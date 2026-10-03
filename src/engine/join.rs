@@ -16,7 +16,7 @@ pub struct Step<K: Ord, L: Ord, R: Ord> {
 /// Both input deltas belong to the same transaction. This initial implementation
 /// uses nested scans and cloned state; it is a semantic baseline, not a bounded
 /// memory or indexed execution strategy.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IncrementalJoin<K: Ord, L: Ord, R: Ord> {
     left: ZSet<(K, L)>,
     right: ZSet<(K, R)>,

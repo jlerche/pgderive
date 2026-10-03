@@ -188,3 +188,18 @@ Callback errors and arithmetic overflow return no partial output.
 The live harness composes the auction–bid join with category=20 and price>=205
 filtering, then projects category/bidder, preserving bag multiplicity. It checks
 the integrated projection against grouped SQL after every source commit.
+
+## Transaction-atomic acyclic circuit
+
+`Circuit<S>` stages an independent clone of owned graph state, evaluates its
+explicit Rust node order, and publishes state/output with one logical tick only
+when the entire transaction succeeds. The harness graph is source deltas → join
+→ filter/map → integrated bags; downstream errors now roll back the join too.
+Tests inject failure after all nodes and projection overflow, then retry the
+same input and verify the original tick and result.
+
+All mutable operators and outputs must be owned by `S`, whose clone must be an
+independent value snapshot. Callbacks must be deterministic and have no external
+side effects or shared mutable handles. The ownership contract is documented,
+not enforced by a dynamic planner. This stages memory only; it does not publish
+PostgreSQL DML, persist state, acknowledge source progress, or provide recursion.

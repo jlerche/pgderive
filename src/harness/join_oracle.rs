@@ -1,6 +1,6 @@
 use super::projection_oracle;
 use crate::{
-    engine::{IncrementalJoin, ZSet},
+    engine::{Circuit, IncrementalJoin, ZSet},
     transaction::Row,
     weighted::Batch,
 };
@@ -9,21 +9,35 @@ use tokio_postgres::Client;
 
 type Joined = (String, Row, Row);
 
-#[derive(Default)]
-pub(super) struct JoinFixture {
+#[derive(Clone, Default)]
+struct QueryState {
     engine: IncrementalJoin<String, Row, Row>,
     output: ZSet<Joined>,
     projected: ZSet<projection_oracle::Projected>,
+}
+
+#[derive(Default)]
+pub(super) struct JoinFixture {
+    circuit: Circuit<QueryState>,
+}
+
+type Inputs = (ZSet<(String, Row)>, ZSet<(String, Row)>);
+
+// Fixed acyclic graph: source deltas -> join -> filter/map -> integrated bags.
+fn evaluate(state: &mut QueryState, input: &Inputs) -> Result<usize> {
+    let step = state.engine.step(&input.0, &input.1)?;
+    state.output.apply(&step.delta)?;
+    state.projected.apply(&projection_oracle::project(&step.delta)?)?;
+    Ok(step.delta.iter().count())
 }
 
 impl JoinFixture {
     pub(super) async fn verify(&mut self, sql: &Client, schema: &str, batch: &Batch) -> Result<()> {
         let left = input(batch, "auction", "id")?;
         let right = input(batch, "bid", "auction")?;
-        let step = self.engine.step(&left, &right)?;
-        self.output.apply(&step.delta)?;
-        self.projected.apply(&projection_oracle::project(&step.delta)?)?;
-        projection_oracle::verify(sql, schema, &self.projected).await?;
+        let step = self.circuit.step(&(left, right), evaluate)?;
+        let state = self.circuit.state();
+        projection_oracle::verify(sql, schema, &state.projected).await?;
         let query = format!("SELECT a.id::text,
             jsonb_build_object('id',a.id::text,'seller',a.seller::text,'category',a.category::text),
             jsonb_build_object('id',b.id::text,'auction',b.auction::text,'bidder',b.bidder::text,'price',b.price::text)
@@ -37,14 +51,13 @@ impl JoinFixture {
             rows.push((tuple, 1));
         }
         ensure!(
-            self.output == ZSet::from_updates(rows)?,
+            state.output == ZSet::from_updates(rows)?,
             "incremental auction/bid join differs from SQL at logical tick {}",
             step.time
         );
         eprintln!(
             "join oracle passed at logical tick {} ({} result deltas)",
-            step.time,
-            step.delta.iter().count()
+            step.time, step.output
         );
         Ok(())
     }
