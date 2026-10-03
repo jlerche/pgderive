@@ -176,3 +176,15 @@ failure on arithmetic/time overflow. Prior accepted evidence is in the PoC's
 about this new engine. The recorded PoC checks were inspected, not replayed or
 modified. Next, linear filter/map operators can compose with this join before
 adding arrangements and the durable publication boundary.
+
+## Weighted filter and map
+
+`ZSet::try_filter` and `ZSet::try_map` transform signed deltas without input
+mutation. Projection consolidates identical output tuples, including negative
+weights and cancellation. Callbacks must be deterministic functions of the full
+tuple; changing predicates between retraction and insertion is unsupported.
+Callback errors and arithmetic overflow return no partial output.
+
+The live harness composes the auction–bid join with category=20 and price>=205
+filtering, then projects category/bidder, preserving bag multiplicity. It checks
+the integrated projection against grouped SQL after every source commit.

@@ -1,3 +1,4 @@
+use super::projection_oracle;
 use crate::{
     engine::{IncrementalJoin, ZSet},
     transaction::Row,
@@ -12,6 +13,7 @@ type Joined = (String, Row, Row);
 pub(super) struct JoinFixture {
     engine: IncrementalJoin<String, Row, Row>,
     output: ZSet<Joined>,
+    projected: ZSet<projection_oracle::Projected>,
 }
 
 impl JoinFixture {
@@ -20,6 +22,8 @@ impl JoinFixture {
         let right = input(batch, "bid", "auction")?;
         let step = self.engine.step(&left, &right)?;
         self.output.apply(&step.delta)?;
+        self.projected.apply(&projection_oracle::project(&step.delta)?)?;
+        projection_oracle::verify(sql, schema, &self.projected).await?;
         let query = format!("SELECT a.id::text,
             jsonb_build_object('id',a.id::text,'seller',a.seller::text,'category',a.category::text),
             jsonb_build_object('id',b.id::text,'auction',b.auction::text,'bidder',b.bidder::text,'price',b.price::text)

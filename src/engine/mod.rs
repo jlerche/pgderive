@@ -2,6 +2,7 @@
 //!
 //! These primitives have no persistence, source LSNs, or recursive scheduling.
 mod join;
+mod linear;
 mod zset;
 
 pub use join::{IncrementalJoin, Step};

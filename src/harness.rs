@@ -13,6 +13,7 @@ use tokio_postgres::{Client, NoTls};
 
 mod cases;
 mod join_oracle;
+mod projection_oracle;
 mod weighted_oracle;
 
 type Model = BTreeMap<(String, String), Row>;
