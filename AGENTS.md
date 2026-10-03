@@ -14,6 +14,8 @@ in object storage. Build small, independently testable steps toward that design.
 - Integration harnesses that mutate shared PostgreSQL must run sequentially.
   Use isolated fixture schemas/databases, never reset application or PoC data.
 - Preserve failure evidence when a runtime or durability check fails.
+- Docker PostgreSQL is disposable: use tmpfs, never persistent Docker volumes
+  or bind-mounted database storage. Do not recreate shared PoC containers.
 
 ## Rust quality rules
 

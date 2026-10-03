@@ -8,11 +8,9 @@ services:
       POSTGRES_DB: pgderive_dev
     command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
     ports: ["127.0.0.1:55434:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+    tmpfs: ["/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d pgderive_dev"]
       interval: 2s
       timeout: 3s
       retries: 30
-volumes:
-  pgdata:
