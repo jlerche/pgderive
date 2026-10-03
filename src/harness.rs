@@ -12,6 +12,7 @@ use tokio::{
 use tokio_postgres::{Client, NoTls};
 
 mod cases;
+mod count_oracle;
 mod join_oracle;
 mod projection_oracle;
 mod weighted_oracle;
@@ -57,7 +58,7 @@ pub async fn run_harness(config: Config) -> Result<()> {
     let outcome = crate::outcome::combine(result, cleanup, "fixture cleanup");
     crate::outcome::combine(outcome, disconnected, "SQL disconnect")?;
     eprintln!(
-        "harness passed: four transactions, weighted SQL differences, full old/new rows, rollback excluded, no acknowledgement; fixture cleaned up"
+        "harness passed: ten transactions, weighted SQL differences, full old/new rows, rollback excluded, no acknowledgement; fixture cleaned up"
     );
     Ok(())
 }
@@ -147,7 +148,7 @@ impl Fixture {
 }
 
 async fn execute(sql: &Client, fixture: &Fixture, mut config: Config) -> Result<()> {
-    config.listener.max_transactions = 4;
+    config.listener.max_transactions = cases::COUNT;
     let (ready, connected) = oneshot::channel();
     let (observed, mut received) = mpsc::channel(8);
     let mut task = tokio::spawn(listener::run(config, Some(ready), Some(observed)));

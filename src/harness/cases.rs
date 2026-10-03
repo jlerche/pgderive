@@ -1,8 +1,10 @@
 use crate::transaction::Operation;
 
+pub(super) const COUNT: usize = 10;
+
 type Case = (String, usize, Option<Operation>);
 
-pub(super) fn transactions(schema: &str) -> [Case; 4] {
+pub(super) fn transactions(schema: &str) -> [Case; COUNT] {
     [
         (
             format!(
@@ -41,5 +43,33 @@ pub(super) fn transactions(schema: &str) -> [Case; 4] {
             5,
             None,
         ),
+        (
+            format!(
+                "BEGIN; UPDATE {schema}.auction SET category=NULL WHERE id=1;
+            UPDATE {schema}.bid SET price=NULL WHERE id=1; COMMIT;"
+            ),
+            2,
+            Some(Operation::Update),
+        ),
+        (format!("UPDATE {schema}.bid SET price=NULL WHERE id=5"), 1, Some(Operation::Update)),
+        (
+            format!(
+                "BEGIN; UPDATE {schema}.bid SET price=250 WHERE id=5;
+            UPDATE {schema}.auction SET category=30 WHERE id=1; COMMIT;"
+            ),
+            2,
+            Some(Operation::Update),
+        ),
+        (format!("UPDATE {schema}.bid SET price=0 WHERE price>=205"), 3, Some(Operation::Update)),
+        (
+            format!(
+                "BEGIN; UPDATE {schema}.auction SET category=20 WHERE id=1;
+            UPDATE {schema}.bid SET price=300 WHERE id=1;
+            INSERT INTO {schema}.bid VALUES(12,1,NULL,300); COMMIT;"
+            ),
+            3,
+            None,
+        ),
+        (format!("DELETE FROM {schema}.bid WHERE price>=205"), 2, Some(Operation::Delete)),
     ]
 }

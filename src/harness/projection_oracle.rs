@@ -37,7 +37,7 @@ pub(super) async fn verify(sql: &Client, schema: &str, output: &ZSet<Projected>)
     Ok(())
 }
 
-fn number(row: &Row, column: &str) -> Result<Option<i64>> {
+pub(super) fn number(row: &Row, column: &str) -> Result<Option<i64>> {
     row.get(column)
         .context("missing fixture numeric column")?
         .as_deref()

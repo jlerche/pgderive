@@ -1,6 +1,6 @@
-use super::projection_oracle;
+use super::{count_oracle, projection_oracle};
 use crate::{
-    engine::{Circuit, IncrementalJoin, ZSet},
+    engine::{Circuit, GroupedCount, IncrementalJoin, ZSet},
     transaction::Row,
     weighted::Batch,
 };
@@ -14,6 +14,8 @@ struct QueryState {
     engine: IncrementalJoin<String, Row, Row>,
     output: ZSet<Joined>,
     projected: ZSet<projection_oracle::Projected>,
+    counts: GroupedCount<Option<String>>,
+    count_output: ZSet<count_oracle::CountRow>,
 }
 
 #[derive(Default)]
@@ -28,6 +30,8 @@ fn evaluate(state: &mut QueryState, input: &Inputs) -> Result<usize> {
     let step = state.engine.step(&input.0, &input.1)?;
     state.output.apply(&step.delta)?;
     state.projected.apply(&projection_oracle::project(&step.delta)?)?;
+    let count_delta = state.counts.step(&count_oracle::input(&step.delta)?)?;
+    state.count_output.apply(&count_delta)?;
     Ok(step.delta.iter().count())
 }
 
@@ -38,6 +42,7 @@ impl JoinFixture {
         let step = self.circuit.step(&(left, right), evaluate)?;
         let state = self.circuit.state();
         projection_oracle::verify(sql, schema, &state.projected).await?;
+        count_oracle::verify(sql, schema, &state.count_output).await?;
         let query = format!("SELECT a.id::text,
             jsonb_build_object('id',a.id::text,'seller',a.seller::text,'category',a.category::text),
             jsonb_build_object('id',b.id::text,'auction',b.auction::text,'bidder',b.bidder::text,'price',b.price::text)

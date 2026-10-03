@@ -117,7 +117,7 @@ volumes. Stopping this Compose service discards its database contents. The scrip
 creates `pgderive_dev` only if absent and never resets an existing database. No object-store service is needed for this slice.
 
 The harness starts the same listener used by the executable, waits for the
-replication connection, and drives four committed transactions:
+replication connection, and drives ten committed transactions:
 
 1. Insert a person, an auction, and ten bids: 12 row changes.
 2. Update the person to a NULL name, change the auction category and ten bid
@@ -126,15 +126,19 @@ replication connection, and drives four committed transactions:
 3. Delete five bids: 5 row changes.
 4. Insert then delete a bid, update a bid without changing its value, and change
    the person twice back to its original value: 5 row changes, an empty batch.
+5. Move the category and a price through NULL, restore qualifying rows, move the
+   category again, remove all qualifying prices, recreate qualifying bids
+   (including a NULL bidder), then delete them: six more commits.
 
 After every commit, it checks full old/new row images against an independently
 accumulated source-row map and compares that map with source SQL. It also checks
 each weighted batch equals the difference between full source SQL snapshots,
-and that durable slot progress was not advanced. Batch sizes are 12, 24, 5, and 0.
+and that durable slot progress was not advanced. The first four batch sizes are
+12, 24, 5, and 0.
 The harness also integrates auction–bid join result deltas and compares them with
-a full SQL join after every commit.
-This fixture uses Nexmark table shapes; query operators and a Nexmark benchmark
-are not implemented yet.
+a full SQL join after every commit, plus filtered projections and grouped counts.
+This fixture uses Nexmark table shapes and a small explicit query graph; it is
+not a Nexmark benchmark.
 
 Each run creates a fresh `pgderive_harness_<pid>` schema. Publication/slot names
 must begin with `pgderive_` and must be unused; existing names are rejected.
@@ -173,9 +177,10 @@ Tests follow the independent raw-history nested-loop oracle from the PoC's
 with 16 steps each, simultaneous updates, multiplicity, cancellation, and atomic
 failure on arithmetic/time overflow. Prior accepted evidence is in the PoC's
 `zset-contract-default-checks.jsonl`; its storage/recovery results are not claims
-about this new engine. The recorded PoC checks were inspected, not replayed or
-modified. Next, linear filter/map operators can compose with this join before
-adding arrangements and the durable publication boundary.
+about this new engine. Storage/recovery checks were inspected and left unchanged;
+the source event trace is replayed by the grouped-count tests described below.
+Filter/map, an owned acyclic circuit boundary, and grouped counts now compose
+with this join. Arrangements and durable publication remain future slices.
 
 ## Weighted filter and map
 
@@ -194,7 +199,8 @@ the integrated projection against grouped SQL after every source commit.
 `Circuit<S>` stages an independent clone of owned graph state, evaluates its
 explicit Rust node order, and publishes state/output with one logical tick only
 when the entire transaction succeeds. The harness graph is source deltas → join
-→ filter/map → integrated bags; downstream errors now roll back the join too.
+→ filter/map → integrated bags and grouped counts. Downstream errors roll back
+the join too.
 Tests inject failure after all nodes and projection overflow, then retry the
 same input and verify the original tick and result.
 
@@ -203,3 +209,25 @@ independent value snapshot. Callbacks must be deterministic and have no external
 side effects or shared mutable handles. The ownership contract is documented,
 not enforced by a dynamic planner. This stages memory only; it does not publish
 PostgreSQL DML, persist state, acknowledge source progress, or provide recursion.
+
+## Incremental grouped counts
+
+`GroupedCount<K>` sums signed full-tuple input weights per group. Changes emit
+a retraction of `(key, old_count)` and an insertion of `(key, new_count)`, each
+with unit weight. A zero count removes the group; a net-zero transaction emits
+no count rows. Signed counts are supported as algebra, while SQL COUNT(*)
+equivalence assumes valid nonnegative source bags. NULL grouping is supported
+with `Option` keys. Arithmetic failure leaves count state unchanged, and the
+enclosing circuit protects upstream/downstream state as well.
+
+The harness builds qualifying bid counts per auction category (price>=205),
+checking full SQL joins, filtered/projected bags, and SQL GROUP BY counts after
+every commit. Tests include group creation/disappearance, signed weights,
+NULL transitions, simultaneous input changes, and failure/retry.
+
+A checked-in event-only copy of the accepted PoC trace replays all 120 recorded
+transactions (111 commits, 9 rollbacks) through join/filter/map/count against an
+independent source-map recomputation, scoped to projects 1–32. Initial source
+rows are supplied explicitly in memory. Fixture provenance and scope are in
+[tests/fixtures/README.md](tests/fixtures/README.md). This strengthens algebra
+validation; it does not establish storage durability or CDC snapshot bootstrap.

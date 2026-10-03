@@ -31,8 +31,8 @@ import hashlib,json,os,pathlib,subprocess,sys
 root=pathlib.Path.cwd()
 out=pathlib.Path(sys.argv[1])
 transactions=[json.loads(line) for line in (out/'transactions.jsonl').read_text().splitlines()]
-assert [len(tx['changes']) for tx in transactions]==[12,12,5,5]
-assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0]
+assert [len(tx['changes']) for tx in transactions]==[12,12,5,5,2,1,2,3,3,2]
+assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,5,2]
 binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')
 files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),binary,out/'transactions.jsonl',out/'harness.log']
 provenance={
