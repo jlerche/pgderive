@@ -11,6 +11,8 @@ use tokio::{
 };
 use tokio_postgres::{Client, NoTls};
 
+mod weighted_oracle;
+
 type Model = BTreeMap<(String, String), Row>;
 type ConnectionTask = JoinHandle<Result<(), tokio_postgres::Error>>;
 
@@ -49,7 +51,7 @@ pub async fn run_harness(config: Config) -> Result<()> {
     cleanup?;
     disconnected?;
     eprintln!(
-        "harness passed: three transactions, full old/new rows, rollback excluded, source SQL oracle, no acknowledgement; fixture cleaned up"
+        "harness passed: four transactions, weighted SQL differences, full old/new rows, rollback excluded, no acknowledgement; fixture cleaned up"
     );
     Ok(())
 }
@@ -139,7 +141,7 @@ impl Fixture {
 }
 
 async fn execute(sql: &Client, fixture: &Fixture, mut config: Config) -> Result<()> {
-    config.listener.max_transactions = 3;
+    config.listener.max_transactions = 4;
     let (ready, connected) = oneshot::channel();
     let (observed, mut received) = mpsc::channel(8);
     let mut task = tokio::spawn(listener::run(config, Some(ready), Some(observed)));
@@ -189,7 +191,7 @@ async fn drive(
             INSERT INTO {schema}.bid SELECT n,1,1,100+n FROM generate_series(1,10) n; COMMIT;"
             ),
             12,
-            Operation::Insert,
+            Some(Operation::Insert),
         ),
         (
             format!(
@@ -198,9 +200,25 @@ async fn drive(
             UPDATE {schema}.bid SET price=price+100; COMMIT;"
             ),
             11,
-            Operation::Update,
+            Some(Operation::Update),
         ),
-        (format!("BEGIN; DELETE FROM {schema}.bid WHERE id%2=0; COMMIT;"), 5, Operation::Delete),
+        (
+            format!("BEGIN; DELETE FROM {schema}.bid WHERE id%2=0; COMMIT;"),
+            5,
+            Some(Operation::Delete),
+        ),
+        (
+            format!(
+                "BEGIN;
+            INSERT INTO {schema}.bid VALUES(11,1,1,999);
+            DELETE FROM {schema}.bid WHERE id=11;
+            UPDATE {schema}.bid SET price=price WHERE id=1;
+            UPDATE {schema}.person SET name='temporary' WHERE id=1;
+            UPDATE {schema}.person SET name=NULL WHERE id=1; COMMIT;"
+            ),
+            5,
+            None,
+        ),
     ];
     let mut model = Model::new();
     for (statements, expected, operation) in cases {
@@ -214,14 +232,14 @@ async fn drive(
             transaction
                 .changes
                 .iter()
-                .all(|change| change.operation == operation && change.schema == *schema),
+                .all(|change| operation.as_ref().is_none_or(|op| change.operation == *op)
+                    && change.schema == *schema),
             "unexpected operation or source schema"
         );
+        let source = source_state(sql, schema).await?;
+        weighted_oracle::verify(&transaction.batch, schema, &model, &source)?;
         apply(&mut model, &transaction)?;
-        ensure!(
-            model == source_state(sql, schema).await?,
-            "reconstructed CDC state differs from PostgreSQL"
-        );
+        ensure!(model == source, "reconstructed CDC state differs from PostgreSQL");
         let current: String = sql
             .query_one(
                 "SELECT confirmed_flush_lsn::text FROM pg_replication_slots WHERE slot_name=$1",

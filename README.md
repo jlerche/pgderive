@@ -1,9 +1,9 @@
 # Pgderive
 
 Pgderive is a PostgreSQL-only incremental view maintenance engine based on DBSP.
-The first slice is a configurable `pgoutput` listener and a real-PostgreSQL row
-mutation harness. There are no computation operators or materialized-result sink
-yet. Object-backed state and transactional publication come in later slices.
+Committed `pgoutput` transactions are normalized into consolidated full-tuple
+weighted batches and verified by a real-PostgreSQL row mutation harness. There
+are no computation operators or materialized-result sink yet. Object-backed state and transactional publication come in later slices.
 
 ## Quality gate
 
@@ -67,7 +67,12 @@ SELECT pg_create_logical_replication_slot('pgderive_dev_slot', 'pgoutput');
 
 Run the listener using the configured database, then insert/update/delete source
 rows in a second session. Stdout contains one JSON object per complete committed
-transaction: xid, commit/end LSNs, table/column names, operation, and old/new rows.
+transaction: xid, commit/end LSNs, table/column names, operation, old/new rows,
+and a consolidated `batch.updates` array. Each weighted update contains its full
+`tuple` (schema, table, all columns) and signed `weight`. Inserts contribute +1,
+deletes -1, and updates retract the old row and add the new row. Identical tuples
+consolidate within the commit; zero weights disappear. Keys do not define tuple
+identity. This batch is stateless; source LSNs are not DBSP logical timestamps.
 Column values are PostgreSQL text representations or JSON null, not generic
 typed DBSP tuples. Relation metadata is decoded with the pinned
 `postgres-replication` parser from Supabase's rust-postgres fork.
@@ -96,21 +101,26 @@ DROP TABLE public.listener_demo;
 
 The script uses a local PostgreSQL instance at port 55434, reusing the existing
 PoC service when available. Otherwise it starts this repository's PostgreSQL 17
-Compose service. It creates `pgderive_dev` only if absent and never resets an
-existing database. No object-store service is needed for this slice.
+Compose service with ephemeral tmpfs database storage and no persistent Docker
+volumes. Stopping this Compose service discards its database contents. The script
+creates `pgderive_dev` only if absent and never resets an existing database. No object-store service is needed for this slice.
 
 The harness starts the same listener used by the executable, waits for the
-replication connection, and drives three committed transactions:
+replication connection, and drives four committed transactions:
 
 1. Insert a person, an auction, and ten bids: 12 row changes.
 2. Update the person to a NULL name and change ten bid prices: 11 row changes.
    An additional rolled-back insert must not appear in CDC.
 3. Delete five bids: 5 row changes.
+4. Insert then delete a bid, update a bid without changing its value, and change
+   the person twice back to its original value: 5 row changes, an empty batch.
 
 After every commit, it checks full old/new row images against an independently
 accumulated source-row map and compares that map with source SQL. It also checks
-that durable slot progress was not advanced. This is a source/transport fixture
-using Nexmark table shapes, not a Nexmark benchmark or DBSP implementation.
+each weighted batch equals the difference between full source SQL snapshots,
+and that durable slot progress was not advanced. Batch sizes are 12, 22, 5, and 0.
+This fixture uses Nexmark table shapes; query operators and a Nexmark benchmark
+are not implemented yet.
 
 Each run creates a fresh `pgderive_harness_<pid>` schema. Publication/slot names
 must begin with `pgderive_` and must be unused; existing names are rejected.
@@ -120,9 +130,10 @@ to overwrite a leftover publication or slot.
 
 JSONL, logs, configuration/source/binary hashes, and version information are saved
 in a fresh ignored `artifacts/replication/run-*` directory, including stderr on
-failure. Run mutating harnesses sequentially. Local development volumes and the
-PostgreSQL service remain running after the check.
+failure. Run mutating harnesses sequentially. The PostgreSQL service remains
+running after the check; this repository does not provision persistent database
+volumes.
 
 The current scope excludes snapshot bootstrap, schema evolution, TRUNCATE,
-generic tuple codecs, weighted operators, durable result publication, recursion,
-and operationally safe WAL-retention management.
+generic tuple codecs, stateful weighted operators, durable result publication,
+recursion, and operationally safe WAL-retention management.

@@ -28,6 +28,7 @@ pub struct Transaction {
     pub(super) commit_lsn: String,
     pub(super) end_lsn: String,
     pub(super) changes: Vec<Change>,
+    pub(super) batch: crate::weighted::Batch,
 }
 
 struct Relation {
@@ -66,7 +67,8 @@ impl Decoder {
 
     pub(super) fn commit(&mut self, commit_lsn: String, end_lsn: String) -> Result<Transaction> {
         let (xid, changes) = self.pending.take().context("COMMIT without BEGIN")?;
-        Ok(Transaction { xid, commit_lsn, end_lsn, changes })
+        let batch = crate::weighted::Batch::from_changes(&changes)?;
+        Ok(Transaction { xid, commit_lsn, end_lsn, changes, batch })
     }
 
     fn relation(&mut self, message: &RelationBody) -> Result<()> {
@@ -107,7 +109,11 @@ impl Decoder {
                 (row.rel_id(), Operation::Update, row.old_tuple(), Some(row.new_tuple()))
             }
             LogicalReplicationMessage::Delete(row) => {
-                (row.rel_id(), Operation::Delete, row.old_tuple().or_else(|| row.key_tuple()), None)
+                ensure!(
+                    row.key_tuple().is_none(),
+                    "key-only delete images need stored state; use REPLICA IDENTITY FULL"
+                );
+                (row.rel_id(), Operation::Delete, row.old_tuple(), None)
             }
             _ => bail!("unsupported logical replication message: {message:?}"),
         };

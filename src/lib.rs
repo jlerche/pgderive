@@ -4,6 +4,7 @@ mod configuration;
 mod harness;
 mod listener;
 mod transaction;
+mod weighted;
 
 pub use configuration::Config;
 pub use harness::run_harness;
