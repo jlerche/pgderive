@@ -11,6 +11,12 @@ in object storage. Build small, independently testable steps toward that design.
   for the initial project work. Do not push or deploy unless requested.
 - Read the current code and relevant tests before changing an interface.
 - Run `./scripts/check.sh` before committing. It is the common local and CI gate.
+- Every slice must be demoable: define its runnable demo and expected visible
+  change before implementation. Deliver a documented command, isolated fixture,
+  inspectable output showing the new behavior, and an automated correctness
+  check. Passing tests or coverage alone is not the demo.
+- Before committing each slice, obtain an independent sub-agent review of the
+  ready-to-commit implementation and address actionable findings.
 - Integration harnesses that mutate shared PostgreSQL must run sequentially.
   Use isolated fixture schemas/databases, never reset application or PoC data.
 - Preserve failure evidence when a runtime or durability check fails.
