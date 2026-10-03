@@ -1,6 +1,6 @@
 use crate::{
     Config, listener,
-    transaction::{Operation, Row, Transaction},
+    transaction::{Row, Transaction},
 };
 use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeMap, time::Duration};
@@ -11,6 +11,8 @@ use tokio::{
 };
 use tokio_postgres::{Client, NoTls};
 
+mod cases;
+mod join_oracle;
 mod weighted_oracle;
 
 type Model = BTreeMap<(String, String), Row>;
@@ -182,46 +184,9 @@ async fn drive(
         )
         .await?
         .get(0);
-    let cases = [
-        (
-            format!(
-                "BEGIN;
-            INSERT INTO {schema}.person VALUES(1,'Alice');
-            INSERT INTO {schema}.auction VALUES(1,1,10);
-            INSERT INTO {schema}.bid SELECT n,1,1,100+n FROM generate_series(1,10) n; COMMIT;"
-            ),
-            12,
-            Some(Operation::Insert),
-        ),
-        (
-            format!(
-                "BEGIN; INSERT INTO {schema}.person VALUES(99,'rolled back'); ROLLBACK;
-            BEGIN; UPDATE {schema}.person SET name=NULL WHERE id=1;
-            UPDATE {schema}.bid SET price=price+100; COMMIT;"
-            ),
-            11,
-            Some(Operation::Update),
-        ),
-        (
-            format!("BEGIN; DELETE FROM {schema}.bid WHERE id%2=0; COMMIT;"),
-            5,
-            Some(Operation::Delete),
-        ),
-        (
-            format!(
-                "BEGIN;
-            INSERT INTO {schema}.bid VALUES(11,1,1,999);
-            DELETE FROM {schema}.bid WHERE id=11;
-            UPDATE {schema}.bid SET price=price WHERE id=1;
-            UPDATE {schema}.person SET name='temporary' WHERE id=1;
-            UPDATE {schema}.person SET name=NULL WHERE id=1; COMMIT;"
-            ),
-            5,
-            None,
-        ),
-    ];
     let mut model = Model::new();
-    for (statements, expected, operation) in cases {
+    let mut join = join_oracle::JoinFixture::default();
+    for (statements, expected, operation) in cases::transactions(schema) {
         sql.batch_execute(&statements).await?;
         let transaction = timeout(Duration::from_secs(20), received.recv())
             .await
@@ -238,6 +203,7 @@ async fn drive(
         );
         let source = source_state(sql, schema).await?;
         weighted_oracle::verify(&transaction.batch, schema, &model, &source)?;
+        join.verify(sql, schema, &transaction.batch).await?;
         apply(&mut model, &transaction)?;
         ensure!(model == source, "reconstructed CDC state differs from PostgreSQL");
         let current: String = sql

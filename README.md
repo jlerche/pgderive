@@ -3,7 +3,8 @@
 Pgderive is a PostgreSQL-only incremental view maintenance engine based on DBSP.
 Committed `pgoutput` transactions are normalized into consolidated full-tuple
 weighted batches and verified by a real-PostgreSQL row mutation harness. There
-are no computation operators or materialized-result sink yet. Object-backed state and transactional publication come in later slices.
+is an initial in-memory incremental equijoin; materialized-result sinks,
+object-backed state, and transactional publication come in later slices.
 
 ## Quality gate
 
@@ -109,7 +110,8 @@ The harness starts the same listener used by the executable, waits for the
 replication connection, and drives four committed transactions:
 
 1. Insert a person, an auction, and ten bids: 12 row changes.
-2. Update the person to a NULL name and change ten bid prices: 11 row changes.
+2. Update the person to a NULL name, change the auction category and ten bid
+   prices together: 12 row changes. Both join inputs change in this commit.
    An additional rolled-back insert must not appear in CDC.
 3. Delete five bids: 5 row changes.
 4. Insert then delete a bid, update a bid without changing its value, and change
@@ -118,7 +120,9 @@ replication connection, and drives four committed transactions:
 After every commit, it checks full old/new row images against an independently
 accumulated source-row map and compares that map with source SQL. It also checks
 each weighted batch equals the difference between full source SQL snapshots,
-and that durable slot progress was not advanced. Batch sizes are 12, 22, 5, and 0.
+and that durable slot progress was not advanced. Batch sizes are 12, 24, 5, and 0.
+The harness also integrates auction–bid join result deltas and compares them with
+a full SQL join after every commit.
 This fixture uses Nexmark table shapes; query operators and a Nexmark benchmark
 are not implemented yet.
 
@@ -135,5 +139,30 @@ running after the check; this repository does not provision persistent database
 volumes.
 
 The current scope excludes snapshot bootstrap, schema evolution, TRUNCATE,
-generic tuple codecs, stateful weighted operators, durable result publication,
+generic tuple codecs, durable result publication,
 recursion, and operationally safe WAL-retention management.
+
+## First DBSP operator
+
+`pgderive::engine` provides generic `ZSet<T>` and `IncrementalJoin<K, L, R>`
+primitives. Collections retain full tuple identity and signed i64 multiplicity.
+One `step` accepts both transaction deltas and evaluates
+`ΔL ⋈ R + L ⋈ ΔR + ΔL ⋈ ΔR` against the previous input state. It commits both
+inputs and advances a separate logical tick only after checked arithmetic
+succeeds. Errors leave operator state and time unchanged. Empty commits still
+advance time. Keys only select matching tuples; they do not impose uniqueness.
+The fixture adapter skips NULL keys to match SQL equality.
+
+This is an in-memory semantic baseline with nested scans and cloned state. It
+is exercised by the live harness, while the standalone listener continues to
+emit diagnostic batches. There is no circuit planner, persistence, snapshot
+bootstrap, recursion, frontier tracking, or source acknowledgement.
+
+Tests follow the independent raw-history nested-loop oracle from the PoC's
+`src/bin/zset_contract_tests.rs.inc`: 128 deterministic signed-input histories
+with 16 steps each, simultaneous updates, multiplicity, cancellation, and atomic
+failure on arithmetic/time overflow. Prior accepted evidence is in the PoC's
+`zset-contract-default-checks.jsonl`; its storage/recovery results are not claims
+about this new engine. The recorded PoC checks were inspected, not replayed or
+modified. Next, linear filter/map operators can compose with this join before
+adding arrangements and the durable publication boundary.

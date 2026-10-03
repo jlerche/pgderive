@@ -26,8 +26,8 @@ import hashlib,json,pathlib,subprocess,sys
 root=pathlib.Path.cwd()
 out=pathlib.Path(sys.argv[1])
 transactions=[json.loads(line) for line in (out/'transactions.jsonl').read_text().splitlines()]
-assert [len(tx['changes']) for tx in transactions]==[12,11,5,5]
-assert [len(tx['batch']['updates']) for tx in transactions]==[12,22,5,0]
+assert [len(tx['changes']) for tx in transactions]==[12,12,5,5]
+assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0]
 files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),root/'target/debug/replication_harness',out/'transactions.jsonl',out/'harness.log']
 provenance={
     'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p','55434','-U','postgres','-d','postgres','-Atc','SELECT version()'],text=True).strip(),
