@@ -7,7 +7,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
       - run: cargo install cargo-machete --version 0.9.2 --locked
+      - run: cargo install cargo-llvm-cov --version 0.8.4 --locked
       - run: ./scripts/check.sh
-      - run: ./scripts/check_integration.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-evidence
+          path: artifacts/

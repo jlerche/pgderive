@@ -10,11 +10,16 @@ exists=$("${pg[@]}" -Atc "SELECT 1 FROM pg_database WHERE datname='pgderive_dev'
 if [[ "$exists" != 1 ]]; then
     "${pg[@]}" -c 'CREATE DATABASE pgderive_dev'
 fi
-cargo build --locked --bins
+if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
+    harness=(cargo llvm-cov run --locked --no-report --bin replication_harness -- config.example.toml)
+else
+    cargo build --locked --bins
+    harness=(./target/debug/replication_harness config.example.toml)
+fi
 mkdir -p artifacts/replication
 output=$(mktemp -d "$PWD/artifacts/replication/run-XXXXXXXX")
 printf 'Evidence: %s\n' "$output"
-if PGDERIVE__POSTGRES__PASSWORD="$PGPASSWORD" timeout 90 ./target/debug/replication_harness config.example.toml >"$output/transactions.jsonl" 2>"$output/harness.log"; then
+if PGDERIVE__POSTGRES__PASSWORD="$PGPASSWORD" timeout 90 "${harness[@]}" >"$output/transactions.jsonl" 2>"$output/harness.log"; then
     cat "$output/harness.log"
 else
     result=$?
@@ -22,13 +27,14 @@ else
     exit "$result"
 fi
 python3 - "$output" <<'PY'
-import hashlib,json,pathlib,subprocess,sys
+import hashlib,json,os,pathlib,subprocess,sys
 root=pathlib.Path.cwd()
 out=pathlib.Path(sys.argv[1])
 transactions=[json.loads(line) for line in (out/'transactions.jsonl').read_text().splitlines()]
 assert [len(tx['changes']) for tx in transactions]==[12,12,5,5]
 assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0]
-files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),root/'target/debug/replication_harness',out/'transactions.jsonl',out/'harness.log']
+binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')
+files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),binary,out/'transactions.jsonl',out/'harness.log']
 provenance={
     'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p','55434','-U','postgres','-d','postgres','-Atc','SELECT version()'],text=True).strip(),
     'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),

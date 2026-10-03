@@ -92,3 +92,25 @@ fn integration_overflow_is_atomic() -> anyhow::Result<()> {
     assert_eq!(state, ZSet::default());
     Ok(())
 }
+
+#[test]
+fn failed_right_integration_does_not_commit_staged_left() -> anyhow::Result<()> {
+    let mut engine = IncrementalJoin::default();
+    engine.step(&ZSet::<(i32, i32)>::default(), &ZSet::from_updates([((1, 1), i64::MAX)])?)?;
+    let before_left = engine.left.clone();
+    let before_right = engine.right.clone();
+    // The left key is unmatched, so multiplication succeeds and failure occurs
+    // only while integrating the right delta, after left staging succeeded.
+    assert!(
+        engine
+            .step(&ZSet::from_updates([((2, 2), 1)])?, &ZSet::from_updates([((1, 1), 1)])?)
+            .is_err()
+    );
+    assert_eq!(engine.left, before_left);
+    assert_eq!(engine.right, before_right);
+    assert_eq!(engine.time, 1);
+    let recovered = engine.step(&ZSet::from_updates([((1, 3), 1)])?, &ZSet::default())?;
+    assert_eq!(recovered.time, 2);
+    assert_eq!(recovered.delta, ZSet::from_updates([((1, 3, 1), i64::MAX)])?);
+    Ok(())
+}

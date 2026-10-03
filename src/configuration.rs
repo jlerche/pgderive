@@ -69,7 +69,7 @@ impl Config {
         Ok(config)
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         ensure!(!self.postgres.host.is_empty(), "postgres.host cannot be empty");
         ensure!(self.postgres.port > 0, "postgres.port cannot be zero");
         ensure!(!self.postgres.database.is_empty(), "postgres.database cannot be empty");
@@ -120,55 +120,4 @@ pub fn identifier(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Config, identifier};
-    use anyhow::Result;
-    use serde_json::json;
-
-    fn fixture() -> Result<Config> {
-        Ok(serde_json::from_value(json!({
-            "postgres":{"host":"localhost","port":5432,"database":"pgderive_dev","user":"postgres","tls":"disable"},
-            "replication":{"slot":"pgderive_slot","publication":"pgderive_pub"}
-        }))?)
-    }
-
-    #[test]
-    fn defaults_and_validation() -> Result<()> {
-        let config = fixture()?;
-        config.validate()?;
-        assert_eq!(config.listener.max_transactions, 0);
-        assert_eq!(config.listener.max_transaction_changes, 100_000);
-        assert_eq!(config.replication_config().port, 5432);
-        Ok(())
-    }
-
-    #[test]
-    fn reject_invalid_limits_and_tls() -> Result<()> {
-        let mut config = fixture()?;
-        config.listener.max_transaction_changes = 0;
-        assert!(config.validate().is_err());
-        config.listener.max_transaction_changes = 1;
-        config.postgres.tls = "unverified".to_owned();
-        assert!(config.validate().is_err());
-        config.postgres.tls = "verify-full".to_owned();
-        config.validate()?;
-        Ok(())
-    }
-
-    #[test]
-    fn reject_unknown_configuration_fields() {
-        let value = json!({
-            "postgres":{"host":"localhost","port":5432,"database":"dev","user":"postgres","tls":"disable","typo":true},
-            "replication":{"slot":"slot","publication":"pub"}
-        });
-        assert!(serde_json::from_value::<Config>(value).is_err());
-    }
-
-    #[test]
-    fn reject_unsafe_sql_identifiers() {
-        assert!(identifier("pgderive_dev_slot"));
-        for value in ["", "1slot", "slot; DROP TABLE x", "a\"b", "a.b"] {
-            assert!(!identifier(value));
-        }
-    }
-}
+mod tests;

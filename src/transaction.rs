@@ -133,19 +133,4 @@ impl Decoder {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::Decoder;
-
-    #[test]
-    fn enforce_transaction_boundaries() -> anyhow::Result<()> {
-        let mut decoder = Decoder::default();
-        assert!(decoder.commit("0/1".into(), "0/2".into()).is_err());
-        decoder.begin(42)?;
-        assert!(decoder.begin(43).is_err());
-        let tx = decoder.commit("0/1".into(), "0/2".into())?;
-        assert_eq!(tx.xid, 42);
-        assert!(tx.changes.is_empty());
-        decoder.begin(43)?;
-        Ok(())
-    }
-}
+mod tests;

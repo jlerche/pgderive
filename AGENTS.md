@@ -31,6 +31,9 @@ in object storage. Build small, independently testable steps toward that design.
   justified, use `#[expect(specific_lint, reason = "concrete justification")]`;
   broad/module/crate allowances require a demonstrated need. Do not use an
   unreasoned `allow` or silence errors to make the gate pass.
+- Rust production line coverage must be at least **80%**, enforced by
+  `cargo llvm-cov` in the common gate. Include the sequential live PostgreSQL
+  harness; exclude only test-source files, not production modules.
 - `cargo machete` must report no unused dependencies. Any necessary scanner
   exception must be documented next to its Cargo metadata entry.
 - Each Rust source file has a default limit of **1,000 physical lines**, including

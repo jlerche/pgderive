@@ -12,12 +12,14 @@ Use Rust 1.95.0, pinned in `rust-toolchain.toml`.
 
 ```bash
 cargo install cargo-machete --version 0.9.2 --locked
+cargo install cargo-llvm-cov --version 0.8.4 --locked
 ./scripts/check.sh
 ```
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
-Rust tests, and unused-dependency detection. GitHub Actions runs the same gate,
-followed by the live integration harness. Compiler warnings and dead/unused code
+Rust tests, coverage, and unused-dependency detection. GitHub Actions runs the
+same gate. Coverage combines unit tests and the sequential live PostgreSQL
+harness, so the common gate needs local PostgreSQL or Docker plus `psql`. Compiler warnings and dead/unused code
 are errors; unsafe code is forbidden. Clippy denies `all`, `pedantic`, and
 `nursery`, plus explicit complexity and selected restriction lints.
 
@@ -39,6 +41,14 @@ Rust files may override their limit once in the first ten lines, with a reason:
 The custom file-length lint is a repository/CI check, not a compiler plugin.
 Malformed, duplicate, or late directives fail the gate. See [AGENTS.md](AGENTS.md)
 for the working rules and exception policy.
+
+The gate requires at least **80% aggregate production Rust line coverage** using
+[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov). All production modules
+and executable entry points are included; only test-source files are excluded.
+`./scripts/check_coverage.sh` runs the coverage portion independently. JSON and
+summary reports remain under `artifacts/coverage/run-*`; CI uploads verification
+evidence even on failure. This is a line-coverage threshold, not branch coverage
+or a substitute for the independent correctness oracles.
 
 ## Configuration
 

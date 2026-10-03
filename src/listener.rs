@@ -24,6 +24,7 @@ pub async fn run(
     ready: Option<oneshot::Sender<()>>,
     observed: Option<mpsc::Sender<Transaction>>,
 ) -> Result<()> {
+    config.validate()?;
     let mut client = ReplicationClient::connect(config.replication_config())
         .await
         .context("connecting replication stream")?;
@@ -32,8 +33,8 @@ pub async fn run(
         let _ = ready.send(());
     }
     let outcome = receive(&config, &mut client, observed.as_ref()).await;
-    client.shutdown().await.context("shutting down replication stream")?;
-    outcome
+    let shutdown = client.shutdown().await.context("shutting down replication stream");
+    crate::outcome::combine(outcome, shutdown, "replication shutdown")
 }
 
 async fn receive(

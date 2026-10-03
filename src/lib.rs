@@ -4,6 +4,7 @@ mod configuration;
 pub mod engine;
 mod harness;
 mod listener;
+mod outcome;
 mod transaction;
 mod weighted;
 

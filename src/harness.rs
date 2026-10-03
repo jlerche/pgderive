@@ -34,6 +34,7 @@ struct Fixture {
 /// Returns setup, stream, oracle, timeout, or cleanup errors. The local harness
 /// requires a non-TLS connection; the standalone listener also supports TLS.
 pub async fn run_harness(config: Config) -> Result<()> {
+    config.validate()?;
     ensure!(config.postgres.tls == "disable", "local harness requires postgres.tls=disable");
     ensure!(
         config.replication.slot.starts_with("pgderive_"),
@@ -48,10 +49,12 @@ pub async fn run_harness(config: Config) -> Result<()> {
     let result = execute(&sql, &fixture, config).await;
     let cleanup = fixture.cleanup(&sql).await;
     drop(sql);
-    let disconnected = connection.await.context("SQL connection task failed")?;
-    result?;
-    cleanup?;
-    disconnected?;
+    let disconnected = connection
+        .await
+        .context("SQL connection task failed")
+        .and_then(|result| result.map_err(Into::into));
+    let outcome = crate::outcome::combine(result, cleanup, "fixture cleanup");
+    crate::outcome::combine(outcome, disconnected, "SQL disconnect")?;
     eprintln!(
         "harness passed: four transactions, weighted SQL differences, full old/new rows, rollback excluded, no acknowledgement; fixture cleaned up"
     );
