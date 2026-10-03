@@ -1,0 +1,145 @@
+use anyhow::{Context, Result, bail, ensure};
+use postgres_replication::protocol::{LogicalReplicationMessage, RelationBody, Tuple, TupleData};
+use serde::Serialize;
+use std::collections::{BTreeMap, HashMap};
+
+pub type Row = BTreeMap<String, Option<String>>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Operation {
+    Insert,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Change {
+    pub(super) schema: String,
+    pub(super) table: String,
+    pub(super) operation: Operation,
+    pub(super) old: Option<Row>,
+    pub(super) new: Option<Row>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Transaction {
+    pub(super) xid: u32,
+    pub(super) commit_lsn: String,
+    pub(super) end_lsn: String,
+    pub(super) changes: Vec<Change>,
+}
+
+struct Relation {
+    schema: String,
+    table: String,
+    columns: Vec<String>,
+}
+
+impl Relation {
+    fn decode(&self, tuple: &Tuple) -> Result<Row> {
+        ensure!(self.columns.len() == tuple.tuple_data().len(), "tuple column count mismatch");
+        self.columns.iter().cloned().zip(tuple.tuple_data()).map(|(name, value)| {
+            let text = match value {
+                TupleData::Null => None,
+                TupleData::Text(bytes) => Some(std::str::from_utf8(bytes)?.to_owned()),
+                TupleData::UnchangedToast => bail!("unchanged TOAST requires stored row reconstruction; unsupported in this listener"),
+                TupleData::Binary(_) => bail!("binary pgoutput tuples are unsupported"),
+            };
+            Ok((name, text))
+        }).collect()
+    }
+}
+
+#[derive(Default)]
+pub struct Decoder {
+    relations: HashMap<u32, Relation>,
+    pending: Option<(u32, Vec<Change>)>,
+}
+
+impl Decoder {
+    pub(super) fn begin(&mut self, xid: u32) -> Result<()> {
+        ensure!(self.pending.is_none(), "nested transaction BEGIN");
+        self.pending = Some((xid, Vec::new()));
+        Ok(())
+    }
+
+    pub(super) fn commit(&mut self, commit_lsn: String, end_lsn: String) -> Result<Transaction> {
+        let (xid, changes) = self.pending.take().context("COMMIT without BEGIN")?;
+        Ok(Transaction { xid, commit_lsn, end_lsn, changes })
+    }
+
+    fn relation(&mut self, message: &RelationBody) -> Result<()> {
+        let columns = message
+            .columns()
+            .iter()
+            .map(|column| column.name().map(str::to_owned))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        self.relations.insert(
+            message.rel_id(),
+            Relation {
+                schema: message.namespace()?.to_owned(),
+                table: message.name()?.to_owned(),
+                columns,
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) fn message(
+        &mut self,
+        message: &LogicalReplicationMessage,
+        limit: usize,
+    ) -> Result<()> {
+        let (id, operation, old, new) = match message {
+            LogicalReplicationMessage::Relation(message) => return self.relation(message),
+            LogicalReplicationMessage::Type(_) | LogicalReplicationMessage::Origin(_) => {
+                return Ok(());
+            }
+            LogicalReplicationMessage::Insert(row) => {
+                (row.rel_id(), Operation::Insert, None, Some(row.tuple()))
+            }
+            LogicalReplicationMessage::Update(row) => {
+                ensure!(
+                    row.key_tuple().is_none(),
+                    "key-only old images need stored state; use REPLICA IDENTITY FULL"
+                );
+                (row.rel_id(), Operation::Update, row.old_tuple(), Some(row.new_tuple()))
+            }
+            LogicalReplicationMessage::Delete(row) => {
+                (row.rel_id(), Operation::Delete, row.old_tuple().or_else(|| row.key_tuple()), None)
+            }
+            _ => bail!("unsupported logical replication message: {message:?}"),
+        };
+        let relation = self.relations.get(&id).context("row arrived before relation metadata")?;
+        let change = Change {
+            schema: relation.schema.clone(),
+            table: relation.table.clone(),
+            operation,
+            old: old.map(|tuple| relation.decode(tuple)).transpose()?,
+            new: new.map(|tuple| relation.decode(tuple)).transpose()?,
+        };
+        let (_, changes) = self.pending.as_mut().context("row outside BEGIN/COMMIT")?;
+        ensure!(changes.len() < limit, "transaction change limit exceeded; no rows acknowledged");
+        changes.push(change);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Decoder;
+
+    #[test]
+    fn enforce_transaction_boundaries() -> anyhow::Result<()> {
+        let mut decoder = Decoder::default();
+        assert!(decoder.commit("0/1".into(), "0/2".into()).is_err());
+        decoder.begin(42)?;
+        assert!(decoder.begin(43).is_err());
+        let tx = decoder.commit("0/1".into(), "0/2".into())?;
+        assert_eq!(tx.xid, 42);
+        assert!(tx.changes.is_empty());
+        decoder.begin(43)?;
+        Ok(())
+    }
+}

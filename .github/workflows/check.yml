@@ -10,3 +10,4 @@ jobs:
           components: clippy, rustfmt
       - run: cargo install cargo-machete --version 0.9.2 --locked
       - run: ./scripts/check.sh
+      - run: ./scripts/check_integration.sh

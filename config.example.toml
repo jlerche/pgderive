@@ -1,0 +1,16 @@
+# Copy to config.local.toml. Passwords can come from PGDERIVE__POSTGRES__PASSWORD.
+[postgres]
+host = "127.0.0.1"
+port = 55434
+database = "pgderive_dev"
+user = "postgres"
+tls = "disable" # Use "verify-full" for a TLS-enabled remote instance.
+# ca_file = "/path/to/ca.pem"
+
+[replication]
+slot = "pgderive_dev_slot"
+publication = "pgderive_dev_pub"
+
+[listener]
+max_transactions = 0 # Unlimited; Ctrl-C stops gracefully.
+max_transaction_changes = 100000
