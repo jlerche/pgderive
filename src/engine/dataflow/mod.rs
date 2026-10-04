@@ -7,6 +7,7 @@ mod join;
 mod operators;
 mod project;
 mod runtime;
+mod sum;
 use super::{
     Batch,
     reader::{BatchData, ObjectBatch},
@@ -19,6 +20,7 @@ use object_store::ObjectStore;
 pub use project::Project;
 pub use runtime::{Graph, PreparedGraph};
 use std::sync::Arc;
+pub use sum::{GroupSum, SumDelta, SumState};
 
 type Grouper<K, L, R, G> = dyn Fn(&K, &L, &R) -> Result<Option<G>> + Send + Sync;
 
@@ -186,4 +188,9 @@ impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> TraceQuery<K, L, R,
 mod tests;
 
 #[cfg(test)]
+#[path = "tests/operators.rs"]
 mod operator_tests;
+
+#[cfg(test)]
+#[path = "tests/sum.rs"]
+mod sum_tests;

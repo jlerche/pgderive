@@ -331,3 +331,18 @@ The older `TraceQuery` count graph remains a reference/check fixture while the
 MVP composes these reusable operators. Graph tests cover project collisions,
 join fan-out/cross terms, pinned readers, downstream errors, empty transactions,
 and stale/foreign work. Aggregate and live S3 compositions build on these APIs.
+
+`GroupSum` adds grouped weighted numeric aggregation. Its immutable `SumState`
+contains total row multiplicity, non-NULL multiplicity, and sum. Products and
+prior-state accumulation use arbitrary precision before final i64 checks. A
+present zero sum is retained, all-NULL groups emit NULL, and removing a group's
+last row retracts it. Internal statistic changes and visible result changes are
+separate typed edges; both can be staged in the same graph root. Identical visible
+rows cancel even when internal counts change.
+
+This MVP aggregate requires valid nonnegative SQL source bags, although deltas
+include retractions. Group totals are checked but do not prove per-tuple source
+validity. Numeric measures and finalized sums/counts are i64; overflow fails the
+transaction. It does not yet implement arbitrary PostgreSQL numeric types.
+Independent source-bag histories and all 111 committed recorded PoC transactions
+check object-backed grouped sums, including prior-state/product cancellation.

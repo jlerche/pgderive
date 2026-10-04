@@ -1,6 +1,7 @@
 use crate::engine::{
     Batch, Circuit, GroupedCount, IncrementalJoin, ZSet,
-    dataflow::{Stream, TraceQuery},
+    dataflow::{Arrangement, GroupSum, Join, Project, Stream, SumState, TraceQuery},
+    trace::TraceSnapshot,
 };
 use anyhow::{Result, bail, ensure};
 use object_store::memory::InMemory;
@@ -118,7 +119,7 @@ async fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()
     tasks.extend((20_000..20_512).map(|id| (id, (id, 1, "open".into(), 9))));
     let mut projects = (1..=32).map(|key| (key, key)).collect::<BTreeMap<_, _>>();
     let mut circuit = Circuit::<Graph>::default();
-    let mut trace = TraceQuery::new(
+    let counts = TraceQuery::new(
         Arc::new(InMemory::new()),
         "poc-tasks-projects-v1".into(),
         64,
@@ -126,6 +127,8 @@ async fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()
             Ok((task.2 == "open" && task.3 >= 8).then_some((*project, *organization)))
         },
     )?;
+    let writer = Arrangement::new(Arc::new(InMemory::new()), "poc-sum-state-v1".into(), 64)?;
+    let mut trace = TraceGraph { counts, sums: writer.empty(), writer };
     let initial = (
         ZSet::from_updates(tasks.values().map(|task| ((task.1, task.clone()), 1)))?,
         ZSet::from_updates(projects.iter().map(|(key, org)| ((*key, *org), 1)))?,
@@ -156,7 +159,12 @@ async fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()
     Ok(())
 }
 
-type TraceGraph = TraceQuery<i64, Task, i64, (i64, i64)>;
+type Group = (i64, i64);
+struct TraceGraph {
+    counts: TraceQuery<i64, Task, i64, Group>,
+    sums: TraceSnapshot<Group, SumState>,
+    writer: Arrangement<Group, SumState>,
+}
 async fn verify_trace(
     graph: &mut TraceGraph,
     time: u64,
@@ -178,9 +186,19 @@ async fn verify_trace(
     };
     let right =
         Stream { time, batch: Batch::from_updates(input.1.iter().map(|(row, w)| (*row, *w)))? };
-    let prepared = graph.prepare(&left, &right).await?;
-    graph.commit(prepared)?;
-    let snapshot = graph.snapshot();
+    let prior = graph.counts.snapshot();
+    let joined = Join.evaluate(&left, &right, &prior.left, &prior.right).await?;
+    let project = Project::new(|key: &i64, (task, org): &(Task, i64)| {
+        Ok((task.2 == "open" && task.3 >= 8).then_some(((*key, *org), task.clone())))
+    });
+    let selected = project.evaluate(&joined)?;
+    let sum = GroupSum::new(|_: &Group, task: &Task| Ok(Some(task.3)));
+    let delta = sum.evaluate(&selected, &graph.sums).await?;
+    graph.sums = graph.writer.stage(&graph.sums, &delta.state).await?;
+    verify_sum(&graph.sums, tasks, projects).await?;
+    let prepared = graph.counts.prepare(&left, &right).await?;
+    graph.counts.commit(prepared)?;
+    let snapshot = graph.counts.snapshot();
     assert_eq!(
         snapshot.counts.materialize().await?,
         Batch::from_updates(oracle(tasks, projects)?.iter().map(|(row, w)| (*row, *w)))?
@@ -197,6 +215,33 @@ async fn verify_trace(
     assert_eq!(
         snapshot.right.materialize().await?,
         Batch::from_updates(projects.iter().map(|(key, org)| ((*key, *org), 1)))?
+    );
+    Ok(())
+}
+
+async fn verify_sum(
+    state: &TraceSnapshot<Group, SumState>,
+    tasks: &BTreeMap<i64, Task>,
+    projects: &BTreeMap<i64, i64>,
+) -> Result<()> {
+    let mut expected = BTreeMap::<Group, (i64, i64)>::new();
+    for task in tasks.values() {
+        if task.2 != "open" || task.3 < 8 {
+            continue;
+        }
+        if let Some(org) = projects.get(&task.1) {
+            let accumulated = expected.entry((task.1, *org)).or_default();
+            accumulated.0 += 1;
+            accumulated.1 += task.3;
+        }
+    }
+    assert_eq!(
+        state.materialize().await?,
+        Batch::from_updates(
+            expected
+                .into_iter()
+                .map(|(key, (rows, sum))| ((key, SumState { rows, non_null: rows, sum }), 1))
+        )?
     );
     Ok(())
 }
