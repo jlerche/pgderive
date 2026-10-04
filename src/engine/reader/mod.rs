@@ -1,4 +1,5 @@
 //! Fallible readers over immutable canonical memory and object batches.
+mod bounded;
 mod cursor;
 mod format;
 mod object;

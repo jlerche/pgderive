@@ -5,6 +5,8 @@ use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Block<T> {
+    #[serde(default)]
+    pub(super) path: Option<String>,
     pub(super) first: T,
     pub(super) last: T,
     pub(super) offset: u64,

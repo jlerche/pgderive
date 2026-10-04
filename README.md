@@ -416,3 +416,20 @@ adapters and independent oracles. Its integrated output includes COUNT(*) and
 nullable SUM. A separate registered three-source chained-join test checks
 simultaneous input changes against full bag recomputation. Durable publication,
 resource-bounded execution and startup schema inspection remain subsequent slices.
+
+## Bounded immutable batch format
+
+New batches use v2: create-only, content-addressed data blocks and a manifest
+containing object-local fences and checksums. Encoding borrows at most 65,536
+input rows and caps each encoded block and the resident manifest at 8 MiB;
+reading fetches and checks one block at a time. The source `Batch` and downstream
+transaction operators still reside in memory until the execution-budget slice.
+The row-count setting determines chunk boundaries: a chunk over the byte cap
+fails rather than splitting automatically. Reduce `block_rows` for wide rows.
+Failed uploads leave unpublished objects for later garbage collection and never
+advance engine state. Retry collisions check stored size and exact bytes.
+
+Packed v1 objects remain readable within the same 8 MiB block/index caps.
+Oversized legacy objects require an offline rewrite before this reader accepts
+them. Durable membership will publish the manifest root; reclamation must follow
+its block references rather than treating that root as the complete batch bytes.

@@ -78,25 +78,28 @@ async fn missing_and_corrupt_objects_fail_closed_without_cursor_movement() -> Re
     let reference = ObjectBatch::write(store.clone(), &batch, "test", 1).await?;
     let object = ObjectBatch::open(store.clone(), reference.clone(), "test").await?;
     let mut cursor = object.cursor().await?;
-    let path = Path::from(reference.path());
+    let path = Path::from(object.block_path(1).ok_or_else(|| anyhow::anyhow!("missing block"))?);
     let bytes = store.get(&path).await?.bytes().await?;
     store.delete(&path).await?;
     assert!(cursor.advance().await.is_err());
     assert_eq!(cursor.current(), Some((&1, &1, 1)));
     assert!(cursor.seek_key(&2).await.is_err());
     assert_eq!(cursor.current(), Some((&1, &1, 1)));
-    assert!(ObjectBatch::<i64, i64>::open(store.clone(), reference.clone(), "test").await.is_err());
     store.put(&path, bytes.clone().into()).await?;
     cursor.advance().await?;
     assert_eq!(cursor.current(), Some((&2, &2, 1)));
     let mut corrupted = bytes.to_vec();
     corrupted[0] ^= 1;
     store.put(&path, corrupted.into()).await?;
-    assert!(object.cursor().await.is_err());
-    let mut bad_index = bytes.to_vec();
+    assert!(cursor.seek_key(&2).await.is_err());
+    let root = Path::from(reference.path());
+    let index = store.get(&root).await?.bytes().await?;
+    store.delete(&root).await?;
+    assert!(ObjectBatch::<i64, i64>::open(store.clone(), reference.clone(), "test").await.is_err());
+    let mut bad_index = index.to_vec();
     let last = bad_index.last_mut().ok_or_else(|| anyhow::anyhow!("empty fixture"))?;
     *last ^= 1;
-    store.put(&path, bad_index.into()).await?;
+    store.put(&root, bad_index.into()).await?;
     assert!(ObjectBatch::<i64, i64>::open(store, reference, "test").await.is_err());
     Ok(())
 }
@@ -183,5 +186,79 @@ async fn split_runs_and_order_consolidate_only_at_logical_boundary() -> Result<(
             expected
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn bounded_objects_round_trip_large_batches_and_reject_oversized_rows() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let batch = Batch::from_updates((0..100_000).map(|n| ((n, format!("value-{n}")), 1)))?;
+    let reference = ObjectBatch::write(store.clone(), &batch, "large-v2", 512).await?;
+    let object = ObjectBatch::<i32, String>::open(store.clone(), reference, "large-v2").await?;
+    let mut cursor = object.cursor().await?;
+    let mut count = 0;
+    while let Some((key, value, weight)) = cursor.current() {
+        assert_eq!(*key, count);
+        assert_eq!(value, &format!("value-{count}"));
+        assert_eq!(weight, 1);
+        count += 1;
+        cursor.advance().await?;
+    }
+    assert_eq!(count, 100_000);
+    let oversized = Batch::from_updates([((0, "x".repeat(8 * 1024 * 1024)), 1)])?;
+    assert!(ObjectBatch::write(store, &oversized, "large-v2", 1).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_packed_object_remains_readable() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let data = serde_json::to_vec(&vec![((1_i64, 2_i64), 3_i64)])?;
+    let digest = format!("{:x}", Sha256::digest(&data));
+    let index = serde_json::to_vec(&serde_json::json!({
+        "version": 1, "schema": "legacy", "blocks": [{
+            "first": [1, 2], "last": [1, 2], "offset": 0,
+            "length": data.len(), "rows": 1, "hash": digest
+        }]
+    }))?;
+    let mut bytes = data.clone();
+    bytes.extend(&index);
+    let path = format!("pgderive/batch-v1/{:x}", Sha256::digest(&bytes));
+    store.put(&Path::from(path.clone()), bytes.clone().into()).await?;
+    let reference = serde_json::from_value(serde_json::json!({
+        "path": path, "bytes": bytes.len(), "index_offset": data.len(),
+        "index_length": index.len(), "index_hash": format!("{:x}", Sha256::digest(&index)),
+        "schema": "legacy"
+    }))?;
+    let object = ObjectBatch::<i64, i64>::open(store, reference, "legacy").await?;
+    let mut cursor = object.cursor().await?;
+    assert_eq!(cursor.current(), Some((&1, &2, 3)));
+    cursor.advance().await?;
+    assert!(cursor.current().is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_manifest_limits_fail_before_reading_rows() -> Result<()> {
+    use sha2::{Digest, Sha256};
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let batch = Batch::from_updates([((1_i64, 1_i64), 1)])?;
+    let reference = ObjectBatch::write(store.clone(), &batch, "limits", 1).await?;
+    let path = Path::from(reference.path());
+    let bytes = store.get(&path).await?.bytes().await?;
+    let mut index: serde_json::Value = serde_json::from_slice(&bytes)?;
+    index["blocks"][0]["rows"] = serde_json::json!(65_537);
+    let malformed = serde_json::to_vec(&index)?;
+    store.put(&path, malformed.clone().into()).await?;
+    let mut descriptor = serde_json::to_value(&reference)?;
+    descriptor["bytes"] = serde_json::json!(malformed.len());
+    descriptor["index_length"] = serde_json::json!(malformed.len());
+    descriptor["index_hash"] = serde_json::json!(format!("{:x}", Sha256::digest(&malformed)));
+    let invalid = serde_json::from_value(descriptor.clone())?;
+    assert!(ObjectBatch::<i64, i64>::open(store.clone(), invalid, "limits").await.is_err());
+    descriptor["index_length"] = serde_json::json!(8 * 1024 * 1024 + 1);
+    let invalid = serde_json::from_value(descriptor)?;
+    assert!(ObjectBatch::<i64, i64>::open(store, invalid, "limits").await.is_err());
     Ok(())
 }
