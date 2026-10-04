@@ -314,3 +314,20 @@ This fixed Rust graph is not a SQL planner or general circuit scheduler. Object
 encoding and full candidate validation remain buffered; many runs cause repeated
 reads. PostgreSQL catalog publication, authoritative restart/recovery, sink DML,
 slot acknowledgement, cloud retry policy and object GC remain unimplemented.
+
+## Composable typed MVP operators
+
+`Project` binds a pure filter/projection for the graph lifetime and consolidates
+full-tuple collisions while preserving logical time. `Join` evaluates all three
+incremental terms against two prior object arrangements at the same boundary.
+`Arrangement` uploads/stages typed immutable state and validates the resulting
+weighted trace. `Graph<State, Input, Output>` binds an explicit Rust operator
+composition at construction, evaluates an entire transaction, and publishes its
+staged state with one root assignment. State consists of immutable snapshots or
+owned values; nodes must stage at the incoming tick and cannot publish external
+effects. This is an acyclic composition API, not a dynamic SQL planner.
+
+The older `TraceQuery` count graph remains a reference/check fixture while the
+MVP composes these reusable operators. Graph tests cover project collisions,
+join fan-out/cross terms, pinned readers, downstream errors, empty transactions,
+and stale/foreign work. Aggregate and live S3 compositions build on these APIs.

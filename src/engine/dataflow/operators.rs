@@ -1,4 +1,3 @@
-use super::Snapshot;
 use crate::engine::{
     Batch, BatchBuilder,
     reader::{BatchData, BatchReader},
@@ -6,50 +5,9 @@ use crate::engine::{
     weights::Accumulator,
 };
 use anyhow::{Result, ensure};
-use num_bigint::BigInt;
 use std::collections::{BTreeMap, BTreeSet};
 
-type JoinWeights<K, L, R> = Accumulator<(K, (L, R))>;
-
 type Joined<K, L, R> = Batch<K, (L, R)>;
-
-pub(super) async fn join<K: BatchData, L: BatchData, R: BatchData, G: BatchData>(
-    left: &Batch<K, L>,
-    right: &Batch<K, R>,
-    prior: &Snapshot<K, L, R, G>,
-) -> Result<Joined<K, L, R>> {
-    let mut output = Accumulator::default();
-    let mut right_cursor = prior.right.cursor().await?;
-    for ((key, value), weight) in left.iter() {
-        right_cursor.seek_key(key).await?;
-        while let Some((other_key, other, other_weight)) = right_cursor.current() {
-            if other_key != key {
-                break;
-            }
-            output.add(
-                (key.clone(), (value.clone(), other.clone())),
-                BigInt::from(*weight) * other_weight,
-            );
-            right_cursor.advance().await?;
-        }
-    }
-    let mut left_cursor = prior.left.cursor().await?;
-    for ((key, value), weight) in right.iter() {
-        left_cursor.seek_key(key).await?;
-        while let Some((other_key, other, other_weight)) = left_cursor.current() {
-            if other_key != key {
-                break;
-            }
-            output.add(
-                (key.clone(), (other.clone(), value.clone())),
-                BigInt::from(*weight) * other_weight,
-            );
-            left_cursor.advance().await?;
-        }
-    }
-    cross(left, right, &mut output);
-    Batch::from_updates(output.finish()?)
-}
 
 pub(super) async fn count<K: BatchData, L: BatchData, R: BatchData, G: BatchData>(
     joined: &Joined<K, L, R>,
@@ -97,21 +55,4 @@ pub(super) async fn count<K: BatchData, L: BatchData, R: BatchData, G: BatchData
         }
     }
     output.finish()
-}
-
-fn cross<K: BatchData, L: BatchData, R: BatchData>(
-    left: &Batch<K, L>,
-    right: &Batch<K, R>,
-    output: &mut JoinWeights<K, L, R>,
-) {
-    for ((key, value), weight) in left.iter() {
-        for ((other_key, other), other_weight) in right.iter() {
-            if key == other_key {
-                output.add(
-                    (key.clone(), (value.clone(), other.clone())),
-                    BigInt::from(*weight) * other_weight,
-                );
-            }
-        }
-    }
 }

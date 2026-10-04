@@ -2,14 +2,22 @@
 //!
 //! Preparation uploads immutable objects; only local commit changes graph visibility.
 //! This is not a `PostgreSQL` durable publication or a recursive DBSP scheduler.
+mod arrangement;
+mod join;
 mod operators;
+mod project;
+mod runtime;
 use super::{
     Batch,
     reader::{BatchData, ObjectBatch},
     trace::{Run, TraceSnapshot},
 };
 use anyhow::{Context, Result, ensure};
+pub use arrangement::Arrangement;
+pub use join::Join;
 use object_store::ObjectStore;
+pub use project::Project;
+pub use runtime::{Graph, PreparedGraph};
 use std::sync::Arc;
 
 type Grouper<K, L, R, G> = dyn Fn(&K, &L, &R) -> Result<Option<G>> + Send + Sync;
@@ -103,7 +111,9 @@ impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> TraceQuery<K, L, R,
     ) -> Result<Prepared<K, L, R, G>> {
         let time = self.root.left.time().checked_add(1).context("logical time overflow")?;
         ensure!(left.time == time && right.time == time, "out-of-order graph input tick");
-        let joined = operators::join(&left.batch, &right.batch, &self.root).await?;
+        let joined =
+            join::join_batches(&left.batch, &right.batch, &self.root.left, &self.root.right)
+                .await?;
         let output = operators::count(&joined, &self.root.counts, &*self.group).await?;
         let next_left = self.append(&self.root.left, &left.batch, time, "left").await?;
         let next_right = self.append(&self.root.right, &right.batch, time, "right").await?;
@@ -174,3 +184,6 @@ impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> TraceQuery<K, L, R,
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod operator_tests;
