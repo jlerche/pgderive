@@ -506,3 +506,34 @@ metadata corruption, and missing roots and blocks.
 This checkpoint API persists arrangement metadata only. It does not apply sink
 DML, record source progress, or acknowledge the replication slot. Atomic
 publication of those effects is the next durability boundary.
+
+## Atomic destination publication
+
+`Catalog::claim` binds an owned destination and a stable source registration to
+an empty tick-zero checkpoint. PostgreSQL fences each claimed writer; reclaiming
+ownership invalidates older writers even when their publication epoch matches.
+Once bound, the metadata-only checkpoint API cannot overwrite that query.
+
+`GroupedJoin::publish_prepared` holds exclusive runtime ownership while checking
+its preparation, encoding result deltas, and committing PostgreSQL membership,
+destination changes, and source commit/end LSN plus transaction ID together.
+Immutable objects were uploaded during preparation. Publication sets
+`synchronous_commit=on`; local visibility moves only after confirmed COMMIT.
+Logical ticks and WAL addresses remain separate. A failed or uncertain COMMIT
+returns an error; uncertain outcomes require authoritative recovery before retry.
+Replication acknowledgement remains disabled in the diagnostic harness.
+
+The initial explicit destination codecs use JSONB identity. Bag destinations
+store the complete `(key,value)` tuple and its nonzero signed coefficient;
+navigation keys do not overwrite other values. Grouped destinations store an
+encoded group, positive COUNT(*) and nullable SUM, checking the exact prior row
+before INSERT/UPDATE/DELETE. Registered codecs must preserve tuple identity under
+JSONB equality. Native SQL column mapping comes with the later SQL compiler.
+Destinations are engine-owned tables; external writers are unsupported.
+
+The live harness compares both destination encodings with SQL after every source
+transaction, checks persisted membership and source positions, rejects replaced
+workers and metadata-only overwrites, and injects destination DML failure to
+verify complete rollback. An isolated arithmetic fixture exercises same-key bag
+multiplicity, cancellation and final-coefficient overflow without acknowledging
+its synthetic source positions.

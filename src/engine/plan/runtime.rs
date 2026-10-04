@@ -77,6 +77,13 @@ impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {
     pub fn commit(&mut self, prepared: PreparedGraph<S, O>) -> Result<Stream<O>> {
         self.graph.commit(prepared)
     }
+    /// Verify preparation ownership before attempting external publication.
+    ///
+    /// # Errors
+    /// Rejects foreign or stale candidates.
+    pub fn validate_prepared(&self, prepared: &PreparedGraph<S, O>) -> Result<()> {
+        self.graph.validate_prepared(prepared)
+    }
 }
 
 impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {

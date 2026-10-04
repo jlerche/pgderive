@@ -52,6 +52,26 @@ impl<
         checkpoint.validate(self.plan())?;
         Ok(checkpoint)
     }
+    /// Export unpublished memberships only after checking this runtime owns them.
+    /// The caller must retain exclusive runtime ownership through durable publication
+    /// and subsequent local commit; this method alone does not authorize ACK.
+    ///
+    /// # Errors
+    /// Rejects stale/foreign candidates or incompatible arrangement membership.
+    pub fn prepared_checkpoint(
+        &self,
+        prepared: &super::Prepared<K, L, R, G>,
+    ) -> Result<Checkpoint> {
+        self.engine.validate_prepared(prepared)?;
+        let checkpoint = Checkpoint {
+            version: 1,
+            plan_identity: self.plan().identity().into(),
+            time: prepared.output().time,
+            arrangements: prepared.candidate().memberships()?,
+        };
+        checkpoint.validate(self.plan())?;
+        Ok(checkpoint)
+    }
     /// Reopen all four arrangements from a complete compatible durable checkpoint.
     /// Every root/index/block and logical coefficient is cold-validated first.
     ///

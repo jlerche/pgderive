@@ -10,12 +10,35 @@ pub(super) async fn save(
     checkpoint: &Checkpoint,
     expected: u64,
 ) -> Result<u64> {
+    let tx = sql.transaction().await?;
+    tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
+    let epoch = stage(&tx, catalog, plan, checkpoint, expected).await?;
+    let active = tx
+        .query_opt(
+            &format!("SELECT query_id FROM {}.pgderive_progress WHERE query_id=$1", catalog.schema),
+            &[&catalog.query],
+        )
+        .await?;
+    ensure!(active.is_none(), "metadata checkpoint cannot overwrite a publication query");
+    tx.commit()
+        .await
+        .context("catalog checkpoint COMMIT outcome requires authoritative reload on failure")?;
+    Ok(epoch)
+}
+
+/// Stage membership in the caller's transaction so sink/progress can share COMMIT.
+pub(super) async fn stage(
+    tx: &Transaction<'_>,
+    catalog: &Catalog,
+    plan: &Plan,
+    checkpoint: &Checkpoint,
+    expected: u64,
+) -> Result<u64> {
     let epoch = expected.checked_add(1).context("catalog epoch overflow")?;
     let next = i64::try_from(epoch)?;
     let expected = i64::try_from(expected)?;
     let time = i64::try_from(checkpoint.time)?;
     let definition = serde_json::to_value(plan.definition())?;
-    let tx = sql.transaction().await?;
     let affected = if expected == 0 {
         tx.execute(&format!("INSERT INTO {}.pgderive_queries(query_id,format_version,plan_identity,definition,logical_time,epoch)
             VALUES($1,1,$2,$3,$4,$5) ON CONFLICT(query_id) DO NOTHING", catalog.schema),
@@ -31,10 +54,7 @@ pub(super) async fn save(
         &[&catalog.query],
     )
     .await?;
-    membership(&tx, catalog, checkpoint).await?;
-    tx.commit()
-        .await
-        .context("catalog checkpoint COMMIT outcome requires authoritative reload on failure")?;
+    membership(tx, catalog, checkpoint).await?;
     Ok(epoch)
 }
 async fn membership(

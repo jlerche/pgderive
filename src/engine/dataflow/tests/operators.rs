@@ -46,7 +46,12 @@ async fn typed_project_join_graph_publishes_every_arrangement_together() -> Resu
     let prepared = graph.prepare(first).await?;
     let pinned = graph.snapshot();
     assert_eq!(graph.time(), 0);
+    graph.validate_prepared(&prepared)?;
+    assert_eq!(prepared.base_time(), 0);
+    assert_eq!(prepared.candidate().2.time(), 1);
+    let staged_output = prepared.output().batch.clone();
     let result = graph.commit(prepared)?;
+    assert_eq!(result.batch, staged_output);
     assert_eq!(
         result.batch,
         Batch::from_updates([
@@ -84,8 +89,10 @@ async fn graph_rejects_clock_stale_foreign_and_join_boundary_errors() -> Result<
     let a = first.prepare(input(1, vec![], vec![])?).await?;
     let b = first.prepare(input(1, vec![], vec![])?).await?;
     let c = first.prepare(input(1, vec![], vec![])?).await?;
+    assert!(second.validate_prepared(&a).is_err());
     assert!(second.commit(a).is_err());
     first.commit(b)?;
+    assert!(first.validate_prepared(&c).is_err());
     assert!(first.commit(c).is_err());
     let state = first.snapshot();
     let left = Stream { time: 2, batch: Batch::from_updates([])? };

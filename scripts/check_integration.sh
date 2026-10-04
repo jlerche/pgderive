@@ -40,6 +40,10 @@ for tick,epoch in [(5,1),(15,2)]:
     assert f'MVP durable manifest recovered all four arrangements at tick {tick} epoch {epoch}' in harness_log
 assert harness_log.count('expected cold-recovery failure for ')==2
 assert 'MVP incomplete and corrupt catalog membership rejected without epoch change' in harness_log
+assert harness_log.count('MVP atomic sink/membership/source publication passed at tick ')==15
+assert 'MVP failed destination DML and fenced writers preserved sink/membership/progress' in harness_log
+assert 'MVP suppressed destination DML rejected without progress change' in harness_log
+assert 'MVP full-tuple bag multiplicity, cancellation and overflow rollback passed' in harness_log
 assert [len(tx['changes']) for tx in transactions]==[12,12,5,5,2,1,2,3,3,2,4,3,2,2,2]
 assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,5,2,4,4,2,2,2]
 binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')

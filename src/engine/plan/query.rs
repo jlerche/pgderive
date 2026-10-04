@@ -9,6 +9,7 @@ use crate::engine::{
 };
 use anyhow::{Context, Result};
 mod checkpoint;
+mod publication;
 use object_store::ObjectStore;
 use std::sync::Arc;
 /// Object backend and resource configuration for typed query creation/reopening.

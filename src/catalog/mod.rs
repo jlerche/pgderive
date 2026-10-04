@@ -1,6 +1,14 @@
-//! `PostgreSQL` coarse checkpoint catalog; sink/progress publication follows later.
+//! `PostgreSQL` coarse checkpoint catalog and atomic sink/progress publication.
+mod position;
+mod publication;
 mod read;
+mod sink;
 mod write;
+pub use position::{Lsn, Progress};
+pub use publication::{Binding, Publication, Writer};
+pub use sink::{Deltas, Sink};
+#[cfg(test)]
+mod tests;
 
 use crate::engine::plan::{Checkpoint, Plan};
 use anyhow::{Result, ensure};
@@ -53,7 +61,13 @@ impl Catalog {
                 query_id text NOT NULL, arrangement_id text NOT NULL,
                 ordinal bigint NOT NULL CHECK(ordinal>=0), reference jsonb NOT NULL,
                 PRIMARY KEY(query_id,arrangement_id,ordinal),
-                FOREIGN KEY(query_id,arrangement_id) REFERENCES {0}.pgderive_arrangements(query_id,arrangement_id) ON DELETE CASCADE);",
+                FOREIGN KEY(query_id,arrangement_id) REFERENCES {0}.pgderive_arrangements(query_id,arrangement_id) ON DELETE CASCADE);
+             CREATE TABLE IF NOT EXISTS {0}.pgderive_progress (
+                query_id text PRIMARY KEY REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
+                binding jsonb NOT NULL, sink_table text NOT NULL UNIQUE,
+                fence bigint NOT NULL CHECK(fence>0), commit_lsn pg_lsn NOT NULL,
+                end_lsn pg_lsn NOT NULL CHECK(end_lsn>=commit_lsn),
+                xid bigint CHECK(xid>=0 AND xid<=4294967295));",
             self.schema
         )).await?;
         Ok(())

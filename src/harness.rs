@@ -222,6 +222,13 @@ async fn drive(
     let mut model = Model::new();
     let mut join = join_oracle::JoinFixture::default();
     let mut mvp = mvp::MvpFixture::new(recovery.store.clone(), recovery.config.execution)?;
+    mvp.initialize_publication(
+        sql,
+        schema,
+        format!("{}:{}:{}", recovery.config.postgres.database, fixture.publication, fixture.slot),
+        &initial,
+    )
+    .await?;
     for (statements, expected, operation) in cases::transactions(schema) {
         sql.batch_execute(&statements).await?;
         let transaction = timeout(Duration::from_secs(20), received.recv())
@@ -241,7 +248,7 @@ async fn drive(
         weighted_oracle::verify(&transaction.batch, schema, &model, &source)?;
         join.verify(sql, schema, &transaction.batch).await?;
         apply(&mut model, &transaction)?;
-        mvp.verify(sql, schema, &transaction.batch, &model).await?;
+        mvp.verify(sql, schema, &transaction, &model).await?;
         if matches!(mvp.time(), 5 | 15) {
             mvp.checkpoint_and_recover(sql, schema, &recovery).await?;
         }

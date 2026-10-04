@@ -198,18 +198,22 @@ async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> R
     let foreign = original
         .prepare(Stream { time: 2, batch: (stream(2, [])?.batch, stream(2, [])?.batch) })
         .await?;
+    assert!(reopened.prepared_checkpoint(&foreign).is_err());
     assert!(reopened.commit(foreign).is_err());
-    reopened.commit(
-        reopened
-            .prepare(Stream {
-                time: 2,
-                batch: (
-                    stream(2, [((1, 2), -1), ((1, 4), 1)])?.batch,
-                    stream(2, [((1, 3), -1), ((1, 7), 1)])?.batch,
-                ),
-            })
-            .await?,
-    )?;
+    let staged = reopened
+        .prepare(Stream {
+            time: 2,
+            batch: (
+                stream(2, [((1, 2), -1), ((1, 4), 1)])?.batch,
+                stream(2, [((1, 3), -1), ((1, 7), 1)])?.batch,
+            ),
+        })
+        .await?;
+    let staged_checkpoint = reopened.prepared_checkpoint(&staged)?;
+    assert_eq!(staged_checkpoint.time, 2);
+    assert_eq!(reopened.time(), 1);
+    reopened.commit(staged)?;
+    assert_eq!(reopened.checkpoint()?, staged_checkpoint);
     assert_eq!(reopened.time(), 2);
     assert_eq!(
         reopened.snapshot().output.materialize().await?,

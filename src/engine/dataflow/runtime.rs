@@ -14,6 +14,23 @@ pub struct PreparedGraph<S, O> {
     next: Arc<Boundary<S>>,
     output: Stream<O>,
 }
+impl<S, O> PreparedGraph<S, O> {
+    /// Logical boundary from which this transaction was evaluated.
+    #[must_use]
+    pub fn base_time(&self) -> u64 {
+        self.base.time
+    }
+    /// Pin the complete unpublished candidate for durable membership encoding.
+    #[must_use]
+    pub fn candidate(&self) -> Arc<S> {
+        self.next.state.clone()
+    }
+    /// Inspect staged result deltas without publishing local visibility.
+    #[must_use]
+    pub const fn output(&self) -> &Stream<O> {
+        &self.output
+    }
+}
 /// Typed acyclic transaction runtime with lifetime-bound graph semantics.
 ///
 /// State must consist of immutable snapshots/owned values, never shared mutable
@@ -71,9 +88,18 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
     /// # Errors
     /// Rejects foreign/stale work without changing state or returning its output.
     pub fn commit(&mut self, prepared: PreparedGraph<S, O>) -> Result<Stream<O>> {
-        ensure!(Arc::ptr_eq(&self.root, &prepared.base), "foreign or stale graph preparation");
+        self.validate_prepared(&prepared)?;
         self.root = prepared.next;
         Ok(prepared.output)
+    }
+    /// Check ownership and freshness before starting external durable publication.
+    /// Hold exclusive ownership of this runtime across publication and local commit.
+    ///
+    /// # Errors
+    /// Rejects a preparation evaluated by another runtime or from an older root.
+    pub fn validate_prepared(&self, prepared: &PreparedGraph<S, O>) -> Result<()> {
+        ensure!(Arc::ptr_eq(&self.root, &prepared.base), "foreign or stale graph preparation");
+        Ok(())
     }
 }
 

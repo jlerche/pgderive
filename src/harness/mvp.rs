@@ -1,5 +1,6 @@
 use super::{Model, join_oracle, projection_oracle};
 mod catalog_checks;
+mod publication;
 mod recovery;
 use crate::{
     engine::{
@@ -21,6 +22,7 @@ type Query = crate::engine::plan::query::GroupedJoin<Key, Row, Row, Group, Bid, 
 pub(super) struct MvpFixture {
     graph: Query,
     epoch: u64,
+    publication: Option<publication::PublicationFixture>,
 }
 impl MvpFixture {
     pub(super) fn new(
@@ -31,19 +33,20 @@ impl MvpFixture {
         let operators = operators();
         let graph = Query::new_with_limits(plan, operators, store, 3, limits)?;
         eprintln!("registered engine query: {}", graph.plan().identity());
-        Ok(Self { graph, epoch: 0 })
+        Ok(Self { graph, epoch: 0, publication: None })
     }
     pub(super) fn time(&self) -> u64 {
         self.graph.time()
     }
     pub(super) async fn verify(
         &mut self,
-        sql: &Client,
+        sql: &mut Client,
         schema: &str,
-        batch: &weighted::Batch,
+        transaction: &crate::transaction::Transaction,
         model: &Model,
     ) -> Result<()> {
         let time = self.graph.time() + 1;
+        let batch = &transaction.batch;
         let input = Stream {
             time,
             batch: (input(batch, "auction", "id")?, input(batch, "bid", "auction")?),
@@ -61,7 +64,11 @@ impl MvpFixture {
         } else {
             prepared?
         };
-        self.graph.commit(prepared)?;
+        self.publication
+            .as_mut()
+            .context("publication fixture not initialized")?
+            .publish(sql, &mut self.graph, prepared, transaction)
+            .await?;
         let state = self.graph.snapshot();
         let expected = memory(model)?;
         ensure!(
