@@ -90,6 +90,7 @@ async fn join_budget_failure_retains_complete_query_root_and_can_retry() -> Resu
         .await?;
     query.commit(prepared)?;
     assert_eq!(query.time(), 1);
+    assert!(query.cache_stats()?.bytes <= Limits::default().cache_bytes);
     assert_eq!(
         query.snapshot().output.materialize().await?,
         Batch::from_updates([((1, (2, Some(9))), 1)])?

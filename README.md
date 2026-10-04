@@ -458,3 +458,26 @@ local publication. Candidate trace validation now streams without collecting
 full state, but still scans all identities; affected-key reads and a byte-bounded
 cache are the next slice. Maintenance still materializes state until its later
 streaming-compaction slice.
+
+## Affected-key arrangement access
+
+Production joins batch probes by navigation key and reuse pinned run heads for
+all input values under that key. Object-local full-tuple fences exclude unrelated
+runs and select the first relevant block directly. Key cursors keep every distinct
+value and stop before a later key's blocks; zero-weight identities still cancel
+across all matching runs. The delta cross term uses sorted key ranges instead of
+comparing every left row to every unrelated right row.
+
+`Arrangement::stage` checks only changed full identities against the pinned prior
+coefficients before uploading. It relies on the prior boundary having already
+been validated; it does not rescan unchanged state to detect unrelated external
+object loss. Full scans remain available for the independent oracle and storage
+validation. Cache residency is bounded by `execution.cache_bytes` and
+`cache_entries`, shared across all production query arrangements. The cache holds
+verified encoded bytes; active decoded blocks and resident indexes are separate
+reader pins. Cursor clones share decoded blocks rather than copying them.
+
+Cold, cached, evicted, and differently split runs are checked for equal weighted
+results. Selected-block failures retain cursor position for retry. Unrelated
+missing blocks do not force a key probe to read outside its scope; fresh recovery
+must validate its complete durable membership in the manifest slice.

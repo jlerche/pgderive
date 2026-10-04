@@ -1,5 +1,5 @@
 use super::{
-    BatchData, BatchReader, Cursor, Entry,
+    BatchData, BatchReader, BlockCache, Cursor, Entry,
     format::{Block, Index, hash, validate},
 };
 use crate::engine::Batch;
@@ -36,6 +36,7 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) store: Arc<dyn ObjectStore>,
     pub(super) reference: ObjectRef,
     pub(super) blocks: Fences<K, V>,
+    cache: Arc<BlockCache>,
 }
 
 impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
@@ -105,6 +106,18 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         reference: ObjectRef,
         schema: &str,
     ) -> Result<Self> {
+        Self::open_with_cache(store, reference, schema, Arc::new(BlockCache::new(0, 0))).await
+    }
+    /// Reopen with a shared bounded immutable block cache.
+    ///
+    /// # Errors
+    /// Returns missing-object, invalid index/schema, or object-store failures.
+    pub async fn open_with_cache(
+        store: Arc<dyn ObjectStore>,
+        reference: ObjectRef,
+        schema: &str,
+        cache: Arc<BlockCache>,
+    ) -> Result<Self> {
         ensure!(
             reference.index_length <= u64::try_from(super::bounded::MAX_BYTES)?,
             "index exceeds byte limit"
@@ -157,7 +170,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             index.version == 2 || offset == reference.index_offset,
             "object block/index layout mismatch"
         );
-        Ok(Self { store, reference, blocks: Arc::new(index.blocks) })
+        Ok(Self { store, reference, blocks: Arc::new(index.blocks), cache })
     }
 
     /// Object containing a selected block; useful for integrity checks and reclamation.
@@ -168,16 +181,29 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             .map(|block| block.path.as_deref().unwrap_or_else(|| self.reference.path()))
     }
 
-    pub(super) async fn read(&self, ordinal: usize) -> Result<Vec<Entry<K, V>>> {
+    pub(super) fn key_block(&self, key: &K) -> Option<usize> {
+        let ordinal = self.blocks.partition_point(|block| block.last.0 < *key);
+        self.blocks.get(ordinal).filter(|block| block.first.0 <= *key).map(|_| ordinal)
+    }
+
+    pub(super) async fn read(&self, ordinal: usize) -> Result<Arc<Vec<Entry<K, V>>>> {
         let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
         let end = block.offset.checked_add(block.length).context("block range overflow")?;
-        let bytes = self
-            .store
-            .get_range(
-                &Path::from(block.path.as_ref().unwrap_or(&self.reference.path).clone()),
-                block.offset..end,
-            )
-            .await?;
+        let bytes = if let Some(bytes) = self.cache.get(&block.hash)? {
+            bytes
+        } else {
+            let bytes = self
+                .store
+                .get_range(
+                    &Path::from(block.path.as_ref().unwrap_or(&self.reference.path).clone()),
+                    block.offset..end,
+                )
+                .await?;
+            ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
+            let bytes: Arc<[u8]> = Arc::from(bytes.as_ref());
+            self.cache.insert(block.hash.clone(), bytes.clone())?;
+            bytes
+        };
         ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
         let rows: Vec<Entry<K, V>> = serde_json::from_slice(&bytes)?;
         validate(&rows)?;
@@ -187,7 +213,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 && rows.last().map(|row| &row.0) == Some(&block.last),
             "block fences/count mismatch"
         );
-        Ok(rows)
+        Ok(Arc::new(rows))
     }
 }
 

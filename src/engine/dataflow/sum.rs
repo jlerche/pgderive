@@ -2,7 +2,7 @@ use super::Stream;
 use crate::engine::{
     Batch,
     execution::{Consolidator, Limits},
-    reader::{BatchData, BatchReader},
+    reader::BatchData,
     trace::TraceSnapshot,
 };
 use anyhow::{Context, Result, ensure};
@@ -117,11 +117,11 @@ impl<K: BatchData, V: BatchData> GroupSum<K, V> {
             }
             totals.last_mut().context("missing aggregate total")?.1.add_exact(column, weight)
         })?;
-        let mut cursor = prior.cursor().await?;
+
         let mut state = Consolidator::new(limits)?;
         let mut output = Consolidator::new(limits)?;
         for (key, mut total) in totals {
-            cursor.seek_key(&key).await?;
+            let mut cursor = prior.key_cursor(&key).await?;
             let before = if let Some((group, value, weight)) = cursor.current()
                 && group == &key
             {

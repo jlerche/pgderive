@@ -2,7 +2,7 @@ use super::Stream;
 use crate::engine::{
     Batch,
     execution::{Consolidator, Limits},
-    reader::{BatchData, BatchReader},
+    reader::BatchData,
     trace::TraceSnapshot,
 };
 use anyhow::{Result, ensure};
@@ -71,9 +71,9 @@ async fn join_bounded<K: BatchData, L: BatchData, R: BatchData>(
     limits.check_batch(left)?;
     limits.check_batch(right)?;
     let mut output = Consolidator::new(limits)?;
-    let mut right_cursor = prior_right.cursor().await?;
+    let mut right_probes = prior_right.probes();
     for ((key, value), weight) in left.iter() {
-        right_cursor.seek_key(key).await?;
+        let mut right_cursor = right_probes.cursor(key).await?;
         while let Some((other_key, other, other_weight)) = right_cursor.current() {
             if other_key != key {
                 break;
@@ -85,9 +85,9 @@ async fn join_bounded<K: BatchData, L: BatchData, R: BatchData>(
             right_cursor.advance().await?;
         }
     }
-    let mut left_cursor = prior_left.cursor().await?;
+    let mut left_probes = prior_left.probes();
     for ((key, value), weight) in right.iter() {
-        left_cursor.seek_key(key).await?;
+        let mut left_cursor = left_probes.cursor(key).await?;
         while let Some((other_key, other, other_weight)) = left_cursor.current() {
             if other_key != key {
                 break;
@@ -108,14 +108,15 @@ fn cross<K: BatchData, L: BatchData, R: BatchData>(
     right: &Batch<K, R>,
     output: &mut JoinWeights<K, L, R>,
 ) -> Result<()> {
+    let right = right.iter().collect::<Vec<_>>();
     for ((key, value), weight) in left.iter() {
-        for ((other_key, other), other_weight) in right.iter() {
-            if key == other_key {
-                output.add(
-                    (key.clone(), (value.clone(), other.clone())),
-                    BigInt::from(*weight) * other_weight,
-                )?;
-            }
+        let start = right.partition_point(|((other, _), _)| other < key);
+        let end = right.partition_point(|((other, _), _)| other <= key);
+        for ((_, other), other_weight) in &right[start..end] {
+            output.add(
+                (key.clone(), (value.clone(), other.clone())),
+                BigInt::from(*weight) * **other_weight,
+            )?;
         }
     }
     Ok(())

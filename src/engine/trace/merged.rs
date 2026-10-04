@@ -107,3 +107,66 @@ impl<K: BatchData, V: BatchData> BatchCursor for MergedCursor<K, V> {
         Self::seek_key(self, key).await
     }
 }
+
+/// Forward-only exact-key probe; all distinct values under the key remain visible.
+/// It cannot be reseeked to another key after excluding irrelevant runs.
+#[derive(Clone)]
+pub struct KeyCursor<K: BatchData, V: BatchData> {
+    cursor: MergedCursor<K, V>,
+}
+impl<K: BatchData, V: BatchData> KeyCursor<K, V> {
+    pub(super) async fn open(runs: &[Run<K, V>], key: &K) -> Result<Self> {
+        let mut cursors = Vec::new();
+        for run in runs {
+            if let Some(cursor) = run.cursor_for_key(key).await? {
+                cursors.push(cursor);
+            }
+        }
+        let mut cursor = MergedCursor { cursors, row: None };
+        cursor.find().await?;
+        Ok(Self { cursor })
+    }
+    /// Current full weighted identity, restricted to the probed key.
+    #[must_use]
+    pub fn current(&self) -> Option<(&K, &V, i64)> {
+        self.cursor.current()
+    }
+    /// Advance atomically without reading blocks beyond the selected key.
+    ///
+    /// # Errors
+    /// Returns selected-block read, integrity, or arithmetic failures and retains
+    /// the prior position so the caller may retry the same operation.
+    pub async fn advance(&mut self) -> Result<()> {
+        self.cursor.advance().await
+    }
+}
+
+/// Batch of key probes sharing a pinned snapshot and the current key's run heads.
+/// Repeated identities under one key reuse decoded heads without another GET.
+pub struct KeyProbes<K: BatchData, V: BatchData> {
+    snapshot: super::TraceSnapshot<K, V>,
+    current: Option<LastProbe<K, V>>,
+}
+struct LastProbe<K: BatchData, V: BatchData> {
+    key: K,
+    cursor: KeyCursor<K, V>,
+}
+impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
+    pub(super) const fn new(snapshot: super::TraceSnapshot<K, V>) -> Self {
+        Self { snapshot, current: None }
+    }
+    /// Pin a fresh cursor for one key, reusing the most recent key's run heads.
+    ///
+    /// # Errors
+    /// Returns selected-block read, integrity, or arithmetic errors.
+    pub async fn cursor(&mut self, key: &K) -> Result<KeyCursor<K, V>> {
+        if let Some(current) = &self.current
+            && &current.key == key
+        {
+            return Ok(current.cursor.clone());
+        }
+        let cursor = self.snapshot.key_cursor(key).await?;
+        self.current = Some(LastProbe { key: key.clone(), cursor: cursor.clone() });
+        Ok(cursor)
+    }
+}

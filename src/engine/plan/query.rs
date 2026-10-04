@@ -4,7 +4,7 @@ use crate::engine::{
     Batch,
     dataflow::{Arrangement, GroupSum, Join, Project, Stream, SumState},
     execution::Limits,
-    reader::BatchData,
+    reader::{BatchData, BlockCache, CacheStats},
     trace::TraceSnapshot,
 };
 use anyhow::{Context, Result};
@@ -72,6 +72,7 @@ struct Execution<
     output: Arrangement<G, AggregateRow>,
     schemas: [String; 4],
     limits: Limits,
+    cache: Arc<BlockCache>,
 }
 type Output<G> = Batch<G, AggregateRow>;
 type SharedExecution<K, A, B, L, R, G, V> = Arc<Execution<K, A, B, L, R, G, V>>;
@@ -198,14 +199,20 @@ impl<
                 .context("missing grouped join arrangement")
         };
         let schemas = [schema("left")?, schema("right")?, schema("sums")?, schema("output")?];
+        let cache = Arc::new(BlockCache::new(limits.cache_bytes, limits.cache_entries));
         let execution = Arc::new(Execution {
             operators,
-            left: Arrangement::new(store.clone(), schemas[0].clone(), block_rows)?,
-            right: Arrangement::new(store.clone(), schemas[1].clone(), block_rows)?,
-            sums: Arrangement::new(store.clone(), schemas[2].clone(), block_rows)?,
-            output: Arrangement::new(store, schemas[3].clone(), block_rows)?,
+            left: Arrangement::new(store.clone(), schemas[0].clone(), block_rows)?
+                .with_cache(cache.clone()),
+            right: Arrangement::new(store.clone(), schemas[1].clone(), block_rows)?
+                .with_cache(cache.clone()),
+            sums: Arrangement::new(store.clone(), schemas[2].clone(), block_rows)?
+                .with_cache(cache.clone()),
+            output: Arrangement::new(store, schemas[3].clone(), block_rows)?
+                .with_cache(cache.clone()),
             schemas,
             limits,
+            cache,
         });
         let evaluator = execution.clone();
         let engine = Engine::new(plan, execution.empty(), move |state, input| {
@@ -218,6 +225,13 @@ impl<
     #[must_use]
     pub fn plan(&self) -> &Plan {
         self.engine.plan()
+    }
+    /// Current query cache residency and request counters.
+    ///
+    /// # Errors
+    /// Returns a cache-lock poisoning error.
+    pub fn cache_stats(&self) -> Result<CacheStats> {
+        self.execution.cache.stats()
     }
     /// Last committed transaction tick.
     #[must_use]

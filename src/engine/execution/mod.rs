@@ -13,6 +13,10 @@ use tempfile::TempDir;
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
+    /// Shared query cache cap for encoded immutable block bytes.
+    pub cache_bytes: usize,
+    /// Shared query cache entry cap; zero disables retention.
+    pub cache_entries: usize,
     /// Maximum encoded bytes retained in the consolidation map.
     pub resident_bytes: usize,
     /// Maximum distinct identities retained before spilling.
@@ -33,6 +37,8 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
+            cache_bytes: 16 * 1024 * 1024,
+            cache_entries: 256,
             resident_bytes: 4 * 1024 * 1024,
             resident_entries: 4096,
             record_bytes: 64 * 1024,

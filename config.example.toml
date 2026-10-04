@@ -25,6 +25,8 @@ secret_access_key = "local"
 # Each operator spills exact coefficients before reaching these resident limits.
 # Byte budgets count serialized records, with separate entry caps for overhead.
 [execution]
+cache_bytes = 16777216
+cache_entries = 256
 resident_bytes = 4194304
 resident_entries = 4096
 record_bytes = 65536

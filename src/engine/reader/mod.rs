@@ -1,11 +1,13 @@
 //! Fallible readers over immutable canonical memory and object batches.
 mod bounded;
+mod cache;
 mod cursor;
 mod format;
 mod object;
 
 use super::Batch;
 use anyhow::Result;
+pub use cache::{BlockCache, CacheStats};
 pub use cursor::Cursor;
 pub use object::{ObjectBatch, ObjectRef};
 use serde::{Serialize, de::DeserializeOwned};

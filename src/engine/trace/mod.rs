@@ -5,7 +5,7 @@ use super::{
     reader::{BatchData, BatchReader, Cursor, ObjectBatch},
 };
 use anyhow::{Context, Result, ensure};
-pub use merged::MergedCursor;
+pub use merged::{KeyCursor, KeyProbes, MergedCursor};
 use std::sync::Arc;
 
 /// One immutable run, in memory or in object storage.
@@ -15,6 +15,20 @@ pub enum Run<K: BatchData, V: BatchData> {
     Memory(Arc<Batch<K, V>>),
     /// Open object batch with resident fences.
     Object(ObjectBatch<K, V>),
+}
+
+impl<K: BatchData, V: BatchData> Run<K, V> {
+    async fn cursor_for_key(&self, key: &K) -> Result<Option<Cursor<K, V>>> {
+        match self {
+            Self::Object(batch) => Cursor::object_key(batch.clone(), key).await,
+            Self::Memory(batch) => {
+                let mut cursor = batch.cursor().await?;
+                cursor.seek_key(key).await?;
+                cursor.restrict_to_key(key);
+                Ok(cursor.current().is_some().then_some(cursor))
+            }
+        }
+    }
 }
 
 impl<K: BatchData, V: BatchData> BatchReader for Run<K, V> {
@@ -65,6 +79,46 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             cursor.advance().await?;
         }
         Ok(())
+    }
+    /// Probe one navigation key, skipping runs whose local fences exclude it.
+    /// Returned rows retain full-tuple identity and consolidate every matching run.
+    ///
+    /// # Errors
+    /// Returns selected-block read, integrity, or consolidated arithmetic failures.
+    pub async fn key_cursor(&self, key: &K) -> Result<KeyCursor<K, V>> {
+        KeyCursor::open(&self.runs, key).await
+    }
+
+    /// Batch affected-key probes against this immutable boundary.
+    #[must_use]
+    pub fn probes(&self) -> KeyProbes<K, V> {
+        KeyProbes::new(self.clone())
+    }
+    pub(crate) async fn validate_delta(&self, delta: &Batch<K, V>) -> Result<()> {
+        let mut updates = delta.iter().peekable();
+        while let Some(((key, _), _)) = updates.peek() {
+            let key = key.clone();
+            let mut cursor = self.key_cursor(&key).await?;
+            while updates.peek().is_some_and(|((other, _), _)| *other == key) {
+                let ((_, value), weight) = updates.next().context("missing delta identity")?;
+                while cursor.current().is_some_and(|(_, old, _)| old < value) {
+                    cursor.advance().await?;
+                }
+                let old = cursor
+                    .current()
+                    .filter(|(_, old, _)| *old == value)
+                    .map_or(0, |(_, _, weight)| weight);
+                old.checked_add(*weight).context("final state coefficient overflow")?;
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn append_validated(&self, run: Run<K, V>, time: u64) -> Result<Self> {
+        ensure!(self.time.checked_add(1) == Some(time), "out-of-order trace tick");
+        let generation = self.generation.checked_add(1).context("trace generation overflow")?;
+        let mut runs = self.runs.clone();
+        runs.push(run);
+        Ok(Self { runs, generation, time })
     }
     /// Physical membership generation; compaction may change it without a tick.
     #[must_use]
@@ -190,3 +244,7 @@ impl<K: BatchData, V: BatchData> Trace<K, V> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/probes.rs"]
+mod probe_tests;
