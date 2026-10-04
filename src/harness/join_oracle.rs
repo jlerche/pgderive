@@ -1,11 +1,18 @@
 use super::{count_oracle, projection_oracle};
 use crate::{
-    engine::{Circuit, GroupedCount, IncrementalJoin, ZSet},
+    engine::{
+        Circuit, GroupedCount, IncrementalJoin, ZSet,
+        dataflow::{Stream, TraceQuery},
+    },
     transaction::Row,
     weighted::Batch,
 };
 use anyhow::{Context, Result, ensure};
+use object_store::memory::InMemory;
+use std::sync::Arc;
 use tokio_postgres::Client;
+
+type ObjectQuery = TraceQuery<String, Row, Row, Option<String>>;
 
 type Joined = (String, Row, Row);
 
@@ -21,6 +28,7 @@ struct QueryState {
 #[derive(Default)]
 pub(super) struct JoinFixture {
     circuit: Circuit<QueryState>,
+    trace: Option<ObjectQuery>,
 }
 
 type Inputs = (ZSet<(String, Row)>, ZSet<(String, Row)>);
@@ -39,7 +47,9 @@ impl JoinFixture {
     pub(super) async fn verify(&mut self, sql: &Client, schema: &str, batch: &Batch) -> Result<()> {
         let left = input(batch, "auction", "id")?;
         let right = input(batch, "bid", "auction")?;
-        let step = self.circuit.step(&(left, right), evaluate)?;
+        let inputs = (left, right);
+        let step = self.circuit.step(&inputs, evaluate)?;
+        self.verify_trace(sql, schema, step.time, &inputs).await?;
         let state = self.circuit.state();
         projection_oracle::verify(sql, schema, &state.projected).await?;
         count_oracle::verify(sql, schema, &state.count_output).await?;
@@ -64,6 +74,51 @@ impl JoinFixture {
             "join oracle passed at logical tick {} ({} result deltas)",
             step.time, step.output
         );
+        Ok(())
+    }
+    async fn verify_trace(
+        &mut self,
+        sql: &Client,
+        schema: &str,
+        time: u64,
+        inputs: &Inputs,
+    ) -> Result<()> {
+        if self.trace.is_none() {
+            self.trace = Some(TraceQuery::new(
+                Arc::new(InMemory::new()),
+                "nexmark-rows-v1".into(),
+                3,
+                |_, auction: &Row, bid| {
+                    if projection_oracle::number(bid, "price")?.is_none_or(|price| price < 205) {
+                        return Ok(None);
+                    }
+                    Ok(Some(auction.get("category").context("missing fixture category")?.clone()))
+                },
+            )?);
+        }
+        let graph = self.trace.as_mut().context("missing trace graph")?;
+        let left = Stream {
+            time,
+            batch: crate::engine::Batch::from_updates(
+                inputs.0.iter().map(|(row, w)| (row.clone(), *w)),
+            )?,
+        };
+        let right = Stream {
+            time,
+            batch: crate::engine::Batch::from_updates(
+                inputs.1.iter().map(|(row, w)| (row.clone(), *w)),
+            )?,
+        };
+        let prepared = graph.prepare(&left, &right).await?;
+        graph.commit(prepared)?;
+        let counts = graph.snapshot().counts.materialize().await?;
+        let output = ZSet::from_updates(counts.iter().map(|(row, w)| (row.clone(), *w)))?;
+        count_oracle::verify(sql, schema, &output).await?;
+        ensure!(
+            output == self.circuit.state().count_output,
+            "trace counts differ from memory graph"
+        );
+        eprintln!("object trace count oracle passed at logical tick {time}");
         Ok(())
     }
 }

@@ -1,9 +1,10 @@
-//! Transaction-ordered, in-memory weighted operators.
+//! Transaction-ordered weighted algebra, immutable storage and trace operators.
 //!
-//! These primitives have no persistence, source LSNs, or recursive scheduling.
+//! Local visibility is not durable catalog publication; no recursive scheduling.
 mod batch;
 mod circuit;
 mod count;
+pub mod dataflow;
 mod join;
 mod linear;
 pub mod reader;

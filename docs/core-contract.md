@@ -1,9 +1,9 @@
 # Core DBSP and object-storage contract
 
-The next work targets weighted semantics and persistent traces. Demos and SQL
-feature breadth are not acceptance criteria. Existing operators are an in-memory
-semantic baseline, not an object-backed execution abstraction or complete DBSP
-runtime. Initial scope remains transaction-ordered acyclic computation.
+The core targets weighted semantics and immutable object-backed traces. Demos
+and SQL feature breadth are not acceptance criteria. The memory operators remain
+a reference baseline alongside the fixed trace-backed graph; neither is a
+complete DBSP runtime. Initial scope is transaction-ordered acyclic computation.
 
 ## Current audit
 
@@ -11,10 +11,10 @@ Full-tuple identity, signed multiplicity, simultaneous join-input cross terms,
 and owned in-memory transaction staging have independent oracle checks. They do
 not establish arbitrary physical-layout equivalence or storage durability.
 
-The initial audit identified an arithmetic gap: `ZSet::from_updates` checks i64 overflow on
-each addition. Identical-tuple updates `[i64::MAX, 1, -1]` fail, while
-`[i64::MAX, -1, 1]` succeed. Projection collisions, grouped-count projection, and
-termwise join accumulation have related intermediate-overflow exposure. The
+The initial audit identified an arithmetic gap: `ZSet::from_updates` checked i64
+overflow on each addition. Identical-tuple updates `[i64::MAX, 1, -1]` failed,
+while `[i64::MAX, -1, 1]` succeeded. Projection collisions, grouped-count
+projection, and termwise join accumulation had related exposure. The
 accepted PoC RESULTS.md documents this class of defect for its i32 persisted
 weights and fixes it with wider accumulation before final narrowing. Pgderive now
 uses arbitrary-precision intermediate coefficients and narrows only finalized
@@ -26,7 +26,7 @@ external effects and shared mutable state. It cannot be treated as a durable
 commit protocol or used to clone mutable object-store-backed state. Backend
 execution needs immutable snapshot descriptors and staged replacements.
 
-## Next three core slices
+## Implemented core slices
 
 1. **Canonical weighted batches and arithmetic.** Define exactly when a logical
    batch is complete and when weights must fit i64. Accumulate contributions
@@ -61,8 +61,10 @@ execution needs immutable snapshot descriptors and staged replacements.
    state against the independent memory oracle and recorded PoC trace under
    cold reads, injected GET/PUT failures and concurrent physical compaction.
 
-The batch/arithmetic and immutable reader/trace slices are implemented as
-semantic baselines. Trace-based operators remain intended work. Readers use a
+All three slices are implemented as semantic baselines, including a fixed
+trace-backed join/filter/grouped-count graph with atomic local root publication.
+Object-backed replay, signed bag oracles, SQL comparisons, failure/retry checks
+and physical-compaction races cover that graph. Readers use a
 versioned JSON codec with explicit schema/ordering requirements; local trace
 visibility is not durable catalog publication. Object writes alone do
 not commit logical state. Actual durable publication still requires object PUT,

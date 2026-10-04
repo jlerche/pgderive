@@ -236,7 +236,7 @@ validation; it does not establish storage durability or CDC snapshot bootstrap.
 
 Further work prioritizes correct DBSP weighted semantics and object-backed
 arrangements. The demo requirement and demo-oriented roadmap are withdrawn.
-See [the core contract and audit](docs/core-contract.md) for the next three slices:
+See [the core contract and audit](docs/core-contract.md) for the three core slices:
 canonical weighted arithmetic, immutable batch/trace readers, and incremental
 operators over pinned traces. The initial intermediate-overflow gap is fixed by exact intermediate arithmetic
 and declared i64 finalization boundaries.
@@ -254,7 +254,7 @@ and all join cross terms. Grouped counts incorporate prior state before narrowin
 the final count. Every materialized operator output and committed state must fit
 the i64 domain. Failed finalization retains the prior circuit/operator state.
 This defines bounded logical collections with exact intermediate arithmetic, not
-unbounded persisted weights. Immutable codecs and trace readers are next.
+unbounded persisted weights. Immutable codecs and trace readers use the same finalization contract.
 
 ## Immutable batch readers and traces
 
@@ -279,3 +279,38 @@ merged reads open one cursor per run. Preparation currently scans/materializes
 complete candidate state for validation, and writers buffer full objects. No
 bounded-memory claim is made. Filesystem-store tests reopen real immutable bytes;
 cloud credentials, retries, catalog recovery and concurrency control remain ahead.
+
+
+## Operators over pinned object traces
+
+`Stream<B>` is one typed, complete transaction batch with logical time. The
+initial `TraceQuery<K,L,R,G>` binds its pure, deterministic classification
+function at construction; changing query semantics requires a new graph. It is an explicit acyclic equijoin → fallible
+filter/group projection → grouped count graph. It probes prior arrangements
+through key seeks and evaluates `ΔL⋈R + L⋈ΔR + ΔL⋈ΔR` with exact intermediate
+products. Full `(key,value)` identity is preserved; neither source key is assumed
+unique. Counts read affected groups from their prior trace, incorporate prior
+counts before narrowing, and emit unit-weight old/new count rows.
+
+Preparation uploads immutable input/count deltas and validates candidate states.
+One local root assignment publishes all three arrangements together. Failed
+reads, callbacks, finalization and uploads leave the root unchanged; stale or
+foreign candidates are rejected. Empty transactions advance the shared logical
+clock. Compaction publishes equivalent physical memberships at the same tick,
+invalidates preparations based on the replaced root, and retains pinned readers.
+It neither emits a logical batch nor deletes objects.
+
+Tests compare signed updates with independent bag recomputation and memory
+operators. The accepted PoC event replay checks all 111 committed transactions
+(9 rollbacks skipped) against the independent source-map oracle, checking input
+arrangements as well as counts. Object task arrangements are scoped to the
+fixture's project domain 1..=32; source-map validation still processes every
+recorded event. The sequential live PostgreSQL harness compares the object graph
+and memory graph with SQL after every committed transaction. Missing objects,
+filesystem PUT failures, corrupt immutable-upload collisions, arithmetic failures, retries and compaction
+races are exercised. These are correctness checks, not performance benchmarks.
+
+This fixed Rust graph is not a SQL planner or general circuit scheduler. Object
+encoding and full candidate validation remain buffered; many runs cause repeated
+reads. PostgreSQL catalog publication, authoritative restart/recovery, sink DML,
+slot acknowledgement, cloud retry policy and object GC remain unimplemented.

@@ -1,8 +1,13 @@
-use crate::engine::{Circuit, GroupedCount, IncrementalJoin, ZSet};
+use crate::engine::{
+    Batch, Circuit, GroupedCount, IncrementalJoin, ZSet,
+    dataflow::{Stream, TraceQuery},
+};
 use anyhow::{Result, bail, ensure};
+use object_store::memory::InMemory;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 type Task = (i64, i64, String, i64);
 type TaskInput = ((i64, Task), i64);
@@ -102,8 +107,8 @@ fn replay(
     Ok((ZSet::from_updates(left)?, ZSet::from_updates(right)?))
 }
 
-#[test]
-fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()> {
+#[tokio::test]
+async fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()> {
     let mut tasks = (1..=10_000)
         .map(|id| {
             let status = if id % 3 == 0 { "closed" } else { "open" };
@@ -113,11 +118,20 @@ fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()> {
     tasks.extend((20_000..20_512).map(|id| (id, (id, 1, "open".into(), 9))));
     let mut projects = (1..=32).map(|key| (key, key)).collect::<BTreeMap<_, _>>();
     let mut circuit = Circuit::<Graph>::default();
+    let mut trace = TraceQuery::new(
+        Arc::new(InMemory::new()),
+        "poc-tasks-projects-v1".into(),
+        64,
+        |project, task: &Task, organization| {
+            Ok((task.2 == "open" && task.3 >= 8).then_some((*project, *organization)))
+        },
+    )?;
     let initial = (
         ZSet::from_updates(tasks.values().map(|task| ((task.1, task.clone()), 1)))?,
         ZSet::from_updates(projects.iter().map(|(key, org)| ((*key, *org), 1)))?,
     );
     circuit.step(&initial, evaluate)?;
+    verify_trace(&mut trace, 1, &initial, &tasks, &projects).await?;
     assert_eq!(circuit.state().output, oracle(&tasks, &projects)?);
     let mut committed = 0;
     let mut rollbacks = 0;
@@ -134,9 +148,55 @@ fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()> {
         let step = circuit.step(&input, evaluate)?;
         committed += 1;
         assert_eq!(step.time, committed + 1);
+        verify_trace(&mut trace, step.time, &input, &tasks, &projects).await?;
         assert_eq!(circuit.state().output, oracle(&tasks, &projects)?, "transaction {ordinal}");
     }
     assert_eq!(committed, 111);
     assert_eq!(rollbacks, 9);
+    Ok(())
+}
+
+type TraceGraph = TraceQuery<i64, Task, i64, (i64, i64)>;
+async fn verify_trace(
+    graph: &mut TraceGraph,
+    time: u64,
+    input: &Inputs,
+    tasks: &BTreeMap<i64, Task>,
+    projects: &BTreeMap<i64, i64>,
+) -> Result<()> {
+    // Accepted fixture's project domain is 1..=32. Scope both old and new task
+    // images before forming this arrangement; source-map validation stays complete.
+    let left = Stream {
+        time,
+        batch: Batch::from_updates(
+            input
+                .0
+                .iter()
+                .filter(|((project, _), _)| (1..=32).contains(project))
+                .map(|(row, w)| (row.clone(), *w)),
+        )?,
+    };
+    let right =
+        Stream { time, batch: Batch::from_updates(input.1.iter().map(|(row, w)| (*row, *w)))? };
+    let prepared = graph.prepare(&left, &right).await?;
+    graph.commit(prepared)?;
+    let snapshot = graph.snapshot();
+    assert_eq!(
+        snapshot.counts.materialize().await?,
+        Batch::from_updates(oracle(tasks, projects)?.iter().map(|(row, w)| (*row, *w)))?
+    );
+    assert_eq!(
+        snapshot.left.materialize().await?,
+        Batch::from_updates(
+            tasks
+                .values()
+                .filter(|task| (1..=32).contains(&task.1))
+                .map(|task| ((task.1, task.clone()), 1))
+        )?
+    );
+    assert_eq!(
+        snapshot.right.materialize().await?,
+        Batch::from_updates(projects.iter().map(|(key, org)| ((*key, *org), 1)))?
+    );
     Ok(())
 }
