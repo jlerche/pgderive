@@ -19,13 +19,64 @@ pub struct ObjectRef {
     index_length: u64,
     index_hash: String,
     schema: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    namespace: Option<String>,
 }
 
 impl ObjectRef {
+    pub(crate) fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+    pub(crate) fn qualify(mut self, namespace: &str) -> Result<Self> {
+        ensure!(
+            valid_namespace(namespace) && self.namespace.is_none(),
+            "invalid immutable upload namespace"
+        );
+        self.path = format!("{namespace}/{}", self.path);
+        self.namespace = Some(namespace.into());
+        Ok(self)
+    }
+    pub(super) fn validate_namespace(&self) -> Result<()> {
+        if let Some(namespace) = &self.namespace {
+            ensure!(
+                valid_namespace(namespace)
+                    && self.path == format!("{namespace}/pgderive/batch-v2/{}", self.index_hash),
+                "invalid namespaced root identity"
+            );
+        }
+        Ok(())
+    }
+    pub(super) fn child_path(&self, path: &str) -> String {
+        self.namespace
+            .as_ref()
+            .map_or_else(|| path.to_owned(), |namespace| format!("{namespace}/{path}"))
+    }
     /// Exact key/value codec and ordering identity.
     #[must_use]
     pub fn schema(&self) -> &str {
         &self.schema
+    }
+    pub(super) const fn index_offset(&self) -> u64 {
+        self.index_offset
+    }
+    pub(super) async fn index_bytes(&self, store: &Arc<dyn ObjectStore>) -> Result<Vec<u8>> {
+        self.validate_namespace()?;
+        ensure!(
+            self.index_length > 0 && self.index_length <= u64::try_from(super::bounded::MAX_BYTES)?,
+            "invalid reachability index size"
+        );
+        let end = self
+            .index_offset
+            .checked_add(self.index_length)
+            .context("reachability index range overflow")?;
+        ensure!(
+            end == self.bytes
+                && store.head(&Path::from(self.path.clone())).await?.size == self.bytes,
+            "reachability root size mismatch"
+        );
+        let bytes = store.get_range(&Path::from(self.path.clone()), self.index_offset..end).await?;
+        ensure!(hash(&bytes) == self.index_hash, "reachability root checksum mismatch");
+        Ok(bytes.to_vec())
     }
     /// Content-addressed object path.
     #[must_use]
@@ -46,6 +97,22 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
 }
 
 impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
+    /// Write in a unique upload namespace and return a globally readable root.
+    /// Never reuse the namespace after its durable upload reservation closes.
+    ///
+    /// # Errors
+    /// Rejects invalid namespaces, encoding limits or object I/O failures.
+    pub async fn write_namespaced(
+        store: Arc<dyn ObjectStore>,
+        batch: &Batch<K, V>,
+        schema: &str,
+        target: (&str, usize),
+    ) -> Result<ObjectRef> {
+        ensure!(valid_namespace(target.0), "invalid batch upload namespace");
+        let scoped: Arc<dyn ObjectStore> =
+            Arc::new(object_store::prefix::PrefixStore::new(store, target.0));
+        Self::write(scoped, batch, schema, target.1).await?.qualify(target.0)
+    }
     /// Encode and PUT a canonical batch without publishing trace membership.
     /// Schema identity must include the key/value types and ordering semantics.
     ///
@@ -86,6 +153,13 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             ensure!(fence_bytes <= super::bounded::MAX_BYTES, "manifest exceeds byte limit");
             blocks.push(block);
         }
+        Self::upload_index(&store, schema, blocks).await
+    }
+    pub(super) async fn upload_index(
+        store: &Arc<dyn ObjectStore>,
+        schema: &str,
+        blocks: Vec<Block<(K, V)>>,
+    ) -> Result<ObjectRef> {
         let index =
             super::bounded::encode(&Index { version: 2, schema: schema.to_owned(), blocks })?;
         let reference = ObjectRef {
@@ -95,11 +169,14 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             index_length: u64::try_from(index.len())?,
             index_hash: hash(&index),
             schema: schema.to_owned(),
+            namespace: None,
         };
-        super::bounded::put(&store, &reference.path, index).await?;
+        super::bounded::put(store, &reference.path, index).await?;
         Ok(reference)
     }
 
+    // Reachability scans use the same trusted size/hash boundary without decoding
+    // application key/value types. They cannot infer liveness from object names alone.
     /// Reopen from a trusted catalog reference, validating the index and schema.
     /// Per-block integrity is checked lazily before exposing rows. Legacy v1
     /// objects are supported within the same 8 MiB block/index limit; larger
@@ -124,6 +201,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         schema: &str,
         cache: Arc<BlockCache>,
     ) -> Result<Self> {
+        reference.validate_namespace()?;
         ensure!(
             reference.index_length <= u64::try_from(super::bounded::MAX_BYTES)?,
             "index exceeds byte limit"
@@ -138,7 +216,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         ensure!(store.head(&path).await?.size == reference.bytes, "object size mismatch");
         let bytes = store.get_range(&path, reference.index_offset..end).await?;
         ensure!(hash(&bytes) == reference.index_hash, "object index checksum mismatch");
-        let index: Index<K, V> = serde_json::from_slice(&bytes)?;
+        let mut index: Index<K, V> = serde_json::from_slice(&bytes)?;
         ensure!(
             matches!(index.version, 1 | 2) && index.schema == schema,
             "unsupported object codec/schema"
@@ -176,6 +254,19 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             index.version == 2 || offset == reference.index_offset,
             "object block/index layout mismatch"
         );
+        if let Some(namespace) = &reference.namespace {
+            ensure!(
+                index.version == 2
+                    && valid_namespace(namespace)
+                    && reference.path.starts_with(&format!("{namespace}/pgderive/batch-v2/")),
+                "invalid namespaced immutable root"
+            );
+        }
+        if reference.namespace.is_some() {
+            for block in &mut index.blocks {
+                block.path = block.path.as_deref().map(|path| reference.child_path(path));
+            }
+        }
         Ok(Self { store, reference, blocks: Arc::new(index.blocks), cache })
     }
 
@@ -238,4 +329,12 @@ impl<K: BatchData, V: BatchData> BatchReader for ObjectBatch<K, V> {
     async fn cursor(&self) -> Result<Cursor<K, V>> {
         Cursor::object(self.clone()).await
     }
+}
+
+pub(super) fn valid_namespace(namespace: &str) -> bool {
+    namespace.strip_prefix("pgderive/upload-v1/").is_some_and(|suffix| {
+        !suffix.is_empty()
+            && suffix.len() <= 160
+            && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    })
 }

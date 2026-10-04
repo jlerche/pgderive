@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1"
+futures-util = "0.3"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 num-bigint = "0.4"
 native-tls = "0.2"

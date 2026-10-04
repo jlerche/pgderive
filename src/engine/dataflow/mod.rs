@@ -166,12 +166,13 @@ impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> TraceQuery<K, L, R,
         prior: &TraceSnapshot<A, B>,
         edge: &str,
     ) -> Result<TraceSnapshot<A, B>> {
-        let batch = prior.materialize().await?;
-        let schema = format!("{}:{edge}", self.schema);
-        let reference =
-            ObjectBatch::write(self.store.clone(), &batch, &schema, self.block_rows).await?;
-        let run = ObjectBatch::open(self.store.clone(), reference, &schema).await?;
-        prior.replace(Run::Object(run)).await
+        Arrangement::<A, B>::new(
+            self.store.clone(),
+            format!("{}:{edge}", self.schema),
+            self.block_rows,
+        )?
+        .compact(prior)
+        .await
     }
     /// Publish equivalent physical membership without producing a logical edge.
     ///

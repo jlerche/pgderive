@@ -70,6 +70,21 @@ impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {
     pub async fn prepare(&self, input: Stream<I>) -> Result<PreparedGraph<S, O>> {
         self.graph.prepare(input).await
     }
+    pub(crate) async fn prepare_using<F: Future<Output = Result<(S, O)>>>(
+        &self,
+        input: Stream<I>,
+        evaluate: impl FnOnce(Arc<S>, Stream<I>) -> F,
+    ) -> Result<PreparedGraph<S, O>> {
+        let time = input.time;
+        let plan = self.plan.clone();
+        self.graph
+            .prepare_using(input, move |state, input| async move {
+                let (state, output) = evaluate(state, input).await?;
+                plan.validate_state(&state, time)?;
+                Ok((state, output))
+            })
+            .await
+    }
     /// Publish checked state through one local visibility pointer.
     ///
     /// # Errors
@@ -104,6 +119,16 @@ impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {
                 Ok(next)
             })
             .await
+    }
+    /// Check ownership before physical membership publication.
+    ///
+    /// # Errors
+    /// Rejects foreign or stale maintenance.
+    pub fn validate_maintenance(
+        &self,
+        prepared: &crate::engine::dataflow::PreparedMaintenance<S>,
+    ) -> Result<()> {
+        self.graph.validate_maintenance(prepared)
     }
     /// Publish checked equivalent physical state without advancing logical time.
     ///

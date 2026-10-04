@@ -66,14 +66,30 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         next.validate().await?;
         Ok(next)
     }
-    pub(super) async fn replace(&self, run: Run<K, V>) -> Result<Self> {
+    pub(crate) async fn replace_runs(&self, runs: Vec<Run<K, V>>) -> Result<Self> {
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
-        let next = Self { runs: vec![run], generation, time: self.time };
-        ensure!(
-            next.materialize().await? == self.materialize().await?,
-            "compaction changed logical state"
-        );
+        let next = Self { runs, generation, time: self.time };
+        ensure!(self.equivalent(&next).await?, "compaction changed logical state");
         Ok(next)
+    }
+    async fn equivalent(&self, other: &Self) -> Result<bool> {
+        let mut left = self.cursor().await?;
+        let mut right = other.cursor().await?;
+        loop {
+            match (left.current(), right.current()) {
+                (None, None) => return Ok(true),
+                (Some(a), Some(b)) if a == b => {
+                    left.advance().await?;
+                    right.advance().await?;
+                }
+                _ => return Ok(false),
+            }
+        }
+    }
+    /// Number of immutable runs whose decoded heads may be opened by a merge.
+    #[must_use]
+    pub const fn run_count(&self) -> usize {
+        self.runs.len()
     }
     async fn validate(&self) -> Result<()> {
         let mut cursor = self.cursor().await?;
@@ -218,7 +234,7 @@ impl<K: BatchData, V: BatchData> Trace<K, V> {
     pub async fn prepare_compaction(&self, runs: Vec<Run<K, V>>) -> Result<PreparedTrace<K, V>> {
         let candidate = self.candidate(runs, self.snapshot.time).await?;
         ensure!(
-            candidate.next.materialize().await? == self.snapshot.materialize().await?,
+            candidate.next.equivalent(&self.snapshot).await?,
             "compaction changed logical state"
         );
         Ok(candidate)

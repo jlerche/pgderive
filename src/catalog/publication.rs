@@ -110,6 +110,7 @@ impl Catalog {
     ) -> Result<Writer> {
         binding.validate()?;
         let tx = sql.transaction().await?;
+        super::storage::shared(&tx, self).await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
         let row = tx.query_one(&format!("SELECT plan_identity,definition,logical_time,epoch FROM {}.pgderive_queries WHERE query_id=$1 FOR UPDATE", self.schema), &[&self.query]).await?;
         ensure!(

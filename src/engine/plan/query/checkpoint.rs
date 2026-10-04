@@ -6,7 +6,7 @@ use crate::engine::{
 use anyhow::{Context, Result};
 use std::sync::Arc;
 impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> QueryState<K, L, R, G> {
-    fn memberships(&self) -> Result<Vec<Membership>> {
+    pub(super) fn memberships(&self) -> Result<Vec<Membership>> {
         let traces = [
             self.left.manifest()?,
             self.right.manifest()?,
@@ -67,6 +67,24 @@ impl<
             version: 1,
             plan_identity: self.plan().identity().into(),
             time: prepared.output().time,
+            arrangements: prepared.candidate().memberships()?,
+        };
+        checkpoint.validate(self.plan())?;
+        Ok(checkpoint)
+    }
+    /// Export maintenance memberships only after checking exact runtime ownership.
+    ///
+    /// # Errors
+    /// Rejects foreign/stale work or incompatible arrangement metadata.
+    pub fn prepared_compaction_checkpoint(
+        &self,
+        prepared: &super::Compaction<K, L, R, G>,
+    ) -> Result<Checkpoint> {
+        self.engine.validate_maintenance(prepared)?;
+        let checkpoint = Checkpoint {
+            version: 1,
+            plan_identity: self.plan().identity().into(),
+            time: self.time(),
             arrangements: prepared.candidate().memberships()?,
         };
         checkpoint.validate(self.plan())?;
@@ -155,7 +173,7 @@ impl<
             limits.cache_entries,
         ));
         Ok(Arc::new(Self {
-            operators,
+            operators: Arc::new(operators),
             left: crate::engine::dataflow::Arrangement::new(
                 store.clone(),
                 schemas[0].clone(),

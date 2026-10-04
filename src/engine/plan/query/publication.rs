@@ -16,6 +16,28 @@ impl<
     V: BatchData,
 > GroupedJoin<K, A, B, L, R, G, V>
 {
+    /// Publish equivalent compaction memberships, then move local visibility.
+    /// Logical time, source positions and destination data remain unchanged.
+    ///
+    /// # Errors
+    /// Rejects stale/foreign work or a local base different from authoritative state.
+    /// After uncertain COMMIT, resolve maintenance and cold-restore before retrying.
+    pub async fn publish_compaction(
+        &mut self,
+        sql: &mut Client,
+        writer: &mut Writer,
+        prepared: super::Compaction<K, L, R, G>,
+    ) -> Result<()> {
+        self.engine.validate_maintenance(&prepared)?;
+        let durable = writer.confirmed(sql, self.plan()).await?;
+        anyhow::ensure!(
+            durable.stored.checkpoint == self.checkpoint()?,
+            "compaction base differs from durable membership"
+        );
+        let checkpoint = self.prepared_compaction_checkpoint(&prepared)?;
+        writer.maintain(sql, self.plan(), &checkpoint).await?;
+        self.engine.commit_maintenance(prepared)
+    }
     /// Durably publish one prepared grouped transaction, then move local visibility.
     ///
     /// Exclusive runtime ownership spans candidate validation and `PostgreSQL` COMMIT.

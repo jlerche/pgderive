@@ -52,11 +52,15 @@ held=[json.loads(line) for line in (out/'sql-commit-hold.jsonl').read_text().spl
 assert [row['server_committed'] for row in held]==[False,True]
 for mode,committed in [('before',False),('after',True)]:
     faults=[json.loads(line) for line in (out/f'sql-commit-{mode}.jsonl').read_text().splitlines()][1:]
-    assert len(faults)==2 and all(row['server_committed'] is committed for row in faults)
+    assert len(faults)==3 and all(row['server_committed'] is committed for row in faults)
 assert 'MVP snapshot uncertain BEFORE COMMIT resolved from authoritative registration' in harness_log
 assert 'MVP snapshot uncertain AFTER COMMIT resolved from authoritative registration' in harness_log
 assert 'MVP externally advanced and recreated source slots rejected before replication starts' in harness_log
 assert 'MVP snapshot quoted-name/boolean/null/native codecs and bounded-copy/RLS rejection verified' in harness_log
+assert 'MVP maintenance uncertain BEFORE COMMIT resolved without logical/source advance' in harness_log
+assert 'MVP maintenance uncertain AFTER COMMIT resolved without logical/source advance' in harness_log
+assert 'MVP durable streaming compaction preserved source/sink/logical state and pinned reader' in harness_log
+assert 'MVP GC retained committed and pinned state; fenced abandoned uploads reclaimed without source/logical advance' in harness_log
 assert 'MVP source schema drift blocked publication and preserved durable boundary' in harness_log
 assert 'MVP exported snapshot plus concurrent insert/update/delete CDC reconstructed exact source state; native schema drift rejected' in harness_log
 assert 'MVP full-tuple bag multiplicity, cancellation and overflow rollback passed' in harness_log

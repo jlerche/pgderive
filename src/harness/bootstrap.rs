@@ -1,5 +1,7 @@
 mod activation;
 mod codec;
+mod collection;
+mod maintenance;
 use super::{Fixture, apply, connect, source_state};
 use crate::{
     Config,
@@ -29,7 +31,7 @@ pub(super) async fn check(
         config.execution,
     )?;
     let catalog = Catalog::new(&fixture.schema, "snapshot_grouped")?;
-    activate(
+    let protection = activate(
         sql,
         &catalog,
         &mut graph,
@@ -37,6 +39,7 @@ pub(super) async fn check(
     )
     .await?;
     let (mut graph, mut writer) = restore(sql, &catalog, graph, recovery, boundary).await?;
+    protection.published(sql, &writer, graph.plan(), &graph.checkpoint()?).await?;
     let mut config = config.clone();
     config.replication.slot = slot.clone();
     let verified = writer.confirmed(sql, graph.plan()).await?;
@@ -54,13 +57,27 @@ pub(super) async fn check(
         report.time == 2 && report.epoch == 2,
         "fresh process recovered wrong snapshot/CDC boundary"
     );
-    schema_drift(sql, &fixture.schema, &contract).await?;
-    advanced_slot(sql, &config, &catalog, graph.plan()).await?;
-    sql.query_one("SELECT pg_drop_replication_slot($1)", &[&slot]).await?;
-    codec::check(sql, fixture, &recovery.config).await?;
+    maintenance::check(sql, &fixture.schema, &mut graph, &mut writer, recovery).await?;
+    collection::check(sql, &catalog, &mut graph, &mut writer, recovery).await?;
+    finish_source(sql, fixture, &config, &catalog, graph.plan()).await?;
     eprintln!(
         "MVP exported snapshot plus concurrent insert/update/delete CDC reconstructed exact source state; native schema drift rejected"
     );
+    Ok(())
+}
+async fn finish_source(
+    sql: &mut Client,
+    fixture: &Fixture,
+    config: &Config,
+    catalog: &Catalog,
+    plan: &crate::engine::plan::Plan,
+) -> Result<()> {
+    let durable = catalog.load_durable(sql, plan).await?.context("missing source contract")?;
+    let contract = durable.binding.registered_source()?.context("missing native contract")?;
+    schema_drift(sql, &fixture.schema, &contract).await?;
+    advanced_slot(sql, config, catalog, plan).await?;
+    sql.query_one("SELECT pg_drop_replication_slot($1)", &[&config.replication.slot]).await?;
+    codec::check(sql, fixture, config).await?;
     Ok(())
 }
 async fn restore(
@@ -115,16 +132,20 @@ async fn activate(
     catalog: &Catalog,
     graph: &mut super::mvp::Query,
     initial: Initial<'_>,
-) -> Result<()> {
+) -> Result<crate::catalog::Protection> {
     let Initial { contract, boundary, batch, config } = initial;
+    let protection = catalog.protect_upload(sql, "snapshot-upload").await?;
     let prepared = graph
-        .prepare(Tick {
-            time: 1,
-            batch: (
-                super::mvp::input(batch, "auction", "id")?,
-                super::mvp::input(batch, "bid", "auction")?,
-            ),
-        })
+        .prepare_protected(
+            Tick {
+                time: 1,
+                batch: (
+                    super::mvp::input(batch, "auction", "id")?,
+                    super::mvp::input(batch, "bid", "auction")?,
+                ),
+            },
+            &protection,
+        )
         .await?;
     let checkpoint = graph.prepared_checkpoint(&prepared)?;
     let deltas = Deltas::grouped(&prepared.output().batch)?;
@@ -137,7 +158,7 @@ async fn activate(
     };
     activation::check(sql, catalog, graph.plan(), snapshot, config).await?;
     graph.commit(prepared)?;
-    Ok(())
+    Ok(protection)
 }
 async fn catch_up(
     sql: &mut Client,
@@ -150,21 +171,27 @@ async fn catch_up(
         .await
         .context("snapshot CDC timed out")??;
     ensure!(transaction.changes.len() == 5, "snapshot boundary lost concurrent source changes");
+    let protection = writer.protect_upload(sql, "snapshot-cdc-upload").await?;
     let prepared = graph
-        .prepare(Tick {
-            time: 2,
-            batch: (
-                super::mvp::input(&transaction.batch, "auction", "id")?,
-                super::mvp::input(&transaction.batch, "bid", "auction")?,
-            ),
-        })
+        .prepare_protected(
+            Tick {
+                time: 2,
+                batch: (
+                    super::mvp::input(&transaction.batch, "auction", "id")?,
+                    super::mvp::input(&transaction.batch, "bid", "auction")?,
+                ),
+            },
+            &protection,
+        )
         .await?;
     let progress = crate::catalog::Progress::new(
         transaction.xid,
         &transaction.commit_lsn,
         &transaction.end_lsn,
     )?;
+    let checkpoint = graph.prepared_checkpoint(&prepared)?;
     graph.publish_prepared(sql, writer, prepared, &progress).await?;
+    protection.published(sql, writer, graph.plan(), &checkpoint).await?;
     stream.acknowledge(sql, writer, graph.plan()).await?;
     reject_publication_drift(sql, schema, graph, writer).await?;
     let different: bool = sql.query_one(&format!("SELECT EXISTS((SELECT group_key,row_count,total FROM {schema}.snapshot_groups EXCEPT SELECT COALESCE(to_jsonb(a.category::text),'null'::jsonb),COUNT(*),SUM(b.price)::bigint FROM {schema}.auction a JOIN {schema}.bid b ON a.id=b.auction GROUP BY a.category) UNION ALL (SELECT COALESCE(to_jsonb(a.category::text),'null'::jsonb),COUNT(*),SUM(b.price)::bigint FROM {schema}.auction a JOIN {schema}.bid b ON a.id=b.auction GROUP BY a.category EXCEPT SELECT group_key,row_count,total FROM {schema}.snapshot_groups))"), &[]).await?.try_get(0)?;

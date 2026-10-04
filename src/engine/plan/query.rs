@@ -77,7 +77,7 @@ struct Execution<
     G: BatchData,
     V: BatchData,
 > {
-    operators: Operators<K, A, B, L, R, G, V>,
+    operators: SharedOperators<K, A, B, L, R, G, V>,
     left: Arrangement<K, L>,
     right: Arrangement<K, R>,
     sums: Arrangement<G, SumState>,
@@ -86,9 +86,13 @@ struct Execution<
     limits: Limits,
     cache: Arc<BlockCache>,
 }
+type SharedOperators<K, A, B, L, R, G, V> = Arc<Operators<K, A, B, L, R, G, V>>;
 type Output<G> = Batch<G, AggregateRow>;
 type SharedExecution<K, A, B, L, R, G, V> = Arc<Execution<K, A, B, L, R, G, V>>;
-/// Complete unpublished state/output of a typed grouped join.
+/// Complete unpublished equivalent physical state of a typed grouped join.
+pub type Compaction<K, L, R, G> =
+    crate::engine::dataflow::PreparedMaintenance<QueryState<K, L, R, G>>;
+/// Prepared logical transaction with complete candidate state and output.
 pub type Prepared<K, L, R, G> =
     crate::engine::dataflow::PreparedGraph<QueryState<K, L, R, G>, Output<G>>;
 type Runtime<K, A, B, L, R, G> = Engine<QueryState<K, L, R, G>, Inputs<K, A, B>, Output<G>>;
@@ -116,6 +120,18 @@ impl<
     V: BatchData,
 > Execution<K, A, B, L, R, G, V>
 {
+    fn scoped(&self, namespace: &str) -> Arc<Self> {
+        Arc::new(Self {
+            operators: self.operators.clone(),
+            left: self.left.clone().with_namespace(namespace),
+            right: self.right.clone().with_namespace(namespace),
+            sums: self.sums.clone().with_namespace(namespace),
+            output: self.output.clone().with_namespace(namespace),
+            schemas: self.schemas.clone(),
+            limits: self.limits,
+            cache: self.cache.clone(),
+        })
+    }
     fn empty(&self) -> QueryState<K, L, R, G> {
         QueryState {
             left: self.left.empty(),
@@ -248,6 +264,36 @@ impl<
         self.execution.limits.check_batch(&input.batch.1)?;
         self.engine.prepare(input).await
     }
+    /// Stage a transaction in the unique namespace of a durable upload reservation.
+    /// Keep the reservation active until authoritative publication is resolved.
+    ///
+    /// # Errors
+    /// Returns reservation, resource, operator, or object failures.
+    pub async fn prepare_protected(
+        &self,
+        input: Stream<Inputs<K, A, B>>,
+        protection: &crate::catalog::Protection,
+    ) -> Result<Prepared<K, L, R, G>> {
+        self.execution.limits.check_batch(&input.batch.0)?;
+        self.execution.limits.check_batch(&input.batch.1)?;
+        let execution = self.execution.scoped(protection.namespace()?);
+        self.engine
+            .prepare_using(input, move |state, input| async move {
+                execution.evaluate(state, input).await
+            })
+            .await
+    }
+    /// Stage compaction while a durable reservation protects every new PUT.
+    ///
+    /// # Errors
+    /// Returns reservation, storage or equivalence failures.
+    pub async fn prepare_compaction_protected(
+        &self,
+        protection: &crate::catalog::Protection,
+    ) -> Result<Compaction<K, L, R, G>> {
+        let execution = self.execution.scoped(protection.namespace()?);
+        self.engine.maintenance(move |state| async move { execution.compact(state).await }).await
+    }
     /// Publish prepared state locally; durable PG publication is a later slice.
     ///
     /// # Errors
@@ -255,16 +301,20 @@ impl<
     pub fn commit(&mut self, prepared: Prepared<K, L, R, G>) -> Result<Stream<Output<G>>> {
         self.engine.commit(prepared)
     }
+    /// Prepare bounded streaming compaction without changing local visibility.
+    ///
+    /// # Errors
+    /// Returns storage, arithmetic or equivalence failures with the root unchanged.
+    pub async fn prepare_compaction(&self) -> Result<Compaction<K, L, R, G>> {
+        let execution = self.execution.clone();
+        self.engine.maintenance(move |state| async move { execution.compact(state).await }).await
+    }
     /// Replace equivalent physical memberships without advancing logical time.
     ///
     /// # Errors
     /// Returns storage/equivalence/stale errors, retaining the current root.
     pub async fn compact(&mut self) -> Result<()> {
-        let execution = self.execution.clone();
-        let prepared = self
-            .engine
-            .maintenance(move |state| async move { execution.compact(state).await })
-            .await?;
+        let prepared = self.prepare_compaction().await?;
         self.engine.commit_maintenance(prepared)
     }
 }

@@ -74,9 +74,16 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
     /// # Errors
     /// Rejects wrong ticks and propagates every node's failure.
     pub async fn prepare(&self, input: Stream<I>) -> Result<PreparedGraph<S, O>> {
+        self.prepare_using(input, |state, input| (self.evaluate)(state, input)).await
+    }
+    pub(crate) async fn prepare_using<F: Future<Output = Result<(S, O)>>>(
+        &self,
+        input: Stream<I>,
+        evaluate: impl FnOnce(Arc<S>, Stream<I>) -> F,
+    ) -> Result<PreparedGraph<S, O>> {
         ensure!(self.root.time.checked_add(1) == Some(input.time), "out-of-order graph tick");
         let time = input.time;
-        let (state, output) = (self.evaluate)(self.snapshot(), input).await?;
+        let (state, output) = evaluate(self.snapshot(), input).await?;
         Ok(PreparedGraph {
             base: self.root.clone(),
             next: Arc::new(Boundary { state: Arc::new(state), time }),
@@ -108,7 +115,22 @@ pub struct PreparedMaintenance<S> {
     base: Arc<Boundary<S>>,
     next: Arc<Boundary<S>>,
 }
+impl<S> PreparedMaintenance<S> {
+    /// Pin equivalence-checked physical state before durable membership publication.
+    #[must_use]
+    pub fn candidate(&self) -> Arc<S> {
+        self.next.state.clone()
+    }
+}
 impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
+    /// Check maintenance belongs to the current immutable boundary.
+    ///
+    /// # Errors
+    /// Rejects foreign or stale physical candidates.
+    pub fn validate_maintenance(&self, prepared: &PreparedMaintenance<S>) -> Result<()> {
+        ensure!(Arc::ptr_eq(&self.root, &prepared.base), "foreign or stale graph maintenance");
+        Ok(())
+    }
     /// Stage physical maintenance over immutable state at the current boundary.
     /// The callback must use equivalence-checked arrangement compaction only.
     ///
@@ -129,7 +151,7 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
     /// # Errors
     /// Rejects stale or foreign maintenance without changing visibility.
     pub fn commit_maintenance(&mut self, prepared: PreparedMaintenance<S>) -> Result<()> {
-        ensure!(Arc::ptr_eq(&self.root, &prepared.base), "foreign or stale graph maintenance");
+        self.validate_maintenance(&prepared)?;
         self.root = prepared.next;
         Ok(())
     }

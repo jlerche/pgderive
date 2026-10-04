@@ -61,7 +61,13 @@ class Proxy(ThreadingHTTPServer):
             raise ValueError("upstream must be a local HTTP origin")
         self.upstream = (parsed.hostname, parsed.port or 80)
         self.model = model
+        self.log_lock = threading.Lock()
         super().__init__(address, Handler)
+
+    def record(self, event):
+        # print performs separate data/newline writes; serialize worker threads.
+        with self.log_lock:
+            print(json.dumps(event), flush=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -116,14 +122,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
         except (OSError, EOFError, ValueError, http.client.HTTPException) as error:
             # Request/response logs are retained by the harness. No retry in proxy.
-            print(json.dumps({"error": str(error), "method": self.command}), flush=True)
+            self.server.record({"error": str(error), "method": self.command})
             if status == 502:
                 self.send_error(502, "upstream request failed")
         finally:
             connection.close()
-            print(json.dumps({"method": self.command, "range": self.headers.get("Range"),
+            self.server.record({"method": self.command, "range": self.headers.get("Range"),
                               "kind": kind, "ordinal": ordinal, "delay_ms": delay_ms,
-                              "status": status, "elapsed_ms": (time.monotonic() - started) * 1000}), flush=True)
+                              "status": status, "elapsed_ms": (time.monotonic() - started) * 1000})
 
     def forward_chunks(self, connection):
         while True:

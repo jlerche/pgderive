@@ -34,6 +34,8 @@ pub(super) async fn stage(
     checkpoint: &Checkpoint,
     expected: u64,
 ) -> Result<u64> {
+    super::storage::shared(tx, catalog).await?;
+    super::storage::validate_additions(tx, catalog, checkpoint).await?;
     let epoch = expected.checked_add(1).context("catalog epoch overflow")?;
     let next = i64::try_from(epoch)?;
     let expected = i64::try_from(expected)?;

@@ -84,6 +84,7 @@ async fn load(
         .start()
         .await?;
     if lock {
+        super::storage::shared(&tx, catalog).await?;
         tx.query_opt(
             &format!(
                 "SELECT query_id FROM {}.pgderive_queries WHERE query_id=$1 FOR UPDATE",
@@ -141,6 +142,46 @@ impl super::Writer {
             "acknowledgement capability is stale or incompatible"
         );
         Ok(durable)
+    }
+    /// Resolve physical maintenance without advancing logical/source progress.
+    ///
+    /// # Errors
+    /// Rejects replaced writers or any boundary other than the exact prior/candidate.
+    pub async fn reconcile_maintenance(
+        &mut self,
+        sql: &mut Client,
+        plan: &Plan,
+        candidate: &Checkpoint,
+    ) -> Result<Resolution> {
+        super::maintenance::validate(&self.checkpoint, candidate, plan)?;
+        let durable = load(&self.catalog, sql, plan, true)
+            .await?
+            .context("missing maintenance resolution boundary")?;
+        ensure!(
+            durable.binding == self.binding
+                && durable.fence == u64::try_from(self.fence)?
+                && durable.end == self.end
+                && durable.commit == self.last_commit
+                && durable.xid == self.last_xid,
+            "maintenance ownership/source progress changed"
+        );
+        let resolution =
+            if durable.stored.epoch == self.epoch && durable.stored.checkpoint == self.checkpoint {
+                Resolution::NotCommitted
+            } else {
+                ensure!(
+                    self.epoch.checked_add(1) == Some(durable.stored.epoch)
+                        && durable.stored.checkpoint == *candidate,
+                    "maintenance has nonmatching authoritative outcome"
+                );
+                Resolution::Committed
+            };
+        if resolution == Resolution::Committed {
+            self.epoch = durable.stored.epoch;
+            self.checkpoint = durable.stored.checkpoint;
+        }
+        self.uncertain = false;
+        Ok(resolution)
     }
     /// Resolve an uncertain COMMIT using the authoritative publication boundary.
     ///

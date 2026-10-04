@@ -628,3 +628,52 @@ copy rejection, quoted names and boolean/null codecs. A failed copy retains its
 persistent slot and evidence. Restarting an unfinished exported copy requires a
 new snapshot/slot; automatic worker lifecycle and cleanup are the later worker
 slice, and physical orphan collection belongs to the GC slice.
+
+### Streaming maintenance and physical collection
+
+`GroupedJoin::prepare_compaction` merges complete full-tuple identities through
+bounded cursors, then writes consolidated v2 blocks and roots. Compaction never
+advances DBSP time or emits result deltas. Default writer budgets are 8 MiB per
+block/index, 4,096 rows per block, 4,096 block fences per root and 128 output roots;
+input traces are capped at 128 runs for compaction. Exceeding a budget fails before
+publication. `publish_compaction` verifies the exact authoritative prior
+membership, publishes a new physical epoch with unchanged sink/source progress,
+and then replaces local visibility. Lost COMMIT responses require authoritative
+maintenance reconciliation and cold reopen before any further publication or ACK.
+
+For a catalog using GC, reserve with `Writer::protect_upload` **before PUT** (bootstrap uses
+`Catalog::protect_upload` before progress exists) and
+use `prepare_protected` or `prepare_compaction_protected`. Each reservation has a
+random, durable physical namespace; equal content in different reservations has
+different physical addresses. Publication accepts newly managed roots only from
+an active reservation at the current writer fence, or exact existing committed
+roots. Release an upload with `Protection::published` after authoritative
+confirmation and after all its writes have finished. Never reuse a reservation's
+namespace after release. These rules protect new uploads from a delayed DELETE
+whose PostgreSQL session has already disconnected.
+
+Readers and recovery must call `protect_checkpoint` before opening objects and
+restore from its `stored()` checkpoint, which is the exact boundary pinned by the
+reservation. Keep that protection until **every** dependent reader is finished;
+then call `reader_finished`. An in-process `Arc` by itself does not protect objects
+from an external collector. Reader protections never expire automatically. After
+an authoritative writer claim, `seal_fenced_uploads` seals abandoned uploads from
+older fences; their original writers can no longer publish them. An unfinished
+bootstrap retains its reservation until activation/recovery establishes ownership.
+
+`Catalog::collect` uses an exclusive schema lifecycle barrier, validates every
+committed/protected root, discovers block addresses from object-local indexes,
+finishes bounded enumeration, and only then deletes unreachable canonical v2
+objects from sealed upload namespaces. Active uploads stop collection. Metadata
+budgets default to 4,096 roots, 262,144 enumerated/reachable paths and 16 MiB of
+encoded catalog metadata. Missing/corrupt roots or exceeded budgets abort before
+DELETE. Partial sweep failures are safe to retry. Committed memberships, source
+progress and destination data are never changed by collection.
+
+Use a store prefix owned exclusively by the catalog schema. Unknown names and
+legacy objects written without managed upload reservations are retained; migrating
+that diagnostic state needs a separate offline procedure. Closed namespace ledger
+rows remain durable and grow over time. Reader protection cleanup after an actual
+reader crash requires evidence that its readers have ended; there is no time-based
+lease expiry. WAL retention, continuous worker policy and sustained workload
+qualification remain separate work.

@@ -1,3 +1,7 @@
+import contextlib
+import io
+import json
+import time
 import http.client
 import threading
 import unittest
@@ -6,6 +10,26 @@ from s3_latency_proxy import ANCHORS, Model, Proxy, quantile
 
 
 class LatencyTests(unittest.TestCase):
+    def test_concurrent_evidence_records_are_complete_json_lines(self):
+        class YieldingOutput(io.StringIO):
+            def write(self, value):
+                result = super().write(value)
+                time.sleep(.001)
+                return result
+        output = YieldingOutput()
+        proxy = Proxy(("127.0.0.1", 0), "http://127.0.0.1:8333", Model())
+        try:
+            with contextlib.redirect_stdout(output):
+                threads = [threading.Thread(target=proxy.record, args=({"record": i},)) for i in range(20)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+            records = [json.loads(line)["record"] for line in output.getvalue().splitlines()]
+            self.assertEqual(sorted(records), list(range(20)))
+        finally:
+            proxy.server_close()
+
     def test_published_anchors_and_interpolation(self):
         for method, anchors in ANCHORS.items():
             for probability, expected in zip((.5, .95, .99), anchors):

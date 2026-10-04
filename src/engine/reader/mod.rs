@@ -4,6 +4,9 @@ mod cache;
 mod cursor;
 mod format;
 mod object;
+mod reachability;
+mod streaming;
+pub use streaming::WriteLimits;
 
 use super::Batch;
 use anyhow::Result;
