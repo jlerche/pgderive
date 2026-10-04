@@ -2,8 +2,7 @@ use super::{Model, join_oracle, projection_oracle};
 use crate::{
     engine::{
         Batch,
-        dataflow::{Arrangement, Graph, GroupSum, Join, Project, Stream, SumState},
-        trace::TraceSnapshot,
+        dataflow::{GroupSum, Project, Stream, SumState},
     },
     transaction::Row,
     weighted,
@@ -15,35 +14,19 @@ use tokio_postgres::Client;
 type Key = String;
 type Group = Option<String>;
 type Bid = (String, Option<i64>);
-type Inputs = (Batch<Key, Row>, Batch<Key, Row>);
-type Output = Batch<Group, Option<i64>>;
-struct State {
-    left: TraceSnapshot<Key, Group>,
-    right: TraceSnapshot<Key, Bid>,
-    sums: TraceSnapshot<Group, SumState>,
-    output: TraceSnapshot<Group, Option<i64>>,
+type Query = crate::engine::plan::query::GroupedJoin<Key, Row, Row, Group, Bid, Group, Bid>;
+pub(super) struct MvpFixture {
+    graph: Query,
 }
-struct Plan {
-    left: Arrangement<Key, Group>,
-    right: Arrangement<Key, Bid>,
-    sums: Arrangement<Group, SumState>,
-    output: Arrangement<Group, Option<i64>>,
-    project_left: Project<Key, Row, Key, Group>,
-    project_right: Project<Key, Row, Key, Bid>,
-    group: Project<Key, (Group, Bid), Group, Bid>,
-    sum: GroupSum<Group, Bid>,
-}
-impl Plan {
-    fn new(store: Arc<dyn ObjectStore>) -> Result<Self> {
-        Ok(Self {
-            left: Arrangement::new(store.clone(), "mvp-auction-category-v1".into(), 3)?,
-            right: Arrangement::new(store.clone(), "mvp-bid-price-v1".into(), 3)?,
-            sums: Arrangement::new(store.clone(), "mvp-sum-statistics-v1".into(), 3)?,
-            output: Arrangement::new(store, "mvp-visible-sums-v1".into(), 3)?,
-            project_left: Project::new(|key: &Key, row: &Row| {
+impl MvpFixture {
+    pub(super) fn new(store: Arc<dyn ObjectStore>) -> Result<Self> {
+        use crate::engine::plan::query::Operators;
+        let plan = registered_plan()?;
+        let operators = Operators {
+            left: Project::new(|key: &Key, row: &Row| {
                 Ok(Some((key.clone(), row.get("category").context("missing category")?.clone())))
             }),
-            project_right: Project::new(|key: &Key, row: &Row| {
+            right: Project::new(|key: &Key, row: &Row| {
                 Ok(Some((
                     key.clone(),
                     (
@@ -56,54 +39,10 @@ impl Plan {
                 Ok(Some((category.clone(), bid.clone())))
             }),
             sum: GroupSum::new(|_: &Group, bid: &Bid| Ok(bid.1)),
-        })
-    }
-    const fn empty(&self) -> State {
-        State {
-            left: self.left.empty(),
-            right: self.right.empty(),
-            sums: self.sums.empty(),
-            output: self.output.empty(),
-        }
-    }
-    async fn evaluate(&self, state: Arc<State>, input: Stream<Inputs>) -> Result<(State, Output)> {
-        let left =
-            self.project_left.evaluate(&Stream { time: input.time, batch: input.batch.0 })?;
-        let right =
-            self.project_right.evaluate(&Stream { time: input.time, batch: input.batch.1 })?;
-        let joined = Join.evaluate(&left, &right, &state.left, &state.right).await?;
-        let grouped = self.group.evaluate(&joined)?;
-        let delta = self.sum.evaluate(&grouped, &state.sums).await?;
-        let next = State {
-            left: self.left.stage(&state.left, &left).await?,
-            right: self.right.stage(&state.right, &right).await?,
-            sums: self.sums.stage(&state.sums, &delta.state).await?,
-            output: self.output.stage(&state.output, &delta.output).await?,
         };
-        Ok((next, delta.output.batch))
-    }
-    async fn compact(&self, state: Arc<State>) -> Result<State> {
-        Ok(State {
-            left: self.left.compact(&state.left).await?,
-            right: self.right.compact(&state.right).await?,
-            sums: self.sums.compact(&state.sums).await?,
-            output: self.output.compact(&state.output).await?,
-        })
-    }
-}
-pub(super) struct MvpFixture {
-    graph: Graph<State, Inputs, Output>,
-    plan: Arc<Plan>,
-}
-impl MvpFixture {
-    pub(super) fn new(store: Arc<dyn ObjectStore>) -> Result<Self> {
-        let plan = Arc::new(Plan::new(store)?);
-        let evaluator = plan.clone();
-        let graph = Graph::new(plan.empty(), move |state, input| {
-            let plan = evaluator.clone();
-            async move { plan.evaluate(state, input).await }
-        });
-        Ok(Self { graph, plan })
+        let graph = Query::new(plan, operators, store, 3)?;
+        eprintln!("registered engine query: {}", graph.plan().identity());
+        Ok(Self { graph })
     }
     pub(super) async fn verify(
         &mut self,
@@ -139,13 +78,11 @@ impl MvpFixture {
         );
         let visible = state.output.materialize().await?;
         let query = format!(
-            "SELECT a.category::text,SUM(b.price)::bigint FROM {schema}.auction a JOIN {schema}.bid b ON a.id=b.auction GROUP BY a.category"
+            "SELECT a.category::text,COUNT(*),SUM(b.price)::bigint FROM {schema}.auction a JOIN {schema}.bid b ON a.id=b.auction GROUP BY a.category"
         );
-        let rows = sql
-            .query(&query, &[])
-            .await?
-            .into_iter()
-            .map(|row| ((row.get::<_, Group>(0), row.get::<_, Option<i64>>(1)), 1));
+        let rows = sql.query(&query, &[]).await?.into_iter().map(|row| {
+            ((row.get::<_, Group>(0), (row.get::<_, i64>(1), row.get::<_, Option<i64>>(2))), 1)
+        });
         ensure!(visible == Batch::from_updates(rows)?, "MVP SUM output differs from SQL");
         if time == 5 {
             self.compact().await?;
@@ -158,12 +95,7 @@ impl MvpFixture {
         let pinned = self.graph.snapshot();
         let expected = pinned.output.materialize().await?;
         let time = self.graph.time();
-        let plan = self.plan.clone();
-        let prepared = self
-            .graph
-            .prepare_maintenance(move |state| async move { plan.compact(state).await })
-            .await?;
-        self.graph.commit_maintenance(prepared)?;
+        self.graph.compact().await?;
         ensure!(
             self.graph.time() == time
                 && pinned.output.materialize().await? == expected
@@ -200,4 +132,75 @@ fn memory(model: &Model) -> Result<Batch<Group, SumState>> {
         }
     }
     Batch::from_updates(totals.into_iter().map(|row| (row, 1)))
+}
+
+fn registered_plan() -> Result<crate::engine::plan::Plan> {
+    use crate::engine::plan::{Arrangement as Registration, Definition, Kind, Node, Plan, Source};
+    let nodes = vec![
+        Node {
+            id: "auction".into(),
+            kind: Kind::Source,
+            inputs: vec!["auctions".into()],
+            schema: "auction-full-row-v1".into(),
+        },
+        Node {
+            id: "bid".into(),
+            kind: Kind::Source,
+            inputs: vec!["bids".into()],
+            schema: "bid-full-row-v1".into(),
+        },
+        Node {
+            id: "left".into(),
+            kind: Kind::Project,
+            inputs: vec!["auction".into()],
+            schema: "mvp-auction-category-v1".into(),
+        },
+        Node {
+            id: "right".into(),
+            kind: Kind::Project,
+            inputs: vec!["bid".into()],
+            schema: "mvp-bid-price-v1".into(),
+        },
+        Node {
+            id: "join".into(),
+            kind: Kind::Join,
+            inputs: vec!["left".into(), "right".into()],
+            schema: "category-bid-v1".into(),
+        },
+        Node {
+            id: "group".into(),
+            kind: Kind::Project,
+            inputs: vec!["join".into()],
+            schema: "group-bid-v1".into(),
+        },
+        Node {
+            id: "aggregate".into(),
+            kind: Kind::Aggregate,
+            inputs: vec!["group".into()],
+            schema: "count-sum-row-v1".into(),
+        },
+    ];
+    let arrangements = [
+        ("left", "left", "mvp-auction-category-v1"),
+        ("right", "right", "mvp-bid-price-v1"),
+        ("sums", "aggregate", "mvp-sum-statistics-v1"),
+        ("output", "aggregate", "mvp-visible-count-sums-v1"),
+    ]
+    .into_iter()
+    .map(|(id, node, schema)| Registration {
+        id: id.into(),
+        node: node.into(),
+        schema: schema.into(),
+    })
+    .collect();
+    Plan::new(Definition {
+        revision: "auction-bid-count-sum-v1".into(),
+        sources: vec![
+            Source { id: "auctions".into(), schema: "auction-full-row-v1".into() },
+            Source { id: "bids".into(), schema: "bid-full-row-v1".into() },
+        ],
+        nodes,
+        arrangements,
+        outputs: vec!["aggregate".into()],
+    })
 }

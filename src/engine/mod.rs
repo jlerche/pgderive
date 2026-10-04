@@ -7,6 +7,7 @@ mod count;
 pub mod dataflow;
 mod join;
 mod linear;
+pub mod plan;
 pub mod reader;
 pub mod trace;
 mod weights;

@@ -398,3 +398,21 @@ durable PostgreSQL membership/result publication, restart recovery, object GC,
 or slot acknowledgement. Immutable bytes are persisted; their authoritative
 restart manifest is not yet implemented. Writers and candidate validation still
 buffer/scan full state; this is correctness infrastructure, not a latency benchmark.
+
+## Registered production engine contract
+
+`engine::plan::Plan` validates explicit source/type contracts, topologically
+ordered operator arities, reachable outputs, and named persisted arrangements.
+Its SHA-256 identity covers the complete registration and semantic revision.
+Callback implementation changes require a new revision; caller-supplied schema
+identities remain an explicit Rust/codec contract until SQL lowering exists.
+
+`Engine` binds the fixed evaluator to a plan and checks the actual immutable
+state membership, schema identities, and every arrangement tick before local
+publication. Missing, extra, duplicate, or differently timed state fails without
+moving visibility. `query::GroupedJoin` is the production reusable two-source
+project/join/group/COUNT/SUM executor; the live harness supplies only domain
+adapters and independent oracles. Its integrated output includes COUNT(*) and
+nullable SUM. A separate registered three-source chained-join test checks
+simultaneous input changes against full bag recomputation. Durable publication,
+resource-bounded execution and startup schema inspection remain subsequent slices.
