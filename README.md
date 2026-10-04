@@ -232,34 +232,11 @@ rows are supplied explicitly in memory. Fixture provenance and scope are in
 [tests/fixtures/README.md](tests/fixtures/README.md). This strengthens algebra
 validation; it does not establish storage durability or CDC snapshot bootstrap.
 
-## Next demoable slices
+## Core implementation focus
 
-Every slice starts with its demo command and expected visible behavior, and ends
-with an independent review, the common quality gate, and instructions to reproduce
-the demo. The commands below are proposed interfaces, not implemented commands.
-
-1. **Live query demo.** Add `./scripts/demo.sh live` using disposable PostgreSQL
-   and isolated Nexmark fixtures. Run the fixed join/filter/count graph outside
-   the test oracle. Display each source commit, logical tick, result retractions
-   and additions, and the current counts. A guided mutation changes a category,
-   moves bids across the price threshold, and creates/removes a group. Allow
-   manual SQL mutations and compare displayed results with a separate SQL query.
-   Keep source acknowledgement disabled. Start from empty owned fixtures; this
-   does not imply general snapshot bootstrap.
-2. **Durable publication demo.** Add `./scripts/demo.sh publish` for the same
-   query. Persist a versioned immutable graph checkpoint through the object-store
-   library, then publish object membership, destination-table changes and source
-   progress in one PostgreSQL transaction. Show the object identifier, committed
-   progress and destination rows, with SQL oracle equality. An injected PUT
-   failure must leave the destination/catalog/progress unchanged. Use complete
-   small checkpoints initially; indexed arrangements remain later work. Keep
-   slot acknowledgement disabled until the restart/replay slice verifies it.
-3. **Restart and replay demo.** Add `./scripts/demo.sh recover`. Restore the
-   published checkpoint, replay outstanding committed source transactions, and
-   acknowledge only durably published progress. Inject process failures before
-   publication and after publication but before acknowledgement. Show recovered
-   counts, replayed/skipped transactions, source progress and slot acknowledgement,
-   and compare results with uninterrupted execution and SQL. Worker restarts
-   retain the running ephemeral demo services; PostgreSQL and object storage
-   remain running. Recreating the disposable services resets the entire fixture.
-   This tests worker crash recovery, not general WAL-retention safety.
+Further work prioritizes correct DBSP weighted semantics and object-backed
+arrangements. The demo requirement and demo-oriented roadmap are withdrawn.
+See [the core contract and audit](docs/core-contract.md) for the next three slices:
+canonical weighted arithmetic, immutable batch/trace readers, and incremental
+operators over pinned traces. The audit identifies an intermediate-overflow
+consolidation gap that must be fixed before physical run layouts are introduced.
