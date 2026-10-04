@@ -15,6 +15,30 @@ def request(url, method="GET"):
         return response.read()
 
 
+def commit_proxy(output, mode):
+    path = output / f"sql-commit-{mode}.jsonl"
+    with path.open("w") as log:
+        command = [sys.executable, "-u", "scripts/pg_commit_proxy.py", "--mode", mode]
+        if mode == "hold":
+            command += ["--gate", str(output / "sql-commit-hold.release")]
+        process = subprocess.Popen(command, stdout=log, stderr=log)
+    try:
+        for _ in range(100):
+            lines = path.read_text().splitlines()
+            if lines:
+                ready = json.loads(lines[0])
+                if ready.get("ready"):
+                    return process, ready["port"]
+            if process.poll() is not None:
+                raise RuntimeError(f"commit proxy failed: {path}")
+            time.sleep(.05)
+        raise RuntimeError(f"commit proxy did not become ready: {path}")
+    except BaseException:
+        process.terminate()
+        process.wait(timeout=10)
+        raise
+
+
 def run(output, command):
     upstream = "http://127.0.0.1:8333"
     try:
@@ -47,6 +71,7 @@ def run(output, command):
         proxy_command += ["--fail", fail]
     with (output / "proxy.jsonl").open("w") as log:
         proxy = subprocess.Popen(proxy_command, stdout=log, stderr=log)
+        commit_processes = []
         try:
             for _ in range(100):
                 lines = (output / "proxy.jsonl").read_text().splitlines()
@@ -63,6 +88,13 @@ def run(output, command):
             environment["PGDERIVE__OBJECT_STORE__ENDPOINT"] = f"http://127.0.0.1:{ready['port']}"
             if fail:
                 environment["PGDERIVE_EXPECT_STORAGE_FAILURE"] = "1"
+            for mode in ("before", "after", "hold"):
+                process, port = commit_proxy(output, mode)
+                commit_processes.append(process)
+                environment[f"PGDERIVE_SQL_COMMIT_{mode.upper()}_PORT"] = str(port)
+                if mode == "hold":
+                    environment["PGDERIVE_SQL_COMMIT_HOLD_GATE"] = str(output / "sql-commit-hold.release")
+
             (output / "storage-profile.json").write_text(json.dumps({"upstream": upstream,
                 "bucket": bucket, "seed": seed, "scale": scale, "failure": fail,
                 "anchors_ms": ready["anchors_ms"], "model": "linear inverse CDF, p0=0, p99-clamped",
@@ -71,6 +103,9 @@ def run(output, command):
                 result = subprocess.run(command, env=environment, stdout=transactions, stderr=stderr, timeout=600)
             return result.returncode
         finally:
+            for process in commit_processes:
+                process.terminate()
+                process.wait(timeout=10)
             proxy.terminate()
             proxy.wait(timeout=10)
 

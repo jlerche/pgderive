@@ -1,4 +1,4 @@
-use super::{Catalog, Deltas, Lsn, Progress, Sink, write};
+use super::{Catalog, Deltas, Lsn, Progress, Sink, read, write};
 use crate::engine::plan::{Checkpoint, Plan};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,13 @@ pub struct Binding {
     pub source: String,
     /// Owned explicit destination table and encoding.
     pub sink: Sink,
+}
+impl Binding {
+    pub(super) fn validate(&self) -> Result<()> {
+        self.sink.validate()?;
+        ensure!(!self.source.is_empty() && self.source.len() <= 4096, "invalid source binding");
+        Ok(())
+    }
 }
 /// Complete prepared transaction, whose immutable objects must already exist.
 #[derive(Clone, Copy)]
@@ -28,12 +35,16 @@ pub struct Publication<'a> {
 /// A newly claimed capability invalidates every previously claimed writer.
 /// Do not retry an uncertain COMMIT blindly; reload the authoritative boundary.
 pub struct Writer {
-    catalog: Catalog,
-    binding: Binding,
-    fence: i64,
-    epoch: u64,
-    time: u64,
-    end: Lsn,
+    pub(super) catalog: Catalog,
+    pub(super) binding: Binding,
+    pub(super) fence: i64,
+    pub(super) epoch: u64,
+    pub(super) time: u64,
+    pub(super) end: Lsn,
+    pub(super) checkpoint: Checkpoint,
+    pub(super) last_commit: Lsn,
+    pub(super) last_xid: Option<u32>,
+    pub(super) uncertain: bool,
 }
 impl Catalog {
     /// Claim publication ownership, initializing progress only at an empty tick zero.
@@ -49,11 +60,7 @@ impl Catalog {
         binding: Binding,
         initial: Lsn,
     ) -> Result<Writer> {
-        binding.sink.validate()?;
-        ensure!(
-            !binding.source.is_empty() && binding.source.len() <= 4096,
-            "invalid source binding"
-        );
+        binding.validate()?;
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
         let row = tx.query_one(&format!("SELECT plan_identity,definition,logical_time,epoch FROM {}.pgderive_queries WHERE query_id=$1 FOR UPDATE", self.schema), &[&self.query]).await?;
@@ -65,9 +72,13 @@ impl Catalog {
         );
         let time = u64::try_from(row.try_get::<_, i64>(2)?)?;
         let epoch = u64::try_from(row.try_get::<_, i64>(3)?)?;
+        let checkpoint = read::boundary(&tx, self, plan)
+            .await?
+            .context("missing claimed checkpoint")?
+            .checkpoint;
         let encoded = serde_json::to_value(&binding)?;
-        let row = tx.query_opt(&format!("SELECT binding,fence,end_lsn::text FROM {}.pgderive_progress WHERE query_id=$1 FOR UPDATE", self.schema), &[&self.query]).await?;
-        let (fence, end) = if let Some(row) = row {
+        let row = tx.query_opt(&format!("SELECT binding,fence,end_lsn::text,commit_lsn::text,xid FROM {}.pgderive_progress WHERE query_id=$1 FOR UPDATE", self.schema), &[&self.query]).await?;
+        let (fence, end, last_commit, last_xid) = if let Some(row) = row {
             ensure!(
                 row.try_get::<_, serde_json::Value>(0)? == encoded,
                 "source/destination binding mismatch"
@@ -75,20 +86,38 @@ impl Catalog {
             let fence =
                 row.try_get::<_, i64>(1)?.checked_add(1).context("worker fence overflow")?;
             let end = row.try_get::<_, String>(2)?.parse()?;
+            let commit = row.try_get::<_, String>(3)?.parse()?;
+            let xid = row.try_get::<_, Option<i64>>(4)?.map(u32::try_from).transpose()?;
+            ensure!(
+                end >= commit
+                    && if time == 0 { xid.is_none() && end == commit } else { xid.is_some() },
+                "invalid claimed source progress"
+            );
             tx.execute(
                 &format!("UPDATE {}.pgderive_progress SET fence=$2 WHERE query_id=$1", self.schema),
                 &[&self.query, &fence],
             )
             .await?;
-            (fence, end)
+            (fence, end, commit, xid)
         } else {
             initialize(&tx, self, &binding, time, initial).await?;
-            (1, initial)
+            (1, initial, initial, None)
         };
         tx.commit()
             .await
             .context("worker claim COMMIT requires authoritative reload on failure")?;
-        Ok(Writer { catalog: self.clone(), binding, fence, epoch, time, end })
+        Ok(Writer {
+            catalog: self.clone(),
+            binding,
+            fence,
+            epoch,
+            time,
+            end,
+            checkpoint,
+            last_commit,
+            last_xid,
+            uncertain: false,
+        })
     }
 }
 async fn initialize(
@@ -146,6 +175,7 @@ impl Writer {
         plan: &Plan,
         publication: Publication<'_>,
     ) -> Result<()> {
+        ensure!(!self.uncertain, "uncertain COMMIT must be reconciled before publication");
         let Publication { checkpoint, progress, deltas } = publication;
         checkpoint.validate(plan)?;
         ensure!(
@@ -162,12 +192,17 @@ impl Writer {
             &[&self.catalog.query, &self.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.end.to_string(), &serde_json::to_value(&self.binding)?]).await?;
         ensure!(affected == 1, "stale or incompatible publication worker");
         deltas.apply(&tx, &self.catalog, &self.binding.sink).await?;
+        self.uncertain = true;
         tx.commit()
             .await
             .context("publication COMMIT outcome requires authoritative reload on failure")?;
         self.epoch = epoch;
         self.time = checkpoint.time;
         self.end = progress.end;
+        self.checkpoint = checkpoint.clone();
+        self.last_commit = progress.commit;
+        self.last_xid = Some(progress.xid);
+        self.uncertain = false;
         Ok(())
     }
 }

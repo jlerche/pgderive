@@ -1,3 +1,4 @@
+mod acknowledgement;
 use crate::{
     Config, listener,
     transaction::{Row, Transaction},
@@ -69,7 +70,7 @@ pub async fn run_harness(config: Config) -> Result<()> {
     let outcome = crate::outcome::combine(result, cleanup, "fixture cleanup");
     crate::outcome::combine(outcome, disconnected, "SQL disconnect")?;
     eprintln!(
-        "harness passed: fifteen transactions, weighted SQL differences, full old/new rows, rollback excluded, no acknowledgement; fixture cleaned up"
+        "harness passed: fifteen diagnostic transactions without acknowledgement, rollback excluded, durable resume/publication/acknowledgement verified; fixture cleaned up"
     );
     Ok(())
 }
@@ -177,16 +178,16 @@ async fn execute(sql: &mut Client, fixture: &Fixture, mut config: Config) -> Res
         } else {
             std::sync::Arc::new(object_store::memory::InMemory::new())
         };
-    let recovery = recovery::Recovery { config: config.clone(), store, prefix };
+    let recovery = recovery::Recovery { config: config.clone(), store: store.clone(), prefix };
     let (ready, connected) = oneshot::channel();
     let (observed, mut received) = mpsc::channel(8);
-    let mut task = tokio::spawn(listener::run(config, Some(ready), Some(observed)));
+    let mut task = tokio::spawn(listener::run(config.clone(), Some(ready), Some(observed)));
     let result = async {
         timeout(Duration::from_secs(10), connected)
             .await
             .context("listener connection timed out")?
             .context("listener failed to connect")?;
-        drive(sql, fixture, &mut received, recovery).await
+        drive(sql, fixture, &mut received, recovery.clone()).await
     }
     .await;
     if result.is_err() {
@@ -202,7 +203,15 @@ async fn execute(sql: &mut Client, fixture: &Fixture, mut config: Config) -> Res
     if completed.is_err() {
         task.abort();
     }
-    completed.context("listener shutdown timed out")?.context("listener task failed")?
+    completed.context("listener shutdown timed out")?.context("listener task failed")??;
+    let end = acknowledgement::check(sql, fixture, &config, store).await?;
+    let report = recovery.recover_query(sql, &fixture.schema, "atomic_grouped").await?;
+    ensure!(
+        report.time == 16 && report.epoch == 17 && report.source_end == Some(end.to_string()),
+        "fresh-process durable source/state recovery mismatch"
+    );
+    eprintln!("MVP fresh-process recovered atomic tick 16 with exact durable source position");
+    Ok(())
 }
 
 async fn drive(
@@ -222,13 +231,7 @@ async fn drive(
     let mut model = Model::new();
     let mut join = join_oracle::JoinFixture::default();
     let mut mvp = mvp::MvpFixture::new(recovery.store.clone(), recovery.config.execution)?;
-    mvp.initialize_publication(
-        sql,
-        schema,
-        format!("{}:{}:{}", recovery.config.postgres.database, fixture.publication, fixture.slot),
-        &initial,
-    )
-    .await?;
+    mvp.initialize_publication(sql, schema, &recovery.config, &initial).await?;
     for (statements, expected, operation) in cases::transactions(schema) {
         sql.batch_execute(&statements).await?;
         let transaction = timeout(Duration::from_secs(20), received.recv())

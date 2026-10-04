@@ -1,5 +1,7 @@
 mod bags;
+mod cancellation;
 mod checks;
+mod recovery;
 use super::{Group, MvpFixture, Query};
 use crate::{
     catalog::{Binding, Catalog, Deltas, Lsn, Progress, Publication, Sink, Writer},
@@ -15,15 +17,20 @@ pub(super) struct PublicationFixture {
     stale: Writer,
     catalog: Catalog,
     schema: String,
+    config: crate::Config,
 }
 impl MvpFixture {
     pub(in crate::harness) async fn initialize_publication(
         &mut self,
         sql: &mut Client,
         schema: &str,
-        source: String,
+        config: &crate::Config,
         initial: &str,
     ) -> Result<()> {
+        let source = format!(
+            "{}:{}:{}",
+            config.postgres.database, config.replication.publication, config.replication.slot
+        );
         let checkpoint = self.graph.checkpoint()?;
         let catalog = Catalog::new(schema, "atomic_grouped")?;
         catalog.install(sql).await?;
@@ -46,8 +53,14 @@ impl MvpFixture {
                 initial,
             )
             .await?;
-        self.publication =
-            Some(PublicationFixture { grouped, bag, stale, catalog, schema: schema.into() });
+        self.publication = Some(PublicationFixture {
+            grouped,
+            bag,
+            stale,
+            catalog,
+            schema: schema.into(),
+            config: config.clone(),
+        });
         Ok(())
     }
 }
@@ -69,7 +82,10 @@ impl PublicationFixture {
             self.failure_checks(sql, graph, publication()).await?;
         }
         let bag = Deltas::bag(&prepared.output().batch)?;
-        graph.publish_prepared(sql, &mut self.grouped, prepared, &progress).await?;
+        if !self.uncertain_commit(sql, graph, publication()).await? {
+            graph.publish_prepared(sql, &mut self.grouped, prepared, &progress).await?;
+        }
+
         self.bag
             .publish(
                 sql,

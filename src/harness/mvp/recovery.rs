@@ -129,6 +129,7 @@ pub(in crate::harness) async fn recover(
         arrangements: checkpoint.arrangements.len(),
         objects: checkpoint.arrangements.iter().map(|member| member.trace.objects.len()).sum(),
         plan_identity: checkpoint.plan_identity.clone(),
+        source_end: None,
     };
     let graph = Query::reopen(
         registered_plan()?,

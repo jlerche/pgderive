@@ -17,9 +17,17 @@ pub(super) async fn load(
         .read_only(true)
         .start()
         .await?;
+    let stored = boundary(&tx, catalog, plan).await?;
+    tx.commit().await?;
+    Ok(stored)
+}
+pub(super) async fn boundary(
+    tx: &Transaction<'_>,
+    catalog: &Catalog,
+    plan: &Plan,
+) -> Result<Option<Stored>> {
     let row = tx.query_opt(&format!("SELECT format_version,plan_identity,definition,logical_time,epoch FROM {}.pgderive_queries WHERE query_id=$1", catalog.schema), &[&catalog.query]).await?;
     let Some(row) = row else {
-        tx.commit().await?;
         return Ok(None);
     };
     ensure!(row.try_get::<_, i32>(0)? == 1, "unsupported catalog query format");
@@ -33,10 +41,9 @@ pub(super) async fn load(
     let time = u64::try_from(row.try_get::<_, i64>(3)?)?;
     let epoch = u64::try_from(row.try_get::<_, i64>(4)?)?;
     ensure!(epoch > 0, "invalid catalog epoch");
-    let arrangements = membership(&tx, catalog).await?;
+    let arrangements = membership(tx, catalog).await?;
     let checkpoint = Checkpoint { version: 1, plan_identity: identity, time, arrangements };
     checkpoint.validate(plan)?;
-    tx.commit().await?;
     Ok(Some(Stored { epoch, checkpoint }))
 }
 async fn membership(tx: &Transaction<'_>, catalog: &Catalog) -> Result<Vec<Membership>> {

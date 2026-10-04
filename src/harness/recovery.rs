@@ -8,6 +8,7 @@ use tokio::process::Command;
 use tokio_postgres::Client;
 
 pub(super) const QUERY: &str = "auction_bid_count_sum";
+#[derive(Clone)]
 pub(super) struct Recovery {
     pub(super) config: Config,
     pub(super) store: Arc<dyn ObjectStore>,
@@ -26,24 +27,34 @@ pub struct RecoveryReport {
     pub objects: usize,
     /// Exact registered plan identity.
     pub plan_identity: String,
+    /// Durable source end for a publication query; absent for metadata-only snapshots.
+    pub source_end: Option<String>,
 }
 impl Recovery {
     pub(super) async fn recover(&self, sql: &mut Client, schema: &str) -> Result<RecoveryReport> {
+        self.recover_query(sql, schema, QUERY).await
+    }
+    pub(super) async fn recover_query(
+        &self,
+        sql: &mut Client,
+        schema: &str,
+        query: &str,
+    ) -> Result<RecoveryReport> {
         if self.config.object_store.is_none() || self.config.source_path.is_none() {
             let plan = mvp::registered_plan()?;
-            let stored = Catalog::new(schema, QUERY)?
-                .load(sql, &plan)
-                .await?
-                .context("missing checkpoint")?;
-            return mvp::recover(
+            let catalog = Catalog::new(schema, query)?;
+            let (stored, end) = stored(sql, &catalog, &plan, query).await?;
+            let mut report = mvp::recover(
                 self.store.clone(),
                 self.config.execution,
                 stored,
                 &source_state(sql, schema).await?,
             )
-            .await;
+            .await?;
+            report.source_end = end;
+            return Ok(report);
         }
-        let output = self.child(schema).await?;
+        let output = self.child_query(schema, query).await?;
         ensure!(
             output.status.success(),
             "fresh-process recovery failed: {}",
@@ -52,6 +63,9 @@ impl Recovery {
         Ok(serde_json::from_slice(&output.stdout)?)
     }
     pub(super) async fn child(&self, schema: &str) -> Result<std::process::Output> {
+        self.child_query(schema, QUERY).await
+    }
+    async fn child_query(&self, schema: &str, query: &str) -> Result<std::process::Output> {
         let path = self
             .config
             .source_path
@@ -60,7 +74,7 @@ impl Recovery {
         let prefix =
             self.prefix.as_ref().context("fresh process requires persistent object storage")?;
         let mut command = Command::new(std::env::current_exe()?);
-        command.args(["--recover"]).arg(path).args([schema, QUERY, prefix]).kill_on_drop(true);
+        command.args(["--recover"]).arg(path).args([schema, query, prefix]).kill_on_drop(true);
         tokio::time::timeout(Duration::from_secs(45), command.output())
             .await
             .context("fresh-process recovery timed out")?
@@ -81,7 +95,7 @@ pub async fn run_recovery(
     config.validate()?;
     ensure!(config.postgres.tls == "disable", "local recovery harness requires TLS disabled");
     ensure!(
-        prefix.starts_with(&format!("{schema}-")) && query == QUERY,
+        prefix.starts_with(&format!("{schema}-")) && matches!(query, QUERY | "atomic_grouped"),
         "invalid recovery fixture scope"
     );
     let catalog = Catalog::new(schema, query)?;
@@ -92,14 +106,29 @@ pub async fn run_recovery(
         .build(prefix)?;
     let (mut sql, connection) = super::connect(&config).await?;
     let result = async {
-        let stored = catalog
-            .load(&mut sql, &mvp::registered_plan()?)
-            .await?
-            .context("missing recovery checkpoint")?;
-        mvp::recover(store, config.execution, stored, &source_state(&sql, schema).await?).await
+        let (stored, end) = stored(&mut sql, &catalog, &mvp::registered_plan()?, query).await?;
+        let mut report =
+            mvp::recover(store, config.execution, stored, &source_state(&sql, schema).await?)
+                .await?;
+        report.source_end = end;
+        Ok(report)
     }
     .await;
     drop(sql);
     let disconnected = connection.await.context("recovery SQL task failed")?.map_err(Into::into);
     crate::outcome::combine(result, disconnected, "recovery disconnect")
+}
+
+async fn stored(
+    sql: &mut Client,
+    catalog: &Catalog,
+    plan: &crate::engine::plan::Plan,
+    query: &str,
+) -> Result<(crate::catalog::Stored, Option<String>)> {
+    if query == "atomic_grouped" {
+        let durable =
+            catalog.load_durable(sql, plan).await?.context("missing durable recovery boundary")?;
+        return Ok((durable.stored, Some(durable.end.to_string())));
+    }
+    Ok((catalog.load(sql, plan).await?.context("missing recovery checkpoint")?, None))
 }

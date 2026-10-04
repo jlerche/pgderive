@@ -2,6 +2,8 @@
 mod position;
 mod publication;
 mod read;
+mod recovery;
+pub use recovery::{Durable, Resolution};
 mod sink;
 mod write;
 pub use position::{Lsn, Progress};

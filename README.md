@@ -537,3 +537,37 @@ workers and metadata-only overwrites, and injects destination DML failure to
 verify complete rollback. An isolated arithmetic fixture exercises same-key bag
 multiplicity, cancellation and final-coefficient overflow without acknowledging
 its synthetic source positions.
+
+## Recovery, replay and acknowledgement
+
+`Catalog::load_durable` reads membership, source positions and worker ownership
+from one repeatable-read snapshot. `Writer::reconcile` first locks the query row
+to wait out the original publication transaction. It accepts only the exact
+unchanged prior boundary or the exact candidate, epoch and transaction identity.
+A writer marks COMMIT uncertain before awaiting its response, so cancellation or
+connection loss cannot permit blind retry or authorize acknowledgement.
+
+`GroupedJoin::restore_checkpoint` cold-validates every arrangement before replacing
+local visibility and invalidating old preparations. Replay uses WAL order; the
+transaction at the exact durable end must also match its commit position and ID.
+A conflicting or overlapping transaction fails closed.
+
+The registered stream plumbing resumes at the durable end and leaves received
+transactions unacknowledged. Before updating pgwire feedback it rechecks the
+writer against PostgreSQL membership, progress and fencing, and requires matching
+source registration. The diagnostic listener remains unacknowledged. A continuous
+worker and verified source inspection/bootstrap remain subsequent slices.
+
+The local SQL fault proxy disconnects before forwarding COMMIT, or discards its
+response only after PostgreSQL confirms successful COMMIT. Evidence records which
+outcome occurred without recording SQL or credentials. The harness verifies both
+resolutions, cold recovery, replay rejection, and blocked blind retries. After
+its fifteen diagnostic transactions, it resumes from durable tick 15, proves that
+periodic feedback cannot acknowledge merely received tick 16, then publishes and
+acknowledges tick 16. A separate process reopens its state and exact source position.
+
+A third proxy mode holds an issued COMMIT while its PostgreSQL transaction stays
+open. The harness cancels the publication future, verifies acknowledgement is
+blocked, and proves reconciliation waits on that transaction's query-row lock.
+Releasing COMMIT then recovers the exact committed candidate. This directly
+checks cancellation safety and the serialization barrier used for resolution.

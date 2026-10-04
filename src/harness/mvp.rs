@@ -18,7 +18,8 @@ use tokio_postgres::Client;
 type Key = String;
 type Group = Option<String>;
 type Bid = (String, Option<i64>);
-type Query = crate::engine::plan::query::GroupedJoin<Key, Row, Row, Group, Bid, Group, Bid>;
+pub(super) type Query =
+    crate::engine::plan::query::GroupedJoin<Key, Row, Row, Group, Bid, Group, Bid>;
 pub(super) struct MvpFixture {
     graph: Query,
     epoch: u64,
@@ -106,7 +107,7 @@ impl MvpFixture {
     }
 }
 type QueryOperators = crate::engine::plan::query::Operators<Key, Row, Row, Group, Bid, Group, Bid>;
-fn operators() -> QueryOperators {
+pub(super) fn operators() -> QueryOperators {
     use crate::engine::plan::query::Operators;
     Operators {
         left: Project::new(|key: &Key, row: &Row| {
@@ -127,7 +128,7 @@ fn operators() -> QueryOperators {
         sum: GroupSum::new(|_: &Group, bid: &Bid| Ok(bid.1)),
     }
 }
-fn input(batch: &weighted::Batch, table: &str, key: &str) -> Result<Batch<Key, Row>> {
+pub(super) fn input(batch: &weighted::Batch, table: &str, key: &str) -> Result<Batch<Key, Row>> {
     Batch::from_updates(
         join_oracle::input(batch, table, key)?.iter().map(|(row, w)| (row.clone(), *w)),
     )

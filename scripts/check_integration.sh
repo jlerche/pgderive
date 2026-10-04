@@ -43,11 +43,21 @@ assert 'MVP incomplete and corrupt catalog membership rejected without epoch cha
 assert harness_log.count('MVP atomic sink/membership/source publication passed at tick ')==15
 assert 'MVP failed destination DML and fenced writers preserved sink/membership/progress' in harness_log
 assert 'MVP suppressed destination DML rejected without progress change' in harness_log
+assert 'MVP uncertain BEFORE COMMIT resolved as NotCommitted; blind retry rejected' in harness_log
+assert 'MVP uncertain AFTER COMMIT resolved as Committed; blind retry rejected' in harness_log
+assert 'MVP resumed from durable tick 15; received rows remained unacknowledged until atomic tick 16 publication' in harness_log
+assert 'MVP fresh-process recovered atomic tick 16 with exact durable source position' in harness_log
+assert 'MVP cancelled pending COMMIT blocked acknowledgement; reconciliation waited for original transaction and recovered committed state' in harness_log
+held=[json.loads(line) for line in (out/'sql-commit-hold.jsonl').read_text().splitlines()][1:]
+assert [row['server_committed'] for row in held]==[False,True]
+for mode,committed in [('before',False),('after',True)]:
+    faults=[json.loads(line) for line in (out/f'sql-commit-{mode}.jsonl').read_text().splitlines()][1:]
+    assert len(faults)==1 and faults[0]['server_committed'] is committed
 assert 'MVP full-tuple bag multiplicity, cancellation and overflow rollback passed' in harness_log
 assert [len(tx['changes']) for tx in transactions]==[12,12,5,5,2,1,2,3,3,2,4,3,2,2,2]
 assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,5,2,4,4,2,2,2]
 binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')
-files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),binary,out/'transactions.jsonl',out/'harness.log',out/'proxy.jsonl',out/'storage-profile.json']
+files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),binary,out/'transactions.jsonl',out/'harness.log',out/'proxy.jsonl',out/'storage-profile.json',out/'sql-commit-before.jsonl',out/'sql-commit-after.jsonl',out/'sql-commit-hold.jsonl']
 provenance={
     'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p','55434','-U','postgres','-d','postgres','-Atc','SELECT version()'],text=True).strip(),
     'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),

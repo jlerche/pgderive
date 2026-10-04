@@ -72,6 +72,23 @@ impl<
         checkpoint.validate(self.plan())?;
         Ok(checkpoint)
     }
+    /// Replace local visibility only after cold-validating an authoritative checkpoint.
+    /// Recovery invalidates all previously prepared transactions and maintenance.
+    ///
+    /// # Errors
+    /// Rejects incompatible or older boundaries and any missing/corrupt object.
+    pub async fn restore_checkpoint(&mut self, checkpoint: Checkpoint) -> Result<()> {
+        checkpoint.validate(self.plan())?;
+        anyhow::ensure!(
+            checkpoint.time >= self.time(),
+            "recovery cannot roll back local logical time"
+        );
+        let state = self.execution.reopen_state(&checkpoint).await?;
+        let restored =
+            Self::bind(self.plan().clone(), self.execution.clone(), state, checkpoint.time)?;
+        self.engine = restored.engine;
+        Ok(())
+    }
     /// Reopen all four arrangements from a complete compatible durable checkpoint.
     /// Every root/index/block and logical coefficient is cold-validated first.
     ///
@@ -85,21 +102,7 @@ impl<
     ) -> Result<Self> {
         checkpoint.validate(&plan)?;
         let execution = Execution::build(&plan, operators, settings)?;
-        let trace = |id: &str| {
-            checkpoint
-                .arrangements
-                .iter()
-                .find(|member| member.id == id)
-                .map(|member| member.trace.clone())
-                .context("missing grouped join checkpoint arrangement")
-        };
-        let state = QueryState {
-            left: execution.left.reopen(trace("left")?).await?,
-            right: execution.right.reopen(trace("right")?).await?,
-            sums: execution.sums.reopen(trace("sums")?).await?,
-            output: execution.output.reopen(trace("output")?).await?,
-            schemas: execution.schemas.clone(),
-        };
+        let state = execution.reopen_state(&checkpoint).await?;
         Self::bind(plan, execution, state, checkpoint.time)
     }
 }
@@ -113,6 +116,23 @@ impl<
     V: BatchData,
 > Execution<K, A, B, L, R, G, V>
 {
+    async fn reopen_state(&self, checkpoint: &Checkpoint) -> Result<QueryState<K, L, R, G>> {
+        let trace = |id: &str| {
+            checkpoint
+                .arrangements
+                .iter()
+                .find(|member| member.id == id)
+                .map(|member| member.trace.clone())
+                .context("missing grouped join checkpoint arrangement")
+        };
+        Ok(QueryState {
+            left: self.left.reopen(trace("left")?).await?,
+            right: self.right.reopen(trace("right")?).await?,
+            sums: self.sums.reopen(trace("sums")?).await?,
+            output: self.output.reopen(trace("output")?).await?,
+            schemas: self.schemas.clone(),
+        })
+    }
     pub(super) fn build(
         plan: &Plan,
         operators: Operators<K, A, B, L, R, G, V>,

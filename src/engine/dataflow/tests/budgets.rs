@@ -176,6 +176,7 @@ async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> R
     use crate::engine::plan::query::Settings;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let mut original = GroupedJoin::new(plan()?, test_operators(), store.clone(), 1)?;
+    let bootstrap = original.checkpoint()?;
     original.commit(
         original
             .prepare(Stream {
@@ -200,6 +201,14 @@ async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> R
         .await?;
     assert!(reopened.prepared_checkpoint(&foreign).is_err());
     assert!(reopened.commit(foreign).is_err());
+    let pending = reopened
+        .prepare(Stream { time: 2, batch: (stream(2, [])?.batch, stream(2, [])?.batch) })
+        .await?;
+    reopened.restore_checkpoint(original.checkpoint()?).await?;
+    assert!(reopened.commit(pending).is_err());
+    let pinned = reopened.snapshot();
+    assert!(reopened.restore_checkpoint(bootstrap).await.is_err());
+    assert!(Arc::ptr_eq(&pinned, &reopened.snapshot()));
     let staged = reopened
         .prepare(Stream {
             time: 2,
