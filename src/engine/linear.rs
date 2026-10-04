@@ -1,4 +1,4 @@
-use super::ZSet;
+use super::{ZSet, weights::Accumulator};
 use anyhow::Result;
 
 impl<T: Ord + Clone> ZSet<T> {
@@ -27,11 +27,11 @@ impl<T: Ord + Clone> ZSet<T> {
         &self,
         mut project: impl FnMut(&T) -> Result<U>,
     ) -> Result<ZSet<U>> {
-        let mut output = ZSet::default();
+        let mut output = Accumulator::default();
         for (tuple, weight) in self.iter() {
-            output.add(project(tuple)?, *weight)?;
+            output.add(project(tuple)?, *weight);
         }
-        Ok(output)
+        ZSet::from_accumulator(output)
     }
 }
 

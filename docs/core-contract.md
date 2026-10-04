@@ -11,13 +11,15 @@ Full-tuple identity, signed multiplicity, simultaneous join-input cross terms,
 and owned in-memory transaction staging have independent oracle checks. They do
 not establish arbitrary physical-layout equivalence or storage durability.
 
-There is a concrete arithmetic gap: `ZSet::from_updates` checks i64 overflow on
+The initial audit identified an arithmetic gap: `ZSet::from_updates` checks i64 overflow on
 each addition. Identical-tuple updates `[i64::MAX, 1, -1]` fail, while
 `[i64::MAX, -1, 1]` succeed. Projection collisions, grouped-count projection, and
 termwise join accumulation have related intermediate-overflow exposure. The
 accepted PoC RESULTS.md documents this class of defect for its i32 persisted
-weights and fixes it with wider accumulation before final narrowing. Pgderive
-must solve it for its own i64 domain rather than assuming that fix transfers.
+weights and fixes it with wider accumulation before final narrowing. Pgderive now
+uses arbitrary-precision intermediate coefficients and narrows only finalized
+logical collections to i64. Grouped counts finalize after incorporating prior
+state, and joins finalize after combining all cross terms.
 
 `Circuit<S>` stages clones of independent owned memory. It explicitly excludes
 external effects and shared mutable state. It cannot be treated as a durable
@@ -59,7 +61,8 @@ execution needs immutable snapshot descriptors and staged replacements.
    state against the independent memory oracle and recorded PoC trace under
    cold reads, injected GET/PUT failures and concurrent physical compaction.
 
-These are intended slices, not implemented guarantees. Object writes alone do
+The batch/arithmetic slice is implemented. Trace readers and trace-based operators
+remain intended slices, not implemented guarantees. Object writes alone do
 not commit logical state. Actual durable publication still requires object PUT,
 then one PostgreSQL transaction publishing object membership, result changes
 and source progress, then acknowledgement. Catalog-generation races require

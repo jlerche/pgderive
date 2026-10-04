@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 config = { version = "0.15", default-features = false, features = ["toml"] }
+num-bigint = "0.4"
 pgwire-replication = "=0.4.1"
 postgres-replication = { git = "https://github.com/supabase/rust-postgres", rev = "8086f1fd19bd9abc0da86ba80f8b7dbdd676cb3e" }
 serde = { version = "1", features = ["derive"] }

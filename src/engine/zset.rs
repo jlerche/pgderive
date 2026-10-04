@@ -1,3 +1,4 @@
+use super::weights::Accumulator;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 
@@ -19,11 +20,11 @@ impl<T: Ord + Clone> ZSet<T> {
     /// # Errors
     /// Returns an error on weight overflow.
     pub fn from_updates(updates: impl IntoIterator<Item = (T, i64)>) -> Result<Self> {
-        let mut result = Self::default();
+        let mut weights = Accumulator::default();
         for (tuple, weight) in updates {
-            result.add(tuple, weight)?;
+            weights.add(tuple, weight);
         }
-        Ok(result)
+        Self::from_accumulator(weights)
     }
 
     /// Iterate in deterministic tuple order.
@@ -42,6 +43,10 @@ impl<T: Ord + Clone> ZSet<T> {
         }
         *self = next;
         Ok(())
+    }
+
+    pub(super) fn from_accumulator(weights: Accumulator<T>) -> Result<Self> {
+        Ok(Self { entries: weights.finish()? })
     }
 
     pub(super) fn add(&mut self, tuple: T, weight: i64) -> Result<()> {

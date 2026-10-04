@@ -238,5 +238,20 @@ Further work prioritizes correct DBSP weighted semantics and object-backed
 arrangements. The demo requirement and demo-oriented roadmap are withdrawn.
 See [the core contract and audit](docs/core-contract.md) for the next three slices:
 canonical weighted arithmetic, immutable batch/trace readers, and incremental
-operators over pinned traces. The audit identifies an intermediate-overflow
-consolidation gap that must be fixed before physical run layouts are introduced.
+operators over pinned traces. The initial intermediate-overflow gap is fixed by exact intermediate arithmetic
+and declared i64 finalization boundaries.
+
+## Canonical batch arithmetic
+
+`engine::Batch<K,V>` is an immutable sorted logical batch over complete `(key,
+value)` identities, and `IndexedZSet<K,V>` names the keyed reference collection.
+`BatchBuilder` accumulates exact arbitrary-precision coefficients; unfinished
+builders can merge without narrowing at arbitrary physical boundaries. `finish`
+removes zero coefficients and rejects only final weights outside i64.
+
+The same exact accumulator backs collection normalization, projection collisions
+and all join cross terms. Grouped counts incorporate prior state before narrowing
+the final count. Every materialized operator output and committed state must fit
+the i64 domain. Failed finalization retains the prior circuit/operator state.
+This defines bounded logical collections with exact intermediate arithmetic, not
+unbounded persisted weights. Immutable codecs and trace readers are next.

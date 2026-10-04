@@ -1,7 +1,7 @@
+use crate::engine::ZSet;
 use crate::transaction::{Change, Operation, Row};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde::Serialize;
-use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Tuple {
@@ -23,20 +23,20 @@ pub struct Batch {
 
 impl Batch {
     pub(super) fn from_changes(changes: &[Change]) -> Result<Self> {
-        let mut weights = BTreeMap::<Tuple, i64>::new();
+        let mut weights = Vec::new();
         for change in changes {
             validate(change)?;
             if let Some(row) = &change.old {
-                accumulate(&mut weights, change, row, -1)?;
+                accumulate(&mut weights, change, row, -1);
             }
             if let Some(row) = &change.new {
-                accumulate(&mut weights, change, row, 1)?;
+                accumulate(&mut weights, change, row, 1);
             }
         }
+        let weights = ZSet::from_updates(weights)?;
         let updates = weights
-            .into_iter()
-            .filter(|(_, weight)| *weight != 0)
-            .map(|(tuple, weight)| Update { tuple, weight })
+            .iter()
+            .map(|(tuple, weight)| Update { tuple: tuple.clone(), weight: *weight })
             .collect();
         Ok(Self { updates })
     }
@@ -52,17 +52,10 @@ fn validate(change: &Change) -> Result<()> {
     Ok(())
 }
 
-fn accumulate(
-    weights: &mut BTreeMap<Tuple, i64>,
-    change: &Change,
-    row: &Row,
-    delta: i64,
-) -> Result<()> {
+fn accumulate(weights: &mut Vec<(Tuple, i64)>, change: &Change, row: &Row, delta: i64) {
     let tuple =
         Tuple { schema: change.schema.clone(), table: change.table.clone(), row: row.clone() };
-    let weight = weights.entry(tuple).or_default();
-    *weight = weight.checked_add(delta).context("tuple weight overflow")?;
-    Ok(())
+    weights.push((tuple, delta));
 }
 
 #[cfg(test)]
