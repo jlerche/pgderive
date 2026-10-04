@@ -9,10 +9,12 @@ publish = false
 anyhow = "1"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 num-bigint = "0.4"
+object_store = { version = "0.14.2", default-features = false, features = ["fs"] }
 pgwire-replication = "=0.4.1"
 postgres-replication = { git = "https://github.com/supabase/rust-postgres", rev = "8086f1fd19bd9abc0da86ba80f8b7dbdd676cb3e" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime", "with-serde_json-1"] }
 

@@ -61,8 +61,10 @@ execution needs immutable snapshot descriptors and staged replacements.
    state against the independent memory oracle and recorded PoC trace under
    cold reads, injected GET/PUT failures and concurrent physical compaction.
 
-The batch/arithmetic slice is implemented. Trace readers and trace-based operators
-remain intended slices, not implemented guarantees. Object writes alone do
+The batch/arithmetic and immutable reader/trace slices are implemented as
+semantic baselines. Trace-based operators remain intended work. Readers use a
+versioned JSON codec with explicit schema/ordering requirements; local trace
+visibility is not durable catalog publication. Object writes alone do
 not commit logical state. Actual durable publication still requires object PUT,
 then one PostgreSQL transaction publishing object membership, result changes
 and source progress, then acknowledgement. Catalog-generation races require

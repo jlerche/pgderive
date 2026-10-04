@@ -255,3 +255,27 @@ the final count. Every materialized operator output and committed state must fit
 the i64 domain. Failed finalization retains the prior circuit/operator state.
 This defines bounded logical collections with exact intermediate arithmetic, not
 unbounded persisted weights. Immutable codecs and trace readers are next.
+
+## Immutable batch readers and traces
+
+`BatchReader`/`BatchCursor` expose fallible forward traversal and key seeks for
+memory batches and `ObjectBatch` JSON-v1 runs. Object runs are content addressed,
+written with create-only PUTs, and reopened from trusted coarse `ObjectRef`
+metadata. Per-block hashes and a trusted index hash are verified before rows are
+exposed. Schema IDs must identify the exact key/value types and Rust ordering;
+Serde must preserve full identity. This is an explicit initial codec contract,
+not a generic SQL encoding or a compressed/binary format.
+
+`TraceSnapshot` pins immutable run membership. Merged cursors consolidate all
+full identities exactly, including signed cancellation across arbitrary physical
+run boundaries. `Trace::prepare_runs` checks the complete logical delta and next
+state, and `commit` rejects stale or foreign preparations. Compaction validates
+weighted equivalence, changes physical generation, and retains logical time.
+Old snapshots remain readable because objects are retained; GC is not implemented.
+
+This is a storage semantics baseline, not yet durable PostgreSQL publication.
+Index fences are resident/object-local. Object cursors retain one decoded block;
+merged reads open one cursor per run. Preparation currently scans/materializes
+complete candidate state for validation, and writers buffer full objects. No
+bounded-memory claim is made. Filesystem-store tests reopen real immutable bytes;
+cloud credentials, retries, catalog recovery and concurrency control remain ahead.

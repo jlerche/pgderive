@@ -6,6 +6,8 @@ mod circuit;
 mod count;
 mod join;
 mod linear;
+pub mod reader;
+pub mod trace;
 mod weights;
 mod zset;
 
