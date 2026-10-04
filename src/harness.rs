@@ -1,4 +1,5 @@
 mod acknowledgement;
+mod bootstrap;
 use crate::{
     Config, listener,
     transaction::{Row, Transaction},
@@ -204,13 +205,14 @@ async fn execute(sql: &mut Client, fixture: &Fixture, mut config: Config) -> Res
         task.abort();
     }
     completed.context("listener shutdown timed out")?.context("listener task failed")??;
-    let end = acknowledgement::check(sql, fixture, &config, store).await?;
+    let end = acknowledgement::check(sql, fixture, &config, store.clone()).await?;
     let report = recovery.recover_query(sql, &fixture.schema, "atomic_grouped").await?;
     ensure!(
         report.time == 16 && report.epoch == 17 && report.source_end == Some(end.to_string()),
         "fresh-process durable source/state recovery mismatch"
     );
     eprintln!("MVP fresh-process recovered atomic tick 16 with exact durable source position");
+    bootstrap::check(sql, fixture, &recovery).await?;
     Ok(())
 }
 
@@ -289,7 +291,10 @@ fn apply(model: &mut Model, transaction: &Transaction) -> Result<()> {
     Ok(())
 }
 
-async fn source_state(sql: &Client, schema: &str) -> Result<Model> {
+async fn source_state(
+    sql: &(impl tokio_postgres::GenericClient + Sync),
+    schema: &str,
+) -> Result<Model> {
     let mut state = Model::new();
     for (table, columns) in [
         ("person", "'id',id::text,'name',name"),

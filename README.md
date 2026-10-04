@@ -556,7 +556,7 @@ The registered stream plumbing resumes at the durable end and leaves received
 transactions unacknowledged. Before updating pgwire feedback it rechecks the
 writer against PostgreSQL membership, progress and fencing, and requires matching
 source registration. The diagnostic listener remains unacknowledged. A continuous
-worker and verified source inspection/bootstrap remain subsequent slices.
+worker remains a subsequent slice; verified source bootstrap is described below.
 
 The local SQL fault proxy disconnects before forwarding COMMIT, or discards its
 response only after PostgreSQL confirms successful COMMIT. Evidence records which
@@ -571,3 +571,60 @@ open. The harness cancels the publication future, verifies acknowledgement is
 blocked, and proves reconciliation waits on that transaction's query-row lock.
 Releasing COMMIT then recovers the exact committed candidate. This directly
 checks cancellation safety and the serialization barrier used for resolution.
+
+## Consistent snapshot bootstrap
+
+`source::Export` creates a new persistent pgoutput slot through the PostgreSQL
+replication control protocol and owns its idle snapshot-exporting connection.
+Initial reads import that exact snapshot in a read-only repeatable-read SQL
+transaction. Both control and SQL sessions verify cluster system ID, timeline
+and database. The source role needs replication permission, full SELECT access,
+and EXECUTE on `pg_control_system()` and `pg_control_checkpoint()`. SQL reads set
+`row_security=off`: RLS may be enabled on a Supabase table, but a reader that would
+see only a policy-filtered subset is rejected. Use an authorized full-row reader.
+
+The frozen source contract accepts explicit full-table publications of ordinary
+persistent, nonpartitioned tables with primary keys and REPLICA IDENTITY FULL.
+The initial codecs support boolean, int2/int4/int8, text, varchar and UUID, with
+NULL preserved. Domains, enums, numeric/floating-point, timestamps, arrays, JSON,
+generated columns and nondeterministic collations are unsupported. Snapshot SQL
+uses exact quoted column names and pgoutput-compatible text representations,
+including boolean `t`/`f`. Bounded cursors, server-side encoded-row limits and the
+same spill/output limits as CDC prevent an unbounded initial copy. Unchanged TOAST
+and TRUNCATE remain fail-closed; publications must emit TRUNCATE rather than omit it.
+
+After initial object PUTs, `Catalog::activate_snapshot` atomically publishes tick
+one memberships, initial destination rows, exclusive slot ownership and the
+slot's consistent point with synchronous COMMIT. Snapshot progress has no source
+transaction ID. No query or feedback capability exists before activation. An
+uncertain activation requires reloading the exact authoritative candidate;
+activation replay cannot apply destination DML twice. Cold reopen precedes CDC,
+which resumes at that point and records real source transactions from tick two.
+The legacy tick-zero claim path is retained for diagnostic/arithmetic fixtures;
+registered native sources cannot use it to bypass initial-copy activation.
+
+Observed wire-layout drift and current native metadata drift reject execution or
+publication. Publication holds source table locks that exclude table DDL through
+COMMIT. The MVP requires administratively immutable publication membership,
+slot ownership and source schema while a query is active. In particular, a
+privileged removal and re-addition of a publication table can omit intervening
+CDC while leaving identical final metadata; the current checks cannot detect
+that history. Table locks do not lock publication membership. Plan changes need
+an explicit new registration/bootstrap, not an in-place SQL schema migration.
+One authoritative catalog namespace owns each registered slot; external sink,
+metadata, publication and slot writers are unsupported.
+
+Resume checks reject a different cluster/timeline/database, an active or temporary
+slot, a non-pgoutput plugin, missing/lost WAL, and a slot whose confirmed or restart
+position is past engine progress. This catches an externally advanced or recreated
+slot before pgwire can silently skip source transactions. These checks do not
+solve WAL-retention sizing, privileged mutation races or failover recovery.
+
+The live harness covers a nonempty snapshot with concurrent changes on both join
+inputs, exact snapshot-plus-CDC reconstruction, initial atomic COMMIT response
+loss on both sides of the boundary, replay rejection, fresh-process reopen,
+primary-key/publication drift, advanced/recreated slots, RLS rejection, bounded
+copy rejection, quoted names and boolean/null codecs. A failed copy retains its
+persistent slot and evidence. Restarting an unfinished exported copy requires a
+new snapshot/slot; automatic worker lifecycle and cleanup are the later worker
+slice, and physical orphan collection belongs to the GC slice.

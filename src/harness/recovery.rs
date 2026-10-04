@@ -41,14 +41,15 @@ impl Recovery {
         query: &str,
     ) -> Result<RecoveryReport> {
         if self.config.object_store.is_none() || self.config.source_path.is_none() {
-            let plan = mvp::registered_plan()?;
+            let plan = recovery_plan(sql, schema, query).await?;
             let catalog = Catalog::new(schema, query)?;
             let (stored, end) = stored(sql, &catalog, &plan, query).await?;
-            let mut report = mvp::recover(
+            let mut report = mvp::recover_plan(
                 self.store.clone(),
                 self.config.execution,
                 stored,
                 &source_state(sql, schema).await?,
+                plan,
             )
             .await?;
             report.source_end = end;
@@ -95,7 +96,8 @@ pub async fn run_recovery(
     config.validate()?;
     ensure!(config.postgres.tls == "disable", "local recovery harness requires TLS disabled");
     ensure!(
-        prefix.starts_with(&format!("{schema}-")) && matches!(query, QUERY | "atomic_grouped"),
+        prefix.starts_with(&format!("{schema}-"))
+            && matches!(query, QUERY | "atomic_grouped" | "snapshot_grouped"),
         "invalid recovery fixture scope"
     );
     let catalog = Catalog::new(schema, query)?;
@@ -106,10 +108,16 @@ pub async fn run_recovery(
         .build(prefix)?;
     let (mut sql, connection) = super::connect(&config).await?;
     let result = async {
-        let (stored, end) = stored(&mut sql, &catalog, &mvp::registered_plan()?, query).await?;
-        let mut report =
-            mvp::recover(store, config.execution, stored, &source_state(&sql, schema).await?)
-                .await?;
+        let plan = recovery_plan(&sql, schema, query).await?;
+        let (stored, end) = stored(&mut sql, &catalog, &plan, query).await?;
+        let mut report = mvp::recover_plan(
+            store,
+            config.execution,
+            stored,
+            &source_state(&sql, schema).await?,
+            plan,
+        )
+        .await?;
         report.source_end = end;
         Ok(report)
     }
@@ -125,10 +133,31 @@ async fn stored(
     plan: &crate::engine::plan::Plan,
     query: &str,
 ) -> Result<(crate::catalog::Stored, Option<String>)> {
-    if query == "atomic_grouped" {
+    if matches!(query, "atomic_grouped" | "snapshot_grouped") {
         let durable =
             catalog.load_durable(sql, plan).await?.context("missing durable recovery boundary")?;
         return Ok((durable.stored, Some(durable.end.to_string())));
     }
     Ok((catalog.load(sql, plan).await?.context("missing recovery checkpoint")?, None))
+}
+
+async fn recovery_plan(
+    sql: &Client,
+    schema: &str,
+    query: &str,
+) -> Result<crate::engine::plan::Plan> {
+    if query != "snapshot_grouped" {
+        return mvp::registered_plan();
+    }
+    let binding: crate::catalog::Binding = serde_json::from_value(
+        sql.query_one(
+            &format!("SELECT binding FROM {schema}.pgderive_progress WHERE query_id=$1"),
+            &[&query],
+        )
+        .await?
+        .try_get(0)?,
+    )?;
+    let contract = binding.registered_source()?.context("missing registered bootstrap source")?;
+    contract.verify(sql).await?;
+    super::bootstrap::plan(&contract)
 }

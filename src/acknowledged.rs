@@ -27,10 +27,23 @@ impl Stream {
             "{}:{}:{}",
             config.postgres.database, config.replication.publication, config.replication.slot
         );
-        ensure!(
-            durable.binding.source == source,
-            "replication source does not match durable registration"
-        );
+        let contract = durable.binding.registered_source()?;
+        if let Some(contract) = &contract {
+            contract.validate()?;
+            ensure!(
+                contract.publication == config.replication.publication
+                    && contract.slot == config.replication.slot
+                    && contract.identity.database == config.postgres.database,
+                "registered source identity changed"
+            );
+            contract.identity.validate_resume(config, durable.end).await?;
+        } else {
+            ensure!(
+                durable.binding.source == source,
+                "replication source does not match durable registration"
+            );
+        }
+        let source = durable.binding.source.clone();
         let replication = config
             .replication_config()
             .with_start_lsn(durable.end.to_string().parse()?)
@@ -41,7 +54,10 @@ impl Stream {
             .context("connecting registered durable source")?;
         Ok(Self {
             client,
-            decoder: Decoder::new(config.execution),
+            decoder: contract.map_or_else(
+                || Decoder::new(config.execution),
+                |contract| Decoder::registered(config.execution, contract),
+            ),
             source,
             acknowledged: durable.end,
             received: durable.end,

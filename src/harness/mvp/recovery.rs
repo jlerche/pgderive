@@ -1,4 +1,4 @@
-use super::{Batch, Bid, Group, Key, Model, MvpFixture, Query, operators, registered_plan};
+use super::{Batch, Bid, Group, Key, Model, MvpFixture, Query, operators};
 use crate::{
     catalog::{Catalog, Stored},
     engine::{
@@ -116,11 +116,12 @@ async fn incompatible_catalog(
     Ok(())
 }
 
-pub(in crate::harness) async fn recover(
+pub(in crate::harness) async fn recover_plan(
     store: Arc<dyn ObjectStore>,
     limits: Limits,
     stored: Stored,
     model: &Model,
+    plan: crate::engine::plan::Plan,
 ) -> Result<RecoveryReport> {
     let checkpoint = stored.checkpoint;
     let report = RecoveryReport {
@@ -132,7 +133,7 @@ pub(in crate::harness) async fn recover(
         source_end: None,
     };
     let graph = Query::reopen(
-        registered_plan()?,
+        plan,
         operators(),
         Settings { store, block_rows: 3, limits },
         checkpoint.clone(),

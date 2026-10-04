@@ -41,6 +41,12 @@ impl Durable {
             return Ok(true);
         }
         if progress.end == self.end {
+            if self.xid.is_none()
+                && self.stored.checkpoint.time == 1
+                && self.binding.registered_source()?.is_some()
+            {
+                return Ok(true);
+            }
             ensure!(
                 self.commit == progress.commit && self.xid == Some(progress.xid),
                 "conflicting transaction at durable source end"
@@ -94,6 +100,7 @@ async fn load(
     let row = tx.query_opt(&format!("SELECT binding,sink_table,fence,commit_lsn::text,end_lsn::text,xid FROM {}.pgderive_progress WHERE query_id=$1", catalog.schema), &[&catalog.query]).await?.context("query has no durable publication contract")?;
     let binding: Binding = serde_json::from_value(row.try_get(0)?)?;
     binding.validate()?;
+    binding.verify_ownership(&tx, catalog).await?;
     ensure!(
         row.try_get::<_, String>(1)? == binding.sink.table(),
         "durable destination identity mismatch"
@@ -104,7 +111,7 @@ async fn load(
     let xid = row.try_get::<_, Option<i64>>(5)?.map(u32::try_from).transpose()?;
     ensure!(fence > 0 && end >= commit, "invalid durable fence/source position");
     ensure!(
-        if stored.checkpoint.time == 0 { xid.is_none() && commit == end } else { xid.is_some() },
+        binding.valid_identity(stored.checkpoint.time, xid, commit, end)?,
         "durable transaction identity/clock mismatch"
     );
     tx.commit().await?;

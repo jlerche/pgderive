@@ -7,6 +7,7 @@ pub mod engine;
 mod harness;
 mod listener;
 mod outcome;
+pub mod source;
 mod storage;
 mod transaction;
 mod weighted;

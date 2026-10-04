@@ -1,4 +1,6 @@
 //! `PostgreSQL` coarse checkpoint catalog and atomic sink/progress publication.
+mod bootstrap;
+pub use bootstrap::Snapshot;
 mod position;
 mod publication;
 mod read;
@@ -64,6 +66,8 @@ impl Catalog {
                 ordinal bigint NOT NULL CHECK(ordinal>=0), reference jsonb NOT NULL,
                 PRIMARY KEY(query_id,arrangement_id,ordinal),
                 FOREIGN KEY(query_id,arrangement_id) REFERENCES {0}.pgderive_arrangements(query_id,arrangement_id) ON DELETE CASCADE);
+             CREATE TABLE IF NOT EXISTS {0}.pgderive_source_slots (
+                source_key text PRIMARY KEY, query_id text NOT NULL UNIQUE REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED);
              CREATE TABLE IF NOT EXISTS {0}.pgderive_progress (
                 query_id text PRIMARY KEY REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
                 binding jsonb NOT NULL, sink_table text NOT NULL UNIQUE,

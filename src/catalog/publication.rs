@@ -16,8 +16,56 @@ pub struct Binding {
 impl Binding {
     pub(super) fn validate(&self) -> Result<()> {
         self.sink.validate()?;
-        ensure!(!self.source.is_empty() && self.source.len() <= 4096, "invalid source binding");
+        ensure!(!self.source.is_empty() && self.source.len() <= 65536, "invalid source binding");
+        if let Some(source) = self.registered_source()? {
+            source.validate()?;
+        }
         Ok(())
+    }
+    pub(crate) fn registered_source(&self) -> Result<Option<crate::source::Contract>> {
+        self.source
+            .strip_prefix("pgderive-source-v1:")
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(Into::into)
+    }
+    pub(super) async fn verify_ownership(
+        &self,
+        sql: &Transaction<'_>,
+        catalog: &Catalog,
+    ) -> Result<()> {
+        if let Some(source) = self.registered_source()? {
+            let row = sql
+                .query_opt(
+                    &format!(
+                        "SELECT query_id FROM {}.pgderive_source_slots WHERE source_key=$1",
+                        catalog.schema
+                    ),
+                    &[&source.ownership_key()?],
+                )
+                .await?
+                .context("registered source ownership missing")?;
+            ensure!(
+                row.try_get::<_, String>(0)? == catalog.query,
+                "registered source owned by another query"
+            );
+        }
+        Ok(())
+    }
+    pub(super) fn valid_identity(
+        &self,
+        time: u64,
+        xid: Option<u32>,
+        commit: Lsn,
+        end: Lsn,
+    ) -> Result<bool> {
+        Ok(if time == 0 {
+            xid.is_none() && end == commit && self.registered_source()?.is_none()
+        } else if xid.is_some() {
+            true
+        } else {
+            time == 1 && end == commit && self.registered_source()?.is_some()
+        })
     }
 }
 /// Complete prepared transaction, whose immutable objects must already exist.
@@ -76,6 +124,9 @@ impl Catalog {
             .await?
             .context("missing claimed checkpoint")?
             .checkpoint;
+        if binding.registered_source()?.is_some() {
+            binding.verify_ownership(&tx, self).await?;
+        }
         let encoded = serde_json::to_value(&binding)?;
         let row = tx.query_opt(&format!("SELECT binding,fence,end_lsn::text,commit_lsn::text,xid FROM {}.pgderive_progress WHERE query_id=$1 FOR UPDATE", self.schema), &[&self.query]).await?;
         let (fence, end, last_commit, last_xid) = if let Some(row) = row {
@@ -89,8 +140,7 @@ impl Catalog {
             let commit = row.try_get::<_, String>(3)?.parse()?;
             let xid = row.try_get::<_, Option<i64>>(4)?.map(u32::try_from).transpose()?;
             ensure!(
-                end >= commit
-                    && if time == 0 { xid.is_none() && end == commit } else { xid.is_some() },
+                end >= commit && binding.valid_identity(time, xid, commit, end)?,
                 "invalid claimed source progress"
             );
             tx.execute(
@@ -128,6 +178,10 @@ async fn initialize(
     initial: Lsn,
 ) -> Result<()> {
     ensure!(time == 0, "publication must initialize at logical tick zero");
+    ensure!(
+        binding.registered_source()?.is_none(),
+        "registered sources require atomic snapshot activation"
+    );
     let roots = tx
         .query_one(
             &format!("SELECT COUNT(*) FROM {}.pgderive_objects WHERE query_id=$1", catalog.schema),
@@ -187,6 +241,9 @@ impl Writer {
         ensure!(progress.end >= progress.commit, "publication source end precedes commit");
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
+        if let Some(source) = self.binding.registered_source()? {
+            source.lock_and_verify(&tx).await?;
+        }
         let epoch = write::stage(&tx, &self.catalog, plan, checkpoint, self.epoch).await?;
         let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn AND binding=$7", self.catalog.schema),
             &[&self.catalog.query, &self.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.end.to_string(), &serde_json::to_value(&self.binding)?]).await?;

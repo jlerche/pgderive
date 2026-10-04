@@ -12,7 +12,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
-pub(super) use recovery::recover;
+pub(super) use recovery::recover_plan;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio_postgres::Client;
 type Key = String;

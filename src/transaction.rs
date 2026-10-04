@@ -67,11 +67,18 @@ pub struct Decoder {
     pending_bytes: u64,
     limits: crate::engine::execution::Limits,
     failed: bool,
+    contract: Option<crate::source::Contract>,
 }
 
 impl Decoder {
     pub(super) fn new(limits: crate::engine::execution::Limits) -> Self {
         Self { limits, ..Self::default() }
+    }
+    pub(super) fn registered(
+        limits: crate::engine::execution::Limits,
+        contract: crate::source::Contract,
+    ) -> Self {
+        Self { limits, contract: Some(contract), ..Self::default() }
     }
     pub(super) fn begin(&mut self, xid: u32) -> Result<()> {
         ensure!(!self.failed, "failed source transaction requires a fresh decoder");
@@ -89,6 +96,9 @@ impl Decoder {
     }
 
     fn relation(&mut self, message: &RelationBody) -> Result<()> {
+        if let Some(contract) = &self.contract {
+            contract.check_relation(message)?;
+        }
         let columns = message
             .columns()
             .iter()
