@@ -114,10 +114,10 @@ The script uses a local PostgreSQL instance at port 55434, reusing the existing
 PoC service when available. Otherwise it starts this repository's PostgreSQL 17
 Compose service with ephemeral tmpfs database storage and no persistent Docker
 volumes. Stopping this Compose service discards its database contents. The script
-creates `pgderive_dev` only if absent and never resets an existing database. No object-store service is needed for this slice.
+creates `pgderive_dev` only if absent and never resets an existing database. It also reuses the PoC SeaweedFS service at port 8333, or starts this repository's pinned SeaweedFS image with tmpfs storage when unavailable.
 
 The harness starts the same listener used by the executable, waits for the
-replication connection, and drives ten committed transactions:
+replication connection, and drives fifteen committed transactions:
 
 1. Insert a person, an auction, and ten bids: 12 row changes.
 2. Update the person to a NULL name, change the auction category and ten bid
@@ -129,6 +129,8 @@ replication connection, and drives ten committed transactions:
 5. Move the category and a price through NULL, restore qualifying rows, move the
    category again, remove all qualifying prices, recreate qualifying bids
    (including a NULL bidder), then delete them: six more commits.
+6. Create zero-sum and all-NULL groups, turn NULL into zero, remove the final rows,
+   then recreate and remove a zero-sum group: five more commits.
 
 After every commit, it checks full old/new row images against an independently
 accumulated source-row map and compares that map with source SQL. It also checks
@@ -142,8 +144,8 @@ not a Nexmark benchmark.
 
 Each run creates a fresh `pgderive_harness_<pid>` schema. Publication/slot names
 must begin with `pgderive_` and must be unused; existing names are rejected.
-Normal completion and handled errors remove the fixture schema, publication, and
-slot. A hard process kill can leave resources for inspection; the next run refuses
+Normal completion removes the fixture schema, publication, and slot. Failed runs
+retain them for inspection and print their names; the next run refuses
 to overwrite a leftover publication or slot.
 
 JSONL, logs, configuration/source/binary hashes, and version information are saved
@@ -169,8 +171,9 @@ The fixture adapter skips NULL keys to match SQL equality.
 
 This is an in-memory semantic baseline with nested scans and cloned state. It
 is exercised by the live harness, while the standalone listener continues to
-emit diagnostic batches. There is no circuit planner, persistence, snapshot
-bootstrap, recursion, frontier tracking, or source acknowledgement.
+emit diagnostic batches. This reference operator does not itself persist state; the composed MVP below
+uses object-backed arrangements. SQL planning, snapshot bootstrap, recovery,
+recursion, frontier tracking, and source acknowledgement remain ahead.
 
 Tests follow the independent raw-history nested-loop oracle from the PoC's
 `src/bin/zset_contract_tests.rs.inc`: 128 deterministic signed-input histories
@@ -180,7 +183,7 @@ failure on arithmetic/time overflow. Prior accepted evidence is in the PoC's
 about this new engine. Storage/recovery checks were inspected and left unchanged;
 the source event trace is replayed by the grouped-count tests described below.
 Filter/map, an owned acyclic circuit boundary, and grouped counts now compose
-with this join. Arrangements and durable publication remain future slices.
+with this join. Object-backed arrangements are implemented below; durable publication remains future work.
 
 ## Weighted filter and map
 
@@ -346,3 +349,52 @@ validity. Numeric measures and finalized sums/counts are i64; overflow fails the
 transaction. It does not yet implement arbitrary PostgreSQL numeric types.
 Independent source-bag histories and all 111 committed recorded PoC transactions
 check object-backed grouped sums, including prior-state/product cancellation.
+
+
+## Project/join/group/sum MVP with SeaweedFS
+
+The live harness composes reusable typed operators into a query that projects
+auction categories and bid prices, joins by auction ID, groups by category, and
+computes SUM(price). Both projected input arrangements, aggregate statistics,
+and integrated visible SUM rows live in immutable S3 objects. Preparation stages
+all four traces and one graph root publishes them together. Every transaction is
+checked against direct PostgreSQL SUM and independent source-map recomputation.
+Compaction at tick five checks pinned readers and unchanged logical time.
+
+`./scripts/check_integration.sh` provisions an isolated `pgderive-mvp-tests`
+bucket if absent and uses a fresh unique object prefix per run. It starts a fresh
+local HTTP latency proxy on a dynamic port and routes the configured S3 client
+through it. Request logs, storage profile, CDC output, and source/binary hashes
+are retained under `artifacts/replication/run-*`. S3 objects are retained under
+the isolated prefix; no accepted PoC objects or frozen binaries are changed.
+The common coverage gate includes this sequential live S3/PostgreSQL harness.
+
+The proxy's default GET p50/p95/p99 is 26.13/38.86/86.13 ms, and PUT is
+69.75/101.10/137.23 ms, from the labeled raw tables in the
+[2025-03-04 public S3 benchmark](https://topicpartition.io/misc/AWS-S3-PUT-latency-benchmark)
+(500 KiB, EC2/S3 eu-north-1, 100 samples). The source's TL;DR swaps the medians;
+the raw tables are authoritative for this profile. These are one workload's
+measurements, not universal S3 latency. The proxy applies a seeded synthetic
+inverse CDF: linear interpolation through p0=0, p50, p95, p99, with the top 1%
+clamped at p99. HEAD uses the GET model; DELETE/POST use PUT. Each sampled delay
+is added before forwarding; local service/network overhead remains additional.
+The model has no payload-size/bandwidth scaling or correlated tails. Seeds are
+reproducible per operation, though concurrency can change request assignment.
+
+```bash
+./scripts/check_integration.sh                         # published latency profile
+PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh # fast local correctness
+PGDERIVE_S3_FAIL=GET:1 PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh
+PGDERIVE_S3_FAIL=PUT:1 PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh
+python3 scripts/s3_latency_proxy.py --port 8334         # standalone local proxy
+```
+
+The failure cases disable S3 client retries, verify that the first failed
+transaction did not publish any graph state, then explicitly retry the same
+transaction and run all SQL checks. Arbitrary injection positions are available
+in the proxy; the harness's expected-failure mode targets the first transaction.
+The MVP uses valid SQL bags and nullable i64 measures/sums. It has no SQL parser,
+durable PostgreSQL membership/result publication, restart recovery, object GC,
+or slot acknowledgement. Immutable bytes are persisted; their authoritative
+restart manifest is not yet implemented. Writers and candidate validation still
+buffer/scan full state; this is correctness infrastructure, not a latency benchmark.

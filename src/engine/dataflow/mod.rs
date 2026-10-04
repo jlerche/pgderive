@@ -18,7 +18,7 @@ pub use arrangement::Arrangement;
 pub use join::Join;
 use object_store::ObjectStore;
 pub use project::Project;
-pub use runtime::{Graph, PreparedGraph};
+pub use runtime::{Graph, PreparedGraph, PreparedMaintenance};
 use std::sync::Arc;
 pub use sum::{GroupSum, SumDelta, SumState};
 

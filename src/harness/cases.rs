@@ -1,10 +1,14 @@
 use crate::transaction::Operation;
 
-pub(super) const COUNT: usize = 10;
+pub(super) const COUNT: usize = 15;
 
 type Case = (String, usize, Option<Operation>);
 
-pub(super) fn transactions(schema: &str) -> [Case; COUNT] {
+pub(super) fn transactions(schema: &str) -> impl Iterator<Item = Case> {
+    baseline(schema).into_iter().chain(sum_cases(schema))
+}
+
+fn baseline(schema: &str) -> [Case; 10] {
     [
         (
             format!(
@@ -71,5 +75,45 @@ pub(super) fn transactions(schema: &str) -> [Case; COUNT] {
             None,
         ),
         (format!("DELETE FROM {schema}.bid WHERE price>=205"), 2, Some(Operation::Delete)),
+    ]
+}
+
+fn sum_cases(schema: &str) -> [Case; 5] {
+    [
+        (
+            format!(
+                "BEGIN; INSERT INTO {schema}.auction VALUES(2,1,99),(3,1,100); INSERT INTO {schema}.bid VALUES(200,2,1,0),(201,3,1,NULL); COMMIT;"
+            ),
+            4,
+            Some(Operation::Insert),
+        ),
+        (
+            format!(
+                "BEGIN; DELETE FROM {schema}.bid WHERE id=200; DELETE FROM {schema}.auction WHERE id=2; UPDATE {schema}.bid SET price=0 WHERE id=201; COMMIT;"
+            ),
+            3,
+            None,
+        ),
+        (
+            format!(
+                "BEGIN; DELETE FROM {schema}.bid WHERE id=201; DELETE FROM {schema}.auction WHERE id=3; COMMIT;"
+            ),
+            2,
+            Some(Operation::Delete),
+        ),
+        (
+            format!(
+                "BEGIN; INSERT INTO {schema}.auction VALUES(2,1,99); INSERT INTO {schema}.bid VALUES(200,2,1,0); COMMIT;"
+            ),
+            2,
+            Some(Operation::Insert),
+        ),
+        (
+            format!(
+                "BEGIN; DELETE FROM {schema}.bid WHERE id=200; DELETE FROM {schema}.auction WHERE id=2; COMMIT;"
+            ),
+            2,
+            Some(Operation::Delete),
+        ),
     ]
 }

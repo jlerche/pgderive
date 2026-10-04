@@ -106,3 +106,25 @@ async fn graph_rejects_clock_stale_foreign_and_join_boundary_errors() -> Result<
     assert_eq!(project.evaluate(&edge)?.batch, Batch::from_updates([((0, 0), i64::MAX)])?);
     Ok(())
 }
+
+#[tokio::test]
+async fn maintenance_changes_physical_boundary_without_advancing_time() -> Result<()> {
+    let mut first = graph()?;
+    let mut other = graph()?;
+    let pending = first.prepare(input(1, vec![], vec![])?).await?;
+    let retained = first.snapshot();
+    let candidate = first.prepare_maintenance(|state| async move { Ok((*state).clone()) }).await?;
+    let stale = first.prepare_maintenance(|state| async move { Ok((*state).clone()) }).await?;
+    let foreign = first.prepare_maintenance(|state| async move { Ok((*state).clone()) }).await?;
+    assert!(other.commit_maintenance(foreign).is_err());
+    first.commit_maintenance(candidate)?;
+    assert_eq!(first.time(), 0);
+    assert!(first.commit(pending).is_err());
+    assert!(first.commit_maintenance(stale).is_err());
+    let pinned = first.snapshot();
+    assert!(first.prepare_maintenance(|_| async { bail!("maintenance failed") }).await.is_err());
+    assert!(Arc::ptr_eq(&pinned, &first.snapshot()));
+    assert_eq!(retained.0.time(), 0);
+    first.commit(first.prepare(input(1, vec![], vec![])?).await?)?;
+    Ok(())
+}

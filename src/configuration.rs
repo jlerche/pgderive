@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub(super) object_store: Option<crate::storage::Storage>,
     pub(super) postgres: Postgres,
     pub(super) replication: Replication,
     #[serde(default)]
@@ -87,6 +89,9 @@ impl Config {
             self.listener.max_transaction_changes > 0,
             "max_transaction_changes must be positive"
         );
+        if let Some(storage) = &self.object_store {
+            storage.validate()?;
+        }
         Ok(())
     }
 

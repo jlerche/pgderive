@@ -69,3 +69,35 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
         Ok(prepared.output)
     }
 }
+
+/// Unpublished physical maintenance, with no logical output or time advance.
+pub struct PreparedMaintenance<S> {
+    base: Arc<Boundary<S>>,
+    next: Arc<Boundary<S>>,
+}
+impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
+    /// Stage physical maintenance over immutable state at the current boundary.
+    /// The callback must use equivalence-checked arrangement compaction only.
+    ///
+    /// # Errors
+    /// Returns maintenance errors without changing the root.
+    pub async fn prepare_maintenance<F: Future<Output = Result<S>>>(
+        &self,
+        maintain: impl FnOnce(Arc<S>) -> F,
+    ) -> Result<PreparedMaintenance<S>> {
+        let state = maintain(self.snapshot()).await?;
+        Ok(PreparedMaintenance {
+            base: self.root.clone(),
+            next: Arc::new(Boundary { state: Arc::new(state), time: self.time() }),
+        })
+    }
+    /// Publish equivalent physical state without emitting a logical edge.
+    ///
+    /// # Errors
+    /// Rejects stale or foreign maintenance without changing visibility.
+    pub fn commit_maintenance(&mut self, prepared: PreparedMaintenance<S>) -> Result<()> {
+        ensure!(Arc::ptr_eq(&self.root, &prepared.base), "foreign or stale graph maintenance");
+        self.root = prepared.next;
+        Ok(())
+    }
+}

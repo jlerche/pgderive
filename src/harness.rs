@@ -14,6 +14,7 @@ use tokio_postgres::{Client, NoTls};
 mod cases;
 mod count_oracle;
 mod join_oracle;
+mod mvp;
 mod projection_oracle;
 mod weighted_oracle;
 
@@ -49,7 +50,15 @@ pub async fn run_harness(config: Config) -> Result<()> {
     let (mut sql, connection) = connect(&config).await?;
     let fixture = Fixture::prepare(&mut sql, &config).await?;
     let result = execute(&sql, &fixture, config).await;
-    let cleanup = fixture.cleanup(&sql).await;
+    let cleanup = if result.is_ok() {
+        fixture.cleanup(&sql).await
+    } else {
+        eprintln!(
+            "failure fixture retained: schema={} slot={} publication={}",
+            fixture.schema, fixture.slot, fixture.publication
+        );
+        Ok(())
+    };
     drop(sql);
     let disconnected = connection
         .await
@@ -58,7 +67,7 @@ pub async fn run_harness(config: Config) -> Result<()> {
     let outcome = crate::outcome::combine(result, cleanup, "fixture cleanup");
     crate::outcome::combine(outcome, disconnected, "SQL disconnect")?;
     eprintln!(
-        "harness passed: ten transactions, weighted SQL differences, full old/new rows, rollback excluded, no acknowledgement; fixture cleaned up"
+        "harness passed: fifteen transactions, weighted SQL differences, full old/new rows, rollback excluded, no acknowledgement; fixture cleaned up"
     );
     Ok(())
 }
@@ -149,6 +158,16 @@ impl Fixture {
 
 async fn execute(sql: &Client, fixture: &Fixture, mut config: Config) -> Result<()> {
     config.listener.max_transactions = cases::COUNT;
+    let store: std::sync::Arc<dyn object_store::ObjectStore> = if let Some(storage) =
+        &config.object_store
+    {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
+        let prefix = format!("{}-{nonce}", fixture.schema);
+        eprintln!("MVP S3 fixture prefix: {prefix}");
+        storage.build(&prefix)?
+    } else {
+        std::sync::Arc::new(object_store::memory::InMemory::new())
+    };
     let (ready, connected) = oneshot::channel();
     let (observed, mut received) = mpsc::channel(8);
     let mut task = tokio::spawn(listener::run(config, Some(ready), Some(observed)));
@@ -157,7 +176,7 @@ async fn execute(sql: &Client, fixture: &Fixture, mut config: Config) -> Result<
             .await
             .context("listener connection timed out")?
             .context("listener failed to connect")?;
-        drive(sql, fixture, &mut received).await
+        drive(sql, fixture, &mut received, store).await
     }
     .await;
     if result.is_err() {
@@ -180,6 +199,7 @@ async fn drive(
     sql: &Client,
     fixture: &Fixture,
     received: &mut mpsc::Receiver<Transaction>,
+    store: std::sync::Arc<dyn object_store::ObjectStore>,
 ) -> Result<()> {
     let schema = &fixture.schema;
     let initial: String = sql
@@ -191,6 +211,7 @@ async fn drive(
         .get(0);
     let mut model = Model::new();
     let mut join = join_oracle::JoinFixture::default();
+    let mut mvp = mvp::MvpFixture::new(store)?;
     for (statements, expected, operation) in cases::transactions(schema) {
         sql.batch_execute(&statements).await?;
         let transaction = timeout(Duration::from_secs(20), received.recv())
@@ -210,6 +231,7 @@ async fn drive(
         weighted_oracle::verify(&transaction.batch, schema, &model, &source)?;
         join.verify(sql, schema, &transaction.batch).await?;
         apply(&mut model, &transaction)?;
+        mvp.verify(sql, schema, &transaction.batch, &model).await?;
         ensure!(model == source, "reconstructed CDC state differs from PostgreSQL");
         let current: String = sql
             .query_one(

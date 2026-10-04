@@ -123,7 +123,7 @@ impl JoinFixture {
     }
 }
 
-fn input(batch: &Batch, table: &str, column: &str) -> Result<ZSet<(String, Row)>> {
+pub(super) fn input(batch: &Batch, table: &str, column: &str) -> Result<ZSet<(String, Row)>> {
     let mut rows = Vec::new();
     for update in batch.updates.iter().filter(|update| update.tuple.table == table) {
         let value = update.tuple.row.get(column).context("missing fixture join column")?;

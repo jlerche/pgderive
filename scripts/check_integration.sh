@@ -19,7 +19,7 @@ fi
 mkdir -p artifacts/replication
 output=$(mktemp -d "$PWD/artifacts/replication/run-XXXXXXXX")
 printf 'Evidence: %s\n' "$output"
-if PGDERIVE__POSTGRES__PASSWORD="$PGPASSWORD" timeout 90 "${harness[@]}" >"$output/transactions.jsonl" 2>"$output/harness.log"; then
+if PGDERIVE__POSTGRES__PASSWORD="$PGPASSWORD" python3 scripts/run_with_s3_proxy.py "$output" "${harness[@]}"; then
     cat "$output/harness.log"
 else
     result=$?
@@ -31,10 +31,14 @@ import hashlib,json,os,pathlib,subprocess,sys
 root=pathlib.Path.cwd()
 out=pathlib.Path(sys.argv[1])
 transactions=[json.loads(line) for line in (out/'transactions.jsonl').read_text().splitlines()]
-assert [len(tx['changes']) for tx in transactions]==[12,12,5,5,2,1,2,3,3,2]
-assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,5,2]
+requests=[json.loads(line) for line in (out/'proxy.jsonl').read_text().splitlines()]
+assert any(row.get('method')=='PUT' for row in requests)
+assert any(row.get('range') for row in requests)
+assert any('MVP project/join/group/sum passed SQL+memory at tick 15' in line for line in (out/'harness.log').read_text().splitlines())
+assert [len(tx['changes']) for tx in transactions]==[12,12,5,5,2,1,2,3,3,2,4,3,2,2,2]
+assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,5,2,4,4,2,2,2]
 binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')
-files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),binary,out/'transactions.jsonl',out/'harness.log']
+files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),binary,out/'transactions.jsonl',out/'harness.log',out/'proxy.jsonl',out/'storage-profile.json']
 provenance={
     'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p','55434','-U','postgres','-d','postgres','-Atc','SELECT version()'],text=True).strip(),
     'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),

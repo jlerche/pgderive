@@ -14,3 +14,10 @@ publication = "pgderive_dev_pub"
 [listener]
 max_transactions = 0 # Unlimited; Ctrl-C stops gracefully.
 max_transaction_changes = 100000
+
+# Local MVP harness: S3 requests pass through the latency proxy to SeaweedFS.
+[object_store]
+endpoint = "http://127.0.0.1:8334"
+bucket = "pgderive-mvp-tests"
+access_key_id = "local"
+secret_access_key = "local"
