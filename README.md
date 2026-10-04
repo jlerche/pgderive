@@ -433,3 +433,28 @@ Packed v1 objects remain readable within the same 8 MiB block/index caps.
 Oversized legacy objects require an offline rewrite before this reader accepts
 them. Durable membership will publish the manifest root; reclamation must follow
 its block references rather than treating that root as the complete batch bytes.
+
+## Transaction execution limits
+
+`[execution]` configures resident record bytes/entries, individual record size,
+contribution count (including join fanout), simultaneous scratch runs, scratch
+bytes, and finalized output bytes/entries. Source transactions have the same
+record/output byte limits plus the listener's change-count limit. A failed source
+transaction cannot commit or continue with partial rows; reconnect/replay is
+required. The diagnostic listener continues to leave its slot unacknowledged.
+
+Source normalization and production project, join, and grouped COUNT/SUM use
+checksum-protected, sorted local scratch runs. Coefficients remain BigInt across
+spills and k-way merging. Aggregate contributions merge before adding prior
+statistics and narrowing; join merges all three terms before narrowing. Scratch
+is temporary execution work; durable arrangement data remains in object storage.
+Successful evaluations remove scratch. Failures retain `pgderive-spill-*`
+directories with their path in consolidation errors for investigation.
+
+Final edge batches remain bounded in-memory collections. Byte budgets measure
+serialized records, with entry caps bounding container overhead; they are not an
+exact Rust allocator/RSS measurement. The engine rejects oversized work before
+local publication. Candidate trace validation now streams without collecting
+full state, but still scans all identities; affected-key reads and a byte-bounded
+cache are the next slice. Maintenance still materializes state until its later
+streaming-compaction slice.

@@ -1,5 +1,9 @@
 use super::Stream;
-use crate::engine::{Batch, BatchBuilder, reader::BatchData};
+use crate::engine::{
+    Batch,
+    execution::{Consolidator, Limits},
+    reader::BatchData,
+};
 use anyhow::Result;
 use std::sync::Arc;
 type Mapper<K, V, A, B> = dyn Fn(&K, &V) -> Result<Option<(A, B)>> + Send + Sync;
@@ -18,12 +22,24 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Project<K, V, A, B>
     /// # Errors
     /// Returns callback errors or overflow of finalized projected coefficients.
     pub fn evaluate(&self, input: &Stream<Batch<K, V>>) -> Result<Stream<Batch<A, B>>> {
-        let mut builder = BatchBuilder::default();
+        self.evaluate_with_limits(input, Limits::default())
+    }
+    /// Evaluate using explicit spill, contribution, and finalized-output budgets.
+    ///
+    /// # Errors
+    /// Returns callback, resource, scratch I/O, or finalized coefficient errors.
+    pub fn evaluate_with_limits(
+        &self,
+        input: &Stream<Batch<K, V>>,
+        limits: Limits,
+    ) -> Result<Stream<Batch<A, B>>> {
+        limits.check_batch(&input.batch)?;
+        let mut builder = Consolidator::new(limits)?;
         for ((key, value), weight) in input.batch.iter() {
-            if let Some((key, value)) = (self.map)(key, value)? {
-                builder.push(key, value, *weight);
+            if let Some(tuple) = (self.map)(key, value)? {
+                builder.add(tuple, *weight)?;
             }
         }
-        Ok(Stream { time: input.time, batch: builder.finish()? })
+        Ok(Stream { time: input.time, batch: builder.finish_batch()? })
     }
 }

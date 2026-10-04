@@ -3,6 +3,7 @@ use super::{Binding, Engine, Plan, State};
 use crate::engine::{
     Batch,
     dataflow::{Arrangement, GroupSum, Join, Project, Stream, SumState},
+    execution::Limits,
     reader::BatchData,
     trace::TraceSnapshot,
 };
@@ -70,6 +71,7 @@ struct Execution<
     sums: Arrangement<G, SumState>,
     output: Arrangement<G, AggregateRow>,
     schemas: [String; 4],
+    limits: Limits,
 }
 type Output<G> = Batch<G, AggregateRow>;
 type SharedExecution<K, A, B, L, R, G, V> = Arc<Execution<K, A, B, L, R, G, V>>;
@@ -115,17 +117,24 @@ impl<
         state: Arc<QueryState<K, L, R, G>>,
         input: Stream<Inputs<K, A, B>>,
     ) -> Result<(QueryState<K, L, R, G>, Output<G>)> {
-        let left =
-            self.operators.left.evaluate(&Stream { time: input.time, batch: input.batch.0 })?;
-        let right =
-            self.operators.right.evaluate(&Stream { time: input.time, batch: input.batch.1 })?;
-        let joined = Join.evaluate(&left, &right, &state.left, &state.right).await?;
-        let grouped = self.operators.group.evaluate(&joined)?;
-        let delta = self.operators.sum.evaluate(&grouped, &state.sums).await?;
+        let left = self.operators.left.evaluate_with_limits(
+            &Stream { time: input.time, batch: input.batch.0 },
+            self.limits,
+        )?;
+        let right = self.operators.right.evaluate_with_limits(
+            &Stream { time: input.time, batch: input.batch.1 },
+            self.limits,
+        )?;
+        let joined = Join
+            .evaluate_with_limits((&left, &right), (&state.left, &state.right), self.limits)
+            .await?;
+        let grouped = self.operators.group.evaluate_with_limits(&joined, self.limits)?;
+        let delta =
+            self.operators.sum.evaluate_with_limits(&grouped, &state.sums, self.limits).await?;
         let output = Project::new(|key: &G, value: &SumState| {
             Ok(Some((key.clone(), (value.rows, (value.non_null != 0).then_some(value.sum)))))
         })
-        .evaluate(&delta.state)?;
+        .evaluate_with_limits(&delta.state, self.limits)?;
         let next = QueryState {
             left: self.left.stage(&state.left, &left).await?,
             right: self.right.stage(&state.right, &right).await?,
@@ -165,6 +174,20 @@ impl<
         store: Arc<dyn ObjectStore>,
         block_rows: usize,
     ) -> Result<Self> {
+        Self::new_with_limits(plan, operators, store, block_rows, Limits::default())
+    }
+    /// Bind a query using explicit transaction operator resource limits.
+    ///
+    /// # Errors
+    /// Rejects invalid registrations, storage configuration, or resource budgets.
+    pub fn new_with_limits(
+        plan: Plan,
+        operators: Operators<K, A, B, L, R, G, V>,
+        store: Arc<dyn ObjectStore>,
+        block_rows: usize,
+        limits: Limits,
+    ) -> Result<Self> {
+        let limits = limits.validate()?;
         validate_shape(&plan)?;
         let schema = |id: &str| {
             plan.definition()
@@ -182,6 +205,7 @@ impl<
             sums: Arrangement::new(store.clone(), schemas[2].clone(), block_rows)?,
             output: Arrangement::new(store, schemas[3].clone(), block_rows)?,
             schemas,
+            limits,
         });
         let evaluator = execution.clone();
         let engine = Engine::new(plan, execution.empty(), move |state, input| {
@@ -210,6 +234,8 @@ impl<
     /// # Errors
     /// Returns node, I/O, arithmetic, contract, or tick failures.
     pub async fn prepare(&self, input: Stream<Inputs<K, A, B>>) -> Result<Prepared<K, L, R, G>> {
+        self.execution.limits.check_batch(&input.batch.0)?;
+        self.execution.limits.check_batch(&input.batch.1)?;
         self.engine.prepare(input).await
     }
     /// Publish prepared state locally; durable PG publication is a later slice.

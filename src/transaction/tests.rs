@@ -45,6 +45,7 @@ fn reject_missing_context_and_transaction_limit() -> anyhow::Result<()> {
     assert!(Decoder::default().message(&message, 10).is_err());
     let mut decoder = with_relation();
     assert!(decoder.message(&message, 10).is_err());
+    let mut decoder = with_relation();
     decoder.begin(1)?;
     decoder.message(&message, 1)?;
     assert!(decoder.message(&message, 1).is_err());
@@ -67,5 +68,21 @@ fn unsupported_tuple_encodings_and_column_mismatch_fail_closed() -> anyhow::Resu
         .columns
         .clear();
     assert!(decoder.message(&insert(b't')?, 10).is_err());
+    Ok(())
+}
+
+#[test]
+fn source_byte_budget_failure_cannot_commit_partial_transaction() -> anyhow::Result<()> {
+    let mut decoder = with_relation();
+    decoder.limits.output_bytes = 1;
+    decoder.begin(1)?;
+    assert!(decoder.message(&insert(b't')?, 10).is_err());
+    assert!(decoder.commit("0/1".into(), "0/2".into()).is_err());
+    assert!(decoder.message(&insert(b't')?, 10).is_err());
+    let mut decoder = with_relation();
+    decoder.limits.record_bytes = 1;
+    decoder.begin(2)?;
+    assert!(decoder.message(&insert(b't')?, 10).is_err());
+    assert!(decoder.commit("0/3".into(), "0/4".into()).is_err());
     Ok(())
 }

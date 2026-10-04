@@ -21,3 +21,15 @@ endpoint = "http://127.0.0.1:8334"
 bucket = "pgderive-mvp-tests"
 access_key_id = "local"
 secret_access_key = "local"
+
+# Each operator spills exact coefficients before reaching these resident limits.
+# Byte budgets count serialized records, with separate entry caps for overhead.
+[execution]
+resident_bytes = 4194304
+resident_entries = 4096
+record_bytes = 65536
+contributions = 10000000
+spill_runs = 128
+scratch_bytes = 1073741824
+output_bytes = 67108864
+output_entries = 250000

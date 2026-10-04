@@ -19,7 +19,10 @@ pub(super) struct MvpFixture {
     graph: Query,
 }
 impl MvpFixture {
-    pub(super) fn new(store: Arc<dyn ObjectStore>) -> Result<Self> {
+    pub(super) fn new(
+        store: Arc<dyn ObjectStore>,
+        limits: crate::engine::execution::Limits,
+    ) -> Result<Self> {
         use crate::engine::plan::query::Operators;
         let plan = registered_plan()?;
         let operators = Operators {
@@ -40,7 +43,7 @@ impl MvpFixture {
             }),
             sum: GroupSum::new(|_: &Group, bid: &Bid| Ok(bid.1)),
         };
-        let graph = Query::new(plan, operators, store, 3)?;
+        let graph = Query::new_with_limits(plan, operators, store, 3, limits)?;
         eprintln!("registered engine query: {}", graph.plan().identity());
         Ok(Self { graph })
     }

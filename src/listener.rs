@@ -42,7 +42,7 @@ async fn receive(
     client: &mut ReplicationClient,
     observed: Option<&mpsc::Sender<Transaction>>,
 ) -> Result<()> {
-    let mut decoder = Decoder::default();
+    let mut decoder = Decoder::new(config.execution);
     let mut committed = 0;
     let interrupted = tokio::signal::ctrl_c();
     tokio::pin!(interrupted);

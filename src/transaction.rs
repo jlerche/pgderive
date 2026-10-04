@@ -38,7 +38,15 @@ struct Relation {
 }
 
 impl Relation {
-    fn decode(&self, tuple: &Tuple) -> Result<Row> {
+    fn decode(&self, tuple: &Tuple, limit: usize) -> Result<Row> {
+        let bytes = tuple.tuple_data().iter().try_fold(0_usize, |total, value| {
+            let length = match value {
+                TupleData::Text(bytes) | TupleData::Binary(bytes) => bytes.len(),
+                _ => 0,
+            };
+            total.checked_add(length).context("row byte count overflow")
+        })?;
+        ensure!(bytes <= limit, "source row byte limit exceeded");
         ensure!(self.columns.len() == tuple.tuple_data().len(), "tuple column count mismatch");
         self.columns.iter().cloned().zip(tuple.tuple_data()).map(|(name, value)| {
             let text = match value {
@@ -56,18 +64,27 @@ impl Relation {
 pub struct Decoder {
     relations: HashMap<u32, Relation>,
     pending: Option<(u32, Vec<Change>)>,
+    pending_bytes: u64,
+    limits: crate::engine::execution::Limits,
+    failed: bool,
 }
 
 impl Decoder {
+    pub(super) fn new(limits: crate::engine::execution::Limits) -> Self {
+        Self { limits, ..Self::default() }
+    }
     pub(super) fn begin(&mut self, xid: u32) -> Result<()> {
+        ensure!(!self.failed, "failed source transaction requires a fresh decoder");
         ensure!(self.pending.is_none(), "nested transaction BEGIN");
         self.pending = Some((xid, Vec::new()));
+        self.pending_bytes = 0;
         Ok(())
     }
 
     pub(super) fn commit(&mut self, commit_lsn: String, end_lsn: String) -> Result<Transaction> {
+        ensure!(!self.failed, "failed source transaction cannot commit");
         let (xid, changes) = self.pending.take().context("COMMIT without BEGIN")?;
-        let batch = crate::weighted::Batch::from_changes(&changes)?;
+        let batch = crate::weighted::Batch::from_changes_with_limits(&changes, self.limits)?;
         Ok(Transaction { xid, commit_lsn, end_lsn, changes, batch })
     }
 
@@ -93,6 +110,12 @@ impl Decoder {
         message: &LogicalReplicationMessage,
         limit: usize,
     ) -> Result<()> {
+        ensure!(!self.failed, "failed source transaction cannot continue");
+        let result = self.message_inner(message, limit);
+        self.failed = result.is_err();
+        result
+    }
+    fn message_inner(&mut self, message: &LogicalReplicationMessage, limit: usize) -> Result<()> {
         let (id, operation, old, new) = match message {
             LogicalReplicationMessage::Relation(message) => return self.relation(message),
             LogicalReplicationMessage::Type(_) | LogicalReplicationMessage::Origin(_) => {
@@ -122,12 +145,19 @@ impl Decoder {
             schema: relation.schema.clone(),
             table: relation.table.clone(),
             operation,
-            old: old.map(|tuple| relation.decode(tuple)).transpose()?,
-            new: new.map(|tuple| relation.decode(tuple)).transpose()?,
+            old: old.map(|tuple| relation.decode(tuple, self.limits.record_bytes)).transpose()?,
+            new: new.map(|tuple| relation.decode(tuple, self.limits.record_bytes)).transpose()?,
         };
+        let bytes = crate::engine::execution::record_size(&change, self.limits.record_bytes)?;
+        let next_bytes = self
+            .pending_bytes
+            .checked_add(u64::try_from(bytes)?)
+            .context("transaction byte count overflow")?;
+        ensure!(next_bytes <= self.limits.output_bytes, "source transaction byte limit exceeded");
         let (_, changes) = self.pending.as_mut().context("row outside BEGIN/COMMIT")?;
         ensure!(changes.len() < limit, "transaction change limit exceeded; no rows acknowledged");
         changes.push(change);
+        self.pending_bytes = next_bytes;
         Ok(())
     }
 }

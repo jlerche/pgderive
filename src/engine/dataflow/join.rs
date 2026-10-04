@@ -1,14 +1,16 @@
 use super::Stream;
 use crate::engine::{
     Batch,
+    execution::{Consolidator, Limits},
     reader::{BatchData, BatchReader},
     trace::TraceSnapshot,
-    weights::Accumulator,
 };
 use anyhow::{Result, ensure};
 use num_bigint::BigInt;
-type JoinWeights<K, L, R> = Accumulator<(K, (L, R))>;
+type JoinWeights<K, L, R> = Consolidator<(K, (L, R))>;
 type Joined<K, L, R> = Batch<K, (L, R)>;
+type Inputs<'a, K, L, R> = (&'a Stream<Batch<K, L>>, &'a Stream<Batch<K, R>>);
+type Priors<'a, K, L, R> = (&'a TraceSnapshot<K, L>, &'a TraceSnapshot<K, R>);
 
 /// Stateless incremental equijoin; both arrangements are pinned to prior time.
 #[derive(Debug, Default)]
@@ -25,6 +27,20 @@ impl Join {
         prior_left: &TraceSnapshot<K, L>,
         prior_right: &TraceSnapshot<K, R>,
     ) -> Result<Stream<Joined<K, L, R>>> {
+        self.evaluate_with_limits((left, right), (prior_left, prior_right), Limits::default()).await
+    }
+    /// Evaluate with explicit limits; physical spills preserve exact cross terms.
+    ///
+    /// # Errors
+    /// Returns clock, read, scratch, resource, or final arithmetic failures.
+    pub async fn evaluate_with_limits<K: BatchData, L: BatchData, R: BatchData>(
+        &self,
+        inputs: Inputs<'_, K, L, R>,
+        priors: Priors<'_, K, L, R>,
+        limits: Limits,
+    ) -> Result<Stream<Joined<K, L, R>>> {
+        let (left, right) = inputs;
+        let (prior_left, prior_right) = priors;
         ensure!(
             left.time == right.time
                 && prior_left.time() == prior_right.time()
@@ -33,7 +49,7 @@ impl Join {
         );
         Ok(Stream {
             time: left.time,
-            batch: join_batches(&left.batch, &right.batch, prior_left, prior_right).await?,
+            batch: join_bounded(&left.batch, &right.batch, prior_left, prior_right, limits).await?,
         })
     }
 }
@@ -43,7 +59,18 @@ pub(super) async fn join_batches<K: BatchData, L: BatchData, R: BatchData>(
     prior_left: &TraceSnapshot<K, L>,
     prior_right: &TraceSnapshot<K, R>,
 ) -> Result<Joined<K, L, R>> {
-    let mut output = Accumulator::default();
+    join_bounded(left, right, prior_left, prior_right, Limits::default()).await
+}
+async fn join_bounded<K: BatchData, L: BatchData, R: BatchData>(
+    left: &Batch<K, L>,
+    right: &Batch<K, R>,
+    prior_left: &TraceSnapshot<K, L>,
+    prior_right: &TraceSnapshot<K, R>,
+    limits: Limits,
+) -> Result<Joined<K, L, R>> {
+    limits.check_batch(left)?;
+    limits.check_batch(right)?;
+    let mut output = Consolidator::new(limits)?;
     let mut right_cursor = prior_right.cursor().await?;
     for ((key, value), weight) in left.iter() {
         right_cursor.seek_key(key).await?;
@@ -54,7 +81,7 @@ pub(super) async fn join_batches<K: BatchData, L: BatchData, R: BatchData>(
             output.add(
                 (key.clone(), (value.clone(), other.clone())),
                 BigInt::from(*weight) * other_weight,
-            );
+            )?;
             right_cursor.advance().await?;
         }
     }
@@ -68,27 +95,28 @@ pub(super) async fn join_batches<K: BatchData, L: BatchData, R: BatchData>(
             output.add(
                 (key.clone(), (other.clone(), value.clone())),
                 BigInt::from(*weight) * other_weight,
-            );
+            )?;
             left_cursor.advance().await?;
         }
     }
-    cross(left, right, &mut output);
-    Batch::from_updates(output.finish()?)
+    cross(left, right, &mut output)?;
+    output.finish_batch()
 }
 
 fn cross<K: BatchData, L: BatchData, R: BatchData>(
     left: &Batch<K, L>,
     right: &Batch<K, R>,
     output: &mut JoinWeights<K, L, R>,
-) {
+) -> Result<()> {
     for ((key, value), weight) in left.iter() {
         for ((other_key, other), other_weight) in right.iter() {
             if key == other_key {
                 output.add(
                     (key.clone(), (value.clone(), other.clone())),
                     BigInt::from(*weight) * other_weight,
-                );
+                )?;
             }
         }
     }
+    Ok(())
 }

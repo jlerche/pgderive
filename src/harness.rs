@@ -170,13 +170,14 @@ async fn execute(sql: &Client, fixture: &Fixture, mut config: Config) -> Result<
     };
     let (ready, connected) = oneshot::channel();
     let (observed, mut received) = mpsc::channel(8);
+    let limits = config.execution;
     let mut task = tokio::spawn(listener::run(config, Some(ready), Some(observed)));
     let result = async {
         timeout(Duration::from_secs(10), connected)
             .await
             .context("listener connection timed out")?
             .context("listener failed to connect")?;
-        drive(sql, fixture, &mut received, store).await
+        drive(sql, fixture, &mut received, store, limits).await
     }
     .await;
     if result.is_err() {
@@ -200,6 +201,7 @@ async fn drive(
     fixture: &Fixture,
     received: &mut mpsc::Receiver<Transaction>,
     store: std::sync::Arc<dyn object_store::ObjectStore>,
+    limits: crate::engine::execution::Limits,
 ) -> Result<()> {
     let schema = &fixture.schema;
     let initial: String = sql
@@ -211,7 +213,7 @@ async fn drive(
         .get(0);
     let mut model = Model::new();
     let mut join = join_oracle::JoinFixture::default();
-    let mut mvp = mvp::MvpFixture::new(store)?;
+    let mut mvp = mvp::MvpFixture::new(store, limits)?;
     for (statements, expected, operation) in cases::transactions(schema) {
         sql.batch_execute(&statements).await?;
         let transaction = timeout(Duration::from_secs(20), received.recv())

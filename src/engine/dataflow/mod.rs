@@ -194,3 +194,7 @@ mod operator_tests;
 #[cfg(test)]
 #[path = "tests/sum.rs"]
 mod sum_tests;
+
+#[cfg(test)]
+#[path = "tests/budgets.rs"]
+mod budget_tests;

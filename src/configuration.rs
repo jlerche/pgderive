@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
+    pub(super) execution: crate::engine::execution::Limits,
+    #[serde(default)]
     pub(super) object_store: Option<crate::storage::Storage>,
     pub(super) postgres: Postgres,
     pub(super) replication: Replication,
@@ -72,6 +74,7 @@ impl Config {
     }
 
     pub(super) fn validate(&self) -> Result<()> {
+        self.execution.validate()?;
         ensure!(!self.postgres.host.is_empty(), "postgres.host cannot be empty");
         ensure!(self.postgres.port > 0, "postgres.port cannot be zero");
         ensure!(!self.postgres.database.is_empty(), "postgres.database cannot be empty");

@@ -5,6 +5,7 @@ mod batch;
 mod circuit;
 mod count;
 pub mod dataflow;
+pub mod execution;
 mod join;
 mod linear;
 pub mod plan;

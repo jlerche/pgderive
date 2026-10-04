@@ -1,13 +1,14 @@
 use super::Stream;
 use crate::engine::{
-    Batch, BatchBuilder,
+    Batch,
+    execution::{Consolidator, Limits},
     reader::{BatchData, BatchReader},
     trace::TraceSnapshot,
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 type Measure<K, V> = dyn Fn(&K, &V) -> Result<Option<i64>> + Send + Sync;
 
 /// Object-persisted sufficient statistics for SQL bag GROUP BY SUM semantics.
@@ -27,12 +28,14 @@ struct Total {
     sum: BigInt,
 }
 impl Total {
-    fn add(&mut self, weight: i64, value: Option<i64>) {
-        self.rows += weight;
-        if let Some(value) = value {
-            self.non_null += weight;
-            self.sum += BigInt::from(weight) * value;
+    fn add_exact(&mut self, column: u8, weight: BigInt) -> Result<()> {
+        match column {
+            0 => self.rows += weight,
+            1 => self.non_null += weight,
+            2 => self.sum += weight,
+            _ => anyhow::bail!("invalid aggregate statistic"),
         }
+        Ok(())
     }
     fn prior(&mut self, state: &SumState) {
         self.rows += state.rows;
@@ -85,14 +88,38 @@ impl<K: BatchData, V: BatchData> GroupSum<K, V> {
         input: &Stream<Batch<K, V>>,
         prior: &TraceSnapshot<K, SumState>,
     ) -> Result<SumDelta<K>> {
+        self.evaluate_with_limits(input, prior, Limits::default()).await
+    }
+    /// Evaluate sufficient statistics with exact spillable intermediate arithmetic.
+    ///
+    /// # Errors
+    /// Returns clock, callback, resource, scratch, read, or final arithmetic errors.
+    pub async fn evaluate_with_limits(
+        &self,
+        input: &Stream<Batch<K, V>>,
+        prior: &TraceSnapshot<K, SumState>,
+        limits: Limits,
+    ) -> Result<SumDelta<K>> {
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order aggregate tick");
-        let mut totals = BTreeMap::<K, Total>::new();
+        limits.check_batch(&input.batch)?;
+        let mut contributions = Consolidator::new(limits)?;
         for ((key, value), weight) in input.batch.iter() {
-            totals.entry(key.clone()).or_default().add(*weight, (self.measure)(key, value)?);
+            contributions.add((key.clone(), 0_u8), *weight)?;
+            if let Some(value) = (self.measure)(key, value)? {
+                contributions.add((key.clone(), 1_u8), *weight)?;
+                contributions.add((key.clone(), 2_u8), BigInt::from(*weight) * value)?;
+            }
         }
+        let mut totals = Vec::<(K, Total)>::new();
+        contributions.finish(|(key, column), weight| {
+            if totals.last().is_none_or(|(group, _)| group != &key) {
+                totals.push((key, Total::default()));
+            }
+            totals.last_mut().context("missing aggregate total")?.1.add_exact(column, weight)
+        })?;
         let mut cursor = prior.cursor().await?;
-        let mut state = BatchBuilder::default();
-        let mut output = BatchBuilder::default();
+        let mut state = Consolidator::new(limits)?;
+        let mut output = Consolidator::new(limits)?;
         for (key, mut total) in totals {
             cursor.seek_key(&key).await?;
             let before = if let Some((group, value, weight)) = cursor.current()
@@ -119,17 +146,17 @@ impl<K: BatchData, V: BatchData> GroupSum<K, V> {
                 continue;
             }
             if let Some(before) = before {
-                state.push(key.clone(), before.clone(), -1);
-                output.push(key.clone(), visible(&before), -1);
+                state.add((key.clone(), before.clone()), -1)?;
+                output.add((key.clone(), visible(&before)), -1)?;
             }
             if let Some(after) = after {
-                state.push(key.clone(), after.clone(), 1);
-                output.push(key, visible(&after), 1);
+                state.add((key.clone(), after.clone()), 1)?;
+                output.add((key, visible(&after)), 1)?;
             }
         }
         Ok(SumDelta {
-            state: Stream { time: input.time, batch: state.finish()? },
-            output: Stream { time: input.time, batch: output.finish()? },
+            state: Stream { time: input.time, batch: state.finish_batch()? },
+            output: Stream { time: input.time, batch: output.finish_batch()? },
         })
     }
 }

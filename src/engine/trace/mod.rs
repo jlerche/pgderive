@@ -47,7 +47,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let mut runs = self.runs.clone();
         runs.push(run);
         let next = Self { runs, generation, time };
-        next.materialize().await?;
+        next.validate().await?;
         Ok(next)
     }
     pub(super) async fn replace(&self, run: Run<K, V>) -> Result<Self> {
@@ -58,6 +58,13 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             "compaction changed logical state"
         );
         Ok(next)
+    }
+    async fn validate(&self) -> Result<()> {
+        let mut cursor = self.cursor().await?;
+        while cursor.current().is_some() {
+            cursor.advance().await?;
+        }
+        Ok(())
     }
     /// Physical membership generation; compaction may change it without a tick.
     #[must_use]
@@ -143,7 +150,7 @@ impl<K: BatchData, V: BatchData> Trace<K, V> {
         time: u64,
     ) -> Result<PreparedTrace<K, V>> {
         ensure!(self.snapshot.time.checked_add(1) == Some(time), "out-of-order trace tick");
-        TraceSnapshot { runs: deltas.clone(), generation: 0, time }.materialize().await?;
+        TraceSnapshot { runs: deltas.clone(), generation: 0, time }.validate().await?;
         let mut runs = self.snapshot.runs.clone();
         runs.extend(deltas);
         self.candidate(runs, time).await
@@ -164,7 +171,7 @@ impl<K: BatchData, V: BatchData> Trace<K, V> {
         let generation =
             self.snapshot.generation.checked_add(1).context("trace generation overflow")?;
         let next = TraceSnapshot { runs, generation, time };
-        next.materialize().await?;
+        next.validate().await?;
         Ok(PreparedTrace { owner: self.owner.clone(), base: self.snapshot.generation, next })
     }
     /// Publish a locally prepared generation after validating its origin/base.

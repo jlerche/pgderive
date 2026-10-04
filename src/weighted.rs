@@ -1,9 +1,9 @@
-use crate::engine::ZSet;
+use crate::engine::execution::{Consolidator, Limits};
 use crate::transaction::{Change, Operation, Row};
 use anyhow::{Result, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Tuple {
     pub(super) schema: String,
     pub(super) table: String,
@@ -22,22 +22,26 @@ pub struct Batch {
 }
 
 impl Batch {
+    #[cfg(test)]
     pub(super) fn from_changes(changes: &[Change]) -> Result<Self> {
-        let mut weights = Vec::new();
+        Self::from_changes_with_limits(changes, Limits::default())
+    }
+    pub(super) fn from_changes_with_limits(changes: &[Change], limits: Limits) -> Result<Self> {
+        let mut weights = Consolidator::new(limits)?;
         for change in changes {
             validate(change)?;
             if let Some(row) = &change.old {
-                accumulate(&mut weights, change, row, -1);
+                accumulate(&mut weights, change, row, -1)?;
             }
             if let Some(row) = &change.new {
-                accumulate(&mut weights, change, row, 1);
+                accumulate(&mut weights, change, row, 1)?;
             }
         }
-        let weights = ZSet::from_updates(weights)?;
-        let updates = weights
-            .iter()
-            .map(|(tuple, weight)| Update { tuple: tuple.clone(), weight: *weight })
-            .collect();
+        let mut updates = Vec::new();
+        weights.finish(|tuple, weight| {
+            updates.push(Update { tuple, weight: i64::try_from(weight)? });
+            Ok(())
+        })?;
         Ok(Self { updates })
     }
 }
@@ -52,10 +56,15 @@ fn validate(change: &Change) -> Result<()> {
     Ok(())
 }
 
-fn accumulate(weights: &mut Vec<(Tuple, i64)>, change: &Change, row: &Row, delta: i64) {
+fn accumulate(
+    weights: &mut Consolidator<Tuple>,
+    change: &Change,
+    row: &Row,
+    delta: i64,
+) -> Result<()> {
     let tuple =
         Tuple { schema: change.schema.clone(), table: change.table.clone(), row: row.clone() };
-    weights.push((tuple, delta));
+    weights.add(tuple, delta)
 }
 
 #[cfg(test)]
