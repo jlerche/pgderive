@@ -34,7 +34,12 @@ transactions=[json.loads(line) for line in (out/'transactions.jsonl').read_text(
 requests=[json.loads(line) for line in (out/'proxy.jsonl').read_text().splitlines()]
 assert any(row.get('method')=='PUT' for row in requests)
 assert any(row.get('range') for row in requests)
-assert any('MVP project/join/group/sum passed SQL+memory at tick 15' in line for line in (out/'harness.log').read_text().splitlines())
+harness_log=(out/'harness.log').read_text()
+assert 'MVP project/join/group/sum passed SQL+memory at tick 15' in harness_log
+for tick,epoch in [(5,1),(15,2)]:
+    assert f'MVP durable manifest recovered all four arrangements at tick {tick} epoch {epoch}' in harness_log
+assert harness_log.count('expected cold-recovery failure for ')==2
+assert 'MVP incomplete and corrupt catalog membership rejected without epoch change' in harness_log
 assert [len(tx['changes']) for tx in transactions]==[12,12,5,5,2,1,2,3,3,2,4,3,2,2,2]
 assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,5,2,4,4,2,2,2]
 binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')

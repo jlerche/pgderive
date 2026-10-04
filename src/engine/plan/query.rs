@@ -8,8 +8,19 @@ use crate::engine::{
     trace::TraceSnapshot,
 };
 use anyhow::{Context, Result};
+mod checkpoint;
 use object_store::ObjectStore;
 use std::sync::Arc;
+/// Object backend and resource configuration for typed query creation/reopening.
+#[derive(Clone)]
+pub struct Settings {
+    /// Backend scoped to this query's immutable object namespace.
+    pub store: Arc<dyn ObjectStore>,
+    /// Maximum rows encoded in one bounded data block.
+    pub block_rows: usize,
+    /// Transaction and cache resource limits.
+    pub limits: Limits,
+}
 /// Visible GROUP BY COUNT(*) and nullable SUM row.
 pub type AggregateRow = (i64, Option<i64>);
 /// Both complete committed source deltas for a typed join query.
@@ -188,34 +199,18 @@ impl<
         block_rows: usize,
         limits: Limits,
     ) -> Result<Self> {
-        let limits = limits.validate()?;
-        validate_shape(&plan)?;
-        let schema = |id: &str| {
-            plan.definition()
-                .arrangements
-                .iter()
-                .find(|item| item.id == id)
-                .map(|item| item.schema.clone())
-                .context("missing grouped join arrangement")
-        };
-        let schemas = [schema("left")?, schema("right")?, schema("sums")?, schema("output")?];
-        let cache = Arc::new(BlockCache::new(limits.cache_bytes, limits.cache_entries));
-        let execution = Arc::new(Execution {
-            operators,
-            left: Arrangement::new(store.clone(), schemas[0].clone(), block_rows)?
-                .with_cache(cache.clone()),
-            right: Arrangement::new(store.clone(), schemas[1].clone(), block_rows)?
-                .with_cache(cache.clone()),
-            sums: Arrangement::new(store.clone(), schemas[2].clone(), block_rows)?
-                .with_cache(cache.clone()),
-            output: Arrangement::new(store, schemas[3].clone(), block_rows)?
-                .with_cache(cache.clone()),
-            schemas,
-            limits,
-            cache,
-        });
+        let execution = Execution::build(&plan, operators, Settings { store, block_rows, limits })?;
+        let initial = execution.empty();
+        Self::bind(plan, execution, initial, 0)
+    }
+    fn bind(
+        plan: Plan,
+        execution: SharedExecution<K, A, B, L, R, G, V>,
+        state: QueryState<K, L, R, G>,
+        time: u64,
+    ) -> Result<Self> {
         let evaluator = execution.clone();
-        let engine = Engine::new(plan, execution.empty(), move |state, input| {
+        let engine = Engine::restore(plan, state, time, move |state, input| {
             let execution = evaluator.clone();
             async move { execution.evaluate(state, input).await }
         })?;

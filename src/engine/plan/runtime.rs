@@ -20,10 +20,23 @@ impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {
         initial: S,
         evaluate: impl Fn(Arc<S>, Stream<I>) -> F + Send + Sync + 'static,
     ) -> Result<Self> {
-        plan.validate_state(&initial, 0)?;
+        Self::restore(plan, initial, 0, evaluate)
+    }
+    /// Bind cold-validated durable state at its recorded logical boundary.
+    /// Caller supplies authoritative membership; schema and all clocks are checked.
+    ///
+    /// # Errors
+    /// Rejects missing, extra, or differently typed/timed arrangement state.
+    pub fn restore<F: Future<Output = Result<(S, O)>> + Send + 'static>(
+        plan: Plan,
+        initial: S,
+        time: u64,
+        evaluate: impl Fn(Arc<S>, Stream<I>) -> F + Send + Sync + 'static,
+    ) -> Result<Self> {
+        plan.validate_state(&initial, time)?;
         let plan = Arc::new(plan);
         let checked = plan.clone();
-        let graph = Graph::new(initial, move |state, input: Stream<I>| {
+        let graph = Graph::at_boundary(initial, time, move |state, input: Stream<I>| {
             let time = input.time;
             let result = evaluate(state, input);
             let plan = checked.clone();

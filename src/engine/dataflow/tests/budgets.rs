@@ -160,3 +160,115 @@ async fn spilled_projection_join_and_aggregate_preserve_exact_cancellation() -> 
     );
     Ok(())
 }
+
+type TestOperators = Operators<i64, i64, i64, i64, i64, i64, i64>;
+fn test_operators() -> TestOperators {
+    let identity = || Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value))));
+    Operators {
+        left: identity(),
+        right: identity(),
+        group: Project::new(|key: &i64, values: &(i64, i64)| Ok(Some((*key, values.0 + values.1)))),
+        sum: GroupSum::new(|_: &i64, value: &i64| Ok(Some(*value))),
+    }
+}
+#[tokio::test]
+async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> Result<()> {
+    use crate::engine::plan::query::Settings;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut original = GroupedJoin::new(plan()?, test_operators(), store.clone(), 1)?;
+    original.commit(
+        original
+            .prepare(Stream {
+                time: 1,
+                batch: (stream(1, [((1, 2), 1)])?.batch, stream(1, [((1, 3), 1)])?.batch),
+            })
+            .await?,
+    )?;
+    let checkpoint = original.checkpoint()?;
+    let checkpoint = serde_json::from_slice(&serde_json::to_vec(&checkpoint)?)?;
+    let mut reopened = GroupedJoin::reopen(
+        plan()?,
+        test_operators(),
+        Settings { store, block_rows: 1, limits: Limits::default() },
+        checkpoint,
+    )
+    .await?;
+    assert_eq!(reopened.time(), 1);
+    assert_eq!(reopened.checkpoint()?, original.checkpoint()?);
+    let foreign = original
+        .prepare(Stream { time: 2, batch: (stream(2, [])?.batch, stream(2, [])?.batch) })
+        .await?;
+    assert!(reopened.commit(foreign).is_err());
+    reopened.commit(
+        reopened
+            .prepare(Stream {
+                time: 2,
+                batch: (
+                    stream(2, [((1, 2), -1), ((1, 4), 1)])?.batch,
+                    stream(2, [((1, 3), -1), ((1, 7), 1)])?.batch,
+                ),
+            })
+            .await?,
+    )?;
+    assert_eq!(reopened.time(), 2);
+    assert_eq!(
+        reopened.snapshot().output.materialize().await?,
+        Batch::from_updates([((1, (1, Some(11))), 1)])?
+    );
+    assert_eq!(original.time(), 1);
+    Ok(())
+}
+#[tokio::test]
+async fn incompatible_checkpoint_memberships_fail_before_reopening() -> Result<()> {
+    use crate::engine::plan::query::Settings;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let original = GroupedJoin::new(plan()?, test_operators(), store.clone(), 1)?;
+    let checkpoint = original.checkpoint()?;
+    let settings = Settings { store, block_rows: 1, limits: Limits::default() };
+    let mut incompatible = checkpoint.clone();
+    incompatible.version = 9;
+    assert!(
+        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
+            .await
+            .is_err()
+    );
+    let mut incompatible = checkpoint.clone();
+    incompatible.plan_identity.push('x');
+    assert!(
+        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
+            .await
+            .is_err()
+    );
+    let mut incompatible = checkpoint.clone();
+    incompatible.arrangements.pop();
+    assert!(
+        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
+            .await
+            .is_err()
+    );
+    let mut incompatible = checkpoint.clone();
+    incompatible.arrangements[1] = incompatible.arrangements[0].clone();
+    assert!(
+        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
+            .await
+            .is_err()
+    );
+    let mut incompatible = checkpoint.clone();
+    incompatible.arrangements[0].trace.time = 1;
+    assert!(
+        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
+            .await
+            .is_err()
+    );
+    let mut incompatible = checkpoint.clone();
+    incompatible.arrangements[0].schema.push('x');
+    assert!(
+        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
+            .await
+            .is_err()
+    );
+    let mut incompatible = checkpoint;
+    incompatible.arrangements[0].trace.version = 2;
+    assert!(GroupedJoin::reopen(plan()?, test_operators(), settings, incompatible).await.is_err());
+    Ok(())
+}

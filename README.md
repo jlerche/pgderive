@@ -481,3 +481,28 @@ Cold, cached, evicted, and differently split runs are checked for equal weighted
 results. Selected-block failures retain cursor position for retry. Unrelated
 missing blocks do not force a key probe to read outside its scope; fresh recovery
 must validate its complete durable membership in the manifest slice.
+
+## Durable arrangement manifests
+
+`GroupedJoin::checkpoint` exports the committed plan identity, logical time,
+arrangement schemas, physical generations, and ordered object-root membership.
+Repeated roots remain separate runs so their weighted multiplicity survives a
+restart. PostgreSQL stores this coarse membership, its count and digest; block
+fences and fine-grained indexes remain in object storage.
+
+`catalog::Catalog` saves a checkpoint in one PostgreSQL transaction using an
+expected epoch to reject stale writers. Loading uses a consistent snapshot and
+rejects incompatible registrations, incomplete membership, altered references,
+and inconsistent arrangement clocks. Catalog times, generations, and epochs
+must fit PostgreSQL's nonnegative signed bigint range.
+
+Reopening validates all referenced roots and blocks with a cold reader before
+attaching the shared cache. A warm cache cannot conceal missing or corrupt
+storage during recovery. The live harness checkpoints at ticks 5 and 15 and
+restores all four arrangements in a separate process, comparing their state
+with independent source recomputation. It also checks stale writes, rollback,
+metadata corruption, and missing roots and blocks.
+
+This checkpoint API persists arrangement metadata only. It does not apply sink
+DML, record source progress, or acknowledge the replication slot. Atomic
+publication of those effects is the next durability boundary.

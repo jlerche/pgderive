@@ -2,7 +2,7 @@ use super::Stream;
 use crate::engine::{
     Batch,
     reader::{BatchData, BlockCache, ObjectBatch},
-    trace::{Run, TraceSnapshot},
+    trace::{Manifest, Run, TraceSnapshot},
 };
 use anyhow::{Result, ensure};
 use object_store::ObjectStore;
@@ -41,6 +41,13 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
     #[must_use]
     pub const fn empty(&self) -> TraceSnapshot<K, V> {
         TraceSnapshot::empty()
+    }
+    /// Cold-validate and reopen complete recorded object membership.
+    ///
+    /// # Errors
+    /// Returns manifest/schema, missing/corrupt object, or arithmetic failures.
+    pub async fn reopen(&self, manifest: Manifest) -> Result<TraceSnapshot<K, V>> {
+        TraceSnapshot::reopen(self.store.clone(), manifest, &self.schema, self.cache.clone()).await
     }
     async fn upload(&self, batch: &Batch<K, V>) -> Result<Run<K, V>> {
         let reference =

@@ -16,6 +16,8 @@ mod count_oracle;
 mod join_oracle;
 mod mvp;
 mod projection_oracle;
+mod recovery;
+pub use recovery::{RecoveryReport, run_recovery};
 mod weighted_oracle;
 
 type Model = BTreeMap<(String, String), Row>;
@@ -49,7 +51,7 @@ pub async fn run_harness(config: Config) -> Result<()> {
     );
     let (mut sql, connection) = connect(&config).await?;
     let fixture = Fixture::prepare(&mut sql, &config).await?;
-    let result = execute(&sql, &fixture, config).await;
+    let result = execute(&mut sql, &fixture, config).await;
     let cleanup = if result.is_ok() {
         fixture.cleanup(&sql).await
     } else {
@@ -156,28 +158,35 @@ impl Fixture {
     }
 }
 
-async fn execute(sql: &Client, fixture: &Fixture, mut config: Config) -> Result<()> {
+async fn execute(sql: &mut Client, fixture: &Fixture, mut config: Config) -> Result<()> {
     config.listener.max_transactions = cases::COUNT;
-    let store: std::sync::Arc<dyn object_store::ObjectStore> = if let Some(storage) =
-        &config.object_store
-    {
-        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos();
-        let prefix = format!("{}-{nonce}", fixture.schema);
-        eprintln!("MVP S3 fixture prefix: {prefix}");
-        storage.build(&prefix)?
-    } else {
-        std::sync::Arc::new(object_store::memory::InMemory::new())
-    };
+    let prefix = config
+        .object_store
+        .as_ref()
+        .map(|_| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|time| format!("{}-{}", fixture.schema, time.as_nanos()))
+        })
+        .transpose()?;
+    let store: std::sync::Arc<dyn object_store::ObjectStore> =
+        if let Some(storage) = &config.object_store {
+            let prefix = prefix.as_ref().context("missing object prefix")?;
+            eprintln!("MVP S3 fixture prefix: {prefix}");
+            storage.build(prefix)?
+        } else {
+            std::sync::Arc::new(object_store::memory::InMemory::new())
+        };
+    let recovery = recovery::Recovery { config: config.clone(), store, prefix };
     let (ready, connected) = oneshot::channel();
     let (observed, mut received) = mpsc::channel(8);
-    let limits = config.execution;
     let mut task = tokio::spawn(listener::run(config, Some(ready), Some(observed)));
     let result = async {
         timeout(Duration::from_secs(10), connected)
             .await
             .context("listener connection timed out")?
             .context("listener failed to connect")?;
-        drive(sql, fixture, &mut received, store, limits).await
+        drive(sql, fixture, &mut received, recovery).await
     }
     .await;
     if result.is_err() {
@@ -197,11 +206,10 @@ async fn execute(sql: &Client, fixture: &Fixture, mut config: Config) -> Result<
 }
 
 async fn drive(
-    sql: &Client,
+    sql: &mut Client,
     fixture: &Fixture,
     received: &mut mpsc::Receiver<Transaction>,
-    store: std::sync::Arc<dyn object_store::ObjectStore>,
-    limits: crate::engine::execution::Limits,
+    recovery: recovery::Recovery,
 ) -> Result<()> {
     let schema = &fixture.schema;
     let initial: String = sql
@@ -213,7 +221,7 @@ async fn drive(
         .get(0);
     let mut model = Model::new();
     let mut join = join_oracle::JoinFixture::default();
-    let mut mvp = mvp::MvpFixture::new(store, limits)?;
+    let mut mvp = mvp::MvpFixture::new(recovery.store.clone(), recovery.config.execution)?;
     for (statements, expected, operation) in cases::transactions(schema) {
         sql.batch_execute(&statements).await?;
         let transaction = timeout(Duration::from_secs(20), received.recv())
@@ -234,6 +242,9 @@ async fn drive(
         join.verify(sql, schema, &transaction.batch).await?;
         apply(&mut model, &transaction)?;
         mvp.verify(sql, schema, &transaction.batch, &model).await?;
+        if matches!(mvp.time(), 5 | 15) {
+            mvp.checkpoint_and_recover(sql, schema, &recovery).await?;
+        }
         ensure!(model == source, "reconstructed CDC state differs from PostgreSQL");
         let current: String = sql
             .query_one(

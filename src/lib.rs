@@ -1,5 +1,6 @@
 //! `PostgreSQL` incremental view maintenance, built one verified slice at a time.
 
+pub mod catalog;
 mod configuration;
 pub mod engine;
 mod harness;
@@ -10,5 +11,5 @@ mod transaction;
 mod weighted;
 
 pub use configuration::Config;
-pub use harness::run_harness;
+pub use harness::{RecoveryReport, run_harness, run_recovery};
 pub use listener::listen;

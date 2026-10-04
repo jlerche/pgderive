@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 /// Coarse immutable-object reference suitable for a trusted membership catalog.
 /// Key/value fences stay in the object's index, not in `PostgreSQL`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ObjectRef {
     path: String,
     bytes: u64,
@@ -21,6 +22,11 @@ pub struct ObjectRef {
 }
 
 impl ObjectRef {
+    /// Exact key/value codec and ordering identity.
+    #[must_use]
+    pub fn schema(&self) -> &str {
+        &self.schema
+    }
     /// Content-addressed object path.
     #[must_use]
     pub fn path(&self) -> &str {
@@ -173,6 +179,14 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         Ok(Self { store, reference, blocks: Arc::new(index.blocks), cache })
     }
 
+    /// Coarse trusted catalog reference for this immutable run.
+    #[must_use]
+    pub const fn reference(&self) -> &ObjectRef {
+        &self.reference
+    }
+    pub(crate) fn share_cache(&mut self, cache: Arc<BlockCache>) {
+        self.cache = cache;
+    }
     /// Object containing a selected block; useful for integrity checks and reclamation.
     #[must_use]
     pub fn block_path(&self, ordinal: usize) -> Option<&str> {

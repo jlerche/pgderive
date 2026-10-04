@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(skip)]
+    pub(super) source_path: Option<PathBuf>,
     #[serde(default)]
     pub(super) execution: crate::engine::execution::Limits,
     #[serde(default)]
@@ -57,7 +59,7 @@ impl Config {
     /// # Errors
     /// Returns an error for unreadable files, unknown fields, or invalid settings.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        let config: Self = config::Config::builder()
+        let mut config: Self = config::Config::builder()
             .add_source(File::from(path.as_ref()))
             .add_source(
                 Environment::with_prefix("PGDERIVE")
@@ -70,6 +72,7 @@ impl Config {
             .try_deserialize()
             .context("decoding listener configuration")?;
         config.validate()?;
+        config.source_path = Some(path.as_ref().to_owned());
         Ok(config)
     }
 

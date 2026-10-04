@@ -30,8 +30,15 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
         initial: S,
         evaluate: impl Fn(Arc<S>, Stream<I>) -> F + Send + Sync + 'static,
     ) -> Self {
+        Self::at_boundary(initial, 0, evaluate)
+    }
+    pub(crate) fn at_boundary<F: Future<Output = Result<(S, O)>> + Send + 'static>(
+        initial: S,
+        time: u64,
+        evaluate: impl Fn(Arc<S>, Stream<I>) -> F + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            root: Arc::new(Boundary { state: Arc::new(initial), time: 0 }),
+            root: Arc::new(Boundary { state: Arc::new(initial), time }),
             evaluate: Arc::new(move |state, input| Box::pin(evaluate(state, input))),
         }
     }

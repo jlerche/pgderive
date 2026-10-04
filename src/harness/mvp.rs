@@ -1,4 +1,6 @@
 use super::{Model, join_oracle, projection_oracle};
+mod catalog_checks;
+mod recovery;
 use crate::{
     engine::{
         Batch,
@@ -9,6 +11,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
+pub(super) use recovery::recover;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio_postgres::Client;
 type Key = String;
@@ -17,35 +20,21 @@ type Bid = (String, Option<i64>);
 type Query = crate::engine::plan::query::GroupedJoin<Key, Row, Row, Group, Bid, Group, Bid>;
 pub(super) struct MvpFixture {
     graph: Query,
+    epoch: u64,
 }
 impl MvpFixture {
     pub(super) fn new(
         store: Arc<dyn ObjectStore>,
         limits: crate::engine::execution::Limits,
     ) -> Result<Self> {
-        use crate::engine::plan::query::Operators;
         let plan = registered_plan()?;
-        let operators = Operators {
-            left: Project::new(|key: &Key, row: &Row| {
-                Ok(Some((key.clone(), row.get("category").context("missing category")?.clone())))
-            }),
-            right: Project::new(|key: &Key, row: &Row| {
-                Ok(Some((
-                    key.clone(),
-                    (
-                        row.get("id").and_then(Option::as_ref).context("missing bid id")?.clone(),
-                        projection_oracle::number(row, "price")?,
-                    ),
-                )))
-            }),
-            group: Project::new(|_: &Key, (category, bid): &(Group, Bid)| {
-                Ok(Some((category.clone(), bid.clone())))
-            }),
-            sum: GroupSum::new(|_: &Group, bid: &Bid| Ok(bid.1)),
-        };
+        let operators = operators();
         let graph = Query::new_with_limits(plan, operators, store, 3, limits)?;
         eprintln!("registered engine query: {}", graph.plan().identity());
-        Ok(Self { graph })
+        Ok(Self { graph, epoch: 0 })
+    }
+    pub(super) fn time(&self) -> u64 {
+        self.graph.time()
     }
     pub(super) async fn verify(
         &mut self,
@@ -109,6 +98,28 @@ impl MvpFixture {
         Ok(())
     }
 }
+type QueryOperators = crate::engine::plan::query::Operators<Key, Row, Row, Group, Bid, Group, Bid>;
+fn operators() -> QueryOperators {
+    use crate::engine::plan::query::Operators;
+    Operators {
+        left: Project::new(|key: &Key, row: &Row| {
+            Ok(Some((key.clone(), row.get("category").context("missing category")?.clone())))
+        }),
+        right: Project::new(|key: &Key, row: &Row| {
+            Ok(Some((
+                key.clone(),
+                (
+                    row.get("id").and_then(Option::as_ref).context("missing bid id")?.clone(),
+                    projection_oracle::number(row, "price")?,
+                ),
+            )))
+        }),
+        group: Project::new(|_: &Key, (category, bid): &(Group, Bid)| {
+            Ok(Some((category.clone(), bid.clone())))
+        }),
+        sum: GroupSum::new(|_: &Group, bid: &Bid| Ok(bid.1)),
+    }
+}
 fn input(batch: &weighted::Batch, table: &str, key: &str) -> Result<Batch<Key, Row>> {
     Batch::from_updates(
         join_oracle::input(batch, table, key)?.iter().map(|(row, w)| (row.clone(), *w)),
@@ -137,7 +148,7 @@ fn memory(model: &Model) -> Result<Batch<Group, SumState>> {
     Batch::from_updates(totals.into_iter().map(|row| (row, 1)))
 }
 
-fn registered_plan() -> Result<crate::engine::plan::Plan> {
+pub(super) fn registered_plan() -> Result<crate::engine::plan::Plan> {
     use crate::engine::plan::{Arrangement as Registration, Definition, Kind, Node, Plan, Source};
     let nodes = vec![
         Node {

@@ -1,10 +1,12 @@
 //! Immutable trace generations and in-memory prepare/commit visibility.
+mod manifest;
 mod merged;
 use super::{
     Batch, BatchBuilder,
     reader::{BatchData, BatchReader, Cursor, ObjectBatch},
 };
 use anyhow::{Context, Result, ensure};
+pub use manifest::Manifest;
 pub use merged::{KeyCursor, KeyProbes, MergedCursor};
 use std::sync::Arc;
 
@@ -248,3 +250,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/probes.rs"]
 mod probe_tests;
+
+#[cfg(test)]
+#[path = "tests/manifests.rs"]
+mod manifest_tests;

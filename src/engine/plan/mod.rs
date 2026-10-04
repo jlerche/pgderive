@@ -18,6 +18,7 @@ pub enum Kind {
 }
 /// Source relation and exact supported column/type contract identity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Source {
     /// Stable source identifier in this plan.
     pub id: String,
@@ -26,6 +27,7 @@ pub struct Source {
 }
 /// Topologically ordered typed operator declaration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Node {
     /// Stable node identifier.
     pub id: String,
@@ -38,6 +40,7 @@ pub struct Node {
 }
 /// Named persisted state owned by one operator.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Arrangement {
     /// Stable arrangement identifier.
     pub id: String,
@@ -48,6 +51,7 @@ pub struct Arrangement {
 }
 /// Complete declared query contract; callbacks must implement these semantics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Definition {
     /// User-provided semantic revision (includes callback implementation changes).
     pub revision: String,
@@ -202,6 +206,8 @@ impl Plan {
         Ok(())
     }
 }
+mod checkpoint;
+pub use checkpoint::{Checkpoint, Membership};
 pub mod query;
 mod runtime;
 pub use runtime::Engine;
