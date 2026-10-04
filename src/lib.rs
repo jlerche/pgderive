@@ -11,6 +11,7 @@ pub mod source;
 mod storage;
 mod transaction;
 mod weighted;
+pub mod worker;
 
 pub use configuration::Config;
 pub use harness::{RecoveryReport, run_harness, run_recovery};

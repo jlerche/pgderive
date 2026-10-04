@@ -22,7 +22,7 @@ impl Sink {
             Self::Bag(table) | Self::Grouped(table) => table,
         }
     }
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
             crate::configuration::identifier(self.table())
                 && !self.table().starts_with("pgderive_"),

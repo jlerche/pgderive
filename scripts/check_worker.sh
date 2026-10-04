@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
+    # Run the instrumented executable directly so SIGKILL targets the worker,
+    # rather than a cargo launcher whose child would survive the crash test.
+    export CARGO_TARGET_DIR="$PWD/target/llvm-cov-target"
+    source <(cargo llvm-cov show-env --sh)
+    cargo build --locked --bin pgderive_worker
+    worker=("$CARGO_TARGET_DIR/debug/pgderive_worker")
+else
+    cargo build --locked --bin pgderive_worker
+    worker=("$PWD/target/debug/pgderive_worker")
+fi
+mkdir -p artifacts/worker
+output=$(mktemp -d "$PWD/artifacts/worker/run-XXXXXXXX")
+printf 'Worker evidence: %s\n' "$output"
+mkdir "$output/transactions" "$output/crashes"
+export PGDERIVE__POSTGRES__PASSWORD=${PGPASSWORD:-postgres}
+if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/transactions" \
+    python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 \
+    "$output/transactions" -- "${worker[@]}"; then
+    cat "$output/transactions/harness.log" >&2
+    exit 1
+fi
+if ! python3 scripts/run_with_s3_proxy.py "$output/crashes" \
+    python3 scripts/worker_crash_harness.py "$output/crashes" -- "${worker[@]}"; then
+    cat "$output/crashes/harness.log" >&2
+    exit 1
+fi
+python3 - "$output" "${worker[0]}" <<'PY'
+import hashlib,json,os,pathlib,subprocess,sys
+output=pathlib.Path(sys.argv[1])
+results=list(output.rglob('result.json'))
+assert len(results)==12,results
+for result in results:
+    json.loads(result.read_text())
+root=pathlib.Path.cwd()
+files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),
+       *sorted((root/'src').rglob('*.rs')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
+       *sorted((root/'scripts').glob('*.py')), *sorted(output.rglob('*.json')),
+       *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]
+provenance={'git_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+            'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),
+            'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p','55434','-U','postgres','-d','pgderive_dev','-Atc','SELECT version()'],text=True,env={**os.environ,"PGPASSWORD":os.environ.get("PGPASSWORD","postgres")}).strip(),
+            'sha256':{str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest() for path in files}}
+(output/'provenance.json').write_text(json.dumps(provenance,indent=2)+'\n')
+print('Worker qualification passed: six COMMIT faults, producer burst, restart and five witnessed process kills.')
+PY

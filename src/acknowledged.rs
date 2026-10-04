@@ -47,6 +47,9 @@ impl Stream {
         let replication = config
             .replication_config()
             .with_start_lsn(durable.end.to_string().parse()?)
+            // One queued event bounds read-ahead while object publication is slow.
+            // Decoder byte budgets apply after upstream wire-frame allocation.
+            .with_buffer_size(1)
             .with_status_interval(std::time::Duration::from_millis(100))
             .with_wakeup_interval(std::time::Duration::from_millis(100));
         let client = ReplicationClient::connect(replication)

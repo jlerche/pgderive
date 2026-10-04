@@ -11,6 +11,7 @@ import hashlib
 import http.client
 import json
 import math
+import pathlib
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -62,7 +63,25 @@ class Proxy(ThreadingHTTPServer):
         self.upstream = (parsed.hostname, parsed.port or 80)
         self.model = model
         self.log_lock = threading.Lock()
+        self.gate_lock = threading.Lock()
+        self.gate = None
         super().__init__(address, Handler)
+
+    def hold(self, method):
+        if self.gate is None:
+            return
+        arm = pathlib.Path(str(self.gate) + '.arm')
+        pending = pathlib.Path(str(self.gate) + '.pending')
+        with self.gate_lock:
+            if not arm.exists() or arm.read_text().strip() != method:
+                return
+            arm.rename(pending)
+            self.record({'held_request': method})
+        deadline = time.monotonic() + 60
+        while not self.gate.exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError('object request gate expired')
+            time.sleep(.02)
 
     def record(self, event):
         # print performs separate data/newline writes; serialize worker threads.
@@ -84,6 +103,7 @@ class Handler(BaseHTTPRequestHandler):
         connection = http.client.HTTPConnection(*self.server.upstream, timeout=30)
         status = 502
         try:
+            self.server.hold(self.command)
             if fail:
                 self.send_error(503, "injected object request failure")
                 status = 503
@@ -160,8 +180,10 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--scale", type=float, default=1)
     parser.add_argument("--fail", help="One-shot failure at GET:N or PUT:N (HEAD uses GET)")
+    parser.add_argument("--gate", type=pathlib.Path, help="Harness gate: METHOD in .arm, witness .pending, release base file")
     args = parser.parse_args()
     server = Proxy(("127.0.0.1", args.port), args.upstream, Model(args.seed, args.scale, args.fail))
+    server.gate = args.gate
     print(json.dumps({"ready": True, "port": server.server_port, "seed": args.seed,
                       "scale": args.scale, "anchors_ms": ANCHORS}), flush=True)
     try:

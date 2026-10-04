@@ -1178,7 +1178,8 @@ dependencies = [
  "num-bigint",
  "object_store",
  "pgwire-replication",
- "postgres-native-tls",
+ "postgres-native-tls 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "postgres-native-tls 0.5.3 (git+https://github.com/supabase/rust-postgres?rev=8086f1fd19bd9abc0da86ba80f8b7dbdd676cb3e)",
  "postgres-replication",
  "serde",
  "serde_json",
@@ -1192,8 +1193,6 @@ dependencies = [
 [[package]]
 name = "pgwire-replication"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20f9e5e3d56a31f59f606cedb6526b6e16dc06e4b34790804796c009940d70c2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1205,7 +1204,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-rustls",
- "tokio-util",
  "tracing",
  "webpki-roots 0.26.11",
 ]
@@ -1240,6 +1238,18 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
+name = "postgres-native-tls"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fef4de47bb81477e0c3deaf153a1b10ae176484713ff1640969f4cb96b653ebc"
+dependencies = [
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-postgres 0.7.18 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "postgres-native-tls"

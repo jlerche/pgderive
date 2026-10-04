@@ -44,6 +44,15 @@ impl Catalog {
         plan: &Plan,
         token: &str,
     ) -> Result<Protection> {
+        self.pin_checkpoint(sql, plan, token, None).await
+    }
+    async fn pin_checkpoint(
+        &self,
+        sql: &mut Client,
+        plan: &Plan,
+        token: &str,
+        recovery_fence: Option<i64>,
+    ) -> Result<Protection> {
         valid_token(token)?;
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
@@ -65,7 +74,20 @@ impl Catalog {
             .iter()
             .flat_map(|member| member.trace.objects.clone())
             .collect::<Vec<_>>();
-        tx.execute(&format!("INSERT INTO {0}.pgderive_protections(token,query_id,owner_fence,uploading,roots) VALUES($1,$2,COALESCE((SELECT fence FROM {0}.pgderive_progress WHERE query_id=$2),0),false,$3)",self.schema),&[&token,&self.query,&serde_json::to_value(&roots)?]).await?;
+        let fence = tx
+            .query_opt(
+                &format!("SELECT fence FROM {}.pgderive_progress WHERE query_id=$1", self.schema),
+                &[&self.query],
+            )
+            .await?
+            .map(|row| row.try_get::<_, i64>(0))
+            .transpose()?;
+        if let Some(expected) = recovery_fence {
+            ensure!(fence == Some(expected), "recovery protection writer fenced");
+        }
+        let fence = fence.unwrap_or(0);
+        let recovering = recovery_fence.is_some();
+        tx.execute(&format!("INSERT INTO {0}.pgderive_protections(token,query_id,owner_fence,uploading,recovering,roots) VALUES($1,$2,$3,false,$4,$5)",self.schema),&[&token,&self.query,&fence,&recovering,&serde_json::to_value(&roots)?]).await?;
         tx.commit()
             .await
             .context("protection COMMIT requires authoritative inspection on failure")?;
@@ -207,6 +229,21 @@ impl Writer {
         ensure!(!self.uncertain, "uncertain writer cannot reserve uploads");
         insert(sql, &self.catalog, token, self.fence).await
     }
+    // Private recovery pins may be invalidated by fencing. They never authorize
+    // externally visible reads: the worker must re-confirm ownership/membership
+    // after restoring, before opening CDC or exposing any recovered result.
+    pub(crate) async fn protect_recovery(
+        &self,
+        sql: &mut Client,
+        plan: &Plan,
+        token: &str,
+    ) -> Result<Protection> {
+        self.confirmed(sql, plan).await?;
+        self.catalog.pin_checkpoint(sql, plan, token, Some(self.fence)).await
+    }
+    pub(crate) async fn seal_fenced_recovery(&self, sql: &mut Client, plan: &Plan) -> Result<u64> {
+        self.seal(sql, plan, true).await
+    }
     /// Seal abandoned uploads belonging to earlier fenced writers of this query.
     /// The new writer must first confirm its authoritative boundary. Older writers
     /// cannot publish these namespaces again; late PUTs remain collectible orphans.
@@ -215,6 +252,9 @@ impl Writer {
     /// # Errors
     /// Rejects uncertain/stale ownership or database failures.
     pub async fn seal_fenced_uploads(&self, sql: &mut Client, plan: &Plan) -> Result<u64> {
+        self.seal(sql, plan, false).await
+    }
+    async fn seal(&self, sql: &mut Client, plan: &Plan, recovery: bool) -> Result<u64> {
         self.confirmed(sql, plan).await?;
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
@@ -230,8 +270,8 @@ impl Writer {
             .await?;
         ensure!(row.try_get::<_, i64>(0)? == self.fence, "upload recovery writer fenced");
         let sealed = tx.execute(
-            &format!("UPDATE {}.pgderive_protections SET active=false WHERE query_id=$1 AND uploading AND active AND owner_fence<$2", self.catalog.schema),
-            &[&self.catalog.query, &self.fence],
+            &format!("UPDATE {}.pgderive_protections SET active=false WHERE query_id=$1 AND ((uploading AND NOT $3) OR (recovering AND $3)) AND active AND owner_fence<$2", self.catalog.schema),
+            &[&self.catalog.query, &self.fence, &recovery],
         ).await?;
         tx.commit().await.context("upload recovery COMMIT outcome uncertain")?;
         Ok(sealed)

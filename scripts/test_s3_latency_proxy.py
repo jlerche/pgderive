@@ -4,12 +4,42 @@ import json
 import time
 import http.client
 import threading
+import tempfile
+import pathlib
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from s3_latency_proxy import ANCHORS, Model, Proxy, quantile
 
 
 class LatencyTests(unittest.TestCase):
+    def test_request_gate_claims_only_armed_method_and_waits_for_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gate = pathlib.Path(directory) / 'release'
+            arm = pathlib.Path(str(gate) + '.arm')
+            pending = pathlib.Path(str(gate) + '.pending')
+            arm.write_text('PUT')
+            proxy = Proxy(('127.0.0.1', 0), 'http://127.0.0.1:8333', Model())
+            proxy.gate = gate
+            try:
+                proxy.hold('GET')
+                self.assertTrue(arm.exists())
+                thread = threading.Thread(target=proxy.hold, args=('PUT',))
+                thread.start()
+                deadline = time.monotonic() + 2
+                while not pending.exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(pending.exists())
+                self.assertFalse(arm.exists())
+                self.assertTrue(thread.is_alive())
+                # A second request cannot consume the same gate reservation.
+                proxy.hold('PUT')
+                gate.touch()
+                thread.join(timeout=2)
+                self.assertFalse(thread.is_alive())
+            finally:
+                gate.touch()
+                proxy.server_close()
+
     def test_concurrent_evidence_records_are_complete_json_lines(self):
         class YieldingOutput(io.StringIO):
             def write(self, value):

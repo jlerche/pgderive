@@ -1,0 +1,60 @@
+# Copy to worker.local.toml. Source tables/publication and owned schema must exist.
+# Passwords can come from PGDERIVE__POSTGRES__PASSWORD.
+[postgres]
+host = "127.0.0.1"
+port = 55434
+database = "pgderive_dev"
+user = "postgres"
+tls = "disable" # Use "verify-full" for a TLS-enabled remote instance.
+# ca_file = "/path/to/ca.pem"
+
+[replication]
+slot = "pgderive_worker" # Stable logical alias; actual UUID slot is journaled.
+publication = "pgderive_worker_pub"
+
+[listener]
+max_transactions = 0 # Unlimited; Ctrl-C stops gracefully.
+max_transaction_changes = 100000
+
+# Local MVP harness: S3 requests pass through the latency proxy to SeaweedFS.
+[object_store]
+endpoint = "http://127.0.0.1:8333"
+bucket = "pgderive-mvp-tests"
+access_key_id = "local"
+secret_access_key = "local"
+
+# Each operator spills exact coefficients before reaching these resident limits.
+# Byte budgets count serialized records, with separate entry caps for overhead.
+[execution]
+cache_bytes = 16777216
+cache_entries = 256
+resident_bytes = 4194304
+resident_entries = 4096
+record_bytes = 65536
+contributions = 10000000
+spill_runs = 128
+scratch_bytes = 1073741824
+output_bytes = 67108864
+output_entries = 250000
+
+[worker]
+catalog_schema = "pgderive_worker"
+query_id = "auction_totals"
+sink_table = "groups"
+object_prefix = "pgderive_worker" # Exclusively owned and stable across restarts.
+block_rows = 4096
+maintenance_ticks = 16
+retry_attempts = 8
+retry_delay_ms = 250
+startup_timeout_secs = 180
+max_transactions = 0 # Continuous. Ctrl-C drains the current transaction.
+
+[worker.query]
+left_schema = "public"
+left_table = "auction"
+left_key = "id"
+group = "category"
+right_schema = "public"
+right_table = "bid"
+right_key = "auction"
+sum = "price"

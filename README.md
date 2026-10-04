@@ -4,7 +4,9 @@ Pgderive is a PostgreSQL-only incremental view maintenance engine based on DBSP.
 Committed `pgoutput` transactions are normalized into consolidated full-tuple
 weighted batches and verified by a real-PostgreSQL row mutation harness. There
 is an initial in-memory incremental equijoin; materialized-result sinks,
-object-backed state, and transactional publication come in later slices.
+object-backed state and transactional publication are implemented for the typed
+project/inner-join/group/count/nullable-integer-sum composition. SQL compilation
+follows the core MVP.
 
 ## Quality gate
 
@@ -154,9 +156,9 @@ failure. Run mutating harnesses sequentially. The PostgreSQL service remains
 running after the check; this repository does not provision persistent database
 volumes.
 
-The current scope excludes snapshot bootstrap, schema evolution, TRUNCATE,
-generic tuple codecs, durable result publication,
-recursion, and operationally safe WAL-retention management.
+The diagnostic listener excludes snapshot bootstrap and durable result
+publication; the continuous worker implements them. Schema evolution, TRUNCATE,
+recursion and operationally safe WAL-retention management remain unsupported.
 
 ## First DBSP operator
 
@@ -172,8 +174,8 @@ The fixture adapter skips NULL keys to match SQL equality.
 This is an in-memory semantic baseline with nested scans and cloned state. It
 is exercised by the live harness, while the standalone listener continues to
 emit diagnostic batches. This reference operator does not itself persist state; the composed MVP below
-uses object-backed arrangements. SQL planning, snapshot bootstrap, recovery,
-recursion, frontier tracking, and source acknowledgement remain ahead.
+uses object-backed arrangements, snapshot bootstrap, recovery and durable
+acknowledgement. SQL planning, recursion and frontier tracking remain ahead.
 
 Tests follow the independent raw-history nested-loop oracle from the PoC's
 `src/bin/zset_contract_tests.rs.inc`: 128 deterministic signed-input histories
@@ -183,7 +185,8 @@ failure on arithmetic/time overflow. Prior accepted evidence is in the PoC's
 about this new engine. Storage/recovery checks were inspected and left unchanged;
 the source event trace is replayed by the grouped-count tests described below.
 Filter/map, an owned acyclic circuit boundary, and grouped counts now compose
-with this join. Object-backed arrangements are implemented below; durable publication remains future work.
+with this join. Object-backed arrangements and durable publication are described
+below.
 
 ## Weighted filter and map
 
@@ -276,12 +279,14 @@ state, and `commit` rejects stale or foreign preparations. Compaction validates
 weighted equivalence, changes physical generation, and retains logical time.
 Old snapshots remain readable because objects are retained; GC is not implemented.
 
-This is a storage semantics baseline, not yet durable PostgreSQL publication.
+This standalone API is a storage semantics baseline. The catalog publication
+path below composes it with durable PostgreSQL state.
 Index fences are resident/object-local. Object cursors retain one decoded block;
 merged reads open one cursor per run. Preparation currently scans/materializes
 complete candidate state for validation, and writers buffer full objects. No
 bounded-memory claim is made. Filesystem-store tests reopen real immutable bytes;
-cloud credentials, retries, catalog recovery and concurrency control remain ahead.
+cloud endpoint provisioning remains unsupported; the composed worker below adds
+retries, catalog recovery and fenced concurrency control.
 
 
 ## Operators over pinned object traces
@@ -315,8 +320,9 @@ races are exercised. These are correctness checks, not performance benchmarks.
 
 This fixed Rust graph is not a SQL planner or general circuit scheduler. Object
 encoding and full candidate validation remain buffered; many runs cause repeated
-reads. PostgreSQL catalog publication, authoritative restart/recovery, sink DML,
-slot acknowledgement, cloud retry policy and object GC remain unimplemented.
+reads. The registered grouped-join composition below adds catalog publication,
+authoritative restart, sink DML, acknowledgement and object GC. This fixed
+reference graph itself remains a semantic baseline.
 
 ## Composable typed MVP operators
 
@@ -393,11 +399,10 @@ The failure cases disable S3 client retries, verify that the first failed
 transaction did not publish any graph state, then explicitly retry the same
 transaction and run all SQL checks. Arbitrary injection positions are available
 in the proxy; the harness's expected-failure mode targets the first transaction.
-The MVP uses valid SQL bags and nullable i64 measures/sums. It has no SQL parser,
-durable PostgreSQL membership/result publication, restart recovery, object GC,
-or slot acknowledgement. Immutable bytes are persisted; their authoritative
-restart manifest is not yet implemented. Writers and candidate validation still
-buffer/scan full state; this is correctness infrastructure, not a latency benchmark.
+The MVP uses valid SQL bags and nullable i64 measures/sums. It has no SQL parser.
+The registered contract, bounded writers, restart manifests, atomic publication
+and collection implemented in the following sections complete the durable path.
+These fixtures establish correctness within their workloads, not cloud throughput.
 
 ## Registered production engine contract
 
@@ -455,9 +460,9 @@ Final edge batches remain bounded in-memory collections. Byte budgets measure
 serialized records, with entry caps bounding container overhead; they are not an
 exact Rust allocator/RSS measurement. The engine rejects oversized work before
 local publication. Candidate trace validation now streams without collecting
-full state, but still scans all identities; affected-key reads and a byte-bounded
-cache are the next slice. Maintenance still materializes state until its later
-streaming-compaction slice.
+full state, but still scans all identities. The affected-key reads and bounded
+cache described next avoid scanning unrelated input records during evaluation.
+Maintenance uses the streaming-compaction path described below.
 
 ## Affected-key arrangement access
 
@@ -480,7 +485,7 @@ reader pins. Cursor clones share decoded blocks rather than copying them.
 Cold, cached, evicted, and differently split runs are checked for equal weighted
 results. Selected-block failures retain cursor position for retry. Unrelated
 missing blocks do not force a key probe to read outside its scope; fresh recovery
-must validate its complete durable membership in the manifest slice.
+validates its complete durable membership through the manifest path below.
 
 ## Durable arrangement manifests
 
@@ -505,7 +510,7 @@ metadata corruption, and missing roots and blocks.
 
 This checkpoint API persists arrangement metadata only. It does not apply sink
 DML, record source progress, or acknowledge the replication slot. Atomic
-publication of those effects is the next durability boundary.
+publication of those effects uses the separate API described next.
 
 ## Atomic destination publication
 
@@ -555,8 +560,8 @@ A conflicting or overlapping transaction fails closed.
 The registered stream plumbing resumes at the durable end and leaves received
 transactions unacknowledged. Before updating pgwire feedback it rechecks the
 writer against PostgreSQL membership, progress and fencing, and requires matching
-source registration. The diagnostic listener remains unacknowledged. A continuous
-worker remains a subsequent slice; verified source bootstrap is described below.
+source registration. The diagnostic listener remains unacknowledged. The
+continuous worker composes this path with the verified bootstrap described below.
 
 The local SQL fault proxy disconnects before forwarding COMMIT, or discards its
 response only after PostgreSQL confirms successful COMMIT. Evidence records which
@@ -626,8 +631,9 @@ loss on both sides of the boundary, replay rejection, fresh-process reopen,
 primary-key/publication drift, advanced/recreated slots, RLS rejection, bounded
 copy rejection, quoted names and boolean/null codecs. A failed copy retains its
 persistent slot and evidence. Restarting an unfinished exported copy requires a
-new snapshot/slot; automatic worker lifecycle and cleanup are the later worker
-slice, and physical orphan collection belongs to the GC slice.
+fresh snapshot boundary. The continuous worker journals its physical slot name
+and can reset only that exact unactivated slot. Activated state always resumes
+its durable source boundary. Fenced collection handles abandoned upload objects.
 
 ### Streaming maintenance and physical collection
 
@@ -677,3 +683,82 @@ rows remain durable and grow over time. Reader protection cleanup after an actua
 reader crash requires evidence that its readers have ended; there is no time-based
 lease expiry. WAL retention, continuous worker policy and sustained workload
 qualification remain separate work.
+
+
+## Continuous worker
+
+`cargo run --locked --bin pgderive_worker -- worker.local.toml` runs the explicit
+native-bound grouped inner join described in `worker.example.toml`. Create the
+source tables, their two-table publication and an empty owned catalog schema
+first. Source tables require primary keys and `REPLICA IDENTITY FULL`; publication
+membership and native types must remain fixed. PostgreSQL must permit logical
+replication, consistent snapshot COPY and destination DML. The current storage
+configuration supports local loopback S3-compatible endpoints; cloud endpoint
+configuration remains outside this local qualification.
+
+The worker imports an exported snapshot, atomically activates object membership,
+the grouped destination and source boundary, then consumes complete source
+transactions. Both join inputs may change together. Group keys preserve NULL;
+COUNT(*) counts matches and integral SUM ignores NULL measures. Every source
+transaction publishes immutable objects before committing membership, sink DML
+and progress together. Only authoritative publication permits slot feedback.
+The destination columns are `group_key` (JSONB), `row_count`, and nullable `total`.
+This is a hand-authored operator composition; SQL parsing is deferred.
+
+The configured slot is a logical alias. A synchronous PostgreSQL registration
+journal records an unpredictable physical slot name before creating it. Restart
+may reset that exact owned slot only before activation; once activated it resumes
+the durable slot and checkpoint. It rejects changed source/query/destination or
+object-prefix configuration, missing/recreated/advanced slots and unjournaled
+existing slots. Preserve the journal, schema and object prefix together. Do not
+manually drop the physical slot to repair a worker failure.
+
+One worker owns a query through a PostgreSQL session advisory lock and fenced
+publication. Consecutive failures retry with bounded backoff and authoritative
+cold reopen; a lost COMMIT response never permits blind replay. Private recovery
+pins can be retired by a succeeding fence, but recovery must reconfirm ownership
+and exact membership before exposing readiness. External reader pins remain
+until their owners explicitly release them. Compaction/GC happens between source
+transactions and preserves source position and logical time. Ctrl-C drains the
+current publication and shuts down replication. SIGKILL requires restart recovery.
+
+JSON events expose readiness, publication time/source end, transaction processing
+latency, cache bytes/entries/hits/misses, maintenance and retries. The worker
+processes one source transaction at a time, with one pgwire event of read-ahead.
+Execution limits bound decoded transaction output, operator contributions,
+resident consolidation, scratch, finalized batches and cache. They are not an
+RSS bound. The vendored pgwire framing patch rejects payloads over 1 MiB before
+allocation; a one-event channel limits read-ahead. The wire cap is independent
+of operator budgets, and an oversized frame fails without acknowledging it. WAL retention/backlog requires independent operational
+monitoring; crash consistency does not bound retained source WAL.
+
+The checked-in sequential qualification uses isolated schemas and compares every
+settled result against PostgreSQL, preserving failure dumps and process logs:
+
+```sh
+cargo build --locked --bin pgderive_worker
+mkdir -p artifacts/worker/my-run
+PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py artifacts/worker/my-run \
+  python3 scripts/worker_harness.py --faults --kill --ticks 12 --burst 16 \
+  artifacts/worker/my-run -- ./target/debug/pgderive_worker
+```
+
+Omit the latency-scale override to use the recorded public-S3 interpolation
+profile. `--faults` sequentially tests COMMIT loss before/after registration,
+activation and source publication. `--kill` checks a between-transaction
+process kill. `scripts/check_worker.sh`, also run by the common coverage gate,
+adds witnessed kills during bootstrap PUT, pinned cold restore, publication
+COMMIT, maintenance COMMIT and GC DeleteObjects. Its recovery test retains an
+external reader pin while retiring the abandoned private recovery pin. This command is qualification evidence, not a throughput or
+cloud-latency guarantee.
+
+
+For a larger local spilling and backpressure qualification, use `--rows 4096
+--auctions 128 --burst 16`. The fixture sets 128 resident identities and a 64 KiB
+resident byte budget to exercise external consolidation. Request logs, source
+fixtures on failure, worker metrics and SQL comparison results remain under the
+selected evidence directory. This establishes correctness within that measured
+workload; it does not claim arbitrary scale, an RSS ceiling or production S3
+throughput. Source schema changes, recursive graphs, floating-point sums, outer
+joins, SQL parsing and managed Supabase privilege provisioning are outside this
+engine MVP.

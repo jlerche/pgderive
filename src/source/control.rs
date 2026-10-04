@@ -65,7 +65,7 @@ impl Identity {
             "source slot advanced beyond durable engine position"
         );
         drop(connection.sql);
-        connection.task.await.context("resume validation control task failed")??;
+        connection.task.wait().await.context("resume validation control task failed")??;
         Ok(())
     }
     /// Inspect cluster/database identity without creating or advancing a slot.
@@ -77,13 +77,28 @@ impl Identity {
         let connection = connect(config).await?;
         let identity = identify(&connection.sql).await?;
         drop(connection.sql);
-        connection.task.await.context("identity control task failed")??;
+        connection.task.wait().await.context("identity control task failed")??;
         Ok(identity)
     }
 }
 struct Connection {
     sql: Client,
-    task: JoinHandle<Result<(), replication_control::Error>>,
+    task: ControlTask,
+}
+// Cancelling a control operation must also close its protocol driver; otherwise
+// a waiting CREATE SLOT can outlive the worker that owns its bootstrap journal.
+struct ControlTask(JoinHandle<Result<(), replication_control::Error>>);
+impl ControlTask {
+    async fn wait(
+        mut self,
+    ) -> std::result::Result<Result<(), replication_control::Error>, tokio::task::JoinError> {
+        (&mut self.0).await
+    }
+}
+impl Drop for ControlTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 /// Slot-consistent exported snapshot, owning its idle exporting connection.
 ///
@@ -169,7 +184,12 @@ impl Export {
     /// Returns exporting connection shutdown failures.
     pub async fn close(self) -> Result<()> {
         drop(self.connection.sql);
-        self.connection.task.await.context("snapshot exporter task failed")?.map_err(Into::into)
+        self.connection
+            .task
+            .wait()
+            .await
+            .context("snapshot exporter task failed")?
+            .map_err(Into::into)
     }
 }
 async fn connect(config: &Config) -> Result<Connection> {
@@ -184,7 +204,7 @@ async fn connect(config: &Config) -> Result<Connection> {
         .replication_mode(ReplicationMode::Logical);
     if pg.tls == "disable" {
         let (sql, connection) = options.connect(NoTls).await?;
-        return Ok(Connection { sql, task: tokio::spawn(connection) });
+        return Ok(Connection { sql, task: ControlTask(tokio::spawn(connection)) });
     }
     let mut tls = native_tls::TlsConnector::builder();
     if let Some(path) = &pg.ca_file {
@@ -194,7 +214,7 @@ async fn connect(config: &Config) -> Result<Connection> {
     options.ssl_mode(replication_control::config::SslMode::Require);
     let tls = replication_control_tls::MakeTlsConnector::new(tls.build()?);
     let (sql, connection) = options.connect(tls).await?;
-    Ok(Connection { sql, task: tokio::spawn(connection) })
+    Ok(Connection { sql, task: ControlTask(tokio::spawn(connection)) })
 }
 async fn identify(sql: &Client) -> Result<Identity> {
     let rows = sql.simple_query("IDENTIFY_SYSTEM").await?;

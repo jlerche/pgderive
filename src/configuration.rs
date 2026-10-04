@@ -4,7 +4,7 @@ use pgwire_replication::{ReplicationConfig, TlsConfig};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-/// Typed configuration for the diagnostic replication listener.
+/// Typed configuration for diagnostic listening and durable worker execution.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -14,6 +14,8 @@ pub struct Config {
     pub(super) execution: crate::engine::execution::Limits,
     #[serde(default)]
     pub(super) object_store: Option<crate::storage::Storage>,
+    #[serde(default)]
+    pub(super) worker: Option<crate::worker::Settings>,
     pub(super) postgres: Postgres,
     pub(super) replication: Replication,
     #[serde(default)]
@@ -78,6 +80,9 @@ impl Config {
 
     pub(super) fn validate(&self) -> Result<()> {
         self.execution.validate()?;
+        if let Some(worker) = &self.worker {
+            worker.validate()?;
+        }
         ensure!(!self.postgres.host.is_empty(), "postgres.host cannot be empty");
         ensure!(self.postgres.port > 0, "postgres.port cannot be zero");
         ensure!(!self.postgres.database.is_empty(), "postgres.database cannot be empty");

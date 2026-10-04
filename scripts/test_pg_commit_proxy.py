@@ -1,10 +1,18 @@
 import socket
 import struct
 import unittest
-from pg_commit_proxy import frame, commit
+from pg_commit_proxy import frame, commit, Proxy, Handler
 
 
 class Frames(unittest.TestCase):
+    def test_once_fault_is_shared_across_connections(self):
+        with Proxy(("127.0.0.1", 0), Handler) as proxy:
+            proxy.once = True
+            self.assertTrue(proxy.claim_fault())
+            self.assertFalse(proxy.claim_fault())
+            proxy.once = False
+            self.assertTrue(proxy.claim_fault())
+
     def test_startup_and_command(self):
         left, right = socket.socketpair()
         with left, right:

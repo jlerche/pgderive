@@ -67,11 +67,14 @@ Object-backed replay, signed bag oracles, SQL comparisons, failure/retry checks
 and physical-compaction races cover that graph. Readers use a
 versioned JSON codec with explicit schema/ordering requirements; local trace
 visibility is not durable catalog publication. Object writes alone do
-not commit logical state. Actual durable publication still requires object PUT,
-then one PostgreSQL transaction publishing object membership, result changes
-and source progress, then acknowledgement. Catalog-generation races require
-validation at publication; uncertain commits require authoritative resolution.
-Until that protocol and recovery are implemented, acknowledgement stays disabled.
+not commit logical state. The composed grouped-join engine now publishes object PUTs followed by one
+PostgreSQL transaction containing membership, result changes and source progress.
+The registered source stream acknowledges only that verified durable boundary.
+Catalog-generation races are validated at publication; uncertain commits require
+authoritative resolution. The diagnostic listener still leaves its slot
+unacknowledged. The continuous worker applies the same protocol through bootstrap, cold reopen,
+bounded retries, maintenance and graceful shutdown; the common gate includes
+COMMIT faults and witnessed process-kill recovery.
 
 ## Boundaries to preserve
 
