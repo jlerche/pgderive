@@ -26,11 +26,28 @@ fn normalized_identity_and_native_layout_are_restart_boundaries() -> Result<()> 
     assert_eq!(identity(SQL)?, identity(normalized)?);
     assert_eq!(identity(SQL)?, identity(&SQL.replace("SELECT", "/* comment */ SELECT"))?);
     assert_ne!(identity(SQL)?, identity(&SQL.replace("IS NOT NULL", "IS NULL"))?);
+    assert_eq!(
+        identity(SQL)?,
+        identity(&SQL.replace("a.other IS NOT NULL", "((a.other) IS NOT NULL)"))?
+    );
+    assert_eq!(identity(SQL)?, identity(&SQL.replace("a.other IS NOT NULL", "a.other NOTNULL"))?);
+    assert_eq!(identity(SQL)?, identity(&SQL.replace("a.category", r#"a.U&"cat\0065gory""#))?);
+    assert_eq!(
+        identity(SQL)?,
+        identity(&SQL.replace("a.category", r#"a.U&"cat!0065gory" UESCAPE '!'"#))?
+    );
+    assert_eq!(
+        identity(SQL)?,
+        identity(
+            &SQL.replace("source.auction a", "source.auction between").replace("a.", "between.")
+        )?
+    );
     let mut changed = native();
     changed.relations[1].columns[2].nullable = false;
     assert_ne!(identity(SQL)?, program::plan(&changed, &compile(SQL, &changed)?)?.identity());
     let mut compiled = compile(SQL, &native())?;
-    compiled.revision = Some("next compiler".into());
+    compiled.revision =
+        Some("sql-grouped-v1:row-text-v1:json-v2:group-string-v1:i64-sum-v1".into());
     assert_ne!(identity(SQL)?, program::plan(&native(), &compiled)?.identity());
     let mut selectors = compile(SQL, &native())?.selectors;
     selectors.group = "id".into();
@@ -53,6 +70,37 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
         SQL.replace("SUM(b.price)", "SUM(a.other)"),
         SQL.replace("COUNT(*)", "COUNT(b.price)"),
         SQL.replace("COUNT(*)", "COUNT(DISTINCT b.price)"),
+        SQL.replace("COUNT(*)", "COUNT(*) FILTER (WHERE b.price IS NULL)"),
+        SQL.replace("COUNT(*)", "COUNT(*) OVER ()"),
+        SQL.replace("SUM(b.price)", "SUM(VARIADIC b.price)"),
+        SQL.replace("SUM(b.price)", "SUM(b.price ORDER BY b.id)"),
+        SQL.replace("SUM(b.price)", "SUM(b.price) WITHIN GROUP (ORDER BY b.id)"),
+        SQL.replace("SUM(b.price)", "pg_catalog.SUM(b.price)"),
+        SQL.replace("a.category", "a.*"),
+        SQL.replace("a.other IS NOT NULL", "NOT (a.other IS NULL)"),
+        SQL.replace("a.other IS NOT NULL", "ROW(a.other) IS NULL"),
+        SQL.replace("GROUP BY", "GROUP BY DISTINCT"),
+        SQL.replace("GROUP BY a.category", "GROUP BY a.category, a.id"),
+        SQL.replace("SELECT", "SELECT DISTINCT"),
+        SQL.replace("FROM source.auction", "INTO source.sink FROM source.auction"),
+        SQL.replace("source.auction a", "ONLY source.auction a"),
+        SQL.replace("source.auction a", "source.auction a(id)"),
+        SQL.replace("a.id=b.auction", "a.id OPERATOR(pg_catalog.=) b.auction"),
+        SQL.replace("JOIN source.bid b ON a.id=b.auction", "JOIN source.bid b USING (id)"),
+        SQL.replace("JOIN source.bid b ON a.id=b.auction", "NATURAL JOIN source.bid b"),
+        SQL.replace("source.auction a", "(SELECT * FROM source.auction) a"),
+        format!("{SQL} LIMIT ALL"),
+        format!("{SQL} FOR UPDATE"),
+        format!("{SQL} HAVING COUNT(*) > 0"),
+        format!("{SQL} UNION ALL {SQL}"),
+        format!("WITH x AS (SELECT 1) {SQL}"),
+        "DELETE FROM source.auction".into(),
+        SQL.replace("a.other", &format!("{}a.other{}", "(".repeat(65), ")".repeat(65))),
+        format!("{SQL} {}", " + ".repeat(2048)),
+        SQL.replace(
+            "a.other IS NOT NULL",
+            &std::iter::repeat_n("a.other IS NULL", 512).collect::<Vec<_>>().join(" AND "),
+        ),
         SQL.replace("IS NOT NULL", "= NULL"),
         SQL.replace("IS NOT NULL", "> 1"),
         SQL.replace("JOIN", "LEFT JOIN"),
@@ -67,7 +115,6 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
         "SELECT * FROM source.auction".into(),
         SQL.replace("a.category", "a.\"Category\""),
         SQL.replace("IS NOT NULL", "IS NULL OR b.price IS NULL"),
-        SQL.replace("a.other IS NOT NULL", "(a.other IS NOT NULL)"),
         SQL.replace("source.auction", "db.source.auction"),
         SQL.replace("a.other", "a.b.c.d"),
         SQL.replace("a.other", "\"\""),
@@ -115,6 +162,16 @@ fn quoted_names_qualifiers_and_conjunctions() -> Result<()> {
     let quoted = "SELECT \"A\".\"Groupé\", COUNT(*), SUM(b.price) FROM \"Source space\".\"Auction\"\"Name\" AS \"A\" JOIN source.bid b ON \"A\".id=b.auction GROUP BY \"A\".\"Groupé\"";
     compile(quoted, &names)?;
     assert!(compile(&quoted.replace("\"A\".", "a."), &names).is_err());
+    let unicode = quoted.replace(r#""Groupé""#, r#"U&"Group\00e9""#);
+    assert_eq!(
+        program::plan(&names, &compile(quoted, &names)?)?.identity(),
+        program::plan(&names, &compile(&unicode, &names)?)?.identity()
+    );
+    names.relations[0].columns[1].name = "x".repeat(63);
+    let truncated = SQL.replace("a.category", &format!("a.\"{}\"", "x".repeat(64)));
+    names.relations[0].schema = "source".into();
+    names.relations[0].table = "auction".into();
+    compile(&truncated, &names)?;
     let defined: crate::worker::QueryDefinition =
         serde_json::from_value(serde_json::json!({"sql":SQL}))?;
     defined.compile(&native())?;

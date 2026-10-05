@@ -10,7 +10,8 @@ project/inner-join/group/count/nullable-integer-sum composition. A bounded SQL c
 
 ## Quality gate
 
-Use Rust 1.95.0, pinned in `rust-toolchain.toml`.
+Use Rust 1.95.0, pinned in `rust-toolchain.toml`, a C toolchain and libclang
+(`libclang-dev` on Debian/Ubuntu) for the bundled pg_query PostgreSQL parser.
 
 ```bash
 cargo install cargo-machete --version 0.9.2 --locked

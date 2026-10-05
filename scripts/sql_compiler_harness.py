@@ -26,6 +26,7 @@ class SqlFixture(Fixture):
         return path
 
     def expected_query(self):
+        self.sql(f"EXPLAIN {self.query}")
         return (f"SELECT COALESCE(to_jsonb(a.group_id::text),'null'::jsonb) group_key,count(*) row_count,sum(b.price) total "
                 f"FROM {self.name}.auction a JOIN {self.name}.bid b ON a.id=b.auction "
                 "WHERE a.category IS NOT NULL "
@@ -90,7 +91,7 @@ def qualify(output, command, null_only):
         prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
         fixture.rejected(command, 'changed', fixture.query.replace('IS NOT NULL', 'IS NULL'))
         assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        fixture.query = fixture.query.replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('JOIN', 'INNER JOIN')
+        fixture.query = fixture.query.replace('a.group_id', 'a.U&"group\\005fid"').replace('a.category IS NOT NULL', '((a.category) IS NOT NULL)').replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('JOIN', 'INNER JOIN')
         resumed = fixture.start(command, 'resumed', maximum=1)
         reopened = resumed.event('ready')
         assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time'] + len(changes)

@@ -7,7 +7,8 @@ use anyhow::Result;
 use serde::Serialize;
 
 /// Semantic/compiler and runtime codec revision; changes require fresh bootstrap.
-pub const REVISION: &str = "sql-grouped-v1:row-text-v1:json-v2:group-string-v1:i64-sum-v1";
+pub const REVISION: &str =
+    "sql-grouped-v2:pg-query-6.2.1:pg-17.7:row-text-v1:json-v2:group-string-v1:i64-sum-v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(crate) struct ColumnRef {

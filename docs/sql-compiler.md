@@ -31,7 +31,7 @@ true. ON equality with either key NULL is unknown and yields no match. Grouping
 preserves NULL, COUNT(*) includes NULL measures, SUM ignores NULL measures and
 returns NULL for an all-NULL group. Empty groups disappear. Zero SUM is distinct
 from absence. Comparisons to NULL (including `= NULL`) are rejected. General
-comparisons, OR, NOT expressions, parentheses and boolean expressions are later
+comparisons, OR, NOT expressions and other boolean expressions are later
 slices; no two-valued approximation of unsupported expressions is attempted.
 
 Table aliases and output aliases support AS or an implicit alias. Output aliases
@@ -41,14 +41,20 @@ text representation (or JSON null), even for integral/boolean/UUID groups; it is
 not a native SQL output-column codec. Aliases are not visible in GROUP BY/WHERE.
 Columns may be unqualified when unique, table-qualified, or schema.table-qualified
 when the table has no alias. An alias hides the original table name. Ambiguous
-columns and duplicate exposed table names are errors. Unquoted ASCII identifiers
-fold to lower case; double-quoted identifiers preserve case and escaped quotes.
-Non-ASCII names require quotes. Names longer than 63 UTF-8 bytes are rejected
-instead of PostgreSQL's silent truncation. SQL keywords used as identifiers must
-be quoted (the tokenizer's conservative keyword set can reject some PostgreSQL
-nonreserved words; source/public/other/id are explicitly accepted). Comments and one optional terminal semicolon are accepted.
-Input is bounded to 16 KiB; NUL is rejected. Unicode escape identifiers are not
-supported. Only built-in unqualified COUNT and SUM spelling is accepted.
+columns and duplicate exposed table names are errors. PostgreSQL 17.7 determines
+identifier keyword categories, case folding, quoted names and Unicode escapes
+(including UESCAPE). Redundant parentheses and PostgreSQL's ISNULL/NOTNULL
+spellings are accepted when their AST has the supported semantics. Comments and
+terminal semicolons follow PostgreSQL syntax; exactly one statement is required.
+PostgreSQL truncates identifiers to 63 UTF-8 bytes, including quoted identifiers;
+resolution and plan identity use that native normalized name. This replaces the
+v1 frontend's overlong-name rejection. Unquoted non-ASCII identifiers are accepted
+with PostgreSQL's folding behavior, rather than requiring quotes.
+
+Input is bounded to 16 KiB, 2,048 scanner tokens, 64 parenthesis levels and 512
+WHERE AST nodes; NUL is rejected. Scanner tokens exclude parentheses in strings,
+comments and quoted identifiers. These are input budgets, not a general native
+parser resource guarantee. Only built-in unqualified COUNT and SUM are supported.
 
 Other syntax fails closed: standalone projection queries, reordered outputs,
 multiple grouping keys/aggregates, COUNT(column), DISTINCT, aggregate FILTER,
@@ -61,9 +67,13 @@ search_path or live SQL name interpolation.
 
 ## Compiler and runtime boundaries
 
-1. Tokenize with pinned sqlparser PostgreSQL dialect; a nonrecursive allow-list
-   grammar builds a syntax-only SELECT representation. Parse diagnostics carry
-   token line/column (tokenizer errors retain their own location).
+1. Scan and parse with pinned pg_query 6.2.1 (embedded PostgreSQL 17.7), through
+   its safe Rust API. Validate supported AST node kinds, clauses and modifiers,
+   then lower to the syntax-only grouped SELECT representation. WHERE traversal
+   is iterative and bounded. Native syntax errors retain PostgreSQL's message;
+   the safe wrapper does not expose the native error cursor. AST lowering errors
+   identify the rejected construct; precise source spans are deferred. Parsing
+   does not perform PostgreSQL catalog resolution or type checking.
 2. Resolve relation/column names and aliases against source::Contract. Binding
    errors identify unknown/ambiguous names. No database state is changed here.
 3. Type-check the native equality/group/measure contracts, then construct typed
@@ -100,8 +110,11 @@ including OIDs, attribute order, modifiers, nullability, collation, source ident
 publication and physical slot. The compiler revision names the source-row text
 codec, object JSON-v2 family, group string codec and bounded sum semantics; engine
 plan identity also hashes the validated declarations. Change this revision when
-compiler semantics or callback/codec interpretation changes. sqlparser is pinned;
-upgrades require a semantic audit and a revision change if interpretation changes.
+compiler semantics or callback/codec interpretation changes. The revision also
+binds pg_query and its embedded PostgreSQL version; parser upgrades require a
+semantic audit and revision change. SQL v1 registrations cannot restart under v2;
+use a fresh registration/bootstrap. Legacy selector identities are unchanged.
+Native parser fingerprints/normalization are never used for durable identity.
 
 Formatting, keyword case, comments, redundant identical conjuncts, conjunct order,
 alias spelling and reversed equality operands normalize equally. Other semantic
@@ -132,3 +145,12 @@ Keep the old registration and evidence for diagnosis. No automatic state reset.
 
 Each slice gets independent review and the common gate before its own commit.
 Recursion, distribution, services and deployment remain deferred.
+
+## Native build dependency
+
+pg_query builds its bundled PostgreSQL parser with a C toolchain and bindgen.
+Install libclang (for example `libclang-dev` on Debian/Ubuntu) alongside the Rust
+toolchain. The application uses only the safe Rust API; its own unsafe-code ban
+remains in force. No PostgreSQL server headers or runtime extension are required.
+The pinned parser grammar is PostgreSQL 17.7, not whichever server version happens
+to be running; newer syntax remains unsupported until deliberately qualified.
