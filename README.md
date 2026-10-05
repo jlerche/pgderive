@@ -334,7 +334,7 @@ typed dependencies, and supports fan-out, chained joins and multiple outputs.
 All nodes read the same immutable prior state. Deferred arrangement replacements
 form a candidate only after the whole tick succeeds; the existing Engine owns
 local prepare/commit publication. The production grouped SQL worker uses this
-scheduler. See [the circuit API and state contract](docs/circuits.md).
+scheduler.
 
 `Project` consolidates full-tuple filter/projection collisions, `Join` includes
 all simultaneous-input terms, and `Arrangement` stages immutable object state.
