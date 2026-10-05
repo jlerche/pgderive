@@ -13,6 +13,7 @@ pub(super) struct Open {
     pub(super) session: Session,
     pub(super) catalog: Catalog,
     pub(super) query: program::Query,
+    pub(super) compiled: crate::compiler::Compiled,
     pub(super) writer: Writer,
     pub(super) store: Arc<dyn ObjectStore>,
     pub(super) nonce: String,
@@ -38,14 +39,15 @@ impl Open {
             block_rows: settings.block_rows,
             limits: config.execution,
         };
-        let mut query = program::build(&contract, &settings.query, options.clone())?;
+        let compiled = settings.query.compile(&contract)?;
+        let mut query = program::build(&contract, &compiled, options.clone())?;
         if catalog.load_durable(&mut session.client, query.plan()).await?.is_none() {
             registration::reset_unactivated(&session.client, &contract).await?;
             bootstrap(&replication, settings, &mut session, &catalog, &mut query).await?;
         }
         let (writer, nonce) =
             reopen(&mut session, &catalog, &mut query, (&contract, settings)).await?;
-        Ok(Self { session, catalog, query, writer, store, nonce, replication })
+        Ok(Self { session, catalog, query, compiled, writer, store, nonce, replication })
     }
 }
 async fn reopen(
@@ -118,7 +120,7 @@ async fn bootstrap(
     // The preliminary registration must match the exact imported source layout.
     let exact = program::build(
         &contract,
-        &settings.query,
+        &settings.query.compile(&contract)?,
         query::Settings {
             store: config
                 .object_store
@@ -143,8 +145,12 @@ async fn bootstrap(
     super::drive::emit(
         &serde_json::json!({"event":"bootstrap_upload","slot":contract.slot,"boundary":boundary.to_string()}),
     )?;
-    let prepared =
-        query.prepare_protected(program::inputs(&batch, &settings.query, 1)?, &protection).await?;
+    let prepared = query
+        .prepare_protected(
+            program::inputs(&batch, &settings.query.compile(&contract)?.selectors, 1)?,
+            &protection,
+        )
+        .await?;
     let checkpoint = query.prepared_checkpoint(&prepared)?;
     let deltas = Deltas::grouped(&prepared.output().batch)?;
     catalog

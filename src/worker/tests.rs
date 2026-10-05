@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use object_store::memory::InMemory;
 use std::sync::Arc;
 
-fn contract() -> Contract {
+pub(super) fn contract() -> Contract {
     let column = |position, name: &str, oid, primary: bool| Column {
         position,
         name: name.into(),
@@ -59,17 +59,17 @@ fn spec() -> Query {
         sum: "price".into(),
     }
 }
-fn settings() -> Settings {
+pub(super) fn settings() -> Settings {
     Settings {
         store: Arc::new(InMemory::new()),
         block_rows: 1,
         limits: crate::engine::execution::Limits::default(),
     }
 }
-fn row(values: &[(&str, Option<&str>)]) -> Row {
+pub(super) fn row(values: &[(&str, Option<&str>)]) -> Row {
     values.iter().map(|(key, value)| ((*key).into(), value.map(Into::into))).collect()
 }
-fn batch(rows: Vec<(&str, Row, i64)>) -> weighted::Batch {
+pub(super) fn batch(rows: Vec<(&str, Row, i64)>) -> weighted::Batch {
     weighted::Batch {
         updates: rows
             .into_iter()
@@ -83,29 +83,46 @@ fn batch(rows: Vec<(&str, Row, i64)>) -> weighted::Batch {
 #[test]
 fn registration_binds_native_types_and_query_selectors() -> Result<()> {
     let native = contract();
-    let original = program::build(&native, &spec(), settings())?;
+    let original =
+        program::build(&native, &crate::compiler::Compiled::legacy(spec(), &native)?, settings())?;
     let mut changed = spec();
     changed.group = "other".into();
     assert_ne!(
         original.plan().identity(),
-        program::build(&native, &changed, settings())?.plan().identity()
+        program::build(
+            &native,
+            &crate::compiler::Compiled::legacy(changed.clone(), &native)?,
+            settings()
+        )?
+        .plan()
+        .identity()
     );
     let mut changed_native = native.clone();
     changed_native.relations[1].columns[2].oid = 23;
     assert_ne!(
         original.plan().identity(),
-        program::build(&changed_native, &spec(), settings())?.plan().identity()
+        program::build(
+            &changed_native,
+            &crate::compiler::Compiled::legacy(spec(), &changed_native)?,
+            settings()
+        )?
+        .plan()
+        .identity()
     );
     changed.sum = "missing".into();
-    assert!(program::build(&native, &changed, settings()).is_err());
+    assert!(crate::compiler::Compiled::legacy(changed, &native).is_err());
     changed_native.relations[1].columns[1].oid = 20;
-    assert!(program::build(&changed_native, &spec(), settings()).is_err());
+    assert!(crate::compiler::Compiled::legacy(spec(), &changed_native).is_err());
     Ok(())
 }
 #[tokio::test]
 async fn full_row_join_nulls_and_simultaneous_retractions_match_sql_semantics() -> Result<()> {
     let selectors = spec();
-    let mut query = program::build(&contract(), &selectors, settings())?;
+    let mut query = program::build(
+        &contract(),
+        &crate::compiler::Compiled::legacy(selectors.clone(), &contract())?,
+        settings(),
+    )?;
     let left = row(&[("id", Some("1")), ("category", None), ("other", Some("a"))]);
     let nil = row(&[("id", Some("3")), ("auction", Some("1")), ("price", None)]);
     let bid = row(&[("id", Some("4")), ("auction", Some("1")), ("price", Some("7"))]);
@@ -141,3 +158,6 @@ async fn full_row_join_nulls_and_simultaneous_retractions_match_sql_semantics() 
     query.checkpoint()?.arrangements.first().context("missing worker membership")?;
     Ok(())
 }
+
+#[path = "tests/sql.rs"]
+mod sql;

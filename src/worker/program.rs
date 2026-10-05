@@ -1,4 +1,5 @@
 use super::spec::Query as Spec;
+use crate::compiler::Compiled;
 use crate::{
     engine::{
         Batch,
@@ -20,16 +21,21 @@ pub(super) type Query = GroupedJoin<String, Row, Row, Row, Row, Group, Joined>;
 
 pub(super) fn build(
     contract: &Contract,
-    spec: &Spec,
+    compiled: &Compiled,
     settings: plan::query::Settings,
 ) -> Result<Query> {
+    let spec = &compiled.selectors;
     spec.validate(contract)?;
+    let filter = compiled.clone();
     let group = spec.group.clone();
     let sum = spec.sum.clone();
     let operators = Operators {
         left: Project::new(|key: &String, row: &Row| Ok(Some((key.clone(), row.clone())))),
         right: Project::new(|key: &String, row: &Row| Ok(Some((key.clone(), row.clone())))),
         group: Project::new(move |_: &String, value: &Joined| {
+            if !filter.qualifies((&value.0, &value.1))? {
+                return Ok(None);
+            }
             Ok(Some((value.0.get(&group).context("missing group column")?.clone(), value.clone())))
         }),
         sum: GroupSum::new(move |_: &Group, rows: &Joined| {
@@ -42,16 +48,24 @@ pub(super) fn build(
         }),
     };
     Query::new_with_limits(
-        plan(contract, spec)?,
+        plan(contract, compiled)?,
         operators,
         settings.store,
         settings.block_rows,
         settings.limits,
     )
 }
-pub(super) fn plan(contract: &Contract, spec: &Spec) -> Result<Plan> {
+pub(super) fn plan(contract: &Contract, compiled: &Compiled) -> Result<Plan> {
     use sha2::{Digest, Sha256};
-    let identity = format!("{:x}", Sha256::digest(serde_json::to_vec(&(contract, spec))?));
+    let spec = &compiled.selectors;
+    spec.validate(contract)?;
+    // Legacy bytes stay unchanged; SQL binds normalized IR and explicit codecs.
+    let bytes = if compiled.revision.is_some() {
+        serde_json::to_vec(&(contract, compiled))?
+    } else {
+        serde_json::to_vec(&(contract, spec))?
+    };
+    let identity = format!("{:x}", Sha256::digest(bytes));
     let schema = |id: &str| format!("worker-grouped-v1:{identity}:{id}");
     let nodes = [
         ("left_source", Kind::Source, vec!["left_source_rows"]),

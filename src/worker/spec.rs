@@ -26,6 +26,30 @@ pub struct Query {
     /// Nullable integral right-side SUM column.
     pub sum: String,
 }
+/// SQL frontend input, retaining the legacy selector form for existing registrations.
+#[derive(Clone, Deserialize)]
+#[serde(untagged)]
+pub enum QueryDefinition {
+    /// Compile SQL into the supported durable composition.
+    Sql(SqlQuery),
+    /// Existing explicit selector registration.
+    Legacy(Query),
+}
+/// SQL text supplied in `[worker.query]` instead of explicit selectors.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SqlQuery {
+    /// One supported SELECT statement.
+    pub sql: String,
+}
+impl QueryDefinition {
+    pub(crate) fn compile(&self, contract: &Contract) -> Result<crate::compiler::Compiled> {
+        match self {
+            Self::Sql(query) => crate::compiler::compile(&query.sql, contract),
+            Self::Legacy(query) => crate::compiler::Compiled::legacy(query.clone(), contract),
+        }
+    }
+}
 /// Continuous worker configuration and bounded maintenance/retry policy.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,7 +76,7 @@ pub struct Settings {
     #[serde(default = "default_startup_timeout")]
     pub startup_timeout_secs: u64,
     /// Explicit supported operator composition.
-    pub query: Query,
+    pub query: QueryDefinition,
 }
 impl Settings {
     pub(crate) fn validate(&self) -> Result<()> {

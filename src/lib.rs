@@ -2,6 +2,7 @@
 
 mod acknowledged;
 pub mod catalog;
+pub mod compiler;
 mod configuration;
 pub mod engine;
 mod harness;

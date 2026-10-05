@@ -15,6 +15,16 @@ pub(super) async fn source(
     config: &Config,
     settings: &Settings,
 ) -> Result<Contract> {
+    // Resolve/type-check before writing any registration or creating a slot.
+    let identity = Identity::inspect(config).await?;
+    let preliminary = Contract::inspect(
+        sql,
+        identity.clone(),
+        &config.replication.publication,
+        &config.replication.slot,
+    )
+    .await?;
+    settings.query.compile(&preliminary)?;
     sql.batch_execute(&format!(
         "CREATE TABLE IF NOT EXISTS {}.pgderive_worker_registration(
         query_id text PRIMARY KEY, format_version integer NOT NULL CHECK(format_version=1),
@@ -24,7 +34,6 @@ pub(super) async fn source(
         settings.catalog_schema
     ))
     .await?;
-    let identity = Identity::inspect(config).await?;
     let row=sql.query_opt(&format!("SELECT format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix FROM {}.pgderive_worker_registration WHERE query_id=$1",settings.catalog_schema),&[&settings.query_id]).await?;
     if let Some(row) = row {
         ensure!(
@@ -47,7 +56,8 @@ pub(super) async fn source(
         );
         source.verify(sql).await?;
         ensure!(
-            program::plan(&source, &settings.query)?.identity() == row.try_get::<_, String>(5)?,
+            program::plan(&source, &settings.query.compile(&source)?)?.identity()
+                == row.try_get::<_, String>(5)?,
             "worker registration query changed"
         );
         return Ok(source);
@@ -69,8 +79,7 @@ async fn create(
     let prefix = &config.replication.slot[..config.replication.slot.len().min(30)];
     let slot = format!("{prefix}_{nonce}");
     let source = Contract::inspect(sql, identity, &config.replication.publication, &slot).await?;
-    settings.query.validate(&source)?;
-    let plan = program::plan(&source, &settings.query)?;
+    let plan = program::plan(&source, &settings.query.compile(&source)?)?;
     let tx = sql.transaction().await?;
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
     tx.execute(&format!("INSERT INTO {}.pgderive_worker_registration(query_id,format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix) VALUES($1,1,$2,$3,$4,$5,$6,$7)",settings.catalog_schema),&[&settings.query_id,&config.replication.slot,&source.slot,&serde_json::to_value(&source)?,&serde_json::to_value(Sink::Grouped(settings.sink_table.clone()))?,&plan.identity(),&settings.object_prefix]).await?;

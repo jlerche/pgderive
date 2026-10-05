@@ -5,8 +5,8 @@ Committed `pgoutput` transactions are normalized into consolidated full-tuple
 weighted batches and verified by a real-PostgreSQL row mutation harness. There
 is an initial in-memory incremental equijoin; materialized-result sinks,
 object-backed state and transactional publication are implemented for the typed
-project/inner-join/group/count/nullable-integer-sum composition. SQL compilation
-follows the core MVP.
+project/inner-join/group/count/nullable-integer-sum composition. A bounded SQL compiler now targets the grouped-join worker; see
+[the SQL subset and compiler boundaries](docs/sql-compiler.md).
 
 ## Quality gate
 
@@ -703,7 +703,8 @@ COUNT(*) counts matches and integral SUM ignores NULL measures. Every source
 transaction publishes immutable objects before committing membership, sink DML
 and progress together. Only authoritative publication permits slot feedback.
 The destination columns are `group_key` (JSONB), `row_count`, and nullable `total`.
-This is a hand-authored operator composition; SQL parsing is deferred.
+The worker accepts legacy selectors or the bounded SQL frontend described in
+[the compiler contract](docs/sql-compiler.md); both execute this explicit composition.
 
 The configured slot is a logical alias. A synchronous PostgreSQL registration
 journal records an unpredictable physical slot name before creating it. Restart
@@ -760,5 +761,5 @@ fixtures on failure, worker metrics and SQL comparison results remain under the
 selected evidence directory. This establishes correctness within that measured
 workload; it does not claim arbitrary scale, an RSS ceiling or production S3
 throughput. Source schema changes, recursive graphs, floating-point sums, outer
-joins, SQL parsing and managed Supabase privilege provisioning are outside this
+joins, arbitrary SQL and managed Supabase privilege provisioning are outside this
 engine MVP.

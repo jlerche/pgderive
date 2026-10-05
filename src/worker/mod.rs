@@ -7,7 +7,7 @@ mod spec;
 mod sql;
 use crate::Config;
 use anyhow::{Context, Result};
-pub use spec::{Query, Settings};
+pub use spec::{Query, QueryDefinition, Settings, SqlQuery};
 
 /// Start or resume a durable grouped worker using the configuration's worker section.
 ///

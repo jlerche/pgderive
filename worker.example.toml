@@ -58,3 +58,8 @@ right_schema = "public"
 right_table = "bid"
 right_key = "auction"
 sum = "price"
+
+# Alternatively replace the selector block above with:
+# [worker.query]
+# sql = "SELECT a.id, COUNT(*), SUM(b.price) FROM public.auction a JOIN public.bid b ON a.id=b.auction WHERE a.category IS NOT NULL GROUP BY a.id"
+# See docs/sql-compiler.md for the exact subset and fixed destination mapping.

@@ -138,11 +138,14 @@ record_bytes=16384
         self.workers.append(worker)
         return worker
 
+    def expected_query(self):
+        return f"""SELECT COALESCE(to_jsonb(a.category),'null'::jsonb) group_key,
+          count(*) row_count,sum(b.price) total FROM {self.name}.auction a
+          JOIN {self.name}.bid b ON a.id=b.auction GROUP BY a.category"""
+
     def verify(self):
         # Compare every weighted aggregate with an independent PostgreSQL query.
-        difference = self.sql(f'''WITH expected AS (
-          SELECT COALESCE(to_jsonb(a.category),'null'::jsonb) group_key,count(*) row_count,sum(b.price) total
-          FROM {self.name}.auction a JOIN {self.name}.bid b ON a.id=b.auction GROUP BY a.category),
+        difference = self.sql(f'''WITH expected AS ({self.expected_query()}),
           actual AS (SELECT group_key,row_count,total FROM {self.name}.groups)
           SELECT count(*) FROM ((SELECT * FROM expected EXCEPT SELECT * FROM actual)
           UNION ALL (SELECT * FROM actual EXCEPT SELECT * FROM expected)) differences''').strip()

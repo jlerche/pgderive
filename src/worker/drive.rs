@@ -126,19 +126,22 @@ async fn consume(
             signal=stop.changed() => {signal.context("worker stop monitor closed")?;return Ok(());}
             transaction=stream.recv() => transaction?,
         };
-        publish(open, settings, &transaction).await?;
+        publish(open, &transaction).await?;
         stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
         count.1.failures = 0;
     }
 }
-async fn publish(open: &mut Open, settings: &Settings, transaction: &Transaction) -> Result<()> {
+async fn publish(open: &mut Open, transaction: &Transaction) -> Result<()> {
     let started = Instant::now();
     let time = open.query.time().checked_add(1).context("worker logical time overflow")?;
     let token = format!("worker:{}:transaction:{time}", open.nonce);
     let protection = open.writer.protect_upload(&mut open.session.client, &token).await?;
     let prepared = open
         .query
-        .prepare_protected(program::inputs(&transaction.batch, &settings.query, time)?, &protection)
+        .prepare_protected(
+            program::inputs(&transaction.batch, &open.compiled.selectors, time)?,
+            &protection,
+        )
         .await?;
     let checkpoint = open.query.prepared_checkpoint(&prepared)?;
     let deltas = Deltas::grouped(&prepared.output().batch)?;
