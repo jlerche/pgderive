@@ -1,12 +1,12 @@
-use super::{Arrangement, GroupSum, Stream, SumState};
+use super::{Arrangement, GroupSum, SumState, TimedBatch};
 use crate::engine::{Batch, ZSet};
 use anyhow::{Result, bail};
 use object_store::memory::InMemory;
 use std::{collections::BTreeMap, sync::Arc};
 type Value = (i64, Option<i64>);
 type Updates = Vec<((i64, Value), i64)>;
-fn edge(time: u64, updates: Updates) -> Result<Stream<Batch<i64, Value>>> {
-    Ok(Stream { time, batch: Batch::from_updates(updates)? })
+fn edge(time: u64, updates: Updates) -> Result<TimedBatch<Batch<i64, Value>>> {
+    Ok(TimedBatch { time, batch: Batch::from_updates(updates)? })
 }
 #[tokio::test]
 async fn zero_null_empty_and_duplicate_groups_have_distinct_semantics() -> Result<()> {

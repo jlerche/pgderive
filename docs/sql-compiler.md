@@ -83,7 +83,8 @@ search_path or live SQL name interpolation.
    sorted/deduplicated conjunctive typed NULL tests and compiler revision. There
    is no generic arbitrary-graph IR in this slice. Unsupported relational shapes
    are rejected, rather than declared without an executable evaluator.
-5. The explicit worker::program bridge binds this IR to GroupedJoin operators:
+5. The explicit worker::program bridge binds this IR to GroupedJoin operators,
+   connected by typed Stream<T> handles and the executable circuit builder:
    full-row input arrangements, inner join, joined-row WHERE/group projection,
    COUNT/SUM sufficient statistics and fixed destination codec. The predicate
    callback runs on both positive and negative full-row contributions. Bootstrap

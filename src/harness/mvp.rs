@@ -5,7 +5,7 @@ mod recovery;
 use crate::{
     engine::{
         Batch,
-        dataflow::{GroupSum, Project, Stream, SumState},
+        dataflow::{GroupSum, Project, SumState, TimedBatch},
     },
     transaction::Row,
     weighted,
@@ -48,7 +48,7 @@ impl MvpFixture {
     ) -> Result<()> {
         let time = self.graph.time() + 1;
         let batch = &transaction.batch;
-        let input = Stream {
+        let input = TimedBatch {
             time,
             batch: (input(batch, "auction", "id")?, input(batch, "bid", "auction")?),
         };

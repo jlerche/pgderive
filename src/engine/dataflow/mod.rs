@@ -3,10 +3,13 @@
 //! Preparation uploads immutable objects; only local commit changes graph visibility.
 //! This is not a `PostgreSQL` durable publication or a recursive DBSP scheduler.
 mod arrangement;
+mod builder;
+mod circuit;
 mod join;
 mod operators;
 mod project;
 mod runtime;
+mod stream;
 mod sum;
 use super::{
     Batch,
@@ -15,19 +18,22 @@ use super::{
 };
 use anyhow::{Context, Result, ensure};
 pub use arrangement::Arrangement;
+pub use builder::CircuitBuilder;
+pub use circuit::{Circuit, NodeContext, NodeOutput, StateUpdate};
 pub use join::Join;
 use object_store::ObjectStore;
 pub use project::Project;
 pub use runtime::{Graph, PreparedGraph, PreparedMaintenance};
 use std::sync::Arc;
+pub use stream::{CircuitInputs, Output, Stream};
 pub use sum::{GroupSum, SumDelta, SumState};
 
 type Grouper<K, L, R, G> = dyn Fn(&K, &L, &R) -> Result<Option<G>> + Send + Sync;
 
-/// One complete logical batch on a typed graph edge. Empty batches carry a tick.
+/// One complete logical delta batch at a tick. Empty batches still carry time.
 #[derive(Debug, Clone)]
-pub struct Stream<B> {
-    /// Transaction-ordered logical time, distinct from source LSNs.
+pub struct TimedBatch<B> {
+    /// Logical delta-tick index, distinct from source LSNs.
     pub time: u64,
     /// Finalized batch for this tick.
     pub batch: B,
@@ -48,7 +54,7 @@ pub struct Snapshot<K: BatchData, L: BatchData, R: BatchData, G: BatchData> {
 pub struct Prepared<K: BatchData, L: BatchData, R: BatchData, G: BatchData> {
     base: Arc<Snapshot<K, L, R, G>>,
     next: Arc<Snapshot<K, L, R, G>>,
-    output: Stream<Batch<G, i64>>,
+    output: TimedBatch<Batch<G, i64>>,
 }
 
 /// Unpublished equivalent physical replacement of the graph's arrangements.
@@ -108,8 +114,8 @@ impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> TraceQuery<K, L, R,
     /// Uploaded objects may be orphaned; garbage collection is not implemented.
     pub async fn prepare(
         &self,
-        left: &Stream<Batch<K, L>>,
-        right: &Stream<Batch<K, R>>,
+        left: &TimedBatch<Batch<K, L>>,
+        right: &TimedBatch<Batch<K, R>>,
     ) -> Result<Prepared<K, L, R, G>> {
         let time = self.root.left.time().checked_add(1).context("logical time overflow")?;
         ensure!(left.time == time && right.time == time, "out-of-order graph input tick");
@@ -123,7 +129,7 @@ impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> TraceQuery<K, L, R,
         Ok(Prepared {
             base: self.root.clone(),
             next: Arc::new(Snapshot { left: next_left, right: next_right, counts: next_counts }),
-            output: Stream { time, batch: output },
+            output: TimedBatch { time, batch: output },
         })
     }
     async fn append<A: BatchData, B: BatchData>(
@@ -143,7 +149,7 @@ impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> TraceQuery<K, L, R,
     ///
     /// # Errors
     /// Rejects stale/foreign candidates without publishing any arrangement.
-    pub fn commit(&mut self, prepared: Prepared<K, L, R, G>) -> Result<Stream<Batch<G, i64>>> {
+    pub fn commit(&mut self, prepared: Prepared<K, L, R, G>) -> Result<TimedBatch<Batch<G, i64>>> {
         ensure!(Arc::ptr_eq(&self.root, &prepared.base), "foreign or stale graph preparation");
         self.root = prepared.next;
         Ok(prepared.output)
@@ -199,3 +205,7 @@ mod sum_tests;
 #[cfg(test)]
 #[path = "tests/budgets.rs"]
 mod budget_tests;
+
+#[cfg(test)]
+#[path = "tests/circuit.rs"]
+mod circuit_tests;

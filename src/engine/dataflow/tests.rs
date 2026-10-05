@@ -1,4 +1,4 @@
-use super::{Stream, TraceQuery};
+use super::{TimedBatch, TraceQuery};
 use crate::engine::{Batch, GroupedCount, IncrementalJoin, ZSet};
 use anyhow::{Result, bail};
 use object_store::{ObjectStoreExt, memory::InMemory, path::Path};
@@ -8,8 +8,8 @@ type Query = TraceQuery<i64, i64, i64, i64>;
 fn stream(
     time: u64,
     rows: impl IntoIterator<Item = ((i64, i64), i64)>,
-) -> Result<Stream<Batch<i64, i64>>> {
-    Ok(Stream { time, batch: Batch::from_updates(rows)? })
+) -> Result<TimedBatch<Batch<i64, i64>>> {
+    Ok(TimedBatch { time, batch: Batch::from_updates(rows)? })
 }
 fn group(key: i64, left: i64, right: i64) -> Option<i64> {
     (left + right >= 0).then_some(key % 2)

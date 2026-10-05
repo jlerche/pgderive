@@ -1,7 +1,7 @@
 use super::{GroupedJoin, Output, Prepared};
 use crate::{
     catalog::{Deltas, Progress, Publication, Writer},
-    engine::{dataflow::Stream, reader::BatchData},
+    engine::{dataflow::TimedBatch, reader::BatchData},
 };
 use anyhow::Result;
 use tokio_postgres::Client;
@@ -53,7 +53,7 @@ impl<
         writer: &mut Writer,
         prepared: Prepared<K, L, R, G>,
         progress: &Progress,
-    ) -> Result<Stream<Output<G>>> {
+    ) -> Result<TimedBatch<Output<G>>> {
         let checkpoint = self.prepared_checkpoint(&prepared)?;
         let deltas = Deltas::grouped(&prepared.output().batch)?;
         writer

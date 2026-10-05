@@ -1,6 +1,6 @@
 use crate::engine::{
     Batch, Circuit, GroupedCount, IncrementalJoin, ZSet,
-    dataflow::{Arrangement, GroupSum, Join, Project, Stream, SumState, TraceQuery},
+    dataflow::{Arrangement, GroupSum, Join, Project, SumState, TimedBatch, TraceQuery},
     trace::TraceSnapshot,
 };
 use anyhow::{Result, bail, ensure};
@@ -174,7 +174,7 @@ async fn verify_trace(
 ) -> Result<()> {
     // Accepted fixture's project domain is 1..=32. Scope both old and new task
     // images before forming this arrangement; source-map validation stays complete.
-    let left = Stream {
+    let left = TimedBatch {
         time,
         batch: Batch::from_updates(
             input
@@ -185,7 +185,7 @@ async fn verify_trace(
         )?,
     };
     let right =
-        Stream { time, batch: Batch::from_updates(input.1.iter().map(|(row, w)| (*row, *w)))? };
+        TimedBatch { time, batch: Batch::from_updates(input.1.iter().map(|(row, w)| (*row, *w)))? };
     let prior = graph.counts.snapshot();
     let joined = Join.evaluate(&left, &right, &prior.left, &prior.right).await?;
     let project = Project::new(|key: &i64, (task, org): &(Task, i64)| {

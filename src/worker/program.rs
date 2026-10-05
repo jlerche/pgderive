@@ -3,7 +3,7 @@ use crate::compiler::Compiled;
 use crate::{
     engine::{
         Batch,
-        dataflow::{GroupSum, Project, Stream},
+        dataflow::{GroupSum, Project, TimedBatch},
         plan::{
             self, Kind, Node, Plan,
             query::{GroupedJoin, Operators},
@@ -16,7 +16,7 @@ use crate::{
 use anyhow::{Context, Result};
 type Group = Option<String>;
 type Joined = (Row, Row);
-type Inputs = Stream<plan::query::Inputs<String, Row, Row>>;
+type Inputs = TimedBatch<plan::query::Inputs<String, Row, Row>>;
 pub(super) type Query = GroupedJoin<String, Row, Row, Row, Row, Group, Joined>;
 
 pub(super) fn build(
@@ -108,7 +108,7 @@ pub(super) fn plan(contract: &Contract, compiled: &Compiled) -> Result<Plan> {
     })
 }
 pub(super) fn inputs(batch: &weighted::Batch, spec: &Spec, time: u64) -> Result<Inputs> {
-    Ok(Stream {
+    Ok(TimedBatch {
         time,
         batch: (
             side(batch, (&spec.left_schema, &spec.left_table), &spec.left_key)?,

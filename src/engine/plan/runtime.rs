@@ -1,5 +1,5 @@
 use super::{Plan, State};
-use crate::engine::dataflow::{Graph, PreparedGraph, Stream};
+use crate::engine::dataflow::{Graph, PreparedGraph, TimedBatch};
 use anyhow::Result;
 use std::{future::Future, sync::Arc};
 
@@ -18,7 +18,7 @@ impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {
     pub fn new<F: Future<Output = Result<(S, O)>> + Send + 'static>(
         plan: Plan,
         initial: S,
-        evaluate: impl Fn(Arc<S>, Stream<I>) -> F + Send + Sync + 'static,
+        evaluate: impl Fn(Arc<S>, TimedBatch<I>) -> F + Send + Sync + 'static,
     ) -> Result<Self> {
         Self::restore(plan, initial, 0, evaluate)
     }
@@ -31,12 +31,12 @@ impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {
         plan: Plan,
         initial: S,
         time: u64,
-        evaluate: impl Fn(Arc<S>, Stream<I>) -> F + Send + Sync + 'static,
+        evaluate: impl Fn(Arc<S>, TimedBatch<I>) -> F + Send + Sync + 'static,
     ) -> Result<Self> {
         plan.validate_state(&initial, time)?;
         let plan = Arc::new(plan);
         let checked = plan.clone();
-        let graph = Graph::at_boundary(initial, time, move |state, input: Stream<I>| {
+        let graph = Graph::at_boundary(initial, time, move |state, input: TimedBatch<I>| {
             let time = input.time;
             let result = evaluate(state, input);
             let plan = checked.clone();
@@ -63,17 +63,17 @@ impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {
     pub fn snapshot(&self) -> Arc<S> {
         self.graph.snapshot()
     }
-    /// Stage a complete transaction; all declared arrangement clocks are checked.
+    /// Stage a complete delta tick; all declared arrangement clocks are checked.
     ///
     /// # Errors
-    /// Returns node, state contract or transaction ordering failures.
-    pub async fn prepare(&self, input: Stream<I>) -> Result<PreparedGraph<S, O>> {
+    /// Returns node, state contract or logical tick ordering failures.
+    pub async fn prepare(&self, input: TimedBatch<I>) -> Result<PreparedGraph<S, O>> {
         self.graph.prepare(input).await
     }
     pub(crate) async fn prepare_using<F: Future<Output = Result<(S, O)>>>(
         &self,
-        input: Stream<I>,
-        evaluate: impl FnOnce(Arc<S>, Stream<I>) -> F,
+        input: TimedBatch<I>,
+        evaluate: impl FnOnce(Arc<S>, TimedBatch<I>) -> F,
     ) -> Result<PreparedGraph<S, O>> {
         let time = input.time;
         let plan = self.plan.clone();
@@ -89,7 +89,7 @@ impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {
     ///
     /// # Errors
     /// Rejects stale/foreign work without changing visibility.
-    pub fn commit(&mut self, prepared: PreparedGraph<S, O>) -> Result<Stream<O>> {
+    pub fn commit(&mut self, prepared: PreparedGraph<S, O>) -> Result<TimedBatch<O>> {
         self.graph.commit(prepared)
     }
     /// Verify preparation ownership before attempting external publication.

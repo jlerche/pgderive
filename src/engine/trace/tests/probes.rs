@@ -1,6 +1,6 @@
 use crate::engine::{
     Batch,
-    dataflow::{Arrangement, Stream},
+    dataflow::{Arrangement, TimedBatch},
     reader::{BlockCache, ObjectBatch},
     trace::{KeyCursor, Run, Trace},
 };
@@ -131,13 +131,14 @@ async fn affected_identity_validation_checks_final_weights_without_scanning_unre
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let writer = Arrangement::new(store.clone(), "ints".into(), 1)?;
     let initial = Batch::from_updates([((1, 1), i64::MAX), ((1, 3), -2), ((100, 0), 1)])?;
-    let prior = writer.stage(&writer.empty(), &Stream { time: 1, batch: initial.clone() }).await?;
+    let prior =
+        writer.stage(&writer.empty(), &TimedBatch { time: 1, batch: initial.clone() }).await?;
     let data = object(store.clone(), Arc::new(BlockCache::new(0, 0)), &initial, 1).await?;
     store.delete(&Path::from(data.block_path(2).context("missing fixture block")?)).await?;
-    let overflow = Stream { time: 2, batch: Batch::from_updates([((1, 1), 1)])? };
+    let overflow = TimedBatch { time: 2, batch: Batch::from_updates([((1, 1), 1)])? };
     assert!(writer.stage(&prior, &overflow).await.is_err());
     assert_eq!(prior.time(), 1);
-    let delta = Stream {
+    let delta = TimedBatch {
         time: 2,
         batch: Batch::from_updates([((1, 1), -i64::MAX), ((1, 2), 2), ((1, 3), 3)])?,
     };

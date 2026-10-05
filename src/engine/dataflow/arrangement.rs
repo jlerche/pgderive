@@ -1,4 +1,4 @@
-use super::Stream;
+use super::TimedBatch;
 use crate::engine::{
     Batch,
     reader::{BatchData, BatchReader, BlockCache, ObjectBatch, WriteLimits},
@@ -6,6 +6,7 @@ use crate::engine::{
 };
 use anyhow::{Result, ensure};
 use object_store::ObjectStore;
+use std::borrow::Borrow;
 use std::sync::Arc;
 
 /// Bound immutable object writer for one typed arrangement in an acyclic graph.
@@ -85,14 +86,14 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
     ///
     /// # Errors
     /// Returns upload/read, tick or final state overflow errors.
-    pub async fn stage(
+    pub async fn stage<B: Borrow<Batch<K, V>> + Sync>(
         &self,
         prior: &TraceSnapshot<K, V>,
-        delta: &Stream<Batch<K, V>>,
+        delta: &TimedBatch<B>,
     ) -> Result<TraceSnapshot<K, V>> {
         ensure!(prior.run_count() < 128, "arrangement run limit requires compaction");
-        prior.validate_delta(&delta.batch).await?;
-        prior.append_validated(self.upload(&delta.batch).await?, delta.time)
+        prior.validate_delta(delta.batch.borrow()).await?;
+        prior.append_validated(self.upload(delta.batch.borrow()).await?, delta.time)
     }
     /// Upload equivalent consolidated state without advancing logical time.
     ///

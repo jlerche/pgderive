@@ -172,7 +172,9 @@ impl<
             limits.cache_bytes,
             limits.cache_entries,
         ));
-        Ok(Arc::new(Self {
+        Arc::new(Self {
+            bound: std::sync::OnceLock::new(),
+            plan: plan.clone(),
             operators: Arc::new(operators),
             left: crate::engine::dataflow::Arrangement::new(
                 store.clone(),
@@ -201,6 +203,7 @@ impl<
             schemas,
             limits,
             cache,
-        }))
+        })
+        .initialize()
     }
 }

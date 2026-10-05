@@ -2,7 +2,7 @@ use super::{count_oracle, projection_oracle};
 use crate::{
     engine::{
         Circuit, GroupedCount, IncrementalJoin, ZSet,
-        dataflow::{Stream, TraceQuery},
+        dataflow::{TimedBatch, TraceQuery},
     },
     transaction::Row,
     weighted::Batch,
@@ -97,13 +97,13 @@ impl JoinFixture {
             )?);
         }
         let graph = self.trace.as_mut().context("missing trace graph")?;
-        let left = Stream {
+        let left = TimedBatch {
             time,
             batch: crate::engine::Batch::from_updates(
                 inputs.0.iter().map(|(row, w)| (row.clone(), *w)),
             )?,
         };
-        let right = Stream {
+        let right = TimedBatch {
             time,
             batch: crate::engine::Batch::from_updates(
                 inputs.1.iter().map(|(row, w)| (row.clone(), *w)),

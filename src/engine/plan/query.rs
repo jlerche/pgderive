@@ -2,16 +2,18 @@
 use super::{Binding, Engine, Plan, State};
 use crate::engine::{
     Batch,
-    dataflow::{Arrangement, GroupSum, Join, Project, Stream, SumState},
+    dataflow::{Arrangement, GroupSum, Project, SumState, TimedBatch},
     execution::Limits,
     reader::{BatchData, BlockCache, CacheStats},
     trace::TraceSnapshot,
 };
 use anyhow::{Context, Result};
 mod checkpoint;
+mod circuit;
 mod publication;
 use object_store::ObjectStore;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+type BoundSlot<K, A, B, L, R, G> = OnceLock<circuit::Built<K, A, B, L, R, G>>;
 /// Object backend and resource configuration for typed query creation/reopening.
 #[derive(Clone)]
 pub struct Settings {
@@ -46,6 +48,7 @@ pub struct Operators<
     pub sum: GroupSum<G, V>,
 }
 /// Pinned complete immutable state of a registered grouped join.
+#[derive(Clone)]
 pub struct QueryState<K: BatchData, L: BatchData, R: BatchData, G: BatchData> {
     /// Left projected input arrangement.
     pub left: TraceSnapshot<K, L>,
@@ -77,6 +80,8 @@ struct Execution<
     G: BatchData,
     V: BatchData,
 > {
+    plan: Plan,
+    bound: BoundSlot<K, A, B, L, R, G>,
     operators: SharedOperators<K, A, B, L, R, G, V>,
     left: Arrangement<K, L>,
     right: Arrangement<K, R>,
@@ -120,8 +125,10 @@ impl<
     V: BatchData,
 > Execution<K, A, B, L, R, G, V>
 {
-    fn scoped(&self, namespace: &str) -> Arc<Self> {
+    fn scoped(&self, namespace: &str) -> Result<Arc<Self>> {
         Arc::new(Self {
+            bound: OnceLock::new(),
+            plan: self.plan.clone(),
             operators: self.operators.clone(),
             left: self.left.clone().with_namespace(namespace),
             right: self.right.clone().with_namespace(namespace),
@@ -131,6 +138,13 @@ impl<
             limits: self.limits,
             cache: self.cache.clone(),
         })
+        .initialize()
+    }
+    fn initialize(self: Arc<Self>) -> Result<Arc<Self>> {
+        self.bound
+            .set(self.build_circuit()?)
+            .map_err(|_| anyhow::anyhow!("circuit already bound"))?;
+        Ok(self)
     }
     fn empty(&self) -> QueryState<K, L, R, G> {
         QueryState {
@@ -142,36 +156,15 @@ impl<
         }
     }
     async fn evaluate(
-        &self,
+        self: &Arc<Self>,
         state: Arc<QueryState<K, L, R, G>>,
-        input: Stream<Inputs<K, A, B>>,
+        input: TimedBatch<Inputs<K, A, B>>,
     ) -> Result<(QueryState<K, L, R, G>, Output<G>)> {
-        let left = self.operators.left.evaluate_with_limits(
-            &Stream { time: input.time, batch: input.batch.0 },
-            self.limits,
-        )?;
-        let right = self.operators.right.evaluate_with_limits(
-            &Stream { time: input.time, batch: input.batch.1 },
-            self.limits,
-        )?;
-        let joined = Join
-            .evaluate_with_limits((&left, &right), (&state.left, &state.right), self.limits)
-            .await?;
-        let grouped = self.operators.group.evaluate_with_limits(&joined, self.limits)?;
-        let delta =
-            self.operators.sum.evaluate_with_limits(&grouped, &state.sums, self.limits).await?;
-        let output = Project::new(|key: &G, value: &SumState| {
-            Ok(Some((key.clone(), (value.rows, (value.non_null != 0).then_some(value.sum)))))
-        })
-        .evaluate_with_limits(&delta.state, self.limits)?;
-        let next = QueryState {
-            left: self.left.stage(&state.left, &left).await?,
-            right: self.right.stage(&state.right, &right).await?,
-            sums: self.sums.stage(&state.sums, &delta.state).await?,
-            output: self.output.stage(&state.output, &output).await?,
-            schemas: self.schemas.clone(),
-        };
-        Ok((next, output.batch))
+        let bound = self.bound.get().context("unbound grouped circuit")?;
+        let mut sources = bound.circuit.inputs();
+        sources.insert(&bound.left, input.batch.0)?;
+        sources.insert(&bound.right, input.batch.1)?;
+        bound.circuit.evaluate(state, TimedBatch { time: input.time, batch: sources }).await
     }
     async fn compact(&self, state: Arc<QueryState<K, L, R, G>>) -> Result<QueryState<K, L, R, G>> {
         Ok(QueryState {
@@ -259,7 +252,10 @@ impl<
     ///
     /// # Errors
     /// Returns node, I/O, arithmetic, contract, or tick failures.
-    pub async fn prepare(&self, input: Stream<Inputs<K, A, B>>) -> Result<Prepared<K, L, R, G>> {
+    pub async fn prepare(
+        &self,
+        input: TimedBatch<Inputs<K, A, B>>,
+    ) -> Result<Prepared<K, L, R, G>> {
         self.execution.limits.check_batch(&input.batch.0)?;
         self.execution.limits.check_batch(&input.batch.1)?;
         self.engine.prepare(input).await
@@ -271,12 +267,12 @@ impl<
     /// Returns reservation, resource, operator, or object failures.
     pub async fn prepare_protected(
         &self,
-        input: Stream<Inputs<K, A, B>>,
+        input: TimedBatch<Inputs<K, A, B>>,
         protection: &crate::catalog::Protection,
     ) -> Result<Prepared<K, L, R, G>> {
         self.execution.limits.check_batch(&input.batch.0)?;
         self.execution.limits.check_batch(&input.batch.1)?;
-        let execution = self.execution.scoped(protection.namespace()?);
+        let execution = self.execution.scoped(protection.namespace()?)?;
         self.engine
             .prepare_using(input, move |state, input| async move {
                 execution.evaluate(state, input).await
@@ -291,14 +287,14 @@ impl<
         &self,
         protection: &crate::catalog::Protection,
     ) -> Result<Compaction<K, L, R, G>> {
-        let execution = self.execution.scoped(protection.namespace()?);
+        let execution = self.execution.scoped(protection.namespace()?)?;
         self.engine.maintenance(move |state| async move { execution.compact(state).await }).await
     }
     /// Publish prepared state locally; durable PG publication is a later slice.
     ///
     /// # Errors
     /// Rejects stale/foreign preparations.
-    pub fn commit(&mut self, prepared: Prepared<K, L, R, G>) -> Result<Stream<Output<G>>> {
+    pub fn commit(&mut self, prepared: Prepared<K, L, R, G>) -> Result<TimedBatch<Output<G>>> {
         self.engine.commit(prepared)
     }
     /// Prepare bounded streaming compaction without changing local visibility.

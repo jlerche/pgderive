@@ -327,15 +327,20 @@ reference graph itself remains a semantic baseline.
 
 ## Composable typed MVP operators
 
-`Project` binds a pure filter/projection for the graph lifetime and consolidates
-full-tuple collisions while preserving logical time. `Join` evaluates all three
-incremental terms against two prior object arrangements at the same boundary.
-`Arrangement` uploads/stages typed immutable state and validates the resulting
-weighted trace. `Graph<State, Input, Output>` binds an explicit Rust operator
-composition at construction, evaluates an entire transaction, and publishes its
-staged state with one root assignment. State consists of immutable snapshots or
-owned values; nodes must stage at the incoming tick and cannot publish external
-effects. This is an acyclic composition API, not a dynamic SQL planner.
+`Stream<T>` now represents a typed circuit edge; `TimedBatch<T>` represents one
+logical delta-tick value. `CircuitBuilder<S>` binds source, unary and binary
+callbacks to a validated plan, derives an executable topological schedule from
+typed dependencies, and supports fan-out, chained joins and multiple outputs.
+All nodes read the same immutable prior state. Deferred arrangement replacements
+form a candidate only after the whole tick succeeds; the existing Engine owns
+local prepare/commit publication. The production grouped SQL worker uses this
+scheduler. See [the circuit API and state contract](docs/circuits.md).
+
+`Project` consolidates full-tuple filter/projection collisions, `Join` includes
+all simultaneous-input terms, and `Arrangement` stages immutable object state.
+The lower-level `Graph<State, Input, Output>` evaluator remains available for
+reference/custom compositions. Source transactions choose delta-tick boundaries
+in the PostgreSQL adapter; SQL syntax remains the bounded grouped subset.
 
 The older `TraceQuery` count graph remains a reference/check fixture while the
 MVP composes these reusable operators. Graph tests cover project collisions,
@@ -413,7 +418,7 @@ Its SHA-256 identity covers the complete registration and semantic revision.
 Callback implementation changes require a new revision; caller-supplied schema
 identities remain an explicit Rust/codec contract until SQL lowering exists.
 
-`Engine` binds the fixed evaluator to a plan and checks the actual immutable
+`Engine` binds an executable evaluator to a plan and checks the actual immutable
 state membership, schema identities, and every arrangement tick before local
 publication. Missing, extra, duplicate, or differently timed state fails without
 moving visibility. `query::GroupedJoin` is the production reusable two-source

@@ -1,4 +1,4 @@
-use super::Stream;
+use super::TimedBatch;
 use crate::engine::{
     Batch,
     execution::{Consolidator, Limits},
@@ -7,9 +7,10 @@ use crate::engine::{
 };
 use anyhow::{Result, ensure};
 use num_bigint::BigInt;
+use std::borrow::Borrow;
 type JoinWeights<K, L, R> = Consolidator<(K, (L, R))>;
 type Joined<K, L, R> = Batch<K, (L, R)>;
-type Inputs<'a, K, L, R> = (&'a Stream<Batch<K, L>>, &'a Stream<Batch<K, R>>);
+type Inputs<'a, L, R> = (&'a TimedBatch<L>, &'a TimedBatch<R>);
 type Priors<'a, K, L, R> = (&'a TraceSnapshot<K, L>, &'a TraceSnapshot<K, R>);
 
 /// Stateless incremental equijoin; both arrangements are pinned to prior time.
@@ -22,23 +23,29 @@ impl Join {
     /// Returns tick, read, integrity or finalized coefficient overflow errors.
     pub async fn evaluate<K: BatchData, L: BatchData, R: BatchData>(
         &self,
-        left: &Stream<Batch<K, L>>,
-        right: &Stream<Batch<K, R>>,
+        left: &TimedBatch<Batch<K, L>>,
+        right: &TimedBatch<Batch<K, R>>,
         prior_left: &TraceSnapshot<K, L>,
         prior_right: &TraceSnapshot<K, R>,
-    ) -> Result<Stream<Joined<K, L, R>>> {
+    ) -> Result<TimedBatch<Joined<K, L, R>>> {
         self.evaluate_with_limits((left, right), (prior_left, prior_right), Limits::default()).await
     }
     /// Evaluate with explicit limits; physical spills preserve exact cross terms.
     ///
     /// # Errors
     /// Returns clock, read, scratch, resource, or final arithmetic failures.
-    pub async fn evaluate_with_limits<K: BatchData, L: BatchData, R: BatchData>(
+    pub async fn evaluate_with_limits<
+        K: BatchData,
+        L: BatchData,
+        R: BatchData,
+        LB: Borrow<Batch<K, L>> + Sync,
+        RB: Borrow<Batch<K, R>> + Sync,
+    >(
         &self,
-        inputs: Inputs<'_, K, L, R>,
+        inputs: Inputs<'_, LB, RB>,
         priors: Priors<'_, K, L, R>,
         limits: Limits,
-    ) -> Result<Stream<Joined<K, L, R>>> {
+    ) -> Result<TimedBatch<Joined<K, L, R>>> {
         let (left, right) = inputs;
         let (prior_left, prior_right) = priors;
         ensure!(
@@ -47,9 +54,16 @@ impl Join {
                 && prior_left.time().checked_add(1) == Some(left.time),
             "inconsistent join boundary"
         );
-        Ok(Stream {
+        Ok(TimedBatch {
             time: left.time,
-            batch: join_bounded(&left.batch, &right.batch, prior_left, prior_right, limits).await?,
+            batch: join_bounded(
+                left.batch.borrow(),
+                right.batch.borrow(),
+                prior_left,
+                prior_right,
+                limits,
+            )
+            .await?,
         })
     }
 }

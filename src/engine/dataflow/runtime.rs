@@ -1,8 +1,8 @@
-use super::Stream;
+use super::TimedBatch;
 use anyhow::{Result, ensure};
 use std::{future::Future, pin::Pin, sync::Arc};
 type Evaluation<S, O> = Pin<Box<dyn Future<Output = Result<(S, O)>> + Send>>;
-type Evaluator<S, I, O> = dyn Fn(Arc<S>, Stream<I>) -> Evaluation<S, O> + Send + Sync;
+type Evaluator<S, I, O> = dyn Fn(Arc<S>, TimedBatch<I>) -> Evaluation<S, O> + Send + Sync;
 struct Boundary<S> {
     state: Arc<S>,
     time: u64,
@@ -12,10 +12,10 @@ struct Boundary<S> {
 pub struct PreparedGraph<S, O> {
     base: Arc<Boundary<S>>,
     next: Arc<Boundary<S>>,
-    output: Stream<O>,
+    output: TimedBatch<O>,
 }
 impl<S, O> PreparedGraph<S, O> {
-    /// Logical boundary from which this transaction was evaluated.
+    /// Logical boundary from which this delta tick was evaluated.
     #[must_use]
     pub fn base_time(&self) -> u64 {
         self.base.time
@@ -27,11 +27,11 @@ impl<S, O> PreparedGraph<S, O> {
     }
     /// Inspect staged result deltas without publishing local visibility.
     #[must_use]
-    pub const fn output(&self) -> &Stream<O> {
+    pub const fn output(&self) -> &TimedBatch<O> {
         &self.output
     }
 }
-/// Typed acyclic transaction runtime with lifetime-bound graph semantics.
+/// Typed acyclic delta-tick runtime with lifetime-bound graph semantics.
 ///
 /// State must consist of immutable snapshots/owned values, never shared mutable
 /// state. Evaluation may upload immutable objects but must not publish external
@@ -45,14 +45,14 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
     /// Every node must use the incoming tick and stage its state before returning.
     pub fn new<F: Future<Output = Result<(S, O)>> + Send + 'static>(
         initial: S,
-        evaluate: impl Fn(Arc<S>, Stream<I>) -> F + Send + Sync + 'static,
+        evaluate: impl Fn(Arc<S>, TimedBatch<I>) -> F + Send + Sync + 'static,
     ) -> Self {
         Self::at_boundary(initial, 0, evaluate)
     }
     pub(crate) fn at_boundary<F: Future<Output = Result<(S, O)>> + Send + 'static>(
         initial: S,
         time: u64,
-        evaluate: impl Fn(Arc<S>, Stream<I>) -> F + Send + Sync + 'static,
+        evaluate: impl Fn(Arc<S>, TimedBatch<I>) -> F + Send + Sync + 'static,
     ) -> Self {
         Self {
             root: Arc::new(Boundary { state: Arc::new(initial), time }),
@@ -64,7 +64,7 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
     pub fn snapshot(&self) -> Arc<S> {
         self.root.state.clone()
     }
-    /// Last committed transaction tick.
+    /// Last committed logical delta tick.
     #[must_use]
     pub fn time(&self) -> u64 {
         self.root.time
@@ -73,13 +73,13 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
     ///
     /// # Errors
     /// Rejects wrong ticks and propagates every node's failure.
-    pub async fn prepare(&self, input: Stream<I>) -> Result<PreparedGraph<S, O>> {
+    pub async fn prepare(&self, input: TimedBatch<I>) -> Result<PreparedGraph<S, O>> {
         self.prepare_using(input, |state, input| (self.evaluate)(state, input)).await
     }
     pub(crate) async fn prepare_using<F: Future<Output = Result<(S, O)>>>(
         &self,
-        input: Stream<I>,
-        evaluate: impl FnOnce(Arc<S>, Stream<I>) -> F,
+        input: TimedBatch<I>,
+        evaluate: impl FnOnce(Arc<S>, TimedBatch<I>) -> F,
     ) -> Result<PreparedGraph<S, O>> {
         ensure!(self.root.time.checked_add(1) == Some(input.time), "out-of-order graph tick");
         let time = input.time;
@@ -87,14 +87,14 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
         Ok(PreparedGraph {
             base: self.root.clone(),
             next: Arc::new(Boundary { state: Arc::new(state), time }),
-            output: Stream { time, batch: output },
+            output: TimedBatch { time, batch: output },
         })
     }
     /// Publish every staged node through one root assignment.
     ///
     /// # Errors
     /// Rejects foreign/stale work without changing state or returning its output.
-    pub fn commit(&mut self, prepared: PreparedGraph<S, O>) -> Result<Stream<O>> {
+    pub fn commit(&mut self, prepared: PreparedGraph<S, O>) -> Result<TimedBatch<O>> {
         self.validate_prepared(&prepared)?;
         self.root = prepared.next;
         Ok(prepared.output)

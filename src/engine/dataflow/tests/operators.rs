@@ -1,4 +1,4 @@
-use super::{Arrangement, Graph, Join, Project, Stream};
+use super::{Arrangement, Graph, Join, Project, TimedBatch};
 use crate::engine::{Batch, trace::TraceSnapshot};
 use anyhow::{Result, bail};
 use object_store::memory::InMemory;
@@ -21,12 +21,13 @@ fn graph() -> Result<Runtime> {
         }
         Ok(Some((*key, *value % 2)))
     }));
-    Ok(Graph::new(initial, move |state: Arc<State>, input: Stream<Inputs>| {
+    Ok(Graph::new(initial, move |state: Arc<State>, input: TimedBatch<Inputs>| {
         let writers = writers.clone();
         let projection = projection.clone();
         async move {
-            let left = projection.evaluate(&Stream { time: input.time, batch: input.batch.0 })?;
-            let right = Stream { time: input.time, batch: input.batch.1 };
+            let left =
+                projection.evaluate(&TimedBatch { time: input.time, batch: input.batch.0 })?;
+            let right = TimedBatch { time: input.time, batch: input.batch.1 };
             let joined = Join.evaluate(&left, &right, &state.0, &state.1).await?;
             let next_left = writers.0.stage(&state.0, &left).await?;
             let next_right = writers.1.stage(&state.1, &right).await?;
@@ -35,8 +36,8 @@ fn graph() -> Result<Runtime> {
         }
     }))
 }
-fn input(time: u64, left: Updates, right: Updates) -> Result<Stream<Inputs>> {
-    Ok(Stream { time, batch: (Batch::from_updates(left)?, Batch::from_updates(right)?) })
+fn input(time: u64, left: Updates, right: Updates) -> Result<TimedBatch<Inputs>> {
+    Ok(TimedBatch { time, batch: (Batch::from_updates(left)?, Batch::from_updates(right)?) })
 }
 #[tokio::test]
 async fn typed_project_join_graph_publishes_every_arrangement_together() -> Result<()> {
@@ -95,8 +96,8 @@ async fn graph_rejects_clock_stale_foreign_and_join_boundary_errors() -> Result<
     assert!(first.validate_prepared(&c).is_err());
     assert!(first.commit(c).is_err());
     let state = first.snapshot();
-    let left = Stream { time: 2, batch: Batch::from_updates([])? };
-    let right = Stream { time: 3, batch: Batch::from_updates([])? };
+    let left = TimedBatch { time: 2, batch: Batch::from_updates([])? };
+    let right = TimedBatch { time: 3, batch: Batch::from_updates([])? };
     assert!(Join.evaluate(&left, &right, &state.0, &state.1).await.is_err());
     let store = Arc::new(InMemory::new());
     assert!(Arrangement::<i64, i64>::new(store.clone(), String::new(), 1).is_err());
@@ -106,7 +107,7 @@ async fn graph_rejects_clock_stale_foreign_and_join_boundary_errors() -> Result<
     assert_eq!(compact.time(), state.0.time());
     assert_eq!(compact.materialize().await?, state.0.materialize().await?);
     let project = Project::new(|_: &i64, _: &i64| Ok(Some((0_i64, 0_i64))));
-    let edge = Stream {
+    let edge = TimedBatch {
         time: 1,
         batch: Batch::from_updates([((0, 0), i64::MAX), ((1, 0), 1), ((2, 0), -1)])?,
     };

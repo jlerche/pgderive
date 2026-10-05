@@ -1,7 +1,7 @@
 use super::{Arrangement, Binding, Definition, Engine, Kind, Node, Plan, Source, State};
 use crate::engine::{
     Batch,
-    dataflow::{Arrangement as Writer, GroupSum, Join, Project, Stream},
+    dataflow::{Arrangement as Writer, GroupSum, Join, Project, TimedBatch},
     trace::TraceSnapshot,
 };
 use anyhow::{Result, ensure};
@@ -106,6 +106,7 @@ fn registrations_are_checked_and_semantic_changes_change_identity() -> Result<()
 }
 type Rows = Batch<i64, i64>;
 type Inputs = (Rows, Rows, Rows);
+#[derive(Clone)]
 struct Snapshot {
     a: TraceSnapshot<i64, i64>,
     b: TraceSnapshot<i64, i64>,
@@ -154,12 +155,16 @@ impl Writers {
             sum: self.sum.empty(),
         }
     }
-    async fn step(&self, prior: Arc<Snapshot>, input: Stream<Inputs>) -> Result<(Snapshot, ())> {
+    async fn step(
+        &self,
+        prior: Arc<Snapshot>,
+        input: TimedBatch<Inputs>,
+    ) -> Result<(Snapshot, ())> {
         let (a, b, c) = input.batch;
         let time = input.time;
-        let a = Stream { time, batch: a };
-        let b = Stream { time, batch: b };
-        let c = Stream { time, batch: c };
+        let a = TimedBatch { time, batch: a };
+        let b = TimedBatch { time, batch: b };
+        let c = TimedBatch { time, batch: c };
         let ab = Join.evaluate(&a, &b, &prior.a, &prior.b).await?;
         let abc = Join.evaluate(&ab, &c, &prior.ab, &prior.c).await?;
         let projected =
@@ -200,7 +205,7 @@ async fn three_sources_chained_joins_projection_count_sum_match_recomputation() 
                 *bag.entry(*row).or_default() += weight;
             }
         }
-        let inputs = Stream {
+        let inputs = TimedBatch {
             time: u64::try_from(time)?,
             batch: (
                 Batch::from_updates(updates[0].clone())?,
@@ -256,7 +261,7 @@ async fn incomplete_or_mismatched_node_state_never_publishes() -> Result<()> {
             .collect(),
     );
     let mut engine =
-        Engine::new(plan, initial, |prior: Arc<Report>, input: Stream<u8>| async move {
+        Engine::new(plan, initial, |prior: Arc<Report>, input: TimedBatch<u8>| async move {
             let mut next = (*prior).clone();
             for binding in &mut next.0 {
                 binding.time = input.time;
@@ -274,12 +279,15 @@ async fn incomplete_or_mismatched_node_state_never_publishes() -> Result<()> {
         })?;
     let pinned = engine.snapshot();
     for failure in 1..=4 {
-        assert!(engine.prepare(Stream { time: 1, batch: failure }).await.is_err());
+        assert!(engine.prepare(TimedBatch { time: 1, batch: failure }).await.is_err());
         assert!(Arc::ptr_eq(&pinned, &engine.snapshot()));
     }
-    let prepared = engine.prepare(Stream { time: 1, batch: 0 }).await?;
+    let prepared = engine.prepare(TimedBatch { time: 1, batch: 0 }).await?;
     engine.commit(prepared)?;
     assert_eq!(engine.time(), 1);
     assert_eq!(pinned.0[0].time, 0);
     Ok(())
 }
+
+#[path = "typed.rs"]
+mod typed;

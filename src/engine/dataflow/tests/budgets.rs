@@ -1,6 +1,6 @@
 use crate::engine::{
     Batch,
-    dataflow::{Arrangement, GroupSum, Join, Project, Stream, SumState},
+    dataflow::{Arrangement, GroupSum, Join, Project, SumState, TimedBatch},
     execution::Limits,
     plan::{
         Definition, Kind, Node, Plan, Source,
@@ -17,8 +17,8 @@ fn limits() -> Limits {
 fn stream(
     time: u64,
     rows: impl IntoIterator<Item = ((i64, i64), i64)>,
-) -> Result<Stream<Batch<i64, i64>>> {
-    Ok(Stream { time, batch: Batch::from_updates(rows)? })
+) -> Result<TimedBatch<Batch<i64, i64>>> {
+    Ok(TimedBatch { time, batch: Batch::from_updates(rows)? })
 }
 fn plan() -> Result<Plan> {
     Plan::new(Definition {
@@ -81,12 +81,15 @@ async fn join_budget_failure_retains_complete_query_root_and_can_retry() -> Resu
     let left = stream(1, [((1, 1), 1), ((1, 2), 1)])?;
     let right = stream(1, [((1, 3), 1), ((1, 4), 1)])?;
     assert!(
-        query.prepare(Stream { time: 1, batch: (left.batch, right.batch.clone()) }).await.is_err()
+        query
+            .prepare(TimedBatch { time: 1, batch: (left.batch, right.batch.clone()) })
+            .await
+            .is_err()
     );
     assert!(Arc::ptr_eq(&before, &query.snapshot()));
     assert_eq!(query.time(), 0);
     let prepared = query
-        .prepare(Stream { time: 1, batch: (stream(1, [((1, 1), 1)])?.batch, right.batch) })
+        .prepare(TimedBatch { time: 1, batch: (stream(1, [((1, 1), 1)])?.batch, right.batch) })
         .await?;
     query.commit(prepared)?;
     assert_eq!(query.time(), 1);
@@ -137,7 +140,7 @@ async fn spilled_projection_join_and_aggregate_preserve_exact_cancellation() -> 
     let prior = sums
         .stage(
             &sums.empty(),
-            &Stream {
+            &TimedBatch {
                 time: 1,
                 batch: Batch::from_updates([((1, SumState { rows: 2, non_null: 2, sum: 0 }), 1)])?,
             },
@@ -179,7 +182,7 @@ async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> R
     let bootstrap = original.checkpoint()?;
     original.commit(
         original
-            .prepare(Stream {
+            .prepare(TimedBatch {
                 time: 1,
                 batch: (stream(1, [((1, 2), 1)])?.batch, stream(1, [((1, 3), 1)])?.batch),
             })
@@ -197,12 +200,12 @@ async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> R
     assert_eq!(reopened.time(), 1);
     assert_eq!(reopened.checkpoint()?, original.checkpoint()?);
     let foreign = original
-        .prepare(Stream { time: 2, batch: (stream(2, [])?.batch, stream(2, [])?.batch) })
+        .prepare(TimedBatch { time: 2, batch: (stream(2, [])?.batch, stream(2, [])?.batch) })
         .await?;
     assert!(reopened.prepared_checkpoint(&foreign).is_err());
     assert!(reopened.commit(foreign).is_err());
     let pending = reopened
-        .prepare(Stream { time: 2, batch: (stream(2, [])?.batch, stream(2, [])?.batch) })
+        .prepare(TimedBatch { time: 2, batch: (stream(2, [])?.batch, stream(2, [])?.batch) })
         .await?;
     reopened.restore_checkpoint(original.checkpoint()?).await?;
     assert!(reopened.commit(pending).is_err());
@@ -210,7 +213,7 @@ async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> R
     assert!(reopened.restore_checkpoint(bootstrap).await.is_err());
     assert!(Arc::ptr_eq(&pinned, &reopened.snapshot()));
     let staged = reopened
-        .prepare(Stream {
+        .prepare(TimedBatch {
             time: 2,
             batch: (
                 stream(2, [((1, 2), -1), ((1, 4), 1)])?.batch,

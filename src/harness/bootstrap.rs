@@ -6,7 +6,7 @@ use super::{Fixture, apply, connect, source_state};
 use crate::{
     Config,
     catalog::{Catalog, Deltas, Lsn, Snapshot, Writer},
-    engine::{dataflow::Stream as Tick, plan::query::Settings},
+    engine::{dataflow::TimedBatch as Tick, plan::query::Settings},
     source::{Contract, Export},
 };
 use anyhow::{Context, Result, ensure};

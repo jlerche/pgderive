@@ -1,6 +1,6 @@
 use crate::engine::{
     Batch,
-    dataflow::{Arrangement, Stream},
+    dataflow::{Arrangement, TimedBatch},
     reader::{BlockCache, ObjectBatch},
     trace::{Manifest, Run, Trace, TraceSnapshot},
 };
@@ -14,8 +14,9 @@ async fn manifest_reopen_preserves_repeated_run_multiplicity_and_physical_genera
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let writer = Arrangement::<i64, i64>::new(store.clone(), "ints".into(), 1)?;
     let batch = Batch::from_updates([((1, 1), 1), ((2, 2), -1)])?;
-    let first = writer.stage(&writer.empty(), &Stream { time: 1, batch: batch.clone() }).await?;
-    let second = writer.stage(&first, &Stream { time: 2, batch }).await?;
+    let first =
+        writer.stage(&writer.empty(), &TimedBatch { time: 1, batch: batch.clone() }).await?;
+    let second = writer.stage(&first, &TimedBatch { time: 2, batch }).await?;
     let manifest = second.manifest()?;
     assert_eq!(manifest.objects[0], manifest.objects[1]);
     let reopened = writer.reopen(serde_json::from_slice(&serde_json::to_vec(&manifest)?)?).await?;
@@ -41,7 +42,7 @@ async fn cold_manifest_reopen_does_not_accept_warm_cached_missing_or_corrupt_obj
     let cache = Arc::new(BlockCache::new(1024, 8));
     let writer = Arrangement::new(store.clone(), "ints".into(), 1)?.with_cache(cache);
     let batch = Batch::from_updates([((1, 1), 1), ((2, 2), 1)])?;
-    let state = writer.stage(&writer.empty(), &Stream { time: 1, batch }).await?;
+    let state = writer.stage(&writer.empty(), &TimedBatch { time: 1, batch }).await?;
     state.materialize().await?;
     let manifest = state.manifest()?;
     let root = manifest.objects.first().context("missing root")?;

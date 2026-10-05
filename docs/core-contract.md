@@ -93,3 +93,15 @@ Evidence read without modification: the prior PoC's README.md, RESULTS.md,
 `src/bin/zset_contract_tests.rs.inc`, and recorded `zset-contract-source.jsonl`.
 The existing local event fixture and oracle replay remain regression checks.
 Independent review and the common 80% coverage/quality gate remain required.
+
+## Executable typed circuit slice
+
+The production grouped worker now binds its operator nodes through typed
+`Stream<T>` handles and a topological circuit builder. `TimedBatch<T>` is a single
+stream element; source transactions select complete synchronized delta batches
+in the PostgreSQL adapter. Graph evaluation retains one immutable prior boundary
+and stages complete candidate state/output before publication. See
+[circuits.md](circuits.md) for the API, invariant, recovery and callback isolation
+contract. Arbitrary acyclic compositions of the existing operator families are
+executable; recursion, new SQL shapes and automatic generic state codecs remain
+separate work.

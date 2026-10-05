@@ -1,4 +1,4 @@
-use super::Stream;
+use super::TimedBatch;
 use crate::engine::{
     Batch,
     execution::{Consolidator, Limits},
@@ -8,6 +8,7 @@ use crate::engine::{
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::sync::Arc;
 type Measure<K, V> = dyn Fn(&K, &V) -> Result<Option<i64>> + Send + Sync;
 
@@ -63,9 +64,9 @@ fn validate(state: &SumState) -> Result<()> {
 /// Complete transaction changes to internal statistics and visible SUM rows.
 pub struct SumDelta<K: BatchData> {
     /// Unit-weight retract/replace delta for the object-backed aggregate trace.
-    pub state: Stream<Batch<K, SumState>>,
+    pub state: TimedBatch<Batch<K, SumState>>,
     /// SQL-visible SUM rows; None is SQL NULL, zero is a present numeric zero.
-    pub output: Stream<Batch<K, Option<i64>>>,
+    pub output: TimedBatch<Batch<K, Option<i64>>>,
 }
 /// Reusable grouped weighted sum over a valid nonnegative SQL input bag.
 ///
@@ -85,7 +86,7 @@ impl<K: BatchData, V: BatchData> GroupSum<K, V> {
     /// Returns tick/read/callback errors, invalid final counts, or final overflow.
     pub async fn evaluate(
         &self,
-        input: &Stream<Batch<K, V>>,
+        input: &TimedBatch<Batch<K, V>>,
         prior: &TraceSnapshot<K, SumState>,
     ) -> Result<SumDelta<K>> {
         self.evaluate_with_limits(input, prior, Limits::default()).await
@@ -94,16 +95,16 @@ impl<K: BatchData, V: BatchData> GroupSum<K, V> {
     ///
     /// # Errors
     /// Returns clock, callback, resource, scratch, read, or final arithmetic errors.
-    pub async fn evaluate_with_limits(
+    pub async fn evaluate_with_limits<B: Borrow<Batch<K, V>> + Sync>(
         &self,
-        input: &Stream<Batch<K, V>>,
+        input: &TimedBatch<B>,
         prior: &TraceSnapshot<K, SumState>,
         limits: Limits,
     ) -> Result<SumDelta<K>> {
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order aggregate tick");
-        limits.check_batch(&input.batch)?;
+        limits.check_batch(input.batch.borrow())?;
         let mut contributions = Consolidator::new(limits)?;
-        for ((key, value), weight) in input.batch.iter() {
+        for ((key, value), weight) in input.batch.borrow().iter() {
             contributions.add((key.clone(), 0_u8), *weight)?;
             if let Some(value) = (self.measure)(key, value)? {
                 contributions.add((key.clone(), 1_u8), *weight)?;
@@ -155,8 +156,8 @@ impl<K: BatchData, V: BatchData> GroupSum<K, V> {
             }
         }
         Ok(SumDelta {
-            state: Stream { time: input.time, batch: state.finish_batch()? },
-            output: Stream { time: input.time, batch: output.finish_batch()? },
+            state: TimedBatch { time: input.time, batch: state.finish_batch()? },
+            output: TimedBatch { time: input.time, batch: output.finish_batch()? },
         })
     }
 }

@@ -3,7 +3,7 @@ use crate::{
     Config,
     acknowledged::Stream,
     catalog::{Catalog, Progress},
-    engine::{dataflow::Stream as Tick, plan::query::Settings},
+    engine::{dataflow::TimedBatch as Tick, plan::query::Settings},
 };
 use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
