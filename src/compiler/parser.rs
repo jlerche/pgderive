@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
-mod expressions;
-use expressions::{aggregate, column, node, optional, predicates, target};
+pub(super) mod expressions;
+use expressions::{aggregate, column, node, optional, target};
 
 #[derive(Clone)]
 pub(super) struct Name(pub(super) Vec<String>);
@@ -16,7 +16,7 @@ pub(super) struct Parsed {
     pub(super) left: Table,
     pub(super) right: Table,
     pub(super) keys: (Name, Name),
-    pub(super) predicates: Vec<(Name, bool)>,
+    pub(super) predicates: Option<super::syntax::Expr>,
     pub(super) grouping: Name,
 }
 
@@ -112,7 +112,7 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
         left,
         right,
         keys,
-        predicates: predicates(where_clause.as_deref())?,
+        predicates: super::syntax::predicate(where_clause.as_deref())?,
         grouping: column(grouping)?,
     })
 }

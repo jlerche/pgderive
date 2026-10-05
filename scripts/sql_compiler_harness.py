@@ -7,14 +7,20 @@ from worker_harness import Fixture, Worker
 
 
 class SqlFixture(Fixture):
-    def __init__(self, output, null_only):
+    def __init__(self, output, null_only, typed=False):
         super().__init__(output, 'sql', rows=32, auctions=8)
         self.null_only = null_only
+        self.typed = typed
+        self.sql(f"ALTER TABLE {self.name}.auction ADD COLUMN enabled boolean, ADD COLUMN token uuid; UPDATE {self.name}.auction SET enabled=CASE WHEN id%3=0 THEN NULL ELSE id%2=0 END,token=CASE WHEN id=1 THEN '00000000-0000-0000-0000-000000000000'::uuid ELSE 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid END")
+        self.where = 'a.category IS NOT NULL '
+        if null_only:
+            self.where += 'AND b.price IS NULL '
+        if typed:
+            self.where += "AND ((a.enabled AND (b.price >= 7 OR b.price IS NULL) AND NOT (a.group_id = 1)) OR (a.token = '00000000000000000000000000000000' AND b.price < 0)) "
         self.sql(f'ALTER TABLE {self.name}.auction ADD COLUMN group_id integer; UPDATE {self.name}.auction SET group_id=CASE WHEN id%3=0 THEN NULL ELSE id%2 END')
         self.query = (f'SELECT a.group_id, COUNT(*), SUM(b.price) FROM {self.name}.auction a '
                       f'JOIN {self.name}.bid b ON a.id=b.auction '
-                      'WHERE a.category IS NOT NULL '
-                      + ('AND b.price IS NULL ' if null_only else '') + 'GROUP BY a.group_id')
+                      'WHERE ' + self.where + 'GROUP BY a.group_id')
 
     def config(self, maximum=0):
         path = super().config(maximum)
@@ -29,8 +35,7 @@ class SqlFixture(Fixture):
         self.sql(f"EXPLAIN {self.query}")
         return (f"SELECT COALESCE(to_jsonb(a.group_id::text),'null'::jsonb) group_key,count(*) row_count,sum(b.price) total "
                 f"FROM {self.name}.auction a JOIN {self.name}.bid b ON a.id=b.auction "
-                "WHERE a.category IS NOT NULL "
-                + ("AND b.price IS NULL " if self.null_only else "") + "GROUP BY a.group_id")
+                "WHERE " + self.where + "GROUP BY a.group_id")
 
     def verify(self):
         super().verify()
@@ -43,6 +48,13 @@ class SqlFixture(Fixture):
                 if (a['category'] is None or b['auction'] is None or a['id'] != b['auction']
                         or (self.null_only and b['price'] is not None)):
                     continue
+                if self.typed:
+                    ordinary = (a['enabled'] is True and (b['price'] is None or b['price'] >= 7)
+                                and a['group_id'] is not None and a['group_id'] != 1)
+                    exceptional = (a['token'] == '00000000-0000-0000-0000-000000000000'
+                                   and b['price'] is not None and b['price'] < 0)
+                    if not (ordinary or exceptional):
+                        continue
                 group = expected.setdefault(None if a['group_id'] is None else str(a['group_id']), [0, None])
                 group[0] += 1
                 if b['price'] is not None:
@@ -67,8 +79,8 @@ class SqlFixture(Fixture):
             self.query = original
 
 
-def qualify(output, command, null_only):
-    fixture = SqlFixture(output, null_only)
+def qualify(output, command, null_only, typed=False):
+    fixture = SqlFixture(output, null_only, typed)
     try:
         fixture.rejected(command, 'unsupported', fixture.query + ' HAVING COUNT(*)>1')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
@@ -83,6 +95,9 @@ def qualify(output, command, null_only):
             f"UPDATE {fixture.name}.bid SET price=0 WHERE id=100; DELETE FROM {fixture.name}.bid WHERE id=101",
             f"DELETE FROM {fixture.name}.bid WHERE auction=1",
         ]
+        if typed:
+            changes[1] += f"; UPDATE {fixture.name}.auction SET enabled=true,token='00000000-0000-0000-0000-000000000000' WHERE id=2; UPDATE {fixture.name}.bid SET price=-5 WHERE id=3"
+            changes[2] += f"; UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=2"
         for index, change in enumerate(changes, 1):
             fixture.sql('BEGIN;' + change + ';COMMIT')
             worker.event('published', minimum_time=ready['time'] + index)
@@ -114,7 +129,7 @@ if __name__ == '__main__':
     command = sys.argv[2:]
     if command and command[0] == '--':
         command = command[1:]
-    for mode in ('regular', 'null-only'):
+    for mode in ('regular', 'null-only', 'typed'):
         directory = output / mode
         directory.mkdir()
-        qualify(directory, command, mode == 'null-only')
+        qualify(directory, command, mode == 'null-only', mode == 'typed')

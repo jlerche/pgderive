@@ -2,13 +2,13 @@ use super::Name;
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
-pub(super) fn node(value: &Node) -> Result<&NodeEnum> {
+pub(in crate::compiler) fn node(value: &Node) -> Result<&NodeEnum> {
     value.node.as_ref().context("missing AST node")
 }
-pub(super) fn optional(value: Option<&Node>) -> Result<&Node> {
+pub(in crate::compiler) fn optional(value: Option<&Node>) -> Result<&Node> {
     value.context("missing expression")
 }
-pub(super) fn names(values: &[Node]) -> Result<Name> {
+pub(in crate::compiler) fn names(values: &[Node]) -> Result<Name> {
     let parts = values
         .iter()
         .map(|value| {
@@ -20,21 +20,25 @@ pub(super) fn names(values: &[Node]) -> Result<Name> {
         .collect::<Result<Vec<_>>>()?;
     Ok(Name(parts))
 }
-pub(super) fn column(value: &Node) -> Result<Name> {
+pub(in crate::compiler) fn column(value: &Node) -> Result<Name> {
     let NodeEnum::ColumnRef(column) = node(value)? else {
         anyhow::bail!("expected column reference");
     };
     ensure!((1..=3).contains(&column.fields.len()), "invalid column qualification");
     names(&column.fields)
 }
-pub(super) fn target(value: &Node) -> Result<&Node> {
+pub(in crate::compiler) fn target(value: &Node) -> Result<&Node> {
     let NodeEnum::ResTarget(target) = node(value)? else {
         anyhow::bail!("expected output target");
     };
     ensure!(target.indirection.is_empty(), "output indirection unsupported");
     optional(target.val.as_deref())
 }
-pub(super) fn aggregate<'a>(value: &'a Node, name: &str, star: bool) -> Result<Option<&'a Node>> {
+pub(in crate::compiler) fn aggregate<'a>(
+    value: &'a Node,
+    name: &str,
+    star: bool,
+) -> Result<Option<&'a Node>> {
     let NodeEnum::FuncCall(call) = node(value)? else {
         anyhow::bail!("expected {name} aggregate");
     };
@@ -65,35 +69,4 @@ pub(super) fn aggregate<'a>(value: &'a Node, name: &str, star: bool) -> Result<O
         "unsupported {name} aggregate or modifier"
     );
     Ok(args.first())
-}
-pub(super) fn predicates(value: Option<&Node>) -> Result<Vec<(Name, bool)>> {
-    let mut pending: Vec<_> = value.into_iter().collect();
-    let mut result = Vec::new();
-    let mut visited = 0;
-    while let Some(value) = pending.pop() {
-        visited += 1;
-        ensure!(visited <= 512, "WHERE exceeds AST budget");
-        match node(value)? {
-            NodeEnum::BoolExpr(expr) => {
-                ensure!(
-                    expr.boolop == i32::from(pg::BoolExprType::AndExpr)
-                        && expr.xpr.is_none()
-                        && expr.args.len() >= 2,
-                    "WHERE supports only AND"
-                );
-                pending.extend(&expr.args);
-            }
-            NodeEnum::NullTest(test) => {
-                ensure!(!test.argisrow && test.xpr.is_none(), "row NULL tests unsupported");
-                let not = match pg::NullTestType::try_from(test.nulltesttype)? {
-                    pg::NullTestType::IsNull => false,
-                    pg::NullTestType::IsNotNull => true,
-                    pg::NullTestType::Undefined => anyhow::bail!("invalid NULL test"),
-                };
-                result.push((column(optional(test.arg.as_deref())?)?, not));
-            }
-            _ => anyhow::bail!("WHERE requires column IS [NOT] NULL"),
-        }
-    }
-    Ok(result)
 }

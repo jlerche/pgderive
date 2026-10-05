@@ -25,14 +25,22 @@ must match exactly; there are no implicit casts. Join/group keys are boolean,
 int2/int4/int8 or UUID. Text/varchar keys are rejected until a collation-aware
 runtime exists. All frozen native types can be tested for NULL.
 
-WHERE is absent or a sequence of column IS NULL / column IS NOT NULL tests joined
-by AND. These tests produce true or false, including on NULL; WHERE retains only
-true. ON equality with either key NULL is unknown and yields no match. Grouping
-preserves NULL, COUNT(*) includes NULL measures, SUM ignores NULL measures and
-returns NULL for an all-NULL group. Empty groups disappear. Zero SUM is distinct
-from absence. Comparisons to NULL (including `= NULL`) are rejected. General
-comparisons, OR, NOT expressions and other boolean expressions are later
-slices; no two-valued approximation of unsupported expressions is attempted.
+WHERE supports column IS NULL / IS NOT NULL, Boolean columns and TRUE/FALSE/NULL,
+and scalar comparisons =, <>, !=, <, <=, >, >= composed with AND/OR/NOT.
+Comparisons require at least one native bool, int2/int4/int8 or UUID column.
+Integral columns may compare across integral widths and to signed i64 integer
+literals; evaluation is exact, without narrowing the literal to the column width.
+Boolean columns compare to Boolean literals. UUID columns compare to unknown
+string literals using PostgreSQL UUID input forms and byte ordering. Quoted
+numeric/Boolean literals, explicit casts, floating/numeric literals, text
+comparisons and other coercions are rejected. NULL comparison produces unknown;
+WHERE retains only true, including on retractions. No transform_null_equals
+session setting is applied. Logical expressions follow PostgreSQL three-valued
+truth tables; pure AND/OR trees are flattened, sorted and deduplicated for identity.
+
+ON equality with either key NULL is unknown and yields no match. Grouping preserves
+NULL, COUNT(*) includes NULL measures, SUM ignores NULL measures and returns NULL
+for an all-NULL group. Empty groups disappear. Zero SUM is distinct from absence.
 
 Table aliases and output aliases support AS or an implicit alias. Output aliases
 are presentation-only: the owned destination still uses group_key, row_count,
@@ -51,8 +59,8 @@ resolution and plan identity use that native normalized name. This replaces the
 v1 frontend's overlong-name rejection. Unquoted non-ASCII identifiers are accepted
 with PostgreSQL's folding behavior, rather than requiring quotes.
 
-Input is bounded to 16 KiB, 2,048 scanner tokens, 64 parenthesis levels and 512
-WHERE AST nodes; NUL is rejected. Scanner tokens exclude parentheses in strings,
+Input is bounded to 16 KiB, 2,048 scanner tokens, 64 parenthesis/expression levels and 512
+WHERE expression nodes; NUL is rejected. Scanner tokens exclude parentheses in strings,
 comments and quoted identifiers. These are input budgets, not a general native
 parser resource guarantee. Only built-in unqualified COUNT and SUM are supported.
 
@@ -70,7 +78,7 @@ search_path or live SQL name interpolation.
 1. Scan and parse with pinned pg_query 6.2.1 (embedded PostgreSQL 17.7), through
    its safe Rust API. Validate supported AST node kinds, clauses and modifiers,
    then lower to the syntax-only grouped SELECT representation. WHERE traversal
-   is iterative and bounded. Native syntax errors retain PostgreSQL's message;
+   is recursive and bounded to 64 expression levels. Native syntax errors retain PostgreSQL's message;
    the safe wrapper does not expose the native error cursor. AST lowering errors
    identify the rejected construct; precise source spans are deferred. Parsing
    does not perform PostgreSQL catalog resolution or type checking.
@@ -80,7 +88,7 @@ search_path or live SQL name interpolation.
    column references for NULL expressions. Resolve/type/lower diagnostics are
    distinguished by message prefixes; precise binder source spans are deferred.
 4. Normalize into a grouped relational IR: exact source/column selectors,
-   sorted/deduplicated conjunctive typed NULL tests and compiler revision. There
+   normalized typed three-valued predicate expressions and compiler revision. There
    is no generic arbitrary-graph IR in this slice. Unsupported relational shapes
    are rejected, rather than declared without an executable evaluator.
 5. The explicit worker::program bridge binds this IR to GroupedJoin operators,
@@ -113,7 +121,7 @@ codec, object JSON-v2 family, group string codec and bounded sum semantics; engi
 plan identity also hashes the validated declarations. Change this revision when
 compiler semantics or callback/codec interpretation changes. The revision also
 binds pg_query and its embedded PostgreSQL version; parser upgrades require a
-semantic audit and revision change. SQL v1 registrations cannot restart under v2;
+semantic audit and revision change. SQL v1/v2 registrations cannot restart under v3;
 use a fresh registration/bootstrap. Legacy selector identities are unchanged.
 Native parser fingerprints/normalization are never used for durable identity.
 
@@ -133,16 +141,17 @@ Keep the old registration and evidence for diagnosis. No automatic state reset.
 
 1. **This slice:** bounded parser/resolver/typed grouped IR, NULL conjunctions,
    explicit grouped runtime bridge, durable identity and oracle/restart tests.
-2. **Typed WHERE:** comparisons for native bool/integral/UUID literals with exact
-   coercion rules, then AND/OR/NOT with three-valued typed expression evaluation.
-   Add truth-table, PostgreSQL differential and retraction tests before broadening.
+2. **Typed WHERE (implemented):** native bool/integral/UUID comparisons and
+   AND/OR/NOT with three-valued evaluation, truth tables and PostgreSQL/memory
+   differential tests through CDC and restart.
 3. **Column projection runtime:** a separate durable bag program and sink mapping
    for single-source projections/filtering, with full-tuple collision semantics;
    support selected output order/names and native sink codecs explicitly.
 4. **Broader grouped lowering:** arbitrary supported join-side group/measure
    selections, multiple keys and aggregate output layouts; extend runtime/checkpoint
    types and identity deliberately. Collation-aware text keys remain a separate
-   prerequisite. General graphs need an explicit executable scheduling bridge.
+   prerequisite. The typed circuit scheduler supplies execution; each new SQL shape still needs
+   explicit state, codec and sink lowering.
 
 Each slice gets independent review and the common gate before its own commit.
 Recursion, distribution, services and deployment remain deferred.

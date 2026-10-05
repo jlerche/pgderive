@@ -1,5 +1,5 @@
 use super::{
-    ColumnRef, Compiled, NullTest, REVISION,
+    ColumnRef, Compiled, REVISION,
     parser::{Name, Parsed, Table},
 };
 use crate::{
@@ -56,13 +56,10 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         sum: sum.name,
     };
     selectors.validate(contract).context("SQL type checking")?;
-    let mut predicates = parsed
+    let predicates = parsed
         .predicates
-        .into_iter()
-        .map(|(name, not)| Ok(NullTest { column: resolve(&name, &scopes)?, not }))
-        .collect::<Result<Vec<_>>>()?;
-    predicates.sort();
-    predicates.dedup();
+        .map(|expr| super::expression::bind(expr, &|name| resolve(name, &scopes)))
+        .transpose()?;
     Ok(Compiled { selectors, predicates, revision: Some(REVISION.into()) })
 }
 fn scope(table: Table, contract: &Contract) -> Result<Scope<'_>> {
