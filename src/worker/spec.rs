@@ -58,7 +58,7 @@ pub struct Settings {
     pub catalog_schema: String,
     /// Stable registered query name.
     pub query_id: String,
-    /// Grouped destination table inside the owned catalog schema.
+    /// Owned grouped-row or weighted-bag destination table inside the catalog schema.
     pub sink_table: String,
     /// Exclusively owned durable object-store prefix, reused across resumes.
     pub object_prefix: String,

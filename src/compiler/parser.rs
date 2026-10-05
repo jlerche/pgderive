@@ -10,7 +10,15 @@ pub(super) struct Table {
     pub(super) name: Name,
     pub(super) alias: Option<String>,
 }
-pub(super) struct Parsed {
+pub(super) enum Parsed {
+    Grouped(Grouped),
+    Projection {
+        source: Table,
+        columns: Vec<(Name, String)>,
+        predicate: Option<super::syntax::Expr>,
+    },
+}
+pub(super) struct Grouped {
     pub(super) group: Name,
     pub(super) sum: Name,
     pub(super) left: Table,
@@ -32,7 +40,7 @@ pub(super) fn parse(sql: &str) -> Result<Parsed> {
     else {
         anyhow::bail!("SQL requires SELECT");
     };
-    query(select).context("SQL lower: unsupported grouped SELECT")
+    query(select).context("SQL lower: unsupported SELECT")
 }
 
 // Bound native parser recursion before parsing, using PostgreSQL's scanner so
@@ -94,6 +102,9 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
             && rarg.is_none(),
         "unsupported SELECT clause"
     );
+    if group_clause.is_empty() {
+        return projection(target_list, from_clause, where_clause.as_deref());
+    }
     let [group, count, sum] = target_list.as_slice() else {
         anyhow::bail!("outputs must be group column, COUNT(*), SUM(column)");
     };
@@ -106,7 +117,7 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     aggregate(target(count)?, "count", true)?;
     let sum = aggregate(target(sum)?, "sum", false)?;
     let (left, right, keys) = join(from)?;
-    Ok(Parsed {
+    Ok(Parsed::Grouped(Grouped {
         group: column(target(group)?)?,
         sum: column(sum.context("SUM argument absent")?)?,
         left,
@@ -114,7 +125,7 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
         keys,
         predicates: super::syntax::predicate(where_clause.as_deref())?,
         grouping: column(grouping)?,
-    })
+    }))
 }
 
 type Joined = (Table, Table, (Name, Name));
@@ -175,4 +186,31 @@ fn table(value: &Node) -> Result<Table> {
         })
         .transpose()?;
     Ok(Table { name: Name(vec![schemaname.clone(), relname.clone()]), alias })
+}
+
+fn projection(targets: &[Node], from: &[Node], predicate: Option<&Node>) -> Result<Parsed> {
+    ensure!(!targets.is_empty() && targets.len() <= 64, "projection requires 1..=64 columns");
+    let [source] = from else {
+        anyhow::bail!("projection requires one source table");
+    };
+    let columns = targets
+        .iter()
+        .map(|value| {
+            let name = column(target(value)?)?;
+            let NodeEnum::ResTarget(value) = node(value)? else {
+                anyhow::bail!("expected output target");
+            };
+            let label = if value.name.is_empty() {
+                name.0.last().context("missing column name")?.clone()
+            } else {
+                value.name.clone()
+            };
+            Ok((name, label))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Parsed::Projection {
+        source: table(source)?,
+        columns,
+        predicate: super::syntax::predicate(predicate)?,
+    })
 }

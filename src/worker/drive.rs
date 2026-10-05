@@ -1,7 +1,7 @@
-use super::{open::Open, program, spec::Settings};
+use super::{open::Open, runtime, spec::Settings};
 use crate::{
     Config,
-    catalog::{Deltas, GcLimits, Progress, Publication},
+    catalog::{GcLimits, Progress, Publication},
     transaction::Transaction,
 };
 use anyhow::{Context, Result, ensure};
@@ -138,13 +138,10 @@ async fn publish(open: &mut Open, transaction: &Transaction) -> Result<()> {
     let protection = open.writer.protect_upload(&mut open.session.client, &token).await?;
     let prepared = open
         .query
-        .prepare_protected(
-            program::inputs(&transaction.batch, &open.compiled.selectors, time)?,
-            &protection,
-        )
+        .prepare_protected(runtime::inputs(&transaction.batch, &open.compiled, time)?, &protection)
         .await?;
     let checkpoint = open.query.prepared_checkpoint(&prepared)?;
-    let deltas = Deltas::grouped(&prepared.output().batch)?;
+    let deltas = prepared.deltas()?;
     let progress = Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
     open.writer
         .publish(
@@ -163,16 +160,7 @@ async fn publish(open: &mut Open, transaction: &Transaction) -> Result<()> {
     )
 }
 async fn maintain(open: &mut Open, settings: &Settings, metrics: &mut Metrics) -> Result<()> {
-    let state = open.query.snapshot();
-    let runs = [
-        state.left.run_count(),
-        state.right.run_count(),
-        state.sums.run_count(),
-        state.output.run_count(),
-    ]
-    .into_iter()
-    .max()
-    .unwrap_or(0);
+    let runs = open.query.run_count();
     if u64::try_from(runs)? < settings.maintenance_ticks {
         return Ok(());
     }
@@ -189,7 +177,6 @@ async fn maintain(open: &mut Open, settings: &Settings, metrics: &mut Metrics) -
     protection
         .published(&mut open.session.client, &open.writer, open.query.plan(), &checkpoint)
         .await?;
-    drop(state);
     let collection = open
         .catalog
         .collect(&mut open.session.client, open.store.clone(), GcLimits::default())

@@ -1,7 +1,12 @@
-use super::{program, registration, spec::Settings, sql::Session};
+use super::{
+    registration,
+    runtime::{self, Runtime},
+    spec::Settings,
+    sql::Session,
+};
 use crate::{
     Config,
-    catalog::{Catalog, Deltas, Sink, Snapshot, Writer},
+    catalog::{Catalog, Snapshot, Writer},
     engine::plan::query,
     source::{Contract, Export},
 };
@@ -12,7 +17,7 @@ use std::sync::Arc;
 pub(super) struct Open {
     pub(super) session: Session,
     pub(super) catalog: Catalog,
-    pub(super) query: program::Query,
+    pub(super) query: Runtime,
     pub(super) compiled: crate::compiler::Compiled,
     pub(super) writer: Writer,
     pub(super) store: Arc<dyn ObjectStore>,
@@ -40,7 +45,7 @@ impl Open {
             limits: config.execution,
         };
         let compiled = settings.query.compile(&contract)?;
-        let mut query = program::build(&contract, &compiled, options.clone())?;
+        let mut query = Runtime::build(&contract, &compiled, options.clone())?;
         if catalog.load_durable(&mut session.client, query.plan()).await?.is_none() {
             registration::reset_unactivated(&session.client, &contract).await?;
             bootstrap(&replication, settings, &mut session, &catalog, &mut query).await?;
@@ -53,7 +58,7 @@ impl Open {
 async fn reopen(
     session: &mut Session,
     catalog: &Catalog,
-    query: &mut program::Query,
+    query: &mut Runtime,
     binding: (&Contract, &Settings),
 ) -> Result<(Writer, String)> {
     let (contract, settings) = binding;
@@ -66,7 +71,7 @@ async fn reopen(
         "worker native source contract differs from activation"
     );
     ensure!(
-        prior.binding.sink == Sink::Grouped(settings.sink_table.clone()),
+        prior.binding.sink == settings.query.compile(contract)?.sink(&settings.sink_table),
         "configured worker destination differs from durable binding"
     );
     let writer = catalog.claim(&mut session.client, query.plan(), prior.binding, prior.end).await?;
@@ -102,7 +107,7 @@ async fn bootstrap(
     settings: &Settings,
     session: &mut Session,
     catalog: &Catalog,
-    query: &mut program::Query,
+    query: &mut Runtime,
 ) -> Result<()> {
     let export = Export::create(config, &config.replication.slot).await?;
     let boundary = export.consistent();
@@ -118,7 +123,7 @@ async fn bootstrap(
     snapshot.commit().await?;
     export.close().await?;
     // The preliminary registration must match the exact imported source layout.
-    let exact = program::build(
+    let exact = Runtime::build(
         &contract,
         &settings.query.compile(&contract)?,
         query::Settings {
@@ -147,12 +152,12 @@ async fn bootstrap(
     )?;
     let prepared = query
         .prepare_protected(
-            program::inputs(&batch, &settings.query.compile(&contract)?.selectors, 1)?,
+            runtime::inputs(&batch, &settings.query.compile(&contract)?, 1)?,
             &protection,
         )
         .await?;
     let checkpoint = query.prepared_checkpoint(&prepared)?;
-    let deltas = Deltas::grouped(&prepared.output().batch)?;
+    let deltas = prepared.deltas()?;
     catalog
         .activate_snapshot(
             &mut session.client,
@@ -162,7 +167,7 @@ async fn bootstrap(
                 deltas: &deltas,
                 source: &contract,
                 boundary,
-                sink: Sink::Grouped(settings.sink_table.clone()),
+                sink: settings.query.compile(&contract)?.sink(&settings.sink_table),
             },
         )
         .await?;

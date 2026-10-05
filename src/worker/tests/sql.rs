@@ -49,7 +49,7 @@ fn normalized_identity_and_native_layout_are_restart_boundaries() -> Result<()> 
     compiled.revision =
         Some("sql-grouped-v1:row-text-v1:json-v2:group-string-v1:i64-sum-v1".into());
     assert_ne!(identity(SQL)?, program::plan(&native(), &compiled)?.identity());
-    let mut selectors = compile(SQL, &native())?.selectors;
+    let mut selectors = compile(SQL, &native())?.selectors()?.clone();
     selectors.group = "id".into();
     let legacy = Compiled::legacy(selectors, &native())?;
     assert_ne!(
@@ -214,7 +214,7 @@ async fn step(
         *tables[index].entry(update.tuple.row.clone()).or_default() += update.weight;
     }
     let prepared =
-        query.prepare(program::inputs(&changes, &compiled.selectors, query.time() + 1)?).await?;
+        query.prepare(program::inputs(&changes, compiled.selectors()?, query.time() + 1)?).await?;
     query.commit(prepared)?;
     assert_eq!(query.snapshot().output.materialize().await?, oracle(tables)?);
     Ok(())
@@ -298,18 +298,18 @@ async fn right_null_predicate_and_overflow_fail_without_advancing_state() -> Res
     let left = row(&[("id", Some("1")), ("category", None), ("other", Some("yes"))]);
     let nil = row(&[("id", Some("3")), ("auction", Some("1")), ("price", None)]);
     let source = batch(vec![("auction", left.clone(), 1), ("bid", nil.clone(), 1)]);
-    let prepared = query.prepare(program::inputs(&source, &compiled.selectors, 1)?).await?;
+    let prepared = query.prepare(program::inputs(&source, compiled.selectors()?, 1)?).await?;
     query.commit(prepared)?;
     let expected = Batch::from_updates([((None, (1, None)), 1)])?;
     assert_eq!(query.snapshot().output.materialize().await?, expected);
     let mut value = nil.clone();
     value.insert("price".into(), Some("7".into()));
     let changes = batch(vec![("bid", nil.clone(), -1), ("bid", value.clone(), 1)]);
-    let prepared = query.prepare(program::inputs(&changes, &compiled.selectors, 2)?).await?;
+    let prepared = query.prepare(program::inputs(&changes, compiled.selectors()?, 2)?).await?;
     query.commit(prepared)?;
     assert_eq!(query.snapshot().output.materialize().await?, Batch::from_updates([])?);
     let changes = batch(vec![("bid", value, -1), ("bid", nil, 1)]);
-    let prepared = query.prepare(program::inputs(&changes, &compiled.selectors, 3)?).await?;
+    let prepared = query.prepare(program::inputs(&changes, compiled.selectors()?, 3)?).await?;
     query.commit(prepared)?;
     assert_eq!(query.snapshot().output.materialize().await?, expected);
 
@@ -320,7 +320,7 @@ async fn right_null_predicate_and_overflow_fail_without_advancing_state() -> Res
     let extra = row(&[("id", Some("5")), ("auction", Some("1")), ("price", Some("1"))]);
     let source = batch(vec![("auction", left, 1), ("bid", huge, 1), ("bid", extra, 1)]);
     let before = query.checkpoint()?;
-    assert!(query.prepare(program::inputs(&source, &compiled.selectors, 1)?).await.is_err());
+    assert!(query.prepare(program::inputs(&source, compiled.selectors()?, 1)?).await.is_err());
     assert_eq!(query.checkpoint()?, before);
     let mut revised = compiled;
     revised.revision = Some("incompatible".into());

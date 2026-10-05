@@ -208,6 +208,7 @@ impl Plan {
 }
 mod checkpoint;
 pub use checkpoint::{Checkpoint, Membership};
+pub mod projection;
 pub mod query;
 mod runtime;
 pub use runtime::Engine;

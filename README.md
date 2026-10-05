@@ -340,7 +340,8 @@ scheduler.
 all simultaneous-input terms, and `Arrangement` stages immutable object state.
 The lower-level `Graph<State, Input, Output>` evaluator remains available for
 reference/custom compositions. Source transactions choose delta-tick boundaries
-in the PostgreSQL adapter; SQL syntax remains the bounded grouped subset.
+in the PostgreSQL adapter; SQL syntax supports the bounded grouped and
+single-source projection subsets.
 
 The older `TraceQuery` count graph remains a reference/check fixture while the
 MVP composes these reusable operators. Graph tests cover project collisions,
@@ -710,7 +711,9 @@ transaction publishes immutable objects before committing membership, sink DML
 and progress together. Only authoritative publication permits slot feedback.
 The destination columns are `group_key` (JSONB), `row_count`, and nullable `total`.
 The worker accepts legacy selectors or the bounded SQL frontend described in
-[the compiler contract](docs/sql-compiler.md); both execute this explicit composition.
+[the compiler contract](docs/sql-compiler.md). Grouped SQL executes this composition;
+single-source projection/filter SQL binds a separate two-node circuit and weighted
+bag sink with explicit native scalar JSON encoding.
 
 The configured slot is a logical alias. A synchronous PostgreSQL registration
 journal records an unpredictable physical slot name before creating it. Restart

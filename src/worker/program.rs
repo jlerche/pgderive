@@ -1,3 +1,4 @@
+pub(super) mod projected;
 use super::spec::Query as Spec;
 use crate::compiler::Compiled;
 use crate::{
@@ -24,7 +25,7 @@ pub(super) fn build(
     compiled: &Compiled,
     settings: plan::query::Settings,
 ) -> Result<Query> {
-    let spec = &compiled.selectors;
+    let spec = compiled.selectors()?;
     spec.validate(contract)?;
     let filter = compiled.clone();
     let group = spec.group.clone();
@@ -57,7 +58,10 @@ pub(super) fn build(
 }
 pub(super) fn plan(contract: &Contract, compiled: &Compiled) -> Result<Plan> {
     use sha2::{Digest, Sha256};
-    let spec = &compiled.selectors;
+    if let Some(projection) = compiled.projection() {
+        return projected::plan(contract, compiled, projection);
+    }
+    let spec = compiled.selectors()?;
     spec.validate(contract)?;
     // Legacy bytes stay unchanged; SQL binds normalized IR and explicit codecs.
     let bytes = if compiled.revision.is_some() {

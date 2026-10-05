@@ -161,3 +161,6 @@ async fn full_row_join_nulls_and_simultaneous_retractions_match_sql_semantics() 
 
 #[path = "tests/sql.rs"]
 mod sql;
+
+#[path = "tests/projection.rs"]
+mod projection;

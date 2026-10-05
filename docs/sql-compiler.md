@@ -1,7 +1,7 @@
 # SQL compiler boundary and slices
 
-The first compiler slice executes a deliberately bounded PostgreSQL SELECT
-through the existing durable grouped-join worker. It is not a general SQL planner
+The compiler executes a deliberately bounded PostgreSQL SELECT through durable
+grouped-join and single-source projection workers. It is not a general SQL planner
 or an interpreter for plan declarations. Configure it in place of selectors:
 
 ```toml
@@ -14,7 +14,7 @@ GROUP BY a.id
 """
 ```
 
-## Exact first-slice subset
+## Supported grouped subset
 
 One SELECT, with exactly three outputs in order: a left column, COUNT(*), and
 SUM(right integral column). GROUP BY contains exactly the same left column.
@@ -43,7 +43,7 @@ NULL, COUNT(*) includes NULL measures, SUM ignores NULL measures and returns NUL
 for an all-NULL group. Empty groups disappear. Zero SUM is distinct from absence.
 
 Table aliases and output aliases support AS or an implicit alias. Output aliases
-are presentation-only: the owned destination still uses group_key, row_count,
+in grouped queries are presentation-only: the owned destination still uses group_key, row_count,
 and total, in that fixed order. group_key is JSONB containing the canonical source
 text representation (or JSON null), even for integral/boolean/UUID groups; it is
 not a native SQL output-column codec. Aliases are not visible in GROUP BY/WHERE.
@@ -64,8 +64,7 @@ WHERE expression nodes; NUL is rejected. Scanner tokens exclude parentheses in s
 comments and quoted identifiers. These are input budgets, not a general native
 parser resource guarantee. Only built-in unqualified COUNT and SUM are supported.
 
-Other syntax fails closed: standalone projection queries, reordered outputs,
-multiple grouping keys/aggregates, COUNT(column), DISTINCT, aggregate FILTER,
+Other syntax fails closed: reordered grouped outputs, multiple grouping keys/aggregates, COUNT(column), DISTINCT, aggregate FILTER,
 HAVING, ORDER BY, LIMIT, CTEs, subqueries, casts, arithmetic, parameters, windows,
 outer/self/multiple joins, set operations and multiple statements. Unsupported
 SQL is rejected before a registration row or replication slot is created.
@@ -73,21 +72,47 @@ Administrative metadata table installation may precede compilation; it does not
 register a query. Resolution uses the explicit frozen publication catalog, not
 search_path or live SQL name interpolation.
 
+## Single-source projection/filter subset
+
+A SELECT without GROUP BY supports 1..=64 column references in any order from one
+explicit schema.table, with optional table/output aliases and the same WHERE
+subset. Repeated columns and output labels are legal. Wildcards, computed outputs,
+DISTINCT, joins without grouped aggregation, ordering, limits, functions and all
+other unsupported clauses fail before registration or slot creation.
+
+The explicit projection circuit has one source and one Project node. Its input
+is the complete full source row with unit navigation key, including rows with
+NULL projected columns. Filtering and projection apply to positive and negative
+contributions. Projection collisions consolidate full projected tuples, preserving
+SQL bag multiplicity; source primary keys are absent from output identity. The
+sole persisted output arrangement supports cold restore and fenced compaction/GC.
+Other publication relations still produce complete source transactions and advance
+query ticks/progress with empty query deltas.
+
+The owned sink uses `tuple jsonb PRIMARY KEY, weight bigint`: tuple is
+`[null, [column_1, ..., column_n]]`. The first null is the unit navigation key.
+Boolean/integral columns encode native JSON booleans/i64 numbers; text/varchar and
+UUID columns encode canonical source strings; SQL NULL encodes JSON null.
+The resolved output layout, names, native types and codec revision bind identity.
+This is an explicit weighted bag representation, not a native-column destination
+SQL table or general function/type runtime. Frozen supported source types and
+deterministic source text equality define its tested domain.
+
 ## Compiler and runtime boundaries
 
 1. Scan and parse with pinned pg_query 6.2.1 (embedded PostgreSQL 17.7), through
    its safe Rust API. Validate supported AST node kinds, clauses and modifiers,
-   then lower to the syntax-only grouped SELECT representation. WHERE traversal
+   then lower to the syntax-only grouped or projection SELECT representation. WHERE traversal
    is recursive and bounded to 64 expression levels. Native syntax errors retain PostgreSQL's message;
    the safe wrapper does not expose the native error cursor. AST lowering errors
    identify the rejected construct; precise source spans are deferred. Parsing
    does not perform PostgreSQL catalog resolution or type checking.
 2. Resolve relation/column names and aliases against source::Contract. Binding
    errors identify unknown/ambiguous names. No database state is changed here.
-3. Type-check the native equality/group/measure contracts, then construct typed
-   column references for NULL expressions. Resolve/type/lower diagnostics are
+3. Type-check the native equality/group/measure contracts, then bind typed
+   predicate expressions and projection output layouts. Resolve/type/lower diagnostics are
    distinguished by message prefixes; precise binder source spans are deferred.
-4. Normalize into a grouped relational IR: exact source/column selectors,
+4. Normalize into a grouped or projection relational IR: exact source/column selectors,
    normalized typed three-valued predicate expressions and compiler revision. There
    is no generic arbitrary-graph IR in this slice. Unsupported relational shapes
    are rejected, rather than declared without an executable evaluator.
@@ -95,8 +120,8 @@ search_path or live SQL name interpolation.
    connected by typed Stream<T> handles and the executable circuit builder:
    full-row input arrangements, inner join, joined-row WHERE/group projection,
    COUNT/SUM sufficient statistics and fixed destination codec. The predicate
-   callback runs on both positive and negative full-row contributions. Bootstrap
-   and CDC use the same compiled selectors and operators.
+   callback runs on both positive and negative full-row contributions. Projection IR instead binds the dedicated source/Project circuit and native
+   weighted-bag codec. Bootstrap and CDC use the same compiled operators.
 
 The existing runtime retains complete full-tuple bag identity, assembles both
 inputs from a complete committed transaction, and includes the simultaneous-input
@@ -122,11 +147,15 @@ plan identity also hashes the validated declarations. Change this revision when
 compiler semantics or callback/codec interpretation changes. The revision also
 binds pg_query and its embedded PostgreSQL version; parser upgrades require a
 semantic audit and revision change. SQL v1/v2 registrations cannot restart under v3;
-use a fresh registration/bootstrap. Legacy selector identities are unchanged.
+use a fresh registration/bootstrap. The projection addition preserves grouped
+v3 serialization/identity and uses its own sql-projection-v1 revision. Legacy
+selector identities are unchanged.
 Native parser fingerprints/normalization are never used for durable identity.
 
 Formatting, keyword case, comments, redundant identical conjuncts, conjunct order,
-alias spelling and reversed equality operands normalize equally. Other semantic
+source alias spelling and reversed equality operands normalize equally.
+Projection output names/order are durable layout: changing either is incompatible.
+Grouped output aliases remain presentation-only. Other semantic
 changes bind differently; equivalence is not a general theorem prover. Existing
 legacy selector plans retain their exact identity bytes, and switching from legacy
 to SQL requires a new registration even if the intended result is equivalent.
@@ -144,9 +173,11 @@ Keep the old registration and evidence for diagnosis. No automatic state reset.
 2. **Typed WHERE (implemented):** native bool/integral/UUID comparisons and
    AND/OR/NOT with three-valued evaluation, truth tables and PostgreSQL/memory
    differential tests through CDC and restart.
-3. **Column projection runtime:** a separate durable bag program and sink mapping
+3. **Column projection runtime (implemented):** a separate durable bag program and sink mapping
    for single-source projections/filtering, with full-tuple collision semantics;
-   support selected output order/names and native sink codecs explicitly.
+   selected output order/names and native scalar JSON codecs bind identity.
+   PostgreSQL and memory oracles cover collisions, NULLs, empty ticks, cold restart
+   after a process kill and a lost COMMIT response.
 4. **Broader grouped lowering:** arbitrary supported join-side group/measure
    selections, multiple keys and aggregate output layouts; extend runtime/checkpoint
    types and identity deliberately. Collation-aware text keys remain a separate

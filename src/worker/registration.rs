@@ -1,7 +1,6 @@
 use super::{program, spec::Settings};
 use crate::{
     Config,
-    catalog::Sink,
     source::{Contract, Identity},
 };
 use anyhow::{Context, Result, ensure};
@@ -51,7 +50,9 @@ pub(super) async fn source(
         );
         ensure!(
             row.try_get::<_, serde_json::Value>(4)?
-                == serde_json::to_value(Sink::Grouped(settings.sink_table.clone()))?,
+                == serde_json::to_value(
+                    settings.query.compile(&source)?.sink(&settings.sink_table)
+                )?,
             "worker registration destination changed"
         );
         source.verify(sql).await?;
@@ -82,7 +83,7 @@ async fn create(
     let plan = program::plan(&source, &settings.query.compile(&source)?)?;
     let tx = sql.transaction().await?;
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-    tx.execute(&format!("INSERT INTO {}.pgderive_worker_registration(query_id,format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix) VALUES($1,1,$2,$3,$4,$5,$6,$7)",settings.catalog_schema),&[&settings.query_id,&config.replication.slot,&source.slot,&serde_json::to_value(&source)?,&serde_json::to_value(Sink::Grouped(settings.sink_table.clone()))?,&plan.identity(),&settings.object_prefix]).await?;
+    tx.execute(&format!("INSERT INTO {}.pgderive_worker_registration(query_id,format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix) VALUES($1,1,$2,$3,$4,$5,$6,$7)",settings.catalog_schema),&[&settings.query_id,&config.replication.slot,&source.slot,&serde_json::to_value(&source)?,&serde_json::to_value(settings.query.compile(&source)?.sink(&settings.sink_table))?,&plan.identity(),&settings.object_prefix]).await?;
     tx.commit().await.context("worker registration COMMIT requires authoritative reload")?;
     Ok(source)
 }

@@ -1,8 +1,10 @@
-//! Bounded PostgreSQL-oriented frontend for the durable grouped-join runtime.
+//! Bounded `PostgreSQL` frontend for durable grouped joins and source projections.
 //! See `docs/sql-compiler.md` for the exact grammar and compatibility contract.
 mod bind;
 mod expression;
 mod parser;
+mod projection;
+pub(crate) use projection::{Cell, Projected};
 mod syntax;
 use crate::{source::Contract, worker::Query};
 use anyhow::Result;
@@ -19,18 +21,41 @@ pub(crate) struct ColumnRef {
     pub(crate) oid: u32,
     pub(crate) nullable: bool,
 }
-/// Resolved typed grouped relational IR, lowered only through the worker bridge.
+/// Resolved typed bounded relational IR, lowered only through the worker bridge.
 /// Names/aliases and formatting are absent; full native layout binds at planning.
 #[derive(Clone, Serialize)]
 pub struct Compiled {
-    pub(crate) selectors: Query,
+    #[serde(flatten)]
+    pub(crate) program: Program,
     predicates: Option<Expr>,
     pub(crate) revision: Option<String>,
 }
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+pub(crate) enum Program {
+    Grouped { selectors: Query },
+    Projection { projection: Projected },
+}
 impl Compiled {
+    pub(crate) fn selectors(&self) -> Result<&Query> {
+        let Program::Grouped { selectors } = &self.program else {
+            anyhow::bail!("expected grouped program");
+        };
+        Ok(selectors)
+    }
+    pub(crate) const fn projection(&self) -> Option<&Projected> {
+        if let Program::Projection { projection } = &self.program { Some(projection) } else { None }
+    }
+    pub(crate) fn sink(&self, table: &str) -> crate::catalog::Sink {
+        if self.projection().is_some() {
+            crate::catalog::Sink::Bag(table.into())
+        } else {
+            crate::catalog::Sink::Grouped(table.into())
+        }
+    }
     pub(crate) fn legacy(selectors: Query, contract: &Contract) -> Result<Self> {
         selectors.validate(contract)?;
-        Ok(Self { selectors, predicates: None, revision: None })
+        Ok(Self { program: Program::Grouped { selectors }, predicates: None, revision: None })
     }
     pub(crate) fn qualifies(
         &self,

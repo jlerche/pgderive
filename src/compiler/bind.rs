@@ -12,6 +12,29 @@ struct Scope<'a> {
     relation: &'a Relation,
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
+    match parsed {
+        Parsed::Grouped(parsed) => grouped(parsed, contract),
+        Parsed::Projection { source, columns, predicate } => {
+            let scopes = [scope(source, contract)?];
+            let columns = columns
+                .into_iter()
+                .map(|(name, label)| {
+                    Ok(super::projection::OutputColumn { column: resolve(&name, &scopes)?, label })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let predicates = predicate
+                .map(|expr| super::expression::bind(expr, &|name| resolve(name, &scopes)))
+                .transpose()?;
+            Ok(Compiled {
+                program: super::Program::Projection { projection: super::Projected {
+                    schema: scopes[0].relation.schema.clone(), table: scopes[0].relation.table.clone(), columns,
+                } }, predicates,
+                revision: Some("sql-projection-v1:pg-query-6.2.1:pg-17.7:where-3vl-v1:row-text-v1:json-v2:native-bag-v1".into()),
+            })
+        }
+    }
+}
+fn grouped(parsed: super::parser::Grouped, contract: &Contract) -> Result<Compiled> {
     let left = scope(parsed.left, contract)?;
     let right = scope(parsed.right, contract)?;
     ensure!(left.relation.oid != right.relation.oid, "SQL resolve: self joins are unsupported");
@@ -60,7 +83,11 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         .predicates
         .map(|expr| super::expression::bind(expr, &|name| resolve(name, &scopes)))
         .transpose()?;
-    Ok(Compiled { selectors, predicates, revision: Some(REVISION.into()) })
+    Ok(Compiled {
+        program: super::Program::Grouped { selectors },
+        predicates,
+        revision: Some(REVISION.into()),
+    })
 }
 fn scope(table: Table, contract: &Contract) -> Result<Scope<'_>> {
     let relation = contract
@@ -73,7 +100,7 @@ fn scope(table: Table, contract: &Contract) -> Result<Scope<'_>> {
 fn qualifier(scope: &Scope<'_>) -> String {
     scope.table.alias.clone().unwrap_or_else(|| scope.relation.table.clone())
 }
-fn resolve(name: &Name, scopes: &[Scope<'_>; 2]) -> Result<ColumnRef> {
+fn resolve(name: &Name, scopes: &[Scope<'_>]) -> Result<ColumnRef> {
     let mut matches = Vec::new();
     for (index, scope) in scopes.iter().enumerate() {
         let qualified = match name.0.as_slice() {

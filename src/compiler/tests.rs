@@ -131,3 +131,35 @@ fn normalization_and_fail_closed_types() -> Result<()> {
     assert!(expression(&format!("{}a", "NOT ".repeat(66))).is_err());
     Ok(())
 }
+
+#[test]
+fn projection_dispatch_preserves_grouped_v3_identity_bytes() -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct Previous<'a> {
+        selectors: &'a crate::worker::Query,
+        predicates: &'a Option<Expr>,
+        revision: &'a Option<String>,
+    }
+    let selectors = crate::worker::Query {
+        left_schema: "source".into(),
+        left_table: "left".into(),
+        left_key: "id".into(),
+        group: "group".into(),
+        right_schema: "source".into(),
+        right_table: "right".into(),
+        right_key: "id".into(),
+        sum: "value".into(),
+    };
+    let compiled = super::Compiled {
+        program: super::Program::Grouped { selectors: selectors.clone() },
+        predicates: Some(expression("a OR (n < 0 AND b)")?),
+        revision: Some(super::REVISION.into()),
+    };
+    let previous = Previous {
+        selectors: &selectors,
+        predicates: &compiled.predicates,
+        revision: &compiled.revision,
+    };
+    assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&previous)?);
+    Ok(())
+}
