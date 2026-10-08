@@ -28,7 +28,7 @@ impl<T: Ord + Clone> ZSet<T> {
     }
 
     /// Iterate in deterministic tuple order.
-    pub fn iter(&self) -> impl Iterator<Item = (&T, &i64)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&T, &i64)> + Clone {
         self.entries.iter()
     }
 

@@ -85,36 +85,40 @@ async fn join_bounded<K: BatchData, L: BatchData, R: BatchData>(
     limits.check_batch(left)?;
     limits.check_batch(right)?;
     let mut output = Consolidator::new(limits)?;
-    let mut right_probes = prior_right.probes();
-    for ((key, value), weight) in left.iter() {
-        let mut right_cursor = right_probes.cursor(key).await?;
-        while let Some((other_key, other, other_weight)) = right_cursor.current() {
-            if other_key != key {
-                break;
-            }
-            output.add(
-                (key.clone(), (value.clone(), other.clone())),
-                BigInt::from(*weight) * other_weight,
-            )?;
-            right_cursor.advance().await?;
-        }
-    }
-    let mut left_probes = prior_left.probes();
-    for ((key, value), weight) in right.iter() {
-        let mut left_cursor = left_probes.cursor(key).await?;
-        while let Some((other_key, other, other_weight)) = left_cursor.current() {
-            if other_key != key {
-                break;
-            }
-            output.add(
-                (key.clone(), (other.clone(), value.clone())),
-                BigInt::from(*weight) * other_weight,
-            )?;
-            left_cursor.advance().await?;
-        }
-    }
+    prior_join(left, prior_right, &mut output, |left, right| (left.clone(), right.clone())).await?;
+    prior_join(right, prior_left, &mut output, |right, left| (left.clone(), right.clone())).await?;
     cross(left, right, &mut output)?;
     output.finish_batch()
+}
+
+// Delta identities are ordered by key, then full value. Scan each selected prior
+// key once, even when many delta values share it. No resident prior-key bag or
+// extra trace state is retained; cloned iterators only borrow the bounded delta.
+async fn prior_join<K: BatchData, D: BatchData, P: BatchData, L: BatchData, R: BatchData>(
+    delta: &Batch<K, D>,
+    prior: &TraceSnapshot<K, P>,
+    output: &mut JoinWeights<K, L, R>,
+    pair: impl Fn(&D, &P) -> (L, R),
+) -> Result<()> {
+    let mut entries = delta.iter().peekable();
+    while let Some(((key, _), _)) = entries.peek().copied() {
+        let group = entries.clone().take_while(|((candidate, _), _)| candidate == key);
+        let mut cursor = prior.key_cursor(key).await?;
+        while let Some((other_key, other, other_weight)) = cursor.current() {
+            if other_key != key {
+                break;
+            }
+            for ((_, value), weight) in group.clone() {
+                output
+                    .add((key.clone(), pair(value, other)), BigInt::from(*weight) * other_weight)?;
+            }
+            cursor.advance().await?;
+        }
+        while entries.peek().is_some_and(|((candidate, _), _)| candidate == key) {
+            entries.next();
+        }
+    }
+    Ok(())
 }
 
 fn cross<K: BatchData, L: BatchData, R: BatchData>(

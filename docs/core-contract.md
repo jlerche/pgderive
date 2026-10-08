@@ -104,3 +104,18 @@ and stages complete candidate state/output before publication. Arbitrary acyclic
 compositions of the existing operator families are
 executable; recursion, new SQL shapes and automatic generic state codecs remain
 separate work.
+
+## Repeated-key join reads
+
+The trace join groups complete delta identities by navigation key and scans each
+selected prior-key cursor once per delta term. Cloned borrowed delta iterators
+produce every full-tuple pair; no resident copy of the prior key bag is needed.
+This changes physical reads, not identity, coefficients or the simultaneous-input
+cross term. The codec and durable plan identity remain compatible.
+
+A cache-disabled object fixture with eight nonzero delta values sharing a key and
+three one-row prior blocks measures the previous cursor-per-value path at 17
+block reads and the grouped path at three. Exact output weights match the independent
+nested-loop result. This is scoped evidence for repeated-key cold reads, not an
+end-to-end Nexmark throughput or scale claim. The existing signed histories,
+spilling, compaction and restart qualification remain required.

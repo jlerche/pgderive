@@ -65,7 +65,7 @@ impl<K: Ord + Clone, V: Ord + Clone> Batch<K, V> {
     }
 
     /// Read the canonical ordered full tuples and their multiplicities.
-    pub fn iter(&self) -> impl Iterator<Item = (&(K, V), &i64)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&(K, V), &i64)> + Clone {
         self.collection.iter()
     }
 }

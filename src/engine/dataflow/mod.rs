@@ -209,3 +209,7 @@ mod budget_tests;
 #[cfg(test)]
 #[path = "tests/circuit.rs"]
 mod circuit_tests;
+
+#[cfg(test)]
+#[path = "tests/join_probes.rs"]
+mod join_probe_tests;
