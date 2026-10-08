@@ -46,7 +46,31 @@ impl Compiled {
     pub(crate) const fn projection(&self) -> Option<&Projected> {
         if let Program::Projection { projection } = &self.program { Some(projection) } else { None }
     }
+    pub(crate) async fn bind_terminal(
+        &mut self,
+        sql: &(impl tokio_postgres::GenericClient + Sync),
+    ) -> Result<()> {
+        if let Program::Projection { projection } = &mut self.program
+            && let Some(terminal) = &mut projection.terminal
+        {
+            terminal.bind(sql).await?;
+        }
+        Ok(())
+    }
+    pub(crate) fn validate_bound(&self) -> Result<()> {
+        if let Some(projection) = self.projection()
+            && let Some(terminal) = &projection.terminal
+        {
+            terminal.validate()?;
+        }
+        Ok(())
+    }
     pub(crate) fn sink(&self, table: &str) -> crate::catalog::Sink {
+        if let Some(projection) = self.projection()
+            && let Some(map) = &projection.terminal
+        {
+            return crate::catalog::Sink::MappedBag { table: table.into(), map: map.clone() };
+        }
         if self.projection().is_some() {
             crate::catalog::Sink::Bag(table.into())
         } else {

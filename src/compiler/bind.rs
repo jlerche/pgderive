@@ -16,20 +16,44 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         Parsed::Grouped(parsed) => grouped(parsed, contract),
         Parsed::Projection { source, columns, predicate } => {
             let scopes = [scope(source, contract)?];
+            let transforms =
+                columns.iter().map(|(_, _, transform)| transform.clone()).collect::<Vec<_>>();
             let columns = columns
                 .into_iter()
-                .map(|(name, label)| {
+                .map(|(name, label, _)| {
                     Ok(super::projection::OutputColumn { column: resolve(&name, &scopes)?, label })
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let terminal = if transforms
+                .iter()
+                .any(|value| *value != crate::catalog::terminal::Transform::Identity)
+            {
+                Some(crate::catalog::Terminal::new(
+                    transforms,
+                    columns.iter().map(|column| column.column.oid).collect(),
+                )?)
+            } else {
+                None
+            };
+            let revision = if terminal.is_some() {
+                "sql-projection-v2:pg-query-6.2.1:pg-17.7:where-3vl-v1:row-text-v1:json-v2:native-bag-v1:terminal-builtins-v1"
+            } else {
+                "sql-projection-v1:pg-query-6.2.1:pg-17.7:where-3vl-v1:row-text-v1:json-v2:native-bag-v1"
+            };
             let predicates = predicate
                 .map(|expr| super::expression::bind(expr, &|name| resolve(name, &scopes)))
                 .transpose()?;
             Ok(Compiled {
-                program: super::Program::Projection { projection: super::Projected {
-                    schema: scopes[0].relation.schema.clone(), table: scopes[0].relation.table.clone(), columns,
-                } }, predicates,
-                revision: Some("sql-projection-v1:pg-query-6.2.1:pg-17.7:where-3vl-v1:row-text-v1:json-v2:native-bag-v1".into()),
+                program: super::Program::Projection {
+                    projection: super::Projected {
+                        schema: scopes[0].relation.schema.clone(),
+                        table: scopes[0].relation.table.clone(),
+                        columns,
+                        terminal,
+                    },
+                },
+                predicates,
+                revision: Some(revision.into()),
             })
         }
     }

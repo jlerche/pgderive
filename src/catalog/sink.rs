@@ -13,13 +13,20 @@ use tokio_postgres::Transaction;
 pub enum Sink {
     /// One full encoded tuple and its nonzero signed bag coefficient.
     Bag(String),
+    /// Pure scalar map over the persisted raw bag, evaluated atomically at publication.
+    MappedBag {
+        /// Owned destination table.
+        table: String,
+        /// Bound built-in function signatures and environment.
+        map: super::Terminal,
+    },
     /// One encoded group, COUNT(*) and nullable SUM, with unit row multiplicity.
     Grouped(String),
 }
 impl Sink {
     pub(super) fn table(&self) -> &str {
         match self {
-            Self::Bag(table) | Self::Grouped(table) => table,
+            Self::Bag(table) | Self::Grouped(table) | Self::MappedBag { table, .. } => table,
         }
     }
     pub(crate) fn validate(&self) -> Result<()> {
@@ -28,11 +35,19 @@ impl Sink {
                 && !self.table().starts_with("pgderive_"),
             "invalid or reserved sink table"
         );
+        if let Self::MappedBag { map, .. } = self {
+            map.validate()?;
+        }
         Ok(())
     }
     pub(super) async fn install(&self, tx: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
+        if let Self::MappedBag { map, .. } = self {
+            map.verify(tx).await?;
+        }
         let columns = match self {
-            Self::Bag(_) => "tuple jsonb PRIMARY KEY, weight bigint NOT NULL CHECK(weight<>0)",
+            Self::Bag(_) | Self::MappedBag { .. } => {
+                "tuple jsonb PRIMARY KEY, weight bigint NOT NULL CHECK(weight<>0)"
+            }
             Self::Grouped(_) => {
                 "group_key jsonb PRIMARY KEY, row_count bigint NOT NULL CHECK(row_count>0), total bigint"
             }
@@ -104,6 +119,11 @@ impl Deltas {
             (Rows::Bag(rows), Sink::Bag(_)) => {
                 for (tuple, delta) in rows {
                     apply_bag(tx, &table, tuple, *delta).await?;
+                }
+            }
+            (Rows::Bag(rows), Sink::MappedBag { map, .. }) => {
+                for (tuple, delta) in map.evaluate(tx, rows).await? {
+                    apply_bag(tx, &table, &tuple, delta).await?;
                 }
             }
             (Rows::Grouped(rows), Sink::Grouped(_)) => {

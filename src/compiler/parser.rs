@@ -14,7 +14,7 @@ pub(super) enum Parsed {
     Grouped(Grouped),
     Projection {
         source: Table,
-        columns: Vec<(Name, String)>,
+        columns: Vec<(Name, String, crate::catalog::terminal::Transform)>,
         predicate: Option<super::syntax::Expr>,
     },
 }
@@ -196,16 +196,12 @@ fn projection(targets: &[Node], from: &[Node], predicate: Option<&Node>) -> Resu
     let columns = targets
         .iter()
         .map(|value| {
-            let name = column(target(value)?)?;
+            let (name, transform, default_label) = projection_target(target(value)?)?;
             let NodeEnum::ResTarget(value) = node(value)? else {
                 anyhow::bail!("expected output target");
             };
-            let label = if value.name.is_empty() {
-                name.0.last().context("missing column name")?.clone()
-            } else {
-                value.name.clone()
-            };
-            Ok((name, label))
+            let label = if value.name.is_empty() { default_label } else { value.name.clone() };
+            Ok((name, label, transform))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Parsed::Projection {
@@ -213,4 +209,33 @@ fn projection(targets: &[Node], from: &[Node], predicate: Option<&Node>) -> Resu
         columns,
         predicate: super::syntax::predicate(predicate)?,
     })
+}
+
+fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Transform, String)> {
+    use crate::catalog::terminal::Transform;
+    if let NodeEnum::FuncCall(call) = node(value)? {
+        let name = expressions::names(&call.funcname)?.0;
+        let function = match name.as_slice() {
+            [name] => name,
+            [schema, name] if schema == "pg_catalog" => name,
+            _ => anyhow::bail!("unsupported terminal function namespace"),
+        };
+        let transform = match function.as_str() {
+            "abs" => Transform::Abs,
+            "length" => Transform::Length,
+            _ => anyhow::bail!("unsupported terminal function"),
+        };
+        // Reuse the exact aggregate-call modifier checks with one ordinary argument.
+        let mut plain = call.as_ref().clone();
+        plain.funcname = vec![pg_query::Node {
+            node: Some(NodeEnum::String(pg::String { sval: function.clone() })),
+        }];
+        let normalized = Node { node: Some(NodeEnum::FuncCall(Box::new(plain))) };
+        let operand =
+            aggregate(&normalized, function, false)?.context("missing function operand")?;
+        return Ok((column(operand)?, transform, function.clone()));
+    }
+    let name = column(value)?;
+    let label = name.0.last().context("missing column name")?.clone();
+    Ok((name, Transform::Identity, label))
 }

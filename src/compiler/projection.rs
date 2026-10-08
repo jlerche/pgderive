@@ -21,6 +21,8 @@ pub struct Projected {
     pub(crate) schema: String,
     pub(crate) table: String,
     pub(crate) columns: Vec<OutputColumn>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) terminal: Option<crate::catalog::Terminal>,
 }
 impl Projected {
     pub(crate) fn row(&self, row: &Row) -> Result<Vec<Option<Cell>>> {

@@ -23,7 +23,7 @@ pub(super) async fn source(
         &config.replication.slot,
     )
     .await?;
-    settings.query.compile(&preliminary)?;
+    settings.query.compile_bound(sql, &preliminary).await?;
     sql.batch_execute(&format!(
         "CREATE TABLE IF NOT EXISTS {}.pgderive_worker_registration(
         query_id text PRIMARY KEY, format_version integer NOT NULL CHECK(format_version=1),
@@ -51,13 +51,13 @@ pub(super) async fn source(
         ensure!(
             row.try_get::<_, serde_json::Value>(4)?
                 == serde_json::to_value(
-                    settings.query.compile(&source)?.sink(&settings.sink_table)
+                    settings.query.compile_bound(sql, &source).await?.sink(&settings.sink_table)
                 )?,
             "worker registration destination changed"
         );
         source.verify(sql).await?;
         ensure!(
-            program::plan(&source, &settings.query.compile(&source)?)?.identity()
+            program::plan(&source, &settings.query.compile_bound(sql, &source).await?)?.identity()
                 == row.try_get::<_, String>(5)?,
             "worker registration query changed"
         );
@@ -80,10 +80,11 @@ async fn create(
     let prefix = &config.replication.slot[..config.replication.slot.len().min(30)];
     let slot = format!("{prefix}_{nonce}");
     let source = Contract::inspect(sql, identity, &config.replication.publication, &slot).await?;
-    let plan = program::plan(&source, &settings.query.compile(&source)?)?;
+    let compiled = settings.query.compile_bound(sql, &source).await?;
+    let plan = program::plan(&source, &compiled)?;
     let tx = sql.transaction().await?;
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-    tx.execute(&format!("INSERT INTO {}.pgderive_worker_registration(query_id,format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix) VALUES($1,1,$2,$3,$4,$5,$6,$7)",settings.catalog_schema),&[&settings.query_id,&config.replication.slot,&source.slot,&serde_json::to_value(&source)?,&serde_json::to_value(settings.query.compile(&source)?.sink(&settings.sink_table))?,&plan.identity(),&settings.object_prefix]).await?;
+    tx.execute(&format!("INSERT INTO {}.pgderive_worker_registration(query_id,format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix) VALUES($1,1,$2,$3,$4,$5,$6,$7)",settings.catalog_schema),&[&settings.query_id,&config.replication.slot,&source.slot,&serde_json::to_value(&source)?,&serde_json::to_value(compiled.sink(&settings.sink_table))?,&plan.identity(),&settings.object_prefix]).await?;
     tx.commit().await.context("worker registration COMMIT requires authoritative reload")?;
     Ok(source)
 }

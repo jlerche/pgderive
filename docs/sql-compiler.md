@@ -76,8 +76,9 @@ search_path or live SQL name interpolation.
 
 A SELECT without GROUP BY supports 1..=64 column references in any order from one
 explicit schema.table, with optional table/output aliases and the same WHERE
-subset. Repeated columns and output labels are legal. Wildcards, computed outputs,
-DISTINCT, joins without grouped aggregation, ordering, limits, functions and all
+subset. Repeated columns and output labels are legal. Apart from the terminal built-ins
+described below, computed outputs are rejected. Wildcards,
+DISTINCT, joins without grouped aggregation, ordering, limits and all
 other unsupported clauses fail before registration or slot creation.
 
 The explicit projection circuit has one source and one Project node. Its input
@@ -97,6 +98,40 @@ The resolved output layout, names, native types and codec revision bind identity
 This is an explicit weighted bag representation, not a native-column destination
 SQL table or general function/type runtime. Frozen supported source types and
 deterministic source text equality define its tested domain.
+
+## PostgreSQL terminal expression execution
+
+Single-source outputs may also call `abs(integral_column)` or
+`length(text_or_varchar_column)`, unqualified or qualified with `pg_catalog`.
+Arguments must be column references; nesting, arbitrary functions, casts and
+function calls in WHERE are rejected before durable registration or slot creation.
+These strict built-ins preserve NULL. ABS uses the native argument width and fails
+on its minimum negative value, matching PostgreSQL rather than widening it.
+LENGTH counts Unicode characters under the required UTF8 server encoding.
+
+The engine persists and emits the raw operand bag. During the same PostgreSQL
+transaction that publishes memberships and source progress, a closed terminal
+map evaluates the built-ins on signed deltas, consolidates mapped tuple collisions
+with exact numeric weight sums, then checks final coefficients fit i64 before
+sink DML. This is a linear map on weighted tuples: insertion and retraction use
+identical semantics, including after cold restore. Any evaluation error rolls back
+publication and prevents ACK. The existing PUT → COMMIT → ACK order is preserved.
+
+Deferral is permitted only for deterministic tuple-local terminal operations.
+Expressions that determine join keys, grouping, qualification or ranking need
+execution at the corresponding Rust operator boundary. SQL volatility labels alone
+are insufficient: user-defined functions, relation reads, time-dependent functions
+and timezone-sensitive functions are outside this slice. It does not yet establish
+PostgreSQL expression coverage for the Nexmark portfolio.
+
+Registration binds concrete built-in signatures and catalog fingerprints, server
+version and encoding into normalized plan identity. Restart and publication verify
+that environment. Function-bearing projections use sql-projection-v2 with the
+terminal-builtins-v1 revision; plain projections preserve v1 identity. Upgrades or
+changed expression semantics require a new registration/bootstrap. As with source
+metadata, privileged concurrent changes to system catalogs or the server executable
+are unsupported; environment inspection is not a lock against administrative
+mutation. No search_path-dependent function resolution is used.
 
 ## Compiler and runtime boundaries
 
@@ -165,6 +200,10 @@ state. Changed SQL, native layout, compiler revision, destination or object pref
 cannot silently reuse state. A mismatch needs a fresh query registration, slot,
 owned destination and object namespace/bootstrap; in-place migration is deferred.
 Keep the old registration and evidence for diagnosis. No automatic state reset.
+
+The complete q0–q22 target and temporal/runtime prerequisites are specified in
+[the Nexmark portfolio contract](nexmark.md). That target exceeds current compiled
+execution and is not established by the existing qualification.
 
 ## Next coherent slices
 

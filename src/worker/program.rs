@@ -58,6 +58,7 @@ pub(super) fn build(
 }
 pub(super) fn plan(contract: &Contract, compiled: &Compiled) -> Result<Plan> {
     use sha2::{Digest, Sha256};
+    compiled.validate_bound()?;
     if let Some(projection) = compiled.projection() {
         return projected::plan(contract, compiled, projection);
     }

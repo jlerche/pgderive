@@ -218,3 +218,29 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn terminal_map_requires_binding_and_rejects_unsafe_positions() -> Result<()> {
+    let native = contract();
+    let mapped = compile(
+        "SELECT pg_catalog.abs(id) AS positive, length(category) AS characters FROM source.auction",
+        &native,
+    )?;
+    assert!(mapped.projection().is_some());
+    assert!(program::plan(&native, &mapped).is_err());
+    assert!(mapped.sink("sink").validate().is_err());
+    for sql in [
+        "SELECT abs(category) FROM source.auction",
+        "SELECT length(id) FROM source.auction",
+        "SELECT now() FROM source.auction",
+        "SELECT random() FROM source.auction",
+        "SELECT public.abs(id) FROM source.auction",
+        "SELECT abs(id) FROM source.auction WHERE abs(id)>0",
+        "SELECT abs(DISTINCT id) FROM source.auction",
+        "SELECT abs(id) FILTER (WHERE id>0) FROM source.auction",
+        "SELECT length(category) OVER () FROM source.auction",
+    ] {
+        assert!(compile(sql, &native).is_err(), "accepted {sql}");
+    }
+    Ok(())
+}

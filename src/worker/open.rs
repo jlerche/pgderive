@@ -44,7 +44,7 @@ impl Open {
             block_rows: settings.block_rows,
             limits: config.execution,
         };
-        let compiled = settings.query.compile(&contract)?;
+        let compiled = settings.query.compile_bound(&session.client, &contract).await?;
         let mut query = Runtime::build(&contract, &compiled, options.clone())?;
         if catalog.load_durable(&mut session.client, query.plan()).await?.is_none() {
             registration::reset_unactivated(&session.client, &contract).await?;
@@ -71,7 +71,12 @@ async fn reopen(
         "worker native source contract differs from activation"
     );
     ensure!(
-        prior.binding.sink == settings.query.compile(contract)?.sink(&settings.sink_table),
+        prior.binding.sink
+            == settings
+                .query
+                .compile_bound(&session.client, contract)
+                .await?
+                .sink(&settings.sink_table),
         "configured worker destination differs from durable binding"
     );
     let writer = catalog.claim(&mut session.client, query.plan(), prior.binding, prior.end).await?;
@@ -123,9 +128,10 @@ async fn bootstrap(
     snapshot.commit().await?;
     export.close().await?;
     // The preliminary registration must match the exact imported source layout.
+    let compiled = settings.query.compile_bound(&session.client, &contract).await?;
     let exact = Runtime::build(
         &contract,
-        &settings.query.compile(&contract)?,
+        &compiled,
         query::Settings {
             store: config
                 .object_store
@@ -150,14 +156,11 @@ async fn bootstrap(
     super::drive::emit(
         &serde_json::json!({"event":"bootstrap_upload","slot":contract.slot,"boundary":boundary.to_string()}),
     )?;
-    let prepared = query
-        .prepare_protected(
-            runtime::inputs(&batch, &settings.query.compile(&contract)?, 1)?,
-            &protection,
-        )
-        .await?;
+    let prepared =
+        query.prepare_protected(runtime::inputs(&batch, &compiled, 1)?, &protection).await?;
     let checkpoint = query.prepared_checkpoint(&prepared)?;
     let deltas = prepared.deltas()?;
+    let sink = compiled.sink(&settings.sink_table);
     catalog
         .activate_snapshot(
             &mut session.client,
@@ -167,7 +170,7 @@ async fn bootstrap(
                 deltas: &deltas,
                 source: &contract,
                 boundary,
-                sink: settings.query.compile(&contract)?.sink(&settings.sink_table),
+                sink,
             },
         )
         .await?;

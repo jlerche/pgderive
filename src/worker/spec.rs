@@ -43,6 +43,15 @@ pub struct SqlQuery {
     pub sql: String,
 }
 impl QueryDefinition {
+    pub(crate) async fn compile_bound(
+        &self,
+        sql: &(impl tokio_postgres::GenericClient + Sync),
+        contract: &Contract,
+    ) -> Result<crate::compiler::Compiled> {
+        let mut compiled = self.compile(contract)?;
+        compiled.bind_terminal(sql).await?;
+        Ok(compiled)
+    }
     pub(crate) fn compile(&self, contract: &Contract) -> Result<crate::compiler::Compiled> {
         match self {
             Self::Sql(query) => crate::compiler::compile(&query.sql, contract),
