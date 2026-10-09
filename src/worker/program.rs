@@ -1,4 +1,5 @@
 pub(super) mod projected;
+pub(super) mod relational;
 use super::spec::Query as Spec;
 use crate::compiler::Compiled;
 use crate::{
@@ -59,6 +60,9 @@ pub(super) fn build(
 pub(super) fn plan(contract: &Contract, compiled: &Compiled) -> Result<Plan> {
     use sha2::{Digest, Sha256};
     compiled.validate_bound()?;
+    if let Some(ir) = compiled.relational() {
+        return relational::plan(contract, compiled, ir);
+    }
     if let Some(projection) = compiled.projection() {
         return projected::plan(contract, compiled, projection);
     }

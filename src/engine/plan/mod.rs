@@ -210,6 +210,7 @@ mod checkpoint;
 pub use checkpoint::{Checkpoint, Membership};
 pub mod projection;
 pub mod query;
+pub mod relational;
 mod runtime;
 pub use runtime::Engine;
 #[cfg(test)]

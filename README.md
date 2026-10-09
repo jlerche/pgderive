@@ -5,7 +5,8 @@ Committed `pgoutput` transactions are normalized into consolidated full-tuple
 weighted batches and verified by a real-PostgreSQL row mutation harness. There
 is an initial in-memory incremental equijoin; materialized-result sinks,
 object-backed state and transactional publication are implemented for the typed
-project/inner-join/group/count/nullable-integer-sum composition. A bounded SQL compiler now targets the grouped-join worker; see
+project/inner-join/group/count/nullable-integer-sum composition. A bounded SQL compiler targets grouped joins, source projections and ungrouped
+inner-join projections through durable circuits; see
 [the SQL subset and compiler boundaries](docs/sql-compiler.md).
 
 ## Quality gate

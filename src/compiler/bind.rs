@@ -1,3 +1,4 @@
+mod relational;
 use super::{
     ColumnRef, Compiled, REVISION,
     parser::{Name, Parsed, Table},
@@ -14,6 +15,9 @@ struct Scope<'a> {
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
         Parsed::Grouped(parsed) => grouped(parsed, contract),
+        Parsed::JoinProjection { left, right, keys, columns, predicate } => {
+            relational::bind((left, right), &keys, columns, predicate, contract)
+        }
         Parsed::Projection { source, columns, predicate } => {
             let scopes = [scope(source, contract)?];
             let transforms =

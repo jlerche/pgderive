@@ -10,11 +10,19 @@ pub(super) struct Table {
     pub(super) name: Name,
     pub(super) alias: Option<String>,
 }
+pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::Transform)>;
 pub(super) enum Parsed {
     Grouped(Grouped),
+    JoinProjection {
+        left: Table,
+        right: Table,
+        keys: (Name, Name),
+        columns: Columns,
+        predicate: Option<super::syntax::Expr>,
+    },
     Projection {
         source: Table,
-        columns: Vec<(Name, String, crate::catalog::terminal::Transform)>,
+        columns: Columns,
         predicate: Option<super::syntax::Expr>,
     },
 }
@@ -204,11 +212,13 @@ fn projection(targets: &[Node], from: &[Node], predicate: Option<&Node>) -> Resu
             Ok((name, label, transform))
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(Parsed::Projection {
-        source: table(source)?,
-        columns,
-        predicate: super::syntax::predicate(predicate)?,
-    })
+    let predicate = super::syntax::predicate(predicate)?;
+    if matches!(node(source)?, NodeEnum::JoinExpr(_)) {
+        let (left, right, keys) = join(source)?;
+        Ok(Parsed::JoinProjection { left, right, keys, columns, predicate })
+    } else {
+        Ok(Parsed::Projection { source: table(source)?, columns, predicate })
+    }
 }
 
 fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Transform, String)> {

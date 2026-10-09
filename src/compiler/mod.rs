@@ -4,6 +4,7 @@ mod bind;
 mod expression;
 mod parser;
 mod projection;
+pub(crate) mod relational;
 pub(crate) use projection::{Cell, Projected};
 mod syntax;
 use crate::{source::Contract, worker::Query};
@@ -34,6 +35,7 @@ pub struct Compiled {
 #[serde(untagged)]
 pub(crate) enum Program {
     Grouped { selectors: Query },
+    Relational { relational: relational::Relational },
     Projection { projection: Projected },
 }
 impl Compiled {
@@ -46,19 +48,34 @@ impl Compiled {
     pub(crate) const fn projection(&self) -> Option<&Projected> {
         if let Program::Projection { projection } = &self.program { Some(projection) } else { None }
     }
+    pub(crate) const fn relational(&self) -> Option<&relational::Relational> {
+        if let Program::Relational { relational } = &self.program { Some(relational) } else { None }
+    }
+    const fn layout(&self) -> Option<&Projected> {
+        match &self.program {
+            Program::Projection { projection } => Some(projection),
+            Program::Relational { relational } => Some(&relational.output),
+            Program::Grouped { .. } => None,
+        }
+    }
     pub(crate) async fn bind_terminal(
         &mut self,
         sql: &(impl tokio_postgres::GenericClient + Sync),
     ) -> Result<()> {
-        if let Program::Projection { projection } = &mut self.program
-            && let Some(terminal) = &mut projection.terminal
+        let layout = match &mut self.program {
+            Program::Projection { projection } => Some(projection),
+            Program::Relational { relational } => Some(&mut relational.output),
+            Program::Grouped { .. } => None,
+        };
+        if let Some(layout) = layout
+            && let Some(terminal) = &mut layout.terminal
         {
             terminal.bind(sql).await?;
         }
         Ok(())
     }
     pub(crate) fn validate_bound(&self) -> Result<()> {
-        if let Some(projection) = self.projection()
+        if let Some(projection) = self.layout()
             && let Some(terminal) = &projection.terminal
         {
             terminal.validate()?;
@@ -66,12 +83,12 @@ impl Compiled {
         Ok(())
     }
     pub(crate) fn sink(&self, table: &str) -> crate::catalog::Sink {
-        if let Some(projection) = self.projection()
+        if let Some(projection) = self.layout()
             && let Some(map) = &projection.terminal
         {
             return crate::catalog::Sink::MappedBag { table: table.into(), map: map.clone() };
         }
-        if self.projection().is_some() {
+        if self.layout().is_some() {
             crate::catalog::Sink::Bag(table.into())
         } else {
             crate::catalog::Sink::Grouped(table.into())

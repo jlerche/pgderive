@@ -1,7 +1,7 @@
 # SQL compiler boundary and slices
 
 The compiler executes a deliberately bounded PostgreSQL SELECT through durable
-grouped-join and single-source projection workers. It is not a general SQL planner
+grouped-join, single-source projection and ungrouped inner-join workers. It is not a general SQL planner
 or an interpreter for plan declarations. Configure it in place of selectors:
 
 ```toml
@@ -87,8 +87,26 @@ A SELECT without GROUP BY supports 1..=64 column references in any order from on
 explicit schema.table, with optional table/output aliases and the same WHERE
 subset. Repeated columns and output labels are legal. Apart from the terminal built-ins
 described below, computed outputs are rejected. Wildcards,
-DISTINCT, joins without grouped aggregation, ordering, limits and all
+DISTINCT, ordering, limits and all
 other unsupported clauses fail before registration or slot creation.
+
+The same output and WHERE subset also supports two distinct source tables joined
+by one inner equijoin, with columns selected from either input. Join keys must
+have identical native bool, integral or UUID contracts; NULL keys never match.
+Text keys, implicit integer-width coercions, outer/self/multiple joins remain
+rejected. Aliases and reversed equality operands normalize to the same semantics;
+output labels and order remain part of durable identity.
+
+Ungrouped joins lower to explicit Source, KeyBy, Join and Project IR nodes. The
+worker binds those nodes to a reusable durable acyclic circuit executor, rather
+than hand-authored query selectors. Both keyed inputs retain complete native
+source tuples. The Join evaluates ΔL⋈R + L⋈ΔR + ΔL⋈ΔR against immutable prior
+state; WHERE and final projection operate on signed joined contributions. The
+final output arrangement preserves projected bag collisions. Every source receives
+one delta per logical tick, including empty deltas. The executor can compose
+source/project/join DAGs with maintained join parents and one maintained output;
+the SQL frontend deliberately accepts only the two-table shape in this slice.
+Aggregate kernels still use the existing grouped bridge.
 
 The explicit projection circuit has one source and one Project node. Its input
 is the complete full source row with unit navigation key, including rows with
@@ -158,15 +176,16 @@ mutation. No search_path-dependent function resolution is used.
    predicate expressions and projection output layouts. Resolve/type/lower diagnostics are
    distinguished by message prefixes; precise binder source spans are deferred.
 4. Normalize into a grouped or projection relational IR: exact source/column selectors,
-   normalized typed three-valued predicate expressions and compiler revision. There
-   is no generic arbitrary-graph IR in this slice. Unsupported relational shapes
-   are rejected, rather than declared without an executable evaluator.
+   normalized typed three-valued predicate expressions and compiler revision. Ungrouped
+   joins carry explicit resolved Source/KeyBy/Join/Project graph nodes. Unsupported
+   relational shapes are rejected before durable registration.
 5. The explicit worker::program bridge binds this IR to GroupedJoin operators,
    connected by typed Stream<T> handles and the executable circuit builder:
    full-row input arrangements, inner join, joined-row WHERE/group projection,
    COUNT/SUM sufficient statistics and fixed destination codec. The predicate
    callback runs on both positive and negative full-row contributions. Projection IR instead binds the dedicated source/Project circuit and native
-   weighted-bag codec. Bootstrap and CDC use the same compiled operators.
+   weighted-bag codec. Ungrouped join IR binds the generic durable relational circuit
+   with explicit maintained join parents and output. Bootstrap and CDC use the same compiled operators.
 
 The existing runtime retains complete full-tuple bag identity, assembles both
 inputs from a complete committed transaction, and includes the simultaneous-input
@@ -249,3 +268,13 @@ toolchain. The application uses only the safe Rust API; its own unsafe-code ban
 remains in force. No PostgreSQL server headers or runtime extension are required.
 The pinned parser grammar is PostgreSQL 17.7, not whichever server version happens
 to be running; newer syntax remains unsupported until deliberately qualified.
+
+Ungrouped join programs use `sql-relational-v1` and `worker-relational-v1` identities,
+including normalized typed graph semantics, full frozen native source contracts,
+raw record and native bag codecs, and compiler revision. A changed predicate,
+projection, label, native layout or revision requires a fresh registration/bootstrap;
+existing grouped/projection identities keep their prior serialized bytes. The live
+owned relational harness compares each complete insert/update/delete transaction
+against PostgreSQL and an independent nested-loop memory bag, with NULLs,
+simultaneous changes, projection collisions, empty output ticks and cold restart.
+This evidence qualifies this subset, not complete Nexmark or window support.
