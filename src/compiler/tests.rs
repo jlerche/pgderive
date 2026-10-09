@@ -163,3 +163,32 @@ fn projection_dispatch_preserves_grouped_v3_identity_bytes() -> Result<()> {
     assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&previous)?);
     Ok(())
 }
+
+#[test]
+fn postgres_remainder_sign_null_and_minimum_integer() -> Result<()> {
+    let cases = [(-7_i64, 3_i64, -1_i64), (7, -3, 1), (i64::MIN, -1, 0), (i64::MIN, 3, -2)];
+    for (value, divisor, expected) in cases {
+        let row = [("big".into(), Some(value.to_string()))].into();
+        let function = expression(&format!("pg_catalog.mod(big,{divisor})={expected}"))?;
+        let operator = expression(&format!("big % {divisor}={expected}"))?;
+        assert_eq!(function, operator);
+        assert_eq!(function.evaluate((&row, &row))?, Some(true));
+        let row = [("big".into(), None)].into();
+        assert_eq!(function.evaluate((&row, &row))?, None);
+    }
+    for sql in [
+        "mod(n,0)=0",
+        "mod(n,NULL)=0",
+        "mod(n,a)=0",
+        "mod(text,3)=0",
+        "public.mod(n,3)=0",
+        "mod(DISTINCT n,3)=0",
+        "mod(n,3) OVER ()=0",
+        "mod(mod(n,3),2)=0",
+        "mod(n,3)",
+        "n + 3=0",
+    ] {
+        assert!(expression(sql).is_err(), "accepted {sql}");
+    }
+    Ok(())
+}

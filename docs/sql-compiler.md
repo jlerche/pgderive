@@ -38,6 +38,15 @@ WHERE retains only true, including on retractions. No transform_null_equals
 session setting is applied. Logical expressions follow PostgreSQL three-valued
 truth tables; pure AND/OR trees are flattened, sorted and deduplicated for identity.
 
+Integral comparisons also accept `mod(column, nonzero_integer_literal)` and
+`column % nonzero_integer_literal`, including `pg_catalog.mod`. Both forms
+normalize to the same typed remainder expression and execute in Rust before the
+relational operator consumes the row. The remainder has the dividend's sign;
+minimum i64 remainder -1 is zero rather than an overflow. NULL input gives unknown
+comparison/qualification. The argument must be a native integral column; nested
+calls, column divisors, NULL/zero divisors, function modifiers and computed outputs
+remain unsupported. This adds a q2 prerequisite, not complete Nexmark qualification.
+
 ON equality with either key NULL is unknown and yields no match. Grouping preserves
 NULL, COUNT(*) includes NULL measures, SUM ignores NULL measures and returns NULL
 for an all-NULL group. Empty groups disappear. Zero SUM is distinct from absence.
@@ -104,7 +113,8 @@ deterministic source text equality define its tested domain.
 Single-source outputs may also call `abs(integral_column)` or
 `length(text_or_varchar_column)`, unqualified or qualified with `pg_catalog`.
 Arguments must be column references; nesting, arbitrary functions, casts and
-function calls in WHERE are rejected before durable registration or slot creation.
+other function calls in WHERE are rejected before durable registration or slot creation.
+The bounded integral remainder predicate described above executes in Rust.
 These strict built-ins preserve NULL. ABS uses the native argument width and fails
 on its minimum negative value, matching PostgreSQL rather than widening it.
 LENGTH counts Unicode characters under the required UTF8 server encoding.
@@ -173,6 +183,11 @@ also have to fit when the visible sum is NULL. This is an explicit MVP limit, no
 full PostgreSQL aggregate arithmetic equivalence.
 
 ## Identity and restart
+
+Remainder-bearing predicates add an integral-remainder-v1 compiler revision suffix.
+Queries without remainder preserve their prior revision and identity. Function and
+operator spellings normalize equally; changing the divisor or predicate is an
+incompatible semantic change requiring fresh registration/bootstrap.
 
 SQL plans hash normalized IR together with the entire native source contract,
 including OIDs, attribute order, modifiers, nullability, collation, source identity,

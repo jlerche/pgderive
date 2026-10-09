@@ -7,12 +7,15 @@ from worker_harness import Fixture, Worker
 
 
 class SqlFixture(Fixture):
-    def __init__(self, output, null_only, typed=False):
+    def __init__(self, output, null_only, typed=False, remainder=False):
         super().__init__(output, 'sql', rows=32, auctions=8)
         self.null_only = null_only
         self.typed = typed
+        self.remainder = remainder
         self.sql(f"ALTER TABLE {self.name}.auction ADD COLUMN enabled boolean, ADD COLUMN token uuid; UPDATE {self.name}.auction SET enabled=CASE WHEN id%3=0 THEN NULL ELSE id%2=0 END,token=CASE WHEN id=1 THEN '00000000-0000-0000-0000-000000000000'::uuid ELSE 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid END")
         self.where = 'a.category IS NOT NULL '
+        if remainder:
+            self.where += 'AND (mod(b.price,3)=0 OR mod(b.price,3)=-1) '
         if null_only:
             self.where += 'AND b.price IS NULL '
         if typed:
@@ -48,6 +51,13 @@ class SqlFixture(Fixture):
                 if (a['category'] is None or b['auction'] is None or a['id'] != b['auction']
                         or (self.null_only and b['price'] is not None)):
                     continue
+                if self.remainder:
+                    if b['price'] is None:
+                        continue
+                    magnitude = abs(b['price']) % 3
+                    signed = -magnitude if b['price'] < 0 else magnitude
+                    if signed not in (0, -1):
+                        continue
                 if self.typed:
                     ordinary = (a['enabled'] is True and (b['price'] is None or b['price'] >= 7)
                                 and a['group_id'] is not None and a['group_id'] != 1)
@@ -79,10 +89,12 @@ class SqlFixture(Fixture):
             self.query = original
 
 
-def qualify(output, command, null_only, typed=False):
-    fixture = SqlFixture(output, null_only, typed)
+def qualify(output, command, null_only, typed=False, remainder=False):
+    fixture = SqlFixture(output, null_only, typed, remainder)
     try:
         fixture.rejected(command, 'unsupported', fixture.query + ' HAVING COUNT(*)>1')
+        if remainder:
+            fixture.rejected(command, 'zero-divisor', fixture.query.replace('mod(b.price,3)', 'mod(b.price,0)'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         worker = fixture.start(command, 'first')
@@ -95,6 +107,9 @@ def qualify(output, command, null_only, typed=False):
             f"UPDATE {fixture.name}.bid SET price=0 WHERE id=100; DELETE FROM {fixture.name}.bid WHERE id=101",
             f"DELETE FROM {fixture.name}.bid WHERE auction=1",
         ]
+        if remainder:
+            changes[0] += f"; INSERT INTO {fixture.name}.bid VALUES(108,1,-6),(109,1,-7),(110,1,NULL)"
+            changes[3] += f"; UPDATE {fixture.name}.bid SET price=6 WHERE id=108"
         if typed:
             changes[1] += f"; UPDATE {fixture.name}.auction SET enabled=true,token='00000000-0000-0000-0000-000000000000' WHERE id=2; UPDATE {fixture.name}.bid SET price=-5 WHERE id=3"
             changes[2] += f"; UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=2"
@@ -107,6 +122,8 @@ def qualify(output, command, null_only, typed=False):
         fixture.rejected(command, 'changed', fixture.query.replace('IS NOT NULL', 'IS NULL'))
         assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
         fixture.query = fixture.query.replace('a.group_id', 'a.U&"group\\005fid"').replace('a.category IS NOT NULL', '((a.category) IS NOT NULL)').replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('JOIN', 'INNER JOIN')
+        if remainder:
+            fixture.query = fixture.query.replace('mod(b.price,3)', '(b.price % 3)')
         resumed = fixture.start(command, 'resumed', maximum=1)
         reopened = resumed.event('ready')
         assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time'] + len(changes)
@@ -129,7 +146,7 @@ if __name__ == '__main__':
     command = sys.argv[2:]
     if command and command[0] == '--':
         command = command[1:]
-    for mode in ('regular', 'null-only', 'typed'):
+    for mode in ('regular', 'null-only', 'typed', 'remainder'):
         directory = output / mode
         directory.mkdir()
-        qualify(directory, command, mode == 'null-only', mode == 'typed')
+        qualify(directory, command, mode == 'null-only', mode == 'typed', mode == 'remainder')

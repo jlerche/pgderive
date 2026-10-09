@@ -52,8 +52,8 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
                         terminal,
                     },
                 },
+                revision: Some(predicate_revision(revision, predicates.as_ref())),
                 predicates,
-                revision: Some(revision.into()),
             })
         }
     }
@@ -109,8 +109,8 @@ fn grouped(parsed: super::parser::Grouped, contract: &Contract) -> Result<Compil
         .transpose()?;
     Ok(Compiled {
         program: super::Program::Grouped { selectors },
+        revision: Some(predicate_revision(REVISION, predicates.as_ref())),
         predicates,
-        revision: Some(REVISION.into()),
     })
 }
 fn scope(table: Table, contract: &Contract) -> Result<Scope<'_>> {
@@ -151,4 +151,12 @@ fn resolve(name: &Name, scopes: &[Scope<'_>]) -> Result<ColumnRef> {
     }
     ensure!(matches.len() <= 1, "SQL resolve: ambiguous column {}", name.0.join("."));
     matches.pop().with_context(|| format!("SQL resolve: unknown column {}", name.0.join(".")))
+}
+
+fn predicate_revision(base: &str, predicate: Option<&super::expression::Expr>) -> String {
+    if predicate.is_some_and(super::expression::Expr::has_remainder) {
+        format!("{base}:integral-remainder-v1")
+    } else {
+        base.into()
+    }
 }

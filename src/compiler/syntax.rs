@@ -18,6 +18,7 @@ pub(super) enum Compare {
 #[derive(Clone)]
 pub(super) enum Scalar {
     Column(Name),
+    Remainder(Name, i64),
     Integer(i64),
     Boolean(bool),
     String(String),
@@ -100,6 +101,7 @@ fn scalar(value: &Node) -> Result<Scalar> {
     match node(value)? {
         NodeEnum::ColumnRef(_) => Ok(Scalar::Column(column(value)?)),
         NodeEnum::AConst(value) => constant(value),
+        NodeEnum::FuncCall(_) | NodeEnum::AExpr(_) => remainder(value),
         _ => anyhow::bail!("unsupported scalar expression"),
     }
 }
@@ -121,4 +123,45 @@ fn constant(value: &pg::AConst) -> Result<Scalar> {
         Some(Val::Sval(value)) => Ok(Scalar::String(value.sval.clone())),
         _ => anyhow::bail!("unsupported literal"),
     }
+}
+
+fn remainder(value: &Node) -> Result<Scalar> {
+    let (left, right) = match node(value)? {
+        NodeEnum::AExpr(expr) => {
+            ensure!(
+                expr.kind == i32::from(pg::AExprKind::AexprOp) && names(&expr.name)?.0 == ["%"],
+                "unsupported scalar operator"
+            );
+            (optional(expr.lexpr.as_deref())?, optional(expr.rexpr.as_deref())?)
+        }
+        NodeEnum::FuncCall(call) => {
+            let function = names(&call.funcname)?.0;
+            ensure!(
+                function == ["mod"] || function == ["pg_catalog", "mod"],
+                "unsupported scalar function"
+            );
+            ensure!(
+                call.args.len() == 2
+                    && call.agg_order.is_empty()
+                    && call.agg_filter.is_none()
+                    && call.over.is_none()
+                    && !call.agg_within_group
+                    && !call.agg_star
+                    && !call.agg_distinct
+                    && !call.func_variadic
+                    && call.funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall),
+                "unsupported MOD modifier"
+            );
+            (&call.args[0], &call.args[1])
+        }
+        _ => anyhow::bail!("unsupported remainder expression"),
+    };
+    let NodeEnum::AConst(value) = node(right)? else {
+        anyhow::bail!("MOD divisor must be a nonzero integral literal");
+    };
+    let Scalar::Integer(divisor) = constant(value)? else {
+        anyhow::bail!("MOD divisor must be a nonzero integral literal");
+    };
+    ensure!(divisor != 0, "MOD zero divisor is outside the supported subset");
+    Ok(Scalar::Remainder(column(left)?, divisor))
 }

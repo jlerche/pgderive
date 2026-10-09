@@ -30,6 +30,28 @@ gap equality convention; the initial target joins consecutive events whose gap
 is strictly less than ten seconds. A session starts at its first event and ends
 ten seconds after its last event. Window NULL timestamps have no membership.
 
+## PostgreSQL formulations for window targets
+
+Every target must be expressible as PostgreSQL SQL before compiler support is
+claimed. Flink-style TUMBLE/HOP/SESSION syntax is not part of the frontend.
+PostgreSQL's OVER clause supports ranking and ordered window aggregates. Fixed
+buckets use date_bin with an explicit origin; a ten-second hopping window advancing
+every two seconds expands each non-NULL event over generate_series(0,4), with start
+`date_bin('2 seconds', event_time, origin) - n * interval '2 seconds'`.
+
+Sessions use lag(event_time) partitioned by bidder and ordered by event_time plus
+stable source identity. A gap >= ten seconds starts a new session; a running SUM
+of those boundaries with ROWS UNBOUNDED PRECEDING supplies the session group.
+An outer grouping emits first event, last event + ten seconds, and count. This is
+ordinary PostgreSQL relational SQL and remains revisable under source changes.
+It does not imply native streaming finalization, watermarks or state expiry.
+
+References: [PostgreSQL window functions](https://www.postgresql.org/docs/17/functions-window.html),
+[date_bin](https://www.postgresql.org/docs/17/functions-datetime.html), and
+[generate_series](https://www.postgresql.org/docs/17/functions-srf.html).
+These forms are target definitions; current compilation still rejects their
+unsupported relational nodes before registration.
+
 ## Query targets
 
 | Query | PostgreSQL adaptation and required behavior |

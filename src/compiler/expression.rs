@@ -17,6 +17,7 @@ pub(super) enum Value {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) enum Scalar {
     Column(ColumnRef),
+    Remainder(ColumnRef, i64),
     Literal(Option<Value>),
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -71,7 +72,12 @@ fn normalized(args: Vec<syntax::Expr>, resolve: &Resolve<'_>, and: bool) -> Resu
     Ok(if and { Expr::And(values) } else { Expr::Or(values) })
 }
 fn column_type(value: &syntax::Scalar, resolve: &Resolve<'_>) -> Result<Option<u32>> {
-    if let syntax::Scalar::Column(name) = value { Ok(Some(resolve(name)?.oid)) } else { Ok(None) }
+    match value {
+        syntax::Scalar::Column(name) | syntax::Scalar::Remainder(name, _) => {
+            Ok(Some(resolve(name)?.oid))
+        }
+        _ => Ok(None),
+    }
 }
 fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scalar> {
     let value = match value {
@@ -82,6 +88,14 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
                 "SQL type: incompatible comparison operands"
             );
             return Ok(Scalar::Column(column));
+        }
+        syntax::Scalar::Remainder(name, divisor) => {
+            let column = resolve(&name)?;
+            ensure!(
+                integral(column.oid) && integral(oid),
+                "SQL type: MOD requires integral operands"
+            );
+            return Ok(Scalar::Remainder(column, divisor));
         }
         syntax::Scalar::Null => None,
         syntax::Scalar::Boolean(value) if oid == 16 => Some(Value::Boolean(value)),
@@ -99,6 +113,22 @@ impl Scalar {
         let column = match self {
             Self::Column(column) => column,
             Self::Literal(value) => return Ok(value.clone()),
+            Self::Remainder(column, divisor) => {
+                let value = Self::Column(column.clone()).evaluate(rows)?;
+                return value
+                    .map(|value| {
+                        let Value::Integer(value) = value else {
+                            anyhow::bail!("nonintegral MOD input");
+                        };
+                        // PostgreSQL defines MIN % -1 as zero, without division overflow.
+                        Ok(Value::Integer(if *divisor == -1 {
+                            0
+                        } else {
+                            value.checked_rem(*divisor).context("invalid MOD divisor")?
+                        }))
+                    })
+                    .transpose();
+            }
         };
         let row = if column.right { rows.1 } else { rows.0 };
         row.get(&column.name)
@@ -123,6 +153,7 @@ impl Scalar {
                 .context("compiled predicate column absent")?
                 .is_none()),
             Self::Literal(value) => Ok(value.is_none()),
+            Self::Remainder(_, _) => Ok(self.evaluate(rows)?.is_none()),
         }
     }
 }
@@ -194,4 +225,16 @@ fn uuid(text: &str) -> Result<[u8; 16]> {
         *byte = u8::from_str_radix(&digits[index * 2..index * 2 + 2], 16)?;
     }
     Ok(value)
+}
+
+impl Expr {
+    pub(super) fn has_remainder(&self) -> bool {
+        let scalar = |value: &Scalar| matches!(value, Scalar::Remainder(_, _));
+        match self {
+            Self::Value(value) | Self::Null(value, _) => scalar(value),
+            Self::Compare(_, left, right) => scalar(left) || scalar(right),
+            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_remainder),
+            Self::Not(value) => value.has_remainder(),
+        }
+    }
 }
