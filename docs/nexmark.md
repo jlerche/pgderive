@@ -150,3 +150,30 @@ aggregate/window consumption. The remaining portfolio includes broader native/te
 and text expressions, general joins with grouped/ordered derived stages, and the
 explicit clock-driven auction-closure formulations. These remain compiler work;
 no unsupported query is approximated or accepted as an executable placeholder.
+
+## Executable q15 formulation
+
+[queries/nexmark/q15.sql](../queries/nexmark/q15.sql) is the named PostgreSQL
+formulation for all twelve daily bid/bidder/auction measures. Its native input is
+`nexmark.bid(date_time timestamptz, price bigint, bidder bigint, auction integral)`
+with a stable source primary key. Prices use the original boundaries 10000 and
+1000000; NULL prices contribute to total counts but no price band. Distinct
+bidder/auction counts ignore NULL and preserve value presence under retractions.
+
+The explicit adaptation represents the day as UTC midnight `timestamptz`, using
+`date_bin(INTERVAL '1 day', date_time, TIMESTAMPTZ '2000-01-01 00:00:00+00')`.
+It does not use the writer's local calendar or claim a native SQL date output.
+In UTC this fixed-day grouping aligns with UTC calendar dates, including dates
+before the origin. NULL and infinite timestamps retain their PostgreSQL groups.
+The maintained bag is compared with this exact PostgreSQL query, with the declared
+output type; it is not presented as an unchanged upstream output ABI.
+
+A sequential owned fixture runs the SQL artifact through snapshot, complete CDC
+transactions and cold restart. An independent oracle groups raw source rows by
+UTC calendar date and counts price bands and non-NULL value sets. It covers every
+threshold, duplicate bidder/auction values, NULLs, BC and upper-range timestamps,
+infinities, microseconds on either side of midnight, writer timezone changes,
+updates moving days/price bands, last-value retractions, rollback, empty query ticks
+and removal to empty. Changed thresholds or DISTINCT semantics cannot adopt
+registered state; quoted alias spelling can resume the same compiled semantics.
+This establishes q15's stated formulation, not the remaining portfolio queries.

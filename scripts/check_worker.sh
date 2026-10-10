@@ -15,7 +15,7 @@ fi
 mkdir -p artifacts/worker
 output=$(mktemp -d "$PWD/artifacts/worker/run-XXXXXXXX")
 printf 'Worker evidence: %s\n' "$output"
-mkdir "$output/transactions" "$output/crashes" "$output/compiler" "$output/projection" "$output/relational" "$output/partition" "$output/numeric" "$output/native" "$output/date-bin" "$output/hopping" "$output/ranking" "$output/peer-frames" "$output/derived" "$output/navigation" "$output/lookup" "$output/composition" "$output/case" "$output/session" "$output/distinct"
+mkdir "$output/transactions" "$output/crashes" "$output/compiler" "$output/projection" "$output/relational" "$output/partition" "$output/numeric" "$output/native" "$output/date-bin" "$output/hopping" "$output/ranking" "$output/peer-frames" "$output/derived" "$output/navigation" "$output/lookup" "$output/composition" "$output/case" "$output/session" "$output/distinct" "$output/nexmark-q15"
 export PGDERIVE__POSTGRES__PASSWORD=${PGPASSWORD:-postgres}
 if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/transactions" \
     python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 \
@@ -113,17 +113,22 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/d
     cat "$output/distinct/harness.log" >&2
     exit 1
 fi
+if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q15" \
+    python3 scripts/nexmark_q15_harness.py "$output/nexmark-q15" -- "${worker[@]}"; then
+    cat "$output/nexmark-q15/harness.log" >&2
+    exit 1
+fi
 python3 - "$output" "${worker[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==92,results
+assert len(results)==93,results
 for result in results:
     json.loads(result.read_text())
 root=pathlib.Path.cwd()
 files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),
        *sorted((root/'src').rglob('*.rs')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
-       *sorted((root/'scripts').glob('*.py')), *sorted(output.rglob('*.json')),
+       *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(output.rglob('*.json')),
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]
 provenance={'git_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
             'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),
