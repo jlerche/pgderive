@@ -283,7 +283,7 @@ This evidence qualifies this subset, not complete Nexmark or window support.
 
 Single-source grouped SELECT supports multiple native bool/integral/UUID/timestamp column
 keys and arbitrary output ordering of those keys and COUNT(*), COUNT(column),
-SUM(int2/int4/int8), AVG(int2/int4/int8), and integral MIN/MAX. Each aggregate may have a FILTER using the
+SUM(int2/int4/int8), AVG(int2/int4/int8), and integral/temporal MIN/MAX. Each aggregate may have a FILTER using the
 supported three-valued predicate subset. NULL grouping keys remain present;
 COUNT(column) ignores NULL; filters retain only true. Existing groups with no
 qualifying non-NULL measures produce COUNT zero and SUM/MIN/MAX NULL. Removing
@@ -298,7 +298,7 @@ integer PRECEDING/FOLLOWING offsets and valid UNBOUNDED endpoints. The ordering
 must include every source primary-key column, explicitly in SQL, so positional
 frames have deterministic occurrence order. The compiler adds no hidden tiebreaker.
 Peer-aware RANGE/GROUPS frames are described below; exclusions and named windows remain rejected.
-Peer ranking and native lag/lead are described below; further temporal expressions remain subsequent slices. Windows preserve
+Peer ranking, native lag/lead and qualified temporal expressions are described below. Windows preserve
 source rows and attach frame aggregates, whereas grouped aggregates replace each
 group with one row. Empty frames yield COUNT zero and other supported aggregates
 NULL, matching PostgreSQL. Source WHERE runs before partition/window evaluation.
@@ -773,8 +773,7 @@ window/group navigation/running-window and repeated date_bin map execution again
 independent memory oracle after inserts, updates, deletes, NULLs and cold restart.
 Signed weighted unit histories separately test duplicate source occurrences,
 projection collisions, thresholds, quoted aliases and several retained stages.
-This is a prerequisite for explicit SQL sessions; CASE, timestamp-gap arithmetic
-and session merge/split qualification remain separate work.
+The CASE/gap and complete session stages described below build on this composition.
 
 ## Lazy native CASE and timestamp-gap comparisons
 
@@ -814,9 +813,54 @@ independent source-bag recomputation. They include exact threshold equality,
 NULLs, guarded infinities, late changes, native writer timezone changes and cold
 restart. Weighted unit histories separately cover boundary merge/split effects
 and duplicate occurrences; native gap tests cover both infinities and finite
-range overflow. Emitting session first/last boundaries still requires temporal
-MIN/MAX and fixed-duration addition; these flags alone do not claim full sessions.
+range overflow. The complete session slice below adds temporal MIN/MAX and fixed-duration
+addition to these flags.
 
 The subtraction rules are grounded in PostgreSQL's
 [timestamp_mi implementation](https://github.com/postgres/postgres/blob/REL_17_STABLE/src/backend/utils/adt/timestamp.c)
 and saved live PostgreSQL infinity/overflow probes under artifacts/.
+
+## Explicit PostgreSQL sessions and temporal boundaries
+
+MIN/MAX now accept native timestamp and timestamptz columns as well as integral
+columns, in supported grouped and window frames. They ignore NULL and filtered
+out inputs, return NULL for an empty eligible frame, and compare native instants,
+including infinities. The runtime retains the complete weighted input bag and
+recomputes affected partitions; it does not yet have Feldera's specialized ordered
+MIN/MAX cursor implementation.
+
+Scalar projections accept `timestamp_column + INTERVAL '10 seconds'` and the
+corresponding subtraction. Literals must be explicitly typed, positive, integral
+microseconds, with one quantity/unit from microseconds through hours. `24 hours`
+is a time duration; `1 day` is rejected because calendar-day timestamptz arithmetic
+can depend on session timezone across DST. Months, implicit casts, arbitrary
+interval expressions and cross-type arithmetic remain rejected before registration.
+NULL propagates, infinities stay infinite, and finite range overflow fails the
+complete staged tick. Plans bind `pg-fixed-time-offset-v1` and temporal aggregate
+plans bind `pg-native-temporal-extrema-v1`; old integral-only plans retain their
+identity and semantics.
+
+A supported session query explicitly composes:
+
+1. Source WHERE time IS NOT NULL, then LAG(time) ordered by time and native identity.
+2. Lazy CASE: previous IS NULL starts a session; equal times stay together;
+   otherwise a gap >= INTERVAL '10 seconds' starts a session.
+3. Running SUM of the int4 flag over ROWS UNBOUNDED PRECEDING.
+4. GROUP BY bidder and running session number, with MIN(time), MAX(time), COUNT(*).
+5. An outer projection emitting first time and last time + INTERVAL '10 seconds'.
+
+The equality guard is actual query SQL, including its behavior for repeated
+infinities. It is not an optimizer rewrite. The MV is the bag produced by that
+PostgreSQL query at each committed source boundary. A late bridge insert can merge
+sessions; deleting it can split them, changing counts and boundaries. No wall
+clock, watermark, expiry, final-only emission or state eviction is introduced.
+An unsupported or overflowing PostgreSQL expression is not silently approximated.
+
+Eight sequential owned fixtures compare complete local/instant sessions,
+filtered local/instant extrema, empty/all-NULL window frames and both offset
+directions with PostgreSQL and direct source-bag connectivity oracles. They cover exact threshold and microsecond boundaries, NULL keys and
+excluded NULL times, equal infinities, multi-row transactions, rollback, timezone
+changes across DST, bridge insert/delete, moves between bidders, removal to empty,
+cold restart and incompatible gap/label rejection. Signed weighted unit histories
+restore every retained stage between ticks and include duplicate occurrences;
+offset range failures preserve the prior checkpoint and permit valid retry.

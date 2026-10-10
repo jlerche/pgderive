@@ -17,6 +17,7 @@ pub(in crate::compiler) enum Value {
     Column(Name),
     Bin(super::scalar::Bin),
     Case(super::case::Case),
+    Offset(super::offset::Offset),
     Aggregate(Box<Aggregate>),
 }
 #[derive(Clone)]
@@ -52,15 +53,13 @@ pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
     }
     Ok(!select.group_clause.is_empty()
         || select.target_list.iter().any(|target_node| {
-            target(target_node)
-                .ok()
-                .is_some_and(|value| super::scalar::is_bin(value).unwrap_or(false))
-                || target(target_node).ok().and_then(|value| node(value).ok()).is_some_and(
-                    |value| {
-                        matches!(value, NodeEnum::CaseExpr(_))
-                            || matches!(value, NodeEnum::FuncCall(call) if call.over.is_some())
-                    },
-                )
+            target(target_node).ok().is_some_and(|value| {
+                super::scalar::is_bin(value).unwrap_or(false)
+                    || super::offset::eligible(value).unwrap_or(false)
+            }) || target(target_node).ok().and_then(|value| node(value).ok()).is_some_and(|value| {
+                matches!(value, NodeEnum::CaseExpr(_))
+                    || matches!(value, NodeEnum::FuncCall(call) if call.over.is_some())
+            })
         }))
 }
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
@@ -97,6 +96,8 @@ fn parse_target(value: &Node) -> Result<Target> {
             let label = if bin.shift.is_some() { "?column?" } else { "date_bin" };
             (Value::Bin(bin), label.into())
         }
+    } else if super::offset::eligible(expression)? {
+        (Value::Offset(super::offset::parse(expression)?), "?column?".into())
     } else if let NodeEnum::CaseExpr(case) = node(expression)? {
         (Value::Case(super::case::parse(case)?), "case".into())
     } else if let NodeEnum::FuncCall(call) = node(expression)? {

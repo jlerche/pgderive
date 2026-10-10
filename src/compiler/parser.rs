@@ -7,6 +7,7 @@ pub(super) mod expansion;
 pub(super) mod expressions;
 pub(super) mod lookup;
 pub(super) mod navigation;
+pub(super) mod offset;
 pub(super) mod partition;
 pub(super) mod scalar;
 use expressions::{aggregate, column, node, optional, target};

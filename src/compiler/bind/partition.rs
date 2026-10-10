@@ -167,6 +167,9 @@ fn bind_targets(
             syntax::Value::Case(case) => {
                 crate::compiler::scalar::bind_case(&case, resolve, computed, context.2)?
             }
+            syntax::Value::Offset(offset) => {
+                crate::compiler::scalar::bind_offset(&offset, resolve, computed, context.2)?
+            }
             syntax::Value::Aggregate(value) => {
                 let result = aggregate(*value, resolve, (context.0, context.1), state)?;
                 transform = result.1;
@@ -389,7 +392,10 @@ fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32>
         }
         Function::Min | Function::Max => {
             let column = argument.context("missing aggregate argument")?;
-            ensure!(matches!(column.oid, 20 | 21 | 23), "MIN/MAX require integral columns");
+            ensure!(
+                matches!(column.oid, 20 | 21 | 23 | 1114 | 1184),
+                "MIN/MAX require integral or timestamp columns"
+            );
             Ok(column.oid)
         }
     }

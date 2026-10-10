@@ -76,18 +76,23 @@ fn aggregate_value(
         }
         count += *weight;
         if !matches!(aggregate.function, Function::Count) {
-            let integer: i64 = value
-                .and_then(|value| value.as_ref())
-                .context("missing integral measure")?
-                .parse()?;
-            sum += BigInt::from(integer) * weight;
-            extremum = Some(extremum.map_or(integer, |prior: i64| {
-                if matches!(aggregate.function, Function::Min) {
-                    prior.min(integer)
+            let argument = aggregate.argument.as_ref().context("missing aggregate argument")?;
+            let text = value.and_then(|value| value.as_ref()).context("missing measure")?;
+            let integer = if matches!(argument.oid, 1114 | 1184) {
+                crate::temporal::Timestamp::parse(text, argument.oid)?.sort_value()
+            } else {
+                text.parse::<i64>()?
+            };
+            if matches!(aggregate.function, Function::Min | Function::Max) {
+                let canonical = if matches!(argument.oid, 1114 | 1184) {
+                    crate::temporal::Timestamp::parse(text, argument.oid)?.text(argument.oid)?
                 } else {
-                    prior.max(integer)
-                }
-            }));
+                    integer.to_string()
+                };
+                update_extremum(&mut extremum, integer, &canonical, &aggregate.function);
+            } else {
+                sum += BigInt::from(integer) * weight;
+            }
         }
     }
     match aggregate.function {
@@ -106,7 +111,7 @@ fn aggregate_value(
         Function::Sum => {
             Ok(Some(i64::try_from(sum).context("SUM(int2/int4) overflow")?.to_string()))
         }
-        Function::Min | Function::Max => Ok(extremum.map(|value| value.to_string())),
+        Function::Min | Function::Max => Ok(extremum.map(|(_, text)| text)),
         Function::Rank
         | Function::DenseRank
         | Function::RowNumber
@@ -116,6 +121,19 @@ fn aggregate_value(
         }
     }
 }
+fn update_extremum(
+    extremum: &mut Option<(i64, String)>,
+    value: i64,
+    text: &str,
+    function: &Function,
+) {
+    if extremum.as_ref().is_none_or(|(prior, _)| {
+        if matches!(function, Function::Min) { value < *prior } else { value > *prior }
+    }) {
+        *extremum = Some((value, text.into()));
+    }
+}
+
 fn ordered(
     bag: &Bag,
     order: &[Order],

@@ -130,3 +130,22 @@ Choose storage changes from those measurements and prove invariant output deltas
 across physical layouts, compaction and restart. Preserve object PUT followed by
 atomic PG membership/result/progress COMMIT and then ACK. Historical time state
 cannot be discarded while arbitrary source retractions remain permitted.
+
+
+## Qualified session primitives
+
+Explicit q11-style PostgreSQL sessions now execute through composed LAG, lazy
+CASE, running SUM, temporal MIN/MAX and fixed-time boundary addition. Qualification
+uses bidder-like integral keys and native timestamps, with gap >= ten seconds
+starting a new session. Late bridge insertions merge components; deleting bridges
+splits them. The source WHERE explicitly excludes NULL event times. Counts and
+boundaries are revised after each complete committed source delta and restore
+through the same durable publication protocol. Local/instant, NULL key, infinity,
+exact gap, microsecond, update/delete and cold-restart cases compare with PostgreSQL
+and an independent direct-connectivity oracle. This qualifies these primitives
+and this explicit session formulation, not all q0–q22 target queries above.
+
+The remaining portfolio includes COUNT DISTINCT, broader native/terminal numeric
+and text expressions, general joins with grouped/ordered derived stages, and the
+explicit clock-driven auction-closure formulations. These remain compiler work;
+no unsupported query is approximated or accepted as an executable placeholder.

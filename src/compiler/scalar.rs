@@ -20,18 +20,20 @@ pub struct Computed {
 pub enum Native {
     Bin(DateBin),
     Case { case: super::case::Case },
+    Offset { offset: Offset },
 }
 impl Native {
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         match self {
             Self::Bin(value) => value.evaluate(row),
             Self::Case { case } => case.evaluate(row),
+            Self::Offset { offset } => offset.evaluate(row),
         }
     }
     pub(super) const fn shift(&self) -> Option<&(ColumnRef, i64)> {
         match self {
             Self::Bin(value) => value.shift.as_ref(),
-            Self::Case { .. } => None,
+            Self::Case { .. } | Self::Offset { .. } => None,
         }
     }
 }
@@ -108,6 +110,44 @@ pub(super) fn bind_case(
     let prefix = scope.map_or_else(|| "@case_".into(), |scope| format!("@case_stage_{scope}_"));
     let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
     let column = ColumnRef { name, right: false, oid, nullable };
+    if !computed.iter().any(|prior| prior.column == column) {
+        computed.push(Computed { column: column.clone(), expression });
+    }
+    Ok(column)
+}
+
+#[derive(Clone, Serialize)]
+pub struct Offset {
+    input: ColumnRef,
+    subtract: i64,
+}
+impl Offset {
+    fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
+        row.get(&self.input.name)
+            .context("missing timestamp offset input")?
+            .as_deref()
+            .map(|text| {
+                crate::temporal::Timestamp::parse(text, self.input.oid)?
+                    .subtract_duration(self.subtract)?
+                    .text(self.input.oid)
+            })
+            .transpose()
+    }
+}
+pub(super) fn bind_offset(
+    parsed: &super::parser::offset::Offset,
+    resolve: &impl Fn(&super::parser::Name) -> Result<ColumnRef>,
+    computed: &mut Vec<Computed>,
+    scope: Option<usize>,
+) -> Result<ColumnRef> {
+    use sha2::{Digest, Sha256};
+    let input = resolve(&parsed.input)?;
+    ensure!(matches!(input.oid, 1114 | 1184), "offset requires native timestamp input");
+    let expression =
+        Native::Offset { offset: Offset { input: input.clone(), subtract: parsed.subtract } };
+    let prefix = scope.map_or_else(|| "@offset_".into(), |scope| format!("@offset_stage_{scope}_"));
+    let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
+    let column = ColumnRef { name, right: false, oid: input.oid, nullable: input.nullable };
     if !computed.iter().any(|prior| prior.column == column) {
         computed.push(Computed { column: column.clone(), expression });
     }
