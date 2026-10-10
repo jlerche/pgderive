@@ -168,3 +168,4 @@ mod projection;
 mod relational;
 
 mod partition;
+mod statistics;

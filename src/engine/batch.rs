@@ -64,6 +64,10 @@ impl<K: Ord + Clone, V: Ord + Clone> Batch<K, V> {
         builder.finish()
     }
 
+    pub(crate) fn weight(&self, tuple: &(K, V)) -> i64 {
+        self.collection.weight(tuple)
+    }
+
     /// Read the canonical ordered full tuples and their multiplicities.
     pub fn iter(&self) -> impl Iterator<Item = (&(K, V), &i64)> + Clone {
         self.collection.iter()

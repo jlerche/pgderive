@@ -262,3 +262,52 @@ async fn malformed_manifest_limits_fail_before_reading_rows() -> Result<()> {
     assert!(ObjectBatch::<i64, i64>::open(store, invalid, "limits").await.is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn full_tuple_probes_match_merged_bags_and_reject_invalid_retractions() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let batch = Batch::from_updates((0..64).map(|value| ((1, value * 2), 3)))?;
+    let reference = ObjectBatch::write(store.clone(), &batch, "point-i64-v1", 4).await?;
+    let object = ObjectBatch::open(store.clone(), reference.clone(), "point-i64-v1").await?;
+    let mut trace = Trace::default();
+    trace.commit(trace.prepare(Run::Object(object), 1).await?)?;
+    trace.commit(trace.prepare(memory([((1, 64), -3), ((1, 66), 4), ((2, 0), -1)])?, 2).await?)?;
+    let snapshot = trace.snapshot();
+    for key in 0..4 {
+        for value in -1..130 {
+            let expected = if key == 1 && value % 2 == 0 && (0..128).contains(&value) {
+                match value {
+                    64 => 0,
+                    66 => 7,
+                    _ => 3,
+                }
+            } else if key == 2 && value == 0 {
+                -1
+            } else {
+                0
+            };
+            assert_eq!(snapshot.tuple_weight(&(key, value)).await?, expected);
+        }
+    }
+    assert!(
+        snapshot
+            .validate_bag_delta(&Batch::from_updates([((1, 65), -1), ((1, 67), 1)])?)
+            .await
+            .is_err()
+    );
+    assert!(snapshot.validate_bag_delta(&Batch::from_updates([((1, 66), -7)])?).await.is_ok());
+    let unbounded = super::TraceSnapshot {
+        runs: vec![
+            memory([((1, 1), i64::MAX)])?,
+            memory([((1, 1), i64::MAX)])?,
+            memory([((1, 1), -i64::MAX)])?,
+        ],
+        generation: 0,
+        time: 0,
+    };
+    assert_eq!(unbounded.tuple_weight(&(1, 1)).await?, i64::MAX);
+    store.put(&Path::from(reference.path()), b"corrupt".to_vec().into()).await?;
+    // Reopened index corruption is rejected before any point query is exposed.
+    assert!(ObjectBatch::<i64, i64>::open(store, reference, "point-i64-v1").await.is_err());
+    Ok(())
+}

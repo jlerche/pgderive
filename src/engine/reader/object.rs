@@ -286,6 +286,14 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             .map(|block| block.path.as_deref().unwrap_or_else(|| self.reference.path()))
     }
 
+    pub(crate) async fn tuple_weight(&self, tuple: &(K, V)) -> Result<i64> {
+        let ordinal = self.blocks.partition_point(|block| block.last < *tuple);
+        let Some(_) = self.blocks.get(ordinal).filter(|block| block.first <= *tuple) else {
+            return Ok(0);
+        };
+        let rows = self.read(ordinal).await?;
+        Ok(rows.binary_search_by(|row| row.0.cmp(tuple)).ok().map_or(0, |index| rows[index].1))
+    }
     pub(super) fn key_block(&self, key: &K) -> Option<usize> {
         let ordinal = self.blocks.partition_point(|block| block.last.0 < *key);
         self.blocks.get(ordinal).filter(|block| block.first.0 <= *key).map(|_| ordinal)

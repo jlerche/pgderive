@@ -32,6 +32,10 @@ impl<T: Ord + Clone> ZSet<T> {
         self.entries.iter()
     }
 
+    pub(crate) fn weight(&self, tuple: &T) -> i64 {
+        self.entries.get(tuple).copied().unwrap_or(0)
+    }
+
     /// Integrate one delta atomically, retaining the original state on error.
     ///
     /// # Errors

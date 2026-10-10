@@ -43,6 +43,7 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
     let mut projects = BTreeSet::new();
     let mut joins = BTreeSet::new();
     let mut partitions = BTreeSet::new();
+    let mut statistics = BTreeSet::new();
     let mut maintained = BTreeSet::new();
     for member in &definition.arrangements {
         ensure!(maintained.insert(&member.node), "multiple arrangements on one relational node");
@@ -67,6 +68,13 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
                     "join inputs require maintained state"
                 );
             }
+            Kind::Statistics => {
+                statistics.insert(node.id.clone());
+                ensure!(
+                    maintained.contains(&node.id) && maintained.contains(&node.inputs[0]),
+                    "statistics node requires retained input and state"
+                );
+            }
             Kind::Aggregate => {
                 partitions.insert(node.id.clone());
                 ensure!(
@@ -79,7 +87,8 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
     ensure!(
         projects == operators.projects.keys().cloned().collect()
             && joins == operators.joins.keys().cloned().collect()
-            && partitions == operators.partitions.keys().cloned().collect(),
+            && partitions == operators.partitions.keys().cloned().collect()
+            && statistics == operators.statistics.keys().cloned().collect(),
         "relational callbacks differ from declarations"
     );
     Ok(())
@@ -98,6 +107,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                 }
                 Kind::Project => self.project(&mut builder, node, &edges, protection)?,
                 Kind::Join => self.join(&mut builder, node, &edges, protection)?,
+                Kind::Statistics => self.statistics(&mut builder, node, &edges, protection)?,
                 Kind::Aggregate => self.partition(&mut builder, node, &edges, protection)?,
             };
             edges.insert(node.id.clone(), edge);
@@ -105,6 +115,40 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         let output =
             edges.get(&self.plan.definition().outputs[0]).context("missing output edge")?;
         Ok(Built { circuit: builder.build(output.output())?, sources })
+    }
+    fn statistics(
+        &self,
+        builder: &mut Builder<K, V>,
+        node: &Node,
+        edges: &BTreeMap<String, Edge<K, V>>,
+        protection: Option<&Protection>,
+    ) -> Result<Edge<K, V>> {
+        let operator =
+            self.operators.statistics.get(&node.id).context("missing statistics callback")?.clone();
+        let execution = Arc::new(self.scoped(protection)?);
+        let id = node.id.clone();
+        let parent = node.inputs[0].clone();
+        builder.unary(
+            &node.id,
+            edges.get(&node.inputs[0]).context("missing statistics edge")?,
+            move |context, input| {
+                let operator = operator.clone();
+                let execution = execution.clone();
+                let id = id.clone();
+                let parent = parent.clone();
+                async move {
+                    let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
+                    execution
+                        .prior(&parent, &context.prior)?
+                        .validate_bag_delta(&input.batch)
+                        .await?;
+                    let delta = operator
+                        .evaluate(&input, execution.prior(&id, &context.prior)?, execution.limits)
+                        .await?;
+                    execution.stage(&id, &context.prior, delta).await
+                }
+            },
+        )
     }
     fn partition(
         &self,

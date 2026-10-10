@@ -112,22 +112,34 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     pub fn probes(&self) -> KeyProbes<K, V> {
         KeyProbes::new(self.clone())
     }
+    /// Read one complete tuple coefficient using object-local full-identity fences.
+    ///
+    /// # Errors
+    /// Returns selected-block integrity/read failures or final coefficient overflow.
+    pub async fn tuple_weight(&self, tuple: &(K, V)) -> Result<i64> {
+        let mut weight = num_bigint::BigInt::from(0);
+        for run in &self.runs {
+            weight += match run {
+                Run::Memory(batch) => batch.weight(tuple),
+                Run::Object(batch) => batch.tuple_weight(tuple).await?,
+            };
+        }
+        i64::try_from(weight).context("final trace coefficient overflow")
+    }
     pub(crate) async fn validate_delta(&self, delta: &Batch<K, V>) -> Result<()> {
-        let mut updates = delta.iter().peekable();
-        while let Some(((key, _), _)) = updates.peek() {
-            let key = key.clone();
-            let mut cursor = self.key_cursor(&key).await?;
-            while updates.peek().is_some_and(|((other, _), _)| *other == key) {
-                let ((_, value), weight) = updates.next().context("missing delta identity")?;
-                while cursor.current().is_some_and(|(_, old, _)| old < value) {
-                    cursor.advance().await?;
-                }
-                let old = cursor
-                    .current()
-                    .filter(|(_, old, _)| *old == value)
-                    .map_or(0, |(_, _, weight)| weight);
-                old.checked_add(*weight).context("final state coefficient overflow")?;
-            }
+        self.validate_coefficients(delta, false).await
+    }
+    pub(crate) async fn validate_bag_delta(&self, delta: &Batch<K, V>) -> Result<()> {
+        self.validate_coefficients(delta, true).await
+    }
+    async fn validate_coefficients(&self, delta: &Batch<K, V>, nonnegative: bool) -> Result<()> {
+        for (tuple, weight) in delta.iter() {
+            let next = self
+                .tuple_weight(tuple)
+                .await?
+                .checked_add(*weight)
+                .context("final state coefficient overflow")?;
+            ensure!(!nonnegative || next >= 0, "negative full-tuple input multiplicity");
         }
         Ok(())
     }

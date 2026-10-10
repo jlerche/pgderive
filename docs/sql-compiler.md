@@ -308,8 +308,8 @@ read only changed partitions from the pinned prior input trace, apply the comple
 signed delta, evaluate prior/new partition bags and emit their difference. The
 maintained full-tuple input and final output are checkpointed in the same durable
 circuit; no whole-database SQL recomputation occurs in production. This initial
-kernel recomputes affected partitions, rather than claiming linear sufficient-statistic
-performance. Future optimized COUNT/SUM state must preserve the same delta contract.
+kernel still handles MIN/MAX and ROWS frames. Grouped COUNT/SUM/AVG-only plans
+use the exact linear statistics path described below.
 Large or skewed partitions and expansive ROWS frames can hit explicit row, byte
 and frame-work limits; failure preserves prior visibility and progress. Output
 contributions use exact spillable consolidation before finalized i64 narrowing.
@@ -323,7 +323,8 @@ output plans use sql-partition-v2, including exact numeric JSON and terminal
 aggregate-statistic codecs, bound PostgreSQL built-ins, and affected-partition-v1
 identity covering
 typed functions, FILTER, grouping/ordering, NULL placement, frame bounds, source
-layouts and codecs. Existing plan identities remain unchanged. Restart cannot
+layouts and codecs. Nonlinear plan identities remain unchanged; optimized grouped
+plans append an exact-linear-statistics-v1 revision. Restart cannot
 reuse state under changed window/group semantics. Qualification compares grouped
 and ROWS outputs with PostgreSQL and an independent source-partition oracle after
 inserts, updates, deletes, NULL groups, all-NULL frames, changed neighbors, empty
@@ -458,3 +459,36 @@ The common gate compares both timestamp overloads and projection collisions with
 PostgreSQL and an independent datetime oracle through updates, deletes, NULLs,
 infinities and cold restart. Unit checks cover pre-origin arithmetic, range errors,
 normalized intervals, unsupported expressions and filtering before scalar errors.
+
+
+## Exact linear grouped statistics
+
+Grouped plans containing only COUNT, integral SUM and integral AVG now lower to an
+explicit Statistics node and a separate finalization map. The reusable operator
+maps each signed full-tuple contribution to exact integer statistics, consolidates
+them with spilling, then reads one prior statistic for each changed group. It
+emits unit-weight retract/replace state deltas. It does not reread every source row
+in that group. FILTER and non-NULL counts are separate for every aggregate; total
+group multiplicity retains all-NULL/all-filtered groups and removes empty groups.
+Integer overflow checks apply after combining the complete tick, preserving
+cancellation and simultaneous input changes.
+
+The circuit checks changed full-tuple coefficients against the pinned input trace
+before evaluating statistics, rejecting invalid retractions even when group totals
+cancel. Object-local full-identity fences select one candidate block per run and a
+binary search resolves the tuple; no primary-key or last-write-wins interpretation
+is introduced. Generic signed trace validation continues to permit negative weights.
+The circuit retains full-tuple input identity and the exact statistics arrangement,
+then projects SQL results from the changed statistics. Both are included in object
+membership/checkpoint/recovery/compaction alongside output state. Numeric SUM/AVG
+finalizers still use the bound PostgreSQL publication functions. Source LSN, logical
+time and the PUT/atomic-publication/ACK order are unchanged. The compiler appends
+exact-linear-statistics-v1 to these plans, so an older partition-recompute checkpoint
+requires fresh registration rather than silent state adoption.
+
+Qualification includes PostgreSQL and independent full-bag oracles for NULLs,
+FILTER, weighted changes, deletion of the last row and cold restart. A memory-store
+case bootstraps a 256-row group, restores it under a 16-contribution tick budget,
+and updates one row with forced consolidation spilling. This verifies the delta
+path under that budget; it does not establish arbitrary group size or throughput.
+MIN/MAX and ROWS retain their existing affected-partition costs and limits.

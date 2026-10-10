@@ -33,6 +33,7 @@ pub(in crate::worker) fn build(
         projects: BTreeMap::new(),
         joins: BTreeMap::new(),
         partitions: BTreeMap::new(),
+        statistics: BTreeMap::new(),
     };
     for node in &ir.nodes {
         match node {
@@ -44,22 +45,18 @@ pub(in crate::worker) fn build(
                 operators.projects.insert(id.clone(), Arc::new(key_by(key)));
             }
             Node::Join { id, .. } => {
-                operators.joins.insert(
-                    id.clone(),
-                    Arc::new(Project::new(|key: &Key, pair: &(Row, Row)| {
-                        let mut row = pair.0.clone();
-                        for (name, value) in &pair.1 {
-                            ensure!(
-                                row.insert(name.clone(), value.clone()).is_none(),
-                                "duplicate joined field"
-                            );
-                        }
-                        Ok(Some((key.clone(), row)))
-                    })),
-                );
+                operators.joins.insert(id.clone(), Arc::new(join_map()));
             }
             Node::PartitionBy { id, keys, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(partition_by(keys, compiled)));
+            }
+            Node::Statistics { id, spec, .. } => {
+                operators
+                    .statistics
+                    .insert(id.clone(), Arc::new(super::statistics::operator(spec)));
+            }
+            Node::Finalize { id, spec, .. } => {
+                operators.projects.insert(id.clone(), Arc::new(super::statistics::finalize(spec)));
             }
             Node::Partition { id, spec, .. } => {
                 let spec = spec.clone();
@@ -101,6 +98,16 @@ pub(in crate::worker) fn build(
         }
     }
     Query::new(plan(contract, compiled, ir)?, operators, settings)
+}
+
+fn join_map() -> Project<Key, (Row, Row), Key, Row> {
+    Project::new(|key: &Key, pair: &(Row, Row)| {
+        let mut row = pair.0.clone();
+        for (name, value) in &pair.1 {
+            ensure!(row.insert(name.clone(), value.clone()).is_none(), "duplicate joined field");
+        }
+        Ok(Some((key.clone(), row)))
+    })
 }
 
 fn map(
@@ -153,8 +160,12 @@ pub(in crate::worker) fn plan(
                 | Node::KeyBy { id, input, .. }
                 | Node::Project { id, input }
                 | Node::Output { id, input }
-                | Node::PartitionBy { id, input, .. } => {
+                | Node::PartitionBy { id, input, .. }
+                | Node::Finalize { id, input, .. } => {
                     (id, plan::Kind::Project, vec![input.clone()])
+                }
+                Node::Statistics { id, input, .. } => {
+                    (id, plan::Kind::Statistics, vec![input.clone()])
                 }
                 Node::Partition { id, input, .. } => {
                     (id, plan::Kind::Aggregate, vec![input.clone()])
@@ -178,6 +189,10 @@ pub(in crate::worker) fn plan(
         .collect();
     let mut maintained = BTreeMap::new();
     for node in &ir.nodes {
+        if let Node::Statistics { id, input, .. } = node {
+            maintained.insert(id.clone(), id.clone());
+            maintained.insert(input.clone(), input.clone());
+        }
         if let Node::Partition { input, .. } = node {
             maintained.insert(input.clone(), input.clone());
         }

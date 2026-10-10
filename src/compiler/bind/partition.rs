@@ -82,7 +82,7 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         .transpose()?;
     let sources = vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }];
     let numeric = output.terminal.is_some();
-    let revision = revision(numeric, mapped);
+    let revision = plan_revision(numeric, mapped, &nodes);
     Ok(Compiled {
         program: crate::compiler::Program::Relational {
             relational: Relational { sources, nodes, output },
@@ -107,6 +107,13 @@ fn keys(
         .collect()
 }
 
+fn plan_revision(numeric: bool, mapped: bool, nodes: &[Node]) -> String {
+    let mut revision = revision(numeric, mapped);
+    if nodes.iter().any(|node| matches!(node, Node::Statistics { .. })) {
+        revision.push_str(":exact-linear-statistics-v1");
+    }
+    revision
+}
 fn revision(numeric: bool, mapped: bool) -> String {
     let base = if numeric {
         "sql-partition-v2:pg-query-6.2.1:pg-17.7:row-text-v1:json-exact-number-v1:native-bag-v1:affected-partition-v1:integer-numeric-aggregate-v1:rows-frame-v1"
@@ -237,6 +244,23 @@ fn nodes(
     computed: Vec<crate::compiler::scalar::Computed>,
 ) -> Vec<Node> {
     let mapped = !computed.is_empty();
+    let linear = matches!(spec.mode, Mode::Grouped { .. })
+        && spec.aggregates.iter().all(|aggregate| {
+            matches!(aggregate.function, Function::Count | Function::Sum | Function::Average)
+        });
+    let aggregate = if linear {
+        Node::Statistics {
+            id: "statistics".into(),
+            input: "partition_input".into(),
+            spec: spec.clone(),
+        }
+    } else {
+        Node::Partition {
+            id: "partition".into(),
+            input: "partition_input".into(),
+            spec: spec.clone(),
+        }
+    };
     let mut nodes = vec![
         Node::Source { id: "source".into(), source: 0 },
         Node::PartitionBy {
@@ -244,9 +268,13 @@ fn nodes(
             input: if mapped { "mapped" } else { "source" }.into(),
             keys,
         },
-        Node::Partition { id: "partition".into(), input: "partition_input".into(), spec },
+        aggregate,
         Node::Output { id: "project".into(), input: "partition".into() },
     ];
+    if linear {
+        nodes
+            .insert(3, Node::Finalize { id: "partition".into(), input: "statistics".into(), spec });
+    }
     if mapped {
         nodes.insert(1, Node::Map { id: "mapped".into(), input: "source".into(), computed });
     }

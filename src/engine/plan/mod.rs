@@ -15,6 +15,8 @@ pub enum Kind {
     Join,
     /// Grouped COUNT/SUM statistics from one edge.
     Aggregate,
+    /// Exact linear sufficient statistics retained per group.
+    Statistics,
 }
 /// Source relation and exact supported column/type contract identity.
 #[derive(Debug, Clone, Serialize, Deserialize)]

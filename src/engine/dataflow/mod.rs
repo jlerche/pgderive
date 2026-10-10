@@ -10,6 +10,7 @@ mod operators;
 mod partition;
 mod project;
 mod runtime;
+mod statistics;
 mod stream;
 mod sum;
 use super::{
@@ -26,6 +27,7 @@ use object_store::ObjectStore;
 pub use partition::{Partition, PartitionWork};
 pub use project::Project;
 pub use runtime::{Graph, PreparedGraph, PreparedMaintenance};
+pub use statistics::Statistics;
 use std::sync::Arc;
 pub use stream::{CircuitInputs, Output, Stream};
 pub use sum::{GroupSum, SumDelta, SumState};
