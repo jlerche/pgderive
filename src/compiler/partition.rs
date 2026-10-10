@@ -41,6 +41,7 @@ pub enum Mode {
     Grouped { keys: Vec<ColumnRef> },
     Rows { order: Vec<Order>, frame: Frame },
     Ranking { order: Vec<Order> },
+    Peers { order: Vec<Order>, frame: Frame, groups: bool },
 }
 #[derive(Clone, Serialize)]
 pub struct Partition {

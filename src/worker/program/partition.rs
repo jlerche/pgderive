@@ -24,6 +24,7 @@ pub(super) fn evaluate(
         Mode::Grouped { keys } => grouped(spec, bag, keys, work),
         Mode::Rows { order, frame } => rows(spec, bag, order, frame, (limits, work)),
         Mode::Ranking { order } => ranks(spec, bag, order, (limits, work)),
+        Mode::Peers { order, frame, .. } => peers(spec, bag, order, frame, (limits, work)),
     }
 }
 fn grouped(
@@ -202,15 +203,7 @@ fn rows(
     let mut updates = Consolidator::new(limits)?;
     for (index, (_, row)) in ordered.iter().enumerate() {
         let (start, end) = bounds(frame, index, ordered.len())?;
-        work.charge(end.saturating_sub(start))?;
-        let frame = Batch::from_updates(
-            ordered[start.min(end)..end].iter().map(|(_, row)| (((), row.clone()), 1)),
-        )?;
-        limits.check_batch(&frame)?;
-        let mut output = row.clone();
-        for aggregate in &spec.aggregates {
-            output.insert(aggregate.field.clone(), aggregate_value(aggregate, &frame, work)?);
-        }
+        let output = framed_row(spec, row, &ordered[start.min(end)..end], (limits, work))?;
         updates.add(((), output), 1)?;
     }
     updates.finish_batch()
@@ -252,6 +245,55 @@ fn ranks(
             output.insert(function.field.clone(), Some(value.to_string()));
         }
         updates.add(((), output), 1)?;
+    }
+    updates.finish_batch()
+}
+
+fn framed_row(
+    spec: &Partition,
+    row: &Row,
+    frame: &[Ordered],
+    context: (Limits, &mut crate::engine::dataflow::PartitionWork),
+) -> Result<Row> {
+    let (limits, work) = context;
+    work.charge(frame.len())?;
+    let frame = Batch::from_updates(frame.iter().map(|(_, row)| (((), row.clone()), 1)))?;
+    limits.check_batch(&frame)?;
+    let mut output = row.clone();
+    for aggregate in &spec.aggregates {
+        output.insert(aggregate.field.clone(), aggregate_value(aggregate, &frame, work)?);
+    }
+    Ok(output)
+}
+fn peers(
+    spec: &Partition,
+    bag: &Bag,
+    order: &[Order],
+    frame: &Frame,
+    context: (Limits, &mut crate::engine::dataflow::PartitionWork),
+) -> Result<Bag> {
+    let (limits, work) = context;
+    let ordered = ordered(bag, order, limits, work)?;
+    let mut groups: Vec<(usize, usize)> = Vec::new();
+    for (index, (keys, _)) in ordered.iter().enumerate() {
+        work.charge(1)?;
+        if index == 0 || compare(keys, &ordered[index - 1].0, order) != Ordering::Equal {
+            groups.push((index, index + 1));
+        } else if let Some(group) = groups.last_mut() {
+            group.1 = index + 1;
+        }
+    }
+    let mut updates = Consolidator::new(limits)?;
+    for (index, (first, last)) in groups.iter().enumerate() {
+        let (start, end) = bounds(frame, index, groups.len())?;
+        let rows = if start >= end {
+            &ordered[0..0]
+        } else {
+            &ordered[groups[start].0..groups[end - 1].1]
+        };
+        for (_, row) in &ordered[*first..*last] {
+            updates.add(((), framed_row(spec, row, rows, (limits, work))?), 1)?;
+        }
     }
     updates.finish_batch()
 }

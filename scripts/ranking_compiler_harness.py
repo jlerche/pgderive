@@ -8,6 +8,7 @@ from sql_compiler_harness import SqlFixture
 
 
 class RankingFixture(SqlFixture):
+    oracle_name = 'independent peer/occurrence ranks'
     def __init__(self, output, mode):
         super().__init__(output, False)
         self.mode = mode
@@ -58,10 +59,10 @@ class RankingFixture(SqlFixture):
             {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
 
 
-def qualify(output, command, mode):
-    fixture = RankingFixture(output, mode)
+def qualify(output, command, mode, fixture_class=RankingFixture):
+    fixture = fixture_class(output, mode)
     try:
-        fixture.rejected(command, 'unsupported', fixture.query.replace('() OVER', '(b.id) OVER'))
+        fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY id')
         if mode == 'number':
             fixture.rejected(command, 'peer-order', fixture.query.replace(',b.id)', ')'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
@@ -93,7 +94,7 @@ def qualify(output, command, mode):
         resumed.event('published')
         resumed.finish()
         fixture.verify()
-        (output/'result.json').write_text(json.dumps({'sql_oracle':'exact bag','memory_oracle':'independent peer/occurrence ranks','null_peers':True,'retractions':True,'restart':'cold','mode':mode})+'\n')
+        (output/'result.json').write_text(json.dumps({'sql_oracle':'exact bag','memory_oracle':fixture.oracle_name,'null_peers':True,'retractions':True,'restart':'cold','mode':mode})+'\n')
         fixture.cleanup()
     except BaseException:
         fixture.preserve()

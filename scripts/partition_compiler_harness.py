@@ -67,7 +67,7 @@ def qualify(output, command, window, frame_spec=None, fixture_class=PartitionFix
         fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY auction')
         if window:
             fixture.rejected(command, 'peer-order', fixture.query.replace(',b.id ROWS', ' ROWS'))
-            fixture.rejected(command, 'range', fixture.query.replace('ROWS BETWEEN ' + fixture.frame_spec[0], 'RANGE UNBOUNDED PRECEDING'))
+            fixture.rejected(command, 'range', fixture.query.replace('ROWS BETWEEN ' + fixture.frame_spec[0], 'RANGE 1 PRECEDING'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         worker = fixture.start(command, 'first')
         ready = worker.event('ready')

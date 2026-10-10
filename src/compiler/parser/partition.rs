@@ -28,6 +28,7 @@ pub(in crate::compiler) struct Window {
     pub order: Vec<(Name, bool, bool)>,
     pub frame: crate::compiler::partition::Frame,
     pub ranking: bool,
+    pub peers: Option<bool>,
 }
 pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
     let [source] = select.from_clause.as_slice() else {
@@ -148,22 +149,36 @@ fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
             order: value.order_clause.iter().map(sort).collect::<Result<_>>()?,
             frame: crate::compiler::partition::Frame { start: None, end: Some(0) },
             ranking,
+            peers: None,
         });
     }
-    // PostgreSQL 17 parsenodes.h: accept ROWS plus boundary flags; reject RANGE/GROUPS/exclusions.
+    // PostgreSQL 17 parsenodes.h: accept standard boundaries, reject exclusions.
     ensure!(
-        value.frame_options & 4 != 0
+        value.frame_options & (2 | 4 | 8) != 0
             && value.frame_options
-                & !(1 | 4 | 16 | 32 | 256 | 512 | 1024 | 2048 | 4096 | 8192 | 16384)
+                & !(1 | 2 | 4 | 8 | 16 | 32 | 256 | 512 | 1024 | 2048 | 4096 | 8192 | 16384)
                 == 0,
-        "window requires an explicit supported ROWS frame"
+        "unsupported window frame"
+    );
+    let peers =
+        if value.frame_options & 4 != 0 { None } else { Some(value.frame_options & 8 != 0) };
+    ensure!(
+        peers != Some(false) || value.frame_options & (2048 | 4096 | 8192 | 16384) == 0,
+        "RANGE offsets require typed distance semantics"
     );
     let keys = value.partition_clause.iter().map(column).collect::<Result<_>>()?;
-    let order = value.order_clause.iter().map(sort).collect::<Result<_>>()?;
+    let order: Vec<_> = value.order_clause.iter().map(sort).collect::<Result<_>>()?;
+    ensure!(peers != Some(true) || !order.is_empty(), "GROUPS requires ORDER BY");
     let start = bound(value.frame_options, value.start_offset.as_deref(), true)?;
     let end = bound(value.frame_options, value.end_offset.as_deref(), false)?;
 
-    Ok(Window { keys, order, frame: crate::compiler::partition::Frame { start, end }, ranking })
+    Ok(Window {
+        keys,
+        order,
+        frame: crate::compiler::partition::Frame { start, end },
+        ranking,
+        peers,
+    })
 }
 fn sort(value: &Node) -> Result<(Name, bool, bool)> {
     let NodeEnum::SortBy(sort) = node(value)? else {

@@ -297,7 +297,7 @@ must share one specification. Frame boundaries support CURRENT ROW, nonnegative
 integer PRECEDING/FOLLOWING offsets and valid UNBOUNDED endpoints. The ordering
 must include every source primary-key column, explicitly in SQL, so positional
 frames have deterministic occurrence order. The compiler adds no hidden tiebreaker.
-RANGE, GROUPS, default frames, exclusions and named windows remain rejected;
+Peer-aware RANGE/GROUPS frames are described below; exclusions and named windows remain rejected.
 Peer ranking is described below; lag/lead and further temporal expressions remain subsequent slices. Windows preserve
 source rows and attach frame aggregates, whereas grouped aggregates replace each
 group with one row. Empty frames yield COUNT zero and other supported aggregates
@@ -560,3 +560,29 @@ unchanged. Independent weighted unit histories and three sequential owned worker
 fixtures compare inserts, updates, deletes, NULL peers, empty query ticks and cold
 restart against memory and PostgreSQL bags. A top-k predicate over these results
 still requires derived-query and post-window filter lowering.
+
+## Peer-aware aggregate frames
+
+Window aggregates also support PostgreSQL's default RANGE frame, RANGE with
+CURRENT ROW or UNBOUNDED endpoints, and GROUPS with nonnegative integral constant
+PRECEDING/FOLLOWING offsets or standard endpoints. GROUPS requires ORDER BY.
+RANGE distance offsets, exclusions and named windows remain rejected before
+registration. All window expressions must share the same typed specification.
+
+Peer equality uses exactly the SQL ORDER BY values, including NULL placement and
+direction; these frames do not require a primary-key tie-breaker. CURRENT ROW
+includes the entire current peer group. GROUPS counts peer groups rather than
+weighted row occurrences; frame aggregates still count/sum every occurrence.
+Without ORDER BY, the default RANGE frame includes the whole partition. Empty
+frames yield COUNT zero and nullable aggregates NULL. Supported FILTER predicates
+apply to aggregate contributions rather than removing peer membership.
+
+The runtime orders only changed partitions, identifies peer ranges, computes each
+row's frame, then emits the old/new bag difference. It retains the existing bounded
+work, checkpoint and publication path. Peer-frame plans bind `sql-peer-frames-v1`;
+existing ROWS/ranking plans retain their previous identities. Explicit default
+RANGE and omitted default syntax normalize identically. Weighted independent unit
+histories and six sequential PostgreSQL/memory fixtures cover default, GROUPS
+neighbors, current-peer, empty, full and unordered frames through source changes
+and cold restart. This qualifies peer-boundary semantics, not temporal-distance
+RANGE execution or unbounded partition scale.

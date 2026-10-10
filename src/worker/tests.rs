@@ -172,3 +172,5 @@ mod partition;
 mod statistics;
 
 mod ranking;
+
+mod peer_frames;

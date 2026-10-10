@@ -203,6 +203,9 @@ fn plan_revision(numeric: bool, mapped: bool, nodes: &[Node]) -> String {
     if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if matches!(spec.mode, Mode::Ranking { .. }))) {
         revision.push_str(":sql-peer-ranking-v1");
     }
+    if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if matches!(spec.mode, Mode::Peers { .. }))) {
+        revision.push_str(":sql-peer-frames-v1");
+    }
     if nodes.iter().any(|node| matches!(node, Node::Expand { .. })) {
         revision.push_str(":bounded-series-expansion-v1:fixed-duration-offset-v1");
     }
@@ -332,15 +335,20 @@ fn bind_window(
             Ok(Order { column: resolve(&name)?, descending, nulls_first })
         })
         .collect::<Result<Vec<_>>>()?;
-    if window.ranking {
+    if window.ranking || window.peers.is_some() {
         ensure!(
             order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
-            "ranking ordering requires integral or timestamp columns"
+            "peer ordering requires integral or timestamp columns"
         );
         if context.1 {
             validate_order(&order, context.0)?;
         }
-        Ok((Mode::Ranking { order }, keys))
+        let mode = if let Some(groups) = window.peers {
+            Mode::Peers { order, frame: window.frame, groups }
+        } else {
+            Mode::Ranking { order }
+        };
+        Ok((mode, keys))
     } else {
         validate_order(&order, context.0)?;
         Ok((Mode::Rows { order, frame: window.frame }, keys))
