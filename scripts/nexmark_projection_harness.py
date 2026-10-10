@@ -5,6 +5,7 @@ import json
 import pathlib
 import sys
 from sql_compiler_harness import SqlFixture
+from native_mv_oracle import expected as native_expected
 
 QUERIES = pathlib.Path(__file__).resolve().parents[1]/'queries/nexmark'
 
@@ -24,7 +25,7 @@ class ProjectionFixture(SqlFixture):
         self.labels = ['auction','bidder','price','date_time','extra'] if query=='q0' else ['auction','price']
 
     def verify(self):
-        expected = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM({self.query}) q GROUP BY 1"
+        expected = native_expected(self,self.labels)
         difference = self.sql(f'''WITH expected AS ({expected}),actual AS
             (SELECT tuple,weight FROM {self.name}.groups),difference AS
             ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL

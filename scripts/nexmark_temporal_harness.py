@@ -8,6 +8,7 @@ import pathlib
 import sys
 from numeric_compiler_harness import average
 from sql_compiler_harness import SqlFixture
+from native_mv_oracle import expected as native_expected
 
 QUERIES = pathlib.Path(__file__).resolve().parents[1]/'queries/nexmark'
 EPOCH = datetime.datetime(2000,1,1)
@@ -80,7 +81,7 @@ class TemporalFixture(SqlFixture):
 
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
-        expected = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM({self.query}) q GROUP BY 1"
+        expected = native_expected(self,self.labels)
         difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
             (SELECT tuple,weight FROM {self.name}.groups),difference AS
             ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL

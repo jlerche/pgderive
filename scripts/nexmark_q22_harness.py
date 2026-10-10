@@ -7,6 +7,7 @@ import subprocess
 import time
 import sys
 from sql_compiler_harness import SqlFixture
+from native_mv_oracle import expected as native_expected
 
 SQL = pathlib.Path(__file__).resolve().parents[1]/'queries/nexmark/q22.sql'
 
@@ -36,7 +37,7 @@ class Q22Fixture(SqlFixture):
         self.labels = ['auction','bidder','price','channel','dir1','dir2','dir3']
 
     def verify(self):
-        expected = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM({self.query}) q GROUP BY 1"
+        expected = native_expected(self,self.labels)
         difference = self.sql(f'''WITH expected AS ({expected}),actual AS
             (SELECT tuple,weight FROM {self.name}.groups),difference AS
             ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL

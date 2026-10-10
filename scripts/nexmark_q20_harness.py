@@ -5,6 +5,7 @@ import json
 import pathlib
 import sys
 from sql_compiler_harness import SqlFixture
+from native_mv_oracle import expected as native_expected
 
 SQL = pathlib.Path(__file__).resolve().parents[1]/'queries/nexmark/q20.sql'
 LABELS = ['auction','bidder','price','channel','url','bid_date_time','bid_extra','item_name','description','initial_bid','reserve','auction_date_time','expires','seller','category','auction_extra']
@@ -37,7 +38,7 @@ class Q20Fixture(SqlFixture):
 
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
-        expected = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(LABELS)})) tuple,count(*)::bigint weight FROM({self.query}) q GROUP BY 1"
+        expected = native_expected(self,LABELS)
         difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
             (SELECT tuple,weight FROM {self.name}.groups),difference AS
             ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL

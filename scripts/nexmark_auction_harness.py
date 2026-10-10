@@ -8,6 +8,7 @@ import pathlib
 import sys
 from numeric_compiler_harness import average
 from sql_compiler_harness import SqlFixture
+from native_mv_oracle import expected as native_expected
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 Q9_LABELS = ['auction_id','item_name','description','initial_bid','reserve','date_time','expires','seller','category','auction_extra','auction','bidder','price','bid_date_time','bid_extra']
@@ -56,7 +57,7 @@ class AuctionFixture(SqlFixture):
 
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
-        expected = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM({self.query}) q GROUP BY 1"
+        expected = native_expected(self,self.labels)
         difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
             (SELECT tuple,weight FROM {self.name}.groups),difference AS
             ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL

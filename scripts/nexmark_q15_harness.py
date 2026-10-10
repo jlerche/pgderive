@@ -5,6 +5,7 @@ import json
 import pathlib
 import sys
 from native_compiler_harness import NativeFixture, encoded
+from native_mv_oracle import expected as native_expected
 
 SQL = pathlib.Path(__file__).resolve().parents[1]/'queries/nexmark/q15.sql'
 
@@ -31,7 +32,7 @@ class Q15Fixture(NativeFixture):
 
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
-        expected = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1"
+        expected = native_expected(self,self.labels)
         difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
             (SELECT tuple,weight FROM {self.name}.groups),difference AS
             ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL

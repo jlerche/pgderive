@@ -129,6 +129,15 @@ also need out-of-order changes, explicit clock advances, exact boundary timestam
 and session merge/split. PostgreSQL-compatible SQL files alone do not establish
 compiler or runtime support.
 
+The named query harnesses create an owned native PostgreSQL materialized view
+from the exact SQL passed to the compiler. They refresh it at every comparison
+boundary and compare full output tuples with their multiplicities against the
+Pgderive sink. No unique index removes duplicates. The original MV definition
+remains fixed across equivalent SQL spelling changes and cold restart. Oracle
+sessions pin UTC and ISO dates; the MV is outside the source publication. Each
+fixture records its SQL, catalog definition, output types and exact weighted JSON
+in `native-mv-oracle.jsonl`, alongside the independent memory oracle.
+
 Measure cold and warm object GETs/bytes, repeated probes, cache residency, root/block
 counts, compaction writes and skewed partition work against identical histories.
 Choose storage changes from those measurements and prove invariant output deltas
