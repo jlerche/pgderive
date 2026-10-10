@@ -24,6 +24,7 @@ pub(super) enum Scalar {
     String(String),
     Null,
 }
+#[derive(Clone)]
 pub(super) enum Expr {
     Value(Scalar),
     Null(Scalar, bool),

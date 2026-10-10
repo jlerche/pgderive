@@ -15,7 +15,7 @@ fi
 mkdir -p artifacts/worker
 output=$(mktemp -d "$PWD/artifacts/worker/run-XXXXXXXX")
 printf 'Worker evidence: %s\n' "$output"
-mkdir "$output/transactions" "$output/crashes" "$output/compiler" "$output/projection" "$output/relational" "$output/partition" "$output/numeric" "$output/native" "$output/date-bin" "$output/hopping" "$output/ranking" "$output/peer-frames" "$output/derived" "$output/navigation" "$output/lookup"
+mkdir "$output/transactions" "$output/crashes" "$output/compiler" "$output/projection" "$output/relational" "$output/partition" "$output/numeric" "$output/native" "$output/date-bin" "$output/hopping" "$output/ranking" "$output/peer-frames" "$output/derived" "$output/navigation" "$output/lookup" "$output/composition"
 export PGDERIVE__POSTGRES__PASSWORD=${PGPASSWORD:-postgres}
 if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/transactions" \
     python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 \
@@ -93,11 +93,16 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/l
     cat "$output/lookup/harness.log" >&2
     exit 1
 fi
+if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/composition" \
+    python3 scripts/composition_compiler_harness.py "$output/composition" -- "${worker[@]}"; then
+    cat "$output/composition/harness.log" >&2
+    exit 1
+fi
 python3 - "$output" "${worker[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==69,results
+assert len(results)==74,results
 for result in results:
     json.loads(result.read_text())
 root=pathlib.Path.cwd()

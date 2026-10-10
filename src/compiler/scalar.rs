@@ -44,6 +44,7 @@ pub(super) fn bind(
     parsed: &super::parser::scalar::Bin,
     resolve: &impl Fn(&super::parser::Name) -> Result<ColumnRef>,
     computed: &mut Vec<Computed>,
+    scope: Option<usize>,
 ) -> Result<ColumnRef> {
     use sha2::{Digest, Sha256};
     let input = resolve(&parsed.input)?;
@@ -66,7 +67,8 @@ pub(super) fn bind(
         })
         .transpose()?;
     let expression = DateBin { input: input.clone(), stride: parsed.stride, origin, shift };
-    let name = format!("@scalar_{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
+    let prefix = scope.map_or_else(|| "@scalar_".into(), |scope| format!("@scalar_stage_{scope}_"));
+    let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
     let column = ColumnRef { name, right: false, oid: input.oid, nullable: input.nullable };
     if !computed.iter().any(|prior| prior.column == column) {
         computed.push(Computed { column: column.clone(), expression });

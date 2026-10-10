@@ -2,21 +2,28 @@ use super::{Name, Table, column, node, optional, target};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) struct Parsed {
-    pub source: Table,
+    pub source: Source,
     pub expansion: Option<super::expansion::Series>,
     pub targets: Vec<Target>,
     pub groups: Vec<super::scalar::Key>,
     pub predicate: Option<crate::compiler::syntax::Expr>,
 }
+pub(in crate::compiler) enum Source {
+    Native(Table),
+    Derived { inner: Box<super::Parsed>, alias: String },
+}
+#[derive(Clone)]
 pub(in crate::compiler) enum Value {
     Column(Name),
     Bin(super::scalar::Bin),
     Aggregate(Aggregate),
 }
+#[derive(Clone)]
 pub(in crate::compiler) struct Target {
     pub value: Value,
     pub label: String,
 }
+#[derive(Clone)]
 pub(in crate::compiler) struct Aggregate {
     pub function: crate::compiler::partition::Function,
     pub argument: Option<Name>,
@@ -24,6 +31,7 @@ pub(in crate::compiler) struct Aggregate {
     pub window: Option<Window>,
     pub navigation: Option<super::navigation::Navigation>,
 }
+#[derive(Clone)]
 pub(in crate::compiler) struct Window {
     pub keys: Vec<Name>,
     pub order: Vec<(Name, bool, bool)>,
@@ -38,7 +46,7 @@ pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
     if super::expansion::eligible(source)? {
         return Ok(true);
     }
-    if !matches!(node(source)?, NodeEnum::RangeVar(_)) {
+    if !matches!(node(source)?, NodeEnum::RangeVar(_) | NodeEnum::RangeSubselect(_)) {
         return Ok(false);
     }
     Ok(!select.group_clause.is_empty()
@@ -53,8 +61,14 @@ pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
 }
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
     ensure!((1..=64).contains(&select.target_list.len()), "partition output count unsupported");
-    let (source, expansion) =
-        super::expansion::source(select.from_clause.first().context("missing source")?)?;
+    let from = select.from_clause.first().context("missing source")?;
+    let (source, expansion) = if let NodeEnum::RangeSubselect(derived) = node(from)? {
+        let (inner, alias) = super::derived::source_query(derived)?;
+        (Source::Derived { inner: Box::new(inner), alias }, None)
+    } else {
+        let (table, expansion) = super::expansion::source(from)?;
+        (Source::Native(table), expansion)
+    };
     let targets = select.target_list.iter().map(parse_target).collect::<Result<_>>()?;
     let groups = select.group_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
     Ok(Parsed {

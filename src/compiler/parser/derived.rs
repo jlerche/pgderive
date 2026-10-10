@@ -15,22 +15,8 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
     let NodeEnum::RangeSubselect(source) = node(source)? else {
         return Ok(None);
     };
-    ensure!(
-        !source.lateral && select.group_clause.is_empty(),
-        "derived LATERAL/grouping unsupported"
-    );
-    let alias = source.alias.as_ref().context("derived query requires an alias")?;
-    ensure!(alias.colnames.is_empty(), "derived column alias list unsupported");
-    let NodeEnum::SelectStmt(inner) =
-        node(source.subquery.as_deref().context("missing derived query")?)?
-    else {
-        anyhow::bail!("derived query requires SELECT");
-    };
-    let inner = query(inner)?;
-    ensure!(
-        matches!(inner, Parsed::Partition(_) | Parsed::Derived(_) | Parsed::Lookup(_)),
-        "derived query requires a native partition query or derived scope"
-    );
+    ensure!(select.group_clause.is_empty(), "derived grouping requires partition lowering");
+    let (inner, alias) = source_query(source)?;
     ensure!(
         (1..=64).contains(&select.target_list.len()),
         "derived projection requires 1..=64 columns"
@@ -53,5 +39,22 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
         })
         .collect::<Result<_>>()?;
     let predicate = crate::compiler::syntax::predicate(select.where_clause.as_deref())?;
-    Ok(Some(Derived { inner: Box::new(inner), alias: alias.aliasname.clone(), columns, predicate }))
+    Ok(Some(Derived { inner: Box::new(inner), alias, columns, predicate }))
+}
+
+pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, String)> {
+    ensure!(!source.lateral, "derived LATERAL unsupported");
+    let alias = source.alias.as_ref().context("derived query requires an alias")?;
+    ensure!(alias.colnames.is_empty(), "derived column alias list unsupported");
+    let NodeEnum::SelectStmt(inner) =
+        node(source.subquery.as_deref().context("missing derived query")?)?
+    else {
+        anyhow::bail!("derived query requires SELECT");
+    };
+    let inner = query(inner)?;
+    ensure!(
+        matches!(inner, Parsed::Partition(_) | Parsed::Derived(_) | Parsed::Lookup(_)),
+        "derived query requires a native partition query or derived scope"
+    );
+    Ok((inner, alias.aliasname.clone()))
 }

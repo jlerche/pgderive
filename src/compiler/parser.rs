@@ -126,13 +126,13 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     if let Some(lookup) = lookup::parse(select)? {
         return Ok(Parsed::Lookup(lookup));
     }
+    if partition::eligible(select)? {
+        return Ok(Parsed::Partition(partition::parse(select)?));
+    }
     if let Some(derived) = derived::parse(select)? {
         return Ok(Parsed::Derived(derived));
     }
     let pg::SelectStmt { target_list, from_clause, where_clause, group_clause, .. } = select;
-    if partition::eligible(select)? {
-        return Ok(Parsed::Partition(partition::parse(select)?));
-    }
     if group_clause.is_empty() {
         return projection(target_list, from_clause, where_clause.as_deref());
     }

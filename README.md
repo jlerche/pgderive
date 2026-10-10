@@ -6,8 +6,8 @@ weighted batches and verified by a real-PostgreSQL row mutation harness. There
 is an initial in-memory incremental equijoin; materialized-result sinks,
 object-backed state and transactional publication are implemented for the typed
 project/inner-join/group/count/nullable-integer-sum composition. A bounded SQL compiler targets grouped joins, source projections and ungrouped
-inner-join projections, grouped aggregates, fixed/hopping buckets, ordered windows
-and derived-query filtering, plus native left predecessor lookup through durable circuits; see
+inner-join projections, grouped aggregates, fixed/hopping buckets, ordered windows,
+derived-query filtering and composed window/group stages, plus native left predecessor lookup through durable circuits; see
 [the SQL subset and compiler boundaries](docs/sql-compiler.md).
 
 ## Quality gate

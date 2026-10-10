@@ -288,7 +288,7 @@ supported three-valued predicate subset. NULL grouping keys remain present;
 COUNT(column) ignores NULL; filters retain only true. Existing groups with no
 qualifying non-NULL measures produce COUNT zero and SUM/MIN/MAX NULL. Removing
 all input rows removes a grouped result. Ungrouped aggregation, DISTINCT,
-numeric input aggregates and grouped/window composition remain rejected. A restricted derived scope is described below.
+numeric input aggregates remain rejected. Derived group/window composition is described below.
 
 Single-source window SELECT supports the same aggregate functions with explicit
 ROWS frames and integral/timestamp column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition
@@ -593,8 +593,8 @@ The frontend supports aliased derived partition scopes with outer column
 projection and optional WHERE predicates using the existing typed three-valued
 subset. Scopes can nest within the existing parser size/token/depth budgets. The
 innermost query must be an existing native partition or predecessor formulation;
-outer grouping, LATERAL, column alias lists, stars and outer computed expressions
-remain rejected. Every scope resolves names only against its immediate inner
+LATERAL, column alias lists, stars and outer computed expressions other than the
+supported date_bin subset remain rejected. Outer grouping and windows use the stage bridge described below. Every scope resolves names only against its immediate inner
 output labels, with quoted identifiers and ambiguous duplicate labels handled
 explicitly. A source alias or hidden column cannot leak through a scope.
 
@@ -622,8 +622,8 @@ projections retain internal fields until the final output: filtering by exposed
 values commutes with signed bag projection, including collisions. The binder
 restricts visibility even while internal fields remain available to the circuit.
 This fusion applies only to pure column projection and deterministic predicates;
-computed outer expressions and later window/group stages require explicit new
-lowering. Projection-only wrappers bind `derived-scope-projection-v1`. Existing
+computed outer expressions beyond the typed date_bin subset require new lowering. Stateful window/group
+stages use distinct retained nodes, as described below. Projection-only wrappers bind `derived-scope-projection-v1`. Existing
 single-filter plans retain their previous serialized identities. Three additional
 owned fixtures qualify nested peer/occurrence top-k and grouped count scopes,
 renamed quoted labels, optional WHERE, changed predicate rejection and restart.
@@ -738,3 +738,40 @@ References: [PostgreSQL lateral and left-join semantics](https://www.postgresql.
 [PostgreSQL LIMIT ordering](https://www.postgresql.org/docs/17/queries-limit.html),
 and the local Feldera `crates/dbsp/src/operator/asof_join.rs` and
 `crates/dbsp/src/operator/dynamic/asof_join.rs` implementations.
+
+## Composed window and group stages
+
+Aliased derived scopes can now feed another supported GROUP BY or window SELECT.
+Each SELECT still has one common window specification, but successive scopes may
+use different specifications. For example, grouped COUNT can feed MAX(count)
+OVER(), followed by a grouped COUNT of the rows tying that maximum. A native LAG
+stage can feed a running COUNT stage; an outer WHERE runs between those stages.
+This is ordinary PostgreSQL subquery evaluation, including non-temporal ROWS,
+RANGE-peer and GROUPS windows. It introduces no clock or expiration semantics.
+
+The compiler resolves only exposed inner labels, assigns each new stage distinct
+node IDs, aggregate fields and computed scalar fields, removes the intermediate output node, and connects
+the new stage to its input. The final visible output remains `project`. Existing
+source WHERE predicates become explicit source Filter nodes once, and each outer
+WHERE becomes a Filter before that scope's map/key/aggregate nodes. Runtime
+partition/statistics operators consume synchronized signed delta ticks; affected
+partition results are differenced and delivered downstream in the same tick.
+Every retained stage participates in the existing checkpoint and atomic durable
+publication. Source LSN and circuit logical time remain separate.
+
+Positional derived windows require the complete exposed native primary key in
+explicit ordering and preserved native occurrence identity. They currently reject
+upstream grouped/expanded stages; peer windows and grouping have no such ordering
+requirement. Sink-deferred numeric payloads cannot cross the boundary. These are
+compiler errors before slot creation or durable registration, not approximate
+execution. Existing single-stage identities remain unchanged; composed plans bind
+`derived-partition-composition-v1`, both revisions, graph, fields, native layouts
+and codecs. Changing any compiled stage cannot reuse incompatible state.
+
+Five sequential owned fixtures compare group/window, group/window/group,
+window/group navigation/running-window and repeated date_bin map execution against PostgreSQL and an
+independent memory oracle after inserts, updates, deletes, NULLs and cold restart.
+Signed weighted unit histories separately test duplicate source occurrences,
+projection collisions, thresholds, quoted aliases and several retained stages.
+This is a prerequisite for explicit SQL sessions; CASE, timestamp-gap arithmetic
+and session merge/split qualification remain separate work.

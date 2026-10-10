@@ -9,8 +9,35 @@ use crate::{
     source::Contract,
 };
 use anyhow::{Context, Result, ensure};
+mod composition;
+struct Body {
+    expansion: Option<crate::compiler::parser::expansion::Series>,
+    targets: Vec<syntax::Target>,
+    groups: Vec<crate::compiler::parser::scalar::Key>,
+    predicate: Option<crate::compiler::syntax::Expr>,
+}
+#[derive(Clone, Copy)]
+struct Stage<'a> {
+    relation: &'a crate::source::Relation,
+    aggregate_base: usize,
+    scalar_scope: Option<usize>,
+}
 pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compiled> {
-    let scopes = [scope(parsed.source, contract)?];
+    let syntax::Parsed { source, expansion, targets, groups, predicate } = parsed;
+    let body = Body { expansion, targets, groups, predicate };
+    match source {
+        syntax::Source::Native(table) => bind_native(table, &body, contract),
+        syntax::Source::Derived { inner, alias } => {
+            composition::bind(*inner, &alias, &body, contract)
+        }
+    }
+}
+fn bind_native(
+    table: crate::compiler::parser::Table,
+    parsed: &Body,
+    contract: &Contract,
+) -> Result<Compiled> {
+    let scopes = [scope(table, contract)?];
     let native = |name: &crate::compiler::parser::Name| {
         let mut column = resolve(name, &scopes)?;
         column.name = field(0, &column.name);
@@ -20,14 +47,30 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
     let resolve = |name: &crate::compiler::parser::Name| {
         crate::compiler::expansion::resolve(name, parsed.expansion.as_ref(), native(name))
     };
-    let mut computed = Vec::new();
-    let group_keys = keys(parsed.groups, &resolve, &mut computed)?;
-    let mut state = Targets { mode: None, keys: group_keys.clone(), aggregates: Vec::new() };
-    let BoundTargets { columns, transforms } = bind_targets(
-        parsed.targets,
+    build(
+        parsed,
         &resolve,
+        Stage { relation: scopes[0].relation, aggregate_base: 0, scalar_scope: None },
+    )
+}
+fn build(
+    parsed: &Body,
+    resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
+    context: Stage<'_>,
+) -> Result<Compiled> {
+    let mut computed = Vec::new();
+    let group_keys = keys(parsed.groups.clone(), resolve, &mut computed, context.scalar_scope)?;
+    let mut state = Targets {
+        mode: None,
+        keys: group_keys.clone(),
+        aggregates: Vec::new(),
+        base: context.aggregate_base,
+    };
+    let BoundTargets { columns, transforms } = bind_targets(
+        parsed.targets.clone(),
+        resolve,
         &mut computed,
-        (&group_keys, scopes[0].relation),
+        (&group_keys, context.relation, context.scalar_scope),
         &mut state,
     )?;
     let projection = state.aggregates.is_empty() && group_keys.is_empty();
@@ -52,7 +95,7 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         mode: state.mode.unwrap_or(Mode::Grouped { keys: group_keys }),
         aggregates: state.aggregates,
     };
-    let relation = scopes[0].relation;
+    let relation = context.relation;
     let terminal = super::terminal(transforms, &columns)?;
     let output = crate::compiler::Projected {
         schema: relation.schema.clone(),
@@ -71,7 +114,7 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         nodes(state.keys, spec, computed)
     };
     attach_expansion(&mut nodes, parsed.expansion.as_ref())?;
-    let predicates = source_predicate(parsed.predicate, &resolve)?;
+    let predicates = source_predicate(parsed.predicate.clone(), resolve)?;
     let sources = vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }];
     let numeric = output.terminal.is_some();
     let revision = plan_revision(numeric, mapped, &nodes);
@@ -109,7 +152,7 @@ fn bind_targets(
     targets: Vec<syntax::Target>,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     computed: &mut Vec<crate::compiler::scalar::Computed>,
-    context: (&[ColumnRef], &crate::source::Relation),
+    context: (&[ColumnRef], &crate::source::Relation, Option<usize>),
     state: &mut Targets,
 ) -> Result<BoundTargets> {
     let mut columns = Vec::new();
@@ -118,9 +161,11 @@ fn bind_targets(
         let mut transform = crate::catalog::terminal::Transform::Identity;
         let column = match target.value {
             syntax::Value::Column(name) => resolve(&name)?,
-            syntax::Value::Bin(bin) => crate::compiler::scalar::bind(&bin, resolve, computed)?,
+            syntax::Value::Bin(bin) => {
+                crate::compiler::scalar::bind(&bin, resolve, computed, context.2)?
+            }
             syntax::Value::Aggregate(value) => {
-                let result = aggregate(value, resolve, context, state)?;
+                let result = aggregate(value, resolve, (context.0, context.1), state)?;
                 transform = result.1;
                 result.0
             }
@@ -183,13 +228,14 @@ fn keys(
     parsed: Vec<crate::compiler::parser::scalar::Key>,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     computed: &mut Vec<crate::compiler::scalar::Computed>,
+    scalar_scope: Option<usize>,
 ) -> Result<Vec<ColumnRef>> {
     parsed
         .into_iter()
         .map(|key| match key {
             crate::compiler::parser::scalar::Key::Column(name) => resolve(&name),
             crate::compiler::parser::scalar::Key::Bin(bin) => {
-                crate::compiler::scalar::bind(&bin, resolve, computed)
+                crate::compiler::scalar::bind(&bin, resolve, computed, scalar_scope)
             }
         })
         .collect()
@@ -228,6 +274,7 @@ fn revision(numeric: bool, mapped: bool) -> String {
 }
 
 struct Targets {
+    base: usize,
     mode: Option<Mode>,
     keys: Vec<ColumnRef>,
     aggregates: Vec<Aggregate>,
@@ -274,7 +321,7 @@ fn aggregate(
         (Function::Sum | Function::Lag | Function::Lead, 1700) => Transform::Numeric,
         _ => Transform::Identity,
     };
-    let name = format!("@aggregate_{}", state.aggregates.len());
+    let name = format!("@aggregate_{}", state.base + state.aggregates.len());
     let filter =
         value.filter.map(|expr| crate::compiler::expression::bind(expr, resolve)).transpose()?;
     let nullable = !value.function.ranking();

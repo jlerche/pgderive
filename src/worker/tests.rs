@@ -175,6 +175,7 @@ mod ranking;
 
 mod peer_frames;
 
+mod composition;
 mod derived;
 
 mod navigation;

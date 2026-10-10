@@ -17,17 +17,8 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
         relational.output.terminal.is_none(),
         "derived scope cannot consume sink-deferred expressions"
     );
-    let resolve = |name: &crate::compiler::parser::Name| -> Result<ColumnRef> {
-        let label = match name.0.as_slice() {
-            [label] => label,
-            [alias, label] if *alias == parsed.alias => label,
-            _ => anyhow::bail!("unknown derived qualifier"),
-        };
-        let mut candidates =
-            relational.output.columns.iter().filter(|column| column.label == *label);
-        let candidate = candidates.next().context("unknown derived column")?;
-        ensure!(candidates.next().is_none(), "ambiguous derived column");
-        Ok(candidate.column.clone())
+    let resolve = |name: &crate::compiler::parser::Name| {
+        resolve_output(name, &parsed.alias, &relational.output.columns)
     };
     let predicate = parsed
         .predicate
@@ -55,4 +46,20 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
     let revision = compiled.revision.as_mut().context("missing inner compiler revision")?;
     revision.push_str(suffix);
     Ok(compiled)
+}
+
+pub(super) fn resolve_output(
+    name: &crate::compiler::parser::Name,
+    alias: &str,
+    columns: &[OutputColumn],
+) -> Result<ColumnRef> {
+    let label = match name.0.as_slice() {
+        [label] => label,
+        [qualifier, label] if qualifier == alias => label,
+        _ => anyhow::bail!("unknown derived qualifier"),
+    };
+    let mut candidates = columns.iter().filter(|column| column.label == *label);
+    let candidate = candidates.next().context("unknown derived column")?;
+    ensure!(candidates.next().is_none(), "ambiguous derived column");
+    Ok(candidate.column.clone())
 }

@@ -1,6 +1,7 @@
 use super::{Name, column, node, optional};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
+#[derive(Clone)]
 pub(in crate::compiler) struct Bin {
     pub input: Name,
     pub stride: i64,
@@ -8,6 +9,7 @@ pub(in crate::compiler) struct Bin {
     pub oid: u32,
     pub shift: Option<(Name, i64)>,
 }
+#[derive(Clone)]
 pub(in crate::compiler) enum Key {
     Column(Name),
     Bin(Bin),

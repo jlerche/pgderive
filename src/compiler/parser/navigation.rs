@@ -3,6 +3,7 @@ use super::{Name, column};
 use crate::compiler::syntax::{self, Scalar};
 use anyhow::{Result, ensure};
 use pg_query::protobuf as pg;
+#[derive(Clone)]
 pub(in crate::compiler) struct Navigation {
     pub argument: Name,
     pub offset: Scalar,
