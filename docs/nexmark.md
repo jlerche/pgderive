@@ -87,11 +87,14 @@ with time descending then stable side-input identity descending. Ranking selects
 source events using their stable identity; afterward, visible full-tuple weights
 sum selected events rather than deduplicating coincident projected tuples.
 
-Eligible auction bids use [auction start,auction expiry). This is an explicit
-boundary adaptation from templates using inclusive BETWEEN. q6 counts only
-auctions with eligible non-NULL winning prices, and closure is clock >= expiry.
-Averages use PostgreSQL numeric division semantics; the current engine's i64
-SUM statistics are not sufficient to claim these queries.
+The named q4/q9 formulations retain the templates' inclusive auction-start and
+auction-expiry eligibility. This supersedes their earlier proposed half-open
+adaptation; it does not change fixed/hopping window membership. The separate q6
+closed-auction target uses [auction start,auction expiry), eligible non-NULL
+winning prices, and an explicit persisted clock with closure at clock >= expiry.
+Each boundary is part of the actual query SQL and durable identity. Averages use
+exact PostgreSQL numeric division; q4 qualifies the existing exact sufficient
+statistics and terminal numeric finalization, not arbitrary numeric SQL.
 
 ## Execution design
 
@@ -182,7 +185,41 @@ This establishes q15's stated formulation, not the remaining portfolio queries.
 
 Two-native-table inner equijoin projections can feed grouped and ordered derived
 stages. The qualified top-one fixture orders by price and both input primary keys,
-then filters row_number <= 1; its winners revise after either input changes. This
-provides part of the q4/q9 circuit shape, but their named auction eligibility and
-explicit persisted-clock closure SQL still need separate qualification. General
+then filters row_number <= 1; its winners revise after either input changes. Named q4/q9 eligibility and winner SQL are qualified below. Explicit
+persisted-clock closure remains a separate query formulation. General
 joins between grouped/ordered derived relations remain unsupported.
+
+## Executable q4 and q9 formulations
+
+[queries/nexmark/q4.sql](../queries/nexmark/q4.sql) joins native auction and bid
+inputs, checks recorded bid time against both inclusive auction boundaries,
+computes per-auction MAX(price), then exact PostgreSQL numeric AVG by integral
+category. NULL prices are ignored by MAX/AVG; a category containing only NULL
+auction maxima remains present with NULL average. It preserves Feldera's q4
+`BETWEEN` eligibility rather than changing the expiry endpoint to exclusive.
+
+[queries/nexmark/q9.sql](../queries/nexmark/q9.sql) emits one eligible bid and the
+complete auction/bid payload per auction, using PostgreSQL DESC NULLS FIRST price
+ordering and ascending bid time. An additional stable bid primary key and auction
+primary key explicitly settle otherwise equal ties. This makes the previously
+underspecified winner deterministic; it does not invent a hidden ordering. The
+named native columns use snake_case; bid has a stable `id` primary key in addition
+to Nexmark fields. Category is integral, prices and monetary payloads are bigint,
+and both input time columns use the same timestamp or timestamptz type.
+
+Four owned sequential fixtures execute these actual SQL files with both timestamp
+and timestamptz sources. PostgreSQL exact bags and independent nested-loop
+eligibility/max/winner/exact Decimal average recomputation agree through complete
+simultaneous inserts, updates and deletes, exact boundaries and adjacent
+microseconds, equal-price/time ties, extreme integral prices, NULL keys/times/
+prices/categories/payloads, infinite timestamps, rollback and cold same-slot
+restart. Changed eligibility or NULL ordering rejects incompatible state. The
+instant fixture includes differing UTC offsets across a DST transition; writer
+DateStyle and TimeZone do not replace recorded native time semantics.
+
+These are revisable relational MVs over recorded input. Neither SQL file contains
+NOW(), a watermark, processing-time expiry or automatic auction closure; an
+auction's winner changes when eligible source data changes. Any clock-gated
+closed-auction formulation must add an explicit persisted clock relation and be
+qualified as that different PostgreSQL query. These files do not establish all
+q0–q22 portfolio support or a throughput claim.
