@@ -23,6 +23,7 @@ pub(super) fn evaluate(
     match &spec.mode {
         Mode::Grouped { keys } => grouped(spec, bag, keys, work),
         Mode::Rows { order, frame } => rows(spec, bag, order, frame, (limits, work)),
+        Mode::Ranking { order } => ranks(spec, bag, order, (limits, work)),
     }
 }
 fn grouped(
@@ -105,6 +106,9 @@ fn aggregate_value(
             Ok(Some(i64::try_from(sum).context("SUM(int2/int4) overflow")?.to_string()))
         }
         Function::Min | Function::Max => Ok(extremum.map(|value| value.to_string())),
+        Function::Rank | Function::DenseRank | Function::RowNumber => {
+            anyhow::bail!("ranking requires ordered evaluator")
+        }
     }
 }
 fn ordered(
@@ -217,4 +221,37 @@ fn bounds(frame: &Frame, index: usize, length: usize) -> Result<(usize, usize)> 
     let start = frame.start.map_or(0, |offset| (index + offset).clamp(0, length));
     let end = frame.end.map_or(length, |offset| (index + offset + 1).clamp(0, length));
     Ok((usize::try_from(start)?, usize::try_from(end)?))
+}
+
+fn ranks(
+    spec: &Partition,
+    bag: &Bag,
+    order: &[Order],
+    context: (Limits, &mut crate::engine::dataflow::PartitionWork),
+) -> Result<Bag> {
+    let (limits, work) = context;
+    let ordered = ordered(bag, order, limits, work)?;
+    let mut updates = Consolidator::new(limits)?;
+    let mut rank = 1_i64;
+    let mut dense = 0_i64;
+    for (index, (keys, row)) in ordered.iter().enumerate() {
+        let position = i64::try_from(index)?.checked_add(1).context("ROW_NUMBER overflow")?;
+        if index == 0 || compare(keys, &ordered[index - 1].0, order) != Ordering::Equal {
+            rank = position;
+            dense = dense.checked_add(1).context("DENSE_RANK overflow")?;
+        }
+        let mut output = row.clone();
+        for function in &spec.aggregates {
+            work.charge(1)?;
+            let value = match function.function {
+                Function::Rank => rank,
+                Function::DenseRank => dense,
+                Function::RowNumber => position,
+                _ => anyhow::bail!("aggregate requires framed evaluator"),
+            };
+            output.insert(function.field.clone(), Some(value.to_string()));
+        }
+        updates.add(((), output), 1)?;
+    }
+    updates.finish_batch()
 }

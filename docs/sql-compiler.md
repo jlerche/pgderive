@@ -298,7 +298,7 @@ integer PRECEDING/FOLLOWING offsets and valid UNBOUNDED endpoints. The ordering
 must include every source primary-key column, explicitly in SQL, so positional
 frames have deterministic occurrence order. The compiler adds no hidden tiebreaker.
 RANGE, GROUPS, default frames, exclusions and named windows remain rejected;
-ranking/lag/lead and temporal expressions are subsequent slices. Windows preserve
+Peer ranking is described below; lag/lead and further temporal expressions remain subsequent slices. Windows preserve
 source rows and attach frame aggregates, whereas grouped aggregates replace each
 group with one row. Empty frames yield COUNT zero and other supported aggregates
 NULL, matching PostgreSQL. Source WHERE runs before partition/window evaluation.
@@ -427,8 +427,8 @@ The owned native harness checks snapshot/CDC/restart projection, timestamp group
 ordered windows and same-type joins against PostgreSQL and independent memory
 recomputation. It includes BC/min/max dates, infinities, NULLs, decimal precision,
 numeric special values, writer-session DateStyle/TimeZone changes and simultaneous
-join-input changes. This foundation does not yet claim hopping expansion,
-calendar-day truncation, ranking or temporal predecessor execution.
+join-input changes. This scalar foundation does not implement calendar-day truncation or temporal predecessor execution.
+Bounded hopping expansion and peer ranking are described separately below.
 
 
 ## Fixed-duration date_bin execution
@@ -532,3 +532,31 @@ independent datetime/full-bag oracle through inserts, updates, deletes, NULLs,
 infinities, pre-origin/DST instants, alias normalization and cold restart. Unit
 checks cover weighted membership, complete-tick cancellation and fanout failure
 without changed visibility. Bounds and these checks establish this subset only.
+
+## PostgreSQL peer and occurrence ranking
+
+Single-source ordered partitions now lower `rank()`, `dense_rank()` and
+`row_number()` into the existing durable affected-partition evaluator. They take
+no arguments, require OVER, and reject FILTER. This slice accepts the default
+window frame only and one shared partition/order specification; mixing ranking
+and framed aggregates requires subsequent window composition. Integral and native
+timestamp ORDER BY columns support ASC/DESC and PostgreSQL default or explicit
+NULL placement. PARTITION BY uses the existing native equality types.
+
+Peers compare only SQL ORDER BY values. RANK counts preceding row occurrences,
+including weighted multiplicities, and DENSE_RANK counts preceding peer groups.
+An empty ORDER BY makes the entire partition one peer group. ROW_NUMBER starts at
+one and requires SQL ORDER BY to include the complete native primary key; after
+series expansion it also requires the generated ordinal. No hidden tie-breaker is
+added. Repeated copies of the same full tuple receive successive row numbers and
+remain a bag of occurrences. Outputs are bigint with checked conversion.
+
+Complete source ticks revise old and new affected partitions and emit the
+snapshot difference. The runtime preserves full input identity, charges occurrence
+and output work against existing limits, and restores the same traces on restart.
+New plans bind `sql-peer-ranking-v1`; changing partitioning, ordering or function
+semantics requires fresh registration. Existing grouped/ROWS plan identity is
+unchanged. Independent weighted unit histories and three sequential owned worker
+fixtures compare inserts, updates, deletes, NULL peers, empty query ticks and cold
+restart against memory and PostgreSQL bags. A top-k predicate over these results
+still requires derived-query and post-window filter lowering.

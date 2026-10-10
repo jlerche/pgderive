@@ -134,7 +134,11 @@ pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
                     }
                     Some(format!("{sum}/{count}"))
                 }
-                Function::Min | Function::Max => {
+                Function::Min
+                | Function::Max
+                | Function::Rank
+                | Function::DenseRank
+                | Function::RowNumber => {
                     anyhow::bail!("nonlinear aggregate requires partition evaluator")
                 }
             };

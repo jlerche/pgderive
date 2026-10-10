@@ -36,7 +36,7 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
             || projection && (!computed.is_empty() || parsed.expansion.is_some()),
         "partition requires an aggregate"
     );
-    validate_occurrences(parsed.expansion.as_ref(), state.mode.as_ref())?;
+    validate_occurrences(parsed.expansion.as_ref(), &state)?;
     validate_keys(&state.keys)?;
     if state.mode.is_none() && !projection {
         ensure!(
@@ -132,10 +132,12 @@ fn bind_targets(
 }
 fn validate_occurrences(
     series: Option<&crate::compiler::parser::expansion::Series>,
-    mode: Option<&Mode>,
+    state: &Targets,
 ) -> Result<()> {
     if series.is_some()
-        && let Some(Mode::Rows { order, .. }) = mode
+        && let Some(Mode::Rows { order, .. } | Mode::Ranking { order }) = state.mode.as_ref()
+        && (matches!(state.mode, Some(Mode::Rows { .. }))
+            || state.aggregates.iter().any(|value| matches!(value.function, Function::RowNumber)))
     {
         ensure!(
             order.iter().any(|order| order.column.name == crate::compiler::expansion::FIELD),
@@ -198,6 +200,9 @@ fn plan_revision(numeric: bool, mapped: bool, nodes: &[Node]) -> String {
     if nodes.iter().any(|node| matches!(node, Node::Statistics { .. })) {
         revision.push_str(":exact-linear-statistics-v1");
     }
+    if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if matches!(spec.mode, Mode::Ranking { .. }))) {
+        revision.push_str(":sql-peer-ranking-v1");
+    }
     if nodes.iter().any(|node| matches!(node, Node::Expand { .. })) {
         revision.push_str(":bounded-series-expansion-v1:fixed-duration-offset-v1");
     }
@@ -230,7 +235,11 @@ fn aggregate(
     use crate::catalog::terminal::Transform;
     if let Some(window) = value.window {
         ensure!(context.0.is_empty(), "grouped window composition requires subquery lowering");
-        let (candidate, window_keys) = bind_window(window, resolve, context.1)?;
+        let (candidate, window_keys) = bind_window(
+            window,
+            resolve,
+            (context.1, matches!(value.function, Function::RowNumber)),
+        )?;
         if let Some(prior) = &state.mode {
             ensure!(
                 serde_json::to_vec(&(prior, &state.keys))?
@@ -253,7 +262,7 @@ fn aggregate(
     let name = format!("@aggregate_{}", state.aggregates.len());
     let filter =
         value.filter.map(|expr| crate::compiler::expression::bind(expr, resolve)).transpose()?;
-    let nullable = true;
+    let nullable = !value.function.ranking();
     state.aggregates.push(Aggregate {
         function: value.function,
         argument,
@@ -287,7 +296,7 @@ fn validate_order(order: &[Order], relation: &crate::source::Relation) -> Result
 }
 fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32> {
     match function {
-        Function::Count => Ok(20),
+        Function::Count | Function::Rank | Function::DenseRank | Function::RowNumber => Ok(20),
         Function::Sum => {
             ensure!(
                 argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
@@ -313,7 +322,7 @@ fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32>
 fn bind_window(
     window: syntax::Window,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
-    relation: &crate::source::Relation,
+    context: (&crate::source::Relation, bool),
 ) -> Result<(Mode, Vec<ColumnRef>)> {
     let keys = window.keys.iter().map(resolve).collect::<Result<Vec<_>>>()?;
     let order = window
@@ -323,8 +332,19 @@ fn bind_window(
             Ok(Order { column: resolve(&name)?, descending, nulls_first })
         })
         .collect::<Result<Vec<_>>>()?;
-    validate_order(&order, relation)?;
-    Ok((Mode::Rows { order, frame: window.frame }, keys))
+    if window.ranking {
+        ensure!(
+            order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
+            "ranking ordering requires integral or timestamp columns"
+        );
+        if context.1 {
+            validate_order(&order, context.0)?;
+        }
+        Ok((Mode::Ranking { order }, keys))
+    } else {
+        validate_order(&order, context.0)?;
+        Ok((Mode::Rows { order, frame: window.frame }, keys))
+    }
 }
 
 fn nodes(

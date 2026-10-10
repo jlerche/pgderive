@@ -8,6 +8,14 @@ pub enum Function {
     Average,
     Min,
     Max,
+    Rank,
+    DenseRank,
+    RowNumber,
+}
+impl Function {
+    pub(crate) const fn ranking(&self) -> bool {
+        matches!(self, Self::Rank | Self::DenseRank | Self::RowNumber)
+    }
 }
 #[derive(Clone, Serialize)]
 pub struct Aggregate {
@@ -32,6 +40,7 @@ pub struct Frame {
 pub enum Mode {
     Grouped { keys: Vec<ColumnRef> },
     Rows { order: Vec<Order>, frame: Frame },
+    Ranking { order: Vec<Order> },
 }
 #[derive(Clone, Serialize)]
 pub struct Partition {

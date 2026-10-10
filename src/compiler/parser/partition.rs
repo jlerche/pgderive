@@ -27,6 +27,7 @@ pub(in crate::compiler) struct Window {
     pub keys: Vec<Name>,
     pub order: Vec<(Name, bool, bool)>,
     pub frame: crate::compiler::partition::Frame,
+    pub ranking: bool,
 }
 pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
     let [source] = select.from_clause.as_slice() else {
@@ -99,6 +100,9 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         "avg" => Function::Average,
         "min" => Function::Min,
         "max" => Function::Max,
+        "rank" => Function::Rank,
+        "dense_rank" => Function::DenseRank,
+        "row_number" => Function::RowNumber,
         _ => anyhow::bail!("unsupported aggregate"),
     };
     ensure!(
@@ -109,7 +113,17 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
             && call.funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall),
         "unsupported aggregate modifier"
     );
-    let argument = if call.agg_star {
+    let ranking = function.ranking();
+    let argument = if ranking {
+        ensure!(
+            call.over.is_some()
+                && call.args.is_empty()
+                && !call.agg_star
+                && call.agg_filter.is_none(),
+            "ranking requires OVER, no arguments or FILTER"
+        );
+        None
+    } else if call.agg_star {
         ensure!(matches!(function, Function::Count) && call.args.is_empty(), "star requires COUNT");
         None
     } else {
@@ -122,11 +136,20 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         function,
         argument,
         filter: crate::compiler::syntax::predicate(call.agg_filter.as_deref())?,
-        window: call.over.as_deref().map(window).transpose()?,
+        window: call.over.as_deref().map(|value| window(value, ranking)).transpose()?,
     })
 }
-fn window(value: &pg::WindowDef) -> Result<Window> {
+fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
     ensure!(value.name.is_empty() && value.refname.is_empty(), "named windows unsupported");
+    if ranking {
+        ensure!(value.frame_options == 1058, "ranking currently requires the default frame");
+        return Ok(Window {
+            keys: value.partition_clause.iter().map(column).collect::<Result<_>>()?,
+            order: value.order_clause.iter().map(sort).collect::<Result<_>>()?,
+            frame: crate::compiler::partition::Frame { start: None, end: Some(0) },
+            ranking,
+        });
+    }
     // PostgreSQL 17 parsenodes.h: accept ROWS plus boundary flags; reject RANGE/GROUPS/exclusions.
     ensure!(
         value.frame_options & 4 != 0
@@ -140,7 +163,7 @@ fn window(value: &pg::WindowDef) -> Result<Window> {
     let start = bound(value.frame_options, value.start_offset.as_deref(), true)?;
     let end = bound(value.frame_options, value.end_offset.as_deref(), false)?;
 
-    Ok(Window { keys, order, frame: crate::compiler::partition::Frame { start, end } })
+    Ok(Window { keys, order, frame: crate::compiler::partition::Frame { start, end }, ranking })
 }
 fn sort(value: &Node) -> Result<(Name, bool, bool)> {
     let NodeEnum::SortBy(sort) = node(value)? else {
