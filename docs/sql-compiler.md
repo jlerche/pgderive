@@ -1006,3 +1006,22 @@ transactions, ticks with no relevant input changes, changed-query rejection,
 normalized aliases/remainder syntax, cold same-slot restart and final retraction.
 These queries add named portfolio evidence using existing runtime operators; no
 new expression semantics or compiler revision is introduced.
+
+
+### Named Nexmark q20 full-payload join
+
+`queries/nexmark/q20.sql` preserves Feldera q20's inner equijoin and category=10
+filter, using the native snake_case schema and explicit bid/auction timestamp and
+extra labels. All 16 projected payload values retain PostgreSQL native semantics;
+there is no auction-time eligibility or implicit closure condition in q20.
+
+Four sequential owned fixtures qualify timestamp/timestamptz, all three integral
+category widths and text/varchar payloads against PostgreSQL and an independent
+raw-source nested-loop Counter. Histories include NULL join keys/categories/
+payloads, timestamp infinities, Unicode, extreme bigint prices/reserves, projected
+duplicates, concurrent changes to both inputs, coordinated auction-key/bid-key
+moves, new/new insertion and simultaneous deletion, category transitions, rollback,
+DateStyle/time-zone changes in source writers, changed-filter/projection rejection,
+quoted alias normalization, cold restart and final retraction. This uses the
+existing synchronized-input join cross term and durable publication path; no new
+compiler revision or runtime operator is introduced.
