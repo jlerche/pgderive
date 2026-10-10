@@ -4,6 +4,7 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
+pub(super) mod lookup;
 pub(super) mod navigation;
 pub(super) mod partition;
 pub(super) mod scalar;
@@ -18,6 +19,7 @@ pub(super) struct Table {
 pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::Transform)>;
 pub(super) enum Parsed {
     Derived(derived::Derived),
+    Lookup(lookup::Parsed),
     Grouped(Grouped),
     Partition(partition::Parsed),
     JoinProjection {
@@ -121,6 +123,9 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
 }
 fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     validate_query(select)?;
+    if let Some(lookup) = lookup::parse(select)? {
+        return Ok(Parsed::Lookup(lookup));
+    }
     if let Some(derived) = derived::parse(select)? {
         return Ok(Parsed::Derived(derived));
     }
@@ -223,7 +228,18 @@ fn projection(targets: &[Node], from: &[Node], predicate: Option<&Node>) -> Resu
     let [source] = from else {
         anyhow::bail!("projection requires one source table");
     };
-    let columns = targets
+    let columns = projection_columns(targets)?;
+    let predicate = super::syntax::predicate(predicate)?;
+    if matches!(node(source)?, NodeEnum::JoinExpr(_)) {
+        let (left, right, keys) = join(source)?;
+        Ok(Parsed::JoinProjection { left, right, keys, columns, predicate })
+    } else {
+        Ok(Parsed::Projection { source: table(source)?, columns, predicate })
+    }
+}
+fn projection_columns(targets: &[Node]) -> Result<Columns> {
+    ensure!((1..=64).contains(&targets.len()), "projection requires 1..=64 columns");
+    targets
         .iter()
         .map(|value| {
             let (name, transform, default_label) = projection_target(target(value)?)?;
@@ -233,14 +249,7 @@ fn projection(targets: &[Node], from: &[Node], predicate: Option<&Node>) -> Resu
             let label = if value.name.is_empty() { default_label } else { value.name.clone() };
             Ok((name, label, transform))
         })
-        .collect::<Result<Vec<_>>>()?;
-    let predicate = super::syntax::predicate(predicate)?;
-    if matches!(node(source)?, NodeEnum::JoinExpr(_)) {
-        let (left, right, keys) = join(source)?;
-        Ok(Parsed::JoinProjection { left, right, keys, columns, predicate })
-    } else {
-        Ok(Parsed::Projection { source: table(source)?, columns, predicate })
-    }
+        .collect()
 }
 
 fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Transform, String)> {

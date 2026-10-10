@@ -592,7 +592,7 @@ RANGE execution or unbounded partition scale.
 The frontend supports aliased derived partition scopes with outer column
 projection and optional WHERE predicates using the existing typed three-valued
 subset. Scopes can nest within the existing parser size/token/depth budgets. The
-innermost query must be an existing single-native-source partition formulation;
+innermost query must be an existing native partition or predecessor formulation;
 outer grouping, LATERAL, column alias lists, stars and outer computed expressions
 remain rejected. Every scope resolves names only against its immediate inner
 output labels, with quoted identifiers and ambiguous duplicate labels handled
@@ -664,3 +664,77 @@ There is no clock, expiry or late-data exclusion. Weighted unit histories and fi
 sequential owned PostgreSQL/memory fixtures cover signed/NULL offsets, present
 NULLs, native type promotion and values, neighbor-changing updates/deletes, source
 filtering followed by outer rank filtering, projection collisions and cold restart.
+
+
+## Native left predecessor lookup
+
+The frontend accepts this PostgreSQL shape, with native column projections and
+an optional outer WHERE from the existing typed three-valued subset:
+
+```sql
+SELECT l.label, p.value
+FROM source.probes l
+LEFT JOIN LATERAL (
+  SELECT r.value
+  FROM source.history r
+  WHERE r.key = l.key AND r.event_time <= l.event_time
+  ORDER BY r.event_time DESC, r.id DESC
+  LIMIT 1
+) p ON true;
+```
+
+The two sources must be distinct native publication relations. One to eight
+ordinary equality keys must connect them; keys use the current compatible native
+bool/integral/UUID/temporal equality types. One `<` or `<=` bound must connect
+native integral columns or columns of the same timestamp/timestamptz type.
+Reversed comparisons normalize identically. ORDER BY starts with the right bound
+DESC and contains the complete right primary key for deterministic ties. Supported
+sort columns are native integral/temporal columns, with explicit ASC/DESC and
+NULL ordering. There is no hidden Rust tuple-order tie breaker.
+
+The inner local scope resolves unqualified names before the outer source scope.
+Outer names see only the left source and the lateral projection's exposed labels;
+the inner source alias and hidden right columns cannot leak out. Table qualifiers
+must be distinct. Quoted labels and ambiguous names are handled explicitly. Inner
+computed expressions, additional predicates, grouping, OFFSET, WITH TIES, alternate
+limits, join conditions other than ON true, self joins and other unsupported shapes
+fail before slot creation or durable registration. Pure derived projection/filter
+layers can consume native lookup results, subject to the existing terminal-value
+boundary.
+
+NULL keys and NULL bounds do not qualify a right row. An unmatched left occurrence
+is preserved with NULL right values. A selected right occurrence with a NULL value
+is still a match. LIMIT 1 selects one occurrence regardless of its positive bag
+weight; left multiplicity is preserved. This differs from the product-of-weights
+contract of Feldera's generic as-of operator. Outer WHERE executes after selection,
+so rejecting a selected right value never falls back to an older right value.
+Numeric output remains exact and uses the PostgreSQL terminal codec in publication.
+Native timestamp comparison includes BC values and infinities without calendar or
+timezone coercions.
+
+The explicit runtime bridge tags full source tuples, keys each input, and executes
+signed UNION ALL at one synchronized delta tick. The union arrangement retains both
+full input bags. A differentiated partition transformation evaluates prior and new
+lookup results only for affected keys. Thus late right inserts/updates/deletes
+revise existing left matches, and simultaneous input changes include their complete
+combined effect. Source primary-key validation remains separate from generic
+weighted identity. There is no watermark, expiration, clock or finalization rule.
+PUT, atomic PostgreSQL membership/result/progress COMMIT and slot ACK retain their
+existing ordering; source LSN remains distinct from logical time.
+
+This initial evaluator sorts right entries and scans them for each left entry in
+an affected key, with bounded work and storage budgets. It does not claim a specialized
+asymptotic predecessor index or arbitrary partition scale. Weighted histories cover
+right duplicates, projection collisions, absent full-tuple retractions, complete
+input changes, budget failure and cold restart. Five sequential owned PostgreSQL and
+independent memory fixtures cover native timestamp/timestamptz, strict bounds,
+post-selection filtering, composite equality keys, exact numeric values, source
+updates/deletes, rollback and restart. Plan identity binds the normalized lookup,
+LIMIT-one cardinality, native layout/codecs and `sql-predecessor-v1`; changed SQL
+cannot adopt incompatible registered state. Existing compiled plan encodings remain
+unchanged.
+
+References: [PostgreSQL lateral and left-join semantics](https://www.postgresql.org/docs/17/queries-table-expressions.html#QUERIES-LATERAL),
+[PostgreSQL LIMIT ordering](https://www.postgresql.org/docs/17/queries-limit.html),
+and the local Feldera `crates/dbsp/src/operator/asof_join.rs` and
+`crates/dbsp/src/operator/dynamic/asof_join.rs` implementations.

@@ -38,7 +38,22 @@ pub(in crate::worker) fn build(
     };
     for node in &ir.nodes {
         match node {
-            Node::Source { .. } => {}
+            Node::Source { .. } | Node::Union { .. } => {}
+            Node::LookupInput { id, spec, .. } => {
+                operators.projects.insert(id.clone(), Arc::new(super::lookup::input(spec)));
+            }
+            Node::Lookup { id, spec, .. } => {
+                let spec = spec.clone();
+                let limits = settings.limits;
+                operators.partitions.insert(
+                    id.clone(),
+                    Arc::new(crate::engine::dataflow::Partition::new(
+                        move |_: &Key, rows: &Batch<(), Row>, work| {
+                            super::lookup::evaluate(&spec, rows, limits, work)
+                        },
+                    )),
+                );
+            }
             Node::Expand { id, series, .. } => {
                 operators.expansions.insert(id.clone(), Arc::new(expand(series, compiled)));
             }
@@ -78,33 +93,33 @@ pub(in crate::worker) fn build(
                 );
             }
             Node::Project { id, .. } | Node::Output { id, .. } => {
-                let compiled = compiled.clone();
-                let filter = matches!(node, Node::Project { .. });
-                let output = ir.output.clone();
                 operators.projects.insert(
                     id.clone(),
-                    Arc::new(Project::new(move |_: &Key, row: &Row| {
-                        if filter && !compiled.qualifies((row, row))? {
-                            return Ok(None);
-                        }
-                        let selected = output
-                            .columns
-                            .iter()
-                            .map(|column| {
-                                let name = &column.column.name;
-                                Ok((
-                                    name.clone(),
-                                    row.get(name).context("missing output column")?.clone(),
-                                ))
-                            })
-                            .collect::<Result<Row>>()?;
-                        Ok(Some((Vec::new(), selected)))
-                    })),
+                    Arc::new(output(&ir.output, compiled, matches!(node, Node::Project { .. }))),
                 );
             }
         }
     }
     Query::new(plan(contract, compiled, ir)?, operators, settings)
+}
+
+fn output(output: &Projected, compiled: &Compiled, filter: bool) -> Project<Key, Row, Key, Row> {
+    let compiled = compiled.clone();
+    let output = output.clone();
+    Project::new(move |_: &Key, row: &Row| {
+        if filter && !compiled.qualifies((row, row))? {
+            return Ok(None);
+        }
+        let selected = output
+            .columns
+            .iter()
+            .map(|column| {
+                let name = &column.column.name;
+                Ok((name.clone(), row.get(name).context("missing output column")?.clone()))
+            })
+            .collect::<Result<Row>>()?;
+        Ok(Some((Vec::new(), selected)))
+    })
 }
 
 fn filter(predicate: &crate::compiler::Predicate) -> Project<Key, Row, Key, Row> {
@@ -200,14 +215,18 @@ pub(in crate::worker) fn plan(
                 | Node::Project { id, input }
                 | Node::Output { id, input }
                 | Node::PartitionBy { id, input, .. }
-                | Node::Finalize { id, input, .. } => {
+                | Node::Finalize { id, input, .. }
+                | Node::LookupInput { id, input, .. } => {
                     (id, plan::Kind::Project, vec![input.clone()])
+                }
+                Node::Union { id, left, right } => {
+                    (id, plan::Kind::Union, vec![left.clone(), right.clone()])
                 }
                 Node::Expand { id, input, .. } => (id, plan::Kind::Expand, vec![input.clone()]),
                 Node::Statistics { id, input, .. } => {
                     (id, plan::Kind::Statistics, vec![input.clone()])
                 }
-                Node::Partition { id, input, .. } => {
+                Node::Partition { id, input, .. } | Node::Lookup { id, input, .. } => {
                     (id, plan::Kind::Aggregate, vec![input.clone()])
                 }
                 Node::Join { id, left, right } => {
@@ -233,7 +252,7 @@ pub(in crate::worker) fn plan(
             maintained.insert(id.clone(), id.clone());
             maintained.insert(input.clone(), input.clone());
         }
-        if let Node::Partition { input, .. } = node {
+        if let Node::Partition { input, .. } | Node::Lookup { input, .. } = node {
             maintained.insert(input.clone(), input.clone());
         }
         if let Node::Join { left, right, .. } = node {

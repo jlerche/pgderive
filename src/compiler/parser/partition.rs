@@ -201,7 +201,7 @@ pub(super) fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
         peers,
     })
 }
-fn sort(value: &Node) -> Result<(Name, bool, bool)> {
+pub(super) fn sort(value: &Node) -> Result<(Name, bool, bool)> {
     let NodeEnum::SortBy(sort) = node(value)? else {
         anyhow::bail!("invalid window order");
     };

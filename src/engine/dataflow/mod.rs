@@ -14,6 +14,7 @@ mod runtime;
 mod statistics;
 mod stream;
 mod sum;
+mod union;
 use super::{
     Batch,
     reader::{BatchData, ObjectBatch},
@@ -33,6 +34,7 @@ pub use statistics::Statistics;
 use std::sync::Arc;
 pub use stream::{CircuitInputs, Output, Stream};
 pub use sum::{GroupSum, SumDelta, SumState};
+pub use union::Union;
 
 type Grouper<K, L, R, G> = dyn Fn(&K, &L, &R) -> Result<Option<G>> + Send + Sync;
 
@@ -219,3 +221,7 @@ mod circuit_tests;
 #[cfg(test)]
 #[path = "tests/join_probes.rs"]
 mod join_probe_tests;
+
+#[cfg(test)]
+#[path = "tests/union.rs"]
+mod union_tests;

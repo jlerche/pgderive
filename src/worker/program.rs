@@ -1,3 +1,4 @@
+mod lookup;
 mod navigation;
 mod partition;
 pub(super) mod projected;

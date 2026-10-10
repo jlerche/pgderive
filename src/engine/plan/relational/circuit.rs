@@ -3,7 +3,7 @@ use crate::{
     catalog::Protection,
     engine::{
         Batch,
-        dataflow::{Circuit, CircuitBuilder, Join, NodeOutput, Stream, TimedBatch},
+        dataflow::{Circuit, CircuitBuilder, Join, NodeOutput, Stream, TimedBatch, Union},
         plan::{Kind, Node, Plan},
         reader::BatchData,
     },
@@ -58,7 +58,7 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
     ensure!(maintained.contains(&definition.outputs[0]), "missing relational output state");
     for node in &definition.nodes {
         match node.kind {
-            Kind::Source => {}
+            Kind::Source | Kind::Union => {}
             Kind::Expand => {
                 expansions.insert(node.id.clone());
             }
@@ -113,6 +113,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                 Kind::Expand => self.expand(&mut builder, node, &edges, protection)?,
                 Kind::Project => self.project(&mut builder, node, &edges, protection)?,
                 Kind::Join => self.join(&mut builder, node, &edges, protection)?,
+                Kind::Union => self.union(&mut builder, node, &edges, protection)?,
                 Kind::Statistics => self.statistics(&mut builder, node, &edges, protection)?,
                 Kind::Aggregate => self.partition(&mut builder, node, &edges, protection)?,
             };
@@ -121,6 +122,26 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         let output =
             edges.get(&self.plan.definition().outputs[0]).context("missing output edge")?;
         Ok(Built { circuit: builder.build(output.output())?, sources })
+    }
+    fn union(
+        &self,
+        builder: &mut Builder<K, V>,
+        node: &Node,
+        edges: &BTreeMap<String, Edge<K, V>>,
+        protection: Option<&Protection>,
+    ) -> Result<Edge<K, V>> {
+        let execution = Arc::new(self.scoped(protection)?);
+        let id = node.id.clone();
+        let left = edges.get(&node.inputs[0]).context("missing union left edge")?;
+        let right = edges.get(&node.inputs[1]).context("missing union right edge")?;
+        builder.binary(&node.id, (left, right), move |context, input| {
+            let execution = execution.clone();
+            let id = id.clone();
+            async move {
+                let delta = Union.evaluate(&input, execution.limits)?;
+                execution.stage(&id, &context.prior, delta).await
+            }
+        })
     }
     fn expand(
         &self,

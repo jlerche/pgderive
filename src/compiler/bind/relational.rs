@@ -40,7 +40,10 @@ pub(super) fn bind(
     };
     Ok(Compiled { program: crate::compiler::Program::Relational { relational: Relational { sources, nodes, output } }, predicates, revision: Some("sql-relational-v1:pg-query-6.2.1:pg-17.7:row-text-v1:json-v2:raw-record-v1:native-bag-v1:where-3vl-v1:integral-remainder-v1:terminal-builtins-v1".into()) })
 }
-fn keys_for(keys: &(Name, Name), scopes: &[super::Scope<'_>; 2]) -> Result<(ColumnRef, ColumnRef)> {
+pub(super) fn keys_for(
+    keys: &(Name, Name),
+    scopes: &[super::Scope<'_>; 2],
+) -> Result<(ColumnRef, ColumnRef)> {
     let left = resolve(&keys.0, scopes)?;
     let right = resolve(&keys.1, scopes)?;
     ensure!(left.right != right.right, "SQL type: join must connect both inputs");
@@ -64,13 +67,13 @@ fn keys_for(keys: &(Name, Name), scopes: &[super::Scope<'_>; 2]) -> Result<(Colu
     );
     Ok((left, right))
 }
-fn qualify(mut column: ColumnRef) -> ColumnRef {
+pub(super) fn qualify(mut column: ColumnRef) -> ColumnRef {
     column.name = crate::compiler::relational::field(usize::from(column.right), &column.name);
     column.right = false;
     column
 }
 type Output = (Vec<crate::compiler::projection::OutputColumn>, Option<crate::catalog::Terminal>);
-fn output(
+pub(super) fn output(
     columns: crate::compiler::parser::Columns,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
 ) -> Result<Output> {

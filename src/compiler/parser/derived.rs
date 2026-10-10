@@ -28,7 +28,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
     };
     let inner = query(inner)?;
     ensure!(
-        matches!(inner, Parsed::Partition(_) | Parsed::Derived(_)),
+        matches!(inner, Parsed::Partition(_) | Parsed::Derived(_) | Parsed::Lookup(_)),
         "derived query requires a native partition query or derived scope"
     );
     ensure!(

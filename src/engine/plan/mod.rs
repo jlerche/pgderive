@@ -15,6 +15,8 @@ pub enum Kind {
     Expand,
     /// Inner equijoin of two edges.
     Join,
+    /// Signed UNION ALL of two identically typed delta edges.
+    Union,
     /// Grouped COUNT/SUM statistics from one edge.
     Aggregate,
     /// Exact linear sufficient statistics retained per group.
@@ -154,7 +156,7 @@ fn validate_nodes(nodes: &[Node], sources: &BTreeMap<String, String>) -> Result<
             !node.id.is_empty() && !node.schema.is_empty() && !visited.contains(&node.id),
             "invalid node registration"
         );
-        let arity = if node.kind == Kind::Join { 2 } else { 1 };
+        let arity = if matches!(node.kind, Kind::Join | Kind::Union) { 2 } else { 1 };
         ensure!(node.inputs.len() == arity, "wrong operator arity");
         if node.kind == Kind::Source {
             ensure!(

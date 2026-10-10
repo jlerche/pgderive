@@ -166,7 +166,7 @@ fn ordered(
     rows.sort_by(|left, right| compare(&left.0, &right.0, order));
     Ok(rows)
 }
-fn compare(left: &[Option<i64>], right: &[Option<i64>], order: &[Order]) -> Ordering {
+pub(super) fn compare(left: &[Option<i64>], right: &[Option<i64>], order: &[Order]) -> Ordering {
     for ((left, right), spec) in left.iter().zip(right).zip(order) {
         let comparison = match (left, right) {
             (None, None) => Ordering::Equal,
