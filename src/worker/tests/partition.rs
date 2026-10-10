@@ -312,3 +312,120 @@ fn native_timestamp_resolution_normalizes_offsets_and_rejects_cross_type_casts()
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn compiled_date_bins_retract_groups_and_preserve_nulls_across_restart() -> Result<()> {
+    let mut native = contract();
+    native.relations[1].columns.push(crate::source::Column {
+        position: 4,
+        name: "event_time".into(),
+        oid: 1184,
+        modifier: -1,
+        nullable: true,
+        primary: false,
+        collation: 0,
+    });
+    let bin = "date_bin('10 seconds',b.event_time,TIMESTAMPTZ '2000-01-01 00:00:00+00')";
+    let sql = format!("SELECT {bin} AS bucket,COUNT(*) AS n FROM source.bid b GROUP BY {bin}");
+    let compiled = compile(&sql, &native)?;
+    let equivalent =
+        compile(&sql.replace("'10 seconds'", "INTERVAL '0.000001 milliseconds'"), &native);
+    assert!(equivalent.is_err()); // fractional interval has sub-microsecond precision
+    let equivalent =
+        compile(&sql.replace("'10 seconds'", "INTERVAL '10000 milliseconds'"), &native)?;
+    assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&equivalent)?);
+    let ir = compiled.relational().context("missing date bin IR")?;
+    let field = ir.output.columns[0].column.name.clone();
+    let options = settings();
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let a = row(&[
+        ("id", Some("1")),
+        ("auction", Some("1")),
+        ("price", Some("1")),
+        ("event_time", Some("1999-12-31 23:59:59.999999+00")),
+    ]);
+    let b =
+        row(&[("id", Some("2")), ("auction", Some("1")), ("price", None), ("event_time", None)]);
+    let moved = row(&[
+        ("id", Some("1")),
+        ("auction", Some("1")),
+        ("price", Some("1")),
+        ("event_time", Some("2000-01-01 00:00:10+00")),
+    ]);
+    let output = |key: Option<&str>, count: i64| -> Row {
+        [(field.clone(), key.map(str::to_owned)), ("@aggregate_0".into(), Some(count.to_string()))]
+            .into()
+    };
+    let changes = batch(vec![("bid", a.clone(), 1), ("bid", b.clone(), 1)]);
+    let candidate = query.prepare(relational::inputs(&changes, ir, 1)?).await?;
+    let before = output(Some("1999-12-31 23:59:50+00"), 1);
+    let null = output(None, 1);
+    assert_eq!(
+        candidate.output().batch,
+        Batch::from_updates([((Vec::new(), before.clone()), 1), ((Vec::new(), null.clone()), 1)])?
+    );
+    query.commit(candidate)?;
+    let checkpoint = query.checkpoint()?;
+    query = relational::build(&native, &compiled, &options)?;
+    query.restore_checkpoint(checkpoint).await?;
+    let changes = batch(vec![("bid", a, -1), ("bid", moved, 1), ("bid", b, -1)]);
+    let candidate = query.prepare(relational::inputs(&changes, ir, 2)?).await?;
+    assert_eq!(
+        candidate.output().batch,
+        Batch::from_updates([
+            ((Vec::new(), before), -1),
+            ((Vec::new(), null), -1),
+            ((Vec::new(), output(Some("2000-01-01 00:00:10+00"), 1)), 1)
+        ])?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn date_bin_rejects_unqualified_semantics_and_filters_before_errors() -> Result<()> {
+    let mut native = contract();
+    native.relations[1].columns.push(crate::source::Column {
+        position: 4,
+        name: "event_time".into(),
+        oid: 1184,
+        modifier: -1,
+        nullable: true,
+        primary: false,
+        collation: 0,
+    });
+    let bin = "date_bin('10 seconds',b.event_time,TIMESTAMPTZ '2000-01-01 00:00:00+00')";
+    let grouped = format!("SELECT {bin} AS bucket,COUNT(*) FROM source.bid b GROUP BY {bin}");
+    for sql in [
+        grouped.replacen("10 seconds", "20 seconds", 1),
+        grouped.replace("10 seconds", "0 seconds"),
+        grouped.replace("10 seconds", "-1 seconds"),
+        grouped.replace("10 seconds", "1 month"),
+        grouped.replace("10 seconds", "1 secondss"),
+        grouped.replace("10 seconds", "infinity"),
+        grouped.replace("10 seconds", "9223372036854775808 microseconds"),
+        grouped.replace("TIMESTAMPTZ", "TIMESTAMP").replace("00:00:00+00", "00:00:00"),
+        grouped.replace("TIMESTAMPTZ '2000-01-01 00:00:00+00'", "'2000-01-01 00:00:00+00'"),
+        grouped.replace("2000-01-01 00:00:00+00", "infinity"),
+        grouped.replace("2000-01-01 00:00:00+00", "now"),
+        grouped.replace("b.event_time", "NULL"),
+    ] {
+        assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
+    let sql = format!("SELECT {bin} FROM source.bid b WHERE b.id<0")
+        .replace("2000-01-01 00:00:00+00", "4714-11-24 00:00:00+00 BC");
+    let compiled = compile(&sql, &native)?;
+    let ir = compiled.relational().context("missing map IR")?;
+    let mut query = relational::build(&native, &compiled, &settings())?;
+    let input = row(&[
+        ("id", Some("1")),
+        ("auction", Some("1")),
+        ("price", Some("1")),
+        ("event_time", Some("294276-12-31 23:59:59.999999+00")),
+    ]);
+    let delta = batch(vec![("bid", input, 1)]);
+    let candidate = query.prepare(relational::inputs(&delta, ir, 1)?).await?;
+    assert_eq!(candidate.output().batch.iter().count(), 0);
+    query.commit(candidate)?;
+    assert_eq!(query.time(), 1);
+    Ok(())
+}

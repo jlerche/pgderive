@@ -4,11 +4,12 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) struct Parsed {
     pub source: Table,
     pub targets: Vec<Target>,
-    pub groups: Vec<Name>,
+    pub groups: Vec<super::scalar::Key>,
     pub predicate: Option<crate::compiler::syntax::Expr>,
 }
 pub(in crate::compiler) enum Value {
     Column(Name),
+    Bin(super::scalar::Bin),
     Aggregate(Aggregate),
 }
 pub(in crate::compiler) struct Target {
@@ -35,16 +36,19 @@ pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
     }
     Ok(!select.group_clause.is_empty()
         || select.target_list.iter().any(|target_node| {
-            target(target_node).ok().and_then(|value| node(value).ok()).is_some_and(
-                |value| matches!(value, NodeEnum::FuncCall(call) if call.over.is_some()),
-            )
+            target(target_node)
+                .ok()
+                .is_some_and(|value| super::scalar::is_bin(value).unwrap_or(false))
+                || target(target_node).ok().and_then(|value| node(value).ok()).is_some_and(
+                    |value| matches!(value, NodeEnum::FuncCall(call) if call.over.is_some()),
+                )
         }))
 }
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
     ensure!((1..=64).contains(&select.target_list.len()), "partition output count unsupported");
     let source = super::table(select.from_clause.first().context("missing source")?)?;
     let targets = select.target_list.iter().map(parse_target).collect::<Result<_>>()?;
-    let groups = select.group_clause.iter().map(column).collect::<Result<_>>()?;
+    let groups = select.group_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
     Ok(Parsed {
         source,
         targets,
@@ -58,7 +62,12 @@ fn parse_target(value: &Node) -> Result<Target> {
     };
     ensure!(output.indirection.is_empty(), "output indirection unsupported");
     let expression = target(value)?;
-    let (value, label) = if let NodeEnum::FuncCall(call) = node(expression)? {
+    let (value, label) = if super::scalar::is_bin(expression)? {
+        let super::scalar::Key::Bin(bin) = super::scalar::key(expression)? else {
+            anyhow::bail!("invalid date_bin target");
+        };
+        (Value::Bin(bin), "date_bin".into())
+    } else if let NodeEnum::FuncCall(call) = node(expression)? {
         let name = super::expressions::names(&call.funcname)?.0;
         let function = match name.as_slice() {
             [name] => name,

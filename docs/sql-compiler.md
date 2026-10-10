@@ -426,5 +426,35 @@ The owned native harness checks snapshot/CDC/restart projection, timestamp group
 ordered windows and same-type joins against PostgreSQL and independent memory
 recomputation. It includes BC/min/max dates, infinities, NULLs, decimal precision,
 numeric special values, writer-session DateStyle/TimeZone changes and simultaneous
-join-input changes. This foundation does not yet claim date_bin, hopping expansion,
+join-input changes. This foundation does not yet claim hopping expansion,
 calendar-day truncation, ranking or temporal predecessor execution.
+
+
+## Fixed-duration date_bin execution
+
+Single-source projection and GROUP BY can evaluate `date_bin(stride, column,
+origin)`. The compiler resolves and type-checks a pure scalar map node before
+partition state; the runtime evaluates that node on signed full-row contributions.
+WHERE runs first, preserving errors only for qualifying input rows. Identical
+expressions share a computed field, and grouped outputs must match a grouping
+expression. Scalar semantics and the map/date-bin revision bind durable identity.
+
+The input is a native timestamp or timestamptz column. Origin must be an explicit
+constant of the same timestamp type in the supported canonical ISO form;
+timestamptz origins require a numeric offset or Z. Stride is an interval constant
+(or unknown string) containing one positive decimal quantity and a unit from
+microseconds through days, with at most six fractional digits and an exact integral
+microsecond result. Months, years, mixed-unit intervals, type modifiers and implicit
+cross-type conversions are rejected before registration.
+
+Execution uses PostgreSQL's checked microsecond arithmetic, including flooring
+before the origin, finite range errors and infinite inputs. Strict NULL inputs
+produce NULL, and GROUP BY retains that NULL group. A timestamptz day stride is
+exactly 86,400 seconds; it is not a local calendar day across daylight-saving
+transitions. Nothing expires because time passes. The materialized weighted bag
+matches this explicit SQL over the current source snapshot.
+
+The common gate compares both timestamp overloads and projection collisions with
+PostgreSQL and an independent datetime oracle through updates, deletes, NULLs,
+infinities and cold restart. Unit checks cover pre-origin arithmetic, range errors,
+normalized intervals, unsupported expressions and filtering before scalar errors.

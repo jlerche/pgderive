@@ -29,6 +29,27 @@ impl Timestamp {
         ensure!((MIN..END).contains(&micros), "timestamp out of PostgreSQL range");
         Ok(Self(micros))
     }
+    pub(crate) fn bin(self, stride: i64, origin: Self) -> Result<Self> {
+        if matches!(self.0, i64::MIN | i64::MAX) {
+            return Ok(self);
+        }
+        ensure!(
+            stride > 0 && !matches!(origin.0, i64::MIN | i64::MAX),
+            "invalid date_bin stride/origin"
+        );
+        let difference = self.0.checked_sub(origin.0).context("date_bin interval out of range")?;
+        let remainder = difference % stride;
+        let delta = difference - remainder;
+        let mut result = origin.0.checked_add(delta).context("date_bin timestamp out of range")?;
+        if remainder < 0 {
+            result = result.checked_sub(stride).context("date_bin timestamp out of range")?;
+        }
+        ensure!((MIN..END).contains(&result), "date_bin timestamp out of range");
+        Ok(Self(result))
+    }
+    pub(crate) fn text(self, oid: u32) -> Result<String> {
+        Ok(self.json(oid)?.replacen('T', " ", 1).replace("+00:00", "+00"))
+    }
     pub(crate) const fn sort_value(self) -> i64 {
         self.0
     }

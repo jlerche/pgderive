@@ -35,6 +35,7 @@ def encoded(text, timezone=False):
 
 
 class NativeFixture(SqlFixture):
+    evidence = {"timestamp_range":"BC through 294276, infinities", "numeric":"exact and special values"}
     def __init__(self, output, mode):
         super().__init__(output, False)
         self.pg.insert(1, '-q')
@@ -109,8 +110,8 @@ class NativeFixture(SqlFixture):
         assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
 
 
-def qualify(output, command, mode):
-    fixture = NativeFixture(output, mode)
+def qualify(output, command, mode, fixture_class=NativeFixture):
+    fixture = fixture_class(output, mode)
     try:
         fixture.rejected(command,'unsupported',fixture.query + ' ORDER BY id')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
@@ -132,7 +133,7 @@ def qualify(output, command, mode):
             fixture.verify()
         worker.abort()
         prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed',fixture.query.replace('AS instant','AS changed').replace('AS local','AS changed'))
+        fixture.rejected(command,'changed',fixture.query.replace(' AS '+fixture.labels[0],' AS changed',1))
         assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
         fixture.query = fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"')
         resumed = fixture.start(command,'resumed',maximum=1)
@@ -143,7 +144,7 @@ def qualify(output, command, mode):
         resumed.event('published')
         resumed.finish()
         fixture.verify()
-        (output/'result.json').write_text(json.dumps({'mode':mode,'sql_oracle':'exact bag','memory_oracle':'native scalar/partition recomputation','timestamp_range':'BC through 294276, infinities','restart':'cold','numeric':'exact and special values'})+'\n')
+        (output/'result.json').write_text(json.dumps({'mode':mode,'sql_oracle':'exact bag','memory_oracle':'native scalar/partition recomputation','restart':'cold',**fixture.evidence})+'\n')
         fixture.cleanup()
     except BaseException:
         fixture.preserve()

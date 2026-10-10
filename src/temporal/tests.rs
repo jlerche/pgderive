@@ -54,3 +54,27 @@ fn invalid_or_context_dependent_timestamp_inputs_fail() {
     }
     assert!(Timestamp(0).json(20).is_err());
 }
+
+#[test]
+fn bins_match_independent_floor_and_postgres_checked_boundaries() -> Result<()> {
+    for stride in [1, 10, 1_000_000, 10_000_000, super::DAY] {
+        for origin in [-1, 0, 7] {
+            for value in [-10_000_001, -10_000_000, -1, 0, 1, 10_000_000] {
+                let expected = i128::from(origin)
+                    + (i128::from(value) - i128::from(origin)).div_euclid(i128::from(stride))
+                        * i128::from(stride);
+                assert_eq!(
+                    Timestamp(value).bin(stride, Timestamp(origin))?.sort_value(),
+                    i64::try_from(expected)?
+                );
+            }
+        }
+    }
+    assert!(Timestamp(super::END - 1).bin(1, Timestamp(super::MIN)).is_err());
+    assert!(Timestamp(super::MIN).bin(super::DAY, Timestamp(1)).is_err());
+    assert!(Timestamp(0).bin(0, Timestamp(0)).is_err());
+    assert!(Timestamp(0).bin(1, Timestamp(i64::MAX)).is_err());
+    assert_eq!(Timestamp(i64::MAX).bin(10, Timestamp(0))?, Timestamp(i64::MAX));
+    assert_eq!(Timestamp(i64::MIN).bin(10, Timestamp(0))?, Timestamp(i64::MIN));
+    Ok(())
+}

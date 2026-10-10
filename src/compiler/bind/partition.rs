@@ -16,7 +16,8 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         column.name = field(0, &column.name);
         Ok(column)
     };
-    let group_keys = parsed.groups.iter().map(&resolve).collect::<Result<Vec<_>>>()?;
+    let mut computed = Vec::new();
+    let group_keys = keys(parsed.groups, &resolve, &mut computed)?;
     let mut state = Targets { mode: None, keys: group_keys.clone(), aggregates: Vec::new() };
     let mut columns = Vec::new();
     let mut transforms = Vec::new();
@@ -24,6 +25,9 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         let mut transform = crate::catalog::terminal::Transform::Identity;
         let column = match target.value {
             syntax::Value::Column(name) => resolve(&name)?,
+            syntax::Value::Bin(bin) => {
+                crate::compiler::scalar::bind(&bin, &resolve, &mut computed)?
+            }
             syntax::Value::Aggregate(value) => {
                 let result =
                     aggregate(value, &resolve, (&group_keys, scopes[0].relation), &mut state)?;
@@ -34,14 +38,19 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         transforms.push(transform);
         columns.push(OutputColumn { column, label: target.label });
     }
-    ensure!(!state.aggregates.is_empty(), "partition requires an aggregate");
+    let projection = state.aggregates.is_empty() && group_keys.is_empty();
+    ensure!(
+        !state.aggregates.is_empty() || projection && !computed.is_empty(),
+        "partition requires an aggregate"
+    );
     validate_keys(&state.keys)?;
-    if state.mode.is_none() {
+    if state.mode.is_none() && !projection {
         ensure!(
-            columns
+            columns.iter().all(|output| state
+                .aggregates
                 .iter()
-                .all(|output| output.column.name.starts_with('@')
-                    || group_keys.contains(&output.column)),
+                .any(|aggregate| aggregate.field == output.column.name)
+                || group_keys.contains(&output.column)),
             "output column must appear in GROUP BY"
         );
     }
@@ -57,26 +66,60 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         columns,
         terminal,
     };
-    let nodes = nodes(state.keys, spec);
+    let mapped = !computed.is_empty();
+    let nodes = if projection {
+        vec![
+            Node::Source { id: "source".into(), source: 0 },
+            Node::Map { id: "mapped".into(), input: "source".into(), computed },
+            Node::Output { id: "project".into(), input: "mapped".into() },
+        ]
+    } else {
+        nodes(state.keys, spec, computed)
+    };
     let predicates = parsed
         .predicate
         .map(|expr| crate::compiler::expression::bind(expr, &resolve))
         .transpose()?;
     let sources = vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }];
     let numeric = output.terminal.is_some();
-    let revision = if numeric {
-        "sql-partition-v2:pg-query-6.2.1:pg-17.7:row-text-v1:json-exact-number-v1:native-bag-v1:affected-partition-v1:integer-numeric-aggregate-v1:rows-frame-v1"
-    } else {
-        "sql-partition-v1:pg-query-6.2.1:pg-17.7:row-text-v1:json-v2:native-bag-v1:affected-partition-v1:integral-aggregate-v1:rows-frame-v1"
-    };
+    let revision = revision(numeric, mapped);
     Ok(Compiled {
         program: crate::compiler::Program::Relational {
             relational: Relational { sources, nodes, output },
         },
         predicates,
-        revision: Some(revision.into()),
+        revision: Some(revision),
     })
 }
+fn keys(
+    parsed: Vec<crate::compiler::parser::scalar::Key>,
+    resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
+    computed: &mut Vec<crate::compiler::scalar::Computed>,
+) -> Result<Vec<ColumnRef>> {
+    parsed
+        .into_iter()
+        .map(|key| match key {
+            crate::compiler::parser::scalar::Key::Column(name) => resolve(&name),
+            crate::compiler::parser::scalar::Key::Bin(bin) => {
+                crate::compiler::scalar::bind(&bin, resolve, computed)
+            }
+        })
+        .collect()
+}
+
+fn revision(numeric: bool, mapped: bool) -> String {
+    let base = if numeric {
+        "sql-partition-v2:pg-query-6.2.1:pg-17.7:row-text-v1:json-exact-number-v1:native-bag-v1:affected-partition-v1:integer-numeric-aggregate-v1:rows-frame-v1"
+    } else {
+        "sql-partition-v1:pg-query-6.2.1:pg-17.7:row-text-v1:json-v2:native-bag-v1:affected-partition-v1:integral-aggregate-v1:rows-frame-v1"
+    };
+    if mapped {
+        format!("{base}:native-scalar-map-v1:date-bin-microseconds-v1")
+    } else {
+        base.into()
+    }
+}
+
 struct Targets {
     mode: Option<Mode>,
     keys: Vec<ColumnRef>,
@@ -188,11 +231,24 @@ fn bind_window(
     Ok((Mode::Rows { order, frame: window.frame }, keys))
 }
 
-fn nodes(keys: Vec<ColumnRef>, spec: Partition) -> Vec<Node> {
-    vec![
+fn nodes(
+    keys: Vec<ColumnRef>,
+    spec: Partition,
+    computed: Vec<crate::compiler::scalar::Computed>,
+) -> Vec<Node> {
+    let mapped = !computed.is_empty();
+    let mut nodes = vec![
         Node::Source { id: "source".into(), source: 0 },
-        Node::PartitionBy { id: "partition_input".into(), input: "source".into(), keys },
+        Node::PartitionBy {
+            id: "partition_input".into(),
+            input: if mapped { "mapped" } else { "source" }.into(),
+            keys,
+        },
         Node::Partition { id: "partition".into(), input: "partition_input".into(), spec },
         Node::Output { id: "project".into(), input: "partition".into() },
-    ]
+    ];
+    if mapped {
+        nodes.insert(1, Node::Map { id: "mapped".into(), input: "source".into(), computed });
+    }
+    nodes
 }

@@ -3,6 +3,7 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 
 pub(super) mod expressions;
 pub(super) mod partition;
+pub(super) mod scalar;
 use expressions::{aggregate, column, node, optional, target};
 
 #[derive(Clone)]

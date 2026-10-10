@@ -7,6 +7,7 @@ pub(crate) mod partition;
 mod projection;
 pub(crate) mod relational;
 pub(crate) use projection::{Cell, Projected};
+pub(crate) mod scalar;
 mod syntax;
 use crate::{source::Contract, worker::Query};
 use anyhow::Result;

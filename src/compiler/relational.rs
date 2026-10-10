@@ -9,6 +9,7 @@ pub struct Source {
 #[derive(Clone, Serialize)]
 pub enum Node {
     Source { id: String, source: usize },
+    Map { id: String, input: String, computed: Vec<super::scalar::Computed> },
     KeyBy { id: String, input: String, key: ColumnRef },
     Join { id: String, left: String, right: String },
     Project { id: String, input: String },

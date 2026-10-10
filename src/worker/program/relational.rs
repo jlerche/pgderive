@@ -37,18 +37,11 @@ pub(in crate::worker) fn build(
     for node in &ir.nodes {
         match node {
             Node::Source { .. } => {}
+            Node::Map { id, computed, .. } => {
+                operators.projects.insert(id.clone(), Arc::new(map(computed, compiled)));
+            }
             Node::KeyBy { id, key, .. } => {
-                let name = key.name.clone();
-                operators.projects.insert(
-                    id.clone(),
-                    Arc::new(Project::new(move |_: &Key, row: &Row| {
-                        Ok(row
-                            .get(&name)
-                            .context("missing join column")?
-                            .as_ref()
-                            .map(|value| (vec![value.clone()], row.clone())))
-                    })),
-                );
+                operators.projects.insert(id.clone(), Arc::new(key_by(key)));
             }
             Node::Join { id, .. } => {
                 operators.joins.insert(
@@ -109,6 +102,37 @@ pub(in crate::worker) fn build(
     }
     Query::new(plan(contract, compiled, ir)?, operators, settings)
 }
+
+fn map(
+    computed: &[crate::compiler::scalar::Computed],
+    compiled: &Compiled,
+) -> Project<Key, Row, Key, Row> {
+    let computed = computed.to_vec();
+    let filter = compiled.clone();
+    Project::new(move |key: &Key, row: &Row| {
+        if !filter.qualifies((row, row))? {
+            return Ok(None);
+        }
+        let mut mapped = row.clone();
+        for value in &computed {
+            ensure!(
+                mapped.insert(value.column.name.clone(), value.expression.evaluate(row)?).is_none(),
+                "duplicate computed field"
+            );
+        }
+        Ok(Some((key.clone(), mapped)))
+    })
+}
+fn key_by(key: &crate::compiler::ColumnRef) -> Project<Key, Row, Key, Row> {
+    let name = key.name.clone();
+    Project::new(move |_: &Key, row: &Row| {
+        Ok(row
+            .get(&name)
+            .context("missing join column")?
+            .as_ref()
+            .map(|value| (vec![value.clone()], row.clone())))
+    })
+}
 pub(in crate::worker) fn plan(
     contract: &Contract,
     compiled: &Compiled,
@@ -125,7 +149,8 @@ pub(in crate::worker) fn plan(
                 Node::Source { id, source } => {
                     (id, plan::Kind::Source, vec![format!("source_{source}")])
                 }
-                Node::KeyBy { id, input, .. }
+                Node::Map { id, input, .. }
+                | Node::KeyBy { id, input, .. }
                 | Node::Project { id, input }
                 | Node::Output { id, input }
                 | Node::PartitionBy { id, input, .. } => {
