@@ -1,0 +1,58 @@
+//! One derived partition scope with an outer typed predicate/projection.
+use super::{Name, Parsed, column, node, query, target};
+use anyhow::{Context, Result, ensure};
+use pg_query::{NodeEnum, protobuf as pg};
+pub(in crate::compiler) struct Derived {
+    pub inner: Box<Parsed>,
+    pub alias: String,
+    pub columns: Vec<(Name, String)>,
+    pub predicate: crate::compiler::syntax::Expr,
+}
+pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
+    let [source] = select.from_clause.as_slice() else {
+        return Ok(None);
+    };
+    let NodeEnum::RangeSubselect(source) = node(source)? else {
+        return Ok(None);
+    };
+    ensure!(
+        !source.lateral && select.group_clause.is_empty(),
+        "derived LATERAL/grouping unsupported"
+    );
+    let alias = source.alias.as_ref().context("derived query requires an alias")?;
+    ensure!(alias.colnames.is_empty(), "derived column alias list unsupported");
+    let NodeEnum::SelectStmt(inner) =
+        node(source.subquery.as_deref().context("missing derived query")?)?
+    else {
+        anyhow::bail!("derived query requires SELECT");
+    };
+    let inner = query(inner)?;
+    ensure!(
+        matches!(inner, Parsed::Partition(_)),
+        "derived query requires one native partition query"
+    );
+    ensure!(
+        (1..=64).contains(&select.target_list.len()),
+        "derived projection requires 1..=64 columns"
+    );
+    let columns = select
+        .target_list
+        .iter()
+        .map(|value| {
+            let NodeEnum::ResTarget(output) = node(value)? else {
+                anyhow::bail!("invalid derived output");
+            };
+            ensure!(output.indirection.is_empty(), "derived output indirection unsupported");
+            let name = column(target(value)?)?;
+            let label = if output.name.is_empty() {
+                name.0.last().context("missing derived column")?.clone()
+            } else {
+                output.name.clone()
+            };
+            Ok((name, label))
+        })
+        .collect::<Result<_>>()?;
+    let predicate = crate::compiler::syntax::predicate(select.where_clause.as_deref())?
+        .context("derived query currently requires WHERE")?;
+    Ok(Some(Derived { inner: Box::new(inner), alias: alias.aliasname.clone(), columns, predicate }))
+}

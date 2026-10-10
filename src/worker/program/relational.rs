@@ -42,6 +42,9 @@ pub(in crate::worker) fn build(
             Node::Expand { id, series, .. } => {
                 operators.expansions.insert(id.clone(), Arc::new(expand(series, compiled)));
             }
+            Node::Filter { id, predicate, .. } => {
+                operators.projects.insert(id.clone(), Arc::new(filter(predicate)));
+            }
             Node::Map { id, computed, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(map(computed, compiled)));
             }
@@ -102,6 +105,13 @@ pub(in crate::worker) fn build(
         }
     }
     Query::new(plan(contract, compiled, ir)?, operators, settings)
+}
+
+fn filter(predicate: &crate::compiler::Predicate) -> Project<Key, Row, Key, Row> {
+    let predicate = predicate.clone();
+    Project::new(move |key: &Key, row: &Row| {
+        Ok(predicate.qualifies(row)?.then(|| (key.clone(), row.clone())))
+    })
 }
 
 fn expand(
@@ -184,7 +194,8 @@ pub(in crate::worker) fn plan(
                 Node::Source { id, source } => {
                     (id, plan::Kind::Source, vec![format!("source_{source}")])
                 }
-                Node::Map { id, input, .. }
+                Node::Filter { id, input, .. }
+                | Node::Map { id, input, .. }
                 | Node::KeyBy { id, input, .. }
                 | Node::Project { id, input }
                 | Node::Output { id, input }

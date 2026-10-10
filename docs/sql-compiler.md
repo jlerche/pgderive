@@ -288,7 +288,7 @@ supported three-valued predicate subset. NULL grouping keys remain present;
 COUNT(column) ignores NULL; filters retain only true. Existing groups with no
 qualifying non-NULL measures produce COUNT zero and SUM/MIN/MAX NULL. Removing
 all input rows removes a grouped result. Ungrouped aggregation, DISTINCT,
-numeric input aggregates, nested queries and grouped/window composition remain rejected.
+numeric input aggregates and grouped/window composition remain rejected. A restricted derived scope is described below.
 
 Single-source window SELECT supports the same aggregate functions with explicit
 ROWS frames and integral/timestamp column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition
@@ -559,7 +559,7 @@ semantics requires fresh registration. Existing grouped/ROWS plan identity is
 unchanged. Independent weighted unit histories and three sequential owned worker
 fixtures compare inserts, updates, deletes, NULL peers, empty query ticks and cold
 restart against memory and PostgreSQL bags. A top-k predicate over these results
-still requires derived-query and post-window filter lowering.
+uses the derived-query and post-window filter lowering described below.
 
 ## Peer-aware aggregate frames
 
@@ -586,3 +586,32 @@ histories and six sequential PostgreSQL/memory fixtures cover default, GROUPS
 neighbors, current-peer, empty, full and unordered frames through source changes
 and cold restart. This qualifies peer-boundary semantics, not temporal-distance
 RANGE execution or unbounded partition scale.
+
+## Derived partition scopes and top-k filtering
+
+The frontend supports one aliased derived partition query with an outer column
+projection and WHERE predicate using the existing typed three-valued subset.
+The inner query must be an existing single-native-source partition formulation;
+outer grouping, nested derived scopes, LATERAL, column alias lists, stars and outer
+computed expressions remain rejected. Outer names resolve only against exposed
+inner output labels, with quoted identifiers and ambiguous duplicate labels
+handled explicitly. An outer WHERE is required in this slice.
+
+The runtime bridge inserts a pure typed Filter after the inner partition or
+statistics finalization, before the outer output projection. It never pushes a
+rank predicate into source filtering. Thus `row_number <= k` selects SQL row
+occurrences in an explicit total order, whereas `rank <= k` preserves peer ties
+and can produce more than k occurrences. Projection collisions consolidate signed
+multiplicities. This uses bounded affected-partition computation; it is not yet a
+specialized asymptotically optimized top-k index.
+
+Inner sink-deferred expressions are rejected at this boundary. Their raw payload
+is not the PostgreSQL expression value, so treating it as a resolved subquery
+column could alter filtering or grouping semantics. A later expression-stage
+implementation may safely expand this boundary. Accepted plans bind resolved
+inner/outer semantics and `derived-scope-filter-v1`; changed thresholds or layout
+cannot reuse incompatible registration. Existing plans retain their identities.
+Weighted unit histories and three sequential owned fixtures qualify tied top-k,
+occurrence top-k and post-group count filtering, including NULLs, output
+collisions, updates/deletes, empty query ticks and cold restart against PostgreSQL
+and independent memory bags.

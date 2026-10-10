@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
+pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
 pub(super) mod partition;
@@ -15,6 +16,7 @@ pub(super) struct Table {
 }
 pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::Transform)>;
 pub(super) enum Parsed {
+    Derived(derived::Derived),
     Grouped(Grouped),
     Partition(partition::Parsed),
     JoinProjection {
@@ -118,6 +120,9 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
 }
 fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     validate_query(select)?;
+    if let Some(derived) = derived::parse(select)? {
+        return Ok(Parsed::Derived(derived));
+    }
     let pg::SelectStmt { target_list, from_clause, where_clause, group_clause, .. } = select;
     if partition::eligible(select)? {
         return Ok(Parsed::Partition(partition::parse(select)?));

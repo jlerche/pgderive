@@ -23,6 +23,9 @@ class RankingFixture(SqlFixture):
             self.labels = ['id', 'auction', 'price', 'r', 'd']
         self.query = f'SELECT b.id,b.auction,b.price,{functions} FROM {self.name}.bid b'
 
+    def changed_query(self):
+        return self.query.replace('PARTITION BY b.auction', 'PARTITION BY b.price')
+
     def verify(self):
         values = ','.join(self.labels)
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
@@ -83,7 +86,7 @@ def qualify(output, command, mode, fixture_class=RankingFixture):
             fixture.verify()
         worker.abort()
         prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command, 'changed', fixture.query.replace('PARTITION BY b.auction', 'PARTITION BY b.price'))
+        fixture.rejected(command, 'changed', fixture.changed_query())
         assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
         fixture.query = fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"')
         resumed = fixture.start(command, 'resumed', maximum=1)

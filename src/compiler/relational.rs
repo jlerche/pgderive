@@ -9,6 +9,7 @@ pub struct Source {
 #[derive(Clone, Serialize)]
 pub enum Node {
     Source { id: String, source: usize },
+    Filter { id: String, input: String, predicate: super::Predicate },
     Expand { id: String, input: String, series: super::expansion::Series },
     Map { id: String, input: String, computed: Vec<super::scalar::Computed> },
     KeyBy { id: String, input: String, key: ColumnRef },
