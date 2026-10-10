@@ -29,7 +29,10 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
         ensure!(candidates.next().is_none(), "ambiguous derived column");
         Ok(candidate.column.clone())
     };
-    let predicate = Predicate::new(crate::compiler::expression::bind(parsed.predicate, &resolve)?);
+    let predicate = parsed
+        .predicate
+        .map(|value| crate::compiler::expression::bind(value, &resolve).map(Predicate::new))
+        .transpose()?;
     let columns = parsed
         .columns
         .into_iter()
@@ -38,10 +41,18 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
     let Some(Node::Output { id, input }) = relational.nodes.pop() else {
         anyhow::bail!("derived query requires terminal output node");
     };
-    relational.nodes.push(Node::Filter { id: "qualified".into(), input, predicate });
-    relational.nodes.push(Node::Output { id, input: "qualified".into() });
+    let (input, suffix) = if let Some(predicate) = predicate {
+        let count =
+            relational.nodes.iter().filter(|node| matches!(node, Node::Filter { .. })).count();
+        let filter = if count == 0 { "qualified".into() } else { format!("qualified_{count}") };
+        relational.nodes.push(Node::Filter { id: filter.clone(), input, predicate });
+        (filter, ":derived-scope-filter-v1")
+    } else {
+        (input, ":derived-scope-projection-v1")
+    };
+    relational.nodes.push(Node::Output { id, input });
     relational.output.columns = columns;
     let revision = compiled.revision.as_mut().context("missing inner compiler revision")?;
-    revision.push_str(":derived-scope-filter-v1");
+    revision.push_str(suffix);
     Ok(compiled)
 }

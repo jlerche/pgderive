@@ -10,7 +10,17 @@ fn sql(numbered: bool) -> String {
         "SELECT q.price FROM(SELECT b.id,b.auction,b.price,{function}() OVER(PARTITION BY b.auction ORDER BY b.price DESC NULLS FIRST{tie}) AS r FROM source.bid b) q WHERE q.r<=3 AND(q.price>0 OR q.price IS NULL)"
     )
 }
-fn oracle(state: &BTreeMap<Row, i64>, numbered: bool) -> Result<Bag> {
+fn scoped_sql(numbered: bool, layered: bool) -> String {
+    let inner = sql(numbered);
+    if layered {
+        format!(
+            "SELECT final.\"Value\" FROM(SELECT middle.price AS \"Value\" FROM({inner}) middle WHERE middle.price IS NULL OR middle.price<5) final"
+        )
+    } else {
+        inner
+    }
+}
+fn oracle(state: &BTreeMap<Row, i64>, numbered: bool, layered: bool) -> Result<Bag> {
     let mut groups: BTreeMap<Option<String>, Vec<Row>> = BTreeMap::new();
     for (row, weight) in state {
         for _ in 0..*weight {
@@ -33,20 +43,22 @@ fn oracle(state: &BTreeMap<Row, i64>, numbered: bool) -> Result<Bag> {
             } else {
                 rows.iter().take_while(|other| price(other) != price(row)).count() + 1
             };
-            if rank <= 3 && price(row).is_none_or(|value| value > 0) {
+            if rank <= 3
+                && price(row).is_none_or(|value| value > 0)
+                && (!layered || price(row).is_none_or(|value| value < 5))
+            {
                 outputs.push(((Vec::new(), [("0:price".into(), row["price"].clone())].into()), 1));
             }
         }
     }
     Batch::from_updates(outputs)
 }
-async fn history(numbered: bool) -> Result<()> {
+async fn history(numbered: bool, layered: bool) -> Result<()> {
     let native = contract();
-    let compiled = compile(&sql(numbered), &native)?;
-    let equivalent = compile(
-        &sql(numbered).replace("q.", "\"Q\".").replace(") q WHERE", ") AS \"Q\" WHERE"),
-        &native,
-    )?;
+    let sql = scoped_sql(numbered, layered);
+    let compiled = compile(&sql, &native)?;
+    let equivalent =
+        compile(&sql.replace("q.", "\"Q\".").replace(") q WHERE", ") AS \"Q\" WHERE"), &native)?;
     assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&equivalent)?);
     let ir = compiled.relational().context("missing derived IR")?;
     let options = settings();
@@ -71,11 +83,11 @@ async fn history(numbered: bool) -> Result<()> {
     .into_iter()
     .enumerate()
     {
-        let before = oracle(&state, numbered)?;
+        let before = oracle(&state, numbered, layered)?;
         for change in &changes.updates {
             *state.entry(change.tuple.row.clone()).or_default() += change.weight;
         }
-        let after = oracle(&state, numbered)?;
+        let after = oracle(&state, numbered, layered)?;
         let expected = Batch::from_updates(
             before
                 .iter()
@@ -95,11 +107,11 @@ async fn history(numbered: bool) -> Result<()> {
 }
 #[tokio::test]
 async fn peer_top_k_keeps_ties_and_projection_multiplicities() -> Result<()> {
-    history(false).await
+    history(false, false).await
 }
 #[tokio::test]
 async fn occurrence_top_k_retracts_and_restores() -> Result<()> {
-    history(true).await
+    history(true, false).await
 }
 #[test]
 fn derived_scope_rejects_ambiguous_and_deferred_values() -> Result<()> {
@@ -116,6 +128,57 @@ fn derived_scope_rejects_ambiguous_and_deferred_values() -> Result<()> {
     assert_ne!(
         serde_json::to_vec(&compile(&sql(false), &native)?)?,
         serde_json::to_vec(&compile(&sql(false).replace("<=3", "<=2"), &native)?)?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_peer_scopes_keep_signed_projection_collisions() -> Result<()> {
+    history(false, true).await
+}
+#[tokio::test]
+async fn nested_occurrence_scopes_keep_order_before_filtering() -> Result<()> {
+    history(true, true).await
+}
+#[test]
+fn nested_scopes_expose_only_inner_labels() -> Result<()> {
+    let native = contract();
+    let query = scoped_sql(false, true);
+    let compiled = compile(&query, &native)?;
+    let ir = compiled.relational().context("missing scoped IR")?;
+    let filters = ir
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            crate::compiler::relational::Node::Filter { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(filters, ["qualified", "qualified_1"]);
+    assert_eq!(ir.output.columns[0].label, "Value");
+    for invalid in [
+        query.replace("final.\"Value\"", "final.id"),
+        query.replace("middle.price<5", "middle.r<5"),
+        query.replace("middle.price<5", "q.price<5"),
+        query.replace("final.\"Value\"", "final.value"),
+    ] {
+        assert!(compile(&invalid, &native).is_err(), "{invalid}");
+    }
+    assert_ne!(
+        serde_json::to_vec(&compiled)?,
+        serde_json::to_vec(&compile(&query.replace("<5", "<4"), &native)?)?
+    );
+    let no_filter = format!("SELECT q.price FROM({}) q", sql(false));
+    let plain = compile(&no_filter, &native)?;
+    assert!(
+        plain
+            .revision
+            .as_deref()
+            .is_some_and(|revision| revision.ends_with(":derived-scope-projection-v1"))
+    );
+    assert_eq!(
+        plain.relational().context("missing projection IR")?.nodes.len(),
+        compile(&sql(false), &native)?.relational().context("missing baseline IR")?.nodes.len()
     );
     Ok(())
 }

@@ -92,7 +92,7 @@ python3 - "$output" "${worker[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==61,results
+assert len(results)==64,results
 for result in results:
     json.loads(result.read_text())
 root=pathlib.Path.cwd()

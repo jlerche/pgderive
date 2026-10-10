@@ -1,4 +1,4 @@
-//! One derived partition scope with an outer typed predicate/projection.
+//! Derived partition scopes with typed predicates and exposed projections.
 use super::{Name, Parsed, column, node, query, target};
 use anyhow::{Context, Result, ensure};
 use pg_query::{NodeEnum, protobuf as pg};
@@ -6,7 +6,7 @@ pub(in crate::compiler) struct Derived {
     pub inner: Box<Parsed>,
     pub alias: String,
     pub columns: Vec<(Name, String)>,
-    pub predicate: crate::compiler::syntax::Expr,
+    pub predicate: Option<crate::compiler::syntax::Expr>,
 }
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
     let [source] = select.from_clause.as_slice() else {
@@ -28,8 +28,8 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
     };
     let inner = query(inner)?;
     ensure!(
-        matches!(inner, Parsed::Partition(_)),
-        "derived query requires one native partition query"
+        matches!(inner, Parsed::Partition(_) | Parsed::Derived(_)),
+        "derived query requires a native partition query or derived scope"
     );
     ensure!(
         (1..=64).contains(&select.target_list.len()),
@@ -52,7 +52,6 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
             Ok((name, label))
         })
         .collect::<Result<_>>()?;
-    let predicate = crate::compiler::syntax::predicate(select.where_clause.as_deref())?
-        .context("derived query currently requires WHERE")?;
+    let predicate = crate::compiler::syntax::predicate(select.where_clause.as_deref())?;
     Ok(Some(Derived { inner: Box::new(inner), alias: alias.aliasname.clone(), columns, predicate }))
 }

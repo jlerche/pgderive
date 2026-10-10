@@ -11,6 +11,8 @@ class DerivedFixture(RankingFixture):
     oracle_name = 'independent ranked/grouped post-filter bags'
 
     def __init__(self, output, mode):
+        self.layered = mode.startswith('layered-')
+        mode = mode.removeprefix('layered-')
         super().__init__(output, mode)
         if mode == 'grouped':
             inner = f'SELECT b.auction,COUNT(*) AS n,COUNT(b.price) AS present FROM {self.name}.bid b GROUP BY b.auction'
@@ -20,6 +22,13 @@ class DerivedFixture(RankingFixture):
             inner = self.query
             self.query = f'SELECT q.price FROM({inner}) q WHERE q.r<=3 AND(q.price>0 OR q.price IS NULL)'
             self.labels = ['price']
+        if self.layered:
+            if mode == 'grouped':
+                self.query = f'SELECT final."Group",final."Total" FROM(SELECT middle.auction AS "Group",middle.n AS "Total" FROM({self.query}) middle WHERE middle.n<=4) final'
+                self.labels = ['"Group"', '"Total"']
+            else:
+                self.query = f'SELECT final."Value" FROM(SELECT middle.price AS "Value" FROM({self.query}) middle WHERE middle.price IS NULL OR middle.price<5) final'
+                self.labels = ['"Value"']
 
     def changed_query(self):
         return self.query.replace('>=2', '>=3') if self.mode == 'grouped' else self.query.replace('<=3', '<=2')
@@ -39,7 +48,7 @@ class DerivedFixture(RankingFixture):
         memory = collections.Counter()
         for auction, group in groups.items():
             if self.mode == 'grouped':
-                if len(group)>=2 and any(row['price'] is not None for row in group):
+                if len(group)>=2 and any(row['price'] is not None for row in group) and (not self.layered or len(group)<=4):
                     memory[(auction, len(group))] += 1
                 continue
             group.sort(key=lambda row: (row['price'] is not None, -(row['price'] or 0), row['id']))
@@ -49,7 +58,7 @@ class DerivedFixture(RankingFixture):
                     rank = index+1
                 else:
                     rank = sum(other['price'] is None or (price is not None and other['price']>price) for other in group if other['price'] != price)+1
-                if rank<=3 and (price is None or price>0):
+                if rank<=3 and (price is None or price>0) and (not self.layered or price is None or price<5):
                     memory[(price,)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
@@ -63,7 +72,7 @@ if __name__ == '__main__':
     command = sys.argv[2:]
     if command and command[0] == '--':
         command = command[1:]
-    for mode in ('peers', 'number', 'grouped'):
+    for mode in ('peers', 'number', 'grouped', 'layered-peers', 'layered-number', 'layered-grouped'):
         directory = output/mode
         directory.mkdir()
         qualify(directory, command, mode, fixture_class=DerivedFixture)

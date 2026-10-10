@@ -589,13 +589,14 @@ RANGE execution or unbounded partition scale.
 
 ## Derived partition scopes and top-k filtering
 
-The frontend supports one aliased derived partition query with an outer column
-projection and WHERE predicate using the existing typed three-valued subset.
-The inner query must be an existing single-native-source partition formulation;
-outer grouping, nested derived scopes, LATERAL, column alias lists, stars and outer
-computed expressions remain rejected. Outer names resolve only against exposed
-inner output labels, with quoted identifiers and ambiguous duplicate labels
-handled explicitly. An outer WHERE is required in this slice.
+The frontend supports aliased derived partition scopes with outer column
+projection and optional WHERE predicates using the existing typed three-valued
+subset. Scopes can nest within the existing parser size/token/depth budgets. The
+innermost query must be an existing single-native-source partition formulation;
+outer grouping, LATERAL, column alias lists, stars and outer computed expressions
+remain rejected. Every scope resolves names only against its immediate inner
+output labels, with quoted identifiers and ambiguous duplicate labels handled
+explicitly. A source alias or hidden column cannot leak through a scope.
 
 The runtime bridge inserts a pure typed Filter after the inner partition or
 statistics finalization, before the outer output projection. It never pushes a
@@ -615,6 +616,17 @@ Weighted unit histories and three sequential owned fixtures qualify tied top-k,
 occurrence top-k and post-group count filtering, including NULLs, output
 collisions, updates/deletes, empty query ticks and cold restart against PostgreSQL
 and independent memory bags.
+
+Nested scopes append separate Filter nodes in SQL scope order. Pure column
+projections retain internal fields until the final output: filtering by exposed
+values commutes with signed bag projection, including collisions. The binder
+restricts visibility even while internal fields remain available to the circuit.
+This fusion applies only to pure column projection and deterministic predicates;
+computed outer expressions and later window/group stages require explicit new
+lowering. Projection-only wrappers bind `derived-scope-projection-v1`. Existing
+single-filter plans retain their previous serialized identities. Three additional
+owned fixtures qualify nested peer/occurrence top-k and grouped count scopes,
+renamed quoted labels, optional WHERE, changed predicate rejection and restart.
 
 ## Native PostgreSQL LAG/LEAD
 
