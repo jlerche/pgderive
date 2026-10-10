@@ -11,6 +11,7 @@ pub enum Transform {
     Length,
     Numeric,
     Average,
+    ArrayElement { delimiter: String, index: u16 },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,6 +19,8 @@ struct Environment {
     server: String,
     encoding: String,
     functions: Vec<(String, Value)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    collations: Vec<Value>,
 }
 /// Bound pure tuple-local scalar map; its raw input bag remains object-backed.
 /// Only concrete built-in signatures are permitted, never arbitrary SQL callbacks.
@@ -26,7 +29,8 @@ struct Environment {
 pub struct Terminal {
     transforms: Vec<Transform>,
     types: Vec<u32>,
-    environment: Option<Environment>,
+    // Keep attestation metadata behind an allocation; serde identity is unchanged.
+    environment: Option<Box<Environment>>,
 }
 impl Terminal {
     pub(crate) fn new(transforms: Vec<Transform>, types: Vec<u32>) -> Result<Self> {
@@ -64,7 +68,7 @@ impl Terminal {
         for (signature, implementation) in self.signatures()? {
             let row = sql.query_one("SELECT jsonb_build_object('oid',p.oid,'source',p.prosrc,'binary',p.probin,'config',p.proconfig,'args',p.proargtypes::text,'result',p.prorettype,'kind',p.prokind,'volatile',p.provolatile,'strict',p.proisstrict,'language',l.lanname,'schema',n.nspname) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE p.oid=pg_catalog.to_regprocedure($1)", &[&signature]).await?;
             let value: Value = row.try_get(0)?;
-            let (argument, result) = implementation_types(implementation)?;
+            let (argument, result, strict) = implementation_types(implementation)?;
             ensure!(
                 value["args"] == argument && value["result"] == result,
                 "terminal built-in types changed"
@@ -75,21 +79,23 @@ impl Terminal {
                     && value["config"].is_null()
                     && value["kind"] == "f"
                     && value["volatile"] == "i"
-                    && value["strict"] == true
+                    && value["strict"] == strict
                     && value["language"] == "internal"
                     && value["schema"] == "pg_catalog",
                 "terminal built-in signature has incompatible implementation"
             );
             functions.push((signature.into(), value));
         }
-        Ok(Environment { server, encoding, functions })
+        let collations =
+            if self.has_array() { vec![array_collation(sql).await?] } else { Vec::new() };
+        Ok(Environment { server, encoding, functions, collations })
     }
     pub(crate) async fn bind(&mut self, sql: &(impl GenericClient + Sync)) -> Result<()> {
         let environment = self.inspect(sql).await?;
         if let Some(prior) = &self.environment {
-            ensure!(prior == &environment, "terminal expression environment changed");
+            ensure!(prior.as_ref() == &environment, "terminal expression environment changed");
         }
-        self.environment = Some(environment);
+        self.environment = Some(Box::new(environment));
         Ok(())
     }
     pub(crate) fn validate(&self) -> Result<()> {
@@ -100,10 +106,13 @@ impl Terminal {
     pub(crate) async fn verify(&self, sql: &(impl GenericClient + Sync)) -> Result<()> {
         self.validate()?;
         ensure!(
-            self.environment.as_ref() == Some(&self.inspect(sql).await?),
+            self.environment.as_deref() == Some(&self.inspect(sql).await?),
             "terminal expression environment changed"
         );
         Ok(())
+    }
+    pub(crate) fn has_array(&self) -> bool {
+        self.transforms.iter().any(|transform| matches!(transform, Transform::ArrayElement { .. }))
     }
     fn expression(&self, index: usize) -> Result<String> {
         let value = format!("tuple->1->{index}");
@@ -124,6 +133,9 @@ impl Terminal {
             }
             (Transform::Average, _) => Ok(format!(
                 "pg_catalog.to_jsonb(pg_catalog.numeric_div(pg_catalog.split_part({text},'/',1)::pg_catalog.numeric,pg_catalog.split_part({text},'/',2)::pg_catalog.numeric))"
+            )),
+            (Transform::ArrayElement { index: subscript, .. }, _) => Ok(format!(
+                "pg_catalog.to_jsonb((pg_catalog.string_to_array(({text})::pg_catalog.text COLLATE pg_catalog.\"C\",($2::pg_catalog.jsonb)->{index}->'ArrayElement'->>'delimiter'))[{subscript}])"
             )),
             (Transform::Length, _) => {
                 Ok(format!("pg_catalog.to_jsonb(pg_catalog.length(({text})::pg_catalog.text))"))
@@ -146,9 +158,13 @@ impl Terminal {
             "WITH raw AS (SELECT value->0 tuple,(value->>1)::bigint weight FROM pg_catalog.jsonb_array_elements($1)), mapped AS (SELECT pg_catalog.jsonb_build_array(NULL,pg_catalog.jsonb_build_array({columns})) tuple,weight FROM raw) SELECT tuple,pg_catalog.sum(weight)::text FROM mapped GROUP BY tuple HAVING pg_catalog.sum(weight)<>0"
         );
         let input = json!(rows);
-        tx.query(&query, &[&input])
-            .await?
-            .into_iter()
+        let rows = if self.has_array() {
+            let parameters = json!(&self.transforms);
+            tx.query(&query, &[&input, &parameters]).await?
+        } else {
+            tx.query(&query, &[&input]).await?
+        };
+        rows.into_iter()
             .map(|row| {
                 let weight: String = row.try_get(1)?;
                 Ok((
@@ -166,6 +182,16 @@ fn signatures_for(transform: &Transform, oid: u32) -> Result<Vec<(&'static str, 
         (Transform::Abs, 20) => vec![("pg_catalog.abs(bigint)", "int8abs")],
         (Transform::Abs, 21) => vec![("pg_catalog.abs(smallint)", "int2abs")],
         (Transform::Abs, 23) => vec![("pg_catalog.abs(integer)", "int4abs")],
+        (Transform::ArrayElement { delimiter, index }, 25 | 1043) => {
+            ensure!(
+                !delimiter.is_empty()
+                    && !delimiter.contains('\0')
+                    && delimiter.len() <= 64
+                    && (1..=1024).contains(index),
+                "invalid terminal array selection"
+            );
+            vec![("pg_catalog.string_to_array(text,text)", "text_to_array")]
+        }
         (Transform::Length, 25 | 1043) => vec![("pg_catalog.length(text)", "textlen")],
         (Transform::Numeric | Transform::Average, 1700) => {
             vec![("pg_catalog.numeric_in(cstring,oid,integer)", "numeric_in")]
@@ -180,17 +206,34 @@ fn signatures_for(transform: &Transform, oid: u32) -> Result<Vec<(&'static str, 
     }
     Ok(signatures)
 }
-fn implementation_types(implementation: &str) -> Result<(&'static str, &'static str)> {
+fn implementation_types(implementation: &str) -> Result<(&'static str, &'static str, bool)> {
     match implementation {
-        "int8abs" => Ok(("20", "20")),
-        "int2abs" => Ok(("21", "21")),
-        "int4abs" => Ok(("23", "23")),
-        "textlen" => Ok(("25", "23")),
-        "numeric_in" => Ok(("2275 26 23", "1700")),
-        "numeric_div" => Ok(("1700 1700", "1700")),
-        "split_part" => Ok(("25 25 23", "25")),
+        "int8abs" => Ok(("20", "20", true)),
+        "int2abs" => Ok(("21", "21", true)),
+        "int4abs" => Ok(("23", "23", true)),
+        "textlen" => Ok(("25", "23", true)),
+        "numeric_in" => Ok(("2275 26 23", "1700", true)),
+        "numeric_div" => Ok(("1700 1700", "1700", true)),
+        "split_part" => Ok(("25 25 23", "25", true)),
+        "text_to_array" => Ok(("25 25", "1009", false)),
         _ => anyhow::bail!("unknown terminal implementation"),
     }
+}
+
+async fn array_collation(sql: &(impl GenericClient + Sync)) -> Result<Value> {
+    let row = sql.query_one("SELECT jsonb_build_object('oid',c.oid,'provider',c.collprovider,'deterministic',c.collisdeterministic,'encoding',c.collencoding,'collate',c.collcollate,'ctype',c.collctype,'version',c.collversion,'schema',n.nspname) FROM pg_catalog.pg_collation c JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE c.oid=pg_catalog.to_regcollation('pg_catalog.\"C\"')", &[]).await?;
+    let value: Value = row.try_get(0)?;
+    ensure!(
+        value["provider"] == "c"
+            && value["deterministic"] == true
+            && value["encoding"] == -1
+            && value["collate"] == "C"
+            && value["ctype"] == "C"
+            && value["version"].is_null()
+            && value["schema"] == "pg_catalog",
+        "terminal C collation changed"
+    );
+    Ok(value)
 }
 
 #[cfg(test)]

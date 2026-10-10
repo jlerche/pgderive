@@ -223,3 +223,22 @@ auction's winner changes when eligible source data changes. Any clock-gated
 closed-auction formulation must add an explicit persisted clock relation and be
 qualified as that different PostgreSQL query. These files do not establish all
 q0–q22 portfolio support or a throughput claim.
+
+## Executable q22 formulation
+
+[queries/nexmark/q22.sql](../queries/nexmark/q22.sql) adapts zero-based Nexmark
+SPLIT_INDEX ordinals 3,4,5 to PostgreSQL array ordinals 4,5,6 after
+`string_to_array(url COLLATE pg_catalog."C", '/')`. Absent components are NULL;
+empty directory components are preserved. Native bid input supplies auction,
+bidder, bigint price, channel text and text/varchar URL plus a stable source PK.
+The transform is final and tuple-local, so PostgreSQL executes it during durable
+publication. Intermediate split results are still rejected.
+
+The actual SQL file is exercised with owned text/varchar sources and independent
+component recomputation through inserts, updates, deletes, NULL/empty URLs,
+repeated/trailing separators, Unicode and quoted/backslash contents, output
+collisions, a witnessed lost COMMIT response and cold restart. Additional fixtures verify parameterized non-ASCII
+quote/backslash delimiters and extraction after a two-input join, including
+simultaneous source changes. Function/collation metadata, ordinal, delimiter,
+codecs and compiler revision bind durable identity. This qualifies q22's declared
+extraction semantics; it does not establish arbitrary PostgreSQL text functions.

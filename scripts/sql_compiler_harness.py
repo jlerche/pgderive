@@ -30,7 +30,7 @@ class SqlFixture(Fixture):
         text = path.read_text()
         before, rest = text.split('[worker.query]')
         _, after = rest.split('[execution]')
-        path.write_text(before + '[worker.query]\nsql=' + json.dumps(self.query)
+        path.write_text(before + '[worker.query]\nsql=' + json.dumps(self.query, ensure_ascii=False)
                         + '\n[execution]' + after)
         return path
 

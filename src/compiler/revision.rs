@@ -2,6 +2,18 @@
 use super::{Compiled, Program, expression::Expr, relational::Node, scalar::Native};
 use anyhow::{Context, Result};
 pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
+    let terminal = match &compiled.program {
+        Program::Projection { projection } => projection.terminal.as_ref(),
+        Program::Relational { relational } => relational.output.terminal.as_ref(),
+        Program::Grouped { .. } => None,
+    };
+    if terminal.is_some_and(crate::catalog::Terminal::has_array) {
+        compiled
+            .revision
+            .as_mut()
+            .context("missing terminal compiler revision")?
+            .push_str(":pg-c-array-element-v1");
+    }
     let gap = compiled.predicates.as_ref().is_some_and(Expr::has_gap)
         || match &compiled.program {
             Program::Relational { relational } => relational.nodes.iter().any(node_gap),

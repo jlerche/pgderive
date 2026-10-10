@@ -923,3 +923,39 @@ They include duplicate values, NULL keys/measures, filtered zero counts, inserts
 updates, deletes, empty query ticks and cold restart. Weighted unit histories
 separately verify last-occurrence transitions, full-tuple retraction rejection,
 checkpoint preservation and repeated cold restore.
+
+## Terminal C-collation array component extraction
+
+A final source or inner-join projection can select
+`(pg_catalog.string_to_array(column COLLATE pg_catalog."C", '/'))[4]`.
+The column must be text/varchar, the delimiter a nonempty literal of at most 64
+UTF-8 bytes, and the single index an integer literal in 1..=1024. The function may
+be unqualified or use pg_catalog; collation must be explicitly pg_catalog."C".
+Slices, multidimensional/dynamic/nonpositive indexes, alternate collations,
+third arguments, function modifiers and intermediate consumption are rejected
+before slot creation or durable registration.
+
+This is a tuple-local final transform, executed in the same PostgreSQL transaction
+as result membership and source-progress publication. The object-backed circuit
+retains the raw full output bag. Delimiters are JSON parameters, never SQL source;
+validated bounded indexes are rendered as integer constants. Empty input yields
+an empty array; absent components and NULL inputs yield NULL, while present empty
+components stay empty strings. PostgreSQL performs UTF-8 splitting under C
+collation; no Rust approximation of general PostgreSQL array or collation rules
+is introduced.
+
+Identity binds the delimiter, ordinal, native layout/codecs and
+`pg-c-array-element-v1`. The built-in `string_to_array(text,text)` implementation,
+argument/result types, immutable volatility and its actual non-strict flag are
+attested together with C collation provider, encoding, locale and version metadata.
+Publication verifies that environment again. Existing terminal plans omit the new
+empty collation metadata field and retain their serialized identity.
+
+The named q22 SQL and four sequential owned fixtures compare text/varchar, quoted
+backslash/Unicode delimiters and joined terminal output with PostgreSQL and an
+independent substring-split/component oracle. Duplicate projected outputs,
+NULL/empty/missing components, complete source updates/deletes, simultaneous join
+inputs, rollback, quoted-alias normalization, incompatible delimiter/index changes
+and cold same-slot restart are covered. The text fixture also witnesses a lost
+COMMIT response and authoritative recovery of finalized output. Full-tuple bag coefficients and the
+PUT -> atomic PG COMMIT -> ACK boundary remain unchanged.

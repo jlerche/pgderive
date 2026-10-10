@@ -115,7 +115,7 @@ fn shifted(value: &Node) -> Result<Key> {
     bin.shift = Some((column(index)?, interval(duration)?));
     Ok(Key::Bin(bin))
 }
-fn string(value: &Node) -> Result<String> {
+pub(super) fn string(value: &Node) -> Result<String> {
     let NodeEnum::AConst(value) = node(value)? else {
         anyhow::bail!("constant string required");
     };
