@@ -22,6 +22,7 @@ pub(in crate::compiler) struct Aggregate {
     pub argument: Option<Name>,
     pub filter: Option<crate::compiler::syntax::Expr>,
     pub window: Option<Window>,
+    pub navigation: Option<super::navigation::Navigation>,
 }
 pub(in crate::compiler) struct Window {
     pub keys: Vec<Name>,
@@ -104,6 +105,8 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         "rank" => Function::Rank,
         "dense_rank" => Function::DenseRank,
         "row_number" => Function::RowNumber,
+        "lag" => Function::Lag,
+        "lead" => Function::Lead,
         _ => anyhow::bail!("unsupported aggregate"),
     };
     ensure!(
@@ -115,7 +118,14 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         "unsupported aggregate modifier"
     );
     let ranking = function.ranking();
-    let argument = if ranking {
+    let navigation = if matches!(function, Function::Lag | Function::Lead) {
+        Some(super::navigation::parse(call)?)
+    } else {
+        None
+    };
+    let argument = if let Some(navigation) = &navigation {
+        Some(navigation.argument.clone())
+    } else if ranking {
         ensure!(
             call.over.is_some()
                 && call.args.is_empty()
@@ -137,10 +147,21 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         function,
         argument,
         filter: crate::compiler::syntax::predicate(call.agg_filter.as_deref())?,
-        window: call.over.as_deref().map(|value| window(value, ranking)).transpose()?,
+        window: call
+            .over
+            .as_deref()
+            .map(|value| {
+                if navigation.is_some() {
+                    super::navigation::window(value)
+                } else {
+                    window(value, ranking)
+                }
+            })
+            .transpose()?,
+        navigation,
     })
 }
-fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
+pub(super) fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
     ensure!(value.name.is_empty() && value.refname.is_empty(), "named windows unsupported");
     if ranking {
         ensure!(value.frame_options == 1058, "ranking currently requires the default frame");

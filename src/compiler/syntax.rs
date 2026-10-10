@@ -97,7 +97,7 @@ fn comparison(expr: &pg::AExpr) -> Result<Expr> {
         scalar(optional(expr.rexpr.as_deref())?)?,
     ))
 }
-fn scalar(value: &Node) -> Result<Scalar> {
+pub(super) fn scalar(value: &Node) -> Result<Scalar> {
     match node(value)? {
         NodeEnum::ColumnRef(_) => Ok(Scalar::Column(column(value)?)),
         NodeEnum::AConst(value) => constant(value),

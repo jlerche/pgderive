@@ -11,8 +11,13 @@ pub enum Function {
     Rank,
     DenseRank,
     RowNumber,
+    Lag,
+    Lead,
 }
 impl Function {
+    pub(crate) const fn occurrence_order(&self) -> bool {
+        matches!(self, Self::RowNumber | Self::Lag | Self::Lead)
+    }
     pub(crate) const fn ranking(&self) -> bool {
         matches!(self, Self::Rank | Self::DenseRank | Self::RowNumber)
     }
@@ -23,6 +28,8 @@ pub struct Aggregate {
     pub(crate) argument: Option<ColumnRef>,
     pub(crate) filter: Option<Predicate>,
     pub(crate) field: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) navigation: Option<super::navigation::Navigation>,
 }
 #[derive(Clone, Serialize)]
 pub struct Order {

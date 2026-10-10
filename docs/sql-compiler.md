@@ -298,7 +298,7 @@ integer PRECEDING/FOLLOWING offsets and valid UNBOUNDED endpoints. The ordering
 must include every source primary-key column, explicitly in SQL, so positional
 frames have deterministic occurrence order. The compiler adds no hidden tiebreaker.
 Peer-aware RANGE/GROUPS frames are described below; exclusions and named windows remain rejected.
-Peer ranking is described below; lag/lead and further temporal expressions remain subsequent slices. Windows preserve
+Peer ranking and native lag/lead are described below; further temporal expressions remain subsequent slices. Windows preserve
 source rows and attach frame aggregates, whereas grouped aggregates replace each
 group with one row. Empty frames yield COUNT zero and other supported aggregates
 NULL, matching PostgreSQL. Source WHERE runs before partition/window evaluation.
@@ -615,3 +615,40 @@ Weighted unit histories and three sequential owned fixtures qualify tied top-k,
 occurrence top-k and post-group count filtering, including NULLs, output
 collisions, updates/deletes, empty query ticks and cold restart against PostgreSQL
 and independent memory bags.
+
+## Native PostgreSQL LAG/LEAD
+
+Single-source partitions support LAG/LEAD over native bool, integral, text/varchar,
+UUID, timestamp/timestamptz and numeric columns. Calls require OVER, one to three
+arguments and a SQL ORDER BY containing the complete source primary key (plus the
+generated ordinal after expansion). OFFSET defaults to one and DEFAULT to NULL.
+Offsets accept signed int4 literals, NULL or native int2/int4 columns; bigint
+columns and out-of-int4 literals are rejected. Defaults accept native columns,
+NULL, integral/boolean literals and text/varchar string literals. Other input
+casts and computed arguments/defaults require further expression lowering.
+
+Navigation counts weighted row occurrences, including NULL-valued rows. Zero
+selects the current row and negative offsets reverse direction. A NULL offset
+returns NULL without using DEFAULT. DEFAULT is read from the current row only
+when the target occurrence is absent; a present NULL remains NULL. Valid supported
+ROWS/RANGE/GROUPS frame syntax is checked and ignored for navigation, matching
+PostgreSQL. All functions in one SELECT still share one partition/order; mixing
+navigation and framed aggregates requires further composition.
+
+The binder resolves PostgreSQL-compatible common types for native integral/numeric
+families and text/varchar defaults. Integral widening and numeric promotion bind
+the result OID; mixed text/varchar retains the first argument's type. Same-type
+native temporal/UUID/boolean values copy exactly. Cross timestamp/timestamptz
+coercions and other unsupported type combinations fail before registration.
+Numeric navigation retains exact text state and uses the existing PostgreSQL
+numeric terminal codec inside atomic publication, never floating point.
+
+The explicit ordered evaluator revises complete affected partitions and emits
+old/new bag differences. Native offset/default operands and the result type bind
+`pg-native-navigation-v1`; omitted defaults and explicit `(1,NULL)` normalize
+identically, as do equivalent supported ignored frames. The optional navigation
+field is absent from old aggregate serialization, preserving prior plan identities.
+There is no clock, expiry or late-data exclusion. Weighted unit histories and five
+sequential owned PostgreSQL/memory fixtures cover signed/NULL offsets, present
+NULLs, native type promotion and values, neighbor-changing updates/deletes, source
+filtering followed by outer rank filtering, projection collisions and cold restart.

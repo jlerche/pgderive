@@ -4,6 +4,7 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
+pub(super) mod navigation;
 pub(super) mod partition;
 pub(super) mod scalar;
 use expressions::{aggregate, column, node, optional, target};

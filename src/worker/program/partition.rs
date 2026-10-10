@@ -13,7 +13,7 @@ use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 use std::cmp::Ordering;
 type Bag = Batch<(), Row>;
-type Ordered = (Vec<Option<i64>>, Row);
+pub(super) type Ordered = (Vec<Option<i64>>, Row);
 pub(super) fn evaluate(
     spec: &Partition,
     bag: &Bag,
@@ -107,7 +107,11 @@ fn aggregate_value(
             Ok(Some(i64::try_from(sum).context("SUM(int2/int4) overflow")?.to_string()))
         }
         Function::Min | Function::Max => Ok(extremum.map(|value| value.to_string())),
-        Function::Rank | Function::DenseRank | Function::RowNumber => {
+        Function::Rank
+        | Function::DenseRank
+        | Function::RowNumber
+        | Function::Lag
+        | Function::Lead => {
             anyhow::bail!("ranking requires ordered evaluator")
         }
     }
@@ -237,12 +241,19 @@ fn ranks(
         for function in &spec.aggregates {
             work.charge(1)?;
             let value = match function.function {
-                Function::Rank => rank,
-                Function::DenseRank => dense,
-                Function::RowNumber => position,
+                Function::Rank => Some(rank.to_string()),
+                Function::DenseRank => Some(dense.to_string()),
+                Function::RowNumber => Some(position.to_string()),
+                Function::Lag | Function::Lead => super::navigation::evaluate(
+                    function,
+                    function.navigation.as_ref().context("missing navigation specification")?,
+                    &ordered,
+                    index,
+                    matches!(function.function, Function::Lead),
+                )?,
                 _ => anyhow::bail!("aggregate requires framed evaluator"),
             };
-            output.insert(function.field.clone(), Some(value.to_string()));
+            output.insert(function.field.clone(), value);
         }
         updates.add(((), output), 1)?;
     }

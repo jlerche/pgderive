@@ -176,3 +176,5 @@ mod ranking;
 mod peer_frames;
 
 mod derived;
+
+mod navigation;

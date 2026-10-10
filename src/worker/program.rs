@@ -1,3 +1,4 @@
+mod navigation;
 mod partition;
 pub(super) mod projected;
 pub(super) mod relational;

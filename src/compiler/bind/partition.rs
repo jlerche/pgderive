@@ -137,11 +137,11 @@ fn validate_occurrences(
     if series.is_some()
         && let Some(Mode::Rows { order, .. } | Mode::Ranking { order }) = state.mode.as_ref()
         && (matches!(state.mode, Some(Mode::Rows { .. }))
-            || state.aggregates.iter().any(|value| matches!(value.function, Function::RowNumber)))
+            || state.aggregates.iter().any(|value| value.function.occurrence_order()))
     {
         ensure!(
             order.iter().any(|order| order.column.name == crate::compiler::expansion::FIELD),
-            "expanded ROWS ordering must include generated ordinal"
+            "expanded positional windows must order by generated ordinal"
         );
     }
     Ok(())
@@ -206,6 +206,9 @@ fn plan_revision(numeric: bool, mapped: bool, nodes: &[Node]) -> String {
     if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if matches!(spec.mode, Mode::Peers { .. }))) {
         revision.push_str(":sql-peer-frames-v1");
     }
+    if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if spec.aggregates.iter().any(|value| value.navigation.is_some()))) {
+        revision.push_str(":pg-native-navigation-v1");
+    }
     if nodes.iter().any(|node| matches!(node, Node::Expand { .. })) {
         revision.push_str(":bounded-series-expansion-v1:fixed-duration-offset-v1");
     }
@@ -238,11 +241,8 @@ fn aggregate(
     use crate::catalog::terminal::Transform;
     if let Some(window) = value.window {
         ensure!(context.0.is_empty(), "grouped window composition requires subquery lowering");
-        let (candidate, window_keys) = bind_window(
-            window,
-            resolve,
-            (context.1, matches!(value.function, Function::RowNumber)),
-        )?;
+        let (candidate, window_keys) =
+            bind_window(window, resolve, (context.1, value.function.occurrence_order()))?;
         if let Some(prior) = &state.mode {
             ensure!(
                 serde_json::to_vec(&(prior, &state.keys))?
@@ -256,10 +256,22 @@ fn aggregate(
         ensure!(!context.0.is_empty(), "ungrouped aggregates unsupported");
     }
     let argument = value.argument.as_ref().map(resolve).transpose()?;
-    let oid = result_type(&value.function, argument.as_ref())?;
+    let navigation = value
+        .navigation
+        .map(|parsed| {
+            crate::compiler::navigation::bind(
+                parsed,
+                argument.as_ref().context("missing navigation input")?,
+                resolve,
+            )
+        })
+        .transpose()?;
+    let oid = navigation
+        .as_ref()
+        .map_or_else(|| result_type(&value.function, argument.as_ref()), |value| Ok(value.oid))?;
     let transform = match (&value.function, oid) {
         (Function::Average, _) => Transform::Average,
-        (Function::Sum, 1700) => Transform::Numeric,
+        (Function::Sum | Function::Lag | Function::Lead, 1700) => Transform::Numeric,
         _ => Transform::Identity,
     };
     let name = format!("@aggregate_{}", state.aggregates.len());
@@ -271,6 +283,7 @@ fn aggregate(
         argument,
         filter: filter.map(crate::compiler::Predicate::new),
         field: name.clone(),
+        navigation,
     });
     Ok((ColumnRef { name, right: false, oid, nullable }, transform))
 }
@@ -285,7 +298,7 @@ fn validate_keys(keys: &[ColumnRef]) -> Result<()> {
 fn validate_order(order: &[Order], relation: &crate::source::Relation) -> Result<()> {
     ensure!(
         order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
-        "ROWS ordering requires integral or timestamp columns"
+        "positional window ordering requires integral or timestamp columns"
     );
     ensure!(
         relation
@@ -293,7 +306,7 @@ fn validate_order(order: &[Order], relation: &crate::source::Relation) -> Result
             .iter()
             .filter(|column| column.primary)
             .all(|column| order.iter().any(|order| order.column.name == field(0, &column.name))),
-        "ROWS ordering must include the complete source primary key for deterministic occurrence order"
+        "positional window ordering must include the complete source primary key for deterministic occurrence order"
     );
     Ok(())
 }
@@ -313,6 +326,9 @@ fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32>
                 "AVG requires integral input"
             );
             Ok(1700)
+        }
+        Function::Lag | Function::Lead => {
+            anyhow::bail!("navigation requires typed operand binding")
         }
         Function::Min | Function::Max => {
             let column = argument.context("missing aggregate argument")?;

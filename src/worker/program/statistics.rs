@@ -138,7 +138,9 @@ pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
                 | Function::Max
                 | Function::Rank
                 | Function::DenseRank
-                | Function::RowNumber => {
+                | Function::RowNumber
+                | Function::Lag
+                | Function::Lead => {
                     anyhow::bail!("nonlinear aggregate requires partition evaluator")
                 }
             };
