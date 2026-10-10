@@ -1047,3 +1047,40 @@ ticks, changed-cutoff/NULL-order rejection, quoted aliases, cold same-slot resta
 and final retraction. Existing affected-partition recomputation remains the runtime
 algorithm; these fixtures establish correctness, not an optimized top-k index or
 arbitrary large/skewed partition cost.
+
+
+### Named Nexmark q11, q12 and q17 temporal statistics
+
+`queries/nexmark/q11.sql` makes the portfolio's session connectivity explicit:
+LAG ordered by recorded event time/stable bid ID, lazy CASE boundaries, running
+SUM with ROWS, then temporal MIN/MAX and occurrence COUNT. Adjacent gaps strictly
+below ten seconds connect; equality starts another session. NULL times are
+excluded, NULL bidders group together, equal infinite times are guarded before
+subtraction, and mixed finite/infinite transitions use PostgreSQL 17 interval
+semantics. A session ends ten seconds after its last event. Late inserts, updates
+and deletes revise sessions; there is no watermark, expiry or implicit clock.
+
+`queries/nexmark/q12.sql` buckets the separate native `processing_time` source
+column. It is assigned once by source ingestion and replicated like any other
+value; the engine never regenerates it using now(), LSN or logical time. The local
+Feldera template uses date_time, while this declared processing-time adaptation
+keeps event time separate. date_bin has explicit ten-second stride/UTC origin;
+NULL and infinite buckets retain their SQL groups and boundary addition propagates
+them. The local-timestamp fixture uses a local origin without an offset.
+
+`queries/nexmark/q17.sql` emits filtered counts, retractable min/max and exact
+integral AVG/SUM by auction and UTC midnight `day_start`. As for q15, this explicit
+native midnight key replaces the template's date output ABI. The bound bigint
+SUM can exceed i64 and is emitted as PostgreSQL numeric; all-NULL measures yield
+NULL extrema/AVG/SUM while row count remains positive.
+
+Six sequential owned fixtures qualify both timestamp types against PostgreSQL
+and independent adjacency components, integer bucket arithmetic and raw price
+statistics with Decimal average rounding. Histories cover exact gap/bucket/day/
+price-band boundaries, pre-origin time, NULLs/infinities, session bridge merges
+and deletion splits, group moves, all-NULL/non-NULL transitions, extreme integral
+sums, source DateStyle/time-zone changes, rollback, empty query-input ticks,
+changed-gap/stride/threshold rejection, quoted aliases, cold same-slot restart
+and final retraction. q12 additionally asserts that an event-time-only update
+leaves its output bag unchanged. These use existing typed circuit operators and
+checkpoint codecs; no new compiler revision or expiration policy is introduced.

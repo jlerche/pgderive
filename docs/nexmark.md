@@ -51,8 +51,10 @@ It does not imply native streaming finalization, watermarks or state expiry.
 References: [PostgreSQL window functions](https://www.postgresql.org/docs/17/functions-window.html),
 [date_bin](https://www.postgresql.org/docs/17/functions-datetime.html), and
 [generate_series](https://www.postgresql.org/docs/17/functions-srf.html).
-These forms are target definitions; current compilation still rejects their
-unsupported relational nodes before registration.
+Executable shapes and named qualification are recorded in
+[sql-compiler.md](sql-compiler.md). Unsupported relational compositions are still
+rejected before registration; support for one window shape does not imply the
+whole portfolio is implemented.
 
 ## Query targets
 
