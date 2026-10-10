@@ -179,6 +179,7 @@ mod case;
 mod composition;
 mod derived;
 mod distinct;
+mod join_composition;
 mod session;
 
 mod navigation;

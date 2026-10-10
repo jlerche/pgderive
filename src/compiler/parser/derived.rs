@@ -53,7 +53,13 @@ pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, Strin
     };
     let inner = query(inner)?;
     ensure!(
-        matches!(inner, Parsed::Partition(_) | Parsed::Derived(_) | Parsed::Lookup(_)),
+        matches!(
+            inner,
+            Parsed::Partition(_)
+                | Parsed::Derived(_)
+                | Parsed::Lookup(_)
+                | Parsed::JoinProjection { .. }
+        ),
         "derived query requires a native partition query or derived scope"
     );
     Ok((inner, alias.aliasname.clone()))

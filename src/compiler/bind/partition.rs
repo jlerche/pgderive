@@ -19,6 +19,7 @@ struct Body {
 #[derive(Clone, Copy)]
 struct Stage<'a> {
     relation: &'a crate::source::Relation,
+    occurrence_keys: &'a [String],
     aggregate_base: usize,
     scalar_scope: Option<usize>,
 }
@@ -47,10 +48,16 @@ fn bind_native(
     let resolve = |name: &crate::compiler::parser::Name| {
         crate::compiler::expansion::resolve(name, parsed.expansion.as_ref(), native(name))
     };
+    let occurrence_keys = primary_keys(&[(0, scopes[0].relation)]);
     build(
         parsed,
         &resolve,
-        Stage { relation: scopes[0].relation, aggregate_base: 0, scalar_scope: None },
+        Stage {
+            relation: scopes[0].relation,
+            occurrence_keys: &occurrence_keys,
+            aggregate_base: 0,
+            scalar_scope: None,
+        },
     )
 }
 fn build(
@@ -70,7 +77,11 @@ fn build(
         parsed.targets.clone(),
         resolve,
         &mut computed,
-        (&group_keys, context.relation, context.scalar_scope),
+        TargetContext {
+            groups: &group_keys,
+            occurrence_keys: context.occurrence_keys,
+            scalar_scope: context.scalar_scope,
+        },
         &mut state,
     )?;
     let projection = state.aggregates.is_empty() && group_keys.is_empty();
@@ -148,11 +159,17 @@ struct BoundTargets {
     columns: Vec<OutputColumn>,
     transforms: Vec<crate::catalog::terminal::Transform>,
 }
+#[derive(Clone, Copy)]
+struct TargetContext<'a> {
+    groups: &'a [ColumnRef],
+    occurrence_keys: &'a [String],
+    scalar_scope: Option<usize>,
+}
 fn bind_targets(
     targets: Vec<syntax::Target>,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     computed: &mut Vec<crate::compiler::scalar::Computed>,
-    context: (&[ColumnRef], &crate::source::Relation, Option<usize>),
+    context: TargetContext<'_>,
     state: &mut Targets,
 ) -> Result<BoundTargets> {
     let mut columns = Vec::new();
@@ -162,16 +179,20 @@ fn bind_targets(
         let column = match target.value {
             syntax::Value::Column(name) => resolve(&name)?,
             syntax::Value::Bin(bin) => {
-                crate::compiler::scalar::bind(&bin, resolve, computed, context.2)?
+                crate::compiler::scalar::bind(&bin, resolve, computed, context.scalar_scope)?
             }
             syntax::Value::Case(case) => {
-                crate::compiler::scalar::bind_case(&case, resolve, computed, context.2)?
+                crate::compiler::scalar::bind_case(&case, resolve, computed, context.scalar_scope)?
             }
-            syntax::Value::Offset(offset) => {
-                crate::compiler::scalar::bind_offset(&offset, resolve, computed, context.2)?
-            }
+            syntax::Value::Offset(offset) => crate::compiler::scalar::bind_offset(
+                &offset,
+                resolve,
+                computed,
+                context.scalar_scope,
+            )?,
             syntax::Value::Aggregate(value) => {
-                let result = aggregate(*value, resolve, (context.0, context.1), state)?;
+                let result =
+                    aggregate(*value, resolve, (context.groups, context.occurrence_keys), state)?;
                 transform = result.1;
                 result.0
             }
@@ -295,7 +316,7 @@ struct Targets {
 fn aggregate(
     value: syntax::Aggregate,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
-    context: (&[ColumnRef], &crate::source::Relation),
+    context: (&[ColumnRef], &[String]),
     state: &mut Targets,
 ) -> Result<(ColumnRef, crate::catalog::terminal::Transform)> {
     use crate::catalog::terminal::Transform;
@@ -355,17 +376,13 @@ fn validate_keys(keys: &[ColumnRef]) -> Result<()> {
     );
     Ok(())
 }
-fn validate_order(order: &[Order], relation: &crate::source::Relation) -> Result<()> {
+fn validate_order(order: &[Order], occurrence_keys: &[String]) -> Result<()> {
     ensure!(
         order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
         "positional window ordering requires integral or timestamp columns"
     );
     ensure!(
-        relation
-            .columns
-            .iter()
-            .filter(|column| column.primary)
-            .all(|column| order.iter().any(|order| order.column.name == field(0, &column.name))),
+        occurrence_keys.iter().all(|key| order.iter().any(|order| order.column.name == *key)),
         "positional window ordering must include the complete source primary key for deterministic occurrence order"
     );
     Ok(())
@@ -411,7 +428,7 @@ fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32>
 fn bind_window(
     window: syntax::Window,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
-    context: (&crate::source::Relation, bool),
+    context: (&[String], bool),
 ) -> Result<(Mode, Vec<ColumnRef>)> {
     let keys = window.keys.iter().map(resolve).collect::<Result<Vec<_>>>()?;
     let order = window
@@ -482,4 +499,17 @@ fn nodes(
         nodes.insert(1, Node::Map { id: "mapped".into(), input: "source".into(), computed });
     }
     nodes
+}
+
+fn primary_keys(relations: &[(usize, &crate::source::Relation)]) -> Vec<String> {
+    relations
+        .iter()
+        .flat_map(|(source, relation)| {
+            relation
+                .columns
+                .iter()
+                .filter(|column| column.primary)
+                .map(|column| field(*source, &column.name))
+        })
+        .collect()
 }

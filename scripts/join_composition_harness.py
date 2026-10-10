@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Join-fed scopes against PostgreSQL and independent weighted recomputation."""
+import collections
+import json
+import pathlib
+import sys
+from sql_compiler_harness import SqlFixture
+
+
+class JoinedFixture(SqlFixture):
+    def __init__(self, output, mode):
+        super().__init__(output, False)
+        self.mode = mode
+        self.sql(f"UPDATE {self.name}.auction SET group_id=NULL,enabled=true WHERE id IN (1,2); UPDATE {self.name}.bid SET price=-3 WHERE auction IN (1,2)")
+        inner = (f'SELECT a.id AS aid,b.id AS bid,a.group_id AS g,b.price AS p FROM '
+                 f'{self.name}.auction a JOIN {self.name}.bid b ON b.auction=a.id '
+                 'WHERE a.enabled OR b.price IS NULL')
+        if mode == 'group':
+            self.query = f'SELECT q.g,COUNT(*) AS n,MAX(q.p) AS m,COUNT(DISTINCT q.aid) AS d FROM({inner}) q WHERE q.p IS NULL OR q.p<0 GROUP BY q.g'
+            self.labels = ['g','n','m','d']
+        elif mode == 'winner':
+            window = f'SELECT q.aid,q.bid,q.g,q.p,row_number() OVER(PARTITION BY q.aid ORDER BY q.p DESC NULLS LAST,q.bid,q.aid) AS r FROM({inner}) q'
+            self.query = f'SELECT w.g,w.p FROM({window}) w WHERE w.r<=1'
+            self.labels = ['g','p']
+        else:
+            self.query = f'SELECT q.g,q.p FROM({inner}) q WHERE q.p IS NULL OR q.p<0'
+            self.labels = ['g','p']
+
+    def verify(self):
+        values = ','.join(self.labels)
+        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
+        difference = self.sql(f'''WITH expected AS ({expected}), actual AS
+            (SELECT tuple,weight FROM {self.name}.groups), difference AS
+            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
+            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        assert difference.strip() == '0', 'join-fed scope differs from PostgreSQL'
+        auctions = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
+        bids = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
+        groups = collections.defaultdict(list)
+        memory = collections.Counter()
+        for a in auctions:
+            for b in bids:
+                if b['auction'] is None or a['id'] != b['auction']:
+                    continue
+                if a['enabled'] is not True and b['price'] is not None:
+                    continue
+                if self.mode != 'winner' and b['price'] is not None and b['price']>=0:
+                    continue
+                groups[a['id'] if self.mode == 'winner' else a['group_id']].append((a,b))
+        for key, rows in groups.items():
+            if self.mode == 'group':
+                prices = [b['price'] for a,b in rows if b['price'] is not None]
+                memory[(key,len(rows),max(prices) if prices else None,len({a['id'] for a,b in rows}))] += 1
+            elif self.mode == 'winner':
+                a,b = min(rows,key=lambda pair:(pair[1]['price'] is None,-(pair[1]['price'] or 0),pair[1]['id'],pair[0]['id']))
+                memory[(a['group_id'],b['price'])] += 1
+            else:
+                memory.update((a['group_id'],b['price']) for a,b in rows)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory), 'join-fed scope differs from memory oracle'
+        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN
+            {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN
+            {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+
+
+def qualify(output, command, mode):
+    fixture = JoinedFixture(output, mode)
+    try:
+        fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY g')
+        fixture.rejected(command, 'hidden', fixture.query.replace('q.g','q.enabled'))
+        fixture.rejected(command, 'terminal', fixture.query.replace('b.price AS p','abs(b.price) AS p'))
+        if mode == 'winner':
+            for label,order in [('left-key',',q.bid)'),('right-key',',q.aid)')]:
+                fixture.rejected(command,label,fixture.query.replace(',q.bid,q.aid)',order))
+        assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
+        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip() == '0'
+        worker = fixture.start(command,'first')
+        ready = worker.event('ready')
+        fixture.verify()
+        changes = [
+            f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(100,'new',NULL,true); INSERT INTO {fixture.name}.bid VALUES(100,100,-7),(101,100,NULL),(102,NULL,4)",
+            f"UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=100; UPDATE {fixture.name}.bid SET price=9 WHERE id=100",
+            f"UPDATE {fixture.name}.auction SET enabled=true,group_id=1 WHERE id=100; UPDATE {fixture.name}.bid SET auction=100,price=-2 WHERE id=2",
+            f"DELETE FROM {fixture.name}.auction WHERE id=100; DELETE FROM {fixture.name}.bid WHERE id=101",
+            f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(100,'again',NULL,false); UPDATE {fixture.name}.bid SET price=NULL WHERE id=100",
+            f"DELETE FROM {fixture.name}.bid WHERE id=102",
+        ]
+        fixture.sql(f'BEGIN; UPDATE {fixture.name}.bid SET price=999; ROLLBACK')
+        for index,change in enumerate(changes,1):
+            fixture.sql('BEGIN;'+change+';COMMIT')
+            worker.event('published',minimum_time=ready['time']+index)
+            fixture.verify()
+        worker.abort()
+        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
+        fixture.rejected(command,'changed',fixture.query.replace('a.enabled OR','a.enabled AND'))
+        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
+        fixture.query = fixture.query.replace('b.','"B".').replace('bid b ', 'bid AS "B" ')
+        resumed = fixture.start(command,'resumed',maximum=1)
+        reopened = resumed.event('ready')
+        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time']+len(changes)
+        fixture.verify()
+        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.auction; DELETE FROM {fixture.name}.bid; COMMIT')
+        resumed.event('published')
+        resumed.finish()
+        fixture.verify()
+        assert fixture.sql(f'SELECT count(*) FROM {fixture.name}.groups').strip() == '0'
+        (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact bag','memory':'independent nested loop and group/order recomputation','simultaneous':'both sources insert/update/delete','restart':'same slot cold recovery','changed':'rejected without progress'})+'\n')
+        fixture.cleanup()
+    except BaseException:
+        fixture.preserve()
+        raise
+
+
+if __name__ == '__main__':
+    output = pathlib.Path(sys.argv[1])
+    command = sys.argv[2:]
+    if command and command[0] == '--':
+        command = command[1:]
+    for mode in ('projection','group','winner'):
+        directory = output/mode
+        directory.mkdir()
+        qualify(directory,command,mode)

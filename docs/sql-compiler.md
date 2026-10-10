@@ -775,6 +775,34 @@ Signed weighted unit histories separately test duplicate source occurrences,
 projection collisions, thresholds, quoted aliases and several retained stages.
 The CASE/gap and complete session stages described below build on this composition.
 
+## Join-fed derived scopes
+
+An aliased two-table inner equijoin projection can now feed supported derived
+projection/filter, GROUP BY and window stages. The compiler replaces the inner
+sink projection with a composable output boundary and removes that boundary when
+connecting the next stage. Full joined tuples remain the internal bag identity;
+name resolution exposes only the inner SELECT labels. Joined WHERE predicates
+become explicit filters after the join, before the outer scope. They are never
+pushed onto one input when they reference both sources.
+
+Positional ROWS, ROW_NUMBER and navigation stages require explicit ordering by
+all columns of both native primary keys. Hidden keys cannot satisfy that proof.
+Peer rank/frame stages preserve SQL ties without adding implicit keys. Grouped
+or expanded upstream occurrence identities remain rejected for positional stages.
+Terminal PostgreSQL expressions remain sink-only. Existing root join plans keep
+their identity; newly composable joins bind `joined-derived-full-tuple-v1` along
+with the outer stages, native layout, codecs and existing compiler revisions.
+
+Three owned sequential fixtures compare derived join projection, grouped counts,
+MAX and COUNT DISTINCT, and per-auction top-one selection with PostgreSQL and an
+independent nested-loop/group/order oracle. Both sources change in complete
+transactions; NULL predicates, keys and values, rollback, deleting all inputs,
+quoted aliases, changed-query rejection and cold same-slot restart are covered.
+Signed unit histories additionally use auction weight two and bid weight three,
+so joined multiplicity six must count as six occurrences and top-one must emit
+one occurrence. This establishes this bridge, not general derived joins, outer
+joins, arbitrary numeric expressions or automatic auction closure.
+
 ## Lazy native CASE and timestamp-gap comparisons
 
 Searched CASE in a scalar projection now supports 1..=32 ordered WHEN branches

@@ -16,6 +16,7 @@ pub(super) fn bind(
     contract: &Contract,
 ) -> Result<Compiled> {
     let mut compiled = crate::compiler::bind::bind(inner, contract)?;
+    crate::compiler::bind::derived::compose_join(&mut compiled)?;
     let Program::Relational { relational } = &mut compiled.program else {
         anyhow::bail!("derived partition requires relational lowering");
     };
@@ -29,6 +30,21 @@ pub(super) fn bind(
         .iter()
         .find(|relation| relation.schema == source.schema && relation.table == source.table)
         .context("missing native source contract")?;
+    let relations = relational
+        .sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| {
+            let relation = contract
+                .relations
+                .iter()
+                .find(|relation| relation.schema == source.schema && relation.table == source.table)
+                .context("missing native occurrence contract")?;
+            Ok((index, relation))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let joined = relational.nodes.iter().any(|node| matches!(node, Node::Join { .. }));
+    let occurrence_keys = super::primary_keys(if joined { &relations } else { &relations[..1] });
     let resolve = |name: &crate::compiler::parser::Name| {
         crate::compiler::bind::derived::resolve_output(name, alias, &relational.output.columns)
     };
@@ -37,6 +53,7 @@ pub(super) fn bind(
         &resolve,
         Stage {
             relation,
+            occurrence_keys: &occurrence_keys,
             aggregate_base: aggregate_base(relational)?,
             scalar_scope: Some(relational.nodes.len()),
         },

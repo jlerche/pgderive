@@ -10,6 +10,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compiled> {
     let mut compiled = bind(*parsed.inner, contract)?;
+    compose_join(&mut compiled)?;
     let Program::Relational { relational } = &mut compiled.program else {
         anyhow::bail!("derived query requires relational lowering");
     };
@@ -62,4 +63,41 @@ pub(super) fn resolve_output(
     let candidate = candidates.next().context("unknown derived column")?;
     ensure!(candidates.next().is_none(), "ambiguous derived column");
     Ok(candidate.column.clone())
+}
+
+/// Retain joined full tuples internally; only exposed labels enter name resolution.
+pub(super) fn compose_join(compiled: &mut Compiled) -> Result<()> {
+    let Program::Relational { relational } = &mut compiled.program else {
+        return Ok(());
+    };
+    let Some(Node::Project { id, input }) = relational.nodes.last() else {
+        return Ok(());
+    };
+    ensure!(
+        relational.nodes.iter().any(|node| matches!(node, Node::Join { .. })),
+        "composable projection requires a joined input"
+    );
+    ensure!(
+        relational.output.terminal.is_none(),
+        "derived scope cannot consume sink-deferred expressions"
+    );
+    let id = id.clone();
+    let mut input = input.clone();
+    relational.nodes.pop();
+    if let Some(expression) = compiled.predicates.take() {
+        let filter = "joined_source_filter".to_string();
+        relational.nodes.push(Node::Filter {
+            id: filter.clone(),
+            input,
+            predicate: Predicate::new(expression),
+        });
+        input = filter;
+    }
+    relational.nodes.push(Node::Output { id, input });
+    compiled
+        .revision
+        .as_mut()
+        .context("missing join compiler revision")?
+        .push_str(":joined-derived-full-tuple-v1");
+    Ok(())
 }

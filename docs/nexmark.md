@@ -147,7 +147,7 @@ and this explicit session formulation, not all q0–q22 target queries above.
 
 Integral grouped COUNT DISTINCT is also qualified, including FILTER and nested
 aggregate/window consumption. The remaining portfolio includes broader native/terminal numeric
-and text expressions, general joins with grouped/ordered derived stages, and the
+and text expressions, joins between derived stages, and the
 explicit clock-driven auction-closure formulations. These remain compiler work;
 no unsupported query is approximated or accepted as an executable placeholder.
 
@@ -177,3 +177,12 @@ updates moving days/price bands, last-value retractions, rollback, empty query t
 and removal to empty. Changed thresholds or DISTINCT semantics cannot adopt
 registered state; quoted alias spelling can resume the same compiled semantics.
 This establishes q15's stated formulation, not the remaining portfolio queries.
+
+## Joined scope bridge
+
+Two-native-table inner equijoin projections can feed grouped and ordered derived
+stages. The qualified top-one fixture orders by price and both input primary keys,
+then filters row_number <= 1; its winners revise after either input changes. This
+provides part of the q4/q9 circuit shape, but their named auction eligibility and
+explicit persisted-clock closure SQL still need separate qualification. General
+joins between grouped/ordered derived relations remain unsupported.
