@@ -42,6 +42,7 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
     ensure!(definition.outputs.len() == 1, "relational executor requires one output");
     let mut projects = BTreeSet::new();
     let mut joins = BTreeSet::new();
+    let mut partitions = BTreeSet::new();
     let mut maintained = BTreeSet::new();
     for member in &definition.arrangements {
         ensure!(maintained.insert(&member.node), "multiple arrangements on one relational node");
@@ -66,12 +67,19 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
                     "join inputs require maintained state"
                 );
             }
-            Kind::Aggregate => anyhow::bail!("unsupported relational aggregate kernel"),
+            Kind::Aggregate => {
+                partitions.insert(node.id.clone());
+                ensure!(
+                    maintained.contains(&node.inputs[0]),
+                    "partition input requires maintained state"
+                );
+            }
         }
     }
     ensure!(
         projects == operators.projects.keys().cloned().collect()
-            && joins == operators.joins.keys().cloned().collect(),
+            && joins == operators.joins.keys().cloned().collect()
+            && partitions == operators.partitions.keys().cloned().collect(),
         "relational callbacks differ from declarations"
     );
     Ok(())
@@ -90,13 +98,47 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                 }
                 Kind::Project => self.project(&mut builder, node, &edges, protection)?,
                 Kind::Join => self.join(&mut builder, node, &edges, protection)?,
-                Kind::Aggregate => anyhow::bail!("unsupported relational node"),
+                Kind::Aggregate => self.partition(&mut builder, node, &edges, protection)?,
             };
             edges.insert(node.id.clone(), edge);
         }
         let output =
             edges.get(&self.plan.definition().outputs[0]).context("missing output edge")?;
         Ok(Built { circuit: builder.build(output.output())?, sources })
+    }
+    fn partition(
+        &self,
+        builder: &mut Builder<K, V>,
+        node: &Node,
+        edges: &BTreeMap<String, Edge<K, V>>,
+        protection: Option<&Protection>,
+    ) -> Result<Edge<K, V>> {
+        let operator =
+            self.operators.partitions.get(&node.id).context("missing partition callback")?.clone();
+        let execution = Arc::new(self.scoped(protection)?);
+        let parent = node.inputs[0].clone();
+        let id = node.id.clone();
+        builder.unary(
+            &node.id,
+            edges.get(&parent).context("missing partition edge")?,
+            move |context, input| {
+                let operator = operator.clone();
+                let execution = execution.clone();
+                let parent = parent.clone();
+                let id = id.clone();
+                async move {
+                    let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
+                    let delta = operator
+                        .evaluate(
+                            &input,
+                            execution.prior(&parent, &context.prior)?,
+                            execution.limits,
+                        )
+                        .await?;
+                    execution.stage(&id, &context.prior, delta).await
+                }
+            },
+        )
     }
     fn project(
         &self,

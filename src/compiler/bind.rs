@@ -1,3 +1,4 @@
+mod partition;
 mod relational;
 use super::{
     ColumnRef, Compiled, REVISION,
@@ -15,6 +16,7 @@ struct Scope<'a> {
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
         Parsed::Grouped(parsed) => grouped(parsed, contract),
+        Parsed::Partition(parsed) => partition::bind(parsed, contract),
         Parsed::JoinProjection { left, right, keys, columns, predicate } => {
             relational::bind((left, right), &keys, columns, predicate, contract)
         }

@@ -68,7 +68,7 @@ fn operators() -> Operators<i64, Vec<i64>> {
             )
         })
         .collect();
-    Operators { projects, joins }
+    Operators { projects, joins, partitions: BTreeMap::new() }
 }
 fn oracle(states: &[Bag; 3]) -> Result<Rows> {
     let mut updates = Vec::new();

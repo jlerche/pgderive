@@ -12,6 +12,9 @@ pub enum Node {
     KeyBy { id: String, input: String, key: ColumnRef },
     Join { id: String, left: String, right: String },
     Project { id: String, input: String },
+    Output { id: String, input: String },
+    PartitionBy { id: String, input: String, keys: Vec<ColumnRef> },
+    Partition { id: String, input: String, spec: super::partition::Partition },
 }
 #[derive(Clone, Serialize)]
 pub struct Relational {

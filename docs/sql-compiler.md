@@ -1,7 +1,7 @@
 # SQL compiler boundary and slices
 
 The compiler executes a deliberately bounded PostgreSQL SELECT through durable
-grouped-join, single-source projection and ungrouped inner-join workers. It is not a general SQL planner
+grouped-join, single-source projection, ungrouped inner-join and affected-partition workers. It is not a general SQL planner
 or an interpreter for plan declarations. Configure it in place of selectors:
 
 ```toml
@@ -14,7 +14,7 @@ GROUP BY a.id
 """
 ```
 
-## Supported grouped subset
+## Legacy grouped-join subset
 
 One SELECT, with exactly three outputs in order: a left column, COUNT(*), and
 SUM(right integral column). GROUP BY contains exactly the same left column.
@@ -73,7 +73,7 @@ WHERE expression nodes; NUL is rejected. Scanner tokens exclude parentheses in s
 comments and quoted identifiers. These are input budgets, not a general native
 parser resource guarantee. Only built-in unqualified COUNT and SUM are supported.
 
-Other syntax fails closed: reordered grouped outputs, multiple grouping keys/aggregates, COUNT(column), DISTINCT, aggregate FILTER,
+In this legacy grouped-join path, other syntax fails closed: reordered grouped outputs, multiple grouping keys/aggregates, COUNT(column), DISTINCT, aggregate FILTER,
 HAVING, ORDER BY, LIMIT, CTEs, subqueries, casts, arithmetic, parameters, windows,
 outer/self/multiple joins, set operations and multiple statements. Unsupported
 SQL is rejected before a registration row or replication slot is created.
@@ -278,3 +278,84 @@ owned relational harness compares each complete insert/update/delete transaction
 against PostgreSQL and an independent nested-loop memory bag, with NULLs,
 simultaneous changes, projection collisions, empty output ticks and cold restart.
 This evidence qualifies this subset, not complete Nexmark or window support.
+
+## Affected partitions, aggregates and non-temporal ROWS frames
+
+Single-source grouped SELECT supports multiple native bool/integral/UUID column
+keys and arbitrary output ordering of those keys and COUNT(*), COUNT(column),
+SUM(int2/int4), and integral MIN/MAX. Each aggregate may have a FILTER using the
+supported three-valued predicate subset. NULL grouping keys remain present;
+COUNT(column) ignores NULL; filters retain only true. Existing groups with no
+qualifying non-NULL measures produce COUNT zero and SUM/MIN/MAX NULL. Removing
+all input rows removes a grouped result. Ungrouped aggregation, AVG, DISTINCT,
+numeric SUM(int8), nested queries and grouped/window composition remain rejected.
+
+Single-source window SELECT supports the same aggregate functions with explicit
+ROWS frames and integral column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition
+keys use the grouped key subset, including NULL. All window calls in one SELECT
+must share one specification. Frame boundaries support CURRENT ROW, nonnegative
+integer PRECEDING/FOLLOWING offsets and valid UNBOUNDED endpoints. The ordering
+must include every source primary-key column, explicitly in SQL, so positional
+frames have deterministic occurrence order. The compiler adds no hidden tiebreaker.
+RANGE, GROUPS, default frames, exclusions and named windows remain rejected;
+ranking/lag/lead and temporal expressions are subsequent slices. Windows preserve
+source rows and attach frame aggregates, whereas grouped aggregates replace each
+group with one row. Empty frames yield COUNT zero and other supported aggregates
+NULL, matching PostgreSQL. Source WHERE runs before partition/window evaluation.
+
+The reusable Partition kernel follows Feldera's group-transform/difference pattern:
+read only changed partitions from the pinned prior input trace, apply the complete
+signed delta, evaluate prior/new partition bags and emit their difference. The
+maintained full-tuple input and final output are checkpointed in the same durable
+circuit; no whole-database SQL recomputation occurs in production. This initial
+kernel recomputes affected partitions, rather than claiming linear sufficient-statistic
+performance. Future optimized COUNT/SUM state must preserve the same delta contract.
+Large or skewed partitions and expansive ROWS frames can hit explicit row, byte
+and frame-work limits; failure preserves prior visibility and progress. Output
+contributions use exact spillable consolidation before finalized i64 narrowing.
+SUM(int2/int4) results and COUNT must fit PostgreSQL bigint; int8 SUM/AVG require
+a separately qualified numeric implementation and are not approximated.
+
+New partition plans use sql-partition-v1/affected-partition-v1 identity including
+typed functions, FILTER, grouping/ordering, NULL placement, frame bounds, source
+layouts and codecs. Existing plan identities remain unchanged. Restart cannot
+reuse state under changed window/group semantics. Qualification compares grouped
+and ROWS outputs with PostgreSQL and an independent source-partition oracle after
+inserts, updates, deletes, NULL groups, all-NULL frames, changed neighbors, empty
+query ticks and cold restart. This establishes the stated subset only.
+
+The work budget counts materialized occurrences, frame-row visits and aggregate
+record visits across affected partitions in one operator tick. It bounds those
+operations; it does not measure total CPU instructions or sort comparisons.
+
+## PostgreSQL semantics progression
+
+The next implementation sequence builds on the same typed circuit and durable
+publication boundary:
+
+1. Native temporal/numeric values and expression execution: keep timestamp and
+   timestamptz distinct, qualify PostgreSQL numeric result rules, and bind types,
+   function semantics and relevant session settings into plan identity. A function
+   may run at the PostgreSQL sink only when its result cannot affect filtering,
+   keys, ordering, grouping or retained operator state, and replay has stable
+   semantics. Otherwise use a qualified Rust implementation or reject it.
+2. Aggregate and fixed/hopping bucket execution: extend COUNT/SUM to optimized
+   sufficient statistics and add exact numeric AVG. Lower date_bin as a scalar
+   expression with the SQL's stride and origin. Hopping membership requires an
+   explicit bounded relational expansion. Preserve SQL NULL groups, negative
+   offsets, type distinctions and errors; timestamptz fixed-duration bins do not
+   implement timezone-dependent calendar days. There is no implicit watermark,
+   expiration, wall-clock tick or late-data exclusion.
+3. Ordered partitions: add PostgreSQL ranking/top-k and additional window frames,
+   then qualify temporal lookup and explicit session formulations. Distinguish
+   row occurrences from distinct weighted entries, PostgreSQL peer groups from
+   deterministic positional ordering, and ROWS from RANGE/GROUPS. Non-temporal
+   ORDER BY and PARTITION BY are first-class inputs to the same operator.
+
+Each step requires PostgreSQL and independent memory bag comparisons through
+complete insert/update/delete ticks and restart. A changed semantic revision
+requires fresh registration/bootstrap; it cannot adopt an incompatible trace.
+The affected-partition implementation above is the correctness foundation, with
+bounded recomputation costs explicitly exposed rather than a claim that every
+window or partition scales linearly. Object-local indexing, batched reads and
+compaction optimizations must preserve this result/delta contract.

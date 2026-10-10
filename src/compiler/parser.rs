@@ -2,6 +2,7 @@ use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
 pub(super) mod expressions;
+pub(super) mod partition;
 use expressions::{aggregate, column, node, optional, target};
 
 #[derive(Clone)]
@@ -13,6 +14,7 @@ pub(super) struct Table {
 pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::Transform)>;
 pub(super) enum Parsed {
     Grouped(Grouped),
+    Partition(partition::Parsed),
     JoinProjection {
         left: Table,
         right: Table,
@@ -68,14 +70,14 @@ fn scan_budget(sql: &str) -> Result<()> {
     Ok(())
 }
 
-fn query(select: &pg::SelectStmt) -> Result<Parsed> {
+fn validate_query(select: &pg::SelectStmt) -> Result<()> {
     let pg::SelectStmt {
         distinct_clause,
         into_clause,
-        target_list,
-        from_clause,
-        where_clause,
-        group_clause,
+        target_list: _,
+        from_clause: _,
+        where_clause: _,
+        group_clause: _,
         group_distinct,
         having_clause,
         window_clause,
@@ -110,9 +112,21 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
             && rarg.is_none(),
         "unsupported SELECT clause"
     );
+    Ok(())
+}
+fn query(select: &pg::SelectStmt) -> Result<Parsed> {
+    validate_query(select)?;
+    let pg::SelectStmt { target_list, from_clause, where_clause, group_clause, .. } = select;
+    if partition::eligible(select)? {
+        return Ok(Parsed::Partition(partition::parse(select)?));
+    }
     if group_clause.is_empty() {
         return projection(target_list, from_clause, where_clause.as_deref());
     }
+    grouped_query(select)
+}
+fn grouped_query(select: &pg::SelectStmt) -> Result<Parsed> {
+    let pg::SelectStmt { target_list, from_clause, where_clause, group_clause, .. } = select;
     let [group, count, sum] = target_list.as_slice() else {
         anyhow::bail!("outputs must be group column, COUNT(*), SUM(column)");
     };

@@ -28,7 +28,9 @@ watermark-based eviction or finalization policy in the current CDC contract.
 Window membership is half-open [start,end). Session connectivity must state its
 gap equality convention; the initial target joins consecutive events whose gap
 is strictly less than ten seconds. A session starts at its first event and ends
-ten seconds after its last event. Window NULL timestamps have no membership.
+ten seconds after its last event. NULL timestamps follow the SQL formulation: date_bin grouping retains a NULL
+group unless WHERE excludes it. Expansion must likewise preserve the SQL rows,
+including any NULL bucket values.
 
 ## PostgreSQL formulations for window targets
 

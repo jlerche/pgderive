@@ -3,6 +3,7 @@
 mod bind;
 mod expression;
 mod parser;
+pub(crate) mod partition;
 mod projection;
 pub(crate) mod relational;
 pub(crate) use projection::{Cell, Projected};
@@ -10,6 +11,7 @@ mod syntax;
 use crate::{source::Contract, worker::Query};
 use anyhow::Result;
 use expression::Expr;
+pub(crate) use expression::Predicate;
 use serde::Serialize;
 
 /// Semantic/compiler and runtime codec revision; changes require fresh bootstrap.

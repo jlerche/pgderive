@@ -166,3 +166,5 @@ mod sql;
 mod projection;
 
 mod relational;
+
+mod partition;

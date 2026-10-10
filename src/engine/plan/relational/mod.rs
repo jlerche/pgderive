@@ -6,7 +6,9 @@ use crate::{
     catalog::Protection,
     engine::{
         Batch,
-        dataflow::{Arrangement, PreparedGraph, PreparedMaintenance, Project, TimedBatch},
+        dataflow::{
+            Arrangement, Partition, PreparedGraph, PreparedMaintenance, Project, TimedBatch,
+        },
         reader::{BatchData, BlockCache, CacheStats},
         trace::TraceSnapshot,
     },
@@ -14,6 +16,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeMap, sync::Arc};
 
+type Group<K, V> = Arc<Partition<K, V>>;
 type Unary<K, V> = Arc<Project<K, V, K, V>>;
 type Binary<K, V> = Arc<Project<K, (V, V), K, V>>;
 /// Pure callbacks implementing the exact declared project and join semantics.
@@ -23,6 +26,8 @@ pub struct Operators<K: BatchData, V: BatchData> {
     pub projects: BTreeMap<String, Unary<K, V>>,
     /// Projection of each complete joined tuple pair, keyed by join identity.
     pub joins: BTreeMap<String, Binary<K, V>>,
+    /// Affected-partition callbacks keyed by declared aggregate node identity.
+    pub partitions: BTreeMap<String, Group<K, V>>,
 }
 #[derive(Clone)]
 struct Entry<K: BatchData, V: BatchData> {

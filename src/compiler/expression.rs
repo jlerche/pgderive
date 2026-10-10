@@ -238,3 +238,15 @@ impl Expr {
         }
     }
 }
+
+#[derive(Clone, Serialize)]
+#[serde(transparent)]
+pub struct Predicate(Expr);
+impl Predicate {
+    pub(super) const fn new(expr: Expr) -> Self {
+        Self(expr)
+    }
+    pub(crate) fn qualifies(&self, row: &Row) -> Result<bool> {
+        Ok(self.0.evaluate((row, row))? == Some(true))
+    }
+}
