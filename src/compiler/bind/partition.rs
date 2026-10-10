@@ -50,15 +50,7 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         aggregates: state.aggregates,
     };
     let relation = scopes[0].relation;
-    let terminal =
-        if transforms.iter().any(|value| *value != crate::catalog::terminal::Transform::Identity) {
-            Some(crate::catalog::Terminal::new(
-                transforms,
-                columns.iter().map(|column| column.column.oid).collect(),
-            )?)
-        } else {
-            None
-        };
+    let terminal = super::terminal(transforms, &columns)?;
     let output = crate::compiler::Projected {
         schema: relation.schema.clone(),
         table: relation.table.clone(),
@@ -134,15 +126,15 @@ fn aggregate(
 
 fn validate_keys(keys: &[ColumnRef]) -> Result<()> {
     ensure!(
-        keys.iter().all(|key| matches!(key.oid, 16 | 20 | 21 | 23 | 2950)),
-        "partition key requires native bool/integral/UUID equality"
+        keys.iter().all(|key| matches!(key.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184)),
+        "partition key requires native bool/integral/UUID/timestamp equality"
     );
     Ok(())
 }
 fn validate_order(order: &[Order], relation: &crate::source::Relation) -> Result<()> {
     ensure!(
-        order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23)),
-        "ROWS ordering requires integral columns"
+        order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
+        "ROWS ordering requires integral or timestamp columns"
     );
     ensure!(
         relation

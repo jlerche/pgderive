@@ -272,3 +272,43 @@ async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()
     assert_eq!(serde_json::to_vec(&query.checkpoint()?)?, before);
     Ok(())
 }
+
+#[test]
+fn native_timestamp_resolution_normalizes_offsets_and_rejects_cross_type_casts() -> Result<()> {
+    let mut native = contract();
+    for (index, name, oid) in [(4, "local", 1114), (5, "instant", 1184), (6, "amount", 1700)] {
+        native.relations[1].columns.push(crate::source::Column {
+            position: index,
+            name: name.into(),
+            oid,
+            modifier: -1,
+            nullable: true,
+            primary: false,
+            collation: 0,
+        });
+    }
+    let sql = "SELECT b.local,b.instant,b.amount FROM source.bid b WHERE b.instant<'2000-01-01 00:00:00+00'";
+    let original = compile(sql, &native)?;
+    let equivalent =
+        compile(&sql.replace("2000-01-01 00:00:00+00", "1999-12-31 16:00:00-08"), &native)?;
+    assert_eq!(serde_json::to_vec(&original)?, serde_json::to_vec(&equivalent)?);
+    assert!(original.validate_bound().is_err());
+    assert!(
+        original
+            .revision
+            .as_deref()
+            .is_some_and(|revision| revision.contains("native-iso-utc-source-v1"))
+    );
+    for predicate in [
+        "b.local=b.instant",
+        "b.instant<'2000-01-01 00:00:00'",
+        "b.amount>1",
+        "b.local<'1900-02-29 00:00:00'",
+    ] {
+        assert!(
+            compile(&format!("SELECT b.local FROM source.bid b WHERE {predicate}"), &native)
+                .is_err()
+        );
+    }
+    Ok(())
+}

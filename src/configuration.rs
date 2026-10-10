@@ -123,6 +123,7 @@ impl Config {
         )
         .with_port(pg.port)
         .with_tls(tls)
+        .with_options("-c DateStyle=ISO,MDY -c TimeZone=UTC -c IntervalStyle=iso_8601")
     }
 }
 

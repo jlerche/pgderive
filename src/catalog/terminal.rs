@@ -162,7 +162,7 @@ impl Terminal {
 
 fn signatures_for(transform: &Transform, oid: u32) -> Result<Vec<(&'static str, &'static str)>> {
     let mut signatures = match (transform, oid) {
-        (Transform::Identity, 16 | 20 | 21 | 23 | 25 | 1043 | 2950) => Vec::new(),
+        (Transform::Identity, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184) => Vec::new(),
         (Transform::Abs, 20) => vec![("pg_catalog.abs(bigint)", "int8abs")],
         (Transform::Abs, 21) => vec![("pg_catalog.abs(smallint)", "int2abs")],
         (Transform::Abs, 23) => vec![("pg_catalog.abs(integer)", "int4abs")],

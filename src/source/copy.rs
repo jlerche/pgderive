@@ -17,7 +17,7 @@ pub async fn copy(
     contract: &Contract,
     limits: Limits,
 ) -> Result<Batch> {
-    snapshot.batch_execute("SET LOCAL row_security=off").await?;
+    snapshot.batch_execute("SET LOCAL row_security=off; SET LOCAL DateStyle='ISO,MDY'; SET LOCAL TimeZone='UTC'; SET LOCAL IntervalStyle='iso_8601'").await?;
     contract.validate()?;
     contract.verify(snapshot).await?;
     let mut weights = Consolidator::new(limits)?;

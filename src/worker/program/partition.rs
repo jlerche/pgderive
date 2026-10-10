@@ -122,7 +122,13 @@ fn ordered(
                 row.get(&key.column.name)
                     .context("missing sort field")?
                     .as_ref()
-                    .map(|value| value.parse::<i64>().map_err(Into::into))
+                    .map(|value| match key.column.oid {
+                        1114 | 1184 => {
+                            Ok(crate::temporal::Timestamp::parse(value, key.column.oid)?
+                                .sort_value())
+                        }
+                        _ => value.parse::<i64>().map_err(Into::into),
+                    })
                     .transpose()
             })
             .collect::<Result<Vec<_>>>()?;

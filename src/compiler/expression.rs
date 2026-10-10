@@ -13,6 +13,7 @@ pub(super) enum Value {
     Boolean(bool),
     Integer(i64),
     Uuid([u8; 16]),
+    Timestamp(crate::temporal::Timestamp),
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) enum Scalar {
@@ -45,7 +46,7 @@ pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
                 .or(column_type(&right, resolve)?)
                 .context("SQL type: comparison requires a native column")?;
             ensure!(
-                matches!(oid, 16 | 20 | 21 | 23 | 2950),
+                matches!(oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184),
                 "SQL type: unsupported comparison type"
             );
             Ok(Expr::Compare(op, scalar(left, oid, resolve)?, scalar(right, oid, resolve)?))
@@ -100,6 +101,9 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
         syntax::Scalar::Null => None,
         syntax::Scalar::Boolean(value) if oid == 16 => Some(Value::Boolean(value)),
         syntax::Scalar::Integer(value) if integral(oid) => Some(Value::Integer(value)),
+        syntax::Scalar::String(value) if matches!(oid, 1114 | 1184) => {
+            Some(Value::Timestamp(crate::temporal::Timestamp::parse(&value, oid)?))
+        }
         syntax::Scalar::String(value) if oid == 2950 => Some(Value::Uuid(uuid(&value)?)),
         _ => anyhow::bail!("SQL type: literal does not match native column"),
     };
@@ -141,6 +145,9 @@ impl Scalar {
                     _ => anyhow::bail!("invalid native boolean"),
                 },
                 20 | 21 | 23 => Ok(Value::Integer(text.parse()?)),
+                1114 | 1184 => {
+                    Ok(Value::Timestamp(crate::temporal::Timestamp::parse(text, column.oid)?))
+                }
                 2950 => Ok(Value::Uuid(uuid(text)?)),
                 _ => anyhow::bail!("unsupported scalar codec"),
             })

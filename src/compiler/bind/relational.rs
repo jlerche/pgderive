@@ -56,7 +56,7 @@ fn keys_for(keys: &(Name, Name), scopes: &[super::Scope<'_>; 2]) -> Result<(Colu
     let lhs = native(0, &left.name)?;
     let rhs = native(1, &right.name)?;
     ensure!(
-        matches!(lhs.oid, 16 | 20 | 21 | 23 | 2950)
+        matches!(lhs.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184)
             && lhs.oid == rhs.oid
             && lhs.modifier == rhs.modifier
             && lhs.collation == rhs.collation,
@@ -81,15 +81,7 @@ fn output(
             Ok(crate::compiler::projection::OutputColumn { column: resolve(&name)?, label })
         })
         .collect::<Result<Vec<_>>>()?;
-    let terminal =
-        if transforms.iter().any(|value| *value != crate::catalog::terminal::Transform::Identity) {
-            Some(crate::catalog::Terminal::new(
-                transforms,
-                columns.iter().map(|output| output.column.oid).collect(),
-            )?)
-        } else {
-            None
-        };
+    let terminal = super::terminal(transforms, &columns)?;
     Ok((columns, terminal))
 }
 fn nodes(left: ColumnRef, right: ColumnRef) -> Vec<crate::compiler::relational::Node> {

@@ -6,7 +6,7 @@ weighted batches and verified by a real-PostgreSQL row mutation harness. There
 is an initial in-memory incremental equijoin; materialized-result sinks,
 object-backed state and transactional publication are implemented for the typed
 project/inner-join/group/count/nullable-integer-sum composition. A bounded SQL compiler targets grouped joins, source projections and ungrouped
-inner-join projections through durable circuits; see
+inner-join projections, grouped aggregates and explicit ROWS windows through durable circuits; see
 [the SQL subset and compiler boundaries](docs/sql-compiler.md).
 
 ## Quality gate
@@ -598,8 +598,11 @@ see only a policy-filtered subset is rejected. Use an authorized full-row reader
 
 The frozen source contract accepts explicit full-table publications of ordinary
 persistent, nonpartitioned tables with primary keys and REPLICA IDENTITY FULL.
-The initial codecs support boolean, int2/int4/int8, text, varchar and UUID, with
-NULL preserved. Domains, enums, numeric/floating-point, timestamps, arrays, JSON,
+The source codecs support boolean, int2/int4/int8, text, varchar, UUID, timestamp,
+timestamptz and numeric, with NULL preserved. Temporal text is pinned to ISO/UTC
+for snapshot and CDC, with native types kept distinct. Numeric projection uses
+exact PostgreSQL publication-time conversion; numeric operator keys/arithmetic
+remain unsupported. Domains, enums, floating-point, arrays, JSON,
 generated columns and nondeterministic collations are unsupported. Snapshot SQL
 uses exact quoted column names and pgoutput-compatible text representations,
 including boolean `t`/`f`. Bounded cursors, server-side encoded-row limits and the

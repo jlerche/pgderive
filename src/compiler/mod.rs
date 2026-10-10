@@ -98,7 +98,23 @@ impl Compiled {
     }
     pub(crate) fn legacy(selectors: Query, contract: &Contract) -> Result<Self> {
         selectors.validate(contract)?;
-        Ok(Self { program: Program::Grouped { selectors }, predicates: None, revision: None })
+        let mut compiled =
+            Self { program: Program::Grouped { selectors }, predicates: None, revision: None };
+        compiled.bind_native_codecs(contract);
+        Ok(compiled)
+    }
+    fn bind_native_codecs(&mut self, contract: &Contract) {
+        if contract
+            .relations
+            .iter()
+            .flat_map(|relation| &relation.columns)
+            .any(|column| matches!(column.oid, 1114 | 1184 | 1700))
+        {
+            let base = self.revision.as_deref().unwrap_or(REVISION);
+            self.revision = Some(format!(
+                "{base}:native-iso-utc-source-v1:pg-microsecond-timestamp-v1:exact-numeric-json-v1"
+            ));
+        }
     }
     pub(crate) fn qualifies(
         &self,
@@ -113,7 +129,9 @@ impl Compiled {
 /// Rejects invalid/unsupported SQL, unresolved/ambiguous names and incompatible types.
 pub fn compile(sql: &str, contract: &Contract) -> Result<Compiled> {
     contract.validate()?;
-    bind::bind(parser::parse(sql)?, contract)
+    let mut compiled = bind::bind(parser::parse(sql)?, contract)?;
+    compiled.bind_native_codecs(contract);
+    Ok(compiled)
 }
 
 #[cfg(test)]

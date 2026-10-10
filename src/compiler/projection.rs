@@ -39,6 +39,10 @@ impl Projected {
                             _ => anyhow::bail!("invalid native boolean"),
                         },
                         20 | 21 | 23 => Ok(Cell::Integer(value.parse()?)),
+                        1114 | 1184 => Ok(Cell::Text(
+                            crate::temporal::Timestamp::parse(value, output.column.oid)?
+                                .json(output.column.oid)?,
+                        )),
                         25 | 1043 | 2950 | 1700 => Ok(Cell::Text(value.into())),
                         _ => anyhow::bail!("unsupported native projection codec"),
                     })

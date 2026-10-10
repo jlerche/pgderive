@@ -30,17 +30,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
                     Ok(super::projection::OutputColumn { column: resolve(&name, &scopes)?, label })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let terminal = if transforms
-                .iter()
-                .any(|value| *value != crate::catalog::terminal::Transform::Identity)
-            {
-                Some(crate::catalog::Terminal::new(
-                    transforms,
-                    columns.iter().map(|column| column.column.oid).collect(),
-                )?)
-            } else {
-                None
-            };
+            let terminal = terminal(transforms, &columns)?;
             let revision = if terminal.is_some() {
                 "sql-projection-v2:pg-query-6.2.1:pg-17.7:where-3vl-v1:row-text-v1:json-v2:native-bag-v1:terminal-builtins-v1"
             } else {
@@ -82,7 +72,7 @@ fn grouped(parsed: super::parser::Grouped, contract: &Contract) -> Result<Compil
     // Text equality/grouping depends on PostgreSQL collation, which the string
     // arrangement cannot execute. Restrict SQL equality/grouping to native scalars.
     ensure!(
-        matches!(group.oid, 16 | 20 | 21 | 23 | 2950),
+        matches!(group.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184),
         "SQL type: text/varchar grouping requires a collation runtime"
     );
     let sum = resolve(&parsed.sum, &scopes)?;
@@ -94,7 +84,7 @@ fn grouped(parsed: super::parser::Grouped, contract: &Contract) -> Result<Compil
     let rhs = resolve(&parsed.keys.1, &scopes)?;
     ensure!(lhs.right != rhs.right, "SQL type: join equality must connect both inputs");
     ensure!(
-        matches!(lhs.oid, 16 | 20 | 21 | 23 | 2950),
+        matches!(lhs.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184),
         "SQL type: text/varchar join requires a collation runtime"
     );
     let (lhs, rhs) = if lhs.right { (rhs, lhs) } else { (lhs, rhs) };
@@ -165,4 +155,23 @@ fn predicate_revision(base: &str, predicate: Option<&super::expression::Expr>) -
     } else {
         base.into()
     }
+}
+
+fn terminal(
+    mut transforms: Vec<crate::catalog::terminal::Transform>,
+    columns: &[crate::compiler::projection::OutputColumn],
+) -> Result<Option<crate::catalog::Terminal>> {
+    use crate::catalog::terminal::Transform;
+    for (transform, column) in transforms.iter_mut().zip(columns) {
+        if *transform == Transform::Identity && column.column.oid == 1700 {
+            *transform = Transform::Numeric;
+        }
+    }
+    if transforms.iter().all(|transform| *transform == Transform::Identity) {
+        return Ok(None);
+    }
+    Ok(Some(crate::catalog::Terminal::new(
+        transforms,
+        columns.iter().map(|output| output.column.oid).collect(),
+    )?))
 }

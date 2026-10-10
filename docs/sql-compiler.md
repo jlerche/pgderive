@@ -92,7 +92,7 @@ other unsupported clauses fail before registration or slot creation.
 
 The same output and WHERE subset also supports two distinct source tables joined
 by one inner equijoin, with columns selected from either input. Join keys must
-have identical native bool, integral or UUID contracts; NULL keys never match.
+have identical native bool, integral, UUID or timestamp contracts; NULL keys never match.
 Text keys, implicit integer-width coercions, outer/self/multiple joins remain
 rejected. Aliases and reversed equality operands normalize to the same semantics;
 output labels and order remain part of durable identity.
@@ -281,7 +281,7 @@ This evidence qualifies this subset, not complete Nexmark or window support.
 
 ## Affected partitions, aggregates and non-temporal ROWS frames
 
-Single-source grouped SELECT supports multiple native bool/integral/UUID column
+Single-source grouped SELECT supports multiple native bool/integral/UUID/timestamp column
 keys and arbitrary output ordering of those keys and COUNT(*), COUNT(column),
 SUM(int2/int4/int8), AVG(int2/int4/int8), and integral MIN/MAX. Each aggregate may have a FILTER using the
 supported three-valued predicate subset. NULL grouping keys remain present;
@@ -291,7 +291,7 @@ all input rows removes a grouped result. Ungrouped aggregation, DISTINCT,
 numeric input aggregates, nested queries and grouped/window composition remain rejected.
 
 Single-source window SELECT supports the same aggregate functions with explicit
-ROWS frames and integral column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition
+ROWS frames and integral/timestamp column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition
 keys use the grouped key subset, including NULL. All window calls in one SELECT
 must share one specification. Frame boundaries support CURRENT ROW, nonnegative
 integer PRECEDING/FOLLOWING offsets and valid UNBOUNDED endpoints. The ordering
@@ -382,7 +382,7 @@ The terminal binding fingerprints concrete immutable built-in signatures and
 server version/encoding; changing that environment rejects restart/publication.
 The JSON codec preserves arbitrary-precision numbers through PostgreSQL responses,
 so large numeric results never pass through f64. The existing nonnumeric identities
-keep their serialized form. Native numeric source columns, arithmetic, nested
+keep their serialized form. Numeric input aggregates/arithmetic, nested
 aggregate/window composition and AVG values used by downstream operators require
 further typed lowering and remain rejected. This is safe sink deferral for the
 currently compiled terminal aggregate plans, not permission to defer relational
@@ -392,3 +392,39 @@ The owned numeric harness checks int2/int4/int8 AVG and int8 SUM against Postgre
 and an independent Decimal oracle, including display-scale rounding, values above
 floating-point precision, NULLs, FILTER, signed changes, ROWS neighbors, alias
 normalization and cold restart.
+
+
+## Native timestamp and numeric source values
+
+Frozen source contracts now accept timestamp (OID 1114), timestamptz (OID 1184)
+and numeric (OID 1700). Snapshot and replication connections explicitly use
+ISO/MDY DateStyle, UTC TimeZone and ISO interval output. Source rows retain the
+complete canonical native text layout; this prevents text-layout drift between
+snapshot, old/new CDC tuples and recovery. PostgreSQL source primary keys remain
+source validation, separate from generic full-tuple weighted identity.
+
+Timestamp values use PostgreSQL's microsecond epoch/range, proleptic Gregorian
+calendar and infinities. Native projection emits PostgreSQL-compatible JSON strings,
+including BC dates and UTC timestamptz offsets. Equality/grouping and ROWS ordering
+support timestamps with existing NULL and signed-delta rules. WHERE supports native
+timestamp comparisons and unknown string constants in the qualified canonical ISO
+form; timestamptz constants need explicit numeric offsets or Z. Ambiguous date
+formats, timezone names, date-only constants, mixed timestamp/timestamptz coercions,
+casts and calendar/timezone functions remain rejected. They require deliberate
+PostgreSQL context and expression lowering rather than string ordering.
+
+Numeric projection safely defers native input conversion to PostgreSQL inside
+atomic publication, preserving exact decimals and PostgreSQL JSON representations
+of NaN/Infinity. COUNT(column) can inspect numeric NULLness in Rust. Numeric keys,
+comparisons, arithmetic and numeric-input SUM/AVG remain unsupported; preserving
+raw decimal scale in a source row is not a claim of Rust numeric SQL equality.
+
+All compiled/selector plans whose frozen source layout includes these new types
+bind native-iso-utc-source-v1, pg-microsecond-timestamp-v1 and
+exact-numeric-json-v1 codec revisions. Older source layouts retain their identity.
+The owned native harness checks snapshot/CDC/restart projection, timestamp grouping,
+ordered windows and same-type joins against PostgreSQL and independent memory
+recomputation. It includes BC/min/max dates, infinities, NULLs, decimal precision,
+numeric special values, writer-session DateStyle/TimeZone changes and simultaneous
+join-input changes. This foundation does not yet claim date_bin, hopping expansion,
+calendar-day truncation, ranking or temporal predecessor execution.

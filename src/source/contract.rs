@@ -217,7 +217,7 @@ async fn columns(sql: &(impl GenericClient + Sync), oid: u32) -> Result<Vec<Colu
     for row in rows {
         let oid = row.try_get(2)?;
         ensure!(
-            matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950)
+            matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184 | 1700)
                 && row.try_get::<_, String>(6)?.is_empty()
                 && row.try_get::<_, bool>(8)?,
             "unsupported source type/generated column/nondeterministic collation"
@@ -261,7 +261,7 @@ fn validate_columns(columns: &[Column]) -> Result<()> {
         );
         previous = column.position;
         ensure!(
-            matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950)
+            matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184 | 1700)
                 && !(column.primary && column.nullable),
             "unsupported source column contract"
         );
