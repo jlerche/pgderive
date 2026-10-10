@@ -1025,3 +1025,25 @@ DateStyle/time-zone changes in source writers, changed-filter/projection rejecti
 quoted alias normalization, cold restart and final retraction. This uses the
 existing synchronized-input join cross term and durable publication path; no new
 compiler revision or runtime operator is introduced.
+
+
+### Named Nexmark q18 and q19 ordered selection
+
+`queries/nexmark/q18.sql` selects the latest bid per bidder/auction. PostgreSQL
+DESC NULLS FIRST means a NULL event time sorts before finite/infinite times; this
+is explicit in SQL. Native bid ID ascending resolves otherwise equal times.
+`queries/nexmark/q19.sql` selects ten occurrences per auction with their row
+numbers, ordered by price DESC NULLS FIRST, event time DESC NULLS FIRST and native
+bid ID ascending. The time/identity tie-breakers refine Feldera's unspecified
+price ties. Both queries omit the source-only ID from the visible Nexmark payload;
+it is a stable ordering input, not an output uniqueness constraint.
+
+Four sequential owned fixtures compare both timestamp variants with PostgreSQL
+and an independent Python occurrence-ordering Counter. They include more than
+ten equal-price bids, NULL keys/prices/times, infinities, extreme prices, equal-time
+ties with different visible payloads, late insertion, winner deletion and backfill,
+partition/PK moves, source DateStyle/time-zone changes, rollback, empty query-input
+ticks, changed-cutoff/NULL-order rejection, quoted aliases, cold same-slot restart
+and final retraction. Existing affected-partition recomputation remains the runtime
+algorithm; these fixtures establish correctness, not an optimized top-k index or
+arbitrary large/skewed partition cost.
