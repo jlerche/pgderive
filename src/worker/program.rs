@@ -1,3 +1,4 @@
+mod distinct;
 mod lookup;
 mod navigation;
 mod partition;

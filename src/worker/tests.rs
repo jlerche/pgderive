@@ -178,6 +178,7 @@ mod peer_frames;
 mod case;
 mod composition;
 mod derived;
+mod distinct;
 mod session;
 
 mod navigation;

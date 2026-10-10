@@ -145,7 +145,8 @@ exact gap, microsecond, update/delete and cold-restart cases compare with Postgr
 and an independent direct-connectivity oracle. This qualifies these primitives
 and this explicit session formulation, not all q0–q22 target queries above.
 
-The remaining portfolio includes COUNT DISTINCT, broader native/terminal numeric
+Integral grouped COUNT DISTINCT is also qualified, including FILTER and nested
+aggregate/window consumption. The remaining portfolio includes broader native/terminal numeric
 and text expressions, general joins with grouped/ordered derived stages, and the
 explicit clock-driven auction-closure formulations. These remain compiler work;
 no unsupported query is approximated or accepted as an executable placeholder.

@@ -287,8 +287,8 @@ SUM(int2/int4/int8), AVG(int2/int4/int8), and integral/temporal MIN/MAX. Each ag
 supported three-valued predicate subset. NULL grouping keys remain present;
 COUNT(column) ignores NULL; filters retain only true. Existing groups with no
 qualifying non-NULL measures produce COUNT zero and SUM/MIN/MAX NULL. Removing
-all input rows removes a grouped result. Ungrouped aggregation, DISTINCT,
-numeric input aggregates remain rejected. Derived group/window composition is described below.
+all input rows removes a grouped result. Integral COUNT DISTINCT is described
+below; ungrouped aggregation, SELECT DISTINCT and numeric input aggregates remain rejected. Derived group/window composition is described below.
 
 Single-source window SELECT supports the same aggregate functions with explicit
 ROWS frames and integral/timestamp column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition
@@ -864,3 +864,34 @@ changes across DST, bridge insert/delete, moves between bidders, removal to empt
 cold restart and incompatible gap/label rejection. Signed weighted unit histories
 restore every retained stage between ticks and include duplicate occurrences;
 offset range failures preserve the prior checkpoint and permit valid retry.
+
+## Retractable integral COUNT DISTINCT
+
+Grouped `COUNT(DISTINCT native_integral_column)` now supports int2/int4/int8 and
+an optional FILTER from the existing three-valued predicate subset. NULL values
+are ignored. An existing group with no qualifying non-NULL values returns zero;
+only removing every source occurrence removes the group. Multiple distinct and
+ordinary aggregates can share a SELECT, and their results can feed a supported
+outer group/window stage.
+
+The affected-partition evaluator counts integral value presence over the complete
+retained positive full-tuple bag. Retracting one duplicate does not remove its
+value while another occurrence remains. It computes before/after cardinalities
+and emits their difference under the same tick, checkpoint and publication
+boundary. This is bounded affected-group recomputation, not a specialized persisted
+value-multiplicity index or additive-statistics shortcut. Work charges all visited
+records; existing partition row/byte/work limits still apply.
+
+Window DISTINCT, DISTINCT tuples/expressions, other DISTINCT aggregates,
+non-integral DISTINCT measures and SELECT DISTINCT remain rejected before slot
+creation or registration. Text collation, numeric special-value/scale equality
+and richer expression signatures require separate qualification. Plans using this
+operator append `pg-integral-distinct-count-v1`; existing COUNT plans retain their
+identity. Changing DISTINCT or FILTER semantics requires fresh registration.
+
+Four sequential owned PostgreSQL fixtures cover all three integer widths and
+nested MAX over distinct counts, against independent value-presence recomputation.
+They include duplicate values, NULL keys/measures, filtered zero counts, inserts,
+updates, deletes, empty query ticks and cold restart. Weighted unit histories
+separately verify last-occurrence transitions, full-tuple retraction rejection,
+checkpoint preservation and repeated cold restore.

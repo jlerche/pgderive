@@ -117,7 +117,7 @@ fn partition_binding_rejects_unsupported_semantics() -> Result<()> {
         WINDOW.replace("1 PRECEDING", "NULL PRECEDING"),
         WINDOW.replace("1 FOLLOWING", "2 FOLLOWING EXCLUDE CURRENT ROW"),
         GROUPED.replace("SUM(b.price)", "AVG(DISTINCT b.price)"),
-        GROUPED.replace("COUNT(*) AS n", "COUNT(DISTINCT b.price) AS n"),
+        GROUPED.replace("COUNT(*) AS n", "COUNT(DISTINCT b.price,b.id) AS n"),
         GROUPED.replace("b.auction AS g", "b.id AS g"),
     ] {
         assert!(compile(&sql, &native).is_err(), "{sql}");

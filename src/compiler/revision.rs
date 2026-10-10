@@ -16,6 +16,7 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
     }
     if let Program::Relational { relational } = &compiled.program {
         for (used, suffix) in [
+            (relational.nodes.iter().any(node_distinct), ":pg-integral-distinct-count-v1"),
             (relational.nodes.iter().any(node_offset), ":pg-fixed-time-offset-v1"),
             (relational.nodes.iter().any(node_temporal_extrema), ":pg-native-temporal-extrema-v1"),
         ] {
@@ -62,4 +63,8 @@ fn node_temporal_extrema(node: &Node) -> bool {
         }),
         _ => false,
     }
+}
+
+fn node_distinct(node: &Node) -> bool {
+    matches!(node, Node::Partition { spec, .. } if spec.aggregates.iter().any(|value| matches!(value.function, super::partition::Function::CountDistinct)))
 }

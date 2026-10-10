@@ -373,6 +373,13 @@ fn validate_order(order: &[Order], relation: &crate::source::Relation) -> Result
 fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32> {
     match function {
         Function::Count | Function::Rank | Function::DenseRank | Function::RowNumber => Ok(20),
+        Function::CountDistinct => {
+            ensure!(
+                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
+                "COUNT DISTINCT requires native integral column"
+            );
+            Ok(20)
+        }
         Function::Sum => {
             ensure!(
                 argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),

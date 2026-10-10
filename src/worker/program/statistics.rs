@@ -134,7 +134,8 @@ pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
                     }
                     Some(format!("{sum}/{count}"))
                 }
-                Function::Min
+                Function::CountDistinct
+                | Function::Min
                 | Function::Max
                 | Function::Rank
                 | Function::DenseRank

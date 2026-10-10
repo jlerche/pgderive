@@ -52,6 +52,18 @@ fn aggregate_value(
     bag: &Bag,
     work: &mut crate::engine::dataflow::PartitionWork,
 ) -> Result<Option<String>> {
+    if matches!(aggregate.function, Function::CountDistinct) {
+        super::distinct::evaluate(aggregate, bag, work)
+    } else {
+        ordinary_value(aggregate, bag, work)
+    }
+}
+
+fn ordinary_value(
+    aggregate: &Aggregate,
+    bag: &Bag,
+    work: &mut crate::engine::dataflow::PartitionWork,
+) -> Result<Option<String>> {
     work.charge(bag.iter().count())?;
     let mut count = BigInt::from(0);
     let mut sum = BigInt::from(0);
@@ -112,12 +124,13 @@ fn aggregate_value(
             Ok(Some(i64::try_from(sum).context("SUM(int2/int4) overflow")?.to_string()))
         }
         Function::Min | Function::Max => Ok(extremum.map(|(_, text)| text)),
-        Function::Rank
+        Function::CountDistinct
+        | Function::Rank
         | Function::DenseRank
         | Function::RowNumber
         | Function::Lag
         | Function::Lead => {
-            anyhow::bail!("ranking requires ordered evaluator")
+            anyhow::bail!("aggregate requires specialized evaluator")
         }
     }
 }

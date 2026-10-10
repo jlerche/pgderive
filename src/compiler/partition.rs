@@ -4,6 +4,7 @@ use serde::Serialize;
 #[derive(Clone, Serialize)]
 pub enum Function {
     Count,
+    CountDistinct,
     Sum,
     Average,
     Min,

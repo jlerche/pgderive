@@ -118,6 +118,7 @@ fn parse_target(value: &Node) -> Result<Target> {
 fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
     use crate::compiler::partition::Function;
     let function = match name {
+        "count" if call.agg_distinct => Function::CountDistinct,
         "count" => Function::Count,
         "sum" => Function::Sum,
         "avg" => Function::Average,
@@ -131,7 +132,8 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         _ => anyhow::bail!("unsupported aggregate"),
     };
     ensure!(
-        !call.agg_distinct
+        (!call.agg_distinct
+            || (matches!(function, Function::CountDistinct) && call.over.is_none()))
             && !call.agg_within_group
             && !call.func_variadic
             && call.agg_order.is_empty()
