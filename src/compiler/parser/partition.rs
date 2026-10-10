@@ -16,7 +16,8 @@ pub(in crate::compiler) enum Source {
 pub(in crate::compiler) enum Value {
     Column(Name),
     Bin(super::scalar::Bin),
-    Aggregate(Aggregate),
+    Case(super::case::Case),
+    Aggregate(Box<Aggregate>),
 }
 #[derive(Clone)]
 pub(in crate::compiler) struct Target {
@@ -55,7 +56,10 @@ pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
                 .ok()
                 .is_some_and(|value| super::scalar::is_bin(value).unwrap_or(false))
                 || target(target_node).ok().and_then(|value| node(value).ok()).is_some_and(
-                    |value| matches!(value, NodeEnum::FuncCall(call) if call.over.is_some()),
+                    |value| {
+                        matches!(value, NodeEnum::CaseExpr(_))
+                            || matches!(value, NodeEnum::FuncCall(call) if call.over.is_some())
+                    },
                 )
         }))
 }
@@ -93,6 +97,8 @@ fn parse_target(value: &Node) -> Result<Target> {
             let label = if bin.shift.is_some() { "?column?" } else { "date_bin" };
             (Value::Bin(bin), label.into())
         }
+    } else if let NodeEnum::CaseExpr(case) = node(expression)? {
+        (Value::Case(super::case::parse(case)?), "case".into())
     } else if let NodeEnum::FuncCall(call) = node(expression)? {
         let name = super::expressions::names(&call.funcname)?.0;
         let function = match name.as_slice() {
@@ -100,7 +106,7 @@ fn parse_target(value: &Node) -> Result<Target> {
             [schema, name] if schema == "pg_catalog" => name,
             _ => anyhow::bail!("unsupported aggregate namespace"),
         };
-        (Value::Aggregate(aggregate(call, function)?), function.clone())
+        (Value::Aggregate(Box::new(aggregate(call, function)?)), function.clone())
     } else {
         let name = column(expression)?;
         let label = name.0.last().context("missing column")?.clone();

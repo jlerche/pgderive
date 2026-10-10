@@ -19,6 +19,8 @@ pub(super) enum Compare {
 pub(super) enum Scalar {
     Column(Name),
     Remainder(Name, i64),
+    Difference(Name, Name),
+    Interval(i64),
     Integer(i64),
     Boolean(bool),
     String(String),
@@ -102,6 +104,17 @@ pub(super) fn scalar(value: &Node) -> Result<Scalar> {
     match node(value)? {
         NodeEnum::ColumnRef(_) => Ok(Scalar::Column(column(value)?)),
         NodeEnum::AConst(value) => constant(value),
+        NodeEnum::AExpr(expression) if names(&expression.name)?.0 == ["-"] => {
+            ensure!(
+                expression.kind == i32::from(pg::AExprKind::AexprOp),
+                "unsupported timestamp difference"
+            );
+            Ok(Scalar::Difference(
+                column(optional(expression.lexpr.as_deref())?)?,
+                column(optional(expression.rexpr.as_deref())?)?,
+            ))
+        }
+        NodeEnum::TypeCast(_) => Ok(Scalar::Interval(super::parser::scalar::interval(value)?)),
         NodeEnum::FuncCall(_) | NodeEnum::AExpr(_) => remainder(value),
         _ => anyhow::bail!("unsupported scalar expression"),
     }

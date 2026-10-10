@@ -775,3 +775,48 @@ Signed weighted unit histories separately test duplicate source occurrences,
 projection collisions, thresholds, quoted aliases and several retained stages.
 This is a prerequisite for explicit SQL sessions; CASE, timestamp-gap arithmetic
 and session merge/split qualification remain separate work.
+
+## Lazy native CASE and timestamp-gap comparisons
+
+Searched CASE in a scalar projection now supports 1..=32 ordered WHEN branches
+using the existing predicate subset. Result arms are native integral columns,
+integral literals or NULL; omitted ELSE is NULL. Integer result promotion follows
+PostgreSQL int2/int4/int8 resolution (ordinary small literals are int4), and mixed
+opaque/numeric results, simple CASE, nested CASE and arithmetic result arms remain
+rejected. CASE conditions retain SQL three-valued logic: only true selects a
+branch. The runtime evaluates conditions in source order, then only the selected
+result arm; later conditions are not evaluated. This is a Rust scalar-map stage
+because flags may affect subsequent filters, keys and running aggregates.
+
+Predicates may compare `timestamp_column - timestamp_column` to an explicitly
+typed positive fixed INTERVAL literal. Both columns must have the same native
+timestamp or timestamptz type. Supported literal quantities have at most six
+fractional decimal digits, represent integral microseconds, and use microseconds
+through days; calendar months and implicit cross-type/timezone casts are rejected.
+Days here are interval comparison quantities, not calendar timestamp addition.
+NULL operands yield unknown. Finite subtraction uses checked signed 64-bit
+microseconds. Infinite differences follow PostgreSQL 17: equal infinities and
+finite overflow raise an error; other infinite differences produce signed
+infinite intervals, ordered outside finite gaps. This does not replace subtraction
+with a timestamp-plus-gap rewrite that could evade PostgreSQL overflow behavior.
+
+A derived LAG stage can therefore feed a lazy boundary CASE, and its int4 flags
+can feed SUM with ROWS UNBOUNDED PRECEDING in the next stage. Explicit equality
+or NULL guards have their actual SQL meaning, including whether subtraction is
+reached for infinity values. The compiler never invents guards or expiration.
+Plans bind `pg-lazy-integral-case-v1` and, wherever gap predicates occur,
+`pg-timestamp-gap-v1`. Date-bin-only plans retain their original serialized scalar
+shape and revision. Stage-specific fields prevent repeated maps from colliding.
+
+Six sequential owned fixtures compare local/instant flags, local/instant running
+totals, nullable/promoted result arms and descending order against PostgreSQL and
+independent source-bag recomputation. They include exact threshold equality,
+NULLs, guarded infinities, late changes, native writer timezone changes and cold
+restart. Weighted unit histories separately cover boundary merge/split effects
+and duplicate occurrences; native gap tests cover both infinities and finite
+range overflow. Emitting session first/last boundaries still requires temporal
+MIN/MAX and fixed-duration addition; these flags alone do not claim full sessions.
+
+The subtraction rules are grounded in PostgreSQL's
+[timestamp_mi implementation](https://github.com/postgres/postgres/blob/REL_17_STABLE/src/backend/utils/adt/timestamp.c)
+and saved live PostgreSQL infinity/overflow probes under artifacts/.

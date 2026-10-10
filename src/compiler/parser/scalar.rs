@@ -125,7 +125,7 @@ fn string(value: &Node) -> Result<String> {
     ensure!(!value.sval.is_empty(), "empty scalar constant");
     Ok(value.sval.clone())
 }
-fn interval(value: &Node) -> Result<i64> {
+pub(in crate::compiler) fn interval(value: &Node) -> Result<i64> {
     let text = if let NodeEnum::TypeCast(cast) = node(value)? {
         let typename = cast.type_name.as_ref().context("missing interval type")?;
         let names = super::expressions::names(&typename.names)?.0;

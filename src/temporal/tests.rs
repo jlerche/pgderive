@@ -78,3 +78,32 @@ fn bins_match_independent_floor_and_postgres_checked_boundaries() -> Result<()> 
     assert_eq!(Timestamp(i64::MIN).bin(10, Timestamp(0))?, Timestamp(i64::MIN));
     Ok(())
 }
+
+#[test]
+fn timestamp_difference_preserves_pg_infinity_and_overflow_rules() -> Result<()> {
+    use super::Gap;
+    let finite = Timestamp::parse("2000-01-01 00:00:00", 1114)?;
+    let later = Timestamp::parse("2000-01-01 00:00:10.000001", 1114)?;
+    let negative = Timestamp::parse("-infinity", 1114)?;
+    let positive = Timestamp::parse("infinity", 1114)?;
+    assert_eq!(later.difference(finite)?, Gap::Finite(10_000_001));
+    assert_eq!(finite.difference(later)?, Gap::Finite(-10_000_001));
+    for (left, right, expected) in [
+        (positive, finite, Gap::PositiveInfinity),
+        (finite, negative, Gap::PositiveInfinity),
+        (negative, finite, Gap::NegativeInfinity),
+        (finite, positive, Gap::NegativeInfinity),
+        (positive, negative, Gap::PositiveInfinity),
+        (negative, positive, Gap::NegativeInfinity),
+    ] {
+        assert_eq!(left.difference(right)?, expected);
+    }
+    assert!(positive.difference(positive).is_err());
+    assert!(negative.difference(negative).is_err());
+    let min = Timestamp::parse("4714-11-24 00:00:00 BC", 1114)?;
+    let max = Timestamp::parse("294276-12-31 23:59:59.999999", 1114)?;
+    assert!(max.difference(min).is_err());
+    assert!(min.difference(max).is_err());
+    assert_eq!(finite.difference(finite)?, Gap::Finite(0));
+    Ok(())
+}

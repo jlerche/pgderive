@@ -1,6 +1,7 @@
 //! Bounded `PostgreSQL` frontend for durable grouped joins and source projections.
 //! See `docs/sql-compiler.md` for the exact grammar and compatibility contract.
 mod bind;
+mod case;
 mod expression;
 pub(crate) mod lookup;
 pub(crate) mod navigation;
@@ -10,6 +11,7 @@ mod projection;
 pub(crate) mod relational;
 pub(crate) use projection::{Cell, Projected};
 pub(crate) mod expansion;
+mod revision;
 pub(crate) mod scalar;
 mod syntax;
 use crate::{source::Contract, worker::Query};
@@ -134,6 +136,7 @@ impl Compiled {
 pub fn compile(sql: &str, contract: &Contract) -> Result<Compiled> {
     contract.validate()?;
     let mut compiled = bind::bind(parser::parse(sql)?, contract)?;
+    revision::bind(&mut compiled)?;
     compiled.bind_native_codecs(contract);
     Ok(compiled)
 }

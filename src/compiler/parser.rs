@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
+pub(super) mod case;
 pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;

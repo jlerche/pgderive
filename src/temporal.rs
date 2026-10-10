@@ -7,7 +7,31 @@ const MIN: i64 = -211_813_488_000_000_000;
 const END: i64 = 9_223_371_331_200_000_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Timestamp(i64);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum Gap {
+    NegativeInfinity,
+    Finite(i64),
+    PositiveInfinity,
+}
 impl Timestamp {
+    pub(crate) fn difference(self, other: Self) -> Result<Gap> {
+        match (self.0, other.0) {
+            (i64::MIN, value) => {
+                ensure!(value != i64::MIN, "interval out of range");
+                Ok(Gap::NegativeInfinity)
+            }
+            (i64::MAX, value) => {
+                ensure!(value != i64::MAX, "interval out of range");
+                Ok(Gap::PositiveInfinity)
+            }
+            (_, i64::MIN) => Ok(Gap::PositiveInfinity),
+            (_, i64::MAX) => Ok(Gap::NegativeInfinity),
+            (left, right) => {
+                Ok(Gap::Finite(left.checked_sub(right).context("interval out of range")?))
+            }
+        }
+    }
+
     pub(crate) fn parse(value: &str, oid: u32) -> Result<Self> {
         ensure!(matches!(oid, 1114 | 1184), "invalid timestamp type");
         match value {

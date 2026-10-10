@@ -13,7 +13,27 @@ pub struct DateBin {
 #[derive(Clone, Serialize)]
 pub struct Computed {
     pub(crate) column: ColumnRef,
-    pub(crate) expression: DateBin,
+    pub(crate) expression: Native,
+}
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+pub enum Native {
+    Bin(DateBin),
+    Case { case: super::case::Case },
+}
+impl Native {
+    pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
+        match self {
+            Self::Bin(value) => value.evaluate(row),
+            Self::Case { case } => case.evaluate(row),
+        }
+    }
+    pub(super) const fn shift(&self) -> Option<&(ColumnRef, i64)> {
+        match self {
+            Self::Bin(value) => value.shift.as_ref(),
+            Self::Case { .. } => None,
+        }
+    }
 }
 impl DateBin {
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
@@ -70,6 +90,24 @@ pub(super) fn bind(
     let prefix = scope.map_or_else(|| "@scalar_".into(), |scope| format!("@scalar_stage_{scope}_"));
     let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
     let column = ColumnRef { name, right: false, oid: input.oid, nullable: input.nullable };
+    if !computed.iter().any(|prior| prior.column == column) {
+        computed.push(Computed { column: column.clone(), expression: Native::Bin(expression) });
+    }
+    Ok(column)
+}
+
+pub(super) fn bind_case(
+    parsed: &super::parser::case::Case,
+    resolve: &impl Fn(&super::parser::Name) -> Result<ColumnRef>,
+    computed: &mut Vec<Computed>,
+    scope: Option<usize>,
+) -> Result<ColumnRef> {
+    use sha2::{Digest, Sha256};
+    let (case, oid, nullable) = super::case::bind(parsed, resolve)?;
+    let expression = Native::Case { case };
+    let prefix = scope.map_or_else(|| "@case_".into(), |scope| format!("@case_stage_{scope}_"));
+    let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
+    let column = ColumnRef { name, right: false, oid, nullable };
     if !computed.iter().any(|prior| prior.column == column) {
         computed.push(Computed { column: column.clone(), expression });
     }

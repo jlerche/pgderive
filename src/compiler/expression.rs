@@ -14,11 +14,13 @@ pub(super) enum Value {
     Integer(i64),
     Uuid([u8; 16]),
     Timestamp(crate::temporal::Timestamp),
+    Interval(crate::temporal::Gap),
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) enum Scalar {
     Column(ColumnRef),
     Remainder(ColumnRef, i64),
+    Difference(ColumnRef, ColumnRef),
     Literal(Option<Value>),
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -46,7 +48,7 @@ pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
                 .or(column_type(&right, resolve)?)
                 .context("SQL type: comparison requires a native column")?;
             ensure!(
-                matches!(oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184),
+                matches!(oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184 | 1186),
                 "SQL type: unsupported comparison type"
             );
             Ok(Expr::Compare(op, scalar(left, oid, resolve)?, scalar(right, oid, resolve)?))
@@ -77,6 +79,7 @@ fn column_type(value: &syntax::Scalar, resolve: &Resolve<'_>) -> Result<Option<u
         syntax::Scalar::Column(name) | syntax::Scalar::Remainder(name, _) => {
             Ok(Some(resolve(name)?.oid))
         }
+        syntax::Scalar::Difference(..) => Ok(Some(1186)),
         _ => Ok(None),
     }
 }
@@ -98,6 +101,17 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
             );
             return Ok(Scalar::Remainder(column, divisor));
         }
+        syntax::Scalar::Difference(left, right) => {
+            let (left, right) = (resolve(&left)?, resolve(&right)?);
+            ensure!(
+                oid == 1186 && matches!(left.oid, 1114 | 1184) && left.oid == right.oid,
+                "timestamp subtraction requires same-type native timestamp operands"
+            );
+            return Ok(Scalar::Difference(left, right));
+        }
+        syntax::Scalar::Interval(value) if oid == 1186 => {
+            Some(Value::Interval(crate::temporal::Gap::Finite(value)))
+        }
         syntax::Scalar::Null => None,
         syntax::Scalar::Boolean(value) if oid == 16 => Some(Value::Boolean(value)),
         syntax::Scalar::Integer(value) if integral(oid) => Some(Value::Integer(value)),
@@ -117,6 +131,15 @@ impl Scalar {
         let column = match self {
             Self::Column(column) => column,
             Self::Literal(value) => return Ok(value.clone()),
+            Self::Difference(left, right) => {
+                let (Some(Value::Timestamp(left)), Some(Value::Timestamp(right))) = (
+                    Self::Column(left.clone()).evaluate(rows)?,
+                    Self::Column(right.clone()).evaluate(rows)?,
+                ) else {
+                    return Ok(None);
+                };
+                return Ok(Some(Value::Interval(left.difference(right)?)));
+            }
             Self::Remainder(column, divisor) => {
                 let value = Self::Column(column.clone()).evaluate(rows)?;
                 return value
@@ -160,7 +183,7 @@ impl Scalar {
                 .context("compiled predicate column absent")?
                 .is_none()),
             Self::Literal(value) => Ok(value.is_none()),
-            Self::Remainder(_, _) => Ok(self.evaluate(rows)?.is_none()),
+            Self::Remainder(_, _) | Self::Difference(_, _) => Ok(self.evaluate(rows)?.is_none()),
         }
     }
 }
@@ -235,6 +258,17 @@ fn uuid(text: &str) -> Result<[u8; 16]> {
 }
 
 impl Expr {
+    pub(super) fn has_gap(&self) -> bool {
+        let gap = |value: &Scalar| {
+            matches!(value, Scalar::Difference(..) | Scalar::Literal(Some(Value::Interval(_))))
+        };
+        match self {
+            Self::Value(value) | Self::Null(value, _) => gap(value),
+            Self::Compare(_, left, right) => gap(left) || gap(right),
+            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_gap),
+            Self::Not(value) => value.has_gap(),
+        }
+    }
     pub(super) fn has_remainder(&self) -> bool {
         let scalar = |value: &Scalar| matches!(value, Scalar::Remainder(_, _));
         match self {
@@ -250,6 +284,9 @@ impl Expr {
 #[serde(transparent)]
 pub struct Predicate(Expr);
 impl Predicate {
+    pub(super) fn has_gap(&self) -> bool {
+        self.0.has_gap()
+    }
     pub(super) const fn new(expr: Expr) -> Self {
         Self(expr)
     }

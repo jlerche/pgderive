@@ -175,6 +175,7 @@ mod ranking;
 
 mod peer_frames;
 
+mod case;
 mod composition;
 mod derived;
 

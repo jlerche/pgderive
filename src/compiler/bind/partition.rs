@@ -164,8 +164,11 @@ fn bind_targets(
             syntax::Value::Bin(bin) => {
                 crate::compiler::scalar::bind(&bin, resolve, computed, context.2)?
             }
+            syntax::Value::Case(case) => {
+                crate::compiler::scalar::bind_case(&case, resolve, computed, context.2)?
+            }
             syntax::Value::Aggregate(value) => {
-                let result = aggregate(value, resolve, (context.0, context.1), state)?;
+                let result = aggregate(*value, resolve, (context.0, context.1), state)?;
                 transform = result.1;
                 result.0
             }
@@ -210,7 +213,7 @@ fn attach_expansion(
     for node in nodes.iter() {
         if let Node::Map { computed, .. } = node {
             for value in computed {
-                if let Some((_, duration)) = &value.expression.shift {
+                if let Some((_, duration)) = value.expression.shift() {
                     ensure!(
                         duration
                             .checked_mul(i64::from(series.end))
@@ -242,7 +245,8 @@ fn keys(
 }
 
 fn plan_revision(numeric: bool, mapped: bool, nodes: &[Node]) -> String {
-    let mut revision = revision(numeric, mapped);
+    let bin = nodes.iter().any(|node| matches!(node, Node::Map { computed, .. } if computed.iter().any(|value| matches!(value.expression, crate::compiler::scalar::Native::Bin(_)))));
+    let mut revision = revision(numeric, mapped, bin);
     if nodes.iter().any(|node| matches!(node, Node::Statistics { .. })) {
         revision.push_str(":exact-linear-statistics-v1");
     }
@@ -255,22 +259,28 @@ fn plan_revision(numeric: bool, mapped: bool, nodes: &[Node]) -> String {
     if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if spec.aggregates.iter().any(|value| value.navigation.is_some()))) {
         revision.push_str(":pg-native-navigation-v1");
     }
+    if nodes.iter().any(|node| matches!(node, Node::Map { computed, .. } if computed.iter().any(|value| matches!(value.expression, crate::compiler::scalar::Native::Case { .. })))) {
+        revision.push_str(":pg-lazy-integral-case-v1");
+    }
     if nodes.iter().any(|node| matches!(node, Node::Expand { .. })) {
         revision.push_str(":bounded-series-expansion-v1:fixed-duration-offset-v1");
     }
     revision
 }
-fn revision(numeric: bool, mapped: bool) -> String {
+fn revision(numeric: bool, mapped: bool, bin: bool) -> String {
     let base = if numeric {
         "sql-partition-v2:pg-query-6.2.1:pg-17.7:row-text-v1:json-exact-number-v1:native-bag-v1:affected-partition-v1:integer-numeric-aggregate-v1:rows-frame-v1"
     } else {
         "sql-partition-v1:pg-query-6.2.1:pg-17.7:row-text-v1:json-v2:native-bag-v1:affected-partition-v1:integral-aggregate-v1:rows-frame-v1"
     };
+    let mut revision = base.to_string();
     if mapped {
-        format!("{base}:native-scalar-map-v1:date-bin-microseconds-v1")
-    } else {
-        base.into()
+        revision.push_str(":native-scalar-map-v1");
     }
+    if bin {
+        revision.push_str(":date-bin-microseconds-v1");
+    }
+    revision
 }
 
 struct Targets {
