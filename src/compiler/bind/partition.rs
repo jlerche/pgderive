@@ -17,54 +17,26 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         Ok(column)
     };
     let group_keys = parsed.groups.iter().map(&resolve).collect::<Result<Vec<_>>>()?;
-    let mut mode = None;
-    let mut keys = group_keys.clone();
-    let mut aggregates = Vec::new();
+    let mut state = Targets { mode: None, keys: group_keys.clone(), aggregates: Vec::new() };
     let mut columns = Vec::new();
+    let mut transforms = Vec::new();
     for target in parsed.targets {
+        let mut transform = crate::catalog::terminal::Transform::Identity;
         let column = match target.value {
             syntax::Value::Column(name) => resolve(&name)?,
             syntax::Value::Aggregate(value) => {
-                if let Some(window) = value.window {
-                    ensure!(
-                        group_keys.is_empty(),
-                        "grouped window composition requires subquery lowering"
-                    );
-                    let (candidate, window_keys) =
-                        bind_window(window, &resolve, scopes[0].relation)?;
-                    if let Some(prior) = &mode {
-                        ensure!(
-                            serde_json::to_vec(&(prior, &keys))?
-                                == serde_json::to_vec(&(&candidate, &window_keys))?,
-                            "multiple window specifications unsupported"
-                        );
-                    }
-                    keys = window_keys;
-                    mode = Some(candidate);
-                } else {
-                    ensure!(!group_keys.is_empty(), "ungrouped aggregates unsupported");
-                }
-                let argument = value.argument.as_ref().map(&resolve).transpose()?;
-                let oid = result_type(&value.function, argument.as_ref())?;
-                let name = format!("@aggregate_{}", aggregates.len());
-                let filter = value
-                    .filter
-                    .map(|expr| crate::compiler::expression::bind(expr, &resolve))
-                    .transpose()?;
-                aggregates.push(Aggregate {
-                    function: value.function,
-                    argument,
-                    filter: filter.map(crate::compiler::Predicate::new),
-                    field: name.clone(),
-                });
-                ColumnRef { name, right: false, oid, nullable: true }
+                let result =
+                    aggregate(value, &resolve, (&group_keys, scopes[0].relation), &mut state)?;
+                transform = result.1;
+                result.0
             }
         };
+        transforms.push(transform);
         columns.push(OutputColumn { column, label: target.label });
     }
-    ensure!(!aggregates.is_empty(), "partition requires an aggregate");
-    validate_keys(&keys)?;
-    if mode.is_none() {
+    ensure!(!state.aggregates.is_empty(), "partition requires an aggregate");
+    validate_keys(&state.keys)?;
+    if state.mode.is_none() {
         ensure!(
             columns
                 .iter()
@@ -73,22 +45,93 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
             "output column must appear in GROUP BY"
         );
     }
-    let spec = Partition { mode: mode.unwrap_or(Mode::Grouped { keys: group_keys }), aggregates };
+    let spec = Partition {
+        mode: state.mode.unwrap_or(Mode::Grouped { keys: group_keys }),
+        aggregates: state.aggregates,
+    };
     let relation = scopes[0].relation;
+    let terminal =
+        if transforms.iter().any(|value| *value != crate::catalog::terminal::Transform::Identity) {
+            Some(crate::catalog::Terminal::new(
+                transforms,
+                columns.iter().map(|column| column.column.oid).collect(),
+            )?)
+        } else {
+            None
+        };
     let output = crate::compiler::Projected {
         schema: relation.schema.clone(),
         table: relation.table.clone(),
         columns,
-        terminal: None,
+        terminal,
     };
-    let nodes = nodes(keys, spec);
+    let nodes = nodes(state.keys, spec);
     let predicates = parsed
         .predicate
         .map(|expr| crate::compiler::expression::bind(expr, &resolve))
         .transpose()?;
     let sources = vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }];
-    Ok(Compiled { program: crate::compiler::Program::Relational { relational: Relational { sources, nodes, output } }, predicates, revision: Some("sql-partition-v1:pg-query-6.2.1:pg-17.7:row-text-v1:json-v2:native-bag-v1:affected-partition-v1:integral-aggregate-v1:rows-frame-v1".into()) })
+    let numeric = output.terminal.is_some();
+    let revision = if numeric {
+        "sql-partition-v2:pg-query-6.2.1:pg-17.7:row-text-v1:json-exact-number-v1:native-bag-v1:affected-partition-v1:integer-numeric-aggregate-v1:rows-frame-v1"
+    } else {
+        "sql-partition-v1:pg-query-6.2.1:pg-17.7:row-text-v1:json-v2:native-bag-v1:affected-partition-v1:integral-aggregate-v1:rows-frame-v1"
+    };
+    Ok(Compiled {
+        program: crate::compiler::Program::Relational {
+            relational: Relational { sources, nodes, output },
+        },
+        predicates,
+        revision: Some(revision.into()),
+    })
 }
+struct Targets {
+    mode: Option<Mode>,
+    keys: Vec<ColumnRef>,
+    aggregates: Vec<Aggregate>,
+}
+fn aggregate(
+    value: syntax::Aggregate,
+    resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
+    context: (&[ColumnRef], &crate::source::Relation),
+    state: &mut Targets,
+) -> Result<(ColumnRef, crate::catalog::terminal::Transform)> {
+    use crate::catalog::terminal::Transform;
+    if let Some(window) = value.window {
+        ensure!(context.0.is_empty(), "grouped window composition requires subquery lowering");
+        let (candidate, window_keys) = bind_window(window, resolve, context.1)?;
+        if let Some(prior) = &state.mode {
+            ensure!(
+                serde_json::to_vec(&(prior, &state.keys))?
+                    == serde_json::to_vec(&(&candidate, &window_keys))?,
+                "multiple window specifications unsupported"
+            );
+        }
+        state.keys = window_keys;
+        state.mode = Some(candidate);
+    } else {
+        ensure!(!context.0.is_empty(), "ungrouped aggregates unsupported");
+    }
+    let argument = value.argument.as_ref().map(resolve).transpose()?;
+    let oid = result_type(&value.function, argument.as_ref())?;
+    let transform = match (&value.function, oid) {
+        (Function::Average, _) => Transform::Average,
+        (Function::Sum, 1700) => Transform::Numeric,
+        _ => Transform::Identity,
+    };
+    let name = format!("@aggregate_{}", state.aggregates.len());
+    let filter =
+        value.filter.map(|expr| crate::compiler::expression::bind(expr, resolve)).transpose()?;
+    let nullable = true;
+    state.aggregates.push(Aggregate {
+        function: value.function,
+        argument,
+        filter: filter.map(crate::compiler::Predicate::new),
+        field: name.clone(),
+    });
+    Ok((ColumnRef { name, right: false, oid, nullable }, transform))
+}
+
 fn validate_keys(keys: &[ColumnRef]) -> Result<()> {
     ensure!(
         keys.iter().all(|key| matches!(key.oid, 16 | 20 | 21 | 23 | 2950)),
@@ -116,10 +159,17 @@ fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32>
         Function::Count => Ok(20),
         Function::Sum => {
             ensure!(
-                argument.is_some_and(|arg| matches!(arg.oid, 21 | 23)),
-                "SUM requires int2/int4; numeric SUM(int8) is deferred"
+                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
+                "SUM requires an integral argument"
             );
-            Ok(20)
+            Ok(if argument.is_some_and(|arg| arg.oid == 20) { 1700 } else { 20 })
+        }
+        Function::Average => {
+            ensure!(
+                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
+                "AVG requires integral input"
+            );
+            Ok(1700)
         }
         Function::Min | Function::Max => {
             let column = argument.context("missing aggregate argument")?;

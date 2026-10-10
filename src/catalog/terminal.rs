@@ -9,6 +9,8 @@ pub enum Transform {
     Identity,
     Abs,
     Length,
+    Numeric,
+    Average,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,15 +43,7 @@ impl Terminal {
         );
         let mut signatures = Vec::new();
         for (transform, oid) in self.transforms.iter().zip(&self.types) {
-            let function = match (transform, oid) {
-                (Transform::Identity, 16 | 20 | 21 | 23 | 25 | 1043 | 2950) => None,
-                (Transform::Abs, 20) => Some(("pg_catalog.abs(bigint)", "int8abs")),
-                (Transform::Abs, 21) => Some(("pg_catalog.abs(smallint)", "int2abs")),
-                (Transform::Abs, 23) => Some(("pg_catalog.abs(integer)", "int4abs")),
-                (Transform::Length, 25 | 1043) => Some(("pg_catalog.length(text)", "textlen")),
-                _ => anyhow::bail!("SQL type: unsupported terminal function signature"),
-            };
-            signatures.extend(function);
+            signatures.extend(signatures_for(transform, *oid)?);
         }
         signatures.sort_unstable();
         signatures.dedup();
@@ -70,13 +64,7 @@ impl Terminal {
         for (signature, implementation) in self.signatures()? {
             let row = sql.query_one("SELECT jsonb_build_object('oid',p.oid,'source',p.prosrc,'binary',p.probin,'config',p.proconfig,'args',p.proargtypes::text,'result',p.prorettype,'kind',p.prokind,'volatile',p.provolatile,'strict',p.proisstrict,'language',l.lanname,'schema',n.nspname) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE p.oid=pg_catalog.to_regprocedure($1)", &[&signature]).await?;
             let value: Value = row.try_get(0)?;
-            let (argument, result) = match implementation {
-                "int8abs" => ("20", "20"),
-                "int2abs" => ("21", "21"),
-                "int4abs" => ("23", "23"),
-                "textlen" => ("25", "23"),
-                _ => anyhow::bail!("unknown terminal implementation"),
-            };
+            let (argument, result) = implementation_types(implementation)?;
             ensure!(
                 value["args"] == argument && value["result"] == result,
                 "terminal built-in types changed"
@@ -131,6 +119,12 @@ impl Terminal {
                 };
                 Ok(format!("pg_catalog.to_jsonb(pg_catalog.abs(({text})::pg_catalog.{native}))"))
             }
+            (Transform::Numeric, _) => {
+                Ok(format!("pg_catalog.to_jsonb(({text})::pg_catalog.numeric)"))
+            }
+            (Transform::Average, _) => Ok(format!(
+                "pg_catalog.to_jsonb(pg_catalog.numeric_div(pg_catalog.split_part({text},'/',1)::pg_catalog.numeric,pg_catalog.split_part({text},'/',2)::pg_catalog.numeric))"
+            )),
             (Transform::Length, _) => {
                 Ok(format!("pg_catalog.to_jsonb(pg_catalog.length(({text})::pg_catalog.text))"))
             }
@@ -163,6 +157,39 @@ impl Terminal {
                 ))
             })
             .collect()
+    }
+}
+
+fn signatures_for(transform: &Transform, oid: u32) -> Result<Vec<(&'static str, &'static str)>> {
+    let mut signatures = match (transform, oid) {
+        (Transform::Identity, 16 | 20 | 21 | 23 | 25 | 1043 | 2950) => Vec::new(),
+        (Transform::Abs, 20) => vec![("pg_catalog.abs(bigint)", "int8abs")],
+        (Transform::Abs, 21) => vec![("pg_catalog.abs(smallint)", "int2abs")],
+        (Transform::Abs, 23) => vec![("pg_catalog.abs(integer)", "int4abs")],
+        (Transform::Length, 25 | 1043) => vec![("pg_catalog.length(text)", "textlen")],
+        (Transform::Numeric | Transform::Average, 1700) => {
+            vec![("pg_catalog.numeric_in(cstring,oid,integer)", "numeric_in")]
+        }
+        _ => anyhow::bail!("SQL type: unsupported terminal function signature"),
+    };
+    if *transform == Transform::Average {
+        signatures.extend([
+            ("pg_catalog.numeric_div(numeric,numeric)", "numeric_div"),
+            ("pg_catalog.split_part(text,text,integer)", "split_part"),
+        ]);
+    }
+    Ok(signatures)
+}
+fn implementation_types(implementation: &str) -> Result<(&'static str, &'static str)> {
+    match implementation {
+        "int8abs" => Ok(("20", "20")),
+        "int2abs" => Ok(("21", "21")),
+        "int4abs" => Ok(("23", "23")),
+        "textlen" => Ok(("25", "23")),
+        "numeric_in" => Ok(("2275 26 23", "1700")),
+        "numeric_div" => Ok(("1700 1700", "1700")),
+        "split_part" => Ok(("25 25 23", "25")),
+        _ => anyhow::bail!("unknown terminal implementation"),
     }
 }
 

@@ -5,6 +5,7 @@ use serde::Serialize;
 pub enum Function {
     Count,
     Sum,
+    Average,
     Min,
     Max,
 }

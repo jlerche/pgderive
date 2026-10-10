@@ -116,7 +116,7 @@ fn partition_binding_rejects_unsupported_semantics() -> Result<()> {
         WINDOW.replace("ORDER BY b.id", "ORDER BY b.price"),
         WINDOW.replace("1 PRECEDING", "NULL PRECEDING"),
         WINDOW.replace("1 FOLLOWING", "2 FOLLOWING EXCLUDE CURRENT ROW"),
-        GROUPED.replace("SUM(b.price)", "AVG(b.price)"),
+        GROUPED.replace("SUM(b.price)", "AVG(DISTINCT b.price)"),
         GROUPED.replace("COUNT(*) AS n", "COUNT(DISTINCT b.price) AS n"),
         GROUPED.replace("b.auction AS g", "b.id AS g"),
     ] {
@@ -216,5 +216,59 @@ async fn window_resource_failure_preserves_root_and_time() -> Result<()> {
     ]);
     assert!(query.prepare(relational::inputs(&rows, ir, 1)?).await.is_err());
     assert_eq!(query.checkpoint()?, before);
+    Ok(())
+}
+
+#[tokio::test]
+async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()> {
+    let native = contract();
+    let compiled = compile(
+        "SELECT b.auction,AVG(b.price),SUM(b.price) FROM source.bid b GROUP BY b.auction",
+        &native,
+    )?;
+    assert!(compiled.validate_bound().is_err());
+    let ir = compiled.relational().context("missing numeric IR")?;
+    let options = settings();
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let large =
+        row(&[("id", Some("1")), ("auction", None), ("price", Some("9223372036854775807"))]);
+    let negative = row(&[("id", Some("2")), ("auction", None), ("price", Some("-1"))]);
+    let null = row(&[("id", Some("3")), ("auction", None), ("price", None)]);
+    let changes = batch(vec![
+        ("bid", large.clone(), 2),
+        ("bid", negative.clone(), 3),
+        ("bid", null.clone(), 1),
+    ]);
+    let candidate = query.prepare(relational::inputs(&changes, ir, 1)?).await?;
+    let total = num_bigint::BigInt::from(i64::MAX) * 2_i32 - 3_i32;
+    let expected: Row = [
+        ("0:auction".into(), None),
+        ("@aggregate_0".into(), Some(format!("{total}/5"))),
+        ("@aggregate_1".into(), Some(total.to_string())),
+    ]
+    .into();
+    assert_eq!(
+        candidate.output().batch,
+        Batch::from_updates([((Vec::new(), expected.clone()), 1)])?
+    );
+    relational::deltas(&candidate.output().batch, &ir.output)?;
+    query.commit(candidate)?;
+    let checkpoint = query.checkpoint()?;
+    query = relational::build(&native, &compiled, &options)?;
+    query.restore_checkpoint(checkpoint).await?;
+    let changes = batch(vec![("bid", large, -2), ("bid", negative, -3)]);
+    let candidate = query.prepare(relational::inputs(&changes, ir, 2)?).await?;
+    let empty: Row =
+        [("0:auction".into(), None), ("@aggregate_0".into(), None), ("@aggregate_1".into(), None)]
+            .into();
+    assert_eq!(
+        candidate.output().batch,
+        Batch::from_updates([((Vec::new(), expected), -1), ((Vec::new(), empty), 1)])?
+    );
+    query.commit(candidate)?;
+    let before = serde_json::to_vec(&query.checkpoint()?)?;
+    let changes = batch(vec![("bid", null, -2)]);
+    assert!(query.prepare(relational::inputs(&changes, ir, 3)?).await.is_err());
+    assert_eq!(serde_json::to_vec(&query.checkpoint()?)?, before);
     Ok(())
 }

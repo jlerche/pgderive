@@ -61,8 +61,8 @@ class PartitionFixture(SqlFixture):
         assert beyond.strip() == '0'
 
 
-def qualify(output, command, window, frame_spec=None):
-    fixture = PartitionFixture(output, window, frame_spec)
+def qualify(output, command, window, frame_spec=None, fixture_class=PartitionFixture):
+    fixture = fixture_class(output, window, frame_spec)
     try:
         fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY auction')
         if window:

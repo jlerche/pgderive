@@ -283,12 +283,12 @@ This evidence qualifies this subset, not complete Nexmark or window support.
 
 Single-source grouped SELECT supports multiple native bool/integral/UUID column
 keys and arbitrary output ordering of those keys and COUNT(*), COUNT(column),
-SUM(int2/int4), and integral MIN/MAX. Each aggregate may have a FILTER using the
+SUM(int2/int4/int8), AVG(int2/int4/int8), and integral MIN/MAX. Each aggregate may have a FILTER using the
 supported three-valued predicate subset. NULL grouping keys remain present;
 COUNT(column) ignores NULL; filters retain only true. Existing groups with no
 qualifying non-NULL measures produce COUNT zero and SUM/MIN/MAX NULL. Removing
-all input rows removes a grouped result. Ungrouped aggregation, AVG, DISTINCT,
-numeric SUM(int8), nested queries and grouped/window composition remain rejected.
+all input rows removes a grouped result. Ungrouped aggregation, DISTINCT,
+numeric input aggregates, nested queries and grouped/window composition remain rejected.
 
 Single-source window SELECT supports the same aggregate functions with explicit
 ROWS frames and integral column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition
@@ -313,10 +313,15 @@ performance. Future optimized COUNT/SUM state must preserve the same delta contr
 Large or skewed partitions and expansive ROWS frames can hit explicit row, byte
 and frame-work limits; failure preserves prior visibility and progress. Output
 contributions use exact spillable consolidation before finalized i64 narrowing.
-SUM(int2/int4) results and COUNT must fit PostgreSQL bigint; int8 SUM/AVG require
-a separately qualified numeric implementation and are not approximated.
+SUM(int2/int4) results and COUNT must fit PostgreSQL bigint. AVG(int2/int4)
+also requires its finalized sum to fit bigint; exceeding this limit fails closed.
+AVG non-NULL counts must fit bigint. SUM(int8) and AVG(int8) keep arbitrary-precision
+integer sums; PostgreSQL numeric output and division are finalized at publication.
 
-New partition plans use sql-partition-v1/affected-partition-v1 identity including
+Integral-only legacy partition plans retain sql-partition-v1 identity. New numeric
+output plans use sql-partition-v2, including exact numeric JSON and terminal
+aggregate-statistic codecs, bound PostgreSQL built-ins, and affected-partition-v1
+identity covering
 typed functions, FILTER, grouping/ordering, NULL placement, frame bounds, source
 layouts and codecs. Existing plan identities remain unchanged. Restart cannot
 reuse state under changed window/group semantics. Qualification compares grouped
@@ -359,3 +364,31 @@ The affected-partition implementation above is the correctness foundation, with
 bounded recomputation costs explicitly exposed rather than a claim that every
 window or partition scales linearly. Object-local indexing, batched reads and
 compaction optimizations must preserve this result/delta contract.
+
+
+## Exact integer numeric output at publication
+
+Integral AVG is a terminal finalizer over exact Rust sum/non-NULL-count statistics,
+not an approximate Rust division. Rust persists a deterministic decimal
+`sum/count` statistic payload in the raw object-backed bag; SUM(int8) persists its
+exact decimal integer total. The typed SQL result is numeric, while this internal
+payload is explicitly interpreted by the terminal map and is never exposed as a
+numeric input to another operator. PostgreSQL's numeric input and numeric_div
+functions produce the destination value in the same atomic transaction as object
+membership and source progress. All-NULL/empty-frame inputs produce NULL without
+division. Filters run in Rust before statistics accumulation.
+
+The terminal binding fingerprints concrete immutable built-in signatures and
+server version/encoding; changing that environment rejects restart/publication.
+The JSON codec preserves arbitrary-precision numbers through PostgreSQL responses,
+so large numeric results never pass through f64. The existing nonnumeric identities
+keep their serialized form. Native numeric source columns, arithmetic, nested
+aggregate/window composition and AVG values used by downstream operators require
+further typed lowering and remain rejected. This is safe sink deferral for the
+currently compiled terminal aggregate plans, not permission to defer relational
+keys, predicates or ordering to PostgreSQL.
+
+The owned numeric harness checks int2/int4/int8 AVG and int8 SUM against PostgreSQL
+and an independent Decimal oracle, including display-scale rounding, values above
+floating-point precision, NULLs, FILTER, signed changes, ROWS neighbors, alias
+normalization and cold restart.

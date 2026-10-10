@@ -90,7 +90,17 @@ fn aggregate_value(
     }
     match aggregate.function {
         Function::Count => Ok(Some(i64::try_from(count).context("COUNT overflow")?.to_string())),
-        Function::Sum if count == BigInt::from(0) => Ok(None),
+        Function::Sum | Function::Average if count == BigInt::from(0) => Ok(None),
+        Function::Average => {
+            let count = i64::try_from(count).context("AVG non-NULL count overflow")?;
+            if aggregate.argument.as_ref().is_some_and(|arg| arg.oid != 20) {
+                i64::try_from(&sum).context("AVG(int2/int4) sum overflow")?;
+            }
+            Ok(Some(format!("{sum}/{count}")))
+        }
+        Function::Sum if aggregate.argument.as_ref().is_some_and(|arg| arg.oid == 20) => {
+            Ok(Some(sum.to_string()))
+        }
         Function::Sum => {
             Ok(Some(i64::try_from(sum).context("SUM(int2/int4) overflow")?.to_string()))
         }

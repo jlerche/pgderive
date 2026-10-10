@@ -78,6 +78,7 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
     let function = match name {
         "count" => Function::Count,
         "sum" => Function::Sum,
+        "avg" => Function::Average,
         "min" => Function::Min,
         "max" => Function::Max,
         _ => anyhow::bail!("unsupported aggregate"),

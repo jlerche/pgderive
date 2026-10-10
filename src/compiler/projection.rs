@@ -39,7 +39,7 @@ impl Projected {
                             _ => anyhow::bail!("invalid native boolean"),
                         },
                         20 | 21 | 23 => Ok(Cell::Integer(value.parse()?)),
-                        25 | 1043 | 2950 => Ok(Cell::Text(value.into())),
+                        25 | 1043 | 2950 | 1700 => Ok(Cell::Text(value.into())),
                         _ => anyhow::bail!("unsupported native projection codec"),
                     })
                     .transpose()

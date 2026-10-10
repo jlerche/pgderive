@@ -30,3 +30,16 @@ fn signature_allowlist_and_typed_rendering() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn numeric_maps_bind_exact_signatures_and_json_numbers() -> Result<()> {
+    let map = Terminal::new(vec![Transform::Numeric, Transform::Average], vec![1700, 1700])?;
+    assert_eq!(map.signatures()?.len(), 3);
+    assert!(map.expression(0)?.contains("::pg_catalog.numeric"));
+    assert!(map.expression(1)?.contains("pg_catalog.numeric_div"));
+    assert!(Terminal::new(vec![Transform::Average], vec![20]).is_err());
+    let exact = "9223372036854775806.6666666666666667";
+    let value: serde_json::Value = serde_json::from_str(exact)?;
+    assert_eq!(serde_json::to_string(&value)?, exact);
+    Ok(())
+}
