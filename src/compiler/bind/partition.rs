@@ -11,38 +11,32 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compiled> {
     let scopes = [scope(parsed.source, contract)?];
-    let resolve = |name: &crate::compiler::parser::Name| {
+    let native = |name: &crate::compiler::parser::Name| {
         let mut column = resolve(name, &scopes)?;
         column.name = field(0, &column.name);
         Ok(column)
     };
+    validate_expansion(parsed.expansion.as_ref(), &scopes[0])?;
+    let resolve = |name: &crate::compiler::parser::Name| {
+        crate::compiler::expansion::resolve(name, parsed.expansion.as_ref(), native(name))
+    };
     let mut computed = Vec::new();
     let group_keys = keys(parsed.groups, &resolve, &mut computed)?;
     let mut state = Targets { mode: None, keys: group_keys.clone(), aggregates: Vec::new() };
-    let mut columns = Vec::new();
-    let mut transforms = Vec::new();
-    for target in parsed.targets {
-        let mut transform = crate::catalog::terminal::Transform::Identity;
-        let column = match target.value {
-            syntax::Value::Column(name) => resolve(&name)?,
-            syntax::Value::Bin(bin) => {
-                crate::compiler::scalar::bind(&bin, &resolve, &mut computed)?
-            }
-            syntax::Value::Aggregate(value) => {
-                let result =
-                    aggregate(value, &resolve, (&group_keys, scopes[0].relation), &mut state)?;
-                transform = result.1;
-                result.0
-            }
-        };
-        transforms.push(transform);
-        columns.push(OutputColumn { column, label: target.label });
-    }
+    let BoundTargets { columns, transforms } = bind_targets(
+        parsed.targets,
+        &resolve,
+        &mut computed,
+        (&group_keys, scopes[0].relation),
+        &mut state,
+    )?;
     let projection = state.aggregates.is_empty() && group_keys.is_empty();
     ensure!(
-        !state.aggregates.is_empty() || projection && !computed.is_empty(),
+        !state.aggregates.is_empty()
+            || projection && (!computed.is_empty() || parsed.expansion.is_some()),
         "partition requires an aggregate"
     );
+    validate_occurrences(parsed.expansion.as_ref(), state.mode.as_ref())?;
     validate_keys(&state.keys)?;
     if state.mode.is_none() && !projection {
         ensure!(
@@ -67,7 +61,7 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         terminal,
     };
     let mapped = !computed.is_empty();
-    let nodes = if projection {
+    let mut nodes = if projection {
         vec![
             Node::Source { id: "source".into(), source: 0 },
             Node::Map { id: "mapped".into(), input: "source".into(), computed },
@@ -76,10 +70,8 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
     } else {
         nodes(state.keys, spec, computed)
     };
-    let predicates = parsed
-        .predicate
-        .map(|expr| crate::compiler::expression::bind(expr, &resolve))
-        .transpose()?;
+    attach_expansion(&mut nodes, parsed.expansion.as_ref())?;
+    let predicates = source_predicate(parsed.predicate, &resolve)?;
     let sources = vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }];
     let numeric = output.terminal.is_some();
     let revision = plan_revision(numeric, mapped, &nodes);
@@ -90,6 +82,100 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         predicates,
         revision: Some(revision),
     })
+}
+fn source_predicate(
+    predicate: Option<crate::compiler::syntax::Expr>,
+    resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
+) -> Result<Option<crate::compiler::expression::Expr>> {
+    let predicates = predicate
+        .map(|expr| {
+            crate::compiler::expression::bind(expr, &|name| {
+                let column = resolve(name)?;
+                ensure!(
+                    column.name != crate::compiler::expansion::FIELD,
+                    "WHERE on generated series columns requires post-expansion filtering"
+                );
+                Ok(column)
+            })
+        })
+        .transpose()?;
+    Ok(predicates)
+}
+struct BoundTargets {
+    columns: Vec<OutputColumn>,
+    transforms: Vec<crate::catalog::terminal::Transform>,
+}
+fn bind_targets(
+    targets: Vec<syntax::Target>,
+    resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
+    computed: &mut Vec<crate::compiler::scalar::Computed>,
+    context: (&[ColumnRef], &crate::source::Relation),
+    state: &mut Targets,
+) -> Result<BoundTargets> {
+    let mut columns = Vec::new();
+    let mut transforms = Vec::new();
+    for target in targets {
+        let mut transform = crate::catalog::terminal::Transform::Identity;
+        let column = match target.value {
+            syntax::Value::Column(name) => resolve(&name)?,
+            syntax::Value::Bin(bin) => crate::compiler::scalar::bind(&bin, resolve, computed)?,
+            syntax::Value::Aggregate(value) => {
+                let result = aggregate(value, resolve, context, state)?;
+                transform = result.1;
+                result.0
+            }
+        };
+        transforms.push(transform);
+        columns.push(OutputColumn { column, label: target.label });
+    }
+    Ok(BoundTargets { columns, transforms })
+}
+fn validate_occurrences(
+    series: Option<&crate::compiler::parser::expansion::Series>,
+    mode: Option<&Mode>,
+) -> Result<()> {
+    if series.is_some()
+        && let Some(Mode::Rows { order, .. }) = mode
+    {
+        ensure!(
+            order.iter().any(|order| order.column.name == crate::compiler::expansion::FIELD),
+            "expanded ROWS ordering must include generated ordinal"
+        );
+    }
+    Ok(())
+}
+fn validate_expansion(
+    series: Option<&crate::compiler::parser::expansion::Series>,
+    scope: &super::Scope<'_>,
+) -> Result<()> {
+    if let Some(series) = series {
+        ensure!(series.alias != super::qualifier(scope), "duplicate source/series alias");
+    }
+    Ok(())
+}
+fn attach_expansion(
+    nodes: &mut Vec<Node>,
+    series: Option<&crate::compiler::parser::expansion::Series>,
+) -> Result<()> {
+    let Some(series) = series else {
+        return Ok(());
+    };
+    for node in nodes.iter() {
+        if let Node::Map { computed, .. } = node {
+            for value in computed {
+                if let Some((_, duration)) = &value.expression.shift {
+                    ensure!(
+                        duration
+                            .checked_mul(i64::from(series.end))
+                            .is_some_and(|micros| micros <= 9_007_199_254_740_992),
+                        "hopping offset exceeds exact PostgreSQL interval multiplication range"
+                    );
+                }
+            }
+        }
+    }
+    crate::compiler::expansion::attach(nodes, series);
+    Ok(())
 }
 fn keys(
     parsed: Vec<crate::compiler::parser::scalar::Key>,
@@ -111,6 +197,9 @@ fn plan_revision(numeric: bool, mapped: bool, nodes: &[Node]) -> String {
     let mut revision = revision(numeric, mapped);
     if nodes.iter().any(|node| matches!(node, Node::Statistics { .. })) {
         revision.push_str(":exact-linear-statistics-v1");
+    }
+    if nodes.iter().any(|node| matches!(node, Node::Expand { .. })) {
+        revision.push_str(":bounded-series-expansion-v1:fixed-duration-offset-v1");
     }
     revision
 }

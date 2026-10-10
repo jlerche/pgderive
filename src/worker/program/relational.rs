@@ -31,6 +31,7 @@ pub(in crate::worker) fn build(
     let ir = compiled.relational().context("expected relational program")?;
     let mut operators = Operators {
         projects: BTreeMap::new(),
+        expansions: BTreeMap::new(),
         joins: BTreeMap::new(),
         partitions: BTreeMap::new(),
         statistics: BTreeMap::new(),
@@ -38,6 +39,9 @@ pub(in crate::worker) fn build(
     for node in &ir.nodes {
         match node {
             Node::Source { .. } => {}
+            Node::Expand { id, series, .. } => {
+                operators.expansions.insert(id.clone(), Arc::new(expand(series, compiled)));
+            }
             Node::Map { id, computed, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(map(computed, compiled)));
             }
@@ -98,6 +102,30 @@ pub(in crate::worker) fn build(
         }
     }
     Query::new(plan(contract, compiled, ir)?, operators, settings)
+}
+
+fn expand(
+    series: &crate::compiler::expansion::Series,
+    compiled: &Compiled,
+) -> crate::engine::dataflow::Expand<Key, Row, Key, Row> {
+    let series = series.clone();
+    let compiled = compiled.clone();
+    crate::engine::dataflow::Expand::new(move |key: &Key, row: &Row, emit| {
+        if series.start > series.end || !compiled.qualifies((row, row))? {
+            return Ok(());
+        }
+        for ordinal in series.start..=series.end {
+            let mut expanded = row.clone();
+            ensure!(
+                expanded
+                    .insert(crate::compiler::expansion::FIELD.into(), Some(ordinal.to_string()))
+                    .is_none(),
+                "duplicate generated ordinal"
+            );
+            emit((key.clone(), expanded))?;
+        }
+        Ok(())
+    })
 }
 
 fn join_map() -> Project<Key, (Row, Row), Key, Row> {
@@ -164,6 +192,7 @@ pub(in crate::worker) fn plan(
                 | Node::Finalize { id, input, .. } => {
                     (id, plan::Kind::Project, vec![input.clone()])
                 }
+                Node::Expand { id, input, .. } => (id, plan::Kind::Expand, vec![input.clone()]),
                 Node::Statistics { id, input, .. } => {
                     (id, plan::Kind::Statistics, vec![input.clone()])
                 }

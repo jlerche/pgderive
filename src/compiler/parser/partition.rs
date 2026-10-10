@@ -3,6 +3,7 @@ use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) struct Parsed {
     pub source: Table,
+    pub expansion: Option<super::expansion::Series>,
     pub targets: Vec<Target>,
     pub groups: Vec<super::scalar::Key>,
     pub predicate: Option<crate::compiler::syntax::Expr>,
@@ -31,6 +32,9 @@ pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
     let [source] = select.from_clause.as_slice() else {
         return Ok(false);
     };
+    if super::expansion::eligible(source)? {
+        return Ok(true);
+    }
     if !matches!(node(source)?, NodeEnum::RangeVar(_)) {
         return Ok(false);
     }
@@ -46,11 +50,13 @@ pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
 }
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
     ensure!((1..=64).contains(&select.target_list.len()), "partition output count unsupported");
-    let source = super::table(select.from_clause.first().context("missing source")?)?;
+    let (source, expansion) =
+        super::expansion::source(select.from_clause.first().context("missing source")?)?;
     let targets = select.target_list.iter().map(parse_target).collect::<Result<_>>()?;
     let groups = select.group_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
     Ok(Parsed {
         source,
+        expansion,
         targets,
         groups,
         predicate: crate::compiler::syntax::predicate(select.where_clause.as_deref())?,
@@ -66,7 +72,10 @@ fn parse_target(value: &Node) -> Result<Target> {
         let super::scalar::Key::Bin(bin) = super::scalar::key(expression)? else {
             anyhow::bail!("invalid date_bin target");
         };
-        (Value::Bin(bin), "date_bin".into())
+        {
+            let label = if bin.shift.is_some() { "?column?" } else { "date_bin" };
+            (Value::Bin(bin), label.into())
+        }
     } else if let NodeEnum::FuncCall(call) = node(expression)? {
         let name = super::expressions::names(&call.funcname)?.0;
         let function = match name.as_slice() {

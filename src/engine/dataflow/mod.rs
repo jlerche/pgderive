@@ -5,6 +5,7 @@
 mod arrangement;
 mod builder;
 mod circuit;
+mod expand;
 mod join;
 mod operators;
 mod partition;
@@ -22,6 +23,7 @@ use anyhow::{Context, Result, ensure};
 pub use arrangement::Arrangement;
 pub use builder::CircuitBuilder;
 pub use circuit::{Circuit, NodeContext, NodeOutput, StateUpdate};
+pub use expand::Expand;
 pub use join::Join;
 use object_store::ObjectStore;
 pub use partition::{Partition, PartitionWork};

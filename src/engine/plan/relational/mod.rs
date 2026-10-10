@@ -7,8 +7,8 @@ use crate::{
     engine::{
         Batch,
         dataflow::{
-            Arrangement, Partition, PreparedGraph, PreparedMaintenance, Project, Statistics,
-            TimedBatch,
+            Arrangement, Expand, Partition, PreparedGraph, PreparedMaintenance, Project,
+            Statistics, TimedBatch,
         },
         reader::{BatchData, BlockCache, CacheStats},
         trace::TraceSnapshot,
@@ -17,6 +17,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeMap, sync::Arc};
 
+type Expansion<K, V> = Arc<Expand<K, V, K, V>>;
 type Linear<K, V> = Arc<Statistics<K, V>>;
 type Group<K, V> = Arc<Partition<K, V>>;
 type Unary<K, V> = Arc<Project<K, V, K, V>>;
@@ -26,6 +27,8 @@ type Binary<K, V> = Arc<Project<K, (V, V), K, V>>;
 pub struct Operators<K: BatchData, V: BatchData> {
     /// Unary filter/map callbacks, keyed by declared node identity.
     pub projects: BTreeMap<String, Unary<K, V>>,
+    /// Pure relational expansions keyed by declared node identity.
+    pub expansions: BTreeMap<String, Expansion<K, V>>,
     /// Projection of each complete joined tuple pair, keyed by join identity.
     pub joins: BTreeMap<String, Binary<K, V>>,
     /// Affected-partition callbacks keyed by declared aggregate node identity.

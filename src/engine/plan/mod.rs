@@ -11,6 +11,8 @@ pub enum Kind {
     Source,
     /// Pure projection/filter of one edge.
     Project,
+    /// Pure bounded relational expansion of one weighted edge.
+    Expand,
     /// Inner equijoin of two edges.
     Join,
     /// Grouped COUNT/SUM statistics from one edge.

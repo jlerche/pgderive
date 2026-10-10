@@ -47,6 +47,15 @@ impl Timestamp {
         ensure!((MIN..END).contains(&result), "date_bin timestamp out of range");
         Ok(Self(result))
     }
+    pub(crate) fn subtract_duration(self, duration: i64) -> Result<Self> {
+        if matches!(self.0, i64::MIN | i64::MAX) {
+            return Ok(self);
+        }
+        let result =
+            self.0.checked_sub(duration).context("timestamp interval arithmetic out of range")?;
+        ensure!((MIN..END).contains(&result), "timestamp interval arithmetic out of range");
+        Ok(Self(result))
+    }
     pub(crate) fn text(self, oid: u32) -> Result<String> {
         Ok(self.json(oid)?.replacen('T', " ", 1).replace("+00:00", "+00"))
     }

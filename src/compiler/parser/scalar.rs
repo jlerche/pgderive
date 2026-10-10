@@ -6,12 +6,16 @@ pub(in crate::compiler) struct Bin {
     pub stride: i64,
     pub origin: String,
     pub oid: u32,
+    pub shift: Option<(Name, i64)>,
 }
 pub(in crate::compiler) enum Key {
     Column(Name),
     Bin(Bin),
 }
 pub(super) fn is_bin(value: &Node) -> Result<bool> {
+    if let NodeEnum::AExpr(expression) = node(value)? {
+        return is_bin(optional(expression.lexpr.as_deref())?);
+    }
     let NodeEnum::FuncCall(call) = node(value)? else {
         return Ok(false);
     };
@@ -23,20 +27,13 @@ pub(super) fn key(value: &Node) -> Result<Key> {
     if !is_bin(value)? {
         return Ok(Key::Column(column(value)?));
     }
+    if let NodeEnum::AExpr(_) = node(value)? {
+        return shifted(value);
+    }
     let NodeEnum::FuncCall(call) = node(value)? else {
         anyhow::bail!("invalid date_bin call");
     };
-    ensure!(
-        !call.agg_star
-            && !call.agg_distinct
-            && !call.agg_within_group
-            && !call.func_variadic
-            && call.agg_order.is_empty()
-            && call.agg_filter.is_none()
-            && call.over.is_none()
-            && call.funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall),
-        "date_bin modifiers unsupported"
-    );
+    validate_call(call)?;
     let [stride, input, origin] = call.args.as_slice() else {
         anyhow::bail!("date_bin requires stride, native column and typed origin");
     };
@@ -67,7 +64,54 @@ pub(super) fn key(value: &Node) -> Result<Key> {
         stride,
         origin: string(optional(cast.arg.as_deref())?)?,
         oid,
+        shift: None,
     }))
+}
+pub(super) fn validate_call(call: &pg::FuncCall) -> Result<()> {
+    ensure!(
+        !call.agg_star
+            && !call.agg_distinct
+            && !call.agg_within_group
+            && !call.func_variadic
+            && call.agg_order.is_empty()
+            && call.agg_filter.is_none()
+            && call.over.is_none()
+            && call.funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall),
+        "scalar/series modifiers unsupported"
+    );
+    Ok(())
+}
+fn operator<'a>(value: &'a Node, op: &str) -> Result<(&'a Node, &'a Node)> {
+    let NodeEnum::AExpr(expression) = node(value)? else {
+        anyhow::bail!("hopping arithmetic requires an operator");
+    };
+    ensure!(
+        expression.kind == i32::from(pg::AExprKind::AexprOp)
+            && super::expressions::names(&expression.name)?.0 == [op],
+        "unsupported hopping operator"
+    );
+    Ok((optional(expression.lexpr.as_deref())?, optional(expression.rexpr.as_deref())?))
+}
+fn shifted(value: &Node) -> Result<Key> {
+    let (bin, offset) = operator(value, "-")?;
+    let Key::Bin(mut bin) = key(bin)? else {
+        anyhow::bail!("hopping base requires date_bin");
+    };
+    ensure!(bin.shift.is_none(), "nested hopping offsets unsupported");
+    let (index, duration) = operator(offset, "*")?;
+    let NodeEnum::TypeCast(cast) = node(duration)? else {
+        anyhow::bail!("hopping offset requires explicit interval");
+    };
+    let text = string(optional(cast.arg.as_deref())?)?;
+    ensure!(
+        !text
+            .split_whitespace()
+            .last()
+            .is_some_and(|unit| matches!(unit.to_ascii_lowercase().as_str(), "day" | "days")),
+        "hopping offsets require time durations, not calendar days"
+    );
+    bin.shift = Some((column(index)?, interval(duration)?));
+    Ok(Key::Bin(bin))
 }
 fn string(value: &Node) -> Result<String> {
     let NodeEnum::AConst(value) = node(value)? else {

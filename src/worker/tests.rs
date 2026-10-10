@@ -167,5 +167,6 @@ mod projection;
 
 mod relational;
 
+mod expansion;
 mod partition;
 mod statistics;

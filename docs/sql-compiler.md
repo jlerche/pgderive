@@ -492,3 +492,43 @@ case bootstraps a 256-row group, restores it under a 16-contribution tick budget
 and updates one row with forced consolidation spilling. This verifies the delta
 path under that budget; it does not establish arbitrary group size or throughput.
 MIN/MAX and ROWS retain their existing affected-partition costs and limits.
+
+
+## Explicit bounded hopping expansion
+
+A single-source CROSS JOIN with `generate_series(start, stop) AS w(n)` now lowers
+to a pure Expand node. Both bounds must be int4 constants from 0 through 1023;
+step defaults to one and start greater than stop produces an empty relation.
+The relation and column aliases are required and obey identifier/ambiguity rules.
+The function may be unqualified or qualified by pg_catalog. Other series overloads,
+LATERAL, ordinality, column definitions and arbitrary set-returning functions are
+rejected before registration. Generated values can be projected, grouped or used
+as supported integral aggregate inputs. WHERE currently addresses source columns;
+generated-column filters require a later post-expansion filter node.
+
+Hopping starts are expressed in SQL as `date_bin(...) - w.n * INTERVAL '2 seconds'`.
+The date-bin base keeps its existing typed origin/stride rules. Offset intervals
+use one positive time quantity from microseconds through hours, with exact
+microsecond precision. Calendar days/months/years are rejected. The largest
+ordinal times the duration must fit the exact double-precision integer range used
+by PostgreSQL's interval multiplication; finite timestamp arithmetic retains
+PostgreSQL range errors. NULL and infinite timestamp inputs retain their SQL
+values for every generated membership, so NULL/infinite groups receive all the
+rows that the explicit cross join produces. The compiler does not add a NULL filter.
+
+Expansion emits lazily into the exact spillable consolidator. Every emitted full
+row includes the generated ordinal and carries the source contribution's signed
+weight; final projection collisions consolidate normally. The series bounds,
+resolved scalar expressions and bounded-series-expansion-v1/fixed-duration-offset-v1
+revisions bind durable identity. There is no clock-driven expiry or late-data rule.
+Non-temporal ROWS over expanded inputs additionally requires the generated ordinal
+in the SQL ORDER BY alongside every source primary-key column, preserving explicit
+occurrence order. Hopping windows are SQL relational membership, distinct from
+ROWS/RANGE/GROUPS aggregate frames.
+
+The common gate compares both timestamp overloads, pure series projection,
+hopping projection collisions and empty expansion with PostgreSQL and an
+independent datetime/full-bag oracle through inserts, updates, deletes, NULLs,
+infinities, pre-origin/DST instants, alias normalization and cold restart. Unit
+checks cover weighted membership, complete-tick cancellation and fanout failure
+without changed visibility. Bounds and these checks establish this subset only.

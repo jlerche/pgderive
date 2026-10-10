@@ -41,6 +41,7 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
     let definition = plan.definition();
     ensure!(definition.outputs.len() == 1, "relational executor requires one output");
     let mut projects = BTreeSet::new();
+    let mut expansions = BTreeSet::new();
     let mut joins = BTreeSet::new();
     let mut partitions = BTreeSet::new();
     let mut statistics = BTreeSet::new();
@@ -58,6 +59,9 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
     for node in &definition.nodes {
         match node.kind {
             Kind::Source => {}
+            Kind::Expand => {
+                expansions.insert(node.id.clone());
+            }
             Kind::Project => {
                 projects.insert(node.id.clone());
             }
@@ -86,6 +90,7 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
     }
     ensure!(
         projects == operators.projects.keys().cloned().collect()
+            && expansions == operators.expansions.keys().cloned().collect()
             && joins == operators.joins.keys().cloned().collect()
             && partitions == operators.partitions.keys().cloned().collect()
             && statistics == operators.statistics.keys().cloned().collect(),
@@ -105,6 +110,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                     sources.push(edge.clone());
                     edge
                 }
+                Kind::Expand => self.expand(&mut builder, node, &edges, protection)?,
                 Kind::Project => self.project(&mut builder, node, &edges, protection)?,
                 Kind::Join => self.join(&mut builder, node, &edges, protection)?,
                 Kind::Statistics => self.statistics(&mut builder, node, &edges, protection)?,
@@ -115,6 +121,32 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         let output =
             edges.get(&self.plan.definition().outputs[0]).context("missing output edge")?;
         Ok(Built { circuit: builder.build(output.output())?, sources })
+    }
+    fn expand(
+        &self,
+        builder: &mut Builder<K, V>,
+        node: &Node,
+        edges: &BTreeMap<String, Edge<K, V>>,
+        protection: Option<&Protection>,
+    ) -> Result<Edge<K, V>> {
+        let operator =
+            self.operators.expansions.get(&node.id).context("missing expansion callback")?.clone();
+        let execution = Arc::new(self.scoped(protection)?);
+        let id = node.id.clone();
+        builder.unary(
+            &node.id,
+            edges.get(&node.inputs[0]).context("missing expansion edge")?,
+            move |context, input| {
+                let operator = operator.clone();
+                let execution = execution.clone();
+                let id = id.clone();
+                async move {
+                    let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
+                    let delta = operator.evaluate(&input, execution.limits)?;
+                    execution.stage(&id, &context.prior, delta).await
+                }
+            },
+        )
     }
     fn statistics(
         &self,
