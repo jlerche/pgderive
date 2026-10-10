@@ -3,6 +3,7 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 
 mod array;
 pub(super) mod case;
+mod decimal;
 pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
@@ -259,6 +260,9 @@ fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Tr
     use crate::catalog::terminal::Transform;
     if matches!(node(value)?, NodeEnum::AIndirection(_)) {
         return array::target(value);
+    }
+    if matches!(node(value)?, NodeEnum::AExpr(_)) {
+        return decimal::target(value);
     }
     if let NodeEnum::FuncCall(call) = node(value)? {
         let name = expressions::names(&call.funcname)?.0;

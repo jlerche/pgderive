@@ -87,3 +87,36 @@ fn old_terminal_environment_keeps_serialized_identity() -> Result<()> {
     assert_eq!(serde_json::to_value(&environment)?, value);
     Ok(())
 }
+
+#[test]
+fn decimal_map_validates_exact_parameter_and_signatures() -> Result<()> {
+    for oid in [20, 21, 23] {
+        let map =
+            Terminal::new(vec![Transform::NumericMultiply { factor: "0.908".into() }], vec![oid])?;
+        assert!(map.has_numeric_multiply());
+        assert!(!map.has_array());
+        assert_eq!(map.signatures()?.len(), 2);
+        let rendered = map.expression(0)?;
+        assert!(rendered.contains("numeric_mul"));
+        assert!(rendered.contains("->'NumericMultiply'->>'factor'"));
+        assert!(!rendered.contains("0.908"));
+    }
+    for factor in ["", ".908", "1.", "1e3", "-1.0", "NaN", "1.0'", "1.0.0"] {
+        assert!(
+            Terminal::new(vec![Transform::NumericMultiply { factor: factor.into() }], vec![20])
+                .is_err()
+        );
+    }
+    assert!(
+        Terminal::new(
+            vec![Transform::NumericMultiply { factor: format!("1.{}", "0".repeat(33)) }],
+            vec![20]
+        )
+        .is_err()
+    );
+    assert!(
+        Terminal::new(vec![Transform::NumericMultiply { factor: "1.0".into() }], vec![1700])
+            .is_err()
+    );
+    Ok(())
+}

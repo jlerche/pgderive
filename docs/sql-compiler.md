@@ -959,3 +959,31 @@ inputs, rollback, quoted-alias normalization, incompatible delimiter/index chang
 and cold same-slot restart are covered. The text fixture also witnesses a lost
 COMMIT response and authoritative recovery of finalized output. Full-tuple bag coefficients and the
 PUT -> atomic PG COMMIT -> ACK boundary remain unchanged.
+
+### Exact terminal decimal multiplication (Nexmark q1)
+
+A final projection may multiply one native smallint/integer/bigint column by a
+nonnegative decimal literal with 1..32 whole and fractional digits. Either operand
+order is accepted; omitted and redundant leading zeroes normalize. Fractional
+scale is retained, and changing the factor or scale invalidates state reuse.
+Exponent notation, integer-only factors, negative factors, nested arithmetic and
+intermediate consumption are rejected before registration. This deliberately
+bounded slice qualifies the exact `0.908 * price` q1 conversion.
+
+The engine retains the raw integral weighted bag. Publication parses its exact
+canonical integer text as PostgreSQL numeric (scale zero), parses the parameterized
+decimal factor, and executes immutable `pg_catalog.numeric_mul` inside the atomic
+result/membership/progress transaction. This matches PostgreSQL's integral-to-numeric
+coercion without binary floating point or integral multiplication overflow. NULLs
+propagate and equal mapped tuples consolidate by weight. Binding attests numeric
+input and multiplication signatures and server encoding/version; the plan also
+binds `:pg-terminal-decimal-multiply-v1`, native layout and existing codecs.
+
+`queries/nexmark/q1.sql` and five sequential owned fixtures compare PostgreSQL with
+an independent Python Decimal bag oracle across int2/int4/int8 and an inner join,
+including extreme inputs, inserts/updates/deletes, NULLs, duplicate projections,
+zero-factor consolidation of distinct prices,
+complete simultaneous input changes, rollback and cold same-slot restart. The
+supported factor bounds are compiler limits, not a claim to arbitrary numeric
+expressions. Arithmetic used in filtering/grouping/ordering still needs native
+execution; it cannot be moved to publication.

@@ -14,6 +14,13 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
             .context("missing terminal compiler revision")?
             .push_str(":pg-c-array-element-v1");
     }
+    if terminal.is_some_and(crate::catalog::Terminal::has_numeric_multiply) {
+        compiled
+            .revision
+            .as_mut()
+            .context("missing decimal compiler revision")?
+            .push_str(":pg-terminal-decimal-multiply-v1");
+    }
     let gap = compiled.predicates.as_ref().is_some_and(Expr::has_gap)
         || match &compiled.program {
             Program::Relational { relational } => relational.nodes.iter().any(node_gap),

@@ -11,6 +11,7 @@ pub enum Transform {
     Length,
     Numeric,
     Average,
+    NumericMultiply { factor: String },
     ArrayElement { delimiter: String, index: u16 },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +115,11 @@ impl Terminal {
     pub(crate) fn has_array(&self) -> bool {
         self.transforms.iter().any(|transform| matches!(transform, Transform::ArrayElement { .. }))
     }
+    pub(crate) fn has_numeric_multiply(&self) -> bool {
+        self.transforms
+            .iter()
+            .any(|transform| matches!(transform, Transform::NumericMultiply { .. }))
+    }
     fn expression(&self, index: usize) -> Result<String> {
         let value = format!("tuple->1->{index}");
         let text = format!("tuple->1->>{index}");
@@ -137,6 +143,9 @@ impl Terminal {
             (Transform::ArrayElement { index: subscript, .. }, _) => Ok(format!(
                 "pg_catalog.to_jsonb((pg_catalog.string_to_array(({text})::pg_catalog.text COLLATE pg_catalog.\"C\",($2::pg_catalog.jsonb)->{index}->'ArrayElement'->>'delimiter'))[{subscript}])"
             )),
+            (Transform::NumericMultiply { .. }, _) => Ok(format!(
+                "pg_catalog.to_jsonb(pg_catalog.numeric_mul(({text})::pg_catalog.numeric,(($2::pg_catalog.jsonb)->{index}->'NumericMultiply'->>'factor')::pg_catalog.numeric))"
+            )),
             (Transform::Length, _) => {
                 Ok(format!("pg_catalog.to_jsonb(pg_catalog.length(({text})::pg_catalog.text))"))
             }
@@ -158,7 +167,7 @@ impl Terminal {
             "WITH raw AS (SELECT value->0 tuple,(value->>1)::bigint weight FROM pg_catalog.jsonb_array_elements($1)), mapped AS (SELECT pg_catalog.jsonb_build_array(NULL,pg_catalog.jsonb_build_array({columns})) tuple,weight FROM raw) SELECT tuple,pg_catalog.sum(weight)::text FROM mapped GROUP BY tuple HAVING pg_catalog.sum(weight)<>0"
         );
         let input = json!(rows);
-        let rows = if self.has_array() {
+        let rows = if self.has_array() || self.has_numeric_multiply() {
             let parameters = json!(&self.transforms);
             tx.query(&query, &[&input, &parameters]).await?
         } else {
@@ -192,6 +201,13 @@ fn signatures_for(transform: &Transform, oid: u32) -> Result<Vec<(&'static str, 
             );
             vec![("pg_catalog.string_to_array(text,text)", "text_to_array")]
         }
+        (Transform::NumericMultiply { factor }, 20 | 21 | 23) => {
+            validate_factor(factor)?;
+            vec![
+                ("pg_catalog.numeric_in(cstring,oid,integer)", "numeric_in"),
+                ("pg_catalog.numeric_mul(numeric,numeric)", "numeric_mul"),
+            ]
+        }
         (Transform::Length, 25 | 1043) => vec![("pg_catalog.length(text)", "textlen")],
         (Transform::Numeric | Transform::Average, 1700) => {
             vec![("pg_catalog.numeric_in(cstring,oid,integer)", "numeric_in")]
@@ -206,6 +222,18 @@ fn signatures_for(transform: &Transform, oid: u32) -> Result<Vec<(&'static str, 
     }
     Ok(signatures)
 }
+pub fn validate_factor(factor: &str) -> Result<()> {
+    let (whole, fraction) = factor.split_once('.').context("decimal factor requires a point")?;
+    ensure!(
+        !whole.is_empty()
+            && !fraction.is_empty()
+            && whole.len() <= 32
+            && fraction.len() <= 32
+            && whole.bytes().chain(fraction.bytes()).all(|byte| byte.is_ascii_digit()),
+        "decimal factor requires 1..32 whole and fractional digits"
+    );
+    Ok(())
+}
 fn implementation_types(implementation: &str) -> Result<(&'static str, &'static str, bool)> {
     match implementation {
         "int8abs" => Ok(("20", "20", true)),
@@ -213,7 +241,7 @@ fn implementation_types(implementation: &str) -> Result<(&'static str, &'static 
         "int4abs" => Ok(("23", "23", true)),
         "textlen" => Ok(("25", "23", true)),
         "numeric_in" => Ok(("2275 26 23", "1700", true)),
-        "numeric_div" => Ok(("1700 1700", "1700", true)),
+        "numeric_mul" | "numeric_div" => Ok(("1700 1700", "1700", true)),
         "split_part" => Ok(("25 25 23", "25", true)),
         "text_to_array" => Ok(("25 25", "1009", false)),
         _ => anyhow::bail!("unknown terminal implementation"),

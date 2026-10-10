@@ -178,6 +178,7 @@ mod peer_frames;
 mod array;
 mod case;
 mod composition;
+mod decimal;
 mod derived;
 mod distinct;
 mod join_composition;
