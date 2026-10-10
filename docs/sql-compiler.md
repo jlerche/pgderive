@@ -45,7 +45,7 @@ relational operator consumes the row. The remainder has the dividend's sign;
 minimum i64 remainder -1 is zero rather than an overflow. NULL input gives unknown
 comparison/qualification. The argument must be a native integral column; nested
 calls, column divisors, NULL/zero divisors, function modifiers and computed outputs
-remain unsupported. This adds a q2 prerequisite, not complete Nexmark qualification.
+remain unsupported. The named q2 qualification below exercises this bounded subset end to end.
 
 ON equality with either key NULL is unknown and yields no match. Grouping preserves
 NULL, COUNT(*) includes NULL measures, SUM ignores NULL measures and returns NULL
@@ -987,3 +987,22 @@ complete simultaneous input changes, rollback and cold same-slot restart. The
 supported factor bounds are compiler limits, not a claim to arbitrary numeric
 expressions. Arithmetic used in filtering/grouping/ordering still needs native
 execution; it cannot be moved to publication.
+
+
+### Named Nexmark q0 and q2 qualification
+
+`queries/nexmark/q0.sql` projects the five native bid payload columns, preserving
+full source occurrences even when projected tuples collide. It is qualified with
+both timestamp and timestamptz sources, NULLs, infinities, Unicode text and extreme
+bigint prices. `queries/nexmark/q2.sql` projects auction/price after the PostgreSQL
+`mod(auction,123)=0` filter; int2/int4/int8 inputs include negative multiples,
+nonmultiples, zero, NULL and each integer width's extremes. Source IDs remain
+source-only identity and are not exposed as an artificial output key.
+
+Five sequential owned fixtures compare every result with PostgreSQL and a raw
+Python Counter oracle (integer divisibility for q2). They cover bootstrap,
+insert/update/delete, primary-key moves, rollback, complete simultaneous source
+transactions, ticks with no relevant input changes, changed-query rejection,
+normalized aliases/remainder syntax, cold same-slot restart and final retraction.
+These queries add named portfolio evidence using existing runtime operators; no
+new expression semantics or compiler revision is introduced.
