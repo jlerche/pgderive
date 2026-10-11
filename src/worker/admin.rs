@@ -17,6 +17,7 @@ pub async fn start(config: Config, restart: bool) -> Result<()> {
     let settings = config.worker.clone().context("configuration requires a worker section")?;
     let mut session = Session::connect(&config).await?;
     session.own(&settings.catalog_schema, &settings.query_id).await?;
+    super::retire::require_active(&session.client, &settings).await?;
     let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
     let exists: bool = session
         .client
@@ -129,6 +130,7 @@ pub async fn status(config: &Config) -> Result<Value> {
     } else {
         "unregistered"
     };
+    let state = super::retire::status(&tx, settings).await?.unwrap_or(state);
     tx.commit().await?;
     Ok(json!({"version":1,"query_id":settings.query_id,"state":state,
         "registration":registration,"progress":progress}))

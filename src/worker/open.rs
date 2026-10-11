@@ -40,6 +40,7 @@ impl Open {
             .context("worker requires durable object storage")?
             .build(&settings.object_prefix)?;
         session.own(&settings.catalog_schema, &settings.query_id).await?;
+        super::retire::require_active(&session.client, settings).await?;
         let catalog = Catalog::new(&settings.catalog_schema, &settings.query_id)?;
         catalog.install(&session.client).await?;
         let contract = registration::source(&mut session.client, config, settings).await?;

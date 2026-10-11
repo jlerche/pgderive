@@ -7,6 +7,9 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
+import hashlib
 
 from sql_compiler_harness import SqlFixture
 from nexmark_projection_harness import ProjectionFixture
@@ -70,6 +73,7 @@ def qualify(output, command, factory):
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         assert inspect(command, fixture, 'status', config)['state'] == 'unregistered'
         rejected(command, fixture, 'restart', config)
+        rejected(command, fixture, 'drop', config)
         original = config.read_text()
         before, after = original.split('[worker.query]')
         _, execution = after.split('[execution]')
@@ -84,7 +88,7 @@ def qualify(output, command, factory):
         worker = Worker(command+['query', 'create'], config, first, fixture.environment)
         fixture.workers.append(worker)
         ready = worker.event('ready')
-        for action in ('create', 'restart'):
+        for action in ('create', 'restart', 'drop'):
             assert 'another worker owns this query' in rejected(command, fixture, action, config)
         verify_result(fixture, labels)
         assert inspect(command, fixture, 'status', config)['progress']['logical_time'] == ready['time']
@@ -130,10 +134,57 @@ def qualify(output, command, factory):
             'oracles': 'native materialized view EXCEPT ALL and independent memory',
             'history': 'bootstrap NULL update simultaneous inputs delete cold restart',
         })+'\n')
-        fixture.cleanup()
+        retire(command, fixture, config, validated)
+        fixture.sql(f'DROP PUBLICATION {fixture.name}; DROP SCHEMA {fixture.name} CASCADE')
     except BaseException:
         fixture.preserve()
         raise
+
+
+
+def retire(command, fixture, config, validated):
+    def source_rows():
+        result = []
+        for relation in validated['source']['relations']:
+            quote = lambda name: '"'+name.replace('"', '""')+'"'
+            table = quote(relation['schema'])+'.'+quote(relation['table'])
+            result.append(fixture.sql(f'SELECT coalesce(jsonb_agg(row ORDER BY row::text),\'[]\'::jsonb) FROM (SELECT to_jsonb(t) row FROM {table} t) rows'))
+        return result
+    before = source_rows()
+    roots = json.loads(fixture.sql(f"SELECT jsonb_agg(reference) FROM {fixture.name}.pgderive_objects"))
+    assert roots, 'retirement fixture has no immutable roots'
+    fixture.sql(f"""INSERT INTO {fixture.name}.pgderive_protections(token,query_id,owner_fence,uploading,roots)
+        SELECT 'external-reader','grouped',0,false,jsonb_agg(reference)
+        FROM {fixture.name}.pgderive_objects""")
+    endpoint = fixture.environment.get('PGDERIVE__OBJECT_STORE__ENDPOINT', 'http://127.0.0.1:8333')
+    def get(path):
+        with urllib.request.urlopen(f'{endpoint}/pgderive-mvp-tests/{fixture.name}/{path}', timeout=10) as response:
+            return response.read()
+    retired = inspect(command, fixture, 'drop', config)
+    assert retired['state'] == 'dropped'
+    assert source_rows() == before, 'drop mutated source rows'
+    assert fixture.sql(f"SELECT count(*) FROM {fixture.name}.pgderive_queries").strip() == '0'
+    assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
+    assert inspect(command, fixture, 'status', config)['state'] == 'dropped'
+    for action in ('create', 'restart'):
+        assert 'query removal is pending or complete' in rejected(command, fixture, action, config)
+    for root in roots:
+        content = get(root['path'])
+        index_bytes = content[root['index_offset']:root['index_offset']+root['index_length']]
+        assert hashlib.sha256(index_bytes).hexdigest() == root['index_hash']
+        index = json.loads(index_bytes)
+        for block in index['blocks']:
+            if block.get('path'):
+                child = get(root['namespace']+'/'+block['path'])
+                assert hashlib.sha256(child).hexdigest() == block['hash']
+    fixture.sql(f"UPDATE {fixture.name}.pgderive_protections SET active=false WHERE token='external-reader'")
+    inspect(command, fixture, 'drop', config)
+    for root in roots:
+        try:
+            get(root['path'])
+            raise AssertionError('released retired root was not collected')
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
 
 
 def namespace_race(output, command):

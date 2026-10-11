@@ -218,11 +218,21 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/q
     cat "$output/query-lifecycle/harness.log" >&2
     exit 1
 fi
+mkdir "$output/query-removal"
+if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/query-removal" \
+    python3 scripts/query_removal_harness.py "$output/query-removal" -- "${admin[@]}"; then
+    cat "$output/query-removal/harness.log" >&2
+    exit 1
+fi
 python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
 assert len(results)==168,results
+removals=list((output/'query-removal').glob('*/qualification.json'))
+assert len(removals)==11,removals
+for removal in removals:
+    json.loads(removal.read_text())
 for result in results:
     json.loads(result.read_text())
 root=pathlib.Path.cwd()

@@ -5,12 +5,14 @@ mod open;
 mod program;
 mod registration;
 mod results;
+mod retire;
 mod runtime;
 mod spec;
 mod sql;
 use crate::Config;
 pub use admin::{start, status, validate};
 use anyhow::{Context, Result};
+pub use retire::drop_query;
 pub use spec::{Query, QueryDefinition, Settings, SqlQuery};
 
 /// Start or resume a durable grouped worker using the configuration's worker section.

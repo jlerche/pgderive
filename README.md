@@ -35,9 +35,28 @@ and external writers remain outside the worker's ownership.
 existing registration. Both hold exclusive query ownership across that check
 and worker startup. Each catalog schema must use one object-store root prefix
 so garbage collection can mark all query and reader roots safely. Explicit
-generation rebuild and removal remain the next part of
+generation rebuild remains the next part of
 [the release work](docs/release-plan.md). The diagnostic
 listener's original `cargo run -- config.local.toml` interface remains available.
+
+`query drop CONFIG.toml` takes exclusive query ownership, journals removal intent,
+fences prior writers and removes the exact registered physical slot. It retires
+the public view, internal sink and query membership transactionally, then runs
+pin-aware garbage collection. Repeat `drop` after an interrupted or uncertain
+operation; `status` distinguishes `dropping` and `dropped`. External reader pins
+retain their objects until released. Source tables and dependent application
+views remain protected; dependency errors require removing the dependency before
+retrying the requested drop. A removal tombstone prevents ordinary create/restart
+from silently recreating the query. Fresh-generation rebuild/recreation remains
+unfinished release work.
+
+New activations create their own sink and record its relation OID atomically;
+pre-existing tables are rejected. An unactivated registration does not authorize
+deleting its requested sink. Retirement requires the original creation proof and
+rejects a replaced table. Activations from earlier versions without that proof
+remain protected from destructive removal; automatic ownership adoption is not
+supported. Successful removal keeps the small registration/tombstone metadata,
+including the schema's object prefix, while retiring query state and results.
 
 ## Quality gate
 

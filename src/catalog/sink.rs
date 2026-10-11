@@ -24,7 +24,7 @@ pub enum Sink {
     Grouped(String),
 }
 impl Sink {
-    pub(super) fn table(&self) -> &str {
+    pub(crate) fn table(&self) -> &str {
         match self {
             Self::Bag(table) | Self::Grouped(table) | Self::MappedBag { table, .. } => table,
         }
@@ -44,6 +44,9 @@ impl Sink {
         if let Self::MappedBag { map, .. } = self {
             map.verify(tx).await?;
         }
+        if self.owned(tx, catalog).await?.is_some() {
+            return Ok(());
+        }
         let columns = match self {
             Self::Bag(_) | Self::MappedBag { .. } => {
                 "tuple jsonb PRIMARY KEY, weight bigint NOT NULL CHECK(weight<>0)"
@@ -52,13 +55,34 @@ impl Sink {
                 "group_key jsonb PRIMARY KEY, row_count bigint NOT NULL CHECK(row_count>0), total bigint"
             }
         };
-        tx.batch_execute(&format!(
-            "CREATE TABLE IF NOT EXISTS {}.{} ({columns})",
-            catalog.schema,
-            self.table()
-        ))
+        tx.batch_execute(&format!("CREATE TABLE {}.{} ({columns})", catalog.schema, self.table()))
+            .await?;
+        let table = format!("{}.{}", catalog.schema, self.table());
+        let oid: u32 =
+            tx.query_one("SELECT pg_catalog.to_regclass($1)::oid", &[&table]).await?.try_get(0)?;
+        tx.execute(
+            &format!("INSERT INTO {}.pgderive_sink_ownership VALUES($1,$2,$3)", catalog.schema),
+            &[&self.table(), &catalog.query, &oid],
+        )
         .await?;
         Ok(())
+    }
+    pub(crate) async fn owned(
+        &self,
+        sql: &(impl tokio_postgres::GenericClient + Sync),
+        catalog: &Catalog,
+    ) -> Result<Option<u32>> {
+        let Some(row) = sql.query_opt(&format!("SELECT query_id,relation_oid FROM {}.pgderive_sink_ownership WHERE sink_table=$1",catalog.schema), &[&self.table()]).await? else { return Ok(None); };
+        ensure!(
+            row.try_get::<_, String>(0)? == catalog.query,
+            "destination belongs to another query"
+        );
+        let oid: u32 = row.try_get(1)?;
+        let table = format!("{}.{}", catalog.schema, self.table());
+        let actual: Option<u32> =
+            sql.query_one("SELECT pg_catalog.to_regclass($1)::oid", &[&table]).await?.try_get(0)?;
+        ensure!(actual == Some(oid), "owned destination was removed or replaced");
+        Ok(Some(oid))
     }
 }
 /// Immutable destination mutations encoded from a complete canonical edge batch.

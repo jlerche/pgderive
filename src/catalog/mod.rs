@@ -81,7 +81,11 @@ impl Catalog {
                 binding jsonb NOT NULL, sink_table text NOT NULL UNIQUE,
                 fence bigint NOT NULL CHECK(fence>0), commit_lsn pg_lsn NOT NULL,
                 end_lsn pg_lsn NOT NULL CHECK(end_lsn>=commit_lsn),
-                xid bigint CHECK(xid>=0 AND xid<=4294967295));",
+                xid bigint CHECK(xid>=0 AND xid<=4294967295));
+             CREATE TABLE IF NOT EXISTS {0}.pgderive_sink_ownership (
+                sink_table text PRIMARY KEY,query_id text NOT NULL UNIQUE
+                REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
+                relation_oid oid NOT NULL);",
             self.schema
         )).await?;
         Ok(())

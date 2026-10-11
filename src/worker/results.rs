@@ -198,3 +198,30 @@ fn native_type(oid: u32) -> Result<&'static str> {
         _ => anyhow::bail!("unsupported public result type OID {oid}"),
     }
 }
+
+pub(super) async fn remove(
+    sql: &tokio_postgres::Transaction<'_>,
+    settings: &Settings,
+    view: &str,
+) -> Result<()> {
+    let row = sql.query_one(&format!(
+        "SELECT view_name,catalog_definition FROM {}.pgderive_result_views WHERE query_id=$1", settings.catalog_schema,
+    ), &[&settings.query_id]).await?;
+    ensure!(row.try_get::<_, String>(0)? == view, "removal result view changed");
+    sql.batch_execute(&format!(
+        "LOCK TABLE {}.{} IN ACCESS EXCLUSIVE MODE",
+        settings.catalog_schema,
+        quote(view)
+    ))
+    .await?;
+    let actual = catalog_definition(sql, &settings.catalog_schema, view).await?;
+    ensure!(actual == row.try_get::<_, String>(1)?, "removal result view was altered");
+    sql.batch_execute(&format!("DROP VIEW {}.{} RESTRICT", settings.catalog_schema, quote(view)))
+        .await?;
+    sql.execute(
+        &format!("DELETE FROM {}.pgderive_result_views WHERE query_id=$1", settings.catalog_schema),
+        &[&settings.query_id],
+    )
+    .await?;
+    Ok(())
+}
