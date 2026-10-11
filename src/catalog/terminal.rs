@@ -13,6 +13,7 @@ pub enum Transform {
     Average,
     NumericMultiply { factor: String },
     ArrayElement { delimiter: String, index: u16 },
+    TimestampFormat { pattern: String, utc: bool },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +23,8 @@ struct Environment {
     functions: Vec<(String, Value)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     collations: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    calendar: Option<Value>,
 }
 /// Bound pure tuple-local scalar map; its raw input bag remains object-backed.
 /// Only concrete built-in signatures are permitted, never arbitrary SQL callbacks.
@@ -74,12 +77,15 @@ impl Terminal {
                 value["args"] == argument && value["result"] == result,
                 "terminal built-in types changed"
             );
+            // General to_char is stable; the closed templates use only numeric
+            // calendar fields, with UTC attested separately when formatting.
             ensure!(
                 value["source"] == implementation
                     && value["binary"].is_null()
                     && value["config"].is_null()
                     && value["kind"] == "f"
-                    && value["volatile"] == "i"
+                    && value["volatile"]
+                        == if implementation == "timestamp_to_char" { "s" } else { "i" }
                     && value["strict"] == strict
                     && value["language"] == "internal"
                     && value["schema"] == "pg_catalog",
@@ -89,7 +95,9 @@ impl Terminal {
         }
         let collations =
             if self.has_array() { vec![array_collation(sql).await?] } else { Vec::new() };
-        Ok(Environment { server, encoding, functions, collations })
+        let calendar =
+            if self.has_timestamp_format() { Some(calendar_context(sql).await?) } else { None };
+        Ok(Environment { server, encoding, functions, collations, calendar })
     }
     pub(crate) async fn bind(&mut self, sql: &(impl GenericClient + Sync)) -> Result<()> {
         let environment = self.inspect(sql).await?;
@@ -120,6 +128,11 @@ impl Terminal {
             .iter()
             .any(|transform| matches!(transform, Transform::NumericMultiply { .. }))
     }
+    pub(crate) fn has_timestamp_format(&self) -> bool {
+        self.transforms
+            .iter()
+            .any(|transform| matches!(transform, Transform::TimestampFormat { .. }))
+    }
     fn expression(&self, index: usize) -> Result<String> {
         let value = format!("tuple->1->{index}");
         let text = format!("tuple->1->>{index}");
@@ -146,6 +159,16 @@ impl Terminal {
             (Transform::NumericMultiply { .. }, _) => Ok(format!(
                 "pg_catalog.to_jsonb(pg_catalog.numeric_mul(({text})::pg_catalog.numeric,(($2::pg_catalog.jsonb)->{index}->'NumericMultiply'->>'factor')::pg_catalog.numeric))"
             )),
+            (Transform::TimestampFormat { utc, .. }, _) => {
+                let input = if *utc {
+                    format!("pg_catalog.timezone('UTC',({text})::pg_catalog.timestamptz)")
+                } else {
+                    format!("({text})::pg_catalog.timestamp")
+                };
+                Ok(format!(
+                    "pg_catalog.to_jsonb(pg_catalog.to_char({input},($2::pg_catalog.jsonb)->{index}->'TimestampFormat'->>'pattern'))"
+                ))
+            }
             (Transform::Length, _) => {
                 Ok(format!("pg_catalog.to_jsonb(pg_catalog.length(({text})::pg_catalog.text))"))
             }
@@ -157,8 +180,8 @@ impl Terminal {
         rows: &[(Value, i64)],
     ) -> Result<Vec<(Value, i64)>> {
         self.verify(tx).await?;
-        // Context-sensitive/volatile functions, relation reads, SRFs and relational
-        // operators cannot be rendered by this closed expression algebra.
+        // Only closed tuple-local forms render here; calendar formats have fixed
+        // fields and an attested UTC context. Relation reads, clocks and SRFs do not.
         let columns = (0..self.types.len())
             .map(|index| self.expression(index))
             .collect::<Result<Vec<_>>>()?
@@ -167,7 +190,8 @@ impl Terminal {
             "WITH raw AS (SELECT value->0 tuple,(value->>1)::bigint weight FROM pg_catalog.jsonb_array_elements($1)), mapped AS (SELECT pg_catalog.jsonb_build_array(NULL,pg_catalog.jsonb_build_array({columns})) tuple,weight FROM raw) SELECT tuple,pg_catalog.sum(weight)::text FROM mapped GROUP BY tuple HAVING pg_catalog.sum(weight)<>0"
         );
         let input = json!(rows);
-        let rows = if self.has_array() || self.has_numeric_multiply() {
+        let rows = if self.has_array() || self.has_numeric_multiply() || self.has_timestamp_format()
+        {
             let parameters = json!(&self.transforms);
             tx.query(&query, &[&input, &parameters]).await?
         } else {
@@ -208,6 +232,18 @@ fn signatures_for(transform: &Transform, oid: u32) -> Result<Vec<(&'static str, 
                 ("pg_catalog.numeric_mul(numeric,numeric)", "numeric_mul"),
             ]
         }
+        (Transform::TimestampFormat { pattern, utc }, oid) => {
+            ensure!(
+                matches!(pattern.as_str(), "YYYY-MM-DD" | "HH24:MI")
+                    && ((*utc && oid == 1184) || (!utc && oid == 1114)),
+                "timestamp formatting requires closed date/minute format and explicit UTC for timestamptz"
+            );
+            let mut result = vec![("pg_catalog.to_char(timestamp,text)", "timestamp_to_char")];
+            if *utc {
+                result.push(("pg_catalog.timezone(text,timestamptz)", "timestamptz_zone"));
+            }
+            result
+        }
         (Transform::Length, 25 | 1043) => vec![("pg_catalog.length(text)", "textlen")],
         (Transform::Numeric | Transform::Average, 1700) => {
             vec![("pg_catalog.numeric_in(cstring,oid,integer)", "numeric_in")]
@@ -239,6 +275,8 @@ fn implementation_types(implementation: &str) -> Result<(&'static str, &'static 
         "int8abs" => Ok(("20", "20", true)),
         "int2abs" => Ok(("21", "21", true)),
         "int4abs" => Ok(("23", "23", true)),
+        "timestamp_to_char" => Ok(("1114 25", "25", true)),
+        "timestamptz_zone" => Ok(("25 1184", "1114", true)),
         "textlen" => Ok(("25", "23", true)),
         "numeric_in" => Ok(("2275 26 23", "1700", true)),
         "numeric_mul" | "numeric_div" => Ok(("1700 1700", "1700", true)),
@@ -246,6 +284,16 @@ fn implementation_types(implementation: &str) -> Result<(&'static str, &'static 
         "text_to_array" => Ok(("25 25", "1009", false)),
         _ => anyhow::bail!("unknown terminal implementation"),
     }
+}
+
+async fn calendar_context(sql: &(impl GenericClient + Sync)) -> Result<Value> {
+    let row = sql.query_one("SELECT jsonb_build_object('abbreviations',current_setting('timezone_abbreviations'),'utc_offset',extract(epoch FROM utc_offset)::bigint,'dst',is_dst) FROM pg_catalog.pg_timezone_abbrevs WHERE abbrev='UTC'", &[]).await?;
+    let value: Value = row.try_get(0)?;
+    ensure!(
+        value["utc_offset"] == 0 && value["dst"] == false,
+        "terminal UTC abbreviation must retain zero offset without daylight saving"
+    );
+    Ok(value)
 }
 
 async fn array_collation(sql: &(impl GenericClient + Sync)) -> Result<Value> {

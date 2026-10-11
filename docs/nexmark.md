@@ -260,3 +260,12 @@ frozen deterministic source collation contract. The query preserves PostgreSQL
 case, trailing-space and NULL behavior; its person/auction join retains complete
 simultaneous-input deltas. Text collation ordering and nondeterministic equality
 remain unsupported.
+
+
+Named q10 and q16 use closed PostgreSQL date/minute formatting at final
+publication. q16 retains the q15 `day_start` ABI, groups native channel strings
+under deterministic equality, and formats its retractable MAX event timestamp.
+The calendar harness compares native MVs and independent raw-source bags for
+timestamp/local and timestamptz/UTC fixtures, with additional C varchar and
+deterministic ICU text q16 groups. Format/context and text-group revisions bind
+identity; changed formats and thresholds reject state reuse.

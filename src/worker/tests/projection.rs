@@ -265,3 +265,77 @@ fn text_equality_revision_binds_each_expression_boundary() -> Result<()> {
     assert!(plain.revision.as_deref().is_some_and(|value| !value.contains(suffix)));
     Ok(())
 }
+
+#[test]
+fn timestamp_terminal_formats_normalize_context_and_reject_unsafe_shapes() -> Result<()> {
+    let mut native = contract();
+    let column = &mut native.relations[0].columns[2];
+    column.oid = 1184;
+    column.collation = 0;
+    let sql = "SELECT to_char(other AT TIME ZONE 'UTC','HH24:MI') AS minute FROM source.auction";
+    let compiled = compile(sql, &native)?;
+    assert!(
+        compiled
+            .revision
+            .as_deref()
+            .is_some_and(|value| value.contains("pg-terminal-utc-calendar-format-v1"))
+    );
+    assert_eq!(
+        serde_json::to_vec(&compiled)?,
+        serde_json::to_vec(&compile(
+            &sql.replace("other AT TIME ZONE 'UTC'", "pg_catalog.timezone('UTC',other)"),
+            &native
+        )?)?
+    );
+    for invalid in [
+        sql.replace("'UTC'", "'America/New_York'"),
+        sql.replace("'HH24:MI'", "'Month'"),
+        sql.replace("other AT TIME ZONE 'UTC'", "other"),
+        sql.replace("'HH24:MI'", "category"),
+    ] {
+        assert!(compile(&invalid, &native).is_err(), "{invalid}");
+    }
+    let derived = "SELECT q.id,to_char(q.latest AT TIME ZONE 'UTC','HH24:MI') AS minute FROM(SELECT id,MAX(other) AS latest FROM source.auction GROUP BY id) q";
+    assert!(compile(derived, &native)?.relational().is_some());
+    let consumed = format!("SELECT z.minute FROM({derived}) z");
+    assert!(compile(&consumed, &native).is_err());
+    native.relations[0].columns[2].oid = 1114;
+    assert!(compile(&sql.replace("other AT TIME ZONE 'UTC'", "other"), &native).is_ok());
+    assert!(compile(sql, &native).is_err());
+    Ok(())
+}
+
+#[test]
+fn named_calendar_queries_lower_text_groups_and_terminal_max() -> Result<()> {
+    let mut native = contract();
+    let template = native.relations[1].columns[2].clone();
+    for (name, oid) in [("date_time", 1184), ("channel", 25), ("bidder", 20), ("extra", 25)] {
+        let mut column = template.clone();
+        column.position = i16::try_from(native.relations[1].columns.len() + 1)?;
+        column.name = name.into();
+        column.oid = oid;
+        column.collation = if oid == 25 { 100 } else { 0 };
+        native.relations[1].columns.push(column);
+    }
+    for sql in [
+        include_str!("../../../queries/nexmark/q10.sql"),
+        include_str!("../../../queries/nexmark/q16.sql"),
+    ] {
+        let compiled = compile(&sql.replace("nexmark.", "source."), &native)?;
+        assert!(
+            compiled
+                .revision
+                .as_deref()
+                .is_some_and(|value| value.contains("pg-terminal-utc-calendar-format-v1"))
+        );
+        if compiled.relational().is_some() {
+            assert!(
+                compiled
+                    .revision
+                    .as_deref()
+                    .is_some_and(|value| value.contains("pg-deterministic-text-partition-v1"))
+            );
+        }
+    }
+    Ok(())
+}

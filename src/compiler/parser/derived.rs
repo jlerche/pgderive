@@ -1,11 +1,11 @@
 //! Derived partition scopes with typed predicates and exposed projections.
-use super::{Name, Parsed, column, node, query, target};
+use super::{Parsed, node, query, target};
 use anyhow::{Context, Result, ensure};
 use pg_query::{NodeEnum, protobuf as pg};
 pub(in crate::compiler) struct Derived {
     pub inner: Box<Parsed>,
     pub alias: String,
-    pub columns: Vec<(Name, String)>,
+    pub columns: super::Columns,
     pub predicate: Option<crate::compiler::syntax::Expr>,
 }
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
@@ -29,13 +29,9 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
                 anyhow::bail!("invalid derived output");
             };
             ensure!(output.indirection.is_empty(), "derived output indirection unsupported");
-            let name = column(target(value)?)?;
-            let label = if output.name.is_empty() {
-                name.0.last().context("missing derived column")?.clone()
-            } else {
-                output.name.clone()
-            };
-            Ok((name, label))
+            let (name, transform, default) = super::projection_target(target(value)?)?;
+            let label = if output.name.is_empty() { default } else { output.name.clone() };
+            Ok((name, label, transform))
         })
         .collect::<Result<_>>()?;
     let predicate = crate::compiler::syntax::predicate(select.where_clause.as_deref())?;

@@ -12,6 +12,7 @@ pub(super) mod navigation;
 pub(super) mod offset;
 pub(super) mod partition;
 pub(super) mod scalar;
+mod timestamp_format;
 use expressions::{aggregate, column, node, optional, target};
 
 #[derive(Clone)]
@@ -271,6 +272,9 @@ fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Tr
             [schema, name] if schema == "pg_catalog" => name,
             _ => anyhow::bail!("unsupported terminal function namespace"),
         };
+        if function == "to_char" {
+            return timestamp_format::target(call);
+        }
         let transform = match function.as_str() {
             "abs" => Transform::Abs,
             "length" => Transform::Length,

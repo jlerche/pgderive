@@ -371,8 +371,9 @@ fn aggregate(
 
 fn validate_keys(keys: &[ColumnRef]) -> Result<()> {
     ensure!(
-        keys.iter().all(|key| matches!(key.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184)),
-        "partition key requires native bool/integral/UUID/timestamp equality"
+        keys.iter()
+            .all(|key| matches!(key.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184)),
+        "partition key requires native deterministic scalar equality"
     );
     Ok(())
 }

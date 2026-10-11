@@ -22,8 +22,9 @@ FROM names two distinct publication relations using explicit schema.table names,
 connected by JOIN or INNER JOIN and one ON column = column equality. Reversing
 the equality operands is accepted. Native join types, modifiers and collations
 must match exactly; there are no implicit casts. Join/group keys are boolean,
-int2/int4/int8 or UUID. Text/varchar keys are rejected until a collation-aware
-runtime exists. All frozen native types can be tested for NULL.
+int2/int4/int8 or UUID. Text/varchar join keys are rejected until a collation-aware
+join runtime exists; native relational partitions support deterministic text keys
+as described below. All frozen native types can be tested for NULL.
 
 WHERE supports column IS NULL / IS NOT NULL, Boolean columns and TRUE/FALSE/NULL,
 and scalar comparisons =, <>, !=, <, <=, >, >= composed with AND/OR/NOT.
@@ -385,7 +386,7 @@ functions produce the destination value in the same atomic transaction as object
 membership and source progress. All-NULL/empty-frame inputs produce NULL without
 division. Filters run in Rust before statistics accumulation.
 
-The terminal binding fingerprints concrete immutable built-in signatures and
+The terminal binding fingerprints concrete built-in signatures and
 server version/encoding; changing that environment rejects restart/publication.
 The JSON codec preserves arbitrary-precision numbers through PostgreSQL responses,
 so large numeric results never pass through f64. The existing nonnumeric identities
@@ -1103,3 +1104,47 @@ source changes, key moves, empty other-source ticks, rollback and cold restart.
 Changed state literals reject reuse; quoted aliases preserve normalized identity.
 Text ordering, unresolved column collations and nondeterministic source collations
 reject before slot creation or registration.
+
+
+## Deterministic text partitions and terminal calendar formatting
+
+Native relational GROUP BY and window partition keys accept text/varchar from
+the frozen deterministic source contract. PostgreSQL deterministic text equality
+uses bytes; canonical full strings (including case, spaces and Unicode
+normalization distinctions) and NULL form the same groups in Rust. Text ordering,
+text joins and nondeterministic source collations remain unsupported. A used text
+partition binds `pg-deterministic-text-partition-v1` into plan identity.
+
+Final projection supports `pg_catalog.to_char(column,'YYYY-MM-DD')` and
+`pg_catalog.to_char(column,'HH24:MI')` on native timestamp. Native timestamptz
+requires `column AT TIME ZONE 'UTC'` or the equivalent built-in
+`pg_catalog.timezone('UTC',column)` operand. Only these fixed numeric calendar
+fields are supported. Other patterns, dynamic formats, timezones and coercions
+reject before slot creation. NULL and infinite timestamps format to NULL, matching
+PostgreSQL; minute fields omit seconds without rounding.
+
+Formatting executes inside the existing atomic sink publication, consolidating
+projected collisions. The general PostgreSQL `timestamp_to_char` implementation
+is STABLE; these closed templates avoid locale text fields and clock reads.
+Attestation requires its exact signature, internal implementation and expected
+stability, and verifies immutable `timestamptz_zone` for UTC conversion. Calendar
+plans bind server version, UTF8 encoding, timezone-abbreviation configuration and
+a zero-offset non-DST UTC meaning, checked again before publication. The compiler
+revision includes `pg-terminal-utc-calendar-format-v1`. Old terminal maps omit the
+new optional calendar metadata, preserving prior identities.
+
+A derived query can format an exposed native aggregate result at final output.
+The inner graph maintains MAX(timestamp) and other aggregates in Rust; PostgreSQL
+formats only the signed output delta. Derived inputs still reject intermediate
+sink-deferred expressions, so formatting cannot influence filtering, grouping,
+joining or ordering without native expression lowering.
+
+`queries/nexmark/q10.sql` retains bid payloads and adds UTC date/minute labels.
+`queries/nexmark/q16.sql` groups channel and the documented q15 UTC `day_start`
+key, computes filtered counts and integral distinct counts, and formats the
+retractable latest-event minute. Timestamp fixtures use local calendar fields;
+timestamptz fixtures use explicit UTC. Their owned harness compares exact native
+MVs and independent raw-source calendar/count/value-set bags across BC/max-year
+timestamps, infinities, NULLs, duplicates, boundaries, channel/day moves, latest
+retractions, simultaneous source changes, rollback and cold restart. C-collated
+varchar and deterministic ICU text grouping are qualified separately.

@@ -120,3 +120,36 @@ fn decimal_map_validates_exact_parameter_and_signatures() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn calendar_maps_bind_native_types_and_closed_patterns() -> Result<()> {
+    for (oid, utc) in [(1114, false), (1184, true)] {
+        for pattern in ["YYYY-MM-DD", "HH24:MI"] {
+            let map = Terminal::new(
+                vec![Transform::TimestampFormat { pattern: pattern.into(), utc }],
+                vec![oid],
+            )?;
+            assert!(map.has_timestamp_format());
+            assert_eq!(map.signatures()?.len(), if utc { 2 } else { 1 });
+            let expression = map.expression(0)?;
+            assert!(expression.contains("'TimestampFormat'->>'pattern'"));
+            assert_eq!(expression.contains("timezone('UTC'"), utc);
+        }
+    }
+    for (oid, utc, pattern) in [
+        (1114, true, "HH24:MI"),
+        (1184, false, "HH24:MI"),
+        (25, false, "HH24:MI"),
+        (1114, false, "Month"),
+        (1114, false, ""),
+    ] {
+        assert!(
+            Terminal::new(
+                vec![Transform::TimestampFormat { pattern: pattern.into(), utc }],
+                vec![oid]
+            )
+            .is_err()
+        );
+    }
+    Ok(())
+}

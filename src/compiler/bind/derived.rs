@@ -25,11 +25,15 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
         .predicate
         .map(|value| crate::compiler::expression::bind(value, &resolve).map(Predicate::new))
         .transpose()?;
+    let mut transforms = Vec::new();
     let columns = parsed
         .columns
         .into_iter()
-        .map(|(name, label)| Ok(OutputColumn { column: resolve(&name)?, label }))
-        .collect::<Result<_>>()?;
+        .map(|(name, label, transform)| {
+            transforms.push(transform);
+            Ok(OutputColumn { column: resolve(&name)?, label })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let Some(Node::Output { id, input }) = relational.nodes.pop() else {
         anyhow::bail!("derived query requires terminal output node");
     };
@@ -43,6 +47,7 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
         (input, ":derived-scope-projection-v1")
     };
     relational.nodes.push(Node::Output { id, input });
+    relational.output.terminal = super::terminal(transforms, &columns)?;
     relational.output.columns = columns;
     let revision = compiled.revision.as_mut().context("missing inner compiler revision")?;
     revision.push_str(suffix);

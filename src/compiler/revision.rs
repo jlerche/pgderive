@@ -21,6 +21,13 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
             .context("missing decimal compiler revision")?
             .push_str(":pg-terminal-decimal-multiply-v1");
     }
+    if terminal.is_some_and(crate::catalog::Terminal::has_timestamp_format) {
+        compiled
+            .revision
+            .as_mut()
+            .context("missing timestamp format revision")?
+            .push_str(":pg-terminal-utc-calendar-format-v1");
+    }
     let text = compiled.predicates.as_ref().is_some_and(Expr::has_text_equality)
         || match &compiled.program {
             Program::Relational { relational } => relational.nodes.iter().any(node_text),
@@ -47,6 +54,7 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
     }
     if let Program::Relational { relational } = &compiled.program {
         for (used, suffix) in [
+            (relational.nodes.iter().any(node_text_key), ":pg-deterministic-text-partition-v1"),
             (relational.nodes.iter().any(node_distinct), ":pg-integral-distinct-count-v1"),
             (relational.nodes.iter().any(node_offset), ":pg-fixed-time-offset-v1"),
             (relational.nodes.iter().any(node_temporal_extrema), ":pg-native-temporal-extrema-v1"),
@@ -115,4 +123,8 @@ fn node_temporal_extrema(node: &Node) -> bool {
 
 fn node_distinct(node: &Node) -> bool {
     matches!(node, Node::Partition { spec, .. } if spec.aggregates.iter().any(|value| matches!(value.function, super::partition::Function::CountDistinct)))
+}
+
+fn node_text_key(node: &Node) -> bool {
+    matches!(node, Node::PartitionBy { keys, .. } if keys.iter().any(|key| matches!(key.oid, 25 | 1043)))
 }
