@@ -2,8 +2,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PGPASSWORD=${PGPASSWORD:-postgres}
-pg=(psql -h 127.0.0.1 -p 55434 -U postgres -d postgres -v ON_ERROR_STOP=1)
+export PGDERIVE_TEST_POSTGRES_PORT=${PGDERIVE_TEST_POSTGRES_PORT:-55434}
+export PGDERIVE__POSTGRES__PORT="$PGDERIVE_TEST_POSTGRES_PORT"
+pg=(psql -h 127.0.0.1 -p "$PGDERIVE_TEST_POSTGRES_PORT" -U postgres -d postgres -v ON_ERROR_STOP=1)
 if ! "${pg[@]}" -Atc 'SELECT 1' >/dev/null 2>&1; then
+    if [[ "$PGDERIVE_TEST_POSTGRES_PORT" != 55434 ]]; then
+        printf 'Configured test PostgreSQL port %s is unavailable\n' "$PGDERIVE_TEST_POSTGRES_PORT" >&2
+        exit 1
+    fi
     docker compose up -d --wait postgres
 fi
 exists=$("${pg[@]}" -Atc "SELECT 1 FROM pg_database WHERE datname='pgderive_dev'")
@@ -69,7 +75,7 @@ assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,
 binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')
 files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),binary,out/'transactions.jsonl',out/'harness.log',out/'proxy.jsonl',out/'storage-profile.json',out/'sql-commit-before.jsonl',out/'sql-commit-after.jsonl',out/'sql-commit-hold.jsonl']
 provenance={
-    'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p','55434','-U','postgres','-d','postgres','-Atc','SELECT version()'],text=True).strip(),
+    'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p',os.environ['PGDERIVE_TEST_POSTGRES_PORT'],'-U','postgres','-d','postgres','-Atc','SELECT version()'],text=True).strip(),
     'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),
     'transactions':len(transactions), 'changes':sum(len(tx['changes']) for tx in transactions),
     'sha256':{str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in files},

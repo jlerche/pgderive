@@ -22,6 +22,12 @@ cargo install cargo-llvm-cov --version 0.8.4 --locked
 ./scripts/check.sh
 ```
 
+To use a separately owned PostgreSQL fixture endpoint, set
+`PGDERIVE_TEST_POSTGRES_PORT=55534 ./scripts/check.sh`. Readiness checks, worker
+configuration, COMMIT-fault proxies, provenance and failure dumps use that port.
+The instance needs logical replication and the `pgderive_dev` database. Docker
+fixtures must use tmpfs for database storage; leave shared PoC containers intact.
+
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. GitHub Actions runs the
 same gate. Coverage combines unit tests and the sequential live PostgreSQL

@@ -10,6 +10,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 pub(in crate::compiler::bind) mod composition;
+mod occurrence;
 struct Body {
     expansion: Option<crate::compiler::parser::expansion::Series>,
     targets: Vec<syntax::Target>,
@@ -391,7 +392,7 @@ fn validate_order(order: &[Order], occurrence_keys: &[String]) -> Result<()> {
     );
     ensure!(
         occurrence_keys.iter().all(|key| order.iter().any(|order| order.column.name == *key)),
-        "positional window ordering must include the complete source primary key for deterministic occurrence order"
+        "positional window partition and ordering must include complete logical occurrence identity"
     );
     Ok(())
 }
@@ -446,13 +447,19 @@ fn bind_window(
             Ok(Order { column: resolve(&name)?, descending, nulls_first })
         })
         .collect::<Result<Vec<_>>>()?;
+    let remaining = context
+        .0
+        .iter()
+        .filter(|name| !keys.iter().any(|key| key.name == **name))
+        .cloned()
+        .collect::<Vec<_>>();
     if window.ranking || window.peers.is_some() {
         ensure!(
             order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
             "peer ordering requires integral or timestamp columns"
         );
         if context.1 {
-            validate_order(&order, context.0)?;
+            validate_order(&order, &remaining)?;
         }
         let mode = if let Some(groups) = window.peers {
             Mode::Peers { order, frame: window.frame, groups }
@@ -461,7 +468,7 @@ fn bind_window(
         };
         Ok((mode, keys))
     } else {
-        validate_order(&order, context.0)?;
+        validate_order(&order, &remaining)?;
         Ok((Mode::Rows { order, frame: window.frame }, keys))
     }
 }

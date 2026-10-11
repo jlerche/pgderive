@@ -1317,3 +1317,27 @@ and ICU-varchar source fixtures. It covers hidden-operand collisions, partial
 retractions, NULL channel/URL/price/bidder, all named brand branches, empty/first
 captures, nonmatching prefixes, Unicode and newline payloads, simultaneous
 changes, PK moves, rollback, empty input ticks and cold restart.
+
+## Logical occurrence identity and grouped ranking
+
+Derived positional windows use typed graph lineage to prove complete row
+identity. Native primary keys seed this proof; filters and maps preserve it,
+scoped boundary maps must retain and rename every identity field, and joins
+combine disjoint identities. GROUP BY replaces prior source identities with
+the complete group key, including its NULL groups. Partition columns and order
+columns together must cover the identity. Missing or hidden fields reject before
+registration. Untagged unions, predecessor outputs without a separate left-row
+proof, and repeated expansion namespaces remain unknown for positional use.
+This proof does not replace generic full-tuple weighted identity or source PK
+validation; it establishes deterministic occurrence order for admitted SQL.
+
+Derived positional plans now bind `logical-occurrence-proof-v1`. Plans registered
+under the earlier derived positional revision require fresh registration/bootstrap
+after this compiler change; restart rejects their old identity rather than
+reusing state silently. Non-positional plans do not acquire this revision.
+
+The q6 circuit executes eligible auction/bid join, persisted-clock cross join
+and closure filter, grouped MAX, ROW_NUMBER per seller, latest-ten filter and
+grouped AVG. Only final numeric AVG rendering is deferred to atomic PostgreSQL
+publication. Clock updates drive ordinary synchronized input deltas, preserving
+the join cross term and object PUT → PG publication COMMIT → slot ACK order.

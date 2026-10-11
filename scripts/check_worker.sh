@@ -204,11 +204,17 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/n
     cat "$output/native-cross/harness.log" >&2
     exit 1
 fi
+mkdir "$output/nexmark-q6"
+if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q6" \
+    python3 scripts/nexmark_q6_harness.py "$output/nexmark-q6" -- "${worker[@]}"; then
+    cat "$output/nexmark-q6/harness.log" >&2
+    exit 1
+fi
 python3 - "$output" "${worker[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==158,results
+assert len(results)==160,results
 for result in results:
     json.loads(result.read_text())
 root=pathlib.Path.cwd()
@@ -218,7 +224,7 @@ files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Pa
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]
 provenance={'git_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
             'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),
-            'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p','55434','-U','postgres','-d','pgderive_dev','-Atc','SELECT version()'],text=True,env={**os.environ,"PGPASSWORD":os.environ.get("PGPASSWORD","postgres")}).strip(),
+            'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p',os.environ.get('PGDERIVE_TEST_POSTGRES_PORT','55434'),'-U','postgres','-d','pgderive_dev','-Atc','SELECT version()'],text=True,env={**os.environ,"PGPASSWORD":os.environ.get("PGPASSWORD","postgres")}).strip(),
             'sha256':{str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest() for path in files}}
 (output/'provenance.json').write_text(json.dumps(provenance,indent=2)+'\n')
 print('Worker qualification passed: six COMMIT faults, producer burst, restart and five witnessed process kills.')

@@ -191,6 +191,7 @@ mod lookup;
 mod group_membership;
 
 mod derived_join;
+mod grouped_occurrence;
 mod native_cross;
 
 mod lookup_remainder;

@@ -30,21 +30,9 @@ pub(super) fn bind(
         .iter()
         .find(|relation| relation.schema == source.schema && relation.table == source.table)
         .context("missing native source contract")?;
-    let relations = relational
-        .sources
-        .iter()
-        .enumerate()
-        .map(|(index, source)| {
-            let relation = contract
-                .relations
-                .iter()
-                .find(|relation| relation.schema == source.schema && relation.table == source.table)
-                .context("missing native occurrence contract")?;
-            Ok((index, relation))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let joined = relational.nodes.iter().any(|node| matches!(node, Node::Join { .. }));
-    let occurrence_keys = super::primary_keys(if joined { &relations } else { &relations[..1] });
+    let occurrence = super::occurrence::keys(relational, contract)?;
+    let known_occurrence = occurrence.is_some();
+    let occurrence_keys = occurrence.unwrap_or_default().into_iter().collect::<Vec<_>>();
     let resolve = |name: &crate::compiler::parser::Name| {
         crate::compiler::bind::derived::resolve_output(name, alias, &relational.output.columns)
     };
@@ -61,12 +49,15 @@ pub(super) fn bind(
     let Program::Relational { relational: stage } = &mut outer.program else {
         anyhow::bail!("missing partition stage");
     };
-    validate_occurrences(relational, stage)?;
+    let positional = validate_occurrences(known_occurrence, stage)?;
     lower_source_filter(relational, compiled.predicates.take())?;
     compose(relational, stage, outer.predicates.take())?;
     let revision = compiled.revision.as_mut().context("missing inner compiler revision")?;
     revision.push_str(":derived-partition-composition-v1:");
     revision.push_str(outer.revision.as_deref().context("missing stage revision")?);
+    if positional {
+        revision.push_str(":logical-occurrence-proof-v1");
+    }
     Ok(compiled)
 }
 fn aggregate_base(relational: &Relational) -> Result<usize> {
@@ -88,27 +79,15 @@ fn aggregate_base(relational: &Relational) -> Result<usize> {
     }
     Ok(base)
 }
-fn validate_occurrences(inner: &Relational, outer: &Relational) -> Result<()> {
+fn validate_occurrences(known: bool, outer: &Relational) -> Result<bool> {
     use crate::compiler::partition::Mode;
     let positional = outer.nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. }
         if matches!(spec.mode, Mode::Rows { .. }) || spec.aggregates.iter().any(|value| value.function.occurrence_order())));
     ensure!(
-        !positional
-            || !inner.nodes.iter().any(|node| matches!(
-                node,
-                Node::Expand { .. }
-                    | Node::Partition {
-                        spec: crate::compiler::partition::Partition {
-                            mode: Mode::Grouped { .. },
-                            ..
-                        },
-                        ..
-                    }
-                    | Node::Statistics { .. }
-            )),
-        "derived positional windows require preserved native occurrence identity"
+        !positional || known,
+        "derived positional windows require proven logical occurrence identity"
     );
-    Ok(())
+    Ok(positional)
 }
 pub(in crate::compiler::bind) fn lower_source_filter(
     relational: &mut Relational,

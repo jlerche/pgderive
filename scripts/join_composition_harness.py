@@ -70,8 +70,9 @@ def qualify(output, command, mode):
         fixture.rejected(command, 'hidden', fixture.query.replace('q.g','q.enabled'))
         fixture.rejected(command, 'terminal', fixture.query.replace('b.price AS p','abs(b.price) AS p'))
         if mode == 'winner':
-            for label,order in [('left-key',',q.bid)'),('right-key',',q.aid)')]:
-                fixture.rejected(command,label,fixture.query.replace(',q.bid,q.aid)',order))
+            fixture.rejected(command,'right-key',fixture.query.replace(',q.bid,q.aid)',',q.aid)'))
+            # Auction identity is already fixed within each partition.
+            fixture.query = fixture.query.replace(',q.bid,q.aid)',',q.bid)')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip() == '0'
         worker = fixture.start(command,'first')

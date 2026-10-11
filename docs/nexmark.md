@@ -1,8 +1,11 @@
 # PostgreSQL Nexmark portfolio contract
 
-The target is q0–q22: 23 queries, following the
+The named portfolio is q0–q22: 23 queries, following the
 [upstream Nexmark portfolio](https://github.com/nexmark/nexmark).
-This is a target contract, not a claim that the compiler executes these queries.
+Each declared PostgreSQL formulation now has compiled execution qualification
+against an exact native materialized view and an independent memory oracle.
+This establishes the named formulations and tested histories, not arbitrary SQL
+or scale.
 The local Feldera SQL templates are a comparison source; they omit q6 and q11
 and contain syntax and temporal choices that need explicit PostgreSQL adaptations.
 The compiler currently supports the narrower shapes in [sql-compiler.md](sql-compiler.md).
@@ -53,8 +56,8 @@ References: [PostgreSQL window functions](https://www.postgresql.org/docs/17/fun
 [generate_series](https://www.postgresql.org/docs/17/functions-srf.html).
 Executable shapes and named qualification are recorded in
 [sql-compiler.md](sql-compiler.md). Unsupported relational compositions are still
-rejected before registration; support for one window shape does not imply the
-whole portfolio is implemented.
+rejected before registration; named portfolio qualification does not imply
+arbitrary window compositions or SQL support.
 
 ## Query targets
 
@@ -157,6 +160,27 @@ sessions pin UTC and ISO dates; the MV is outside the source publication. Each
 fixture records its SQL, catalog definition, output types and exact weighted JSON
 in `native-mv-oracle.jsonl`, alongside the independent memory oracle.
 
+The common gate runs these owned fixture families sequentially:
+
+| Queries | Harness in `scripts/` |
+| --- | --- |
+| q0, q2 | nexmark_projection_harness.py |
+| q1 | nexmark_q1_harness.py |
+| q3 | nexmark_q3_harness.py |
+| q4, q9 | nexmark_auction_harness.py |
+| q5, q7 | nexmark_hot_harness.py |
+| q6 | nexmark_q6_harness.py |
+| q8 | nexmark_q8_harness.py |
+| q10, q16 | nexmark_calendar_harness.py |
+| q11, q12, q17 | nexmark_temporal_harness.py |
+| q13 | nexmark_q13_harness.py |
+| q14 | nexmark_q14_harness.py |
+| q15 | nexmark_q15_harness.py |
+| q18, q19 | nexmark_ordered_harness.py |
+| q20 | nexmark_q20_harness.py |
+| q21 | nexmark_q21_harness.py |
+| q22 | nexmark_q22_harness.py |
+
 Measure cold and warm object GETs/bytes, repeated probes, cache residency, root/block
 counts, compaction writes and skewed partition work against identical histories.
 Choose storage changes from those measurements and prove invariant output deltas
@@ -176,13 +200,14 @@ boundaries are revised after each complete committed source delta and restore
 through the same durable publication protocol. Local/instant, NULL key, infinity,
 exact gap, microsecond, update/delete and cold-restart cases compare with PostgreSQL
 and an independent direct-connectivity oracle. This qualifies these primitives
-and this explicit session formulation, not all q0–q22 target queries above.
+and this explicit session formulation; other named queries have their separate
+qualification below.
 
 Integral grouped COUNT DISTINCT is also qualified, including FILTER and nested
-aggregate/window consumption. The remaining portfolio includes broader native/terminal numeric
-and text expressions, broader join shapes, and the
-explicit clock-driven auction-closure formulations. These remain compiler work;
-no unsupported query is approximated or accepted as an executable placeholder.
+aggregate/window consumption. Native/terminal expressions, scoped joins and
+recorded auction closure are qualified by their named fixtures below. Broader
+SQL shapes still reject; no unsupported query is accepted as an executable
+placeholder.
 
 ## Executable q15 formulation
 
@@ -209,7 +234,7 @@ infinities, microseconds on either side of midnight, writer timezone changes,
 updates moving days/price bands, last-value retractions, rollback, empty query ticks
 and removal to empty. Changed thresholds or DISTINCT semantics cannot adopt
 registered state; quoted alias spelling can resume the same compiled semantics.
-This establishes q15's stated formulation, not the remaining portfolio queries.
+This establishes q15's stated formulation; other queries have separate fixtures.
 
 ## Joined scope bridge
 
@@ -380,3 +405,26 @@ partial deletions and URL changes retract the correct counts. NULLs, brand
 precedence, whitespace, prefixes, duplicate/empty captures, Unicode/newlines,
 simultaneous changes, PK moves, rollback, empty input ticks and cold restart are
 covered. Changed CASE labels or capture index reject durable state reuse.
+
+## Recorded closure and latest-ten selling prices (q6)
+
+`queries/nexmark/q6.sql` uses `global_clock(id,recorded_time)` as ordinary source
+data, selecting id=0. A bid qualifies inclusively between auction opening and
+expiry; an auction qualifies when expiry <= recorded_time. Clock qualification
+precedes GROUP BY auction identity, seller and expiry with MAX(price). Auctions
+without eligible bids are absent; eligible all-NULL prices retain a NULL maximum.
+ROW_NUMBER partitions by seller and orders by expiry DESC, auction identity DESC.
+The first ten auctions, including NULL-priced auctions, supply AVG(final_price);
+AVG ignores NULL prices and returns NULL when all selected prices are NULL.
+
+This is the declared PostgreSQL adaptation in the target table above. The local
+Feldera templates omit q6; closure uses no implicit processing clock or watermark.
+Clock reversals, deletes and late source mutations revise the result. Source LSN,
+logical time and recorded_time remain separate.
+
+Two owned timestamp/timestamptz fixtures compare the exact native PostgreSQL MV
+and independent source eligibility/max/latest-ten/exact-average oracle. Fourteen
+same-seller auctions exercise the cutoff and expiry ties. NULLs, integer extrema,
+late bids, simultaneous three-input changes, PK moves, clock reversals and
+delete/reinsert, ignored clock identities, rollback, empty logical-input ticks
+and cold restart are covered. Changed clock selection or ordering rejects reuse.

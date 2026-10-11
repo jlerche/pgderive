@@ -7,6 +7,7 @@ server completion before disconnecting the client without forwarding that reply.
 """
 import argparse
 import json
+import os
 import pathlib
 import time
 import socket
@@ -147,11 +148,13 @@ class Handler(socketserver.BaseRequestHandler):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("before", "after", "hold"), required=True)
-    parser.add_argument("--upstream", type=int, default=55434)
+    parser.add_argument("--upstream", type=int, default=os.environ.get("PGDERIVE_TEST_POSTGRES_PORT", "55434"))
     parser.add_argument("--gate", type=pathlib.Path)
     parser.add_argument("--once", action="store_true", help="inject one global COMMIT fault")
     parser.add_argument("--arm-query", help="arm after an SQL Parse/Query containing this literal")
     args = parser.parse_args()
+    if not 1 <= args.upstream <= 65535:
+        parser.error("upstream port must be between 1 and 65535")
     if args.mode == "hold" and args.gate is None:
         parser.error("hold mode requires --gate")
     with Proxy(("127.0.0.1", 0), Handler) as server:
