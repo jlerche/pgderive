@@ -1,0 +1,39 @@
+[Unit]
+Description=Pgderive query %i
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pgderive
+Group=pgderive
+EnvironmentFile=/etc/pgderive/%i.env
+LoadCredential=s3:/etc/pgderive/%i.s3.json
+Environment=PGDERIVE__OBJECT_STORE__CREDENTIALS_FILE=%d/s3
+Environment=TMPDIR=/run/pgderive-%i
+RuntimeDirectory=pgderive-%i
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStart=/opt/pgderive/bin/pgderive query restart /etc/pgderive/%i.toml
+Restart=on-failure
+RestartSec=10s
+KillSignal=SIGINT
+TimeoutStopSec=900
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+# Engine byte limits are serialized-state budgets, not process RSS limits.
+# Size MemoryMax and scratch storage from the qualified workload before enabling.
+
+[Install]
+WantedBy=multi-user.target

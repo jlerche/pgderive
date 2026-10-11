@@ -240,6 +240,21 @@ for qualification in query-health query-health-failure query-health-slot query-s
         exit 1
     fi
 done
+./scripts/package_release.sh "$output/package"
+mkdir "$output/query-capacity"
+if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/query-capacity" \
+    python3 scripts/query_capacity_harness.py "$output/query-capacity" -- "$output/package/bin/pgderive"; then
+    cat "$output/query-capacity/harness.log" >&2
+    exit 1
+fi
+python3 - "$output" <<'UNIT'
+import pathlib,subprocess,sys
+output=pathlib.Path(sys.argv[1])
+unit=output/'pgderive-validate@.service'
+unit.write_text((output/'package/examples/pgderive@.service').read_text().replace('/opt/pgderive/bin/pgderive',str(output/'package/bin/pgderive')))
+with (output/'systemd-validation.log').open('w') as log:
+    subprocess.run(['systemd-analyze','verify',str(unit)],check=True,stdout=log,stderr=log)
+UNIT
 python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
@@ -253,7 +268,7 @@ health_failures=list((output/'query-health-failure').glob('*/qualification.json'
 assert len(health_failures)==6,health_failures
 for result in health_failures:
     json.loads(result.read_text())
-for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls','query-postgres-tls'):
+for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls','query-postgres-tls','query-capacity'):
     json.loads((output/name/'qualification.json').read_text())
 for fault in rebuild_faults:
     json.loads(fault.read_text())
@@ -264,7 +279,8 @@ for result in results:
 root=pathlib.Path.cwd()
 files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),pathlib.Path(sys.argv[3]).with_name('postgres_tls_control_probe'),
        *sorted((root/'src').rglob('*.rs')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
-       *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(output.rglob('*.json')),
+       *sorted((root/'docs').glob('*.md')), *sorted((root/'deploy').glob('*.service')), output/'package/bin/pgderive',
+       *sorted((root/'scripts').glob('*.sh')), *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(output.rglob('*.json')),
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]
 provenance={'git_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
             'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),

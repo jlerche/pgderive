@@ -857,3 +857,8 @@ PostgreSQL TLS and restricted worker role requirements are documented in
 [PostgreSQL security](docs/postgres-security.md). The common gate independently
 checks SQL, replication-control and streaming certificate rejection on an owned
 tmpfs PostgreSQL fixture.
+
+A host-native package and supervised worker setup are described in
+[deployment](docs/deployment.md), with the conservative
+[backup/failover policy](docs/backup-failover.md). Packaging builds and records
+artifacts; it does not install a service or credentials.
