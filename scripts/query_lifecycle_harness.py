@@ -166,8 +166,7 @@ def retire(command, fixture, config, validated):
     assert fixture.sql(f"SELECT count(*) FROM {fixture.name}.pgderive_queries").strip() == '0'
     assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
     assert inspect(command, fixture, 'status', config)['state'] == 'dropped'
-    for action in ('create', 'restart'):
-        assert 'query removal is pending or complete' in rejected(command, fixture, action, config)
+    assert 'query removal is pending or complete' in rejected(command, fixture, 'restart', config)
     for root in roots:
         content = get(root['path'])
         index_bytes = content[root['index_offset']:root['index_offset']+root['index_length']]

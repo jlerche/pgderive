@@ -224,6 +224,14 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/q
     cat "$output/query-removal/harness.log" >&2
     exit 1
 fi
+for qualification in query-rebuild query-rebuild-limits query-rebuild-fault; do
+    mkdir "$output/$qualification"
+    if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/$qualification" \
+        python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${admin[@]}"; then
+        cat "$output/$qualification/harness.log" >&2
+        exit 1
+    fi
+done
 python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
@@ -231,6 +239,12 @@ results=list(output.rglob('result.json'))
 assert len(results)==168,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
+rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))
+assert len(rebuild_faults)==12,rebuild_faults
+for name in ('query-rebuild','query-rebuild-limits'):
+    json.loads((output/name/'qualification.json').read_text())
+for fault in rebuild_faults:
+    json.loads(fault.read_text())
 for removal in removals:
     json.loads(removal.read_text())
 for result in results:

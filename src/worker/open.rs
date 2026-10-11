@@ -31,6 +31,22 @@ impl Open {
     pub(super) async fn connect_with_session(
         config: &Config,
         settings: &Settings,
+        session: Session,
+    ) -> Result<Self> {
+        session.own(&settings.catalog_schema, &settings.query_id).await?;
+        let resolved = super::lifecycle::resolve(&session.client, config, settings).await?;
+        let mut opened = Self::raw(&resolved.config, &resolved.settings, session).await?;
+        super::results::install(
+            &mut opened.session.client,
+            &resolved.presentation,
+            &opened.compiled,
+        )
+        .await?;
+        Ok(opened)
+    }
+    pub(super) async fn raw(
+        config: &Config,
+        settings: &Settings,
         mut session: Session,
     ) -> Result<Self> {
         settings.validate()?;

@@ -17,7 +17,13 @@ pub async fn start(config: Config, restart: bool) -> Result<()> {
     let settings = config.worker.clone().context("configuration requires a worker section")?;
     let mut session = Session::connect(&config).await?;
     session.own(&settings.catalog_schema, &settings.query_id).await?;
-    super::retire::require_active(&session.client, &settings).await?;
+    if !restart && super::lifecycle::recreate(&session.client, &settings).await? {
+        session = super::lifecycle::rebuild_owned(&config, &settings, session, true).await?;
+        return super::drive::run_initial(config, settings, Some(session)).await;
+    }
+    let resolved = super::lifecycle::resolve(&session.client, &config, &settings).await?;
+    let native = &resolved.settings;
+    super::retire::require_active(&session.client, native).await?;
     let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
     let exists: bool = session
         .client
@@ -29,7 +35,7 @@ pub async fn start(config: Config, restart: bool) -> Result<()> {
             .client
             .query_opt(
                 &format!("SELECT query_id FROM {table} WHERE query_id=$1"),
-                &[&settings.query_id],
+                &[&native.query_id],
             )
             .await?
             .is_some();
@@ -59,6 +65,7 @@ pub async fn validate(config: &Config) -> Result<Value> {
     config.validate()?;
     let settings = config.worker.as_ref().context("configuration requires a worker section")?;
     let mut session = Session::connect(config).await?;
+    super::lifecycle::require_public(&session.client, settings).await?;
     let identity = Identity::inspect(config).await?;
     let tx = session
         .client
@@ -75,9 +82,11 @@ pub async fn validate(config: &Config) -> Result<Value> {
     super::results::validate(&tx, settings).await?;
     let plan = program::plan(&source, &compiled)?;
     let statement = tx.prepare(&query_sql(&settings.query)).await?;
-    let columns = statement.columns().iter().map(|column| {
-        json!({"name":column.name(),"type_oid":column.type_().oid(),"type":column.type_().name(),"type_modifier":column.type_modifier()})
-    }).collect::<Vec<_>>();
+    let mut columns = Vec::new();
+    for column in statement.columns() {
+        let collation = super::results::collation(&tx, &query_sql(&settings.query), column).await?;
+        columns.push(json!({"name":column.name(),"type_oid":column.type_().oid(),"type":column.type_().name(),"type_modifier":column.type_modifier(),"collation":collation}));
+    }
     tx.commit().await?;
     Ok(json!({"version":1,"query_id":settings.query_id,"valid":true,
         "identity_scope":"configured-slot-alias","plan_identity":plan.identity(),
@@ -99,6 +108,7 @@ pub async fn status(config: &Config) -> Result<Value> {
         .read_only(true)
         .start()
         .await?;
+    let (query_id, lifecycle) = super::lifecycle::current(&tx, settings).await?;
     let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
     let exists: bool = tx
         .query_one("SELECT pg_catalog.to_regclass($1) IS NOT NULL", &[&table])
@@ -107,7 +117,7 @@ pub async fn status(config: &Config) -> Result<Value> {
     let registration = if exists {
         tx.query_opt(
             &format!("SELECT pg_catalog.to_jsonb(r) FROM {table} r WHERE query_id=$1"),
-            &[&settings.query_id],
+            &[&query_id],
         )
         .await?
         .map(|row| row.try_get::<_, Value>(0))
@@ -119,7 +129,7 @@ pub async fn status(config: &Config) -> Result<Value> {
         tx.query_opt(&format!(
             "SELECT pg_catalog.jsonb_build_object('logical_time',q.logical_time,'epoch',q.epoch,'fence',p.fence,'commit_lsn',p.commit_lsn::text,'end_lsn',p.end_lsn::text,'xid',p.xid) FROM {}.pgderive_queries q JOIN {}.pgderive_progress p USING(query_id) WHERE q.query_id=$1",
             settings.catalog_schema, settings.catalog_schema,
-        ), &[&settings.query_id]).await?.map(|row| row.try_get::<_, Value>(0)).transpose()?
+        ), &[&query_id]).await?.map(|row| row.try_get::<_, Value>(0)).transpose()?
     } else {
         None
     };
@@ -130,10 +140,18 @@ pub async fn status(config: &Config) -> Result<Value> {
     } else {
         "unregistered"
     };
-    let state = super::retire::status(&tx, settings).await?.unwrap_or(state);
+    let mut native = settings.clone();
+    native.query_id = query_id;
+    let state = super::retire::status(&tx, &native).await?.unwrap_or(state);
+    let state = lifecycle
+        .as_ref()
+        .and_then(|value| value.get("phase"))
+        .and_then(Value::as_str)
+        .filter(|phase| *phase != "Active")
+        .unwrap_or(state);
     tx.commit().await?;
     Ok(json!({"version":1,"query_id":settings.query_id,"state":state,
-        "registration":registration,"progress":progress}))
+        "registration":registration,"progress":progress,"lifecycle":lifecycle}))
 }
 
 pub(super) fn query_sql(query: &QueryDefinition) -> String {

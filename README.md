@@ -34,9 +34,7 @@ and external writers remain outside the worker's ownership.
 `query create` requires an unregistered query; `query restart` requires an
 existing registration. Both hold exclusive query ownership across that check
 and worker startup. Each catalog schema must use one object-store root prefix
-so garbage collection can mark all query and reader roots safely. Explicit
-generation rebuild remains the next part of
-[the release work](docs/release-plan.md). The diagnostic
+so garbage collection can mark all query and reader roots safely. The diagnostic
 listener's original `cargo run -- config.local.toml` interface remains available.
 
 `query drop CONFIG.toml` takes exclusive query ownership, journals removal intent,
@@ -46,9 +44,28 @@ pin-aware garbage collection. Repeat `drop` after an interrupted or uncertain
 operation; `status` distinguishes `dropping` and `dropped`. External reader pins
 retain their objects until released. Source tables and dependent application
 views remain protected; dependency errors require removing the dependency before
-retrying the requested drop. A removal tombstone prevents ordinary create/restart
-from silently recreating the query. Fresh-generation rebuild/recreation remains
-unfinished release work.
+retrying the requested drop. Restart cannot recreate removed state. Explicit
+`query create` after a completed drop allocates a fresh physical generation.
+
+`query rebuild CONFIG.toml` validates the current SQL before reserving a fresh
+physical generation and bootstrapping a consistent snapshot. The public result
+view and active generation switch in one PostgreSQL transaction; the old result
+remains visible until that transaction commits. Compatible columns preserve the
+view OID and consumers. Incompatible names/types/modifiers/collations require a
+replacement view, and PostgreSQL dependency checks can reject that switch.
+The old generation then retires through the same pin-aware removal protocol.
+Rebuild finishes with the replacement activated but stopped; use `query restart`
+to start consuming changes. Source tables are never reset.
+
+An interrupted rebuild records its exact pending semantics and generation.
+Repeat rebuild with the original SQL to resume it; ordinary restart is blocked
+while building. Changed SQL cannot reuse that pending state. Drop can abandon an
+interrupted generation safely. After an uncertain final completion, inspect
+status: an active generation with no pending retirement is already complete;
+restart it. A new rebuild invocation on a fully completed query intentionally
+creates another fresh generation. Physical generation IDs are internal and
+cannot be used directly through the query CLI. Source LSNs establish snapshot
+ordering; fresh-generation logical time is independent of the previous one.
 
 New activations create their own sink and record its relation OID atomically;
 pre-existing tables are rejected. An unactivated registration does not authorize

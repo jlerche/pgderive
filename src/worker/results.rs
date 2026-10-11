@@ -1,4 +1,5 @@
 //! `PostgreSQL` presentation of committed internal bags as typed SQL rows.
+mod switch;
 use super::{
     admin::{query_sql, quote},
     spec::Settings,
@@ -6,6 +7,7 @@ use super::{
 use crate::{catalog::Sink, compiler::Compiled};
 use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
+pub(super) use switch::replace;
 use tokio_postgres::{Client, Column, GenericClient, Statement};
 
 pub(super) async fn validate(sql: &(impl GenericClient + Sync), settings: &Settings) -> Result<()> {
@@ -82,7 +84,7 @@ pub(super) async fn install(
     Ok(())
 }
 
-async fn definition(
+pub(super) async fn definition(
     sql: &(impl GenericClient + Sync),
     settings: &Settings,
     grouped: bool,
@@ -148,7 +150,7 @@ fn type_spec(column: &Column, native: &str) -> Result<String> {
     }
 }
 
-async fn collation(
+pub(super) async fn collation(
     sql: &(impl GenericClient + Sync),
     query: &str,
     column: &Column,
@@ -173,7 +175,7 @@ async fn collation(
     ))
 }
 
-async fn catalog_definition(
+pub(super) async fn catalog_definition(
     sql: &(impl GenericClient + Sync),
     schema: &str,
     view: &str,

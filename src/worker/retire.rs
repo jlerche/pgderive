@@ -68,15 +68,11 @@ pub(super) async fn status(
         .map(|removal| if removal.finished { "dropped" } else { "dropping" }))
 }
 
-/// Retire the journaled slot, result and membership without resetting source data.
-///
-/// # Errors
-/// Rejects live ownership, changed resources, dependencies or uncertain operations.
-/// Repeating the command reconciles its durable intent; it never deletes a prefix.
-pub async fn drop_query(config: &Config) -> Result<Value> {
-    config.validate()?;
-    let settings = config.worker.as_ref().context("configuration requires a worker section")?;
-    let mut session = Session::connect(config).await?;
+pub(super) async fn execute(
+    config: &Config,
+    settings: &Settings,
+    session: &mut Session,
+) -> Result<Value> {
     session.own(&settings.catalog_schema, &settings.query_id).await?;
     let removal = match read(&session.client, settings).await? {
         Some(removal) => removal,

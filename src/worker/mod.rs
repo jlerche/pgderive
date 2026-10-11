@@ -1,6 +1,7 @@
 //! Continuous operation of the explicit, native-bound grouped inner-join MVP.
 mod admin;
 mod drive;
+mod lifecycle;
 mod open;
 mod program;
 mod registration;
@@ -12,7 +13,7 @@ mod sql;
 use crate::Config;
 pub use admin::{start, status, validate};
 use anyhow::{Context, Result};
-pub use retire::drop_query;
+pub use lifecycle::{drop_query, rebuild};
 pub use spec::{Query, QueryDefinition, Settings, SqlQuery};
 
 /// Start or resume a durable grouped worker using the configuration's worker section.

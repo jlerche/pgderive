@@ -12,11 +12,13 @@ async fn main() -> Result<()> {
         [scope, command, path] if scope == "query" => {
             let config = Config::load(path).context("loading query configuration")?;
             match command.as_str() {
-                "validate" | "status" | "drop" => {
+                "validate" | "status" | "drop" | "rebuild" => {
                     let result = if command == "validate" {
                         pgderive::worker::validate(&config).await?
                     } else if command == "status" {
                         pgderive::worker::status(&config).await?
+                    } else if command == "rebuild" {
+                        pgderive::worker::rebuild(&config).await?
                     } else {
                         pgderive::worker::drop_query(&config).await?
                     };
@@ -28,7 +30,7 @@ async fn main() -> Result<()> {
             }
         }
         _ => bail!(
-            "usage: pgderive [CONFIG.toml] | query <validate|status|create|restart|drop> CONFIG.toml"
+            "usage: pgderive [CONFIG.toml] | query <validate|status|create|restart|rebuild|drop> CONFIG.toml"
         ),
     }
 }
