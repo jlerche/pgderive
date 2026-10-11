@@ -24,6 +24,7 @@ pub(super) async fn source(
     )
     .await?;
     settings.query.compile_bound(sql, &preliminary).await?;
+    super::results::validate(sql, settings).await?;
     sql.batch_execute(&format!(
         "CREATE TABLE IF NOT EXISTS {}.pgderive_worker_registration(
         query_id text PRIMARY KEY, format_version integer NOT NULL CHECK(format_version=1),

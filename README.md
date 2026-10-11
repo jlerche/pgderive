@@ -11,6 +11,31 @@ derived-query filtering and composed window/group stages, native left predecesso
 and explicit revisable sessions through durable circuits; see
 [the SQL subset and compiler boundaries](docs/sql-compiler.md).
 
+## Query inspection and typed results
+
+`cargo run --locked -- query validate worker.local.toml` resolves and type-checks
+the configured query against the live PostgreSQL publication, binds terminal
+built-ins and reports its output names, type OIDs/modifiers and provisional plan
+identity. It runs read-only and creates no registration or replication slot.
+The provisional identity uses the configured slot alias; durable registration
+binds the independently journaled physical slot. `query status` reports whether
+the query is unregistered, registered or activated and its exact durable progress.
+Activation alone does not establish current worker readiness or freshness.
+
+Set `worker.result_view = "auction_totals"` to expose an application-facing SQL
+view in the owned catalog schema. It presents named native columns, preserves
+output type modifiers and collations, and expands committed positive bag weights
+into duplicate rows. NULL values remain NULL. The weighted sink remains internal;
+applications can `SELECT` the result view normally. Output labels must be unique
+and fit PostgreSQL's identifier limit; add explicit aliases when needed. Restart
+rejects a changed or externally altered result view. Source/application tables
+and external writers remain outside the worker's ownership.
+
+`query create` and `query restart` currently invoke the existing guarded
+create-or-resume worker path; the explicit generation/rebuild/removal lifecycle
+is the next part of [the release work](docs/release-plan.md). The diagnostic
+listener's original `cargo run -- config.local.toml` interface remains available.
+
 ## Quality gate
 
 Use Rust 1.95.0, pinned in `rust-toolchain.toml`, a C toolchain and libclang

@@ -52,6 +52,7 @@ impl Open {
         }
         let (writer, nonce) =
             reopen(&mut session, &catalog, &mut query, (&contract, settings)).await?;
+        super::results::install(&mut session.client, settings, &compiled).await?;
         Ok(Self { session, catalog, query, compiled, writer, store, nonce, replication })
     }
 }

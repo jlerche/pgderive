@@ -1,12 +1,15 @@
 //! Continuous operation of the explicit, native-bound grouped inner-join MVP.
+mod admin;
 mod drive;
 mod open;
 mod program;
 mod registration;
+mod results;
 mod runtime;
 mod spec;
 mod sql;
 use crate::Config;
+pub use admin::{status, validate};
 use anyhow::{Context, Result};
 pub use spec::{Query, QueryDefinition, Settings, SqlQuery};
 

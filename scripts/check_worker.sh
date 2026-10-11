@@ -6,11 +6,13 @@ if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
     # rather than a cargo launcher whose child would survive the crash test.
     export CARGO_TARGET_DIR="$PWD/target/llvm-cov-target"
     source <(cargo llvm-cov show-env --sh)
-    cargo build --locked --bin pgderive_worker
+    cargo build --locked --bin pgderive_worker --bin pgderive
     worker=("$CARGO_TARGET_DIR/debug/pgderive_worker")
+    admin=("$CARGO_TARGET_DIR/debug/pgderive")
 else
-    cargo build --locked --bin pgderive_worker
+    cargo build --locked --bin pgderive_worker --bin pgderive
     worker=("$PWD/target/debug/pgderive_worker")
+    admin=("$PWD/target/debug/pgderive")
 fi
 mkdir -p artifacts/worker
 output=$(mktemp -d "$PWD/artifacts/worker/run-XXXXXXXX")
@@ -210,15 +212,21 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/n
     cat "$output/nexmark-q6/harness.log" >&2
     exit 1
 fi
-python3 - "$output" "${worker[0]}" <<'PY'
+mkdir "$output/query-lifecycle"
+if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/query-lifecycle" \
+    python3 scripts/query_lifecycle_harness.py "$output/query-lifecycle" -- "${admin[@]}"; then
+    cat "$output/query-lifecycle/harness.log" >&2
+    exit 1
+fi
+python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==160,results
+assert len(results)==168,results
 for result in results:
     json.loads(result.read_text())
 root=pathlib.Path.cwd()
-files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),
+files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),
        *sorted((root/'src').rglob('*.rs')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
        *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(output.rglob('*.json')),
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]

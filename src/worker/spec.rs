@@ -69,6 +69,9 @@ pub struct Settings {
     pub query_id: String,
     /// Owned grouped-row or weighted-bag destination table inside the catalog schema.
     pub sink_table: String,
+    /// Optional application-facing typed bag view, distinct from the internal sink.
+    #[serde(default)]
+    pub result_view: Option<String>,
     /// Exclusively owned durable object-store prefix, reused across resumes.
     pub object_prefix: String,
     /// Maximum rows in one immutable data block.
@@ -96,6 +99,12 @@ impl Settings {
             "invalid worker query name"
         );
         crate::catalog::Sink::Grouped(self.sink_table.clone()).validate()?;
+        if let Some(view) = &self.result_view {
+            ensure!(
+                identifier(view) && !view.starts_with("pgderive_") && view != &self.sink_table,
+                "invalid, reserved or conflicting result view"
+            );
+        }
         ensure!(
             !self.object_prefix.is_empty()
                 && self.object_prefix.len() <= 200
