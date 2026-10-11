@@ -852,3 +852,8 @@ engine MVP.
 
 Operational health observations and failure qualification are documented in
 [worker health](docs/worker-health.md).
+
+PostgreSQL TLS and restricted worker role requirements are documented in
+[PostgreSQL security](docs/postgres-security.md). The common gate independently
+checks SQL, replication-control and streaming certificate rejection on an owned
+tmpfs PostgreSQL fixture.

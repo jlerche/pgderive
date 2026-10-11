@@ -6,11 +6,11 @@ if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
     # rather than a cargo launcher whose child would survive the crash test.
     export CARGO_TARGET_DIR="$PWD/target/llvm-cov-target"
     source <(cargo llvm-cov show-env --sh)
-    cargo build --locked --bin pgderive_worker --bin pgderive
+    cargo build --locked --bin pgderive_worker --bin pgderive --bin postgres_tls_control_probe
     worker=("$CARGO_TARGET_DIR/debug/pgderive_worker")
     admin=("$CARGO_TARGET_DIR/debug/pgderive")
 else
-    cargo build --locked --bin pgderive_worker --bin pgderive
+    cargo build --locked --bin pgderive_worker --bin pgderive --bin postgres_tls_control_probe
     worker=("$PWD/target/debug/pgderive_worker")
     admin=("$PWD/target/debug/pgderive")
 fi
@@ -232,7 +232,7 @@ for qualification in query-rebuild query-rebuild-limits query-rebuild-fault; do
         exit 1
     fi
 done
-for qualification in query-health query-health-failure query-health-slot query-storage-tls; do
+for qualification in query-health query-health-failure query-health-slot query-storage-tls query-postgres-tls; do
     mkdir "$output/$qualification"
     if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/$qualification" \
         python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${admin[@]}"; then
@@ -253,7 +253,7 @@ health_failures=list((output/'query-health-failure').glob('*/qualification.json'
 assert len(health_failures)==6,health_failures
 for result in health_failures:
     json.loads(result.read_text())
-for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls'):
+for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls','query-postgres-tls'):
     json.loads((output/name/'qualification.json').read_text())
 for fault in rebuild_faults:
     json.loads(fault.read_text())
@@ -262,7 +262,7 @@ for removal in removals:
 for result in results:
     json.loads(result.read_text())
 root=pathlib.Path.cwd()
-files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),
+files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),pathlib.Path(sys.argv[3]).with_name('postgres_tls_control_probe'),
        *sorted((root/'src').rglob('*.rs')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
        *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(output.rglob('*.json')),
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]
