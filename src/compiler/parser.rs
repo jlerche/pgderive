@@ -12,6 +12,7 @@ pub(super) mod navigation;
 pub(super) mod offset;
 pub(super) mod partition;
 pub(super) mod scalar;
+pub(super) mod scoped_join;
 mod timestamp_format;
 use expressions::{aggregate, column, node, optional, target};
 
@@ -23,6 +24,7 @@ pub(super) struct Table {
 }
 pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::Transform)>;
 pub(super) enum Parsed {
+    ScopedJoin(scoped_join::Parsed),
     Derived(derived::Derived),
     Lookup(lookup::Parsed),
     Grouped(Grouped),
@@ -128,6 +130,9 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
 }
 fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     validate_query(select)?;
+    if let Some(join) = scoped_join::parse(select)? {
+        return Ok(Parsed::ScopedJoin(join));
+    }
     if let Some(lookup) = lookup::parse(select)? {
         return Ok(Parsed::Lookup(lookup));
     }

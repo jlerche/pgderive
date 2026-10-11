@@ -9,7 +9,7 @@ use crate::{
     source::Contract,
 };
 use anyhow::{Context, Result, ensure};
-mod composition;
+pub(in crate::compiler::bind) mod composition;
 struct Body {
     expansion: Option<crate::compiler::parser::expansion::Series>,
     targets: Vec<syntax::Target>,

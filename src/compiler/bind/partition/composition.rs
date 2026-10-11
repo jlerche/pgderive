@@ -110,7 +110,7 @@ fn validate_occurrences(inner: &Relational, outer: &Relational) -> Result<()> {
     );
     Ok(())
 }
-fn lower_source_filter(
+pub(in crate::compiler::bind) fn lower_source_filter(
     relational: &mut Relational,
     expression: Option<crate::compiler::expression::Expr>,
 ) -> Result<()> {
@@ -172,7 +172,11 @@ fn compose(
     inner.output = outer.output.clone();
     Ok(())
 }
-fn rewrite(node: &mut Node, rename: &impl Fn(&str) -> String, edge: &impl Fn(&str) -> String) {
+pub(in crate::compiler::bind) fn rewrite(
+    node: &mut Node,
+    rename: &impl Fn(&str) -> String,
+    edge: &impl Fn(&str) -> String,
+) {
     match node {
         Node::Source { id, .. } => *id = rename(id),
         Node::Join { id, left, right } | Node::Union { id, left, right } => {
@@ -184,6 +188,8 @@ fn rewrite(node: &mut Node, rename: &impl Fn(&str) -> String, edge: &impl Fn(&st
         | Node::Expand { id, input, .. }
         | Node::Map { id, input, .. }
         | Node::KeyBy { id, input, .. }
+        | Node::Rebind { id, input, .. }
+        | Node::EquijoinKey { id, input, .. }
         | Node::LookupInput { id, input, .. }
         | Node::Lookup { id, input, .. }
         | Node::Project { id, input }

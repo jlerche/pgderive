@@ -52,6 +52,7 @@ pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, Strin
         matches!(
             inner,
             Parsed::Partition(_)
+                | Parsed::ScopedJoin(_)
                 | Parsed::Derived(_)
                 | Parsed::Lookup(_)
                 | Parsed::JoinProjection { .. }

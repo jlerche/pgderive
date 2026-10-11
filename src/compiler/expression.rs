@@ -34,6 +34,12 @@ pub(super) enum Expr {
     Not(Box<Self>),
 }
 type Resolve<'a> = dyn Fn(&Name) -> Result<ColumnRef> + 'a;
+pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
+    Scalar::Column(column.clone())
+        .evaluate((row, row))?
+        .map(|value| serde_json::to_string(&value).map_err(Into::into))
+        .transpose()
+}
 pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
     match expr {
         syntax::Expr::Value(value) => Ok(Expr::Value(scalar(value, 16, resolve)?)),

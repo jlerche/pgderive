@@ -66,6 +66,12 @@ pub(in crate::worker) fn build(
             Node::KeyBy { id, key, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(key_by(key)));
             }
+            Node::Rebind { id, fields, .. } => {
+                operators.projects.insert(id.clone(), Arc::new(super::bindings::rebind(fields)));
+            }
+            Node::EquijoinKey { id, keys, .. } => {
+                operators.projects.insert(id.clone(), Arc::new(super::bindings::key_by(keys)));
+            }
             Node::Join { id, .. } => {
                 operators.joins.insert(id.clone(), Arc::new(join_map()));
             }
@@ -212,6 +218,8 @@ pub(in crate::worker) fn plan(
                 Node::Filter { id, input, .. }
                 | Node::Map { id, input, .. }
                 | Node::KeyBy { id, input, .. }
+                | Node::Rebind { id, input, .. }
+                | Node::EquijoinKey { id, input, .. }
                 | Node::Project { id, input }
                 | Node::Output { id, input }
                 | Node::PartitionBy { id, input, .. }

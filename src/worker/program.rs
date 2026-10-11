@@ -1,3 +1,4 @@
+mod bindings;
 mod distinct;
 mod lookup;
 mod navigation;

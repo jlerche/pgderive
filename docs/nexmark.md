@@ -180,7 +180,7 @@ and this explicit session formulation, not all q0–q22 target queries above.
 
 Integral grouped COUNT DISTINCT is also qualified, including FILTER and nested
 aggregate/window consumption. The remaining portfolio includes broader native/terminal numeric
-and text expressions, joins between derived stages, and the
+and text expressions, broader join shapes, and the
 explicit clock-driven auction-closure formulations. These remain compiler work;
 no unsupported query is approximated or accepted as an executable placeholder.
 
@@ -216,8 +216,9 @@ This establishes q15's stated formulation, not the remaining portfolio queries.
 Two-native-table inner equijoin projections can feed grouped and ordered derived
 stages. The qualified top-one fixture orders by price and both input primary keys,
 then filters row_number <= 1; its winners revise after either input changes. Named q4/q9 eligibility and winner SQL are qualified below. Explicit
-persisted-clock closure remains a separate query formulation. General
-joins between grouped/ordered derived relations remain unsupported.
+persisted-clock closure remains a separate query formulation. The scoped derived
+equijoin bridge used by q8 is described below; broader join conditions and mixed
+native/derived inputs remain unsupported.
 
 ## Executable q4 and q9 formulations
 
@@ -304,3 +305,21 @@ cold same-slot restart. Changing q5 membership count or q7 stride rejects state
 reuse; equivalent aliases preserve identity. No new operator declarations alone
 supply execution: the existing scalar/partition/filter circuit bridge executes
 these compositions with complete input ticks and durable publication.
+
+
+## New users joining auctions (q8)
+
+`queries/nexmark/q8.sql` groups person ID/name and auction seller into distinct
+ten-second memberships, then joins person ID to seller and equal bucket starts.
+The fixed width makes the end key determined by the start, so omitting it from
+the equality preserves membership. Duplicate auctions do not multiply seller
+membership; NULL join components do not match. NULL person names remain valid
+payloads. Infinite times retain PostgreSQL date_bin behavior. There is no clock,
+watermark, expiry or implicit finalization.
+
+Four owned fixtures cover timestamp/timestamptz, default and deterministic ICU
+text, C-collated varchar and integral key widths. They compare the exact native
+materialized view and an independent raw-source membership/join oracle after
+snapshot bootstrap, simultaneous inserts, partial/last duplicate deletions,
+source/key/bucket moves, boundary and DST changes, rollback, empty input ticks,
+quoted aliases and cold restart. Changed stride or join key rejects state reuse.

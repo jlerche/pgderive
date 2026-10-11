@@ -18,6 +18,7 @@ use crate::{source::Contract, worker::Query};
 use anyhow::Result;
 use expression::Expr;
 pub(crate) use expression::Predicate;
+pub(crate) use expression::native_key;
 use serde::Serialize;
 
 /// Semantic/compiler and runtime codec revision; changes require fresh bootstrap.

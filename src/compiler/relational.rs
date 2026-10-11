@@ -7,12 +7,19 @@ pub struct Source {
     pub(crate) table: String,
 }
 #[derive(Clone, Serialize)]
+pub struct Binding {
+    pub(crate) input: ColumnRef,
+    pub(crate) output: ColumnRef,
+}
+#[derive(Clone, Serialize)]
 pub enum Node {
     Source { id: String, source: usize },
     Filter { id: String, input: String, predicate: super::Predicate },
     Expand { id: String, input: String, series: super::expansion::Series },
     Map { id: String, input: String, computed: Vec<super::scalar::Computed> },
     KeyBy { id: String, input: String, key: ColumnRef },
+    Rebind { id: String, input: String, fields: Vec<Binding> },
+    EquijoinKey { id: String, input: String, keys: Vec<ColumnRef> },
     Join { id: String, left: String, right: String },
     Union { id: String, left: String, right: String },
     LookupInput { id: String, input: String, spec: super::lookup::Input },

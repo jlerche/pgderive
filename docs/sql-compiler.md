@@ -1170,3 +1170,32 @@ membership. Plans using this form bind `pg-group-membership-v1`; existing
 aggregate and projection identities are unchanged. Derived scopes can consume
 these ordinary typed outputs. Group-only output does not supply native occurrence
 identity for positional windows.
+
+
+## Inner joins between derived scopes
+
+Two independently compiled, non-LATERAL relational subqueries can join with an
+AND of 1–16 ordinary column equalities. Both inputs need aliases; exposed output
+labels resolve within those scopes, and ambiguous unqualified names reject.
+Keys require identical native types: boolean, smallint, integer, bigint, UUID,
+timestamp or timestamptz. NULL in any key component excludes that tuple from the
+inner join. Text, numeric, coercions, OR/non-equality ON conditions, USING,
+NATURAL and outer joins remain unsupported here. Direct native/derived mixed
+joins are a separate boundary. Root WHERE uses the existing typed predicate
+subset; grouped consumers can wrap the join in another derived query.
+
+Lowering prefixes graph IDs, assigns global source indices, adapts each raw
+source back to its inner field layout, then maps visible subquery outputs into
+distinct typed fields. These are executable projection operators. Canonical
+compound keys feed the existing maintained join, preserving full visible tuple
+multiplicity and all three simultaneous-input delta terms. Nested scopes and
+repeated physical sources receive the same complete committed source batch.
+Inner source predicates run before their aggregates; outer predicates run after
+the join. Intermediate sink-deferred expressions reject before registration.
+
+Used plans bind `sql-scoped-equijoin-v1`, `typed-boundary-map-v1`,
+`canonical-compound-key-v1` and both inner compiler revisions, in addition to
+native source layouts and existing runtime codecs. Equality operand direction,
+conjunction order and repeated equivalent keys normalize; changed key sets or
+inner semantics cannot reuse durable state. Existing query identities are
+unchanged.
