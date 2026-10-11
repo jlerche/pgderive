@@ -22,6 +22,8 @@ endpoint = "http://127.0.0.1:8333"
 bucket = "pgderive-mvp-tests"
 access_key_id = "local"
 secret_access_key = "local"
+# For remote storage, replace this section with the HTTPS example in
+# docs/storage-configuration.md. Do not combine inline and file credentials.
 
 # Each operator spills exact coefficients before reaching these resident limits.
 # Byte budgets count serialized records, with separate entry caps for overhead.

@@ -53,7 +53,8 @@ fn reject_unsafe_sql_identifiers() {
 async fn public_entry_points_validate_before_connecting() -> Result<()> {
     let mut config = fixture()?;
     config.replication.publication = "pgderive_pub; DROP TABLE source".into();
-    for result in [crate::listen(config.clone()).await, crate::run_harness(config).await] {
+    for result in [crate::listen(config.clone()).await, Box::pin(crate::run_harness(config)).await]
+    {
         let error = result.err().ok_or_else(|| anyhow::anyhow!("expected validation error"))?;
         assert_eq!(error.to_string(), "invalid replication.publication identifier");
     }

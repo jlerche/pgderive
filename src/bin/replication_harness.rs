@@ -13,5 +13,5 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let path = args.get(1).map_or("config.local.toml", String::as_str);
-    run_harness(Config::load(path)?).await
+    Box::pin(run_harness(Config::load(path)?)).await
 }

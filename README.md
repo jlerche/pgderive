@@ -775,9 +775,10 @@ native-bound grouped inner join described in `worker.example.toml`. Create the
 source tables, their two-table publication and an empty owned catalog schema
 first. Source tables require primary keys and `REPLICA IDENTITY FULL`; publication
 membership and native types must remain fixed. PostgreSQL must permit logical
-replication, consistent snapshot COPY and destination DML. The current storage
-configuration supports local loopback S3-compatible endpoints; cloud endpoint
-configuration remains outside this local qualification.
+replication, consistent snapshot COPY and destination DML. Storage supports local loopback HTTP fixtures and explicit HTTPS S3-compatible
+endpoints with region, certificate verification and private credential files.
+See [storage configuration](docs/storage-configuration.md) for configuration and
+the qualification boundary; no cloud provider has been qualified.
 
 The worker imports an exported snapshot, atomically activates object membership,
 the grouped destination and source boundary, then consumes complete source

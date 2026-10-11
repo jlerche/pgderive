@@ -53,6 +53,12 @@ impl Open {
             .as_ref()
             .context("worker requires durable object storage")?
             .build(&settings.object_prefix)?;
+        config
+            .object_store
+            .as_ref()
+            .context("worker requires durable object storage")?
+            .preflight(store.as_ref())
+            .await?;
         session.own(&settings.catalog_schema, &settings.query_id).await?;
         super::retire::require_active(&session.client, settings).await?;
         let catalog = Catalog::new(&settings.catalog_schema, &settings.query_id)?;

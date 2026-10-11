@@ -1363,6 +1363,7 @@ dependencies = [
  "postgres-native-tls 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "postgres-native-tls 0.5.3 (git+https://github.com/supabase/rust-postgres?rev=8086f1fd19bd9abc0da86ba80f8b7dbdd676cb3e)",
  "postgres-replication",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1370,6 +1371,7 @@ dependencies = [
  "tokio",
  "tokio-postgres 0.7.18 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-postgres 0.7.18 (git+https://github.com/supabase/rust-postgres?rev=8086f1fd19bd9abc0da86ba80f8b7dbdd676cb3e)",
+ "url",
 ]
 
 [[package]]
