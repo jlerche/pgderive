@@ -297,11 +297,20 @@ fn framed_row(
     frame: &[Ordered],
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
 ) -> Result<Row> {
+    let mut output = row.clone();
+    output.extend(framed_fields(spec, frame, context)?);
+    Ok(output)
+}
+fn framed_fields(
+    spec: &Partition,
+    frame: &[Ordered],
+    context: (Limits, &mut crate::engine::dataflow::PartitionWork),
+) -> Result<Row> {
     let (limits, work) = context;
     work.charge(frame.len())?;
     let frame = Batch::from_updates(frame.iter().map(|(_, row)| (((), row.clone()), 1)))?;
     limits.check_batch(&frame)?;
-    let mut output = row.clone();
+    let mut output = Row::new();
     for aggregate in &spec.aggregates {
         output.insert(aggregate.field.clone(), aggregate_value(aggregate, &frame, work)?);
     }
@@ -333,8 +342,13 @@ fn peers(
         } else {
             &ordered[groups[start].0..groups[end - 1].1]
         };
+        // Every member of a peer group has the same RANGE/GROUPS frame.
+        let fields = framed_fields(spec, rows, (limits, work))?;
         for (_, row) in &ordered[*first..*last] {
-            updates.add(((), framed_row(spec, row, rows, (limits, work))?), 1)?;
+            work.charge(fields.len())?;
+            let mut output = row.clone();
+            output.extend(fields.clone());
+            updates.add(((), output), 1)?;
         }
     }
     updates.finish_batch()

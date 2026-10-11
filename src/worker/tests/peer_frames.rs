@@ -133,3 +133,29 @@ fn rejects_unimplemented_distance_and_exclusions() -> Result<()> {
     assert_ne!(serde_json::to_vec(&default)?, serde_json::to_vec(&compile(&sql(2), &contract())?)?);
     Ok(())
 }
+
+#[tokio::test]
+async fn whole_partition_aggregates_share_work_between_peers() -> Result<()> {
+    let native = contract();
+    let compiled = compile(&sql(4), &native)?;
+    let ir = compiled.relational().context("missing peer IR")?;
+    let mut options = settings();
+    options.limits.contributions = 1024;
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let mut state = BTreeMap::new();
+    let mut changes = Vec::new();
+    for id in 0..64 {
+        let input = row(&[
+            ("id", Some(&id.to_string())),
+            ("auction", Some("1")),
+            ("price", Some(&id.to_string())),
+        ]);
+        state.insert(input.clone(), 1);
+        changes.push(("bid", input, 1));
+    }
+    let changes = batch(changes);
+    let prepared = query.prepare(relational::inputs(&changes, ir, 1)?).await?;
+    assert_eq!(prepared.output().batch, oracle(&state, 4)?);
+    query.commit(prepared)?;
+    Ok(())
+}

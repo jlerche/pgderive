@@ -584,8 +584,13 @@ Without ORDER BY, the default RANGE frame includes the whole partition. Empty
 frames yield COUNT zero and nullable aggregates NULL. Supported FILTER predicates
 apply to aggregate contributions rather than removing peer membership.
 
-The runtime orders only changed partitions, identifies peer ranges, computes each
-row's frame, then emits the old/new bag difference. It retains the existing bounded
+The runtime orders only changed partitions, identifies peer ranges, computes the
+aggregate fields once per peer group's shared frame, and copies them into every
+output occurrence before emitting the old/new bag difference. It charges frame
+construction, aggregate scans and copied fields against the work budget. An
+unordered 64-row COUNT/SUM partition fits a 1,024-unit contribution budget; the
+previous per-row rescans exhausted that same budget. Ordered frames with many
+distinct peer groups can still require quadratic scans. It retains the existing bounded
 work, checkpoint and publication path. Peer-frame plans bind `sql-peer-frames-v1`;
 existing ROWS/ranking plans retain their previous identities. Explicit default
 RANGE and omitted default syntax normalize identically. Weighted independent unit
