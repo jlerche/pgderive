@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) enum Value {
     Boolean(bool),
+    Text(String),
     Integer(i64),
     Uuid([u8; 16]),
     Timestamp(crate::temporal::Timestamp),
@@ -48,9 +49,17 @@ pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
                 .or(column_type(&right, resolve)?)
                 .context("SQL type: comparison requires a native column")?;
             ensure!(
-                matches!(oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184 | 1186),
+                matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184 | 1186),
                 "SQL type: unsupported comparison type"
             );
+            if matches!(oid, 25 | 1043) {
+                ensure!(
+                    matches!(op, Compare::Eq | Compare::Ne)
+                        && (column_type(&left, resolve)?.is_some()
+                            != column_type(&right, resolve)?.is_some()),
+                    "text equality requires one native column and an unknown literal; text ordering and column collation resolution are unsupported"
+                );
+            }
             Ok(Expr::Compare(op, scalar(left, oid, resolve)?, scalar(right, oid, resolve)?))
         }
         syntax::Expr::Not(expr) => Ok(Expr::Not(Box::new(bind(*expr, resolve)?))),
@@ -118,6 +127,7 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
         syntax::Scalar::String(value) if matches!(oid, 1114 | 1184) => {
             Some(Value::Timestamp(crate::temporal::Timestamp::parse(&value, oid)?))
         }
+        syntax::Scalar::String(value) if matches!(oid, 25 | 1043) => Some(Value::Text(value)),
         syntax::Scalar::String(value) if oid == 2950 => Some(Value::Uuid(uuid(&value)?)),
         _ => anyhow::bail!("SQL type: literal does not match native column"),
     };
@@ -168,6 +178,7 @@ impl Scalar {
                     _ => anyhow::bail!("invalid native boolean"),
                 },
                 20 | 21 | 23 => Ok(Value::Integer(text.parse()?)),
+                25 | 1043 => Ok(Value::Text(text.to_owned())),
                 1114 | 1184 => {
                     Ok(Value::Timestamp(crate::temporal::Timestamp::parse(text, column.oid)?))
                 }
@@ -258,6 +269,16 @@ fn uuid(text: &str) -> Result<[u8; 16]> {
 }
 
 impl Expr {
+    pub(super) fn has_text_equality(&self) -> bool {
+        match self {
+            Self::Compare(_, left, right) => [left, right].iter().any(
+                |value| matches!(value, Scalar::Column(column) if matches!(column.oid, 25 | 1043)),
+            ),
+            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_text_equality),
+            Self::Not(value) => value.has_text_equality(),
+            Self::Value(_) | Self::Null(_, _) => false,
+        }
+    }
     pub(super) fn has_gap(&self) -> bool {
         let gap = |value: &Scalar| {
             matches!(value, Scalar::Difference(..) | Scalar::Literal(Some(Value::Interval(_))))
@@ -284,6 +305,9 @@ impl Expr {
 #[serde(transparent)]
 pub struct Predicate(Expr);
 impl Predicate {
+    pub(super) fn has_text_equality(&self) -> bool {
+        self.0.has_text_equality()
+    }
     pub(super) fn has_gap(&self) -> bool {
         self.0.has_gap()
     }

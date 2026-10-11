@@ -103,7 +103,8 @@ fn normalization_and_fail_closed_types() -> Result<()> {
     assert_eq!(expression("a AND a")?, expression("a")?);
     for sql in [
         "n",
-        "text = 'x'",
+        "text < 'x'",
+        "text = text",
         "a = 1",
         "n = true",
         "n = u",
@@ -189,6 +190,26 @@ fn postgres_remainder_sign_null_and_minimum_integer() -> Result<()> {
         "n + 3=0",
     ] {
         assert!(expression(sql).is_err(), "accepted {sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn deterministic_text_equality_preserves_bytes_and_unknown() -> Result<()> {
+    let empty = Row::new();
+    for text in [Some("OR"), Some("or"), Some("OR "), Some("é"), Some("e\u{301}"), Some(""), None]
+    {
+        let row = [("text".into(), text.map(str::to_owned))].into();
+        for literal in ["OR", "é", ""] {
+            let equal = expression(&format!("text = '{literal}'"))?;
+            let reverse = expression(&format!("'{literal}' = text"))?;
+            let different = expression(&format!("text <> '{literal}'"))?;
+            assert_eq!(equal.evaluate((&row, &empty))?, text.map(|value| value == literal));
+            assert_eq!(equal.evaluate((&row, &empty))?, reverse.evaluate((&row, &empty))?);
+            assert_eq!(different.evaluate((&row, &empty))?, text.map(|value| value != literal));
+            assert!(equal.has_text_equality());
+        }
+        assert_eq!(expression("text = NULL")?.evaluate((&row, &empty))?, None);
     }
     Ok(())
 }

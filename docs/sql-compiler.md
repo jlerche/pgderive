@@ -32,8 +32,14 @@ Integral columns may compare across integral widths and to signed i64 integer
 literals; evaluation is exact, without narrowing the literal to the column width.
 Boolean columns compare to Boolean literals. UUID columns compare to unknown
 string literals using PostgreSQL UUID input forms and byte ordering. Quoted
-numeric/Boolean literals, explicit casts, floating/numeric literals, text
-comparisons and other coercions are rejected. NULL comparison produces unknown;
+numeric/Boolean literals, explicit casts, floating/numeric literals and other
+coercions are rejected. Native text/varchar columns support equality and inequality
+with unknown string literals or NULL. Source collations must be deterministic:
+PostgreSQL text equality then compares bytes, preserving case, trailing spaces and
+Unicode normalization distinctions. Rust evaluates the same UTF-8 strings. Text
+ordering, text column-to-column comparisons (which require collation resolution),
+and nondeterministic source collations are rejected. This feature binds
+`pg-deterministic-text-equality-v1` into the compiler revision only when used. NULL comparison produces unknown;
 WHERE retains only true, including on retractions. No transform_null_equals
 session setting is applied. Logical expressions follow PostgreSQL three-valued
 truth tables; pure AND/OR trees are flattened, sorted and deduplicated for identity.
@@ -1084,3 +1090,16 @@ changed-gap/stride/threshold rejection, quoted aliases, cold same-slot restart
 and final retraction. q12 additionally asserts that an event-time-only update
 leaves its output bag unchanged. These use existing typed circuit operators and
 checkpoint codecs; no new compiler revision or expiration policy is introduced.
+
+
+## Named local item suggestions (q3)
+
+`queries/nexmark/q3.sql` follows the Feldera local item suggestion query: auction
+seller joins person ID, category is 10, and state equals OR, ID or CA. The owned
+harness compares the exact SQL through a native PostgreSQL MV and an independent
+raw-source nested-loop memory bag. Default deterministic text, C-collated varchar
+and deterministic ICU text fixtures cover case/trailing spaces, NULLs, simultaneous
+source changes, key moves, empty other-source ticks, rollback and cold restart.
+Changed state literals reject reuse; quoted aliases preserve normalized identity.
+Text ordering, unresolved column collations and nondeterministic source collations
+reject before slot creation or registration.

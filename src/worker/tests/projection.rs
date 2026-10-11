@@ -201,7 +201,7 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
         "SELECT id FROM source.auction,source.bid",
         "SELECT id FROM source.auction JOIN source.bid ON auction.id=bid.auction",
         "SELECT id FROM source.auction WHERE random()>0",
-        "SELECT id FROM source.auction WHERE category='x'",
+        "SELECT id FROM source.auction WHERE category<'x'",
         "SELECT id FROM source.auction WHERE id::text='1'",
     ] {
         assert!(compile(sql, &native).is_err(), "accepted {sql}");
@@ -242,5 +242,26 @@ fn terminal_map_requires_binding_and_rejects_unsafe_positions() -> Result<()> {
     ] {
         assert!(compile(sql, &native).is_err(), "accepted {sql}");
     }
+    Ok(())
+}
+
+#[test]
+fn text_equality_revision_binds_each_expression_boundary() -> Result<()> {
+    let native = contract();
+    let suffix = "pg-deterministic-text-equality-v1";
+    for sql in [
+        "SELECT id FROM source.auction WHERE category='OR'",
+        "SELECT id,CASE WHEN category='OR' THEN 1 ELSE 0 END AS flag FROM source.auction",
+        "SELECT id,COUNT(*) FILTER(WHERE category='OR') AS n FROM source.auction GROUP BY id",
+        "SELECT q.id FROM(SELECT id,category,ROW_NUMBER() OVER(PARTITION BY id ORDER BY id) AS n FROM source.auction) q WHERE q.category='OR'",
+    ] {
+        let compiled =
+            compile(sql, &native).map_err(|error| anyhow::anyhow!("{sql}: {error:#}"))?;
+        assert!(compiled.revision.as_deref().is_some_and(|value| value.contains(suffix)), "{sql}");
+        let changed = compile(&sql.replace("'OR'", "'ID'"), &native)?;
+        assert_ne!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&changed)?, "{sql}");
+    }
+    let plain = compile("SELECT id FROM source.auction WHERE category IS NULL", &native)?;
+    assert!(plain.revision.as_deref().is_some_and(|value| !value.contains(suffix)));
     Ok(())
 }

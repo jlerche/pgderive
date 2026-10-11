@@ -21,6 +21,18 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
             .context("missing decimal compiler revision")?
             .push_str(":pg-terminal-decimal-multiply-v1");
     }
+    let text = compiled.predicates.as_ref().is_some_and(Expr::has_text_equality)
+        || match &compiled.program {
+            Program::Relational { relational } => relational.nodes.iter().any(node_text),
+            _ => false,
+        };
+    if text {
+        compiled
+            .revision
+            .as_mut()
+            .context("missing text compiler revision")?
+            .push_str(":pg-deterministic-text-equality-v1");
+    }
     let gap = compiled.predicates.as_ref().is_some_and(Expr::has_gap)
         || match &compiled.program {
             Program::Relational { relational } => relational.nodes.iter().any(node_gap),
@@ -63,6 +75,23 @@ fn node_gap(node: &Node) -> bool {
             .aggregates
             .iter()
             .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_gap)),
+        _ => false,
+    }
+}
+
+fn node_text(node: &Node) -> bool {
+    match node {
+        Node::Filter { predicate, .. } => predicate.has_text_equality(),
+        Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
+            Native::Case { case } => case.has_text_equality(),
+            Native::Bin(_) | Native::Offset { .. } => false,
+        }),
+        Node::Partition { spec, .. }
+        | Node::Statistics { spec, .. }
+        | Node::Finalize { spec, .. } => spec
+            .aggregates
+            .iter()
+            .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_text_equality)),
         _ => false,
     }
 }

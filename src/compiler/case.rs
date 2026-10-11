@@ -13,6 +13,9 @@ pub enum Arm {
     Literal(Option<i64>),
 }
 impl Case {
+    pub(super) fn has_text_equality(&self) -> bool {
+        self.arms.iter().any(|(condition, _)| condition.has_text_equality())
+    }
     pub(super) fn has_gap(&self) -> bool {
         self.arms.iter().any(|(condition, _)| condition.has_gap())
     }

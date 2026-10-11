@@ -253,3 +253,10 @@ quote/backslash delimiters and extraction after a two-input join, including
 simultaneous source changes. Function/collation metadata, ordinal, delimiter,
 codecs and compiler revision bind durable identity. This qualifies q22's declared
 extraction semantics; it does not establish arbitrary PostgreSQL text functions.
+
+
+Named q3 local item suggestions now use native text/varchar equality under the
+frozen deterministic source collation contract. The query preserves PostgreSQL
+case, trailing-space and NULL behavior; its person/auction join retains complete
+simultaneous-input deltas. Text collation ordering and nondeterministic equality
+remain unsupported.
