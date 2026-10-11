@@ -3,6 +3,7 @@ mod lookup;
 mod partition;
 mod relational;
 mod scoped_join;
+mod terminal;
 use super::{
     ColumnRef, Compiled, REVISION,
     parser::{Name, Parsed, Table},
@@ -18,6 +19,9 @@ struct Scope<'a> {
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
+        Parsed::Terminal { source, targets, predicate } => {
+            terminal::bind(source, &targets, predicate.as_deref(), contract)
+        }
         Parsed::ScopedJoin(parsed) => scoped_join::bind(parsed, contract),
         Parsed::Derived(parsed) => derived::bind_derived(parsed, contract),
         Parsed::Lookup(parsed) => lookup::bind(parsed, contract),

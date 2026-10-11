@@ -69,7 +69,7 @@ pub(super) fn key(value: &Node) -> Result<Key> {
         shift: None,
     }))
 }
-pub(super) fn validate_call(call: &pg::FuncCall) -> Result<()> {
+pub(in crate::compiler) fn validate_call(call: &pg::FuncCall) -> Result<()> {
     ensure!(
         !call.agg_star
             && !call.agg_distinct
@@ -115,7 +115,7 @@ fn shifted(value: &Node) -> Result<Key> {
     bin.shift = Some((column(index)?, interval(duration)?));
     Ok(Key::Bin(bin))
 }
-pub(super) fn string(value: &Node) -> Result<String> {
+pub(in crate::compiler) fn string(value: &Node) -> Result<String> {
     let NodeEnum::AConst(value) = node(value)? else {
         anyhow::bail!("constant string required");
     };

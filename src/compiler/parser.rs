@@ -36,6 +36,11 @@ pub(super) enum Parsed {
         columns: Columns,
         predicate: Option<super::syntax::Expr>,
     },
+    Terminal {
+        source: Table,
+        targets: Vec<Node>,
+        predicate: Option<Box<Node>>,
+    },
     Projection {
         source: Table,
         columns: Columns,
@@ -137,16 +142,31 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
         return Ok(Parsed::Lookup(lookup));
     }
     if partition::eligible(select)? {
-        return Ok(Parsed::Partition(partition::parse(select)?));
+        return partition::parse(select)
+            .map(Parsed::Partition)
+            .or_else(|prior| terminal_query(select).map_err(|_| prior));
     }
     if let Some(derived) = derived::parse(select)? {
         return Ok(Parsed::Derived(derived));
     }
     let pg::SelectStmt { target_list, from_clause, where_clause, group_clause, .. } = select;
     if group_clause.is_empty() {
-        return projection(target_list, from_clause, where_clause.as_deref());
+        return projection(target_list, from_clause, where_clause.as_deref())
+            .or_else(|prior| terminal_query(select).map_err(|_| prior));
     }
     grouped_query(select)
+}
+fn terminal_query(select: &pg::SelectStmt) -> Result<Parsed> {
+    ensure!(select.group_clause.is_empty(), "terminal programs cannot group");
+    let [source] = select.from_clause.as_slice() else {
+        anyhow::bail!("terminal programs require one native input");
+    };
+    ensure!((1..=64).contains(&select.target_list.len()), "invalid terminal output layout");
+    Ok(Parsed::Terminal {
+        source: table(source)?,
+        targets: select.target_list.clone(),
+        predicate: select.where_clause.clone(),
+    })
 }
 fn grouped_query(select: &pg::SelectStmt) -> Result<Parsed> {
     let pg::SelectStmt { target_list, from_clause, where_clause, group_clause, .. } = select;

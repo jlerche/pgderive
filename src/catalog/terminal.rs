@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_postgres::{GenericClient, Transaction};
 
+pub mod program;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Transform {
     Identity,
@@ -35,14 +37,29 @@ pub struct Terminal {
     types: Vec<u32>,
     // Keep attestation metadata behind an allocation; serde identity is unchanged.
     environment: Option<Box<Environment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    program: Option<program::Program>,
 }
 impl Terminal {
     pub(crate) fn new(transforms: Vec<Transform>, types: Vec<u32>) -> Result<Self> {
-        let result = Self { transforms, types, environment: None };
+        let result = Self { transforms, types, environment: None, program: None };
+        result.signatures()?;
+        Ok(result)
+    }
+    pub(crate) fn from_program(program: program::Program, types: Vec<u32>) -> Result<Self> {
+        let result =
+            Self { transforms: Vec::new(), types, environment: None, program: Some(program) };
         result.signatures()?;
         Ok(result)
     }
     fn signatures(&self) -> Result<Vec<(&'static str, &'static str)>> {
+        if let Some(program) = &self.program {
+            ensure!(
+                self.transforms.is_empty() && (1..=64).contains(&self.types.len()),
+                "invalid terminal program layout"
+            );
+            return program.signatures(&self.types);
+        }
         ensure!(
             !self.types.is_empty()
                 && self.types.len() == self.transforms.len()
@@ -95,8 +112,13 @@ impl Terminal {
         }
         let collations =
             if self.has_array() { vec![array_collation(sql).await?] } else { Vec::new() };
-        let calendar =
-            if self.has_timestamp_format() { Some(calendar_context(sql).await?) } else { None };
+        let calendar = if self.has_timestamp_format()
+            || self.program.as_ref().is_some_and(program::Program::has_calendar)
+        {
+            Some(calendar_context(sql).await?)
+        } else {
+            None
+        };
         Ok(Environment { server, encoding, functions, collations, calendar })
     }
     pub(crate) async fn bind(&mut self, sql: &(impl GenericClient + Sync)) -> Result<()> {
@@ -182,16 +204,23 @@ impl Terminal {
         self.verify(tx).await?;
         // Only closed tuple-local forms render here; calendar formats have fixed
         // fields and an attested UTC context. Relation reads, clocks and SRFs do not.
-        let columns = (0..self.types.len())
-            .map(|index| self.expression(index))
-            .collect::<Result<Vec<_>>>()?
-            .join(",");
+        let (columns, predicate) = if let Some(program) = &self.program {
+            program.render(&self.types)?
+        } else {
+            let columns = (0..self.types.len())
+                .map(|index| self.expression(index))
+                .collect::<Result<Vec<_>>>()?
+                .join(",");
+            (columns, "TRUE".into())
+        };
         let query = format!(
-            "WITH raw AS (SELECT value->0 tuple,(value->>1)::bigint weight FROM pg_catalog.jsonb_array_elements($1)), mapped AS (SELECT pg_catalog.jsonb_build_array(NULL,pg_catalog.jsonb_build_array({columns})) tuple,weight FROM raw) SELECT tuple,pg_catalog.sum(weight)::text FROM mapped GROUP BY tuple HAVING pg_catalog.sum(weight)<>0"
+            "WITH raw AS (SELECT value->0 tuple,(value->>1)::bigint weight FROM pg_catalog.jsonb_array_elements($1)), mapped AS (SELECT pg_catalog.jsonb_build_array(NULL,pg_catalog.jsonb_build_array({columns})) tuple,weight FROM raw WHERE {predicate}) SELECT tuple,pg_catalog.sum(weight)::text FROM mapped GROUP BY tuple HAVING pg_catalog.sum(weight)<>0"
         );
         let input = json!(rows);
-        let rows = if self.has_array() || self.has_numeric_multiply() || self.has_timestamp_format()
-        {
+        let rows = if let Some(program) = &self.program {
+            let parameters = json!(program);
+            tx.query(&query, &[&input, &parameters]).await?
+        } else if self.has_array() || self.has_numeric_multiply() || self.has_timestamp_format() {
             let parameters = json!(&self.transforms);
             tx.query(&query, &[&input, &parameters]).await?
         } else {
@@ -282,7 +311,7 @@ fn implementation_types(implementation: &str) -> Result<(&'static str, &'static 
         "numeric_mul" | "numeric_div" => Ok(("1700 1700", "1700", true)),
         "split_part" => Ok(("25 25 23", "25", true)),
         "text_to_array" => Ok(("25 25", "1009", false)),
-        _ => anyhow::bail!("unknown terminal implementation"),
+        _ => program::implementation_types(implementation),
     }
 }
 

@@ -1219,3 +1219,48 @@ spelling, equality orientation and conjunct order normalize. Used plans bind
 lookup plans retain their previous identities. The maintained lookup still selects
 one right occurrence by the complete deterministic order, preserves the left
 full-tuple bag and revises matches when either source changes.
+
+## Typed terminal expression programs (Nexmark q14)
+
+A single native-source projection can compile a bounded tuple-local expression
+DAG when the older native projection/partition forms cannot represent it. Each
+node references only preceding nodes; input indices refer to a separate raw
+native layout, while visible outputs have explicit labels and inferred types.
+Computed outputs require explicit aliases. The program permits decimal numeric
+multiplication, numeric inequalities, length(text), replace(text,text,text),
+integer subtraction of int4 operands, searched CASE with matching result types
+and an explicit ELSE, and boolean AND/OR/NOT. Numeric inequalities coerce native
+integers exactly to numeric. Integral multiplication is rejected: it must not
+silently acquire numeric semantics in place of PostgreSQL overflow errors.
+Decimal constants use bounded nonnegative decimal syntax; exponent syntax and
+untyped NULL literals are rejected. Source NULLs retain PostgreSQL three-valued
+logic. Native int4 subtraction keeps PostgreSQL's overflow behavior.
+
+Hour extraction requires timestamp without time zone, or explicit conversion of
+native timestamptz via AT TIME ZONE 'UTC'/timezone('UTC',input). Direct hour
+extraction from timestamptz and other time zones are rejected. The selected
+extract_timestamp implementation is immutable; the UTC abbreviation context is
+attested for instant conversion. Text length and replacement run in PostgreSQL,
+including Unicode character semantics. No clocks, user functions, relation
+reads, set-returning functions, generic casts or downstream consumers of deferred
+results are permitted.
+
+The worker maintains the complete referenced raw operand bag in its durable
+projection circuit. Publication maps signed deltas and applies the terminal
+predicate with IS TRUE, consolidates collisions using PostgreSQL numeric SUM of
+weights, and narrows only finalized coefficients to i64. Literals are parameters,
+never interpolated SQL. All functions and casts come from closed concrete typed
+signatures, with implementation, volatility, strictness, schema, language,
+server version and UTF8 attested before registration and again in publication.
+The existing PUT → atomic PG membership/result/progress COMMIT → slot ACK
+protocol is unchanged. Output errors abort publication and cannot advance progress.
+
+Programs bind sql-terminal-program-v1, the typed DAG, output labels, raw native
+source layout and codecs into durable identity. Changed predicates or output
+expressions reject state reuse; equivalent source aliases permit same-slot cold
+restart. Legacy terminal plans omit the optional program field, retaining their
+serialized identity. Compiler validation also bounds generated expression size
+before slot creation. The q14 fixtures compare the exact SQL with a native
+materialized view and an independent Decimal/Unicode/hour oracle through
+weighted duplicates, NULLs, infinities, range boundaries, signed integral limits,
+CDC updates/deletes, rollback, empty input ticks and restart.

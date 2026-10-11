@@ -41,7 +41,6 @@ fn decimal_projection_rejects_nonliteral_and_intermediate_arithmetic() {
         "SELECT 0.908 * category FROM source.auction",
         "SELECT NULL * price FROM source.bid",
         "SELECT q.price FROM (SELECT 0.908 * price AS price FROM source.bid) q",
-        "SELECT price FROM source.bid WHERE 0.908 * price > 1",
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");
     }

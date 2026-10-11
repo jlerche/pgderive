@@ -342,3 +342,22 @@ duplicates, NULL keys/times/selected values, infinities, ties, late side changes
 simultaneous updates, key/PK/time moves, rollback and empty input ticks. An
 event-time-only update leaves selected values unchanged. Changed divisor or bound
 rejects durable reuse; aliases and MOD/% spelling permit cold same-slot restart.
+
+## Tuple-local computation and filtering (q14)
+
+`queries/nexmark/q14.sql` uses native PostgreSQL numeric multiplication and range
+qualification, searched CASE on the timestamp's hour, and
+length(extra)-length(replace(extra,'c','')) for Unicode character counting. The
+instant variant explicitly converts to UTC before extracting the hour; the
+owned timestamp-without-time-zone fixture uses its local calendar fields. NULL
+hours and infinity fall through to otherTime, exactly as PostgreSQL specifies.
+The camel-case bidTimeType output is quoted explicitly.
+
+Two owned fixtures compare the exact query with a native materialized view and
+an independent Decimal/Unicode/hour bag. They cover duplicate outputs, NULL
+operands, infinities, numeric range boundaries, int8 extrema, simultaneous row
+changes, predicate crossings, DST instants, PK moves, rollback, empty input ticks
+and cold restart. Changed range bounds or CASE labels reject durable state reuse;
+source alias changes preserve identity. The terminal program evaluates only
+signed tuple-local deltas inside atomic publication; it cannot feed deferred
+values into other operators or substitute an implicit replay clock.

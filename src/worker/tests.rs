@@ -193,3 +193,5 @@ mod group_membership;
 mod derived_join;
 
 mod lookup_remainder;
+
+mod terminal_program;
