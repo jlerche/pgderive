@@ -339,3 +339,34 @@ fn named_calendar_queries_lower_text_groups_and_terminal_max() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn named_hot_auction_and_highest_bid_queries_lower() -> Result<()> {
+    let mut native = contract();
+    let template = native.relations[1].columns[2].clone();
+    for (name, oid) in [("date_time", 1184), ("bidder", 20), ("extra", 25)] {
+        let mut column = template.clone();
+        column.position = i16::try_from(native.relations[1].columns.len() + 1)?;
+        column.name = name.into();
+        column.oid = oid;
+        column.collation = if oid == 25 { 100 } else { 0 };
+        native.relations[1].columns.push(column);
+    }
+    for sql in [
+        include_str!("../../../queries/nexmark/q5.sql"),
+        include_str!("../../../queries/nexmark/q7.sql"),
+    ] {
+        let sql = sql.replace("nexmark.", "source.");
+        let compiled = compile(&sql, &native)?;
+        assert!(compiled.relational().is_some());
+        let equivalent =
+            compile(&sql.replace("b.", "\"B\".").replace("bid b", "bid AS \"B\""), &native)?;
+        assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&equivalent)?);
+        let changed = compile(
+            &sql.replace("2 seconds", "3 seconds").replace("10 seconds", "11 seconds"),
+            &native,
+        )?;
+        assert_ne!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&changed)?);
+    }
+    Ok(())
+}

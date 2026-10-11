@@ -89,6 +89,25 @@ with time descending then stable side-input identity descending. Ranking selects
 source events using their stable identity; afterward, visible full-tuple weights
 sum selected events rather than deduplicating coincident projected tuples.
 
+The q5 PostgreSQL formulation expands each non-NULL event time into five start
+keys spaced two seconds apart, groups by auction/start, and retains all ties for
+the maximum count at each start. The fixed ten-second width makes the end key
+determined by the start. Window keys are omitted only from the final projection;
+identical auction/count outputs from different windows retain their multiplicity.
+For infinite timestamps PostgreSQL fixed offsets preserve infinity, so all five
+expanded occurrences share one start and contribute five times to its count.
+
+The q7 formulation deliberately uses the portfolio's highest-bid-in-each-bucket
+behavior: `date_bin` defines ten-second buckets with an explicit UTC origin, and
+every bid tied for its bucket's maximum non-NULL price is retained. The local
+Feldera q7 template instead compares bid time with `BETWEEN start-10 seconds AND
+start` after grouping maxima by that start; that backward, inclusive predicate
+does not describe the same bucket membership. We do not claim literal equivalence
+to that template. The native MV oracle executes our exact PostgreSQL formulation.
+NULL event times are excluded in q5/q7. Finite bucket membership is half-open;
+infinite times retain PostgreSQL's `date_bin` behavior. No watermark or expiry
+removes old buckets or prevents late retractions.
+
 The named q4/q9 formulations retain the templates' inclusive auction-start and
 auction-expiry eligibility. This supersedes their earlier proposed half-open
 adaptation; it does not change fixed/hopping window membership. The separate q6
@@ -269,3 +288,19 @@ The calendar harness compares native MVs and independent raw-source bags for
 timestamp/local and timestamptz/UTC fixtures, with additional C varchar and
 deterministic ICU text q16 groups. Format/context and text-group revisions bind
 identity; changed formats and thresholds reject state reuse.
+
+## Executable q5/q7 formulations
+
+The actual [q5](../queries/nexmark/q5.sql) and
+[q7](../queries/nexmark/q7.sql) files execute through composed scalar, grouped and
+unordered whole-partition MAX stages. Final equality predicates preserve all
+maximum ties. Four owned fixtures exercise timestamp/local and timestamptz/UTC
+sources against exact native MVs and independent raw-source bucket/max bags.
+Histories cover inserts, updates, deletes, duplicate visible winners, NULL keys,
+NULL times/prices, all-NULL price partitions, extreme integral prices, exact
+boundaries and adjacent microseconds, late changes, infinity, DST writer context,
+complete simultaneous publication-source changes, empty input ticks, rollback and
+cold same-slot restart. Changing q5 membership count or q7 stride rejects state
+reuse; equivalent aliases preserve identity. No new operator declarations alone
+supply execution: the existing scalar/partition/filter circuit bridge executes
+these compositions with complete input ticks and durable publication.
