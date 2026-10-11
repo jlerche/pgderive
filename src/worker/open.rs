@@ -15,6 +15,7 @@ use object_store::ObjectStore;
 use std::sync::Arc;
 
 pub(super) struct Open {
+    pub(super) settings: Settings,
     pub(super) session: Session,
     pub(super) catalog: Catalog,
     pub(super) query: Runtime,
@@ -25,9 +26,6 @@ pub(super) struct Open {
     pub(super) replication: Config,
 }
 impl Open {
-    pub(super) async fn connect(config: &Config, settings: &Settings) -> Result<Self> {
-        Self::connect_with_session(config, settings, Session::connect(config).await?).await
-    }
     pub(super) async fn connect_with_session(
         config: &Config,
         settings: &Settings,
@@ -76,7 +74,17 @@ impl Open {
         let (writer, nonce) =
             reopen(&mut session, &catalog, &mut query, (&contract, settings)).await?;
         super::results::install(&mut session.client, settings, &compiled).await?;
-        Ok(Self { session, catalog, query, compiled, writer, store, nonce, replication })
+        Ok(Self {
+            settings: settings.clone(),
+            session,
+            catalog,
+            query,
+            compiled,
+            writer,
+            store,
+            nonce,
+            replication,
+        })
     }
 }
 async fn reopen(

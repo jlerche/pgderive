@@ -87,11 +87,15 @@ pub struct Settings {
     /// Maximum startup/recovery duration before cancellation and authoritative retry.
     #[serde(default = "default_startup_timeout")]
     pub startup_timeout_secs: u64,
+    /// Diagnostic observation and physical WAL alerts.
+    #[serde(default)]
+    pub health: super::HealthPolicy,
     /// Explicit supported operator composition.
     pub query: QueryDefinition,
 }
 impl Settings {
     pub(crate) fn validate(&self) -> Result<()> {
+        self.health.validate()?;
         ensure!((1..=3600).contains(&self.startup_timeout_secs), "invalid worker startup timeout");
         ensure!(identifier(&self.catalog_schema), "invalid worker catalog schema");
         ensure!(

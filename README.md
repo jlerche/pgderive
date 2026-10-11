@@ -848,3 +848,6 @@ workload; it does not claim arbitrary scale, an RSS ceiling or production S3
 throughput. Source schema changes, recursive graphs, floating-point sums, outer
 joins, arbitrary SQL and managed Supabase privilege provisioning are outside this
 engine MVP.
+
+Operational health observations and failure qualification are documented in
+[worker health](docs/worker-health.md).

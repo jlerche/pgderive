@@ -149,9 +149,12 @@ pub async fn status(config: &Config) -> Result<Value> {
         .and_then(Value::as_str)
         .filter(|phase| *phase != "Active")
         .unwrap_or(state);
+    let attempt = super::health::attempts::observed(&tx, settings).await?;
+    let health =
+        super::health::observe(&tx, &native, registration.as_ref(), progress.as_ref()).await?;
     tx.commit().await?;
     Ok(json!({"version":1,"query_id":settings.query_id,"state":state,
-        "registration":registration,"progress":progress,"lifecycle":lifecycle}))
+        "registration":registration,"progress":progress,"lifecycle":lifecycle,"health":health,"worker_attempt":attempt}))
 }
 
 pub(super) fn query_sql(query: &QueryDefinition) -> String {

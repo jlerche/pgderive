@@ -4,6 +4,9 @@ cd "$(dirname "$0")/.."
 export PGPASSWORD=${PGPASSWORD:-postgres}
 export PGDERIVE_TEST_POSTGRES_PORT=${PGDERIVE_TEST_POSTGRES_PORT:-55434}
 export PGDERIVE__POSTGRES__PORT="$PGDERIVE_TEST_POSTGRES_PORT"
+# Every gate owns fresh names; interrupted fixtures remain available as evidence.
+export PGDERIVE__REPLICATION__SLOT="pgderive_gate_${BASHPID}_slot"
+export PGDERIVE__REPLICATION__PUBLICATION="pgderive_gate_${BASHPID}_pub"
 pg=(psql -h 127.0.0.1 -p "$PGDERIVE_TEST_POSTGRES_PORT" -U postgres -d postgres -v ON_ERROR_STOP=1)
 if ! "${pg[@]}" -Atc 'SELECT 1' >/dev/null 2>&1; then
     if [[ "$PGDERIVE_TEST_POSTGRES_PORT" != 55434 ]]; then

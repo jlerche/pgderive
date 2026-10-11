@@ -39,6 +39,10 @@ impl Session {
         Ok(session)
     }
     pub(super) async fn own(&self, schema: &str, query: &str) -> Result<()> {
+        ensure!(self.try_own(schema, query).await?, "another worker owns this query");
+        Ok(())
+    }
+    pub(super) async fn try_own(&self, schema: &str, query: &str) -> Result<bool> {
         let scope = format!("pgderive-worker:{schema}:{query}");
         let row = timeout(
             Duration::from_secs(10),
@@ -49,8 +53,7 @@ impl Session {
         )
         .await
         .context("worker ownership acquisition timed out")??;
-        ensure!(row.try_get::<_, bool>(0)?, "another worker owns this query");
-        Ok(())
+        Ok(row.try_get(0)?)
     }
 }
 impl Drop for Session {

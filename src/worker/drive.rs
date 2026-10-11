@@ -58,7 +58,18 @@ async fn retry(
         if *stop.borrow() {
             return emit(&json!({"event":"stopped","retries":metrics.retries}));
         }
-        let result = attempt(config, settings, stop, &mut metrics, initial.take()).await;
+        let mut ticket = super::health::attempts::Ticket::new();
+        let opening = timeout(
+            Duration::from_secs(settings.startup_timeout_secs),
+            ticket.start(config, settings, initial.take(), metrics.failures),
+        )
+        .await
+        .context("worker attempt startup timed out")
+        .and_then(std::convert::identity);
+        let result = match opening {
+            Ok(session) => attempt(config, settings, stop, &mut metrics, (session, &ticket)).await,
+            Err(error) => Err(error),
+        };
         match result {
             Ok((time, end)) => {
                 return emit(
@@ -69,6 +80,22 @@ async fn retry(
                 metrics.failures =
                     metrics.failures.checked_add(1).context("worker retry counter overflow")?;
                 let attempts = metrics.failures;
+                let observation = timeout(
+                    Duration::from_secs(settings.health.stale_secs),
+                    ticket.failure(config, settings, attempts, &error),
+                )
+                .await
+                .context("worker failure observation timed out")
+                .and_then(std::convert::identity);
+                match observation {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Err(error.context("query attempt superseded by another owner"));
+                    }
+                    Err(diagnostic) => emit(
+                        &json!({"event":"diagnostic_failure","attempt":attempts,"error":format!("{diagnostic:#}")}),
+                    )?,
+                }
                 metrics.retries =
                     metrics.retries.checked_add(1).context("worker retry metric overflow")?;
                 emit(&json!({"event":"retry","attempt":attempts,"error":format!("{error:#}")}))?;
@@ -94,30 +121,57 @@ async fn attempt(
     settings: &Settings,
     stop: &mut watch::Receiver<bool>,
     metrics: &mut Metrics,
-    initial: Option<Session>,
+    initial: (Session, &super::health::attempts::Ticket),
 ) -> Result<(u64, String)> {
-    let opening = async {
-        if let Some(session) = initial {
-            Open::connect_with_session(config, settings, session).await
-        } else {
-            Open::connect(config, settings).await
-        }
-    };
+    let ticket = initial.1;
+    let opening = Open::connect_with_session(config, settings, initial.0);
     let mut open = timeout(Duration::from_secs(settings.startup_timeout_secs), Box::pin(opening))
         .await
         .context("worker startup/recovery timed out")??;
     let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
     let base = *metrics.base.get_or_insert_with(|| open.query.time());
     let mut stream = crate::acknowledged::Stream::connect(&open.replication, &durable).await?;
+    let mut health = super::health::Monitor::start(config, &open, &durable).await?;
+    let reporter = health.reporter();
+    ensure!(
+        ticket.record(&open.session.client, settings, "running", (metrics.failures, None)).await?,
+        "worker attempt ownership changed"
+    );
     let result = async {
         emit(&json!({"event":"ready","time":open.query.time(),"end_lsn":durable.end.to_string(),"epoch":durable.stored.epoch,"slot":open.replication.replication.slot}))?;
-        consume(&mut open, &mut stream, settings, stop, (base, metrics)).await
+        tokio::select! {
+            result = consume(&mut open, &mut stream, settings, stop, (base, metrics, &reporter)) => result,
+            result = health.failed() => result,
+        }
     }.await;
     let shutdown = timeout(Duration::from_secs(10), stream.shutdown())
         .await
         .context("worker replication shutdown timed out")
         .and_then(std::convert::identity);
-    crate::outcome::combine(result, shutdown, "worker replication shutdown")?;
+    let result = crate::outcome::combine(result, shutdown, "worker replication shutdown");
+    let attempts = if result.is_err() {
+        metrics.failures.checked_add(1).context("worker retry counter overflow")?
+    } else {
+        metrics.failures
+    };
+    let diagnostics =
+        timeout(Duration::from_secs(10), health.finish(&open, result.as_ref().err(), attempts))
+            .await
+            .context("worker final diagnostics timed out")
+            .and_then(std::convert::identity);
+    let result = crate::outcome::combine(result, diagnostics, "worker final diagnostics");
+    let diagnostics = ticket
+        .record(
+            &open.session.client,
+            settings,
+            if result.is_ok() { "stopped" } else { "failed" },
+            (attempts, result.as_ref().err()),
+        )
+        .await;
+    if let Err(diagnostic) = diagnostics {
+        emit(&json!({"event":"diagnostic_failure","error":format!("{diagnostic:#}")}))?;
+    }
+    result?;
     Ok((open.query.time(), open.writer.end().to_string()))
 }
 async fn consume(
@@ -125,10 +179,19 @@ async fn consume(
     stream: &mut crate::acknowledged::Stream,
     settings: &Settings,
     stop: &mut watch::Receiver<bool>,
-    count: (u64, &mut Metrics),
+    count: (u64, &mut Metrics, &super::health::Reporter),
 ) -> Result<()> {
     loop {
-        maintain(open, settings, count.1).await?;
+        if u64::try_from(open.query.run_count())? >= settings.maintenance_ticks {
+            count.2.record(open, "maintenance")?;
+            timeout(
+                Duration::from_secs(settings.health.operation_timeout_secs),
+                maintain(open, settings, count.1),
+            )
+            .await
+            .context("worker maintenance timed out; recover authoritative progress")??;
+            count.2.record(open, "ready")?;
+        }
         if *stop.borrow()
             || (settings.max_transactions != 0
                 && open.query.time().saturating_sub(count.0) >= settings.max_transactions)
@@ -139,7 +202,14 @@ async fn consume(
             signal=stop.changed() => {signal.context("worker stop monitor closed")?;return Ok(());}
             transaction=stream.recv() => transaction?,
         };
-        publish(open, &transaction).await?;
+        count.2.record(open, "publishing")?;
+        timeout(
+            Duration::from_secs(settings.health.operation_timeout_secs),
+            publish(open, &transaction),
+        )
+        .await
+        .context("worker publication timed out; recover authoritative progress without ACK")??;
+        count.2.record(open, "ready")?;
         stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
         count.1.failures = 0;
     }

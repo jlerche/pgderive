@@ -1,7 +1,9 @@
 //! Continuous operation of the explicit, native-bound grouped inner-join MVP.
 mod admin;
 mod drive;
+mod health;
 mod lifecycle;
+pub use health::Policy as HealthPolicy;
 mod open;
 mod program;
 mod registration;
