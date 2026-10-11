@@ -189,6 +189,7 @@ pub(in crate::compiler::bind) fn rewrite(
         | Node::Map { id, input, .. }
         | Node::KeyBy { id, input, .. }
         | Node::Rebind { id, input, .. }
+        | Node::CrossKey { id, input }
         | Node::EquijoinKey { id, input, .. }
         | Node::LookupInput { id, input, .. }
         | Node::Lookup { id, input, .. }

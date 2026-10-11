@@ -21,7 +21,12 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let right = scope(parsed.right, "right_", left.ir.sources.len(), contract)?;
     ensure!(left.alias != right.alias, "duplicate scoped join qualifier");
     let scopes = [left, right];
-    let keys = keys(parsed.keys, &scopes)?;
+    let keys = parsed.keys.map(|value| keys(value, &scopes)).transpose()?;
+    let join_revision = if keys.is_some() {
+        "sql-scoped-equijoin-v1:typed-boundary-map-v1:canonical-compound-key-v1"
+    } else {
+        "sql-scoped-crossjoin-v1:typed-boundary-map-v1:constant-navigation-key-v1"
+    };
     let resolve = |name: &Name| Ok(resolve(name, &scopes)?.1);
     let (columns, terminal) = super::relational::output(parsed.columns, &resolve)?;
     let predicate = parsed
@@ -29,25 +34,15 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         .map(|value| crate::compiler::expression::bind(value, &resolve).map(Predicate::new))
         .transpose()?;
     let [mut left, right] = scopes;
-    let revision = format!(
-        "sql-scoped-equijoin-v1:typed-boundary-map-v1:canonical-compound-key-v1:{}:{}",
-        left.revision, right.revision
-    );
+    let revision = format!("{join_revision}:{}:{}", left.revision, right.revision);
     left.ir.sources.extend(right.ir.sources);
     left.ir.nodes.extend(right.ir.nodes);
-    left.ir.nodes.extend([
-        Node::EquijoinKey {
-            id: "left_key".into(),
-            input: "left_visible".into(),
-            keys: keys.iter().map(|pair| pair.0.clone()).collect(),
-        },
-        Node::EquijoinKey {
-            id: "right_key".into(),
-            input: "right_visible".into(),
-            keys: keys.into_iter().map(|pair| pair.1).collect(),
-        },
-        Node::Join { id: "joined".into(), left: "left_key".into(), right: "right_key".into() },
-    ]);
+    left.ir.nodes.extend(join_keys(keys));
+    left.ir.nodes.push(Node::Join {
+        id: "joined".into(),
+        left: "left_key".into(),
+        right: "right_key".into(),
+    });
     let input = if let Some(predicate) = predicate {
         left.ir.nodes.push(Node::Filter {
             id: "join_filter".into(),
@@ -66,6 +61,26 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         predicates: None,
         revision: Some(revision),
     })
+}
+fn join_keys(keys: Option<Vec<(ColumnRef, ColumnRef)>>) -> [Node; 2] {
+    let Some(keys) = keys else {
+        return [
+            Node::CrossKey { id: "left_key".into(), input: "left_visible".into() },
+            Node::CrossKey { id: "right_key".into(), input: "right_visible".into() },
+        ];
+    };
+    [
+        Node::EquijoinKey {
+            id: "left_key".into(),
+            input: "left_visible".into(),
+            keys: keys.iter().map(|pair| pair.0.clone()).collect(),
+        },
+        Node::EquijoinKey {
+            id: "right_key".into(),
+            input: "right_visible".into(),
+            keys: keys.into_iter().map(|pair| pair.1).collect(),
+        },
+    ]
 }
 fn scope(
     (parsed, alias): (Box<crate::compiler::parser::Parsed>, String),
@@ -88,7 +103,6 @@ fn scope(
             format!("{prefix}{edge}")
         });
     }
-    adapt_sources(&mut ir, offset, contract)?;
     let fields = ir
         .output
         .columns
@@ -112,6 +126,7 @@ fn scope(
         input: format!("{prefix}{input}"),
         fields,
     });
+    adapt_sources(&mut ir, offset, contract)?;
     Ok(Scope {
         alias,
         ir,

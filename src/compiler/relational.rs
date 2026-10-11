@@ -19,6 +19,7 @@ pub enum Node {
     Map { id: String, input: String, computed: Vec<super::scalar::Computed> },
     KeyBy { id: String, input: String, key: ColumnRef },
     Rebind { id: String, input: String, fields: Vec<Binding> },
+    CrossKey { id: String, input: String },
     EquijoinKey { id: String, input: String, keys: Vec<ColumnRef> },
     Join { id: String, left: String, right: String },
     Union { id: String, left: String, right: String },

@@ -47,11 +47,17 @@ pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, Strin
     else {
         anyhow::bail!("derived query requires SELECT");
     };
-    let inner = query(inner)?;
+    let inner = match query(inner)? {
+        Parsed::Projection { source, columns, predicate } => {
+            Parsed::NativeScope { source, columns, predicate }
+        }
+        other => other,
+    };
     ensure!(
         matches!(
             inner,
-            Parsed::Partition(_)
+            Parsed::NativeScope { .. }
+                | Parsed::Partition(_)
                 | Parsed::ScopedJoin(_)
                 | Parsed::Derived(_)
                 | Parsed::Lookup(_)

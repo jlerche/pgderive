@@ -29,13 +29,10 @@ pub(in crate::worker) fn build(
     settings: &Settings,
 ) -> Result<Query> {
     let ir = compiled.relational().context("expected relational program")?;
-    let mut operators = Operators {
-        projects: BTreeMap::new(),
-        expansions: BTreeMap::new(),
-        joins: BTreeMap::new(),
-        partitions: BTreeMap::new(),
-        statistics: BTreeMap::new(),
-    };
+    Query::new(plan(contract, compiled, ir)?, operators(ir, compiled, settings), settings)
+}
+fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Operators<Key, Row> {
+    let mut operators = empty_operators();
     for node in &ir.nodes {
         match node {
             Node::Source { .. } | Node::Union { .. } => {}
@@ -68,6 +65,9 @@ pub(in crate::worker) fn build(
             }
             Node::Rebind { id, fields, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(super::bindings::rebind(fields)));
+            }
+            Node::CrossKey { id, .. } => {
+                operators.projects.insert(id.clone(), Arc::new(super::bindings::cross_key()));
             }
             Node::EquijoinKey { id, keys, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(super::bindings::key_by(keys)));
@@ -106,7 +106,16 @@ pub(in crate::worker) fn build(
             }
         }
     }
-    Query::new(plan(contract, compiled, ir)?, operators, settings)
+    operators
+}
+const fn empty_operators() -> Operators<Key, Row> {
+    Operators {
+        projects: BTreeMap::new(),
+        expansions: BTreeMap::new(),
+        joins: BTreeMap::new(),
+        partitions: BTreeMap::new(),
+        statistics: BTreeMap::new(),
+    }
 }
 
 fn output(output: &Projected, compiled: &Compiled, filter: bool) -> Project<Key, Row, Key, Row> {
@@ -219,6 +228,7 @@ pub(in crate::worker) fn plan(
                 | Node::Map { id, input, .. }
                 | Node::KeyBy { id, input, .. }
                 | Node::Rebind { id, input, .. }
+                | Node::CrossKey { id, input }
                 | Node::EquijoinKey { id, input, .. }
                 | Node::Project { id, input }
                 | Node::Output { id, input }

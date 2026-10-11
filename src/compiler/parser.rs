@@ -41,6 +41,11 @@ pub(super) enum Parsed {
         targets: Vec<Node>,
         predicate: Option<Box<Node>>,
     },
+    NativeScope {
+        source: Table,
+        columns: Columns,
+        predicate: Option<super::syntax::Expr>,
+    },
     Projection {
         source: Table,
         columns: Columns,

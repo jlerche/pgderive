@@ -6,7 +6,7 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) struct Parsed {
     pub left: (Box<super::Parsed>, String),
     pub right: (Box<super::Parsed>, String),
-    pub keys: Vec<(Name, Name)>,
+    pub keys: Option<Vec<(Name, Name)>>,
     pub columns: Columns,
     pub predicate: Option<crate::compiler::syntax::Expr>,
 }
@@ -33,9 +33,14 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     );
     let left = super::derived::source_query(left)?;
     let right = super::derived::source_query(right)?;
-    let mut keys = Vec::new();
-    equalities(optional(join.quals.as_deref())?, &mut keys)?;
-    ensure!((1..=16).contains(&keys.len()), "scoped join requires 1..=16 equalities");
+    let keys = if let Some(quals) = join.quals.as_deref() {
+        let mut keys = Vec::new();
+        equalities(quals, &mut keys)?;
+        ensure!((1..=16).contains(&keys.len()), "scoped join requires 1..=16 equalities");
+        Some(keys)
+    } else {
+        None
+    };
     Ok(Some(Parsed {
         left: (Box::new(left.0), left.1),
         right: (Box::new(right.0), right.1),

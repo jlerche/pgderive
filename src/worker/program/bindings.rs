@@ -31,3 +31,8 @@ pub(super) fn key_by(keys: &[ColumnRef]) -> Project<Key, Row, Key, Row> {
         Ok(key.map(|key| (key, row.clone())))
     })
 }
+
+/// A Cartesian product uses one constant navigation key, including NULL tuples.
+pub(super) fn cross_key() -> Project<Key, Row, Key, Row> {
+    Project::new(|_: &Key, row: &Row| Ok(Some((Vec::new(), row.clone()))))
+}

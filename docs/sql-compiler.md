@@ -1174,6 +1174,21 @@ identity for positional windows.
 
 ## Inner joins between derived scopes
 
+Native column projections with the typed WHERE subset can also serve as scoped
+inputs. Their source filters execute before the boundary projection. Hidden
+native columns remain available inside the scope but cannot resolve outside it;
+sink-deferred expressions cannot become circuit inputs.
+
+Two aliased relational scopes can use explicit `CROSS JOIN`. Each input maps to
+a constant navigation key and feeds the same durable weighted join as an
+equijoin, including the simultaneous-input cross term. NULL tuples participate
+normally. Cartesian fan-out remains subject to existing work and storage limits.
+Used plans bind `sql-native-scope-v1` and, for Cartesian joins,
+`sql-scoped-crossjoin-v1:constant-navigation-key-v1`. No clock behavior is implied:
+a persisted clock relation changes computation through ordinary source deltas.
+The owned native-cross fixture compares exact PostgreSQL materialized-view bags
+and a raw nested-loop memory oracle through simultaneous changes and cold restart.
+
 Two independently compiled, non-LATERAL relational subqueries can join with an
 AND of 1–16 ordinary column equalities. Both inputs need aliases; exposed output
 labels resolve within those scopes, and ambiguous unqualified names reject.

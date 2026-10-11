@@ -198,11 +198,17 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/n
     cat "$output/nexmark-q21/harness.log" >&2
     exit 1
 fi
+mkdir "$output/native-cross"
+if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/native-cross" \
+    python3 scripts/native_cross_harness.py "$output/native-cross" -- "${worker[@]}"; then
+    cat "$output/native-cross/harness.log" >&2
+    exit 1
+fi
 python3 - "$output" "${worker[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==157,results
+assert len(results)==158,results
 for result in results:
     json.loads(result.read_text())
 root=pathlib.Path.cwd()

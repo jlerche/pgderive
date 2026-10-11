@@ -1,5 +1,6 @@
 mod derived;
 mod lookup;
+mod native_scope;
 mod partition;
 mod relational;
 mod scoped_join;
@@ -19,6 +20,9 @@ struct Scope<'a> {
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
+        Parsed::NativeScope { source, columns, predicate } => {
+            native_scope::bind(source, columns, predicate, contract)
+        }
         Parsed::Terminal { source, targets, predicate } => {
             terminal::bind(source, &targets, predicate.as_deref(), contract)
         }
