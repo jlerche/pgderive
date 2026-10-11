@@ -34,6 +34,10 @@ pub(super) async fn source(
         settings.catalog_schema
     ))
     .await?;
+    let incompatible: bool = sql.query_one(&format!(
+        "SELECT EXISTS(SELECT 1 FROM {}.pgderive_worker_registration WHERE object_prefix<>$1)", settings.catalog_schema,
+    ), &[&settings.object_prefix]).await?.try_get(0)?;
+    ensure!(!incompatible, "catalog schema requires one object-store prefix for safe GC");
     let row=sql.query_opt(&format!("SELECT format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix FROM {}.pgderive_worker_registration WHERE query_id=$1",settings.catalog_schema),&[&settings.query_id]).await?;
     if let Some(row) = row {
         ensure!(
@@ -85,6 +89,16 @@ async fn create(
     let plan = program::plan(&source, &compiled)?;
     let tx = sql.transaction().await?;
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
+    let namespace = format!("pgderive-worker-registration:{}", settings.catalog_schema);
+    tx.query_one(
+        "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1,0))",
+        &[&namespace],
+    )
+    .await?;
+    let incompatible: bool = tx.query_one(&format!(
+        "SELECT EXISTS(SELECT 1 FROM {}.pgderive_worker_registration WHERE object_prefix<>$1)", settings.catalog_schema,
+    ), &[&settings.object_prefix]).await?.try_get(0)?;
+    ensure!(!incompatible, "catalog schema requires one object-store prefix for safe GC");
     tx.execute(&format!("INSERT INTO {}.pgderive_worker_registration(query_id,format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix) VALUES($1,1,$2,$3,$4,$5,$6,$7)",settings.catalog_schema),&[&settings.query_id,&config.replication.slot,&source.slot,&serde_json::to_value(&source)?,&serde_json::to_value(compiled.sink(&settings.sink_table))?,&plan.identity(),&settings.object_prefix]).await?;
     tx.commit().await.context("worker registration COMMIT requires authoritative reload")?;
     Ok(source)

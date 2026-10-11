@@ -4,8 +4,48 @@ use crate::{
     Config,
     source::{Contract, Identity},
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
+
+/// Create a new query or explicitly restart its existing registration.
+/// Ownership spans the precondition check and startup, preventing adoption races.
+///
+/// # Errors
+/// Rejects occupied creation, missing restart, incompatible state or worker failures.
+pub async fn start(config: Config, restart: bool) -> Result<()> {
+    config.validate()?;
+    let settings = config.worker.clone().context("configuration requires a worker section")?;
+    let mut session = Session::connect(&config).await?;
+    session.own(&settings.catalog_schema, &settings.query_id).await?;
+    let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
+    let exists: bool = session
+        .client
+        .query_one("SELECT pg_catalog.to_regclass($1) IS NOT NULL", &[&table])
+        .await?
+        .try_get(0)?;
+    let registered = exists
+        && session
+            .client
+            .query_opt(
+                &format!("SELECT query_id FROM {table} WHERE query_id=$1"),
+                &[&settings.query_id],
+            )
+            .await?
+            .is_some();
+    ensure!(
+        registered == restart,
+        "create requires an unregistered query; restart requires an existing registration"
+    );
+    if !restart {
+        let catalog = crate::catalog::Catalog::new(&settings.catalog_schema, &settings.query_id)?;
+        catalog.install(&session.client).await?;
+        // Establish this invocation's journal while ownership is uninterrupted.
+        // Bootstrap retries may then resume this exact registration. An uncertain
+        // journal COMMIT returns an error and requires explicit status/restart.
+        super::registration::source(&mut session.client, &config, &settings).await?;
+    }
+    super::drive::run_initial(config, settings, Some(session)).await
+}
 
 /// Resolve and describe a query against `PostgreSQL` without durable registration.
 ///
@@ -19,7 +59,13 @@ pub async fn validate(config: &Config) -> Result<Value> {
     let settings = config.worker.as_ref().context("configuration requires a worker section")?;
     let mut session = Session::connect(config).await?;
     let identity = Identity::inspect(config).await?;
-    let tx = session.client.build_transaction().read_only(true).start().await?;
+    let tx = session
+        .client
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()
+        .await?;
     tx.batch_execute("SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO,MDY'").await?;
     let source =
         Contract::inspect(&tx, identity, &config.replication.publication, &config.replication.slot)
@@ -45,7 +91,13 @@ pub async fn status(config: &Config) -> Result<Value> {
     config.validate()?;
     let settings = config.worker.as_ref().context("configuration requires a worker section")?;
     let mut session = Session::connect(config).await?;
-    let tx = session.client.build_transaction().read_only(true).start().await?;
+    let tx = session
+        .client
+        .build_transaction()
+        .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+        .read_only(true)
+        .start()
+        .await?;
     let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
     let exists: bool = tx
         .query_one("SELECT pg_catalog.to_regclass($1) IS NOT NULL", &[&table])

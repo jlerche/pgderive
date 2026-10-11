@@ -1,4 +1,4 @@
-use super::{open::Open, runtime, spec::Settings};
+use super::{open::Open, runtime, spec::Settings, sql::Session};
 use crate::{
     Config,
     catalog::{GcLimits, Progress, Publication},
@@ -16,13 +16,20 @@ use tokio::{
 };
 
 pub(super) async fn run(config: Config, settings: Settings) -> Result<()> {
+    run_initial(config, settings, None).await
+}
+pub(super) async fn run_initial(
+    config: Config,
+    settings: Settings,
+    initial: Option<Session>,
+) -> Result<()> {
     let (signal, mut stop) = watch::channel(false);
     let monitor = Signal(tokio::spawn(async move {
         tokio::signal::ctrl_c().await.context("worker Ctrl-C monitor failed")?;
         let _closed = signal.send(true);
         Ok(())
     }));
-    let result = retry(&config, &settings, &mut stop).await;
+    let result = retry(&config, &settings, &mut stop, initial).await;
     drop(monitor);
     result
 }
@@ -43,6 +50,7 @@ async fn retry(
     config: &Config,
     settings: &Settings,
     stop: &mut watch::Receiver<bool>,
+    mut initial: Option<Session>,
 ) -> Result<()> {
     let started = Instant::now();
     let mut metrics = Metrics::default();
@@ -50,7 +58,7 @@ async fn retry(
         if *stop.borrow() {
             return emit(&json!({"event":"stopped","retries":metrics.retries}));
         }
-        let result = attempt(config, settings, stop, &mut metrics).await;
+        let result = attempt(config, settings, stop, &mut metrics, initial.take()).await;
         match result {
             Ok((time, end)) => {
                 return emit(
@@ -86,13 +94,18 @@ async fn attempt(
     settings: &Settings,
     stop: &mut watch::Receiver<bool>,
     metrics: &mut Metrics,
+    initial: Option<Session>,
 ) -> Result<(u64, String)> {
-    let mut open = timeout(
-        Duration::from_secs(settings.startup_timeout_secs),
-        Open::connect(config, settings),
-    )
-    .await
-    .context("worker startup/recovery timed out")??;
+    let opening = async {
+        if let Some(session) = initial {
+            Open::connect_with_session(config, settings, session).await
+        } else {
+            Open::connect(config, settings).await
+        }
+    };
+    let mut open = timeout(Duration::from_secs(settings.startup_timeout_secs), Box::pin(opening))
+        .await
+        .context("worker startup/recovery timed out")??;
     let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
     let base = *metrics.base.get_or_insert_with(|| open.query.time());
     let mut stream = crate::acknowledged::Stream::connect(&open.replication, &durable).await?;

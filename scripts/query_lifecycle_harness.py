@@ -6,6 +6,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import time
 
 from sql_compiler_harness import SqlFixture
 from nexmark_projection_harness import ProjectionFixture
@@ -40,6 +41,7 @@ def rejected(command, fixture, action, config):
         evidence.write(json.dumps({'action': action, 'expected': 'rejection',
                                    'code': result.returncode, 'stderr': result.stderr})+'\n')
     assert result.returncode != 0, 'invalid query/result interface was accepted'
+    return result.stderr
 
 
 def verify_result(fixture, labels):
@@ -67,6 +69,7 @@ def qualify(output, command, factory):
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         assert inspect(command, fixture, 'status', config)['state'] == 'unregistered'
+        rejected(command, fixture, 'restart', config)
         original = config.read_text()
         before, after = original.split('[worker.query]')
         _, execution = after.split('[execution]')
@@ -81,6 +84,8 @@ def qualify(output, command, factory):
         worker = Worker(command+['query', 'create'], config, first, fixture.environment)
         fixture.workers.append(worker)
         ready = worker.event('ready')
+        for action in ('create', 'restart'):
+            assert 'another worker owns this query' in rejected(command, fixture, action, config)
         verify_result(fixture, labels)
         assert inspect(command, fixture, 'status', config)['progress']['logical_time'] == ready['time']
         changes = [
@@ -95,6 +100,13 @@ def qualify(output, command, factory):
             worker.event('published', minimum_time=ready['time']+index)
             verify_result(fixture, labels)
         worker.finish(graceful=True)
+        rejected(command, fixture, 'create', config)
+        other = original.replace('query_id="grouped"', 'query_id="different"').replace(
+            f'object_prefix="{fixture.name}"', f'object_prefix="{fixture.name}_other"').replace(
+            'retry_attempts=8', 'retry_attempts=1')
+        config.write_text(other)
+        assert 'one object-store prefix' in rejected(command, fixture, 'create', config)
+        config.write_text(original)
         logical = fixture.sql(f"SELECT logical_time FROM {fixture.name}.pgderive_queries")
         progress = fixture.sql(f"SELECT end_lsn FROM {fixture.name}.pgderive_progress")
         first_column = '"'+labels[0].replace('"', '""')+'"'
@@ -122,6 +134,79 @@ def qualify(output, command, factory):
     except BaseException:
         fixture.preserve()
         raise
+
+
+def namespace_race(output, command):
+    """Hold registration serialization until both independent creates contend."""
+    fixture = grouped(output)
+    blocker = None
+    try:
+        config = configured(fixture)
+        original = config.read_text()
+        # Install catalog DDL without registering unsupported SQL.
+        before, after = original.split('[worker.query]')
+        _, execution = after.split('[execution]')
+        config.write_text(before+'[worker.query]\nsql='+json.dumps(
+            f'SELECT now() FROM {fixture.name}.bid')+'\n[execution]'+execution)
+        rejected(command, fixture, 'create', config)
+        fixture.sql(f"""CREATE TABLE {fixture.name}.pgderive_worker_registration(
+            query_id text PRIMARY KEY,format_version integer NOT NULL CHECK(format_version=1),
+            logical_slot text NOT NULL UNIQUE,slot_name text NOT NULL UNIQUE,
+            source jsonb NOT NULL,sink jsonb NOT NULL,plan_identity text NOT NULL,
+            object_prefix text NOT NULL)""")
+        blocker = subprocess.Popen(fixture.pg[:-1]+['-At'], env=fixture.environment,
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        blocker.stdin.write(f"BEGIN; SELECT pg_advisory_xact_lock(hashtextextended('pgderive-worker-registration:{fixture.name}',0)); SELECT 'held';\n")
+        blocker.stdin.flush()
+        while blocker.stdout.readline().strip() != 'held':
+            assert blocker.poll() is None, 'registration lock holder exited'
+        workers = []
+        for index in range(2):
+            path = output/f'create-{index}.toml'
+            text = original.replace('retry_attempts=8', 'retry_attempts=1')
+            if index:
+                text = text.replace('query_id="grouped"', 'query_id="different"').replace(
+                    f'slot="{fixture.name}"', f'slot="{fixture.name}_other"').replace(
+                    'sink_table="groups"', 'sink_table="other_groups"').replace(
+                    'result_view="result"', 'result_view="other_result"').replace(
+                    f'object_prefix="{fixture.name}"', f'object_prefix="{fixture.name}_other"')
+            path.write_text(text)
+            logs = output/f'create-{index}'
+            logs.mkdir()
+            worker = Worker(command+['query', 'create'], path, logs, fixture.environment)
+            workers.append(worker)
+            fixture.workers.append(worker)
+        deadline = time.monotonic()+8
+        while True:
+            waiting = int(fixture.sql("SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory' AND query LIKE 'SELECT pg_catalog.pg_advisory_xact_lock%'"))
+            if waiting == 2:
+                break
+            assert time.monotonic() < deadline, 'both registrations did not contend'
+            time.sleep(.05)
+        blocker.stdin.write('COMMIT;\n'+chr(92)+'q\n')
+        blocker.stdin.flush()
+        blocker.wait(timeout=10)
+        deadline = time.monotonic()+30
+        while all(worker.process.poll() is None for worker in workers):
+            assert time.monotonic() < deadline, 'incompatible create was not rejected'
+            time.sleep(.05)
+        losers = [worker for worker in workers if worker.process.poll() is not None]
+        assert len(losers) == 1 and losers[0].process.returncode != 0
+        assert 'one object-store prefix' in pathlib.Path(losers[0].stderr.name).read_text()
+        winner = next(worker for worker in workers if worker not in losers)
+        winner.event('ready')
+        winner.finish(graceful=True)
+        assert fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_worker_registration').strip() == '1'
+        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '1'
+        (output/'qualification.json').write_text(json.dumps({'contending_creates':2,'registered':1,'physical_slots':1})+'\n')
+        fixture.cleanup()
+    except BaseException:
+        fixture.preserve()
+        raise
+    finally:
+        if blocker is not None and blocker.poll() is None:
+            blocker.kill()
+            blocker.wait(timeout=10)
 
 
 def grouped(output):
@@ -172,6 +257,9 @@ if __name__ == '__main__':
     command = sys.argv[2:]
     if command and command[0] == '--':
         command = command[1:]
+    race = output/'namespace-race'
+    race.mkdir()
+    namespace_race(race, command)
     for name, factory in [
         ('grouped', grouped),
         ('projection-local', lambda out: ProjectionFixture(out, 'q0', 'local')),

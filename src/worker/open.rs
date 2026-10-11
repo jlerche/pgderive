@@ -26,13 +26,19 @@ pub(super) struct Open {
 }
 impl Open {
     pub(super) async fn connect(config: &Config, settings: &Settings) -> Result<Self> {
+        Self::connect_with_session(config, settings, Session::connect(config).await?).await
+    }
+    pub(super) async fn connect_with_session(
+        config: &Config,
+        settings: &Settings,
+        mut session: Session,
+    ) -> Result<Self> {
         settings.validate()?;
         let store = config
             .object_store
             .as_ref()
             .context("worker requires durable object storage")?
             .build(&settings.object_prefix)?;
-        let mut session = Session::connect(config).await?;
         session.own(&settings.catalog_schema, &settings.query_id).await?;
         let catalog = Catalog::new(&settings.catalog_schema, &settings.query_id)?;
         catalog.install(&session.client).await?;

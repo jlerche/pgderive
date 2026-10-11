@@ -9,7 +9,7 @@ mod runtime;
 mod spec;
 mod sql;
 use crate::Config;
-pub use admin::{status, validate};
+pub use admin::{start, status, validate};
 use anyhow::{Context, Result};
 pub use spec::{Query, QueryDefinition, Settings, SqlQuery};
 

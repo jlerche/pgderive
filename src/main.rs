@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
                     println!("{result}");
                     Ok(())
                 }
-                "create" | "restart" => pgderive::worker::run(config).await,
+                "create" | "restart" => pgderive::worker::start(config, command == "restart").await,
                 _ => bail!("unknown query command: {command}"),
             }
         }

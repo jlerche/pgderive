@@ -31,9 +31,12 @@ and fit PostgreSQL's identifier limit; add explicit aliases when needed. Restart
 rejects a changed or externally altered result view. Source/application tables
 and external writers remain outside the worker's ownership.
 
-`query create` and `query restart` currently invoke the existing guarded
-create-or-resume worker path; the explicit generation/rebuild/removal lifecycle
-is the next part of [the release work](docs/release-plan.md). The diagnostic
+`query create` requires an unregistered query; `query restart` requires an
+existing registration. Both hold exclusive query ownership across that check
+and worker startup. Each catalog schema must use one object-store root prefix
+so garbage collection can mark all query and reader roots safely. Explicit
+generation rebuild and removal remain the next part of
+[the release work](docs/release-plan.md). The diagnostic
 listener's original `cargo run -- config.local.toml` interface remains available.
 
 ## Quality gate
