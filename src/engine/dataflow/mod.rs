@@ -225,3 +225,7 @@ mod join_probe_tests;
 #[cfg(test)]
 #[path = "tests/union.rs"]
 mod union_tests;
+
+#[cfg(test)]
+#[path = "tests/partition.rs"]
+mod partition_tests;

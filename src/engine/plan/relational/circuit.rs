@@ -81,6 +81,12 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
             }
             Kind::Aggregate => {
                 partitions.insert(node.id.clone());
+                let operator =
+                    operators.partitions.get(&node.id).context("missing partition callback")?;
+                ensure!(
+                    !operator.supports_retained_output() || maintained.contains(&node.id),
+                    "retained partition requires output state"
+                );
                 ensure!(
                     maintained.contains(&node.inputs[0]),
                     "partition input requires maintained state"
@@ -225,13 +231,19 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                 let id = id.clone();
                 async move {
                     let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
-                    let delta = operator
-                        .evaluate(
-                            &input,
-                            execution.prior(&parent, &context.prior)?,
-                            execution.limits,
-                        )
-                        .await?;
+                    let prior = execution.prior(&parent, &context.prior)?;
+                    let delta = if operator.supports_retained_output() {
+                        operator
+                            .evaluate_retained(
+                                &input,
+                                prior,
+                                execution.prior(&id, &context.prior)?,
+                                execution.limits,
+                            )
+                            .await?
+                    } else {
+                        operator.evaluate(&input, prior, execution.limits).await?
+                    };
                     execution.stage(&id, &context.prior, delta).await
                 }
             },

@@ -54,6 +54,13 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
     }
     if let Program::Relational { relational } = &compiled.program {
         for (used, suffix) in [
+            (
+                relational
+                    .nodes
+                    .iter()
+                    .any(|node| matches!(node, Node::Partition { .. } | Node::Lookup { .. })),
+                ":retained-partition-output-v1",
+            ),
             (relational.nodes.iter().any(node_text_key), ":pg-deterministic-text-partition-v1"),
             (relational.nodes.iter().any(node_distinct), ":pg-integral-distinct-count-v1"),
             (relational.nodes.iter().any(node_offset), ":pg-fixed-time-offset-v1"),

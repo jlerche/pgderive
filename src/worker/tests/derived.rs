@@ -178,11 +178,53 @@ fn nested_scopes_expose_only_inner_labels() -> Result<()> {
         plain
             .revision
             .as_deref()
-            .is_some_and(|revision| revision.ends_with(":derived-scope-projection-v1"))
+            .is_some_and(|revision| revision.contains(":derived-scope-projection-v1")
+                && revision.ends_with(":retained-partition-output-v1"))
     );
     assert_eq!(
         plain.relational().context("missing projection IR")?.nodes.len(),
         compile(&sql(false), &native)?.relational().context("missing baseline IR")?.nodes.len()
     );
+    Ok(())
+}
+
+#[test]
+fn retained_output_revision_only_binds_partition_layouts() -> Result<()> {
+    let native = contract();
+    let linear = compile(
+        "SELECT b.auction AS g,COUNT(*) AS n FROM source.bid b GROUP BY b.auction",
+        &native,
+    )?;
+    assert!(
+        linear
+            .revision
+            .as_deref()
+            .is_some_and(|value| !value.contains("retained-partition-output"))
+    );
+    let linear_plan =
+        relational::plan(&native, &linear, linear.relational().context("missing linear IR")?)?;
+    assert!(linear_plan.definition().revision.starts_with("worker-relational-v1:"));
+    let partition = compile(
+        "SELECT b.auction AS g,MIN(b.price) AS n FROM source.bid b GROUP BY b.auction",
+        &native,
+    )?;
+    assert!(
+        partition
+            .revision
+            .as_deref()
+            .is_some_and(|value| value.contains("retained-partition-output-v1"))
+    );
+    let partition_plan = relational::plan(
+        &native,
+        &partition,
+        partition.relational().context("missing partition IR")?,
+    )?;
+    assert!(
+        partition_plan
+            .definition()
+            .revision
+            .starts_with("worker-relational-retained-partition-v2:")
+    );
+    assert!(partition_plan.definition().arrangements.iter().any(|entry| entry.node == "partition"));
     Ok(())
 }

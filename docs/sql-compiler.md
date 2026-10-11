@@ -1341,3 +1341,16 @@ and closure filter, grouped MAX, ROW_NUMBER per seller, latest-ten filter and
 grouped AVG. Only final numeric AVG rendering is deferred to atomic PostgreSQL
 publication. Clock updates drive ordinary synchronized input deltas, preserving
 the join cross term and object PUT → PG publication COMMIT → slot ACK order.
+
+## Retained affected-partition output
+
+Plans with native partition/window or predecessor-lookup operators now retain
+both operator input and its exact intermediate output. The new runtime computes
+current affected partitions once and subtracts that output; it still scans
+current affected partitions. The compiler binds `retained-partition-output-v1`
+and the worker uses `worker-relational-retained-partition-v2` for these layouts.
+Existing registrations for those earlier layouts require explicit `query rebuild`;
+ordinary restart rejects their changed identity. Source contracts, full-tuple bag
+identity, complete delta ticks and publication/ACK ordering remain binding.
+See [the Feldera algorithm audit](feldera-audit.md) for the measured callback-work
+reduction and remaining ordered-index/distinct work.

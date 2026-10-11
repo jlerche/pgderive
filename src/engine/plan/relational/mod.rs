@@ -204,3 +204,6 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod partition_tests;

@@ -44,7 +44,7 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
                 let limits = settings.limits;
                 operators.partitions.insert(
                     id.clone(),
-                    Arc::new(crate::engine::dataflow::Partition::new(
+                    Arc::new(crate::engine::dataflow::Partition::new_zero_preserving(
                         move |_: &Key, rows: &Batch<(), Row>, work| {
                             super::lookup::evaluate(&spec, rows, limits, work)
                         },
@@ -91,7 +91,7 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
                 let limits = settings.limits;
                 operators.partitions.insert(
                     id.clone(),
-                    Arc::new(crate::engine::dataflow::Partition::new(
+                    Arc::new(crate::engine::dataflow::Partition::new_zero_preserving(
                         move |_: &Key, rows: &Batch<(), Row>, work: &mut crate::engine::dataflow::PartitionWork| {
                             super::partition::evaluate(&spec, rows, (limits, work))
                         },
@@ -208,6 +208,13 @@ fn key_by(key: &crate::compiler::ColumnRef) -> Project<Key, Row, Key, Row> {
             .map(|value| (vec![value.clone()], row.clone())))
     })
 }
+fn plan_revision(ir: &Relational) -> &'static str {
+    if ir.nodes.iter().any(|node| matches!(node, Node::Partition { .. } | Node::Lookup { .. })) {
+        "worker-relational-retained-partition-v2"
+    } else {
+        "worker-relational-v1"
+    }
+}
 pub(in crate::worker) fn plan(
     contract: &Contract,
     compiled: &Compiled,
@@ -215,7 +222,8 @@ pub(in crate::worker) fn plan(
 ) -> Result<Plan> {
     contract.validate()?;
     let identity = format!("{:x}", Sha256::digest(serde_json::to_vec(&(contract, compiled))?));
-    let schema = |id: &str| format!("worker-relational-v1:{identity}:{id}");
+    let revision = plan_revision(ir);
+    let schema = |id: &str| format!("{revision}:{identity}:{id}");
     let nodes = ir
         .nodes
         .iter()
@@ -270,8 +278,9 @@ pub(in crate::worker) fn plan(
             maintained.insert(id.clone(), id.clone());
             maintained.insert(input.clone(), input.clone());
         }
-        if let Node::Partition { input, .. } | Node::Lookup { input, .. } = node {
+        if let Node::Partition { id, input, .. } | Node::Lookup { id, input, .. } = node {
             maintained.insert(input.clone(), input.clone());
+            maintained.insert(id.clone(), id.clone());
         }
         if let Node::Join { left, right, .. } = node {
             for id in [left, right] {
@@ -285,7 +294,7 @@ pub(in crate::worker) fn plan(
         .map(|(id, node)| plan::Arrangement { id, schema: schema(&node), node })
         .collect();
     Plan::new(plan::Definition {
-        revision: format!("worker-relational-v1:{identity}"),
+        revision: format!("{revision}:{identity}"),
         sources,
         nodes,
         arrangements,
