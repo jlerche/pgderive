@@ -1153,3 +1153,20 @@ MVs and independent raw-source calendar/count/value-set bags across BC/max-year
 timestamps, infinities, NULLs, duplicates, boundaries, channel/day moves, latest
 retractions, simultaneous source changes, rollback and cold restart. C-collated
 varchar and deterministic ICU text grouping are qualified separately.
+
+## Group-only membership
+
+A nonempty `GROUP BY` may project grouping columns without aggregate calls. Each
+nonempty group emits one row; NULL keys group together. Omitting a grouping key
+from the projection can produce identical output tuples from different groups,
+whose weights add. Non-grouping output columns are rejected before registration.
+This is group-only SQL, not general `SELECT DISTINCT` or grouping sets.
+
+Lowering uses the existing exact statistics operator with only its hidden row
+count, followed by finalization. Inserts and retractions change that count; only
+empty/nonempty transitions change membership. No COUNT result is exposed or
+narrowed to bigint. Full-tuple input multiplicity remains distinct from group
+membership. Plans using this form bind `pg-group-membership-v1`; existing
+aggregate and projection identities are unchanged. Derived scopes can consume
+these ordinary typed outputs. Group-only output does not supply native occurrence
+identity for positional windows.

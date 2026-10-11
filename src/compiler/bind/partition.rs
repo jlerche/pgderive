@@ -87,6 +87,7 @@ fn build(
     let projection = state.aggregates.is_empty() && group_keys.is_empty();
     ensure!(
         !state.aggregates.is_empty()
+            || !group_keys.is_empty()
             || projection && (!computed.is_empty() || parsed.expansion.is_some()),
         "partition requires an aggregate"
     );
@@ -273,6 +274,12 @@ fn plan_revision(numeric: bool, mapped: bool, nodes: &[Node]) -> String {
     let mut revision = revision(numeric, mapped, bin);
     if nodes.iter().any(|node| matches!(node, Node::Statistics { .. })) {
         revision.push_str(":exact-linear-statistics-v1");
+    }
+    if nodes
+        .iter()
+        .any(|node| matches!(node, Node::Statistics { spec, .. } if spec.aggregates.is_empty()))
+    {
+        revision.push_str(":pg-group-membership-v1");
     }
     if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if matches!(spec.mode, Mode::Ranking { .. }))) {
         revision.push_str(":sql-peer-ranking-v1");
