@@ -195,3 +195,5 @@ mod derived_join;
 mod lookup_remainder;
 
 mod terminal_program;
+
+mod terminal_text;

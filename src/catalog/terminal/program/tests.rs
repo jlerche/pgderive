@@ -77,3 +77,81 @@ fn pure_boolean_case_preserves_native_three_valued_rendering() -> Result<()> {
     assert!(predicate.contains("NOT"));
     Ok(())
 }
+
+#[test]
+fn collated_regex_nodes_are_closed_and_render_native_null_tests() -> Result<()> {
+    let program = program(
+        vec![
+            Expression::Input(0),
+            Expression::CollateC(0),
+            Expression::Literal(Literal::Text("(&|^)channel_id=([^&]*)".into())),
+            Expression::Call { function: Function::RegexMatch, arguments: vec![1, 2] },
+            Expression::ArrayElement { input: 3, index: 2 },
+            Expression::IsNull { input: 4, negated: true },
+        ],
+        Some(5),
+    );
+    assert!(program.has_collation());
+    assert_eq!(program.validate(&[1043])?, [1043, 25, 25, 1009, 25, 16]);
+    assert_eq!(
+        program.signatures(&[1043])?,
+        [("pg_catalog.regexp_match(text,text)", "regexp_match_no_flags")]
+    );
+    let (columns, predicate) = program.render(&[1043])?;
+    assert!(columns.contains("IS NOT NULL"));
+    assert!(predicate.contains("COLLATE pg_catalog.\"C\""));
+    assert!(predicate.contains(")[2]"));
+    assert!(!predicate.contains("channel_id="));
+    Ok(())
+}
+#[test]
+fn restored_programs_reject_unattested_text_context() {
+    for expression in [
+        Expression::Call { function: Function::Lower, arguments: vec![0] },
+        Expression::Call { function: Function::TextEqual, arguments: vec![0, 0] },
+        Expression::Call { function: Function::RegexMatch, arguments: vec![0, 0] },
+        Expression::ArrayElement { input: 0, index: 2 },
+    ] {
+        assert!(program(vec![Expression::Input(0), expression], None).validate(&[25]).is_err());
+    }
+    let value = program(
+        vec![
+            Expression::Input(0),
+            Expression::CollateC(0),
+            Expression::Literal(Literal::Text("arbitrary".into())),
+            Expression::Call { function: Function::RegexMatch, arguments: vec![1, 2] },
+        ],
+        None,
+    );
+    assert!(value.validate(&[25]).is_err());
+}
+
+#[test]
+fn pruning_boolean_intermediates_preserves_native_input_indices() -> Result<()> {
+    let mut value = program(
+        vec![
+            Expression::Input(0),
+            Expression::Literal(Literal::Text("unreachable".into())),
+            Expression::Input(1),
+            Expression::Not(0),
+            Expression::And(vec![3, 2]),
+        ],
+        Some(4),
+    );
+    value.outputs[0].expression = 3;
+    value.prune()?;
+    assert_eq!(
+        value.expressions,
+        [
+            Expression::Input(0),
+            Expression::Input(1),
+            Expression::Not(0),
+            Expression::And(vec![2, 1])
+        ]
+    );
+    assert_eq!(value.outputs[0].expression, 2);
+    assert_eq!(value.predicate, Some(3));
+    assert_eq!(value.validate(&[16, 16])?, [16; 4]);
+    assert!(program(vec![Expression::Not(0)], None).prune().is_err());
+    Ok(())
+}

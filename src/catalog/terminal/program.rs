@@ -2,7 +2,9 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+mod context;
 mod functions;
+mod normalize;
 mod render;
 pub use functions::{Function, implementation_types};
 use functions::{Signature, call_type};
@@ -21,6 +23,9 @@ pub enum Expression {
     And(Vec<usize>),
     Or(Vec<usize>),
     Not(usize),
+    CollateC(usize),
+    ArrayElement { input: usize, index: u16 },
+    IsNull { input: usize, negated: bool },
     Case { branches: Vec<(usize, usize)>, otherwise: usize },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,8 +47,9 @@ impl Program {
         ensure!((1..=512).contains(&self.expressions.len()), "terminal expression budget exceeded");
         ensure!((1..=64).contains(&self.outputs.len()), "invalid terminal output layout");
         let mut types = Vec::new();
-        for expression in &self.expressions {
+        for (index, expression) in self.expressions.iter().enumerate() {
             types.push(expression_type(expression, &types, inputs)?);
+            context::validate(expression, &self.expressions[..index])?;
         }
         for output in &self.outputs {
             ensure!(
@@ -72,6 +78,9 @@ impl Program {
         signatures.sort_unstable();
         signatures.dedup();
         Ok(signatures)
+    }
+    pub fn has_collation(&self) -> bool {
+        self.expressions.iter().any(|expression| matches!(expression, Expression::CollateC(_)))
     }
     pub(super) fn has_calendar(&self) -> bool {
         self.expressions.iter().any(|expression| {
@@ -114,6 +123,27 @@ pub fn expression_type(expression: &Expression, types: &[u32], inputs: &[u32]) -
             Ok(16)
         }
         Expression::Case { branches, otherwise } => case_type(branches, *otherwise, types),
+        Expression::CollateC(index) => {
+            ensure!(
+                matches!(types.get(*index), Some(25 | 1043)),
+                "C collation requires text prior node"
+            );
+            Ok(25)
+        }
+        Expression::ArrayElement { input, index } => {
+            ensure!(
+                types.get(*input) == Some(&1009) && (1..=2).contains(index),
+                "terminal capture requires text array and index 1 or 2"
+            );
+            Ok(25)
+        }
+        Expression::IsNull { input, .. } => {
+            ensure!(
+                types.get(*input).is_some_and(|oid| *oid != 1009),
+                "terminal NULL test requires scalar prior node"
+            );
+            Ok(16)
+        }
     }
 }
 fn literal_type(literal: &Literal) -> Result<u32> {

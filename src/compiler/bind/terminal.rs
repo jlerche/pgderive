@@ -18,6 +18,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 mod expressions;
+mod text;
 struct Builder<'a> {
     scope: Scope<'a>,
     columns: Vec<OutputColumn>,
@@ -53,19 +54,31 @@ pub(super) fn bind(
         builder.program.outputs.push(Output { label, expression });
     }
     builder.program.predicate = predicate.map(|value| builder.expression(value, 0)).transpose()?;
+    let revision = if builder.program.has_collation() {
+        builder.program.prune()?;
+        "sql-terminal-program-v1:pg-query-6.2.1:pg-17.7:typed-native-dag-v1:terminal-3vl-v1:raw-bag-v1:json-v2:pg-terminal-c-text-regex-v1"
+    } else {
+        "sql-terminal-program-v1:pg-query-6.2.1:pg-17.7:typed-native-dag-v1:terminal-3vl-v1:raw-bag-v1:json-v2"
+    };
     let input_types = builder.columns.iter().map(|output| output.column.oid).collect();
     let terminal = Terminal::from_program(builder.program, input_types)?;
     Ok(Compiled {
-        program: crate::compiler::Program::Projection { projection: Projected {
-            schema: builder.scope.relation.schema.clone(), table: builder.scope.relation.table.clone(),
-            columns: builder.columns, terminal: Some(terminal),
-        } },
-        revision: Some("sql-terminal-program-v1:pg-query-6.2.1:pg-17.7:typed-native-dag-v1:terminal-3vl-v1:raw-bag-v1:json-v2".into()),
+        program: crate::compiler::Program::Projection {
+            projection: Projected {
+                schema: builder.scope.relation.schema.clone(),
+                table: builder.scope.relation.table.clone(),
+                columns: builder.columns,
+                terminal: Some(terminal),
+            },
+        },
+        revision: Some(revision.into()),
         predicates: None,
     })
 }
 impl Builder<'_> {
     fn push(&mut self, expression: Expression) -> Result<usize> {
+        let expression =
+            if self.program.has_collation() { self.flatten(expression) } else { expression };
         ensure!(self.types.len() < 512, "terminal expression budget exceeded");
         let inputs = self.columns.iter().map(|output| output.column.oid).collect::<Vec<_>>();
         let oid = expression_type(&expression, &self.types, &inputs)?;
@@ -77,6 +90,22 @@ impl Builder<'_> {
         self.types.push(oid);
         self.program.expressions.push(expression);
         Ok(index)
+    }
+    fn flatten(&self, expression: Expression) -> Expression {
+        let (arguments, conjunction) = match expression {
+            Expression::And(arguments) => (arguments, true),
+            Expression::Or(arguments) => (arguments, false),
+            other => return other,
+        };
+        let arguments = arguments
+            .into_iter()
+            .flat_map(|index| match self.program.expressions.get(index) {
+                Some(Expression::And(children)) if conjunction => children.clone(),
+                Some(Expression::Or(children)) if !conjunction => children.clone(),
+                _ => vec![index],
+            })
+            .collect();
+        if conjunction { Expression::And(arguments) } else { Expression::Or(arguments) }
     }
     fn input(&mut self, value: &Node) -> Result<usize> {
         let column: ColumnRef = resolve(&column(value)?, std::slice::from_ref(&self.scope))?;
@@ -106,6 +135,9 @@ impl Builder<'_> {
             NodeEnum::FuncCall(value) => self.call(value, depth + 1),
             NodeEnum::BoolExpr(value) => self.boolean(value, depth + 1),
             NodeEnum::CaseExpr(value) => self.case(value, depth + 1),
+            NodeEnum::CollateClause(value) => self.collate(value, depth + 1),
+            NodeEnum::AIndirection(value) => self.array(value, depth + 1),
+            NodeEnum::NullTest(value) => self.null_test(value, depth + 1),
             _ => anyhow::bail!("SQL lower: unsupported terminal expression"),
         }
     }

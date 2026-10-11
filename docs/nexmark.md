@@ -361,3 +361,22 @@ and cold restart. Changed range bounds or CASE labels reject durable state reuse
 source alias changes preserve identity. The terminal program evaluates only
 signed tuple-local deltas inside atomic publication; it cannot feed deferred
 values into other operators or substitute an implicit replay clock.
+
+## Explicit text context and hidden operands (q21)
+
+`queries/nexmark/q21.sql` inlines the Feldera template's named-channel mapping and
+uses PostgreSQL regexp_match's second capture for other channels. It deliberately
+declares pg_catalog."C" for lower-case matching and regex input. This gives ASCII
+case conversion with exact remaining bytes; it does not silently adopt the
+source's default or ICU collation. Unicode captures remain PostgreSQL text.
+The closed regex is `(&|^)channel_id=([^&]*)`: the first matching component wins,
+including an empty capture. NULL or no match is excluded unless a named brand
+qualifies. URL is absent from the visible output.
+
+Three owned source-collation fixtures compare the exact SQL with native
+materialized views and an independent ASCII mapping/delimiter scanner. Distinct
+hidden URLs collapse to the same visible tuple, retaining bag multiplicity;
+partial deletions and URL changes retract the correct counts. NULLs, brand
+precedence, whitespace, prefixes, duplicate/empty captures, Unicode/newlines,
+simultaneous changes, PK moves, rollback, empty input ticks and cold restart are
+covered. Changed CASE labels or capture index reject durable state reuse.

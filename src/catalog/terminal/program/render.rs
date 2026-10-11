@@ -72,6 +72,15 @@ fn render(
             }
             Ok(format!("pg_catalog.{}({})", function.name(), arguments.join(",")))
         }
+        Expression::CollateC(input) => {
+            Ok(format!("({}) COLLATE pg_catalog.\"C\"", get(nodes, *input)?))
+        }
+        Expression::ArrayElement { input, index } => {
+            Ok(format!("({})[{index}]", get(nodes, *input)?))
+        }
+        Expression::IsNull { input, negated } => {
+            Ok(format!("({}) IS {}NULL", get(nodes, *input)?, if *negated { "NOT " } else { "" }))
+        }
         Expression::And(arguments) => boolean(arguments, nodes, " AND "),
         Expression::Or(arguments) => boolean(arguments, nodes, " OR "),
         Expression::Not(index) => Ok(format!("(NOT ({}))", get(nodes, *index)?)),

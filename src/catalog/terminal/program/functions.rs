@@ -14,6 +14,9 @@ pub enum Function {
     Subtract,
     Hour,
     Utc,
+    Lower,
+    TextEqual,
+    RegexMatch,
 }
 pub(super) fn call_type(function: Function, arguments: &[u32]) -> Result<u32> {
     let result = match (function, arguments) {
@@ -23,9 +26,11 @@ pub(super) fn call_type(function: Function, arguments: &[u32]) -> Result<u32> {
         (
             Function::Greater | Function::Less | Function::GreaterEqual | Function::LessEqual,
             [1700, 1700],
-        ) => 16,
+        )
+        | (Function::TextEqual, [25 | 1043, 25 | 1043]) => 16,
         (Function::Length, [25 | 1043]) | (Function::Subtract, [23, 23]) => 23,
-        (Function::Replace, [25 | 1043, 25, 25]) => 25,
+        (Function::Replace, [25 | 1043, 25, 25]) | (Function::Lower, [25 | 1043]) => 25,
+        (Function::RegexMatch, [25 | 1043, 25]) => 1009,
         (Function::Utc, [1184]) => 1114,
         _ => anyhow::bail!("SQL type: unsupported terminal built-in signature"),
     };
@@ -51,6 +56,9 @@ impl Function {
             Self::Subtract => ("pg_catalog.int4mi(integer,integer)", "int4mi"),
             Self::Hour => ("pg_catalog.extract(text,timestamp)", "extract_timestamp"),
             Self::Utc => ("pg_catalog.timezone(text,timestamptz)", "timestamptz_zone"),
+            Self::Lower => ("pg_catalog.lower(text)", "lower"),
+            Self::TextEqual => ("pg_catalog.texteq(text,text)", "texteq"),
+            Self::RegexMatch => ("pg_catalog.regexp_match(text,text)", "regexp_match_no_flags"),
         })
     }
     pub(super) const fn name(self) -> &'static str {
@@ -66,6 +74,9 @@ impl Function {
             Self::Subtract => "int4mi",
             Self::Hour => "extract",
             Self::Utc => "timezone",
+            Self::Lower => "lower",
+            Self::TextEqual => "texteq",
+            Self::RegexMatch => "regexp_match",
         }
     }
 }
@@ -78,6 +89,9 @@ pub fn implementation_types(implementation: &str) -> Result<(&'static str, &'sta
         "replace_text" => ("25 25 25", "25"),
         "int4mi" => ("23 23", "23"),
         "extract_timestamp" => ("25 1114", "1700"),
+        "lower" => ("25", "25"),
+        "texteq" => ("25 25", "16"),
+        "regexp_match_no_flags" => ("25 25", "1009"),
         _ => anyhow::bail!("unknown terminal program implementation"),
     };
     Ok((args, result, true))

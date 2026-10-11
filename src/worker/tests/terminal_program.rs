@@ -1,7 +1,7 @@
 use super::contract;
 use crate::{compiler::compile, source::Column};
 use anyhow::{Context, Result};
-fn native(oid: u32) -> crate::source::Contract {
+pub(super) fn native(oid: u32) -> crate::source::Contract {
     let mut native = contract();
     native.relations[1].columns.extend([
         Column {

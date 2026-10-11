@@ -1264,3 +1264,41 @@ before slot creation. The q14 fixtures compare the exact SQL with a native
 materialized view and an independent Decimal/Unicode/hour oracle through
 weighted duplicates, NULLs, infinities, range boundaries, signed integral limits,
 CDC updates/deletes, rollback, empty input ticks and restart.
+
+## Explicit C terminal text programs (Nexmark q21)
+
+Terminal programs add lower(text), text equality and bounded text IN lists when
+the evaluated text expression explicitly declares COLLATE pg_catalog."C".
+Lower-case outputs retain that explicit context for equality. The compiler
+rejects other or implicit collations rather than substituting C for the original
+query. C's ASCII case behavior is an explicit PostgreSQL adaptation, not a
+Unicode case-folding approximation. Source text/varchar may use other collations;
+the declared C expression controls the terminal operation. Its native collation
+metadata is attested alongside lower(text), texteq(text,text) and the immutable
+non-set-returning regexp_match(text,text) implementation.
+
+The regex subset accepts only the parameterized literal
+`(&|^)channel_id=([^&]*)`, explicitly C-collated input, and no flags. Native array
+selection permits capture index 1 or 2, with scalar IS NULL/IS NOT NULL tests.
+Other patterns, dynamic patterns, slices, flags and regexp_matches are rejected
+before slot creation. Empty capture text differs from NULL: q21 qualifies an
+empty channel id, whereas a missing match or NULL URL does not qualify by itself.
+CASE branch ordering and laziness remain PostgreSQL's. URL is retained in the raw
+operand bag, but visible q21 output contains channel_id in its place; rows with
+different hidden URLs can collide and consolidate their signed multiplicities.
+
+The used revision adds pg-terminal-c-text-regex-v1. For these new collated
+programs only, associative boolean nodes flatten and unreachable intermediary
+nodes are removed, so the q21 IN predicate and equivalent OR formulation have
+the same typed identity. Existing terminal programs retain their serialized
+identity. Case labels, capture index, collation, functions, native layouts and
+codecs bind durable identity; incompatible changes cannot reuse state. All
+execution remains terminal inside atomic publication, with no downstream
+consumers of deferred values.
+
+The named q21 harness compares exact native materialized views with an
+independent ASCII-C mapping and delimiter-scanner oracle in default, C-varchar
+and ICU-varchar source fixtures. It covers hidden-operand collisions, partial
+retractions, NULL channel/URL/price/bidder, all named brand branches, empty/first
+captures, nonmatching prefixes, Unicode and newline payloads, simultaneous
+changes, PK moves, rollback, empty input ticks and cold restart.

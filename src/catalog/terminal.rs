@@ -110,8 +110,13 @@ impl Terminal {
             );
             functions.push((signature.into(), value));
         }
-        let collations =
-            if self.has_array() { vec![array_collation(sql).await?] } else { Vec::new() };
+        let collations = if self.has_array()
+            || self.program.as_ref().is_some_and(program::Program::has_collation)
+        {
+            vec![array_collation(sql).await?]
+        } else {
+            Vec::new()
+        };
         let calendar = if self.has_timestamp_format()
             || self.program.as_ref().is_some_and(program::Program::has_calendar)
         {

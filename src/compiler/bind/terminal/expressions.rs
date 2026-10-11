@@ -3,6 +3,9 @@ use anyhow::{Result, ensure};
 use pg_query::{NodeEnum, protobuf as pg};
 impl Builder<'_> {
     pub(super) fn operator(&mut self, value: &pg::AExpr, depth: usize) -> Result<usize> {
+        if value.kind == i32::from(pg::AExprKind::AexprIn) {
+            return self.membership(value, depth);
+        }
         ensure!(
             value.kind == i32::from(pg::AExprKind::AexprOp),
             "unsupported terminal operator kind"
@@ -18,6 +21,7 @@ impl Builder<'_> {
             ">=" => Function::GreaterEqual,
             "<=" => Function::LessEqual,
             "-" => Function::Subtract,
+            "=" => Function::TextEqual,
             _ => anyhow::bail!("unsupported terminal operator"),
         };
         let left = self.expression(optional(value.lexpr.as_deref())?, depth)?;
@@ -28,7 +32,7 @@ impl Builder<'_> {
                 "integral multiplication requires native overflow semantics and is unsupported"
             );
         }
-        let arguments = if function == Function::Subtract {
+        let arguments = if matches!(function, Function::Subtract | Function::TextEqual) {
             vec![left, right]
         } else {
             vec![self.numeric(left)?, self.numeric(right)?]
@@ -52,6 +56,7 @@ impl Builder<'_> {
         }
         crate::compiler::parser::scalar::validate_call(&plain)?;
         match function {
+            "lower" | "regexp_match" => self.text_call(value, function, depth),
             "length" | "replace" => {
                 let function =
                     if function == "length" { Function::Length } else { Function::Replace };
