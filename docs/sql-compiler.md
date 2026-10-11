@@ -1354,3 +1354,20 @@ ordinary restart rejects their changed identity. Source contracts, full-tuple ba
 identity, complete delta ticks and publication/ACK ordering remain binding.
 See [the Feldera algorithm audit](feldera-audit.md) for the measured callback-work
 reduction and remaining ordered-index/distinct work.
+
+
+## Exact grouped distinct membership
+
+Grouped integral COUNT(DISTINCT), together with COUNT/SUM/AVG and supported FILTER,
+now executes through exact per-group/value occurrence counts and zero/positive
+membership deltas. Full source identities and ordinary rows remain available for
+validity and group presence; NULL and all-filtered groups emit zero distinct
+counts. Counts accumulate with BigInt before public bigint finalization. Mixed
+MIN/MAX queries retain affected-partition evaluation.
+
+The compiler adds pg-exact-distinct-membership-v1 and the worker layout uses
+worker-relational-exact-distinct-v3. Explicit rebuild is required for an existing
+registration whose compiled layout changes; unrelated plans retain their identity.
+The native SQL subset and PUT/PG COMMIT/ACK boundary are unchanged. The
+[Feldera audit](feldera-audit.md) records the controlled block-read measurement,
+state tradeoff and remaining ordered-index work.

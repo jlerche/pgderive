@@ -10,6 +10,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 pub(in crate::compiler::bind) mod composition;
+mod distinct;
 mod occurrence;
 struct Body {
     expansion: Option<crate::compiler::parser::expansion::Series>,
@@ -478,6 +479,9 @@ fn nodes(
     spec: Partition,
     computed: Vec<crate::compiler::scalar::Computed>,
 ) -> Vec<Node> {
+    if distinct::supports(&spec) {
+        return distinct::nodes(keys, spec, computed);
+    }
     let mapped = !computed.is_empty();
     let linear = matches!(spec.mode, Mode::Grouped { .. })
         && spec.aggregates.iter().all(|aggregate| {

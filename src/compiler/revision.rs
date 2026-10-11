@@ -63,6 +63,10 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
             ),
             (relational.nodes.iter().any(node_text_key), ":pg-deterministic-text-partition-v1"),
             (relational.nodes.iter().any(node_distinct), ":pg-integral-distinct-count-v1"),
+            (
+                relational.nodes.iter().any(|node| matches!(node, Node::DistinctCounts { .. })),
+                ":pg-exact-distinct-membership-v1",
+            ),
             (relational.nodes.iter().any(node_offset), ":pg-fixed-time-offset-v1"),
             (relational.nodes.iter().any(node_temporal_extrema), ":pg-native-temporal-extrema-v1"),
         ] {
@@ -129,7 +133,7 @@ fn node_temporal_extrema(node: &Node) -> bool {
 }
 
 fn node_distinct(node: &Node) -> bool {
-    matches!(node, Node::Partition { spec, .. } if spec.aggregates.iter().any(|value| matches!(value.function, super::partition::Function::CountDistinct)))
+    matches!(node, Node::Partition { spec, .. } | Node::DistinctCounts { spec, .. } if spec.aggregates.iter().any(|value| matches!(value.function, super::partition::Function::CountDistinct)))
 }
 
 fn node_text_key(node: &Node) -> bool {

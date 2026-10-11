@@ -177,6 +177,9 @@ pub(in crate::compiler::bind) fn rewrite(
         | Node::PartitionBy { id, input, .. }
         | Node::Partition { id, input, .. }
         | Node::Statistics { id, input, .. }
+        | Node::DistinctInput { id, input, .. }
+        | Node::DistinctCounts { id, input, .. }
+        | Node::DistinctMembership { id, input, .. }
         | Node::Finalize { id, input, .. } => {
             *id = rename(id);
             *input = edge(input);

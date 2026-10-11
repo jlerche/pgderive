@@ -51,11 +51,40 @@ use the same general sum/count abstraction. Integer widths, overflow checks,
 NULLs, FILTER and PostgreSQL finalization must follow the actual bound query.
 
 Feldera's distinct operator maintains tuple counts and emits zero/positive
-membership transitions. Pgderive's current COUNT(DISTINCT integral) evaluator
-still builds a set from the affected partition. Retained per-group/value counts
-can remove that scan. Group-presence counts must include rows excluded by NULL
-or FILTER so a surviving group can output zero; negative final value counts must
-fail rather than be thresholded to absence. This improvement is not yet implemented.
+membership transitions. Pgderive now lowers grouped COUNT(DISTINCT integral),
+combined with COUNT/SUM/AVG, through executable expansion, exact sparse statistics,
+membership projection, UNION ALL and grouped statistics. Positive-to-positive
+count changes produce no membership delta; first and last occurrences do. The
+ordinary-row branch retains groups with only NULL or FILTER-excluded distinct
+inputs. Negative final occurrence counts fail rather than become absence.
+
+Sparse occurrence counts and total group presence use BigInt in unit-weight
+state rows. Full original row identities remain separate until exact aggregation;
+two different rows with i64::MAX weight sharing one value therefore count as one
+distinct value without premature occurrence-weight overflow. This is a weighted
+engine boundary test, not a PostgreSQL capacity measurement. Only public COUNT
+results narrow to PostgreSQL bigint. Canonical aggregate-index/value tags separate
+multiple distinct arguments and their filters; internal markers cannot collide
+with ordinary rows. The compiler binds pg-exact-distinct-membership-v1 and the
+worker binds worker-relational-exact-distinct-v3; earlier layouts require rebuild.
+
+A controlled query with 1,000 source rows and ten distinct values updates one row
+between two already-present values. With eight-row blocks and cache disabled,
+the retained affected-group baseline reads 128 blocks and the new path reads 14,
+with identical empty result deltas. These are data-block cache misses during the
+operator tick, excluding cold restore, not total object GETs or end-to-end latency.
+Tests cover exact large occurrence counts, mixed ordinary aggregates, NULL/FILTER,
+value/group changes, malformed state, full-tuple rejection and cold reopen. Live
+smallint/integer/bigint and nested scopes plus native q15 match PostgreSQL and
+independent memory oracles through retractions and restart.
+
+The path retains original rows in the mixed stream and full rows per distinct
+aggregate in its sparse input. It adds persisted state and write work to reduce
+recomputation and reads; this measurement does not establish lower storage bytes
+or universal throughput. Removing repeated input state needs a separate proof
+that complete source-tuple validation still runs before atomic publication.
+Distinct expressions mixed with MIN/MAX remain on the retained partition path;
+splitting and recombining nonlinear aggregates is additional graph/index work.
 
 Feldera MIN/MAX uses ordered retained value counts and stops at the first nonzero
 value. Its SQL variants exclude NULL. A scalar minimum is not retractable when

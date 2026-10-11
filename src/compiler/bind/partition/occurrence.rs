@@ -88,7 +88,11 @@ fn infer<'a>(
                 });
             (id, identity)
         }
-        Node::Union { id, .. } | Node::Lookup { id, .. } => (id, None),
+        Node::Union { id, .. }
+        | Node::Lookup { id, .. }
+        | Node::DistinctInput { id, .. }
+        | Node::DistinctCounts { id, .. }
+        | Node::DistinctMembership { id, .. } => (id, None),
         Node::Filter { id, input, .. }
         | Node::Map { id, input, .. }
         | Node::KeyBy { id, input, .. }

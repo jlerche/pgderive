@@ -1,5 +1,6 @@
 mod bindings;
 mod distinct;
+mod distinct_statistics;
 mod lookup;
 mod navigation;
 mod partition;

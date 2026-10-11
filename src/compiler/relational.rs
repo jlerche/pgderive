@@ -30,6 +30,9 @@ pub enum Node {
     PartitionBy { id: String, input: String, keys: Vec<ColumnRef> },
     Partition { id: String, input: String, spec: super::partition::Partition },
     Statistics { id: String, input: String, spec: super::partition::Partition },
+    DistinctInput { id: String, input: String, spec: super::partition::Partition },
+    DistinctCounts { id: String, input: String, spec: super::partition::Partition },
+    DistinctMembership { id: String, input: String, spec: super::partition::Partition },
     Finalize { id: String, input: String, spec: super::partition::Partition },
 }
 #[derive(Clone, Serialize)]

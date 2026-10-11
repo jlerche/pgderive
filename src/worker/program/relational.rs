@@ -40,16 +40,7 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
                 operators.projects.insert(id.clone(), Arc::new(super::lookup::input(spec)));
             }
             Node::Lookup { id, spec, .. } => {
-                let spec = spec.clone();
-                let limits = settings.limits;
-                operators.partitions.insert(
-                    id.clone(),
-                    Arc::new(crate::engine::dataflow::Partition::new_zero_preserving(
-                        move |_: &Key, rows: &Batch<(), Row>, work| {
-                            super::lookup::evaluate(&spec, rows, limits, work)
-                        },
-                    )),
-                );
+                operators.partitions.insert(id.clone(), lookup_operator(spec, settings));
             }
             Node::Expand { id, series, .. } => {
                 operators.expansions.insert(id.clone(), Arc::new(expand(series, compiled)));
@@ -78,6 +69,21 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
             Node::PartitionBy { id, keys, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(partition_by(keys, compiled)));
             }
+            Node::DistinctInput { id, spec, .. } => {
+                operators
+                    .expansions
+                    .insert(id.clone(), Arc::new(super::distinct_statistics::input(spec)));
+            }
+            Node::DistinctCounts { id, spec, .. } => {
+                operators
+                    .statistics
+                    .insert(id.clone(), Arc::new(super::distinct_statistics::counts(spec)));
+            }
+            Node::DistinctMembership { id, spec, .. } => {
+                operators
+                    .projects
+                    .insert(id.clone(), Arc::new(super::distinct_statistics::membership(spec)));
+            }
             Node::Statistics { id, spec, .. } => {
                 operators
                     .statistics
@@ -87,16 +93,7 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
                 operators.projects.insert(id.clone(), Arc::new(super::statistics::finalize(spec)));
             }
             Node::Partition { id, spec, .. } => {
-                let spec = spec.clone();
-                let limits = settings.limits;
-                operators.partitions.insert(
-                    id.clone(),
-                    Arc::new(crate::engine::dataflow::Partition::new_zero_preserving(
-                        move |_: &Key, rows: &Batch<(), Row>, work: &mut crate::engine::dataflow::PartitionWork| {
-                            super::partition::evaluate(&spec, rows, (limits, work))
-                        },
-                    )),
-                );
+                operators.partitions.insert(id.clone(), partition_operator(spec, settings));
             }
             Node::Project { id, .. } | Node::Output { id, .. } => {
                 operators.projects.insert(
@@ -107,6 +104,30 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
         }
     }
     operators
+}
+fn partition_operator(
+    spec: &crate::compiler::partition::Partition,
+    settings: &Settings,
+) -> Arc<crate::engine::dataflow::Partition<Key, Row>> {
+    let spec = spec.clone();
+    let limits = settings.limits;
+    Arc::new(crate::engine::dataflow::Partition::new_zero_preserving(
+        move |_: &Key, rows: &Batch<(), Row>, work| {
+            super::partition::evaluate(&spec, rows, (limits, work))
+        },
+    ))
+}
+fn lookup_operator(
+    spec: &crate::compiler::lookup::Lookup,
+    settings: &Settings,
+) -> Arc<crate::engine::dataflow::Partition<Key, Row>> {
+    let spec = spec.clone();
+    let limits = settings.limits;
+    Arc::new(crate::engine::dataflow::Partition::new_zero_preserving(
+        move |_: &Key, rows: &Batch<(), Row>, work| {
+            super::lookup::evaluate(&spec, rows, limits, work)
+        },
+    ))
 }
 const fn empty_operators() -> Operators<Key, Row> {
     Operators {
@@ -208,7 +229,43 @@ fn key_by(key: &crate::compiler::ColumnRef) -> Project<Key, Row, Key, Row> {
             .map(|value| (vec![value.clone()], row.clone())))
     })
 }
+fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
+    let (id, kind, inputs) = match node {
+        Node::Source { id, source } => (id, plan::Kind::Source, vec![format!("source_{source}")]),
+        Node::Filter { id, input, .. }
+        | Node::Map { id, input, .. }
+        | Node::KeyBy { id, input, .. }
+        | Node::Rebind { id, input, .. }
+        | Node::CrossKey { id, input }
+        | Node::EquijoinKey { id, input, .. }
+        | Node::Project { id, input }
+        | Node::Output { id, input }
+        | Node::PartitionBy { id, input, .. }
+        | Node::Finalize { id, input, .. }
+        | Node::LookupInput { id, input, .. }
+        | Node::DistinctMembership { id, input, .. } => {
+            (id, plan::Kind::Project, vec![input.clone()])
+        }
+        Node::Union { id, left, right } => {
+            (id, plan::Kind::Union, vec![left.clone(), right.clone()])
+        }
+        Node::Expand { id, input, .. } | Node::DistinctInput { id, input, .. } => {
+            (id, plan::Kind::Expand, vec![input.clone()])
+        }
+        Node::Statistics { id, input, .. } | Node::DistinctCounts { id, input, .. } => {
+            (id, plan::Kind::Statistics, vec![input.clone()])
+        }
+        Node::Partition { id, input, .. } | Node::Lookup { id, input, .. } => {
+            (id, plan::Kind::Aggregate, vec![input.clone()])
+        }
+        Node::Join { id, left, right } => (id, plan::Kind::Join, vec![left.clone(), right.clone()]),
+    };
+    plan::Node { id: id.clone(), kind, inputs, schema: schema(id) }
+}
 fn plan_revision(ir: &Relational) -> &'static str {
+    if ir.nodes.iter().any(|node| matches!(node, Node::DistinctCounts { .. })) {
+        return "worker-relational-exact-distinct-v3";
+    }
     if ir.nodes.iter().any(|node| matches!(node, Node::Partition { .. } | Node::Lookup { .. })) {
         "worker-relational-retained-partition-v2"
     } else {
@@ -224,44 +281,7 @@ pub(in crate::worker) fn plan(
     let identity = format!("{:x}", Sha256::digest(serde_json::to_vec(&(contract, compiled))?));
     let revision = plan_revision(ir);
     let schema = |id: &str| format!("{revision}:{identity}:{id}");
-    let nodes = ir
-        .nodes
-        .iter()
-        .map(|node| {
-            let (id, kind, inputs) = match node {
-                Node::Source { id, source } => {
-                    (id, plan::Kind::Source, vec![format!("source_{source}")])
-                }
-                Node::Filter { id, input, .. }
-                | Node::Map { id, input, .. }
-                | Node::KeyBy { id, input, .. }
-                | Node::Rebind { id, input, .. }
-                | Node::CrossKey { id, input }
-                | Node::EquijoinKey { id, input, .. }
-                | Node::Project { id, input }
-                | Node::Output { id, input }
-                | Node::PartitionBy { id, input, .. }
-                | Node::Finalize { id, input, .. }
-                | Node::LookupInput { id, input, .. } => {
-                    (id, plan::Kind::Project, vec![input.clone()])
-                }
-                Node::Union { id, left, right } => {
-                    (id, plan::Kind::Union, vec![left.clone(), right.clone()])
-                }
-                Node::Expand { id, input, .. } => (id, plan::Kind::Expand, vec![input.clone()]),
-                Node::Statistics { id, input, .. } => {
-                    (id, plan::Kind::Statistics, vec![input.clone()])
-                }
-                Node::Partition { id, input, .. } | Node::Lookup { id, input, .. } => {
-                    (id, plan::Kind::Aggregate, vec![input.clone()])
-                }
-                Node::Join { id, left, right } => {
-                    (id, plan::Kind::Join, vec![left.clone(), right.clone()])
-                }
-            };
-            plan::Node { id: id.clone(), kind, inputs, schema: schema(id) }
-        })
-        .collect();
+    let nodes = ir.nodes.iter().map(|node| declaration(node, &schema)).collect();
     let sources = ir
         .nodes
         .iter()
@@ -274,7 +294,7 @@ pub(in crate::worker) fn plan(
         .collect();
     let mut maintained = BTreeMap::new();
     for node in &ir.nodes {
-        if let Node::Statistics { id, input, .. } = node {
+        if let Node::Statistics { id, input, .. } | Node::DistinctCounts { id, input, .. } = node {
             maintained.insert(id.clone(), id.clone());
             maintained.insert(input.clone(), input.clone());
         }

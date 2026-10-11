@@ -1,8 +1,9 @@
 # Worker health observations
 
-`pgderive query status` includes a versioned `health` object. This interface is
-under qualification for the operational release slice. Its observations do not
-acknowledge source WAL or advance authoritative progress.
+`pgderive query status` includes a versioned `health` object. The controlled
+release qualification exercises this interface through the owned-fixture checks
+below. Its observations do not acknowledge source WAL or advance authoritative
+progress.
 
 `ready` requires activated progress, an active compatible slot, a recent heartbeat,
 current writer fence and live ownership lock, and the worker's `ready` phase.

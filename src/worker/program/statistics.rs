@@ -19,8 +19,15 @@ pub(super) fn operator(spec: &Partition) -> Statistics<Key, Row> {
     )
 }
 fn measure(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
+    if let Some(values) = super::distinct_statistics::measure(spec, row)? {
+        return Ok(values);
+    }
     let mut values = vec![BigInt::from(1)];
     for aggregate in &spec.aggregates {
+        if matches!(aggregate.function, Function::CountDistinct) {
+            values.extend([BigInt::from(0), BigInt::from(0)]);
+            continue;
+        }
         let qualifies = aggregate
             .filter
             .as_ref()
@@ -115,7 +122,7 @@ pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
             let count = &values[1 + index * 2];
             let sum = &values[2 + index * 2];
             let value = match aggregate.function {
-                Function::Count => {
+                Function::Count | Function::CountDistinct => {
                     Some(i64::try_from(count).context("COUNT overflow")?.to_string())
                 }
                 Function::Sum | Function::Average if count == &BigInt::from(0) => None,
@@ -134,8 +141,7 @@ pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
                     }
                     Some(format!("{sum}/{count}"))
                 }
-                Function::CountDistinct
-                | Function::Min
+                Function::Min
                 | Function::Max
                 | Function::Rank
                 | Function::DenseRank
