@@ -15,6 +15,7 @@ use anyhow::{Context, Result, ensure};
 struct Conditions {
     keys: Vec<(ColumnRef, ColumnRef)>,
     bound: Option<(ColumnRef, ColumnRef, bool)>,
+    computed: Vec<crate::compiler::scalar::Computed>,
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let scopes = [scope(parsed.left, contract)?, scope(parsed.right, contract)?];
@@ -22,13 +23,14 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     ensure!(qualifier(&scopes[0]) != qualifier(&scopes[1]), "duplicate correlated qualifier");
     ensure!(qualifier(&scopes[0]) != parsed.alias, "duplicate outer lookup qualifier");
     let correlated = |name: &Name| correlated(name, &scopes);
-    let mut conditions = Conditions { keys: Vec::new(), bound: None };
+    let mut conditions = Conditions { keys: Vec::new(), bound: None, computed: Vec::new() };
     condition(parsed.condition, &correlated, &mut conditions)?;
     ensure!((1..=8).contains(&conditions.keys.len()), "lookup requires 1..=8 equality keys");
     conditions.keys.sort();
     conditions.keys.dedup();
+    conditions.computed.sort_unstable_by(|left, right| left.column.cmp(&right.column));
     for (left, right) in &conditions.keys {
-        compatible_keys(left, right, &scopes)?;
+        compatible_keys(left, right, &scopes, &conditions.computed)?;
     }
     let (left_bound, right_bound, inclusive) =
         conditions.bound.context("missing predecessor bound")?;
@@ -62,7 +64,8 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
             .map(|column| field(1, &column.name))
             .collect(),
     };
-    let nodes = nodes((left_keys, right_keys), spec, predicate);
+    let has_computed = !conditions.computed.is_empty();
+    let nodes = nodes((left_keys, right_keys), spec, predicate, conditions.computed);
     let sources = scopes
         .iter()
         .map(|scope| Source {
@@ -76,8 +79,19 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         columns,
         terminal,
     };
-    Ok(Compiled { program: Program::Relational { relational: Relational { sources, nodes, output } }, predicates: None,
-        revision: Some("sql-predecessor-v1:pg-query-6.2.1:pg-17.7:native-bag-v1:row-text-v1:json-exact-number-v1:signed-union-v1:affected-partition-v1:sql-limit-one-v1:where-3vl-v1:terminal-builtins-v1".into()) })
+    Ok(Compiled {
+        program: Program::Relational { relational: Relational { sources, nodes, output } },
+        predicates: None,
+        revision: Some(revision(has_computed)),
+    })
+}
+fn revision(computed: bool) -> String {
+    let base = "sql-predecessor-v1:pg-query-6.2.1:pg-17.7:native-bag-v1:row-text-v1:json-exact-number-v1:signed-union-v1:affected-partition-v1:sql-limit-one-v1:where-3vl-v1:terminal-builtins-v1";
+    if computed {
+        format!("{base}:native-lookup-remainder-v1:pg-integral-promotion-v1")
+    } else {
+        base.into()
+    }
 }
 fn correlated(name: &Name, scopes: &[Scope<'_>; 2]) -> Result<ColumnRef> {
     // The inner local relation shadows an unqualified outer column.
@@ -97,6 +111,17 @@ fn condition(
             for value in values {
                 condition(value, resolve, state)?;
             }
+        }
+        Expr::Compare(Compare::Eq, Scalar::Remainder(input, divisor), Scalar::Column(key))
+        | Expr::Compare(Compare::Eq, Scalar::Column(key), Scalar::Remainder(input, divisor)) => {
+            let input = resolve(&input)?;
+            let key = resolve(&key)?;
+            ensure!(
+                !input.right && key.right,
+                "lookup MOD key must correlate left input with right column"
+            );
+            let column = crate::compiler::remainder::bind(input, divisor, &mut state.computed)?;
+            state.keys.push((column, key));
         }
         Expr::Compare(op, Scalar::Column(left), Scalar::Column(right)) => {
             let left = resolve(&left)?;
@@ -123,7 +148,12 @@ fn condition(
     }
     Ok(())
 }
-fn compatible_keys(left: &ColumnRef, right: &ColumnRef, scopes: &[Scope<'_>; 2]) -> Result<()> {
+fn compatible_keys(
+    left: &ColumnRef,
+    right: &ColumnRef,
+    scopes: &[Scope<'_>; 2],
+    computed: &[crate::compiler::scalar::Computed],
+) -> Result<()> {
     let native = |side: usize, name: &str| {
         scopes[side]
             .relation
@@ -132,8 +162,15 @@ fn compatible_keys(left: &ColumnRef, right: &ColumnRef, scopes: &[Scope<'_>; 2])
             .find(|column| column.name == name)
             .context("missing lookup key")
     };
-    let lhs = native(0, &left.name)?;
     let rhs = native(1, &right.name)?;
+    if computed.iter().any(|value| value.column == qualify(left.clone())) {
+        ensure!(
+            left.oid == rhs.oid && rhs.modifier == -1 && rhs.collation == 0,
+            "incompatible computed lookup key type"
+        );
+        return Ok(());
+    }
+    let lhs = native(0, &left.name)?;
     ensure!(
         matches!(lhs.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184)
             && lhs.oid == rhs.oid
@@ -222,6 +259,7 @@ fn nodes(
     keys: (Vec<ColumnRef>, Vec<ColumnRef>),
     spec: Lookup,
     predicate: Option<crate::compiler::Predicate>,
+    computed: Vec<crate::compiler::scalar::Computed>,
 ) -> Vec<Node> {
     let mut nodes = vec![
         Node::Source { id: "left_source".into(), source: 0 },
@@ -239,6 +277,15 @@ fn nodes(
         Node::Union { id: "lookup_input".into(), left: "left".into(), right: "right".into() },
         Node::Lookup { id: "lookup".into(), input: "lookup_input".into(), spec },
     ];
+    if !computed.is_empty() {
+        nodes.insert(
+            2,
+            Node::Map { id: "left_scalar".into(), input: "left_source".into(), computed },
+        );
+        if let Some(Node::LookupInput { input, .. }) = nodes.get_mut(3) {
+            *input = "left_scalar".into();
+        }
+    }
     let input = predicate.map_or("lookup", |predicate| {
         nodes.push(Node::Filter { id: "qualified".into(), input: "lookup".into(), predicate });
         "qualified"

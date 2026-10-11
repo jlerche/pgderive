@@ -11,6 +11,7 @@ mod projection;
 pub(crate) mod relational;
 pub(crate) use projection::{Cell, Projected};
 pub(crate) mod expansion;
+mod remainder;
 mod revision;
 pub(crate) mod scalar;
 mod syntax;

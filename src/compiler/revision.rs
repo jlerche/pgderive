@@ -75,7 +75,7 @@ fn node_gap(node: &Node) -> bool {
         Node::Filter { predicate, .. } => predicate.has_gap(),
         Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
             Native::Case { case } => case.has_gap(),
-            Native::Bin(_) | Native::Offset { .. } => false,
+            Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
         }),
         Node::Partition { spec, .. }
         | Node::Statistics { spec, .. }
@@ -92,7 +92,7 @@ fn node_text(node: &Node) -> bool {
         Node::Filter { predicate, .. } => predicate.has_text_equality(),
         Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
             Native::Case { case } => case.has_text_equality(),
-            Native::Bin(_) | Native::Offset { .. } => false,
+            Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
         }),
         Node::Partition { spec, .. }
         | Node::Statistics { spec, .. }

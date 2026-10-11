@@ -21,6 +21,7 @@ pub enum Native {
     Bin(DateBin),
     Case { case: super::case::Case },
     Offset { offset: Offset },
+    Remainder { remainder: super::remainder::Remainder },
 }
 impl Native {
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
@@ -28,12 +29,13 @@ impl Native {
             Self::Bin(value) => value.evaluate(row),
             Self::Case { case } => case.evaluate(row),
             Self::Offset { offset } => offset.evaluate(row),
+            Self::Remainder { remainder } => remainder.evaluate(row),
         }
     }
     pub(super) const fn shift(&self) -> Option<&(ColumnRef, i64)> {
         match self {
             Self::Bin(value) => value.shift.as_ref(),
-            Self::Case { .. } | Self::Offset { .. } => None,
+            Self::Case { .. } | Self::Offset { .. } | Self::Remainder { .. } => None,
         }
     }
 }

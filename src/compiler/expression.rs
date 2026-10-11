@@ -40,6 +40,19 @@ pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
         .map(|value| serde_json::to_string(&value).map_err(Into::into))
         .transpose()
 }
+pub(super) fn integral_remainder(
+    column: &ColumnRef,
+    divisor: i64,
+    row: &Row,
+) -> Result<Option<String>> {
+    Scalar::Remainder(column.clone(), divisor)
+        .evaluate((row, row))?
+        .map(|value| {
+            let Value::Integer(value) = value else { anyhow::bail!("nonintegral MOD result") };
+            Ok(value.to_string())
+        })
+        .transpose()
+}
 pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
     match expr {
         syntax::Expr::Value(value) => Ok(Expr::Value(scalar(value, 16, resolve)?)),

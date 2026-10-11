@@ -1199,3 +1199,23 @@ native source layouts and existing runtime codecs. Equality operand direction,
 conjunction order and repeated equivalent keys normalize; changed key sets or
 inner semantics cannot reuse durable state. Existing query identities are
 unchanged.
+
+
+## Computed integral predecessor keys
+
+The left operand of a predecessor equality key may be `mod(column, literal)` or
+`column % literal`, optionally using `pg_catalog.mod`. The input must be a native
+left integral column and the divisor a nonzero integral literal fitting i64.
+The right operand is a native column. PostgreSQL promotion is explicit: an int4
+literal promotes smallint input to integer; bigint input or an int8 literal
+produces bigint. The right key must have that exact result type. Other arithmetic,
+right computed keys, casts and zero divisors reject before registration.
+
+A typed scalar map evaluates the remainder before the tagged predecessor input;
+it never runs at sink time. NULL stays NULL, signed remainder follows truncation
+toward zero, and the minimum integer modulo -1 yields zero. Equivalent MOD/%
+spelling, equality orientation and conjunct order normalize. Used plans bind
+`native-lookup-remainder-v1:pg-integral-promotion-v1`; unchanged native-column
+lookup plans retain their previous identities. The maintained lookup still selects
+one right occurrence by the complete deterministic order, preserves the left
+full-tuple bag and revises matches when either source changes.

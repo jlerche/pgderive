@@ -323,3 +323,22 @@ materialized view and an independent raw-source membership/join oracle after
 snapshot bootstrap, simultaneous inserts, partial/last duplicate deletions,
 source/key/bucket moves, boundary and DST changes, rollback, empty input ticks,
 quoted aliases and cold restart. Changed stride or join key rejects state reuse.
+
+
+## Recorded processing-time side input (q13)
+
+`queries/nexmark/q13.sql` is an ordinary PostgreSQL LEFT JOIN LATERAL with LIMIT 1.
+A native modulo map computes auction % 10000 before lookup; eligible side input
+has equal key and date_time <= recorded bid processing_time. The latest eligible
+time wins, with stable side-input ID descending breaking ties. Event date_time
+remains payload. This explicitly differs from the local Feldera template's use
+of event date_time as p_time, following the portfolio's separate processing-time
+contract. No replay clock, ingestion service or implicit state expiry is added.
+
+Four owned timestamp/timestamptz fixtures qualify smallint-to-integer promotion,
+integer and bigint keys, extreme signed values and C-collated varchar payloads.
+Exact native MVs and independent signed-modulo/predecessor bags cover projected
+duplicates, NULL keys/times/selected values, infinities, ties, late side changes,
+simultaneous updates, key/PK/time moves, rollback and empty input ticks. An
+event-time-only update leaves selected values unchanged. Changed divisor or bound
+rejects durable reuse; aliases and MOD/% spelling permit cold same-slot restart.
