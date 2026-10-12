@@ -232,7 +232,7 @@ for qualification in query-rebuild query-rebuild-limits query-rebuild-fault; do
         exit 1
     fi
 done
-for qualification in query-health query-health-failure query-health-slot query-storage-tls query-postgres-tls; do
+for qualification in query-health query-health-failure query-health-slot query-storage-tls query-postgres-tls query-recovery; do
     mkdir "$output/$qualification"
     if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/$qualification" \
         python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${admin[@]}"; then
@@ -260,7 +260,7 @@ health_failures=list((output/'query-health-failure').glob('*/qualification.json'
 assert len(health_failures)==6,health_failures
 for result in health_failures:
     json.loads(result.read_text())
-for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls','query-postgres-tls','query-capacity'):
+for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls','query-postgres-tls','query-recovery','query-capacity'):
     json.loads((output/name/'qualification.json').read_text())
 for fault in rebuild_faults:
     json.loads(fault.read_text())

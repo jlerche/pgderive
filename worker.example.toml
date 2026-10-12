@@ -53,6 +53,13 @@ retry_delay_ms = 250
 startup_timeout_secs = 180
 max_transactions = 0 # Continuous. Ctrl-C drains the current transaction.
 
+# Illustrative warnings for an administrator-selected 8 GiB slot retention cap.
+# Size from peak cluster WAL rate, outage tolerance and disk headroom; these are
+# observations, not PostgreSQL disk limits. See docs/worker-health.md.
+[worker.health]
+retained_wal_alert_bytes = 1073741824
+backlog_alert_bytes = 1073741824
+
 [worker.query]
 left_schema = "public"
 left_table = "auction"

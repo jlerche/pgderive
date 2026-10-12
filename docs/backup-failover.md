@@ -39,3 +39,39 @@ slot validity and retained bytes, set a deliberate PostgreSQL retention cap, and
 accept that invalidation requires rebootstrap. No ACK skipping is supported.
 These are supported recovery constraints and an operator procedure, not evidence
 that arbitrary PostgreSQL backup products or cloud-provider failover were tested.
+
+## Logical restore and rebootstrap rehearsal
+
+`scripts/query_recovery_harness.py` rehearses the conservative logical-restore
+policy on two independently owned tmpfs PostgreSQL 17 servers. It stops the
+worker, records exact progress/source state and reader roots, saves a custom-format
+`pg_dump` of the complete fixture database, and copies every object under the
+exclusively owned prefix. It verifies membership/reader-root index hashes and
+referenced data blocks against the saved files, rather than treating a listing
+count as closure. The fixture uses directly indexed objects; paged index and
+physical backup/PITR/promotion restore are outside this drill.
+
+The source server is stopped before restoring with PostgreSQL 17 `pg_restore`
+on the second server. Saved objects are uploaded to a separate owned mirror
+prefix and read back against their hashes. That mirror is a preservation copy,
+not a compatible query namespace: copied metadata is never rewritten to force
+checkpoint adoption. The drill verifies restored source rows and progress,
+rejects ordinary restart of the copied query, and creates a fresh catalog/query,
+slot and object prefix against the restored sources. It checks the fresh result
+against the identical native materialized view and independent memory oracle,
+then switches an application consumer view in one PostgreSQL transaction.
+Simultaneous changes, NULLs, deletes and cold restart are checked after cutover.
+
+The evidence directory retains database.dump, dump/restore logs, object files and
+hash manifest, source identities/configuration, oracle records and measured
+restore/bootstrap durations. Successful fixture servers are disposable; failed
+servers and logs are retained. The fixture's object mirror and original object
+backup namespace remain preserved. This exercises logical dump/restore and local
+SeaweedFS copy, not a selected production backup product or provider durability.
+For a real rollout, repeat with the deployment's backup tooling, object retention,
+query sizes and cutover process; select an RPO/RTO from those measurements.
+
+Logical pg_dump is not a physical backup with archived WAL or point-in-time
+recovery. It supplies the consistent source/metadata/results snapshot for this
+fresh-bootstrap policy. Do not interpret this rehearsal as qualification of
+cross-timeline checkpoint reuse or automatic failover.

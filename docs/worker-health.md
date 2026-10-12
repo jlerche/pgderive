@@ -60,3 +60,43 @@ Scratch-cap qualification grows one join key through successful transactions,
 then changes a single source tuple so join fanout exceeds the configured scratch
 budget. Its failure leaves the complete source transaction unpublished and
 unacknowledged; recovery with a sufficient budget matches both independent oracles.
+
+## WAL protection policy and operator response
+
+Provision retention on the PostgreSQL server, independently of the worker.
+For example, an administrator can select an 8 GiB per-slot retention allowance
+and configure PostgreSQL with `max_slot_wal_keep_size = '8GB'`. Set corresponding
+worker warning thresholds before that allowance; worker.example.toml illustrates
+1 GiB retained/backlog warnings. These are sizing examples, not universal safe
+values. Verify the effective setting with `SHOW max_slot_wal_keep_size` and the
+status observation before starting a workload. A negative value means unlimited
+slot retention.
+
+Choose the allowance from the peak **whole-cluster WAL generation rate** times
+an acceptable outage/recovery interval, plus operational headroom. Set warnings
+low enough that alert delivery and operator intervention can finish before the
+remaining allowance is consumed. Include all slots, archive failures, checkpoint
+behavior and other disk consumers in the database disk budget. Monitor actual
+pg_wal/filesystem usage as well as per-slot distances. PostgreSQL applies this
+setting at checkpoint time; it is not a strict instantaneous disk ceiling.
+See [PostgreSQL slot retention configuration](https://www.postgresql.org/docs/17/runtime-config-replication.html).
+
+Deliver `wal_retention`/`wal_backlog` alerts from periodic query status polling to
+the deployment's monitoring system. A warning calls for diagnosis of worker,
+object-store and database availability; fix the cause and restart/catch up while
+the slot remains valid. Pausing the worker does not reduce retention. Do not
+increase the allowance without verifying disk capacity. An unsafe, lost or
+missing slot requires preserving logs/status, fixing the cause, stopping the
+query container, then explicit `query rebuild CONFIG` on the same source identity.
+Check the identical native materialized view, then `query restart CONFIG` and
+verify progress advances. Never manually advance feedback or reset the journal.
+
+The sequential owned-fixture slot harness now uses a **positive 64 MiB cap** and
+**8 MiB warnings**. It records warning before invalidation, unchanged progress
+and feedback, successful catch-up, checkpoint-driven slot loss, rejected restart,
+and measured explicit rebuild with PostgreSQL/memory equality. The focused run
+warned at 23,451,960 retained bytes and rebuilt in about 0.55 seconds for its
+32-bid/8-auction fixture. Segment-boundary granularity explains overshooting the
+warning threshold. This is a local observed recovery time, not a production RTO
+or proof that total PostgreSQL disk stays below 64 MiB. The full gate repeats the
+drill and retains the actual timings under query-health-slot/qualification.json.

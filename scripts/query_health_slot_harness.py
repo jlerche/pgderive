@@ -21,7 +21,7 @@ def qualify(output, binary):
         '--tmpfs', '/var/lib/postgresql/data:rw,size=512m',
         '--publish', '127.0.0.1::5432', '-e', 'POSTGRES_PASSWORD=postgres',
         '-e', 'POSTGRES_DB=pgderive_dev', 'postgres:17', '-c', 'wal_level=logical',
-        '-c', 'max_slot_wal_keep_size=0', '-c', 'max_wal_size=128MB',
+        '-c', 'max_slot_wal_keep_size=64MB', '-c', 'max_wal_size=128MB',
         '-c', 'min_wal_size=32MB'], check=True, capture_output=True)
     try:
         inspection = json.loads(subprocess.check_output(['docker', 'inspect', name]))[0]
@@ -38,7 +38,8 @@ def qualify(output, binary):
         fixture = grouped(output)
         try:
             config = configured(fixture)
-            config.write_text(config.read_text().replace('retry_attempts=8', 'retry_attempts=1'))
+            config.write_text(config.read_text().replace('retry_attempts=8', 'retry_attempts=1').replace(
+                '[worker.query]', '[worker.health]\nretained_wal_alert_bytes=8388608\nbacklog_alert_bytes=8388608\n[worker.query]'))
             labels = [column['name'] for column in command(fixture,binary,'validate',config)['columns']]
             logs = output/'initial'
             logs.mkdir()
@@ -47,6 +48,31 @@ def qualify(output, binary):
             ready = worker.event('ready')
             worker.finish(graceful=True)
             before = command(fixture,binary,'status',config)['progress']
+            feedback = health(fixture,binary,config)['observation']['slot']['confirmed_flush_lsn']
+            fixture.sql(f'BEGIN; UPDATE {fixture.name}.auction SET group_id=13 WHERE id=1; '
+                        f'UPDATE {fixture.name}.bid SET price=NULL WHERE id=1; COMMIT')
+            for _ in range(3):
+                fixture.sql('SELECT pg_switch_wal(); CHECKPOINT')
+                warning = health(fixture,binary,config)
+                if {'wal_retention','wal_backlog'} <= set(warning['alerts']):
+                    break
+            assert warning['observation']['max_slot_wal_keep_size'] == '64MB', warning
+            assert {'wal_retention','wal_backlog'} <= set(warning['alerts']), warning
+            assert 'slot_invalidated' not in warning['alerts'], warning
+            assert warning['observation']['slot']['wal_status'] in ('reserved','extended'), warning
+            assert command(fixture,binary,'status',config)['progress'] == before
+            assert not warning['observation']['slot']['confirmed_past_durable'], warning
+            assert warning['observation']['slot']['confirmed_flush_lsn'] == feedback, warning
+            resumed = output/'catch-up'
+            resumed.mkdir()
+            worker = Worker(binary+['query','restart'],config,resumed,fixture.environment)
+            fixture.workers.append(worker)
+            worker.event('ready')
+            worker.event('published',minimum_time=ready['time']+1)
+            verify(fixture,labels)
+            worker.finish(graceful=True)
+            before = command(fixture,binary,'status',config)['progress']
+            feedback = health(fixture,binary,config)['observation']['slot']['confirmed_flush_lsn']
             for _ in range(12):
                 fixture.sql('SELECT pg_switch_wal(); CHECKPOINT')
                 invalid = health(fixture,binary,config)
@@ -54,15 +80,22 @@ def qualify(output, binary):
                     break
             assert 'slot_invalidated' in invalid['alerts'] and 'slot_wal_unsafe' in invalid['alerts'], invalid
             assert invalid['observation']['slot']['wal_status'] == 'lost', invalid
+            assert invalid['observation']['slot']['confirmed_flush_lsn'] == feedback, invalid
             assert not invalid['ready']
             rejected(binary,fixture,'restart',config)
+            assert health(fixture,binary,config)['observation']['slot']['confirmed_flush_lsn'] == feedback
             after = command(fixture,binary,'status',config)['progress']
             assert {key:value for key,value in after.items() if key != 'fence'} == {key:value for key,value in before.items() if key != 'fence'}, 'invalid slot advanced authoritative data progress'
+            began = time.monotonic()
             command(fixture,binary,'rebuild',config)
+            rebuild_seconds = time.monotonic()-began
             verify(fixture,labels)
             command(fixture,binary,'drop',config)
             (output/'qualification.json').write_text(json.dumps({'slot':ready['slot'],
-                'invalidated':invalid,'explicit_rebuild':True,'native_and_memory_equality':True}, indent=2)+'\n')
+                'warning':warning,'catch_up_before_invalidation':True,
+                'invalidated':invalid,'explicit_rebuild':True,'rebuild_seconds':rebuild_seconds,
+                'retention_cap_bytes':67108864,'alert_threshold_bytes':8388608,
+                'native_and_memory_equality':True}, indent=2)+'\n')
             completed = True
         except BaseException:
             fixture.preserve()
