@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a host-native package; never install a service or credentials.
+# Build a host-native package; never deploy a container or credentials.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [[ $# != 1 ]]; then
@@ -54,7 +54,6 @@ target_directory=$(cargo metadata --locked --no-deps --format-version 1 | python
 install -m 755 "$target_directory/$package_host/release/pgderive" "$output/bin/pgderive"
 ldd "$output/bin/pgderive" > "$output/runtime-libraries.log"
 install -m 644 worker.example.toml "$output/examples/worker.toml"
-install -m 644 deploy/pgderive@.service "$output/examples/pgderive@.service"
 for document in storage-configuration postgres-security worker-health deployment backup-failover sql-compiler; do
     install -m 644 "docs/$document.md" "$output/docs/$document.md"
 done

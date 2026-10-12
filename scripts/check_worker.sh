@@ -247,14 +247,6 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/q
     cat "$output/query-capacity/harness.log" >&2
     exit 1
 fi
-python3 - "$output" <<'UNIT'
-import pathlib,subprocess,sys
-output=pathlib.Path(sys.argv[1])
-unit=output/'pgderive-validate@.service'
-unit.write_text((output/'package/examples/pgderive@.service').read_text().replace('/opt/pgderive/bin/pgderive',str(output/'package/bin/pgderive')))
-with (output/'systemd-validation.log').open('w') as log:
-    subprocess.run(['systemd-analyze','verify',str(unit)],check=True,stdout=log,stderr=log)
-UNIT
 python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,subprocess,sys
 output=pathlib.Path(sys.argv[1])
@@ -279,7 +271,7 @@ for result in results:
 root=pathlib.Path.cwd()
 files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),pathlib.Path(sys.argv[3]).with_name('postgres_tls_control_probe'),
        *sorted((root/'src').rglob('*.rs')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
-       *sorted((root/'docs').glob('*.md')), *sorted((root/'deploy').glob('*.service')), output/'package/bin/pgderive',
+       *sorted((root/'docs').glob('*.md')), output/'package/bin/pgderive',
        *sorted((root/'scripts').glob('*.sh')), *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(output.rglob('*.json')),
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]
 provenance={'git_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),

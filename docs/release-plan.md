@@ -1,6 +1,6 @@
 # Controlled production release work
 
-The release target is a supervised worker per query on PostgreSQL 17, using the
+The release target is a containerized worker per query on PostgreSQL 17, using the
 documented SQL subset, fixed source layouts and engine-owned results. Correctness
 qualification does not establish capacity or remote storage durability. These four
 slices must finish before declaring the release work complete.
@@ -45,7 +45,7 @@ does not protect PostgreSQL disk. No automatic skipping or dropping active slots
 Support explicit remote HTTPS S3-compatible endpoints, region and secure credential
 configuration, preserving create-only objects and failure reconciliation. Verify
 PostgreSQL TLS hostname/CA validation and least-privilege provisioning. Supply a
-reproducible installation and supervised process example with graceful shutdown.
+reproducible packaging and container runtime guidance with graceful shutdown.
 
 Run sequential owned-fixture sustained/skewed workloads, prolonged storage outages
 and supervised restart checks; retain capacity/resource evidence and scope claims

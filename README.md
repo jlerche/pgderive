@@ -858,7 +858,7 @@ PostgreSQL TLS and restricted worker role requirements are documented in
 checks SQL, replication-control and streaming certificate rejection on an owned
 tmpfs PostgreSQL fixture.
 
-A host-native package and supervised worker setup are described in
+A host-native package and container runtime guidance are described in
 [deployment](docs/deployment.md), with the conservative
 [backup/failover policy](docs/backup-failover.md). Packaging builds and records
-artifacts; it does not install a service or credentials.
+artifacts; it does not build or deploy a container or credentials.

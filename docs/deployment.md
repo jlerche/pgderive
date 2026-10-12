@@ -32,78 +32,74 @@ postgres-security.md for restricted role grants and storage-configuration.md for
 HTTPS credentials. Avoid using the source schema as the engine schema in production.
 Source DDL/layout changes require a deliberate query rebuild or fresh bootstrap.
 
-Create an unprivileged pgderive OS user/group and install bin/pgderive to
-/opt/pgderive/bin/pgderive. Install the supplied template to
-/etc/systemd/system/pgderive@.service and run systemctl daemon-reload. Put a query
-configuration at /etc/pgderive/myquery.toml, readable by the pgderive user but not
-world-readable. Use an instance name containing only letters, digits, underscore
-or dash; it is an operator-selected filename, not SQL text.
+## Container runtime contract
 
-Place the S3 JSON document at /etc/pgderive/myquery.s3.json, owned by root, mode0600.
-The unit's LoadCredential copies it privately; the injected
-PGDERIVE__OBJECT_STORE__CREDENTIALS_FILE points to that private copy. Omit inline
-S3 credentials from the TOML. Put the PostgreSQL password in the root-owned
-mode0600 EnvironmentFile /etc/pgderive/myquery.env:
+Deploy one worker per query in a container using an image built from a clean,
+reviewed commit. Run the packaged executable on a compatible architecture, libc
+and OpenSSL environment; the host-native package is not itself a container image.
+Run as an unprivileged UID/GID and mount the query configuration and CA files
+read-only. Inject secrets through the deployment platform's secret mechanism.
+The S3 credential JSON must be a private regular file readable by the worker,
+mode0600, selected by `PGDERIVE__OBJECT_STORE__CREDENTIALS_FILE`. PostgreSQL uses
+`PGDERIVE__POSTGRES__PASSWORD`. Never put credentials on the command line or in
+an image layer, repository or shared logs. Verify the actual mounted secret's
+permissions against the credential-file checks.
 
-```text
-PGDERIVE__POSTGRES__PASSWORD=your-secret
-```
-
-Provision secrets out of band; never commit them, echo them into shared logs or
-put them on the command line. Follow systemd EnvironmentFile quoting rules for
-special characters. TLS CA files must remain readable to the service. Scratch
-uses the unit's private /run/pgderive-myquery directory, retained across service
-stops/restarts so failed spill evidence survives. Inspect and archive failed
-work before removing only verified stale execution directories while the service
-is stopped. Retention is bounded by operator cleanup and filesystem capacity;
-/run does not survive a host reboot. Size its filesystem and
-engine scratch_bytes deliberately. /run is commonly tmpfs, so scratch usage may
-consume host memory. Engine serialized byte caps are not RSS ceilings.
+Give the worker a private writable scratch directory and set TMPDIR to it.
+Choose disk-backed scratch or account for its memory usage when using tmpfs.
+Preserve failed spill evidence across container restarts using an explicitly
+managed scratch mount, with filesystem capacity and operator cleanup limits.
+Engine serialized byte budgets are not container memory limits or RSS ceilings.
+Keep source database storage outside the worker container. Disposable Docker
+PostgreSQL test fixtures must continue to use tmpfs.
 
 ## First creation and normal restart
 
-The normal service runs `query restart`, which deliberately refuses an
-unregistered query. For first creation, add only this temporary drop-in at
-/etc/systemd/system/pgderive@myquery.service.d/bootstrap.conf:
+For first creation, run the executable directly as the container's main process:
 
-```ini
-[Service]
-ExecStart=
-ExecStart=/opt/pgderive/bin/pgderive query create /etc/pgderive/myquery.toml
-Restart=no
+```text
+pgderive query create /etc/pgderive/query.toml
 ```
 
-Reload systemd and start pgderive@myquery. Inspect its journal for the JSON ready
-event; Type=simple means process startup, not query readiness. Readiness requires
-successful activation and the published health checks. Stop the service after
-ready, remove only bootstrap.conf, reload systemd and enable/start the normal
-service. The stop sends SIGINT and waits for the current engine publication. An incomplete
-source transaction still being assembled can be cancelled safely and will replay
-from durable progress;
-normal restart resumes the registered query. If creation fails, inspect status
-and preserved logs before retrying: never delete metadata or slots to force it.
+Creation remains a running worker after activation. Inspect its JSON ready event
+and status; process startup alone does not establish readiness. After the initial
+activation, configure subsequent container starts to run:
 
-The template uses Restart=on-failure with a delay and bounded start bursts.
-Worker retry_attempts is an additional internal bound. Both bounds require operator
-attention after exhaustion. KillSignal=SIGINT invokes the current graceful path;
-the 900-second stop timeout is an example, not a proved upper bound. Size it from
-qualification; expiry becomes forced termination and relies on durable recovery.
-Do not use a readiness=false observation as an unconditional restart trigger:
-publication and maintenance legitimately report busy. Alert on failure/stale
-heartbeat/slot validity and WAL retention according to worker-health.md.
+```text
+pgderive query restart /etc/pgderive/query.toml
+```
+
+Restart deliberately refuses an unregistered query. If creation fails, inspect
+status and preserved logs before deciding whether to retry creation or restart.
+Do not delete metadata or replication slots to force startup. Only one container
+may own a query; use a rollout policy that respects that exclusive ownership.
+
+Configure the container runtime to send SIGINT to the worker on shutdown, with a
+termination grace period sized from the qualified workload. Execute the binary
+directly or use an entrypoint that forwards signals. SIGINT drains the current
+publication; an incomplete source transaction can be cancelled safely and replays
+from durable progress. A forced kill after the grace period relies on crash
+recovery. Configure bounded restart backoff and operator attention after repeated
+failures, alongside the worker's internal retry_attempts bound.
+
+Publication and maintenance legitimately report busy. Do not use every
+readiness=false observation as a liveness failure or automatic restart trigger.
+Alert on failure, stale heartbeat, slot validity and WAL retention according to
+worker-health.md. Apply container CPU, memory and scratch limits using measured
+workloads and verify failure/recovery with those limits in the selected platform.
 
 Resource exhaustion fails without ACK. Inspect the exact category, preserve
 artifacts, adjust a verified budget or remove the cause, then restart. Slot loss
 requires the explicit rebuild path on the same source identity. Read the
-backup-failover.md policy before restore or promoted failover. No production
-service is installed by the package script or qualification harness.
+backup-failover.md policy before restore or promoted failover. No container is built or deployed by the package script or qualification harness.
 
 ## Qualification scope
 
-The template is statically checked with systemd-analyze against the built
-executable. The workload harness tests an external process restart policy,
-SIGINT, unavailable storage and recovery; that is not a live systemd deployment
-qualification. Native PostgreSQL and independent memory oracles check results.
+The workload harness tests an external process restart policy, SIGINT,
+unavailable storage and recovery. It does not qualify a container image,
+orchestrator, mounted secrets or runtime resource limits. Exercise those with
+the selected deployment platform before production. Native PostgreSQL and
+independent memory oracles check results.
 Read the retained measurements before choosing resource limits; neither one
 passing run nor a byte budget establishes universal throughput or an RSS bound.
 
