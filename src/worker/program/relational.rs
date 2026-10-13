@@ -92,6 +92,10 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
             Node::Finalize { id, spec, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(super::statistics::finalize(spec)));
             }
+            Node::OrderedInput { .. }
+            | Node::OrderedFirst { .. }
+            | Node::OrderedGroup { .. }
+            | Node::OrderedFinalize { .. } => bind_ordered(node, &mut operators),
             Node::Partition { id, spec, .. } => {
                 operators.partitions.insert(id.clone(), partition_operator(spec, settings));
             }
@@ -136,6 +140,7 @@ const fn empty_operators() -> Operators<Key, Row> {
         joins: BTreeMap::new(),
         partitions: BTreeMap::new(),
         statistics: BTreeMap::new(),
+        ordered: BTreeMap::new(),
     }
 }
 
@@ -243,26 +248,31 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         | Node::PartitionBy { id, input, .. }
         | Node::Finalize { id, input, .. }
         | Node::LookupInput { id, input, .. }
+        | Node::OrderedGroup { id, input }
         | Node::DistinctMembership { id, input, .. } => {
             (id, plan::Kind::Project, vec![input.clone()])
         }
         Node::Union { id, left, right } => {
             (id, plan::Kind::Union, vec![left.clone(), right.clone()])
         }
-        Node::Expand { id, input, .. } | Node::DistinctInput { id, input, .. } => {
-            (id, plan::Kind::Expand, vec![input.clone()])
-        }
+        Node::Expand { id, input, .. }
+        | Node::OrderedInput { id, input, .. }
+        | Node::DistinctInput { id, input, .. } => (id, plan::Kind::Expand, vec![input.clone()]),
         Node::Statistics { id, input, .. } | Node::DistinctCounts { id, input, .. } => {
             (id, plan::Kind::Statistics, vec![input.clone()])
         }
-        Node::Partition { id, input, .. } | Node::Lookup { id, input, .. } => {
-            (id, plan::Kind::Aggregate, vec![input.clone()])
-        }
+        Node::OrderedFirst { id, input, .. } => (id, plan::Kind::Ordered, vec![input.clone()]),
+        Node::OrderedFinalize { id, input, .. }
+        | Node::Partition { id, input, .. }
+        | Node::Lookup { id, input, .. } => (id, plan::Kind::Aggregate, vec![input.clone()]),
         Node::Join { id, left, right } => (id, plan::Kind::Join, vec![left.clone(), right.clone()]),
     };
     plan::Node { id: id.clone(), kind, inputs, schema: schema(id) }
 }
 fn plan_revision(ir: &Relational) -> &'static str {
+    if ir.nodes.iter().any(|node| matches!(node, Node::OrderedFirst { .. })) {
+        return "worker-relational-ordered-extrema-v4";
+    }
     if ir.nodes.iter().any(|node| matches!(node, Node::DistinctCounts { .. })) {
         return "worker-relational-exact-distinct-v3";
     }
@@ -298,7 +308,11 @@ pub(in crate::worker) fn plan(
             maintained.insert(id.clone(), id.clone());
             maintained.insert(input.clone(), input.clone());
         }
-        if let Node::Partition { id, input, .. } | Node::Lookup { id, input, .. } = node {
+        if let Node::OrderedFirst { id, input, .. }
+        | Node::OrderedFinalize { id, input, .. }
+        | Node::Partition { id, input, .. }
+        | Node::Lookup { id, input, .. } = node
+        {
             maintained.insert(input.clone(), input.clone());
             maintained.insert(id.clone(), id.clone());
         }
@@ -379,4 +393,22 @@ fn partition_by(
             .collect::<Result<_>>()?;
         Ok(Some((key, row.clone())))
     })
+}
+
+fn bind_ordered(node: &Node, operators: &mut Operators<Key, Row>) {
+    match node {
+        Node::OrderedInput { id, spec, .. } => {
+            operators.expansions.insert(id.clone(), Arc::new(super::ordered::input(spec)));
+        }
+        Node::OrderedFirst { id, spec, .. } => {
+            operators.ordered.insert(id.clone(), Arc::new(super::ordered::first(spec)));
+        }
+        Node::OrderedGroup { id, .. } => {
+            operators.projects.insert(id.clone(), Arc::new(super::ordered::group()));
+        }
+        Node::OrderedFinalize { id, spec, .. } => {
+            operators.partitions.insert(id.clone(), Arc::new(super::ordered::finalize(spec)));
+        }
+        _ => {}
+    }
 }

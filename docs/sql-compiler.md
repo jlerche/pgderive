@@ -498,7 +498,8 @@ FILTER, weighted changes, deletion of the last row and cold restart. A memory-st
 case bootstraps a 256-row group, restores it under a 16-contribution tick budget,
 and updates one row with forced consolidation spilling. This verifies the delta
 path under that budget; it does not establish arbitrary group size or throughput.
-MIN/MAX and ROWS retain their existing affected-partition costs and limits.
+Mixed MIN/MAX aggregates and ROWS retain their affected-partition costs and limits;
+grouped MIN/MAX-only queries use the ordered state described below.
 
 
 ## Explicit bounded hopping expansion
@@ -866,8 +867,8 @@ MIN/MAX now accept native timestamp and timestamptz columns as well as integral
 columns, in supported grouped and window frames. They ignore NULL and filtered
 out inputs, return NULL for an empty eligible frame, and compare native instants,
 including infinities. The runtime retains the complete weighted input bag and
-recomputes affected partitions; it does not yet have Feldera's specialized ordered
-MIN/MAX cursor implementation.
+uses ordered full-identity state for grouped MIN/MAX-only plans. Mixed aggregates
+and temporal window frames retain affected-partition evaluation.
 
 Scalar projections accept `timestamp_column + INTERVAL '10 seconds'` and the
 corresponding subtraction. Literals must be explicitly typed, positive, integral
@@ -1371,3 +1372,38 @@ registration whose compiled layout changes; unrelated plans retain their identit
 The native SQL subset and PUT/PG COMMIT/ACK boundary are unchanged. The
 [Feldera audit](feldera-audit.md) records the controlled block-read measurement,
 state tradeoff and remaining ordered-index work.
+
+## Ordered full-identity grouped extrema
+
+Grouped queries whose aggregates are all MIN/MAX now maintain a reusable ordered
+index over complete weighted rows per aggregate. Integral, timestamp and
+timestamptz values use explicit native ordering, including infinities. FILTER
+retains only true; NULL and excluded values use a last sentinel so a nonempty
+group with no eligible values still produces NULL. NUL-prefixed internal fields
+cannot collide with PostgreSQL identifiers; malformed reserved fields fail closed.
+The original full row remains the identity within each value order, including
+when multiple source occurrences share the same value.
+
+The executable graph expands each input into per-aggregate ordered identities,
+uses OrderedFirst against synchronized prior input and retained selection traces,
+then combines the small selected set into the grouped result. Every changed full
+identity is checked before an early cursor stop; retracting a nonexistent tail
+row cannot be hidden by an unchanged minimum. The generic operator requires a
+nonnegative prior input and exact prior selection, established inductively from
+empty state and reused only from the bound authoritative checkpoint.
+
+Compiler revision pg-ordered-full-identity-extrema-v1 and worker layout
+worker-relational-ordered-extrema-v4 bind these arrangements. Previous scan-based
+extrema checkpoints require explicit rebuild; restart cannot adopt them silently.
+Mixed aggregate and window queries retain their existing path. This does not
+implement bounded top-k, ranking, navigation or session indexing.
+
+A controlled 1,000-row/two-extrema update with eight-row blocks and cache disabled
+reduces data-block cache misses during the complete prepare operation from 127
+to 12, including changed-identity checks and staging reads. New immutable objects
+for that tick increase from four to six and from 918 to 1,698 bytes. These exclude
+initial bootstrap/cold restore and PostgreSQL metadata/WAL. Full-row copies per
+aggregate increase state and write work; deleted prefixes, many retained runs and
+compaction policy still affect reads. Qualification covers all three integral
+widths and both timestamp types, NULL/FILTER, ties, retractions, simultaneous joined
+changes, independent memory/native-MV agreement and cold restart.

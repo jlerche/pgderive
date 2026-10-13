@@ -52,8 +52,78 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
             .context("missing gap compiler revision")?
             .push_str(":pg-timestamp-gap-v1");
     }
+    relational_revisions(compiled)?;
+    Ok(())
+}
+fn node_gap(node: &Node) -> bool {
+    match node {
+        Node::Filter { predicate, .. } => predicate.has_gap(),
+        Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
+            Native::Case { case } => case.has_gap(),
+            Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
+        }),
+        Node::Partition { spec, .. }
+        | Node::Statistics { spec, .. }
+        | Node::OrderedFinalize { spec, .. }
+        | Node::Finalize { spec, .. } => spec
+            .aggregates
+            .iter()
+            .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_gap)),
+        _ => false,
+    }
+}
+
+fn node_text(node: &Node) -> bool {
+    match node {
+        Node::Filter { predicate, .. } => predicate.has_text_equality(),
+        Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
+            Native::Case { case } => case.has_text_equality(),
+            Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
+        }),
+        Node::Partition { spec, .. }
+        | Node::Statistics { spec, .. }
+        | Node::OrderedFinalize { spec, .. }
+        | Node::Finalize { spec, .. } => spec
+            .aggregates
+            .iter()
+            .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_text_equality)),
+        _ => false,
+    }
+}
+
+fn node_offset(node: &Node) -> bool {
+    matches!(node, Node::Map { computed, .. } if computed.iter().any(|value| matches!(value.expression, Native::Offset { .. })))
+}
+fn node_temporal_extrema(node: &Node) -> bool {
+    match node {
+        Node::Partition { spec, .. }
+        | Node::Statistics { spec, .. }
+        | Node::OrderedFinalize { spec, .. }
+        | Node::Finalize { spec, .. } => spec.aggregates.iter().any(|value| {
+            matches!(
+                value.function,
+                super::partition::Function::Min | super::partition::Function::Max
+            ) && value.argument.as_ref().is_some_and(|arg| matches!(arg.oid, 1114 | 1184))
+        }),
+        _ => false,
+    }
+}
+
+fn node_distinct(node: &Node) -> bool {
+    matches!(node, Node::Partition { spec, .. } | Node::DistinctCounts { spec, .. } if spec.aggregates.iter().any(|value| matches!(value.function, super::partition::Function::CountDistinct)))
+}
+
+fn node_text_key(node: &Node) -> bool {
+    matches!(node, Node::PartitionBy { keys, .. } if keys.iter().any(|key| matches!(key.oid, 25 | 1043)))
+}
+
+fn relational_revisions(compiled: &mut Compiled) -> Result<()> {
     if let Program::Relational { relational } = &compiled.program {
         for (used, suffix) in [
+            (
+                relational.nodes.iter().any(|node| matches!(node, Node::OrderedFirst { .. })),
+                ":pg-ordered-full-identity-extrema-v1",
+            ),
             (
                 relational
                     .nodes
@@ -80,62 +150,4 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
         }
     }
     Ok(())
-}
-fn node_gap(node: &Node) -> bool {
-    match node {
-        Node::Filter { predicate, .. } => predicate.has_gap(),
-        Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
-            Native::Case { case } => case.has_gap(),
-            Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
-        }),
-        Node::Partition { spec, .. }
-        | Node::Statistics { spec, .. }
-        | Node::Finalize { spec, .. } => spec
-            .aggregates
-            .iter()
-            .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_gap)),
-        _ => false,
-    }
-}
-
-fn node_text(node: &Node) -> bool {
-    match node {
-        Node::Filter { predicate, .. } => predicate.has_text_equality(),
-        Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
-            Native::Case { case } => case.has_text_equality(),
-            Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
-        }),
-        Node::Partition { spec, .. }
-        | Node::Statistics { spec, .. }
-        | Node::Finalize { spec, .. } => spec
-            .aggregates
-            .iter()
-            .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_text_equality)),
-        _ => false,
-    }
-}
-
-fn node_offset(node: &Node) -> bool {
-    matches!(node, Node::Map { computed, .. } if computed.iter().any(|value| matches!(value.expression, Native::Offset { .. })))
-}
-fn node_temporal_extrema(node: &Node) -> bool {
-    match node {
-        Node::Partition { spec, .. }
-        | Node::Statistics { spec, .. }
-        | Node::Finalize { spec, .. } => spec.aggregates.iter().any(|value| {
-            matches!(
-                value.function,
-                super::partition::Function::Min | super::partition::Function::Max
-            ) && value.argument.as_ref().is_some_and(|arg| matches!(arg.oid, 1114 | 1184))
-        }),
-        _ => false,
-    }
-}
-
-fn node_distinct(node: &Node) -> bool {
-    matches!(node, Node::Partition { spec, .. } | Node::DistinctCounts { spec, .. } if spec.aggregates.iter().any(|value| matches!(value.function, super::partition::Function::CountDistinct)))
-}
-
-fn node_text_key(node: &Node) -> bool {
-    matches!(node, Node::PartitionBy { keys, .. } if keys.iter().any(|key| matches!(key.oid, 25 | 1043)))
 }

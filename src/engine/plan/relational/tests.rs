@@ -73,6 +73,7 @@ fn operators() -> Operators<i64, Vec<i64>> {
         joins,
         partitions: BTreeMap::new(),
         statistics: BTreeMap::new(),
+        ordered: BTreeMap::new(),
         expansions: BTreeMap::new(),
     }
 }

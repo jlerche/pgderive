@@ -88,9 +88,14 @@ splitting and recombining nonlinear aggregates is additional graph/index work.
 
 Feldera MIN/MAX uses ordered retained value counts and stops at the first nonzero
 value. Its SQL variants exclude NULL. A scalar minimum is not retractable when
-the current minimum is deleted. Pgderive still scans affected partitions;
-reducing those reads requires an ordered SQL-value index with explicit codecs,
-NULL handling and positive integrated-bag validation.
+the current minimum is deleted. Pgderive now uses an ordered full-identity index for grouped MIN/MAX-only queries,
+with explicit integral/timestamp codecs, NULL/FILTER sentinels and changed-bag
+validation. Mixed aggregate and window paths still scan affected partitions.
+Unlike a scalar minimum, retained full identities permit retracting the current
+extreme and selecting its successor. The complete-prepare cold-read comparison
+is 127 versus 12 blocks, with tick writes increasing from four/918 bytes to
+six/1,698 bytes. This reuses immutable object-local fences and keeps PostgreSQL
+metadata coarse. It is a read/write tradeoff, not a general throughput result.
 
 Top-k combines retained output with a cursor that can stop after K ordered
 occurrences. Retained output alone does not make Pgderive's rank-filter queries

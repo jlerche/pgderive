@@ -205,7 +205,7 @@ fn retained_output_revision_only_binds_partition_layouts() -> Result<()> {
         relational::plan(&native, &linear, linear.relational().context("missing linear IR")?)?;
     assert!(linear_plan.definition().revision.starts_with("worker-relational-v1:"));
     let partition = compile(
-        "SELECT b.auction AS g,MIN(b.price) AS n FROM source.bid b GROUP BY b.auction",
+        "SELECT b.auction AS g,MIN(b.price) AS n,COUNT(*) AS c FROM source.bid b GROUP BY b.auction",
         &native,
     )?;
     assert!(

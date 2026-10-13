@@ -45,6 +45,7 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
     let mut joins = BTreeSet::new();
     let mut partitions = BTreeSet::new();
     let mut statistics = BTreeSet::new();
+    let mut ordered = BTreeSet::new();
     let mut maintained = BTreeSet::new();
     for member in &definition.arrangements {
         ensure!(maintained.insert(&member.node), "multiple arrangements on one relational node");
@@ -70,6 +71,13 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
                 ensure!(
                     node.inputs.iter().all(|id| maintained.contains(id)),
                     "join inputs require maintained state"
+                );
+            }
+            Kind::Ordered => {
+                ordered.insert(node.id.clone());
+                ensure!(
+                    maintained.contains(&node.id) && maintained.contains(&node.inputs[0]),
+                    "ordered node requires retained input and output"
                 );
             }
             Kind::Statistics => {
@@ -99,7 +107,8 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
             && expansions == operators.expansions.keys().cloned().collect()
             && joins == operators.joins.keys().cloned().collect()
             && partitions == operators.partitions.keys().cloned().collect()
-            && statistics == operators.statistics.keys().cloned().collect(),
+            && statistics == operators.statistics.keys().cloned().collect()
+            && ordered == operators.ordered.keys().cloned().collect(),
         "relational callbacks differ from declarations"
     );
     Ok(())
@@ -120,6 +129,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                 Kind::Project => self.project(&mut builder, node, &edges, protection)?,
                 Kind::Join => self.join(&mut builder, node, &edges, protection)?,
                 Kind::Union => self.union(&mut builder, node, &edges, protection)?,
+                Kind::Ordered => self.ordered(&mut builder, node, &edges, protection)?,
                 Kind::Statistics => self.statistics(&mut builder, node, &edges, protection)?,
                 Kind::Aggregate => self.partition(&mut builder, node, &edges, protection)?,
             };
@@ -170,6 +180,41 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                 async move {
                     let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
                     let delta = operator.evaluate(&input, execution.limits)?;
+                    execution.stage(&id, &context.prior, delta).await
+                }
+            },
+        )
+    }
+    fn ordered(
+        &self,
+        builder: &mut Builder<K, V>,
+        node: &Node,
+        edges: &BTreeMap<String, Edge<K, V>>,
+        protection: Option<&Protection>,
+    ) -> Result<Edge<K, V>> {
+        let operator =
+            self.operators.ordered.get(&node.id).context("missing ordered callback")?.clone();
+        let execution = Arc::new(self.scoped(protection)?);
+        let id = node.id.clone();
+        let parent = node.inputs[0].clone();
+        builder.unary(
+            &node.id,
+            edges.get(&parent).context("missing ordered edge")?,
+            move |context, input| {
+                let operator = operator.clone();
+                let execution = execution.clone();
+                let id = id.clone();
+                let parent = parent.clone();
+                async move {
+                    let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
+                    let delta = operator
+                        .evaluate(
+                            &input,
+                            execution.prior(&parent, &context.prior)?,
+                            execution.prior(&id, &context.prior)?,
+                            execution.limits,
+                        )
+                        .await?;
                     execution.stage(&id, &context.prior, delta).await
                 }
             },

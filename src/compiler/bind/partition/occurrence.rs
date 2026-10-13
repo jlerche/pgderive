@@ -29,23 +29,7 @@ fn infer<'a>(
     identities: &BTreeMap<String, Identity>,
 ) -> Result<(&'a str, Identity)> {
     let (id, identity) = match node {
-        Node::Source { id, source } => {
-            let source_spec = ir.sources.get(*source).context("missing occurrence source")?;
-            let relation = contract
-                .relations
-                .iter()
-                .find(|relation| {
-                    relation.schema == source_spec.schema && relation.table == source_spec.table
-                })
-                .context("missing occurrence relation")?;
-            let keys = relation
-                .columns
-                .iter()
-                .filter(|column| column.primary)
-                .map(|column| field(*source, &column.name))
-                .collect::<BTreeSet<_>>();
-            (id, (!keys.is_empty()).then_some(keys))
-        }
+        Node::Source { id, source } => (id, source_identity(*source, ir, contract)?),
         Node::Rebind { id, input, fields } => {
             let remapped = prior(input, identities)?.and_then(|keys| {
                 keys.into_iter()
@@ -71,7 +55,9 @@ fn infer<'a>(
             );
             (id, combined)
         }
-        Node::Partition { id, input, spec } | Node::Statistics { id, input, spec } => {
+        Node::Partition { id, input, spec }
+        | Node::OrderedFinalize { id, input, spec }
+        | Node::Statistics { id, input, spec } => {
             let identity = if let Mode::Grouped { keys } = &spec.mode {
                 Some(keys.iter().map(|column| column.name.clone()).collect())
             } else {
@@ -90,6 +76,9 @@ fn infer<'a>(
         }
         Node::Union { id, .. }
         | Node::Lookup { id, .. }
+        | Node::OrderedInput { id, .. }
+        | Node::OrderedFirst { id, .. }
+        | Node::OrderedGroup { id, .. }
         | Node::DistinctInput { id, .. }
         | Node::DistinctCounts { id, .. }
         | Node::DistinctMembership { id, .. } => (id, None),
@@ -105,4 +94,22 @@ fn infer<'a>(
         | Node::Finalize { id, input, .. } => (id, prior(input, identities)?),
     };
     Ok((id, identity))
+}
+
+fn source_identity(source: usize, ir: &Relational, contract: &Contract) -> Result<Identity> {
+    let source_spec = ir.sources.get(source).context("missing occurrence source")?;
+    let relation = contract
+        .relations
+        .iter()
+        .find(|relation| {
+            relation.schema == source_spec.schema && relation.table == source_spec.table
+        })
+        .context("missing occurrence relation")?;
+    let keys = relation
+        .columns
+        .iter()
+        .filter(|column| column.primary)
+        .map(|column| field(source, &column.name))
+        .collect::<BTreeSet<_>>();
+    Ok((!keys.is_empty()).then_some(keys))
 }

@@ -7,8 +7,8 @@ use crate::{
     engine::{
         Batch,
         dataflow::{
-            Arrangement, Expand, Partition, PreparedGraph, PreparedMaintenance, Project,
-            Statistics, TimedBatch,
+            Arrangement, Expand, OrderedFirst, Partition, PreparedGraph, PreparedMaintenance,
+            Project, Statistics, TimedBatch,
         },
         reader::{BatchData, BlockCache, CacheStats},
         trace::TraceSnapshot,
@@ -19,6 +19,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 type Expansion<K, V> = Arc<Expand<K, V, K, V>>;
 type Linear<K, V> = Arc<Statistics<K, V>>;
+type Ordered<K, V> = Arc<OrderedFirst<K, V>>;
 type Group<K, V> = Arc<Partition<K, V>>;
 type Unary<K, V> = Arc<Project<K, V, K, V>>;
 type Binary<K, V> = Arc<Project<K, (V, V), K, V>>;
@@ -35,6 +36,8 @@ pub struct Operators<K: BatchData, V: BatchData> {
     pub partitions: BTreeMap<String, Group<K, V>>,
     /// Exact additive statistics callbacks, keyed by their retained state node.
     pub statistics: BTreeMap<String, Linear<K, V>>,
+    /// Ordered first-value selectors over retained full-identity inputs.
+    pub ordered: BTreeMap<String, Ordered<K, V>>,
 }
 #[derive(Clone)]
 struct Entry<K: BatchData, V: BatchData> {

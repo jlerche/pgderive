@@ -59,6 +59,7 @@ fn operators(calls: &Arc<AtomicUsize>) -> Operators<i64, i64> {
         partitions: BTreeMap::from([("partition".into(), Arc::new(partition))]),
         joins: BTreeMap::new(),
         statistics: BTreeMap::new(),
+        ordered: BTreeMap::new(),
         expansions: BTreeMap::new(),
     }
 }

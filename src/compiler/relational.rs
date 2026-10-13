@@ -33,6 +33,10 @@ pub enum Node {
     DistinctInput { id: String, input: String, spec: super::partition::Partition },
     DistinctCounts { id: String, input: String, spec: super::partition::Partition },
     DistinctMembership { id: String, input: String, spec: super::partition::Partition },
+    OrderedInput { id: String, input: String, spec: super::partition::Partition },
+    OrderedFirst { id: String, input: String, spec: super::partition::Partition },
+    OrderedGroup { id: String, input: String },
+    OrderedFinalize { id: String, input: String, spec: super::partition::Partition },
     Finalize { id: String, input: String, spec: super::partition::Partition },
 }
 #[derive(Clone, Serialize)]

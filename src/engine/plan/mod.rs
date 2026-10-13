@@ -21,6 +21,8 @@ pub enum Kind {
     Aggregate,
     /// Exact linear sufficient statistics retained per group.
     Statistics,
+    /// First positive identity in explicitly encoded physical order.
+    Ordered,
 }
 /// Source relation and exact supported column/type contract identity.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -12,6 +12,7 @@ use anyhow::{Context, Result, ensure};
 pub(in crate::compiler::bind) mod composition;
 mod distinct;
 mod occurrence;
+mod ordered;
 struct Body {
     expansion: Option<crate::compiler::parser::expansion::Series>,
     targets: Vec<syntax::Target>,
@@ -479,6 +480,9 @@ fn nodes(
     spec: Partition,
     computed: Vec<crate::compiler::scalar::Computed>,
 ) -> Vec<Node> {
+    if ordered::supports(&spec) {
+        return ordered::nodes(keys, spec, computed);
+    }
     if distinct::supports(&spec) {
         return distinct::nodes(keys, spec, computed);
     }

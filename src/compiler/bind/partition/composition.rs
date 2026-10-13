@@ -65,6 +65,7 @@ fn aggregate_base(relational: &Relational) -> Result<usize> {
     for node in &relational.nodes {
         if let Node::Partition { spec, .. }
         | Node::Statistics { spec, .. }
+        | Node::OrderedFinalize { spec, .. }
         | Node::Finalize { spec, .. } = node
         {
             for value in &spec.aggregates {
@@ -180,6 +181,10 @@ pub(in crate::compiler::bind) fn rewrite(
         | Node::DistinctInput { id, input, .. }
         | Node::DistinctCounts { id, input, .. }
         | Node::DistinctMembership { id, input, .. }
+        | Node::OrderedInput { id, input, .. }
+        | Node::OrderedFirst { id, input, .. }
+        | Node::OrderedGroup { id, input }
+        | Node::OrderedFinalize { id, input, .. }
         | Node::Finalize { id, input, .. } => {
             *id = rename(id);
             *input = edge(input);

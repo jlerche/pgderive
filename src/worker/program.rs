@@ -3,6 +3,7 @@ mod distinct;
 mod distinct_statistics;
 mod lookup;
 mod navigation;
+mod ordered;
 mod partition;
 pub(super) mod projected;
 pub(super) mod relational;

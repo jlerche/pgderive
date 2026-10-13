@@ -229,3 +229,10 @@ mod union_tests;
 #[cfg(test)]
 #[path = "tests/partition.rs"]
 mod partition_tests;
+
+mod ordered;
+pub use ordered::OrderedFirst;
+
+#[cfg(test)]
+#[path = "tests/ordered.rs"]
+mod ordered_tests;
