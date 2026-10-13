@@ -1,9 +1,7 @@
 use super::Run;
-use crate::engine::{
-    reader::{BatchCursor, BatchData, BatchReader, Cursor, Entry},
-    weights::Accumulator,
-};
-use anyhow::Result;
+use crate::engine::reader::{BatchCursor, BatchData, BatchReader, Cursor, Entry};
+use anyhow::{Context, Result};
+use num_bigint::BigInt;
 
 /// Merge pinned run cursors, summing complete identities before i64 narrowing.
 /// Each read operation stages cursor positions, preserving retry on GET errors.
@@ -33,25 +31,25 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
             let tuple = self
                 .cursors
                 .iter()
-                .filter_map(|cursor| {
-                    cursor.current().map(|(key, val, _)| (key.clone(), val.clone()))
-                })
+                .filter_map(|cursor| cursor.current().map(|(key, val, _)| (key, val)))
                 .min();
-            let Some(tuple) = tuple else {
+            let Some((key, val)) = tuple else {
                 self.row = None;
                 return Ok(());
             };
-            let mut weights = Accumulator::default();
+            let mut weight = BigInt::default();
             for cursor in &self.cursors {
-                if let Some((key, val, weight)) = cursor.current()
-                    && (key, val) == (&tuple.0, &tuple.1)
+                if let Some((other_key, other_val, coefficient)) = cursor.current()
+                    && (other_key, other_val) == (key, val)
                 {
-                    weights.add(tuple.clone(), weight);
+                    weight += coefficient;
                 }
             }
-            let rows = weights.finish()?;
-            if let Some(weight) = rows.get(&tuple) {
-                self.row = Some((tuple, *weight));
+            let tuple = (key.clone(), val.clone());
+            if weight != BigInt::default() {
+                let weight =
+                    i64::try_from(weight).context("finalized weight exceeds i64 domain")?;
+                self.row = Some((tuple, weight));
                 return Ok(());
             }
             self.skip(&tuple).await?;
@@ -170,3 +168,7 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         Ok(cursor)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/merge_heads.rs"]
+mod tests;

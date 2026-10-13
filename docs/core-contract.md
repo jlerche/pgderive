@@ -145,3 +145,20 @@ to no proof. Fencing does not establish quiescence, so abandoned upload records
 stay available to identify delayed PUT orphans. Handles bind a unique reservation
 ID as well as their token; stale handles cannot close a later token generation.
 There is no time-based expiration or universal bound on unresolved records.
+
+## Borrowed merge-head selection
+
+The trace merge compares borrowed `(key, full value)` heads and clones only the
+selected identity. Matching coefficients accumulate directly in one BigInt
+before final i64 narrowing, without a single-identity temporary ordered map.
+This path serves key probes, full scans, validation and physical compaction;
+transactional cursor staging and lazy fallible block loads remain unchanged.
+The durable format, plan identity and restart behavior are unchanged.
+
+A deterministic clone-count fixture compares the prior head-selection code with
+the new path: sixteen different live heads require 17 versus one value clone;
+three equal heads with coefficients `i64::MAX, 1, -i64::MAX` require six versus
+one, both producing coefficient one. These count selection work only, excluding
+cursor construction/staging, JSON decoding, object requests and wall time.
+Encoded-byte caching still redecodes blocks, memory cursors still clone source
+rows, and no decoded-resident-memory or RSS bound follows from this change.
