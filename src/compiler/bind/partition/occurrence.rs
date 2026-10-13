@@ -30,6 +30,9 @@ fn infer<'a>(
 ) -> Result<(&'a str, Identity)> {
     let (id, identity) = match node {
         Node::Source { id, source } => (id, source_identity(*source, ir, contract)?),
+        Node::TopKInput { id, input, .. } | Node::TopK { id, input, .. } => {
+            (id, prior(input, identities)?)
+        }
         Node::Rebind { id, input, fields } => {
             let remapped = prior(input, identities)?.and_then(|keys| {
                 keys.into_iter()

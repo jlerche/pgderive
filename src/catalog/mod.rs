@@ -76,6 +76,7 @@ impl Catalog {
              CREATE TABLE IF NOT EXISTS {0}.pgderive_protections (
                 token text PRIMARY KEY, id bigint GENERATED ALWAYS AS IDENTITY UNIQUE, namespace text UNIQUE, active boolean NOT NULL DEFAULT true, query_id text NOT NULL, owner_fence bigint NOT NULL CHECK(owner_fence>=0), uploading boolean NOT NULL, roots jsonb NOT NULL CHECK(jsonb_typeof(roots)='array'));
              ALTER TABLE {0}.pgderive_protections ADD COLUMN IF NOT EXISTS recovering boolean NOT NULL DEFAULT false;
+             ALTER TABLE {0}.pgderive_protections ADD COLUMN IF NOT EXISTS quiescent boolean NOT NULL DEFAULT false;
              CREATE TABLE IF NOT EXISTS {0}.pgderive_progress (
                 query_id text PRIMARY KEY REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
                 binding jsonb NOT NULL, sink_table text NOT NULL UNIQUE,

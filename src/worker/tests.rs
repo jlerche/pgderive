@@ -205,3 +205,6 @@ mod incremental_distinct;
 mod ordered;
 
 mod native_join;
+
+#[path = "tests/topk.rs"]
+mod topk;

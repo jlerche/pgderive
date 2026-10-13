@@ -37,6 +37,8 @@ pub enum Node {
     DistinctMembership { id: String, input: String, spec: super::partition::Partition },
     OrderedInput { id: String, input: String, spec: super::partition::Partition },
     OrderedFirst { id: String, input: String, spec: super::partition::Partition },
+    TopKInput { id: String, input: String, spec: super::topk::Spec },
+    TopK { id: String, input: String, spec: super::topk::Spec },
     OrderedGroup { id: String, input: String },
     OrderedFinalize { id: String, input: String, spec: super::partition::Partition },
     Finalize { id: String, input: String, spec: super::partition::Partition },

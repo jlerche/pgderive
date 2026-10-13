@@ -1479,3 +1479,45 @@ does not establish indexed outer-join performance at arbitrary scale.
 The sequential native join harness compares eight query shapes against native
 PostgreSQL materialized views from identical SQL and an independent raw-row
 loop oracle, through NULLs, updates, deletes, simultaneous changes and restart.
+
+## Ordered occurrence top-k specialization
+
+A derived filter directly consuming a partition with only ROW_NUMBER can use
+an immutable ordered input and retained top-k output. The predicate must be one
+ordinary integral comparison of that row-number column with a literal: `<= K`,
+`< K`, `= K`, or an equivalent operand-reversed comparison. The derived cutoff
+is at most 1,024 occurrences; nonpositive cutoffs select no occurrences. The
+original filter still executes after selection, including equality at the cutoff.
+Other predicates, larger cutoffs, RANK/DENSE_RANK, mixed window functions and
+general ORDER BY/LIMIT retain their existing support or rejection boundaries.
+This optimization does not add general LIMIT syntax or discard peer ties.
+
+The existing ROW_NUMBER uniqueness proof remains required: partition and order
+fields must include complete logical occurrence identity. Native integral and
+timestamp ordering uses explicit fixed-width tokens with signed bias, direction
+and independent NULL placement. Full source tuples remain distinct in the input
+index. Timestamp infinities retain PostgreSQL order; timestamptz compares instants.
+No watermark, wall-clock expiry or historical truncation is introduced.
+
+The generic OrderedTopK operator validates every changed full identity before
+reading a bounded ordered prefix, even when K is zero or a changed tuple is
+outside the prefix. It merges complete delta coefficients with prior state,
+counts positive row occurrences and clips the final tuple's multiplicity at K.
+Retained prior output is subtracted exactly; selected occurrences receive their
+one-based row numbers. Both sides of a joined source transaction are evaluated
+against the same prior boundary before this selection. Deleted prefixes and
+cancelling physical runs can still require substantial reads.
+
+Used plans bind `pg-ordered-occurrence-topk-v1` and
+`worker-relational-ordered-topk-v1`, including the typed order, cutoff, field
+bindings, native layouts and codecs. Existing plans whose physical graph changes
+reject ordinary restart and require explicit rebuild/bootstrap. Existing ordered
+extrema plans keep their previous callback semantics and durable revision.
+
+The owned top-k harness covers both order directions, NULL placement, reversed
+and strict/equality/zero bounds, integral extrema, both timestamp types and
+infinities, projected duplicate bags, changes and cold restart. The native
+materialized view uses identical SQL; the independent oracle sorts raw source
+occurrences. A cache-disabled 128-block fixture compares a complete partition
+read with at most 12 reads for an unchanged three-occurrence prefix and a tail
+update. This measures that fixture, not worst-case fanout or end-to-end capacity.

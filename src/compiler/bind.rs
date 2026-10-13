@@ -6,6 +6,7 @@ mod partition;
 mod relational;
 mod scoped_join;
 mod terminal;
+mod topk;
 use super::{
     ColumnRef, Compiled, REVISION,
     parser::{Name, Parsed, Table},

@@ -97,13 +97,16 @@ is 127 versus 12 blocks, with tick writes increasing from four/918 bytes to
 six/1,698 bytes. This reuses immutable object-local fences and keeps PostgreSQL
 metadata coarse. It is a read/write tradeoff, not a general throughput result.
 
-Top-k combines retained output with a cursor that can stop after K ordered
-occurrences. Retained output alone does not make Pgderive's rank-filter queries
-bounded K scans. Ranking updates can seek the predecessor of the earliest changed
-value and update a suffix; inserting an early row can inherently change every
-later ROW_NUMBER. LAG/LEAD can use local ordered seeks for fixed offsets. These
-read improvements require an ordered occurrence index that preserves PostgreSQL
-NULL ordering, peers, tie identity and multiplicity.
+At the pinned revision, dynamic/group/topk.rs distinguishes plain
+`TopK::transform` (counts full identities while preserving their weights) from
+`TopKRowNumber::transform` (expands positive multiplicity into unit occurrences
+until K). The latter is the direct precedent for PostgreSQL ROW_NUMBER cutoffs.
+Pgderive's OrderedTopK follows occurrence counting and clips multiplicity at K;
+it validates every changed identity before merging an ordered prefix. Its SQL
+specialization keeps the outer predicate and explicit occurrence-identity proof.
+Unfiltered ranking still can change an entire suffix after an early insertion.
+RANK/DENSE_RANK, mixed windows and navigation retain affected-partition execution;
+this slice does not claim bounded reads for those queries or discard their peers.
 
 Rolling aggregation uses range cursors and radix aggregate state. Watermark-based
 truncation cannot be adopted for a PostgreSQL materialized view that permits

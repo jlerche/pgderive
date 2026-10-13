@@ -200,7 +200,7 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/n
     cat "$output/nexmark-q21/harness.log" >&2
     exit 1
 fi
-for qualification in query-toast query-ordered-state query-expression query-expression-calendar query-native-join; do
+for qualification in query-toast query-ordered-state query-expression query-expression-calendar query-native-join query-topk; do
     mkdir "$output/$qualification"
     if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/$qualification" \
         python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${worker[@]}"; then
@@ -208,6 +208,12 @@ for qualification in query-toast query-ordered-state query-expression query-expr
         exit 1
     fi
 done
+mkdir "$output/query-storage-soak"
+if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/query-storage-soak" \
+    python3 scripts/query_storage_soak_harness.py --duration 1 --transactions 6 --rows 256 "$output/query-storage-soak" -- "${worker[@]}"; then
+    cat "$output/query-storage-soak/harness.log" >&2
+    exit 1
+fi
 mkdir "$output/native-cross"
 if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/native-cross" \
     python3 scripts/native_cross_harness.py "$output/native-cross" -- "${worker[@]}"; then
@@ -263,7 +269,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==188,results
+assert len(results)==198,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))
@@ -272,7 +278,7 @@ health_failures=list((output/'query-health-failure').glob('*/qualification.json'
 assert len(health_failures)==6,health_failures
 for result in health_failures:
     json.loads(result.read_text())
-for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls','query-postgres-tls','query-recovery','query-container','query-capacity'):
+for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls','query-postgres-tls','query-recovery','query-container','query-capacity','query-storage-soak'):
     json.loads((output/name/'qualification.json').read_text())
 for fault in rebuild_faults:
     json.loads(fault.read_text())

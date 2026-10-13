@@ -32,7 +32,7 @@ pub(super) async fn check(
     reader.reader_finished(sql).await?;
     let result = catalog.collect(sql, recovery.store.clone(), limits).await?;
     collected(result, true)?;
-    abandoned(sql, catalog, graph, writer, recovery).await?;
+    abandoned_and_ledger(sql, catalog, graph, writer, recovery).await?;
     ensure!(
         graph.snapshot().output.materialize().await? == expected,
         "GC changed visible weighted state"
@@ -67,30 +67,13 @@ async fn abandoned(
     let prepared = graph.prepare_compaction_protected(&protection).await?;
     let checkpoint = graph.prepared_compaction_checkpoint(&prepared)?;
     let root = checkpoint.arrangements[0].trace.objects[0].clone();
+    let orphan_data = recovery.store.get(&Path::from(root.path())).await?.bytes().await?.to_vec();
     let limits = GcLimits::default();
     ensure!(
         catalog.collect(sql, recovery.store.clone(), limits).await? == Collection::UploadProtected,
         "GC swept unresolved uploads"
     );
-    let before = writer.confirmed(sql, graph.plan()).await?;
-    let next = catalog.claim(sql, graph.plan(), before.binding, before.end).await?;
-    let stale = std::mem::replace(writer, next);
-    ensure!(
-        stale.protect_upload(sql, "gc-stale").await.is_err(),
-        "stale writer reserved at new fence"
-    );
-    ensure!(
-        catalog.protect_upload(sql, "gc-bootstrap-bypass").await.is_err(),
-        "bootstrap reservation bypassed active writer"
-    );
-    ensure!(
-        writer.maintain(sql, graph.plan(), &checkpoint).await.is_err(),
-        "new writer published fenced upload"
-    );
-    ensure!(
-        writer.seal_fenced_uploads(sql, graph.plan()).await? == 1,
-        "recovery did not seal abandoned upload"
-    );
+    let before = fence_abandoned(sql, catalog, writer, graph.plan(), &checkpoint).await?;
     rejected_sweep(sql, catalog, graph, recovery, root.path()).await?;
     let result = catalog.collect(sql, recovery.store.clone(), limits).await?;
     collected(result, true)?;
@@ -98,6 +81,7 @@ async fn abandoned(
         recovery.store.head(&Path::from(root.path())).await.is_err(),
         "abandoned root survived collection"
     );
+    late_put(sql, catalog, recovery, root.path(), orphan_data).await?;
     let after = writer.confirmed(sql, graph.plan()).await?;
     ensure!(
         after.end == before.end && after.stored.checkpoint == before.stored.checkpoint,
@@ -144,4 +128,62 @@ async fn rejected_sweep(
     recovery.store.put(&path, original.into()).await?;
     ensure!(rejected && orphan_retained, "missing committed root allowed destructive sweep");
     Ok(())
+}
+
+async fn late_put(
+    sql: &mut Client,
+    catalog: &Catalog,
+    recovery: &Recovery,
+    path: &str,
+    bytes: Vec<u8>,
+) -> Result<()> {
+    let path = Path::from(path);
+    recovery.store.put(&path, bytes.into()).await?;
+    let collected = catalog.collect(sql, recovery.store.clone(), GcLimits::default()).await?;
+    ensure!(
+        matches!(collected,Collection::Collected {deleted,..} if deleted>0),
+        "fenced late PUT was no longer collectible"
+    );
+    ensure!(recovery.store.head(&path).await.is_err(), "late orphan survived collection");
+    Ok(())
+}
+
+async fn fence_abandoned(
+    sql: &mut Client,
+    catalog: &Catalog,
+    writer: &mut Writer,
+    plan: &crate::engine::plan::Plan,
+    checkpoint: &crate::engine::plan::Checkpoint,
+) -> Result<crate::catalog::Durable> {
+    let before = writer.confirmed(sql, plan).await?;
+    let next = catalog.claim(sql, plan, before.binding.clone(), before.end).await?;
+    let stale = std::mem::replace(writer, next);
+    ensure!(
+        stale.protect_upload(sql, "gc-stale").await.is_err(),
+        "stale writer reserved at new fence"
+    );
+    ensure!(
+        catalog.protect_upload(sql, "gc-bootstrap-bypass").await.is_err(),
+        "bootstrap reservation bypassed active writer"
+    );
+    ensure!(
+        writer.maintain(sql, plan, checkpoint).await.is_err(),
+        "new writer published fenced upload"
+    );
+    ensure!(
+        writer.seal_fenced_uploads(sql, plan).await? == 1,
+        "recovery did not seal abandoned upload"
+    );
+    Ok(before)
+}
+
+async fn abandoned_and_ledger(
+    sql: &mut Client,
+    catalog: &Catalog,
+    graph: &mut Query,
+    writer: &mut Writer,
+    recovery: &Recovery,
+) -> Result<()> {
+    abandoned(sql, catalog, graph, writer, recovery).await?;
+    super::ledger::check(sql, catalog, graph, writer, recovery).await
 }

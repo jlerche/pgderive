@@ -38,6 +38,14 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
         anyhow::bail!("derived query requires terminal output node");
     };
     let (input, suffix) = if let Some(predicate) = predicate {
+        let optimized = super::topk::specialize(relational, &input, &predicate);
+        if optimized {
+            compiled
+                .revision
+                .as_mut()
+                .context("missing compiler revision")?
+                .push_str(":pg-ordered-occurrence-topk-v1");
+        }
         let count =
             relational.nodes.iter().filter(|node| matches!(node, Node::Filter { .. })).count();
         let filter = if count == 0 { "qualified".into() } else { format!("qualified_{count}") };

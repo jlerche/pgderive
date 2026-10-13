@@ -191,3 +191,74 @@ artifacts/release-capacity/first. Durable progress and confirmed slot flush both
 remained at the preceding boundary. The successful runs explicitly configured
 512 spill runs while retaining the 128-entry resident budget. This observed
 limit is part of choosing the operating envelope, not evidence of unlimited skew.
+
+## Joined top-k storage qualification
+
+The storage workload uses an owned source fixture with 10,000 bids, eight auctions
+and a heavily skewed join key. It maintains the first three row occurrences per
+auction with explicit PostgreSQL ordering. Each complete source transaction is
+checked against a native materialized view defined by identical SQL and an
+independent raw-row memory oracle. Updates, delete/insert replacements, NULLs and
+simultaneous changes to both join inputs exercise retractions and join fanout.
+Two graceful stops and fresh-process restarts check recovery from durable state.
+
+Build the optimized worker, then run this harness sequentially with all other
+mutating PostgreSQL checks. Supply the port of an independently owned PostgreSQL
+fixture configured for logical replication; Docker database storage must be tmpfs.
+
+```sh
+cargo build --locked --release --bin pgderive_worker
+mkdir -p artifacts/storage-soak-my-run
+PGDERIVE_TEST_POSTGRES_PORT=32835 PGPASSWORD=postgres \
+  PGDERIVE_S3_LATENCY_SCALE=0.1 PGDERIVE_HARNESS_TIMEOUT_SECONDS=7200 \
+  python3 scripts/run_with_s3_proxy.py artifacts/storage-soak-my-run \
+  python3 scripts/query_storage_soak_harness.py \
+  --duration 3600 --transactions 1000 --rows 10000 \
+  artifacts/storage-soak-my-run -- ./target/release/pgderive_worker
+```
+
+The run finishes only after both the requested duration and transaction count
+have been reached. The common gate runs a six-transaction version as harness
+acceptance; that short run does not establish sustained behavior. Retain the
+binary and source hashes alongside the longer run's evidence.
+The proxy wrapper defaults to a 600-second harness timeout. Longer workloads must
+set a finite positive timeout that allows for bootstrap, recovery and checking
+in addition to the workload duration; the value is recorded in storage-profile.json.
+
+`qualification.json` records publication latency, cold restarts, protection
+records, sampled RSS/cache usage, final physical object inventory and HTTP body
+bytes/request counts excluding S3 listing requests. Interval inventories can
+overlap maintenance; the final
+inventory follows worker shutdown. HTTP byte counts exclude headers and framing,
+and any unaccounted chunked requests are reported separately. The example applies
+10% of the recorded proxy latency profile to local SeaweedFS. These measurements
+qualify that fixture and do not establish cloud throughput, arbitrary SQL scale
+or an enforceable RSS ceiling. Fenced uploads whose PUTs may still finish retain
+their protection records; this workload cannot prove a universal ledger bound.
+
+The retained optimized-worker run under artifacts/storage-soak-hour-second
+completed 1,000 transactions over 3,608.11 seconds with cold restarts at
+transactions 333 and 666. The native materialized view and independent memory
+oracle matched after every transaction and restart. Logs record 1,000 published
+transactions and 333 maintenance events. The 341 recorded input hashes matched
+at completion; the PostgreSQL fixture used tmpfs with no database volume mounts.
+
+Transaction submission-to-publication latency, including psql startup and source
+SQL execution but excluding the subsequent oracle comparisons, was 158 ms median,
+4.09 seconds p95 and 11.64 seconds maximum. Sampled peak worker RSS was 139.7 MiB;
+protection records ranged from two to five, coarse membership roots from ten to
+twenty, and the protection relation occupied 64–96 KiB. After graceful shutdown,
+two protection records remained and the owned prefix contained 590 physical
+objects totaling 7,645,107 bytes, including retained/unpublished objects.
+
+Excluding listings, the proxy recorded 179,843 GET, 111,689 PUT, 111,099 POST and
+8,350 HEAD requests, with no DELETE requests. POST includes object-store protocol
+operations, so these counts are not a count of logical result writes. Accounted
+HTTP request bodies totaled 1,105,730,208 bytes and response bodies totaled
+2,073,763,950 bytes, with no unaccounted chunked requests. The observed tail
+latency and storage traffic remain substantial despite bounded-prefix selection
+and selective compaction; this evidence does not establish low storage cost or
+universal capacity. The first attempt under artifacts/storage-soak-hour-first
+was terminated by the wrapper's former ten-minute timeout. Its source snapshot,
+logs and owned PostgreSQL fixture dump are retained as failure evidence; it is
+not a completed sustained qualification.

@@ -9,6 +9,7 @@ mod partition;
 pub(super) mod projected;
 pub(super) mod relational;
 mod statistics;
+mod topk;
 use super::spec::Query as Spec;
 use crate::compiler::Compiled;
 use crate::{

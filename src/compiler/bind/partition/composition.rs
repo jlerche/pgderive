@@ -63,6 +63,14 @@ pub(super) fn bind(
 fn aggregate_base(relational: &Relational) -> Result<usize> {
     let mut base = 0;
     for node in &relational.nodes {
+        if let Node::TopK { spec, .. } = node {
+            let index: usize = spec
+                .field
+                .strip_prefix("@aggregate_")
+                .context("invalid top-k aggregate field")?
+                .parse()?;
+            base = base.max(index.checked_add(1).context("aggregate field overflow")?);
+        }
         if let Node::Partition { spec, .. }
         | Node::Statistics { spec, .. }
         | Node::OrderedFinalize { spec, .. }
@@ -185,6 +193,8 @@ pub(in crate::compiler::bind) fn rewrite(
         | Node::DistinctMembership { id, input, .. }
         | Node::OrderedInput { id, input, .. }
         | Node::OrderedFirst { id, input, .. }
+        | Node::TopKInput { id, input, .. }
+        | Node::TopK { id, input, .. }
         | Node::OrderedGroup { id, input }
         | Node::OrderedFinalize { id, input, .. }
         | Node::Finalize { id, input, .. } => {

@@ -387,3 +387,38 @@ impl Predicate {
         self.0.has_typed()
     }
 }
+
+impl Predicate {
+    pub(super) fn row_number_cutoff(&self, field: &str) -> Option<usize> {
+        let Expr::Compare(compare, left, right) = &self.0 else {
+            return None;
+        };
+        let (compare, column, limit) = match (left, right) {
+            (Scalar::Column(column), Scalar::Literal(Some(Value::Integer(limit)))) => {
+                (compare.clone(), column, *limit)
+            }
+            (Scalar::Literal(Some(Value::Integer(limit))), Scalar::Column(column)) => {
+                let reversed = match compare {
+                    Compare::Eq => Compare::Eq,
+                    Compare::Lt => Compare::Gt,
+                    Compare::Le => Compare::Ge,
+                    Compare::Gt => Compare::Lt,
+                    Compare::Ge => Compare::Le,
+                    Compare::Ne => Compare::Ne,
+                };
+                (reversed, column, *limit)
+            }
+            _ => return None,
+        };
+        if column.name != field {
+            return None;
+        }
+        let limit = match compare {
+            Compare::Eq | Compare::Le => limit.max(0),
+            Compare::Lt => limit.saturating_sub(1).max(0),
+            _ => return None,
+        };
+        let limit = usize::try_from(limit).ok()?;
+        (limit <= 1024).then_some(limit)
+    }
+}

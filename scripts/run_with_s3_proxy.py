@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run one isolated live harness through a fresh latency proxy; retain evidence."""
 import json
+import math
 import os
 import pathlib
 import subprocess
@@ -40,6 +41,9 @@ def commit_proxy(output, mode):
 
 
 def run(output, command):
+    timeout = float(os.environ.get("PGDERIVE_HARNESS_TIMEOUT_SECONDS", "600"))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("PGDERIVE_HARNESS_TIMEOUT_SECONDS must be finite and positive")
     upstream = "http://127.0.0.1:8333"
     try:
         request(upstream)
@@ -97,10 +101,11 @@ def run(output, command):
 
             (output / "storage-profile.json").write_text(json.dumps({"upstream": upstream,
                 "bucket": bucket, "seed": seed, "scale": scale, "failure": fail,
+                "harness_timeout_seconds": timeout,
                 "anchors_ms": ready["anchors_ms"], "model": "linear inverse CDF, p0=0, p99-clamped",
                 "source": "https://topicpartition.io/misc/AWS-S3-PUT-latency-benchmark"}, indent=2))
             with (output / "transactions.jsonl").open("w") as transactions, (output / "harness.log").open("w") as stderr:
-                result = subprocess.run(command, env=environment, stdout=transactions, stderr=stderr, timeout=600)
+                result = subprocess.run(command, env=environment, stdout=transactions, stderr=stderr, timeout=timeout)
             return result.returncode
         finally:
             for process in commit_processes:

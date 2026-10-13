@@ -232,6 +232,13 @@ mod partition_tests;
 
 mod ordered;
 pub use ordered::OrderedFirst;
+mod topk;
+pub use topk::OrderedTopK;
+mod ordered_selection;
+pub use ordered_selection::OrderedSelection;
+#[cfg(test)]
+#[path = "tests/topk.rs"]
+mod topk_tests;
 
 #[cfg(test)]
 #[path = "tests/ordered.rs"]

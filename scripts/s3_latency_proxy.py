@@ -102,6 +102,9 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         connection = http.client.HTTPConnection(*self.server.upstream, timeout=30)
         status = 502
+        request_bytes = 0
+        response_bytes = 0
+        parsed = urlsplit(self.path)
         try:
             self.server.hold(self.command)
             if fail:
@@ -120,6 +123,7 @@ class Handler(BaseHTTPRequestHandler):
             connection.putheader("Connection", "close")
             connection.endheaders()
             if chunked:
+                request_bytes = None  # Chunk framing is forwarded without payload accounting.
                 self.forward_chunks(connection)
             else:
                 remaining = int(self.headers.get("Content-Length", 0))
@@ -129,6 +133,7 @@ class Handler(BaseHTTPRequestHandler):
                         raise EOFError("incomplete request body")
                     connection.send(chunk)
                     remaining -= len(chunk)
+                    request_bytes += len(chunk)
             response = connection.getresponse()
             status = response.status
             self.send_response_only(status, response.reason)
@@ -140,6 +145,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.command != "HEAD":
                 while chunk := response.read(65536):
                     self.wfile.write(chunk)
+                    response_bytes += len(chunk)
         except (OSError, EOFError, ValueError, http.client.HTTPException) as error:
             # Request/response logs are retained by the harness. No retry in proxy.
             self.server.record({"error": str(error), "method": self.command})
@@ -148,6 +154,8 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             connection.close()
             self.server.record({"method": self.command, "range": self.headers.get("Range"),
+                              "path": parsed.path, "listing": "list-type=" in parsed.query,
+                              "request_body_bytes": request_bytes, "response_body_bytes": response_bytes,
                               "kind": kind, "ordinal": ordinal, "delay_ms": delay_ms,
                               "status": status, "elapsed_ms": (time.monotonic() - started) * 1000})
 

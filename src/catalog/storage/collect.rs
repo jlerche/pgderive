@@ -79,11 +79,12 @@ impl Catalog {
         let retained = mark(&store, roots, limits.objects).await?;
         let sealed = tx.query(&format!("SELECT namespace FROM {}.pgderive_protections WHERE uploading AND NOT active AND namespace IS NOT NULL",self.schema),&[]).await?.into_iter().map(|row|row.try_get::<_,String>(0)).collect::<std::result::Result<BTreeSet<_>,_>>()?;
         ensure!(sealed.len() <= limits.objects, "GC namespace metadata limit exceeded");
-        let candidates = candidates(&store, &retained, &sealed, limits.objects).await?;
-        let deleted = candidates.len();
-        for path in candidates {
+        let sweep = candidates(&store, &retained, &sealed, limits.objects).await?;
+        let deleted = sweep.candidates.len();
+        for path in sweep.candidates {
             store.delete(&path).await?;
         }
+        retire(&tx, self, &sealed, &sweep.surviving).await?;
         tx.commit()
             .await
             .context("GC metadata barrier COMMIT failed; physical sweep is idempotent")?;
@@ -151,14 +152,19 @@ async fn mark(
     }
     Ok(retained)
 }
+struct Sweep {
+    candidates: Vec<Path>,
+    surviving: BTreeSet<String>,
+}
 async fn candidates(
     store: &Arc<dyn ObjectStore>,
     retained: &BTreeSet<String>,
     sealed: &BTreeSet<String>,
     limit: usize,
-) -> Result<Vec<Path>> {
+) -> Result<Sweep> {
     let mut list = store.list(Some(&Path::from("pgderive")));
     let mut candidates = Vec::new();
+    let mut surviving = BTreeSet::new();
     let mut count = 0_usize;
     while let Some(object) = list.try_next().await? {
         count = count.checked_add(1).context("GC listing count overflow")?;
@@ -166,9 +172,11 @@ async fn candidates(
         if managed(object.location.as_ref(), sealed) && !retained.contains(object.location.as_ref())
         {
             candidates.push(object.location);
+        } else if let Some(namespace) = listed_namespace(object.location.as_ref(), sealed) {
+            surviving.insert(namespace);
         }
     }
-    Ok(candidates)
+    Ok(Sweep { candidates, surviving })
 }
 fn managed(path: &str, sealed: &BTreeSet<String>) -> bool {
     let Some((namespace, relative)) = path.split_once("/pgderive/") else { return false };
@@ -182,4 +190,34 @@ fn managed(path: &str, sealed: &BTreeSet<String>) -> bool {
     };
     hash.len() == 64
         && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+// Only closed uploads with a writes-finished proof can lose their namespace
+// ledger, and only after complete enumeration and successful sweep. Fencing
+// alone cannot establish this proof: delayed PUTs can still create orphans.
+async fn retire(
+    tx: &Transaction<'_>,
+    catalog: &Catalog,
+    sealed: &BTreeSet<String>,
+    surviving: &BTreeSet<String>,
+) -> Result<()> {
+    tx.execute(
+        &format!(
+            "DELETE FROM {}.pgderive_protections WHERE NOT active AND NOT uploading",
+            catalog.schema
+        ),
+        &[],
+    )
+    .await?;
+    for namespace in sealed.difference(surviving) {
+        tx.execute(&format!("DELETE FROM {}.pgderive_protections WHERE namespace=$1 AND NOT active AND uploading AND quiescent",catalog.schema),&[namespace]).await?;
+    }
+    Ok(())
+}
+
+fn listed_namespace(path: &str, sealed: &BTreeSet<String>) -> Option<String> {
+    let relative = path.strip_prefix("pgderive/upload-v1/")?;
+    let id = relative.split('/').next()?;
+    let namespace = format!("pgderive/upload-v1/{id}");
+    sealed.contains(&namespace).then_some(namespace)
 }

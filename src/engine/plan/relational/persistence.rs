@@ -87,13 +87,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                         .context("missing compaction writer")?
                         .clone()
                         .with_namespace(&namespace);
-                    entries.insert(
-                        id.clone(),
-                        Entry {
-                            schema: entry.schema.clone(),
-                            trace: writer.compact(&entry.trace).await?,
-                        },
-                    );
+                    entries.insert(id.clone(), compact_entry(entry, &writer).await?);
                 }
                 Ok(RelationalState { entries })
             })
@@ -128,3 +122,16 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         self.engine.commit_maintenance(work)
     }
 }
+
+async fn compact_entry<K: BatchData, V: BatchData>(
+    entry: &Entry<K, V>,
+    writer: &crate::engine::dataflow::Arrangement<K, V>,
+) -> Result<Entry<K, V>> {
+    if entry.trace.run_count() <= 1 {
+        return Ok(entry.clone());
+    }
+    Ok(Entry { schema: entry.schema.clone(), trace: writer.compact(&entry.trace).await? })
+}
+#[cfg(test)]
+#[path = "compaction_tests.rs"]
+mod tests;

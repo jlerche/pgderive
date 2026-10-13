@@ -119,3 +119,29 @@ block reads and the grouped path at three. Exact output weights match the indepe
 nested-loop result. This is scoped evidence for repeated-key cold reads, not an
 end-to-end Nexmark throughput or scale claim. The existing signed histories,
 spilling, compaction and restart qualification remain required.
+
+## Ordered selection and physical maintenance
+
+OrderedFirst selects one full identity for extrema. OrderedTopK instead counts
+row occurrences and clips weighted multiplicity at its cutoff. OrderedSelection
+binds either callback to the retained input/output circuit bridge. A complete
+changed bag is validated before prefix selection; the operator differentiates
+the exact retained result without exposing staged state. Immutable full-identity
+input remains available for retractions and late changes. These contracts do not
+introduce event-time eviction, recursion or a separate source clock.
+
+Relational compaction preserves zero/single-run arrangements and rewrites only
+arrangements with multiple runs. Whole-state equivalence validation remains in
+place; the improvement saves writes, not every validation read. Compaction keeps
+source progress, logical time and results unchanged.
+
+Finished reader protections can retire after release. Closed upload namespace
+records require a durable writes-finished (`quiescent`) proof, complete bounded
+listing, successful physical sweep and no surviving namespace objects before
+retirement under the schema lifecycle barrier. `Protection::published` requires
+every namespace PUT to have finished; authoritative checkpoint confirmation alone
+is insufficient. Unknown objects prevent retirement. Older schema rows default
+to no proof. Fencing does not establish quiescence, so abandoned upload records
+stay available to identify delayed PUT orphans. Handles bind a unique reservation
+ID as well as their token; stale handles cannot close a later token generation.
+There is no time-based expiration or universal bound on unresolved records.

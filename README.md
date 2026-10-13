@@ -769,8 +769,11 @@ progress and destination data are never changed by collection.
 
 Use a store prefix owned exclusively by the catalog schema. Unknown names and
 legacy objects written without managed upload reservations are retained; migrating
-that diagnostic state needs a separate offline procedure. Closed namespace ledger
-rows remain durable and grow over time. Reader protection cleanup after an actual
+that diagnostic state needs a separate offline procedure. Closed upload namespace records are retired only after all writes are known
+to have finished and a complete GC sweep leaves the namespace empty. Unknown
+objects, legacy reservations without that proof and fence-sealed abandoned uploads
+retain their records; delayed PUTs in fenced namespaces must remain collectible.
+Those unresolved records can still grow over time. Reader protection cleanup after an actual
 reader crash requires evidence that its readers have ended; there is no time-based
 lease expiry. WAL retention, continuous worker policy and sustained workload
 qualification remain separate work.

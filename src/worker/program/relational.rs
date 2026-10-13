@@ -54,8 +54,8 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
             Node::Map { id, computed, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(map(computed, compiled)));
             }
-            Node::KeyBy { id, key, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(key_by(key)));
+            Node::KeyBy { .. } | Node::PartitionBy { .. } => {
+                bind_keys(node, &mut operators, compiled);
             }
             Node::Rebind { id, fields, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(super::bindings::rebind(fields)));
@@ -68,9 +68,6 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
             }
             Node::Join { id, .. } => {
                 operators.joins.insert(id.clone(), Arc::new(join_map()));
-            }
-            Node::PartitionBy { id, keys, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(partition_by(keys, compiled)));
             }
             Node::DistinctInput { id, spec, .. } => {
                 operators
@@ -95,7 +92,9 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
             Node::Finalize { id, spec, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(super::statistics::finalize(spec)));
             }
-            Node::OrderedInput { .. }
+            Node::TopKInput { .. }
+            | Node::TopK { .. }
+            | Node::OrderedInput { .. }
             | Node::OrderedFirst { .. }
             | Node::OrderedGroup { .. }
             | Node::OrderedFinalize { .. } => bind_ordered(node, &mut operators),
@@ -250,6 +249,7 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         | Node::Output { id, input }
         | Node::PartitionBy { id, input, .. }
         | Node::Finalize { id, input, .. }
+        | Node::TopKInput { id, input, .. }
         | Node::LeftJoinInput { id, input, .. }
         | Node::LookupInput { id, input, .. }
         | Node::OrderedGroup { id, input }
@@ -265,7 +265,9 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         Node::Statistics { id, input, .. } | Node::DistinctCounts { id, input, .. } => {
             (id, plan::Kind::Statistics, vec![input.clone()])
         }
-        Node::OrderedFirst { id, input, .. } => (id, plan::Kind::Ordered, vec![input.clone()]),
+        Node::OrderedFirst { id, input, .. } | Node::TopK { id, input, .. } => {
+            (id, plan::Kind::Ordered, vec![input.clone()])
+        }
         Node::OrderedFinalize { id, input, .. }
         | Node::Partition { id, input, .. }
         | Node::LeftJoin { id, input, .. }
@@ -275,6 +277,9 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
     plan::Node { id: id.clone(), kind, inputs, schema: schema(id) }
 }
 fn plan_revision(ir: &Relational) -> &'static str {
+    if ir.nodes.iter().any(|node| matches!(node, Node::TopK { .. })) {
+        return "worker-relational-ordered-topk-v1";
+    }
     if ir.nodes.iter().any(|node| matches!(node, Node::OrderedFirst { .. })) {
         return "worker-relational-ordered-extrema-v4";
     }
@@ -315,7 +320,8 @@ pub(in crate::worker) fn plan(
             maintained.insert(id.clone(), id.clone());
             maintained.insert(input.clone(), input.clone());
         }
-        if let Node::OrderedFirst { id, input, .. }
+        if let Node::TopK { id, input, .. }
+        | Node::OrderedFirst { id, input, .. }
         | Node::OrderedFinalize { id, input, .. }
         | Node::Partition { id, input, .. }
         | Node::LeftJoin { id, input, .. }
@@ -405,11 +411,27 @@ fn partition_by(
 
 fn bind_ordered(node: &Node, operators: &mut Operators<Key, Row>) {
     match node {
+        Node::TopKInput { id, spec, .. } => {
+            operators.projects.insert(id.clone(), Arc::new(super::topk::input(spec)));
+        }
+        Node::TopK { id, spec, .. } => {
+            operators.ordered.insert(
+                id.clone(),
+                Arc::new(crate::engine::dataflow::OrderedSelection::TopK(super::topk::operator(
+                    spec,
+                ))),
+            );
+        }
         Node::OrderedInput { id, spec, .. } => {
             operators.expansions.insert(id.clone(), Arc::new(super::ordered::input(spec)));
         }
         Node::OrderedFirst { id, spec, .. } => {
-            operators.ordered.insert(id.clone(), Arc::new(super::ordered::first(spec)));
+            operators.ordered.insert(
+                id.clone(),
+                Arc::new(crate::engine::dataflow::OrderedSelection::First(super::ordered::first(
+                    spec,
+                ))),
+            );
         }
         Node::OrderedGroup { id, .. } => {
             operators.projects.insert(id.clone(), Arc::new(super::ordered::group()));
@@ -430,6 +452,18 @@ fn bind_left_join(node: &Node, operators: &mut Operators<Key, Row>, settings: &S
             operators
                 .partitions
                 .insert(id.clone(), Arc::new(super::left_join::operator(spec, settings.limits)));
+        }
+        _ => {}
+    }
+}
+
+fn bind_keys(node: &Node, operators: &mut Operators<Key, Row>, compiled: &Compiled) {
+    match node {
+        Node::KeyBy { id, key, .. } => {
+            operators.projects.insert(id.clone(), Arc::new(key_by(key)));
+        }
+        Node::PartitionBy { id, keys, .. } => {
+            operators.projects.insert(id.clone(), Arc::new(partition_by(keys, compiled)));
         }
         _ => {}
     }

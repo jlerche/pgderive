@@ -17,6 +17,7 @@ use tokio_postgres::Client;
 pub struct Protection {
     catalog: Catalog,
     token: String,
+    id: i64,
     uploading: bool,
     roots: Vec<ObjectRef>,
     namespace: Option<String>,
@@ -29,7 +30,7 @@ impl Catalog {
     /// retain uncertain reservations; never infer release from connection loss.
     ///
     /// # Errors
-    /// Rejects reused/invalid tokens or database failures.
+    /// Rejects invalid tokens, tokens still recorded, or database failures.
     pub async fn protect_upload(&self, sql: &mut Client, token: &str) -> Result<Protection> {
         insert(sql, self, token, 0).await
     }
@@ -37,7 +38,7 @@ impl Catalog {
     /// Retain the protection for every reader using the returned root membership.
     ///
     /// # Errors
-    /// Rejects corrupt/missing checkpoints, reused tokens or database failures.
+    /// Rejects corrupt/missing checkpoints, tokens still recorded, or database failures.
     pub async fn protect_checkpoint(
         &self,
         sql: &mut Client,
@@ -87,13 +88,15 @@ impl Catalog {
         }
         let fence = fence.unwrap_or(0);
         let recovering = recovery_fence.is_some();
-        tx.execute(&format!("INSERT INTO {0}.pgderive_protections(token,query_id,owner_fence,uploading,recovering,roots) VALUES($1,$2,$3,false,$4,$5)",self.schema),&[&token,&self.query,&fence,&recovering,&serde_json::to_value(&roots)?]).await?;
+        let row = tx.query_one(&format!("INSERT INTO {0}.pgderive_protections(token,query_id,owner_fence,uploading,recovering,roots) VALUES($1,$2,$3,false,$4,$5) RETURNING id",self.schema),&[&token,&self.query,&fence,&recovering,&serde_json::to_value(&roots)?]).await?;
+        let id: i64 = row.try_get(0)?;
         tx.commit()
             .await
             .context("protection COMMIT requires authoritative inspection on failure")?;
         Ok(Protection {
             catalog: self.clone(),
             token: token.into(),
+            id,
             uploading: false,
             roots,
             namespace: None,
@@ -147,6 +150,7 @@ async fn insert(
     Ok(Protection {
         catalog: catalog.clone(),
         token: token.into(),
+        id,
         uploading: true,
         roots,
         namespace: Some(namespace),
@@ -180,6 +184,9 @@ impl Protection {
         &self.roots
     }
     /// Release an upload only after exact candidate publication is confirmed.
+    /// Every PUT in this reservation namespace must already have finished, and
+    /// the namespace must never be used for another write. This caller precondition
+    /// establishes quiescence; checkpoint confirmation alone cannot prove it.
     ///
     /// # Errors
     /// Rejects a different query, uncertain/stale writer or nonmatching checkpoint.
@@ -212,7 +219,7 @@ impl Protection {
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
         shared(&tx, &self.catalog).await?;
-        let affected = tx.execute(&format!("UPDATE {}.pgderive_protections SET active=false WHERE token=$1 AND query_id=$2 AND uploading=$3 AND roots=$4 AND active",self.catalog.schema),&[&self.token,&self.catalog.query,&self.uploading,&serde_json::to_value(&self.roots)?]).await?;
+        let affected = tx.execute(&format!("UPDATE {}.pgderive_protections SET active=false,quiescent=true WHERE token=$1 AND query_id=$2 AND uploading=$3 AND roots=$4 AND active AND id=$5",self.catalog.schema),&[&self.token,&self.catalog.query,&self.uploading,&serde_json::to_value(&self.roots)?,&self.id]).await?;
         ensure!(affected == 1, "storage protection changed or disappeared");
         tx.commit().await.context("protection release COMMIT outcome uncertain")?;
         Ok(())
@@ -224,7 +231,7 @@ impl Writer {
     /// Keep the reservation active through authoritative publication resolution.
     ///
     /// # Errors
-    /// Rejects uncertain/stale writers, reused tokens or database failures.
+    /// Rejects uncertain/stale writers, tokens still recorded, or database failures.
     pub async fn protect_upload(&self, sql: &mut Client, token: &str) -> Result<Protection> {
         ensure!(!self.uncertain, "uncertain writer cannot reserve uploads");
         insert(sql, &self.catalog, token, self.fence).await
