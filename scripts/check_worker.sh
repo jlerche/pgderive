@@ -249,6 +249,10 @@ for qualification in query-health query-health-failure query-health-slot query-s
     fi
 done
 ./scripts/package_release.sh "$output/package"
+container_tag="pgderive-qualification:gate-${BASHPID}"
+python3 scripts/build_container.py "$output/package" "$output/container-image" --tag "$container_tag"
+python3 scripts/query_container_harness.py "$output/query-container" --image "$container_tag" \
+    --image-manifest "$output/container-image/manifest.json" --duration-seconds 35 --interval-seconds 1
 mkdir "$output/query-capacity"
 if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/query-capacity" \
     python3 scripts/query_capacity_harness.py "$output/query-capacity" -- "$output/package/bin/pgderive"; then
@@ -256,7 +260,7 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/q
     exit 1
 fi
 python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
-import hashlib,json,os,pathlib,subprocess,sys
+import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
 assert len(results)==175,results
@@ -268,7 +272,7 @@ health_failures=list((output/'query-health-failure').glob('*/qualification.json'
 assert len(health_failures)==6,health_failures
 for result in health_failures:
     json.loads(result.read_text())
-for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls','query-postgres-tls','query-recovery','query-capacity'):
+for name in ('query-rebuild','query-rebuild-limits','query-health','query-health-slot','query-storage-tls','query-postgres-tls','query-recovery','query-container','query-capacity'):
     json.loads((output/name/'qualification.json').read_text())
 for fault in rebuild_faults:
     json.loads(fault.read_text())
@@ -277,12 +281,17 @@ for removal in removals:
 for result in results:
     json.loads(result.read_text())
 root=pathlib.Path.cwd()
+private_credential=output/'query-container/secrets/s3.json'
+credential_info=private_credential.stat()
+assert stat.S_ISREG(credential_info.st_mode) and stat.S_IMODE(credential_info.st_mode)==0o600
+assert credential_info.st_uid==10001
 files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),pathlib.Path(sys.argv[3]).with_name('postgres_tls_control_probe'),
        *sorted((root/'src').rglob('*.rs')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
-       *sorted((root/'docs').glob('*.md')), output/'package/bin/pgderive',
-       *sorted((root/'scripts').glob('*.sh')), *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(output.rglob('*.json')),
+       *sorted((root/'docs').glob('*.md')), root/'.dockerignore', *sorted((root/'deploy').glob('*')), output/'package/bin/pgderive',
+       *sorted((root/'scripts').glob('*.sh')), *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(path for path in output.rglob('*.json') if path != private_credential),
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]
-provenance={'git_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+provenance={'private_inputs':{str(private_credential.relative_to(root)):{'uid':credential_info.st_uid,'gid':credential_info.st_gid,'mode':'0600','bytes':credential_info.st_size,'scope':'ownership/mode attestation only; private credential contents remain unreadable to the host qualifier'}},
+            'git_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
             'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),
             'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p',os.environ.get('PGDERIVE_TEST_POSTGRES_PORT','55434'),'-U','postgres','-d','pgderive_dev','-Atc','SELECT version()'],text=True,env={**os.environ,"PGPASSWORD":os.environ.get("PGPASSWORD","postgres")}).strip(),
             'sha256':{str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest() for path in files}}

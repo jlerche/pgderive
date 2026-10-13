@@ -8,7 +8,8 @@ HA service or arbitrary PostgreSQL SQL implementation.
 ## Build and inspect
 
 Use the repository's pinned Rust toolchain, a C toolchain/Clang for pg_query,
-OpenSSL development libraries and Python3. Build a host-native package:
+OpenSSL development libraries and Python3. Image qualification also requires
+Docker with BuildKit and support for local tmpfs-backed scratch volumes. Build a host-native package:
 
 ```sh
 ./scripts/package_release.sh artifacts/package-my-release
@@ -23,6 +24,31 @@ package script clears inherited Rust instrumentation flags, compiler wrappers,
 target and release-profile overrides and uses a separate target/package-release
 build directory with an explicit host target. Its manifest records this policy; gate package measurements
 therefore use an uninstrumented release binary. A successful build alone does not establish the live PostgreSQL/object-store gate.
+
+## Build the container image
+
+The runtime image uses a scratch base and bundles the release executable, its
+host ELF loader/library closure and the host CA bundle. No package repository or
+network is consulted during Docker build. The image manifest binds the package
+manifest, every runtime input hash and the resulting image ID. Context and BuildKit image timestamps
+are normalized to the source commit timestamp through SOURCE_DATE_EPOCH. Two
+clean no-cache builds must produce the same immutable image ID; both IDs and the
+epoch are recorded in the manifest. The Rust package remains host-native and does not promise identical
+bytes across arbitrary build hosts. Build on the target architecture and inspect
+both manifests before release:
+
+```sh
+./scripts/package_release.sh artifacts/package-my-release
+python3 scripts/build_container.py artifacts/package-my-release \
+  artifacts/image-my-release --tag pgderive:my-release
+```
+
+Build from a clean reviewed commit for deployment. Qualification may use an
+explicitly attested dirty tree before its commit; that image is a test artifact.
+The scratch image has no shell, runs UID/GID10001, starts the executable directly
+as PID1 and declares SIGINT as its stop signal. It contains no query configuration
+or credentials. Supply `query create /etc/pgderive/query.toml` for first activation
+and `query restart /etc/pgderive/query.toml` for subsequent starts.
 
 ## Provision
 
@@ -91,17 +117,52 @@ workloads and verify failure/recovery with those limits in the selected platform
 Resource exhaustion fails without ACK. Inspect the exact category, preserve
 artifacts, adjust a verified budget or remove the cause, then restart. Slot loss
 requires the explicit rebuild path on the same source identity. Read the
-backup-failover.md policy before restore or promoted failover. No container is built or deployed by the package script or qualification harness.
+backup-failover.md policy before restore or promoted failover. The package script builds binaries; the separate image builder creates the runtime image. Neither deploys a service.
 
 ## Qualification scope
 
-The workload harness tests an external process restart policy, SIGINT,
-unavailable storage and recovery. It does not qualify a container image,
-orchestrator, mounted secrets or runtime resource limits. Exercise those with
-the selected deployment platform before production. Native PostgreSQL and
-independent memory oracles check results.
-Read the retained measurements before choosing resource limits; neither one
-passing run nor a byte budget establishes universal throughput or an RSS bound.
+The container harness runs the actual image against newly owned tmpfs PostgreSQL
+with restricted TLS worker roles and a local HTTPS proxy to SeaweedFS. It mounts
+configuration/CA read-only and a mode0600 S3 credential file owned by UID10001.
+Workers have a read-only root filesystem, dropped capabilities, no-new-privileges,
+a 512MiB container memory limit and two CPUs. Scratch uses a separately owned
+256MiB tmpfs-backed volume held mounted by an evidence keeper across worker
+restarts; the engine scratch byte budget is 128MiB. A marker proves that the
+mount survives actual container stop/start. Failed runs archive scratch and retain
+the owned containers/volume for inspection. The database never uses that volume;
+its storage remains disposable tmpfs. These limits are specific test inputs,
+not general sizing recommendations.
+
+Run sequentially with the other mutating PostgreSQL harnesses:
+
+```sh
+python3 scripts/query_container_harness.py artifacts/container-soak-my-release \
+  --image pgderive:my-release --image-manifest artifacts/image-my-release/manifest.json \
+  --duration-seconds 1800 --interval-seconds 5
+```
+
+The default thirty-minute workload maintains three queries: a grouped inner join,
+grouped COUNT/SUM/AVG/integral COUNT DISTINCT and grouped integral MIN/MAX. Transactions repeatedly insert,
+update and delete skewed source rows, include NULLs and simultaneous join-input
+changes, and are checked against native PostgreSQL materialized views and an
+independent source-row memory calculation. It forces SIGKILL and starts the same
+restart container every thirty iterations and at the end, then checks recovered
+results. SIGINT shutdown is checked separately. The harness resolves the image to its immutable ID before execution and checks
+every worker container against that ID. It verifies every Python qualifier/helper
+hash against the image package source manifest at start and finish, preventing
+mutable test code from being attributed to an earlier image. Progression samples
+record cache hits/misses, RSS,
+scratch usage, coarse membership roots, protection-ledger growth and slot WAL
+backlog; event/request logs witness compaction/collection and signed conditional
+PUTs. Final physical inventories include retained/unpublished objects. A short
+run is runtime acceptance, not sustained-capacity evidence; inspect requested
+and actual elapsed duration in qualification.json before calling a run a soak.
+
+This qualifies the local Docker runtime and local SeaweedFS TLS fixture, rather
+than a cloud provider, orchestrator or arbitrary workload. The production memory,
+scratch and WAL budgets still require representative deployment sizing. Neither
+one passing run nor an engine byte budget establishes universal throughput or
+an RSS ceiling.
 
 The retained optimized-package candidate run used 64 auctions and 10,000 bids,
 including 9,531 bids on one auction and 2,000 NULL prices. It applied 100 complete

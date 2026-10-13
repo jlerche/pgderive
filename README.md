@@ -95,7 +95,9 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. GitHub Actions runs the
 same gate. Coverage combines unit tests and the sequential live PostgreSQL
-harness, so the common gate needs local PostgreSQL or Docker plus `psql`. Compiler warnings and dead/unused code
+harness, so the common gate needs `psql` and Docker with BuildKit for owned tmpfs
+fixtures and actual image/runtime checks, even when a local PostgreSQL endpoint
+is supplied. Compiler warnings and dead/unused code
 are errors; unsafe code is forbidden. Clippy denies `all`, `pedantic`, and
 `nursery`, plus explicit complexity and selected restriction lints.
 
@@ -867,4 +869,6 @@ tmpfs PostgreSQL fixture.
 A host-native package and container runtime guidance are described in
 [deployment](docs/deployment.md), with the conservative
 [backup/failover policy](docs/backup-failover.md). Packaging builds and records
-artifacts; it does not build or deploy a container or credentials.
+artifacts. `scripts/build_container.py` builds the separately attested runtime
+image from that package; neither script deploys production workers or credentials.
+The actual container harness and longer soak are described in the deployment guide.
