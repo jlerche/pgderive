@@ -3,6 +3,7 @@
 mod bind;
 mod case;
 mod expression;
+pub(crate) mod left_join;
 pub(crate) mod lookup;
 pub(crate) mod navigation;
 mod parser;

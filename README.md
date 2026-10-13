@@ -8,7 +8,7 @@ object-backed state and transactional publication are implemented for the typed
 project/inner-join/group/count/nullable-integer-sum composition. A bounded SQL compiler targets grouped joins, source projections and ungrouped
 inner-join projections, grouped aggregates, fixed/hopping buckets, ordered windows,
 derived-query filtering and composed window/group stages, native left predecessor lookup,
-and explicit revisable sessions through durable circuits; see
+explicit revisable sessions, and bounded self/multiway/left join trees through durable circuits; see
 [the SQL subset and compiler boundaries](docs/sql-compiler.md).
 
 ## Query inspection and typed results
@@ -854,8 +854,8 @@ resident byte budget to exercise external consolidation. Request logs, source
 fixtures on failure, worker metrics and SQL comparison results remain under the
 selected evidence directory. This establishes correctness within that measured
 workload; it does not claim arbitrary scale, an RSS ceiling or production S3
-throughput. Source schema changes, recursive graphs, floating-point sums, outer
-joins, arbitrary SQL and managed Supabase privilege provisioning are outside this
+throughput. Source schema changes, recursive graphs, floating-point sums, full/right
+outer joins, arbitrary SQL and managed Supabase privilege provisioning are outside this
 engine MVP.
 
 Operational health observations and failure qualification are documented in

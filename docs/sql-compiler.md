@@ -1196,8 +1196,9 @@ labels resolve within those scopes, and ambiguous unqualified names reject.
 Keys require identical native types: boolean, smallint, integer, bigint, UUID,
 timestamp or timestamptz. NULL in any key component excludes that tuple from the
 inner join. Text, numeric, coercions, OR/non-equality ON conditions, USING,
-NATURAL and outer joins remain unsupported here. Direct native/derived mixed
-joins are a separate boundary. Root WHERE uses the existing typed predicate
+NATURAL and outer joins remain unsupported by this original scoped inner path.
+The join-tree path described below adds LEFT and native/derived mixed joins.
+Root WHERE uses the existing typed predicate
 subset; grouped consumers can wrap the join in another derived query.
 
 Lowering prefixes graph IDs, assigns global source indices, adapts each raw
@@ -1444,3 +1445,37 @@ zone, including an explicit attested UTC conversion from timestamptz. Arbitrary
 named zones, ambient-session timestamptz extraction, volatile functions, user
 functions and arbitrary casts remain rejected. UTC is a bound execution context;
 source LSN and logical time remain distinct from temporal SQL values.
+
+## Native and mixed derived join trees
+
+The compiler accepts bounded trees of native sources and non-LATERAL derived
+queries with INNER, CROSS and LEFT joins. Self joins have distinct source
+occurrences, each receiving the same complete physical-source delta. Trees
+are limited to 16 source occurrences and nesting depth 16. Equality ON clauses
+may contain conjunctions of native columns with matching types, modifiers and
+collations; supported keys are boolean, integral, UUID and timestamp types.
+Aliases hide original relation names, quoted identifiers retain case, and
+ambiguous references reject before registration. RIGHT/FULL/NATURAL/USING joins,
+join aliases, inequality or disjunctive ON clauses, implicit key coercions and
+text keys remain unsupported. Grouping over a tree uses an enclosing derived
+query; intermediate sink-deferred expressions reject.
+
+Inner joins execute the maintained incremental join, including simultaneous
+input cross terms. LEFT joins tag and union both complete input deltas, then
+recompute affected retained key partitions and subtract their prior outputs.
+NULL keys on opposite sides cannot match. An unmatched left tuple produces
+one null-extended right tuple with its original multiplicity; matched weights
+multiply exactly before final narrowing. WHERE runs after null extension, so
+filtering a matched row cannot manufacture an unmatched row. Complete tuple
+identity survives state maintenance, publication and cold recovery. Left joins
+currently do not establish a uniqueness proof for positional window ordering.
+
+The join tree revision binds source occurrences, compound keys, retained left
+join semantics and inner compiler revisions alongside native source contracts
+and codecs. Changed SQL cannot reuse incompatible durable state. Affected-key
+recomputation and join fanout remain bounded by execution budgets; this slice
+does not establish indexed outer-join performance at arbitrary scale.
+
+The sequential native join harness compares eight query shapes against native
+PostgreSQL materialized views from identical SQL and an independent raw-row
+loop oracle, through NULLs, updates, deletes, simultaneous changes and restart.

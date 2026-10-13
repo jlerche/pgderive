@@ -18,7 +18,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     else {
         return Ok(None);
     };
-    if right.lateral || left.lateral {
+    if right.lateral || left.lateral || join.jointype != i32::from(pg::JoinType::JoinInner) {
         return Ok(None);
     }
     ensure!(

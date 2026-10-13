@@ -36,6 +36,9 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
     for node in &ir.nodes {
         match node {
             Node::Source { .. } | Node::Union { .. } => {}
+            Node::LeftJoinInput { .. } | Node::LeftJoin { .. } => {
+                bind_left_join(node, &mut operators, settings);
+            }
             Node::LookupInput { id, spec, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(super::lookup::input(spec)));
             }
@@ -247,6 +250,7 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         | Node::Output { id, input }
         | Node::PartitionBy { id, input, .. }
         | Node::Finalize { id, input, .. }
+        | Node::LeftJoinInput { id, input, .. }
         | Node::LookupInput { id, input, .. }
         | Node::OrderedGroup { id, input }
         | Node::DistinctMembership { id, input, .. } => {
@@ -264,6 +268,7 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         Node::OrderedFirst { id, input, .. } => (id, plan::Kind::Ordered, vec![input.clone()]),
         Node::OrderedFinalize { id, input, .. }
         | Node::Partition { id, input, .. }
+        | Node::LeftJoin { id, input, .. }
         | Node::Lookup { id, input, .. } => (id, plan::Kind::Aggregate, vec![input.clone()]),
         Node::Join { id, left, right } => (id, plan::Kind::Join, vec![left.clone(), right.clone()]),
     };
@@ -276,7 +281,9 @@ fn plan_revision(ir: &Relational) -> &'static str {
     if ir.nodes.iter().any(|node| matches!(node, Node::DistinctCounts { .. })) {
         return "worker-relational-exact-distinct-v3";
     }
-    if ir.nodes.iter().any(|node| matches!(node, Node::Partition { .. } | Node::Lookup { .. })) {
+    if ir.nodes.iter().any(|node| {
+        matches!(node, Node::Partition { .. } | Node::LeftJoin { .. } | Node::Lookup { .. })
+    }) {
         "worker-relational-retained-partition-v2"
     } else {
         "worker-relational-v1"
@@ -311,6 +318,7 @@ pub(in crate::worker) fn plan(
         if let Node::OrderedFirst { id, input, .. }
         | Node::OrderedFinalize { id, input, .. }
         | Node::Partition { id, input, .. }
+        | Node::LeftJoin { id, input, .. }
         | Node::Lookup { id, input, .. } = node
         {
             maintained.insert(input.clone(), input.clone());
@@ -408,6 +416,20 @@ fn bind_ordered(node: &Node, operators: &mut Operators<Key, Row>) {
         }
         Node::OrderedFinalize { id, spec, .. } => {
             operators.partitions.insert(id.clone(), Arc::new(super::ordered::finalize(spec)));
+        }
+        _ => {}
+    }
+}
+
+fn bind_left_join(node: &Node, operators: &mut Operators<Key, Row>, settings: &Settings) {
+    match node {
+        Node::LeftJoinInput { id, spec, .. } => {
+            operators.projects.insert(id.clone(), Arc::new(super::left_join::input(spec)));
+        }
+        Node::LeftJoin { id, spec, .. } => {
+            operators
+                .partitions
+                .insert(id.clone(), Arc::new(super::left_join::operator(spec, settings.limits)));
         }
         _ => {}
     }

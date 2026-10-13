@@ -203,3 +203,5 @@ mod terminal_text;
 mod incremental_distinct;
 
 mod ordered;
+
+mod native_join;

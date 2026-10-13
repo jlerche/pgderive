@@ -11,10 +11,10 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 
-struct Scope {
-    alias: String,
-    ir: Relational,
-    revision: String,
+pub(super) struct Scope {
+    pub(super) alias: String,
+    pub(super) ir: Relational,
+    pub(super) revision: String,
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let left = scope(parsed.left, "left_", 0, contract)?;
@@ -82,7 +82,7 @@ fn join_keys(keys: Option<Vec<(ColumnRef, ColumnRef)>>) -> [Node; 2] {
         },
     ]
 }
-fn scope(
+pub(super) fn scope(
     (parsed, alias): (Box<crate::compiler::parser::Parsed>, String),
     prefix: &str,
     offset: usize,

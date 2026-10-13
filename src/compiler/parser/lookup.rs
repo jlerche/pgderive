@@ -19,6 +19,16 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     let NodeEnum::RangeSubselect(subquery) = node(optional(join.rarg.as_deref())?)? else {
         return Ok(None);
     };
+    if !subquery.lateral {
+        return Ok(None);
+    }
+    parsed(select, join, subquery).map(Some)
+}
+fn parsed(
+    select: &pg::SelectStmt,
+    join: &pg::JoinExpr,
+    subquery: &pg::RangeSubselect,
+) -> Result<Parsed> {
     validate_join(join, select, subquery)?;
     let alias = subquery.alias.as_ref().context("lookup subquery requires an alias")?;
     ensure!(alias.colnames.is_empty(), "lookup column alias list unsupported");
@@ -26,7 +36,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         anyhow::bail!("lookup requires SELECT");
     };
     let (right, condition, order) = inner_shape(inner)?;
-    Ok(Some(Parsed {
+    Ok(Parsed {
         left: table(optional(join.larg.as_deref())?)?,
         right,
         alias: alias.aliasname.clone(),
@@ -35,7 +45,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         condition,
         order,
         predicate: syntax::predicate(select.where_clause.as_deref())?,
-    }))
+    })
 }
 fn validate_join(
     join: &pg::JoinExpr,

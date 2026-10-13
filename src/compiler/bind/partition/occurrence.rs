@@ -75,6 +75,7 @@ fn infer<'a>(
             (id, identity)
         }
         Node::Union { id, .. }
+        | Node::LeftJoin { id, .. }
         | Node::Lookup { id, .. }
         | Node::OrderedInput { id, .. }
         | Node::OrderedFirst { id, .. }
@@ -87,6 +88,7 @@ fn infer<'a>(
         | Node::KeyBy { id, input, .. }
         | Node::CrossKey { id, input }
         | Node::EquijoinKey { id, input, .. }
+        | Node::LeftJoinInput { id, input, .. }
         | Node::LookupInput { id, input, .. }
         | Node::Project { id, input }
         | Node::Output { id, input }

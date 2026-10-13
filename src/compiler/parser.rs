@@ -8,6 +8,7 @@ pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
 pub(super) mod lookup;
+pub(super) mod native_join;
 pub(super) mod navigation;
 pub(super) mod offset;
 pub(super) mod partition;
@@ -24,6 +25,7 @@ pub(super) struct Table {
 }
 pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::Transform)>;
 pub(super) enum Parsed {
+    NativeJoin(native_join::Parsed),
     ScopedJoin(scoped_join::Parsed),
     Derived(derived::Derived),
     Lookup(lookup::Parsed),
@@ -145,6 +147,9 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     }
     if let Some(lookup) = lookup::parse(select)? {
         return Ok(Parsed::Lookup(lookup));
+    }
+    if let Some(join) = native_join::parse(select)? {
+        return Ok(Parsed::NativeJoin(join));
     }
     if partition::eligible(select)? {
         return partition::parse(select)

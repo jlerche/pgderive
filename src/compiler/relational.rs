@@ -23,6 +23,8 @@ pub enum Node {
     EquijoinKey { id: String, input: String, keys: Vec<ColumnRef> },
     Join { id: String, left: String, right: String },
     Union { id: String, left: String, right: String },
+    LeftJoinInput { id: String, input: String, spec: super::left_join::Input },
+    LeftJoin { id: String, input: String, spec: super::left_join::Spec },
     LookupInput { id: String, input: String, spec: super::lookup::Input },
     Lookup { id: String, input: String, spec: super::lookup::Lookup },
     Project { id: String, input: String },
