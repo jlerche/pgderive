@@ -116,13 +116,11 @@ fn normalization_and_fail_closed_types() -> Result<()> {
         "u = '0-0000000000000000000000000000000'",
         "n > 1.5",
         "big > 9223372036854775808",
-        "n+1>0",
         "n BETWEEN 1 AND 2",
         "n IN (1,2)",
         "n IS DISTINCT FROM 1",
         "true IS NULL",
         "ROW(a) IS NULL",
-        "n = CAST(1 AS integer)",
         "abs(n)>0",
         "a IS TRUE",
         "n OPERATOR(pg_catalog.=) 1",
@@ -187,7 +185,6 @@ fn postgres_remainder_sign_null_and_minimum_integer() -> Result<()> {
         "mod(n,3) OVER ()=0",
         "mod(mod(n,3),2)=0",
         "mod(n,3)",
-        "n + 3=0",
     ] {
         assert!(expression(sql).is_err(), "accepted {sql}");
     }

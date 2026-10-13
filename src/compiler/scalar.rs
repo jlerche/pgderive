@@ -18,6 +18,7 @@ pub struct Computed {
 #[derive(Clone, Serialize)]
 #[serde(untagged)]
 pub enum Native {
+    Typed { typed: super::typed::Typed },
     Bin(DateBin),
     Case { case: super::case::Case },
     Offset { offset: Offset },
@@ -26,6 +27,7 @@ pub enum Native {
 impl Native {
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         match self {
+            Self::Typed { typed } => typed.evaluate(row),
             Self::Bin(value) => value.evaluate(row),
             Self::Case { case } => case.evaluate(row),
             Self::Offset { offset } => offset.evaluate(row),
@@ -35,7 +37,10 @@ impl Native {
     pub(super) const fn shift(&self) -> Option<&(ColumnRef, i64)> {
         match self {
             Self::Bin(value) => value.shift.as_ref(),
-            Self::Case { .. } | Self::Offset { .. } | Self::Remainder { .. } => None,
+            Self::Typed { .. }
+            | Self::Case { .. }
+            | Self::Offset { .. }
+            | Self::Remainder { .. } => None,
         }
     }
 }

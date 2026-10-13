@@ -21,6 +21,9 @@ impl Program {
             self.predicate.map_or(Ok::<String, anyhow::Error>("TRUE".into()), |index| {
                 Ok(format!("({}) IS TRUE", get(&nodes, index)?))
             })?;
+        // The serialized program is always supplied as parameter two, including
+        // programs without literals. Keep its parameter type bound explicitly.
+        let predicate = format!("({predicate}) AND ($2::pg_catalog.jsonb IS NOT NULL)");
         Ok((columns, predicate))
     }
 }
@@ -49,6 +52,7 @@ fn render(
             };
             Ok(format!("(tuple->1->>{index})::pg_catalog.{native}"))
         }
+        Expression::Null(oid) => typed_null(*oid),
         Expression::Literal(literal) => {
             let (variant, native) = match literal {
                 Literal::Text(_) => ("Text", "text"),
@@ -64,6 +68,9 @@ fn render(
                 .iter()
                 .map(|index| Ok(get(nodes, *index)?.to_string()))
                 .collect::<Result<Vec<_>>>()?;
+            if let Function::Calendar(field) = function {
+                arguments.insert(0, format!("'{}'::pg_catalog.text", field.name()));
+            }
             if *function == Function::Hour {
                 arguments.insert(0, "'hour'::pg_catalog.text".into());
             }
@@ -80,6 +87,11 @@ fn render(
         }
         Expression::IsNull { input, negated } => {
             Ok(format!("({}) IS {}NULL", get(nodes, *input)?, if *negated { "NOT " } else { "" }))
+        }
+        Expression::Coalesce(arguments) => {
+            let arguments =
+                arguments.iter().map(|index| get(nodes, *index)).collect::<Result<Vec<_>>>()?;
+            Ok(format!("COALESCE({})", arguments.join(",")))
         }
         Expression::And(arguments) => boolean(arguments, nodes, " AND "),
         Expression::Or(arguments) => boolean(arguments, nodes, " OR "),
@@ -102,4 +114,20 @@ fn boolean(arguments: &[usize], nodes: &[String], operator: &str) -> Result<Stri
         .map(|index| Ok(format!("({})", get(nodes, *index)?)))
         .collect::<Result<Vec<_>>>()?;
     Ok(format!("({})", values.join(operator)))
+}
+
+fn typed_null(oid: u32) -> Result<String> {
+    let name = match oid {
+        16 => "bool",
+        20 => "int8",
+        21 => "int2",
+        23 => "int4",
+        25 => "text",
+        2950 => "uuid",
+        1114 => "timestamp",
+        1184 => "timestamptz",
+        1700 => "numeric",
+        _ => anyhow::bail!("unsupported typed NULL"),
+    };
+    Ok(format!("NULL::pg_catalog.{name}"))
 }

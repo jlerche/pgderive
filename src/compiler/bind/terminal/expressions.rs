@@ -16,6 +16,10 @@ impl Builder<'_> {
         };
         let function = match operator.as_str() {
             "*" => Function::Multiply,
+            "+" => Function::Integral {
+                operation: crate::catalog::terminal::program::Operation::Add,
+                oid: 23,
+            },
             ">" => Function::Greater,
             "<" => Function::Less,
             ">=" => Function::GreaterEqual,
@@ -26,11 +30,12 @@ impl Builder<'_> {
         };
         let left = self.expression(optional(value.lexpr.as_deref())?, depth)?;
         let right = self.expression(optional(value.rexpr.as_deref())?, depth)?;
-        if function == Function::Multiply {
-            ensure!(
-                self.types.get(left) == Some(&1700) || self.types.get(right) == Some(&1700),
-                "integral multiplication requires native overflow semantics and is unsupported"
-            );
+        if matches!(operator.as_str(), "+" | "-" | "*")
+            && [left, right]
+                .iter()
+                .all(|index| matches!(self.types.get(*index), Some(20 | 21 | 23)))
+        {
+            return self.integral_operator(operator, left, right);
         }
         let arguments = if matches!(function, Function::Subtract | Function::TextEqual) {
             vec![left, right]
@@ -72,12 +77,20 @@ impl Builder<'_> {
                     anyhow::bail!("calendar function requires two arguments");
                 };
                 let text = crate::compiler::parser::scalar::string(literal)?;
-                ensure!(
-                    text == if function == "extract" { "hour" } else { "UTC" },
-                    "only hour extraction and explicit UTC supported"
-                );
+                let selected = if function == "extract" {
+                    if text == "hour" {
+                        Function::Hour
+                    } else {
+                        Function::Calendar(crate::catalog::terminal::program::Calendar::parse(
+                            &text,
+                        )?)
+                    }
+                } else {
+                    ensure!(text == "UTC", "only explicit UTC timezone conversion supported");
+                    Function::Utc
+                };
                 let input = self.expression(input, depth)?;
-                let function = if function == "extract" { Function::Hour } else { Function::Utc };
+                let function = selected;
                 self.push(Expression::Call { function, arguments: vec![input] })
             }
             _ => anyhow::bail!("unsupported terminal built-in"),

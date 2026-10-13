@@ -50,6 +50,13 @@ impl QueryDefinition {
     ) -> Result<crate::compiler::Compiled> {
         let mut compiled = self.compile(contract)?;
         compiled.bind_terminal(sql).await?;
+        if let Self::Sql(query) = self {
+            // Parse/Describe does not run the planner. Planning the validated,
+            // closed SELECT catches immutable constant errors before registration.
+            sql.query(&format!("EXPLAIN (FORMAT JSON) {}", query.sql), &[])
+                .await
+                .context("PostgreSQL query planning failed")?;
+        }
         Ok(compiled)
     }
     pub(crate) fn compile(&self, contract: &Contract) -> Result<crate::compiler::Compiled> {

@@ -52,6 +52,15 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
             .context("missing gap compiler revision")?
             .push_str(":pg-timestamp-gap-v1");
     }
+    if compiled.predicates.as_ref().is_some_and(Expr::has_typed)
+        || matches!(&compiled.program, Program::Relational { relational } if relational.nodes.iter().any(node_typed))
+    {
+        compiled
+            .revision
+            .as_mut()
+            .context("missing predicate compiler revision")?
+            .push_str(":pg-checked-integral-predicate-v1");
+    }
     relational_revisions(compiled)?;
     Ok(())
 }
@@ -60,6 +69,7 @@ fn node_gap(node: &Node) -> bool {
         Node::Filter { predicate, .. } => predicate.has_gap(),
         Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
             Native::Case { case } => case.has_gap(),
+            Native::Typed { typed } => typed.has_gap(),
             Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
         }),
         Node::Partition { spec, .. }
@@ -78,6 +88,7 @@ fn node_text(node: &Node) -> bool {
         Node::Filter { predicate, .. } => predicate.has_text_equality(),
         Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
             Native::Case { case } => case.has_text_equality(),
+            Native::Typed { typed } => typed.has_text_equality(),
             Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
         }),
         Node::Partition { spec, .. }
@@ -120,6 +131,7 @@ fn node_text_key(node: &Node) -> bool {
 fn relational_revisions(compiled: &mut Compiled) -> Result<()> {
     if let Program::Relational { relational } = &compiled.program {
         for (used, suffix) in [
+            (relational.nodes.iter().any(|node| matches!(node, Node::Map { computed, .. } if computed.iter().any(|value| matches!(value.expression, Native::Typed { .. })))), ":pg-checked-integral-scalar-v1"),
             (
                 relational.nodes.iter().any(|node| matches!(node, Node::OrderedFirst { .. })),
                 ":pg-ordered-full-identity-extrema-v1",
@@ -150,4 +162,18 @@ fn relational_revisions(compiled: &mut Compiled) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn node_typed(node: &Node) -> bool {
+    match node {
+        Node::Filter { predicate, .. } => predicate.has_typed(),
+        Node::Partition { spec, .. }
+        | Node::Statistics { spec, .. }
+        | Node::OrderedFinalize { spec, .. }
+        | Node::Finalize { spec, .. } => spec
+            .aggregates
+            .iter()
+            .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_typed)),
+        _ => false,
+    }
 }

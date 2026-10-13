@@ -19,6 +19,7 @@ pub(super) enum Value {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) enum Scalar {
+    Typed(Box<super::typed::Typed>),
     Column(ColumnRef),
     Remainder(ColumnRef, i64),
     Difference(ColumnRef, ColumnRef),
@@ -59,7 +60,10 @@ pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
         syntax::Expr::Null(value, not) => {
             let value = match value {
                 syntax::Scalar::Column(name) => Scalar::Column(resolve(&name)?),
-                _ => anyhow::bail!("SQL type: NULL tests require a column"),
+                syntax::Scalar::Typed(value) => {
+                    Scalar::Typed(Box::new(super::typed::bind(&value, &|name| resolve(name), 0)?))
+                }
+                _ => anyhow::bail!("SQL type: NULL tests require a column or typed expression"),
             };
             Ok(Expr::Null(value, not))
         }
@@ -107,12 +111,28 @@ fn column_type(value: &syntax::Scalar, resolve: &Resolve<'_>) -> Result<Option<u
         syntax::Scalar::Column(name) | syntax::Scalar::Remainder(name, _) => {
             Ok(Some(resolve(name)?.oid))
         }
-        syntax::Scalar::Difference(..) => Ok(Some(1186)),
+        syntax::Scalar::Typed(value) => {
+            Ok(Some(super::typed::bind(value, &|name| resolve(name), 0)?.oid()))
+        }
+        syntax::Scalar::Difference(left, right) => {
+            let left = resolve(left)?;
+            let right = resolve(right)?;
+            Ok(Some(if integral(left.oid) && integral(right.oid) {
+                super::typed::difference(left, right).oid()
+            } else {
+                1186
+            }))
+        }
         _ => Ok(None),
     }
 }
 fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scalar> {
     let value = match value {
+        syntax::Scalar::Typed(value) => {
+            let value = super::typed::bind(&value, &|name| resolve(name), 0)?;
+            ensure!(integral(oid) && integral(value.oid()), "typed integral operand required");
+            return Ok(Scalar::Typed(Box::new(value)));
+        }
         syntax::Scalar::Column(name) => {
             let column = resolve(&name)?;
             ensure!(
@@ -131,6 +151,9 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
         }
         syntax::Scalar::Difference(left, right) => {
             let (left, right) = (resolve(&left)?, resolve(&right)?);
+            if integral(left.oid) && integral(right.oid) && integral(oid) {
+                return Ok(Scalar::Typed(Box::new(super::typed::difference(left, right))));
+            }
             ensure!(
                 oid == 1186 && matches!(left.oid, 1114 | 1184) && left.oid == right.oid,
                 "timestamp subtraction requires same-type native timestamp operands"
@@ -160,6 +183,7 @@ impl Scalar {
         let column = match self {
             Self::Column(column) => column,
             Self::Literal(value) => return Ok(value.clone()),
+            Self::Typed(value) => return Ok(value.evaluate_pair(rows)?.map(Value::Integer)),
             Self::Difference(left, right) => {
                 let (Some(Value::Timestamp(left)), Some(Value::Timestamp(right))) = (
                     Self::Column(left.clone()).evaluate(rows)?,
@@ -213,7 +237,9 @@ impl Scalar {
                 .context("compiled predicate column absent")?
                 .is_none()),
             Self::Literal(value) => Ok(value.is_none()),
-            Self::Remainder(_, _) | Self::Difference(_, _) => Ok(self.evaluate(rows)?.is_none()),
+            Self::Typed(_) | Self::Remainder(_, _) | Self::Difference(_, _) => {
+                Ok(self.evaluate(rows)?.is_none())
+            }
         }
     }
 }
@@ -290,17 +316,21 @@ fn uuid(text: &str) -> Result<[u8; 16]> {
 impl Expr {
     pub(super) fn has_text_equality(&self) -> bool {
         match self {
-            Self::Compare(_, left, right) => [left, right].iter().any(
-                |value| matches!(value, Scalar::Column(column) if matches!(column.oid, 25 | 1043)),
-            ),
+            Self::Compare(_, left, right) => [left, right].iter().any(|value| {
+                matches!(value, Scalar::Column(column) if matches!(column.oid, 25 | 1043))
+                    || matches!(value, Scalar::Typed(value) if value.has_text_equality())
+            }),
             Self::And(values) | Self::Or(values) => values.iter().any(Self::has_text_equality),
             Self::Not(value) => value.has_text_equality(),
-            Self::Value(_) | Self::Null(_, _) => false,
+            Self::Value(value) | Self::Null(value, _) => {
+                matches!(value, Scalar::Typed(value) if value.has_text_equality())
+            }
         }
     }
     pub(super) fn has_gap(&self) -> bool {
         let gap = |value: &Scalar| {
             matches!(value, Scalar::Difference(..) | Scalar::Literal(Some(Value::Interval(_))))
+                || matches!(value, Scalar::Typed(value) if value.has_gap())
         };
         match self {
             Self::Value(value) | Self::Null(value, _) => gap(value),
@@ -310,7 +340,10 @@ impl Expr {
         }
     }
     pub(super) fn has_remainder(&self) -> bool {
-        let scalar = |value: &Scalar| matches!(value, Scalar::Remainder(_, _));
+        let scalar = |value: &Scalar| {
+            matches!(value, Scalar::Remainder(_, _))
+                || matches!(value, Scalar::Typed(value) if value.has_remainder())
+        };
         match self {
             Self::Value(value) | Self::Null(value, _) => scalar(value),
             Self::Compare(_, left, right) => scalar(left) || scalar(right),
@@ -335,5 +368,22 @@ impl Predicate {
     }
     pub(crate) fn qualifies(&self, row: &Row) -> Result<bool> {
         Ok(self.0.evaluate((row, row))? == Some(true))
+    }
+}
+
+impl Expr {
+    pub(super) fn has_typed(&self) -> bool {
+        let typed = |value: &Scalar| matches!(value, Scalar::Typed(_));
+        match self {
+            Self::Value(value) | Self::Null(value, _) => typed(value),
+            Self::Compare(_, left, right) => typed(left) || typed(right),
+            Self::Not(value) => value.has_typed(),
+            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_typed),
+        }
+    }
+}
+impl Predicate {
+    pub(super) fn has_typed(&self) -> bool {
+        self.0.has_typed()
     }
 }

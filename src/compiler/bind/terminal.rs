@@ -17,6 +17,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
+mod casts;
 mod expressions;
 mod text;
 struct Builder<'a> {
@@ -60,7 +61,44 @@ pub(super) fn bind(
     } else {
         "sql-terminal-program-v1:pg-query-6.2.1:pg-17.7:typed-native-dag-v1:terminal-3vl-v1:raw-bag-v1:json-v2"
     };
+    if builder.columns.is_empty() {
+        let column = builder
+            .scope
+            .relation
+            .columns
+            .first()
+            .context("constant projection requires source column")?;
+        builder.columns.push(OutputColumn {
+            label: column.name.clone(),
+            column: ColumnRef {
+                name: column.name.clone(),
+                right: false,
+                oid: column.oid,
+                nullable: column.nullable,
+            },
+        });
+    }
     let input_types = builder.columns.iter().map(|output| output.column.oid).collect();
+    let extended = builder.program.expressions.iter().any(|value| {
+        matches!(
+            value,
+            Expression::Null(_)
+                | Expression::Coalesce(_)
+                | Expression::Call {
+                    function: Function::Int2
+                        | Function::Int4
+                        | Function::Int8
+                        | Function::Integral { .. }
+                        | Function::Calendar(_),
+                    ..
+                }
+        )
+    });
+    let revision = if extended {
+        format!("{revision}:pg-typed-terminal-integral-calendar-v2")
+    } else {
+        revision.into()
+    };
     let terminal = Terminal::from_program(builder.program, input_types)?;
     Ok(Compiled {
         program: crate::compiler::Program::Projection {
@@ -71,7 +109,7 @@ pub(super) fn bind(
                 terminal: Some(terminal),
             },
         },
-        revision: Some(revision.into()),
+        revision: Some(revision),
         predicates: None,
     })
 }
@@ -130,11 +168,13 @@ impl Builder<'_> {
         ensure!(depth < 64, "terminal expression depth exceeded");
         match node(value)? {
             NodeEnum::ColumnRef(_) => self.input(value),
+            NodeEnum::TypeCast(value) => self.cast(value, depth + 1),
             NodeEnum::AConst(value) => self.constant(value),
             NodeEnum::AExpr(value) => self.operator(value, depth + 1),
             NodeEnum::FuncCall(value) => self.call(value, depth + 1),
             NodeEnum::BoolExpr(value) => self.boolean(value, depth + 1),
             NodeEnum::CaseExpr(value) => self.case(value, depth + 1),
+            NodeEnum::CoalesceExpr(value) => self.coalesce(value, depth + 1),
             NodeEnum::CollateClause(value) => self.collate(value, depth + 1),
             NodeEnum::AIndirection(value) => self.array(value, depth + 1),
             NodeEnum::NullTest(value) => self.null_test(value, depth + 1),

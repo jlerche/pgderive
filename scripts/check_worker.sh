@@ -200,7 +200,7 @@ if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/n
     cat "$output/nexmark-q21/harness.log" >&2
     exit 1
 fi
-for qualification in query-toast query-ordered-state; do
+for qualification in query-toast query-ordered-state query-expression query-expression-calendar; do
     mkdir "$output/$qualification"
     if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/$qualification" \
         python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${worker[@]}"; then
@@ -263,7 +263,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==175,results
+assert len(results)==180,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))

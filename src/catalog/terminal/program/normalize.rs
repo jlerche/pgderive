@@ -31,8 +31,9 @@ impl Program {
 }
 fn references(expression: &Expression) -> Vec<usize> {
     match expression {
-        Expression::Input(_) | Expression::Literal(_) => Vec::new(),
+        Expression::Input(_) | Expression::Null(_) | Expression::Literal(_) => Vec::new(),
         Expression::Call { arguments, .. }
+        | Expression::Coalesce(arguments)
         | Expression::And(arguments)
         | Expression::Or(arguments) => arguments.clone(),
         Expression::Not(input)
@@ -51,8 +52,9 @@ fn mapped(index: usize, mapping: &[Option<usize>]) -> Result<usize> {
 }
 fn remap(expression: &mut Expression, mapping: &[Option<usize>]) -> Result<()> {
     match expression {
-        Expression::Input(_) | Expression::Literal(_) => {}
+        Expression::Input(_) | Expression::Null(_) | Expression::Literal(_) => {}
         Expression::Call { arguments, .. }
+        | Expression::Coalesce(arguments)
         | Expression::And(arguments)
         | Expression::Or(arguments) => {
             for index in arguments {

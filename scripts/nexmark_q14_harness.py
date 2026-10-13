@@ -70,8 +70,8 @@ def qualify(output,command,mode):
         for label,query in [
             ('clock',fixture.query.replace('length(extra)','length(now()::text)',1)),
             ('user-function',fixture.query.replace('replace(extra','public.replace(extra')),
-            ('integer-overflow',fixture.query.replace('0.908 * price','2 * price')),
-            ('timezone',fixture.query.replace("'UTC'","'America/New_York'") if fixture.instant else fixture.query.replace('extract(hour','extract(day')),
+            ('unsupported-division',fixture.query.replace('0.908 * price','2 / price')),
+            ('timezone',fixture.query.replace("'UTC'","'America/New_York'") if fixture.instant else fixture.query.replace('extract(hour','extract(julian')),
             ('downstream',f'SELECT x.auction FROM ({fixture.query}) x WHERE x.price>1000000'),
         ]:
             fixture.rejected(command,label,query)

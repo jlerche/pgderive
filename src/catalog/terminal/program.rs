@@ -6,7 +6,7 @@ mod context;
 mod functions;
 mod normalize;
 mod render;
-pub use functions::{Function, implementation_types};
+pub use functions::{Calendar, Function, Operation, implementation_types};
 use functions::{Signature, call_type};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,8 +18,10 @@ pub enum Literal {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Expression {
     Input(usize),
+    Null(u32),
     Literal(Literal),
     Call { function: Function, arguments: Vec<usize> },
+    Coalesce(Vec<usize>),
     And(Vec<usize>),
     Or(Vec<usize>),
     Not(usize),
@@ -106,6 +108,13 @@ pub fn expression_type(expression: &Expression, types: &[u32], inputs: &[u32]) -
             );
             Ok(oid)
         }
+        Expression::Null(oid) => {
+            ensure!(
+                matches!(oid, 16 | 20 | 21 | 23 | 25 | 2950 | 1114 | 1184 | 1700),
+                "unsupported typed NULL"
+            );
+            Ok(*oid)
+        }
         Expression::Literal(literal) => literal_type(literal),
         Expression::Call { function, arguments } => {
             call_type(*function, &argument_types(arguments, types)?)
@@ -123,6 +132,17 @@ pub fn expression_type(expression: &Expression, types: &[u32], inputs: &[u32]) -
             Ok(16)
         }
         Expression::Case { branches, otherwise } => case_type(branches, *otherwise, types),
+        Expression::Coalesce(arguments) => {
+            ensure!((1..=64).contains(&arguments.len()), "invalid COALESCE arity");
+            let arguments = argument_types(arguments, types)?;
+            let result = *arguments.first().context("missing COALESCE operand")?;
+            ensure!(
+                arguments.iter().all(|oid| *oid == result),
+                "COALESCE requires matching resolved types"
+            );
+            ensure!(result != 1009, "COALESCE requires scalar operands");
+            Ok(result)
+        }
         Expression::CollateC(index) => {
             ensure!(
                 matches!(types.get(*index), Some(25 | 1043)),

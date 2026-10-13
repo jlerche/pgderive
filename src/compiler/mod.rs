@@ -15,6 +15,7 @@ mod remainder;
 mod revision;
 pub(crate) mod scalar;
 mod syntax;
+mod typed;
 use crate::{source::Contract, worker::Query};
 use anyhow::Result;
 use expression::Expr;

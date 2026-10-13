@@ -182,6 +182,9 @@ fn bind_targets(
         let mut transform = crate::catalog::terminal::Transform::Identity;
         let column = match target.value {
             syntax::Value::Column(name) => resolve(&name)?,
+            syntax::Value::Typed(value) => {
+                crate::compiler::typed::computed(&value, resolve, computed, context.scalar_scope)?
+            }
             syntax::Value::Bin(bin) => {
                 crate::compiler::scalar::bind(&bin, resolve, computed, context.scalar_scope)?
             }
@@ -265,6 +268,9 @@ fn keys(
         .into_iter()
         .map(|key| match key {
             crate::compiler::parser::scalar::Key::Column(name) => resolve(&name),
+            crate::compiler::parser::scalar::Key::Typed(value) => {
+                crate::compiler::typed::computed(&value, resolve, computed, scalar_scope)
+            }
             crate::compiler::parser::scalar::Key::Bin(bin) => {
                 crate::compiler::scalar::bind(&bin, resolve, computed, scalar_scope)
             }

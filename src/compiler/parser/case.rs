@@ -21,10 +21,19 @@ pub(super) fn parse(value: &pg::CaseExpr) -> Result<Case> {
             ensure!(arm.xpr.is_none(), "invalid CASE branch expression");
             let predicate = syntax::predicate(arm.expr.as_deref())?
                 .ok_or_else(|| anyhow::anyhow!("missing CASE condition"))?;
-            Ok((predicate, syntax::scalar(optional(arm.result.as_deref())?)?))
+            let result = syntax::scalar(optional(arm.result.as_deref())?)?;
+            ensure!(
+                !matches!(result, syntax::Scalar::Typed(_)),
+                "computed CASE arm needs typed scalar lowering"
+            );
+            Ok((predicate, result))
         })
         .collect::<Result<_>>()?;
     let otherwise =
         value.defresult.as_deref().map(syntax::scalar).transpose()?.unwrap_or(syntax::Scalar::Null);
+    ensure!(
+        !matches!(otherwise, syntax::Scalar::Typed(_)),
+        "computed CASE default needs typed scalar lowering"
+    );
     Ok(Case { arms, otherwise })
 }

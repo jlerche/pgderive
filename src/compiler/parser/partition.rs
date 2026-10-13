@@ -14,6 +14,7 @@ pub(in crate::compiler) enum Source {
 }
 #[derive(Clone)]
 pub(in crate::compiler) enum Value {
+    Typed(Box<Node>),
     Column(Name),
     Bin(super::scalar::Bin),
     Case(super::case::Case),
@@ -98,8 +99,16 @@ fn parse_target(value: &Node) -> Result<Target> {
         }
     } else if super::offset::eligible(expression)? {
         (Value::Offset(super::offset::parse(expression)?), "?column?".into())
+    } else if matches!(
+        node(expression)?,
+        NodeEnum::TypeCast(_) | NodeEnum::CoalesceExpr(_) | NodeEnum::AExpr(_)
+    ) {
+        (Value::Typed(Box::new(expression.clone())), "?column?".into())
     } else if let NodeEnum::CaseExpr(case) = node(expression)? {
-        (Value::Case(super::case::parse(case)?), "case".into())
+        super::case::parse(case).map_or_else(
+            |_| (Value::Typed(Box::new(expression.clone())), "case".into()),
+            |case| (Value::Case(case), "case".into()),
+        )
     } else if let NodeEnum::FuncCall(call) = node(expression)? {
         let name = super::expressions::names(&call.funcname)?.0;
         let function = match name.as_slice() {

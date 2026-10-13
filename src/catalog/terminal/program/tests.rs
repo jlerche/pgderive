@@ -26,7 +26,7 @@ fn program_validates_acyclic_types_and_parameterizes_literals() -> Result<()> {
         [("pg_catalog.replace(text,text,text)", "replace_text")]
     );
     let (columns, predicate) = program.render(&[25])?;
-    assert_eq!(predicate, "TRUE");
+    assert_eq!(predicate, "(TRUE) AND ($2::pg_catalog.jsonb IS NOT NULL)");
     assert!(!columns.contains(value));
     assert!(columns.contains("$2::pg_catalog.jsonb"));
     assert!(columns.contains("pg_catalog.replace"));
@@ -153,5 +153,26 @@ fn pruning_boolean_intermediates_preserves_native_input_indices() -> Result<()> 
     assert_eq!(value.predicate, Some(3));
     assert_eq!(value.validate(&[16, 16])?, [16; 4]);
     assert!(program(vec![Expression::Not(0)], None).prune().is_err());
+    Ok(())
+}
+
+#[test]
+fn coalesce_preserves_order_and_rejects_unresolved_types() -> Result<()> {
+    let mut value = program(
+        vec![Expression::Input(0), Expression::Input(1), Expression::Coalesce(vec![1, 0])],
+        None,
+    );
+    assert_eq!(value.validate(&[23, 23])?, [23, 23, 23]);
+    assert!(value.validate(&[23, 20]).is_err());
+    let before = value.render(&[23, 23])?;
+    assert!(
+        before
+            .0
+            .contains("COALESCE((tuple->1->>1)::pg_catalog.int4,(tuple->1->>0)::pg_catalog.int4)")
+    );
+    value.prune()?;
+    assert_eq!(value.render(&[23, 23])?, before);
+    assert!(program(vec![Expression::Coalesce(vec![])], None).validate(&[]).is_err());
+    assert!(program(vec![Expression::Coalesce(vec![0])], None).validate(&[]).is_err());
     Ok(())
 }

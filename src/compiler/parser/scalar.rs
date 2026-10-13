@@ -11,6 +11,7 @@ pub(in crate::compiler) struct Bin {
 }
 #[derive(Clone)]
 pub(in crate::compiler) enum Key {
+    Typed(Box<Node>),
     Column(Name),
     Bin(Bin),
 }
@@ -27,7 +28,11 @@ pub(super) fn is_bin(value: &Node) -> Result<bool> {
 }
 pub(super) fn key(value: &Node) -> Result<Key> {
     if !is_bin(value)? {
-        return Ok(Key::Column(column(value)?));
+        return if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
+            Ok(Key::Column(column(value)?))
+        } else {
+            Ok(Key::Typed(Box::new(value.clone())))
+        };
     }
     if let NodeEnum::AExpr(_) = node(value)? {
         return shifted(value);

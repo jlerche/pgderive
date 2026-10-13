@@ -17,6 +17,7 @@ pub(super) enum Compare {
 }
 #[derive(Clone)]
 pub(super) enum Scalar {
+    Typed(Box<Node>),
     Column(Name),
     Remainder(Name, i64),
     Difference(Name, Name),
@@ -109,12 +110,22 @@ pub(super) fn scalar(value: &Node) -> Result<Scalar> {
                 expression.kind == i32::from(pg::AExprKind::AexprOp),
                 "unsupported timestamp difference"
             );
-            Ok(Scalar::Difference(
-                column(optional(expression.lexpr.as_deref())?)?,
-                column(optional(expression.rexpr.as_deref())?)?,
-            ))
+            let left = column(optional(expression.lexpr.as_deref())?);
+            let right = column(optional(expression.rexpr.as_deref())?);
+            match (left, right) {
+                (Ok(left), Ok(right)) => Ok(Scalar::Difference(left, right)),
+                _ => typed(value),
+            }
         }
-        NodeEnum::TypeCast(_) => Ok(Scalar::Interval(super::parser::scalar::interval(value)?)),
+        NodeEnum::TypeCast(_) => {
+            super::parser::scalar::interval(value).map(Scalar::Interval).or_else(|_| typed(value))
+        }
+        NodeEnum::CoalesceExpr(_) | NodeEnum::CaseExpr(_) => typed(value),
+        NodeEnum::AExpr(expression)
+            if names(&expression.name)?.0.iter().any(|name| matches!(name.as_str(), "+" | "*")) =>
+        {
+            typed(value)
+        }
         NodeEnum::FuncCall(_) | NodeEnum::AExpr(_) => remainder(value),
         _ => anyhow::bail!("unsupported scalar expression"),
     }
@@ -178,4 +189,34 @@ fn remainder(value: &Node) -> Result<Scalar> {
     };
     ensure!(divisor != 0, "MOD zero divisor is outside the supported subset");
     Ok(Scalar::Remainder(column(left)?, divisor))
+}
+
+fn typed(value: &Node) -> Result<Scalar> {
+    validate_integral_syntax(value, 0)?;
+    Ok(Scalar::Typed(Box::new(value.clone())))
+}
+fn validate_integral_syntax(value: &Node, depth: usize) -> Result<()> {
+    ensure!(depth < 32, "integral scalar depth exceeded");
+    match node(value)? {
+        NodeEnum::AConst(value) => {
+            if let Some(pg::a_const::Val::Fval(value)) = &value.val {
+                value.fval.parse::<i64>()?;
+            }
+        }
+        NodeEnum::AExpr(value) => {
+            if let Some(value) = &value.lexpr {
+                validate_integral_syntax(value, depth + 1)?;
+            }
+            if let Some(value) = &value.rexpr {
+                validate_integral_syntax(value, depth + 1)?;
+            }
+        }
+        NodeEnum::CoalesceExpr(value) => {
+            for value in &value.args {
+                validate_integral_syntax(value, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }

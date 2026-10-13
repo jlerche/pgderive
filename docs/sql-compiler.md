@@ -1407,3 +1407,40 @@ aggregate increase state and write work; deleted prefixes, many retained runs an
 compaction policy still affect reads. Qualification covers all three integral
 widths and both timestamp types, NULL/FILTER, ties, retractions, simultaneous joined
 changes, independent memory/native-MV agreement and cold restart.
+
+## Checked expression execution progression
+
+Tuple-local terminal expressions execute inside the authoritative publication
+transaction when their results have no circuit consumers. The raw referenced
+operand bag remains durable; projection collisions consolidate complete output
+identities and signed weights before final narrowing. Circuit consumers require
+pure Rust scalar-map or predicate evaluation before joining, grouping or ordering.
+Publication still follows PUT, atomic membership/result/progress COMMIT, then ACK.
+
+Terminal programs now resolve integral addition, subtraction and multiplication
+at the PostgreSQL promoted width, plus explicit int2/int4/int8 and integral-to-numeric
+casts without modifiers. Narrowing and arithmetic errors abort publication. Before durable registration,
+EXPLAIN of the validated original SELECT invokes the PostgreSQL planner and
+rejects constant-folding errors, including failing constant alternatives under
+CASE or COALESCE. Row-dependent alternatives retain lazy runtime evaluation.
+COALESCE preserves operand order and lazy evaluation, promotes integral widths,
+and resolves bare NULLs from other operands; all-NULL terminal COALESCE resolves
+to text. Other type combinations require matching resolved types. Cast NULLs
+have explicit types. Constant-only projections retain one raw source operand to
+preserve source-row multiplicity even when no operand contributes to the output.
+
+The circuit integral scalar tree supports columns, int4 literals, explicit
+integral casts, checked +/−/*, lazy COALESCE and searched CASE with integral
+results. Computed projections and GROUP BY keys use the existing scalar-map node;
+predicates evaluate typed operands with SQL three-valued comparisons and NULL
+tests. All-NULL circuit expressions require an explicit integral cast. Legacy
+simple CASE and timestamp subtraction preserve their existing paths. Plans using
+the new map/predicate evaluator bind its explicit revision and normalized typed
+tree. Changed expressions reject checkpoint reuse.
+
+Terminal EXTRACT additionally accepts year, month, day, minute, second, epoch,
+week, isoyear, isodow, dow, doy and quarter. It consumes timestamp without time
+zone, including an explicit attested UTC conversion from timestamptz. Arbitrary
+named zones, ambient-session timestamptz extraction, volatile functions, user
+functions and arbitrary casts remain rejected. UTC is a bound execution context;
+source LSN and logical time remain distinct from temporal SQL values.
