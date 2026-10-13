@@ -38,25 +38,44 @@ struct Relation {
 }
 
 impl Relation {
-    fn decode(&self, tuple: &Tuple, limit: usize) -> Result<Row> {
-        let bytes = tuple.tuple_data().iter().try_fold(0_usize, |total, value| {
-            let length = match value {
-                TupleData::Text(bytes) | TupleData::Binary(bytes) => bytes.len(),
-                _ => 0,
-            };
-            total.checked_add(length).context("row byte count overflow")
+    fn decode(&self, tuple: &Tuple, prior: Option<&Row>, limit: usize) -> Result<Row> {
+        ensure!(self.columns.len() == tuple.tuple_data().len(), "tuple column count mismatch");
+        // Measure the reconstructed values before cloning. Wire length alone omits TOAST.
+        let values = self
+            .columns
+            .iter()
+            .zip(tuple.tuple_data())
+            .map(|(name, value)| Self::value(name, value, prior))
+            .collect::<Result<Vec<_>>>()?;
+        let bytes = values.iter().try_fold(0_usize, |total, value| {
+            total.checked_add(value.map_or(0, str::len)).context("row byte count overflow")
         })?;
         ensure!(bytes <= limit, "source row byte limit exceeded");
-        ensure!(self.columns.len() == tuple.tuple_data().len(), "tuple column count mismatch");
-        self.columns.iter().cloned().zip(tuple.tuple_data()).map(|(name, value)| {
-            let text = match value {
-                TupleData::Null => None,
-                TupleData::Text(bytes) => Some(std::str::from_utf8(bytes)?.to_owned()),
-                TupleData::UnchangedToast => bail!("unchanged TOAST requires stored row reconstruction; unsupported in this listener"),
-                TupleData::Binary(_) => bail!("binary pgoutput tuples are unsupported"),
-            };
-            Ok((name, text))
-        }).collect()
+        Ok(self
+            .columns
+            .iter()
+            .cloned()
+            .zip(values.into_iter().map(|value| value.map(str::to_owned)))
+            .collect())
+    }
+    fn value<'a>(
+        name: &str,
+        value: &'a TupleData,
+        prior: Option<&'a Row>,
+    ) -> Result<Option<&'a str>> {
+        match value {
+            TupleData::Null => Ok(None),
+            TupleData::Text(bytes) => Ok(Some(std::str::from_utf8(bytes)?)),
+            TupleData::UnchangedToast => {
+                let prior =
+                    prior.context("unchanged TOAST requires a complete same-update old image")?;
+                let value =
+                    prior.get(name).context("unchanged TOAST column missing in old image")?;
+                ensure!(value.is_some(), "unchanged TOAST cannot refer to a NULL old value");
+                Ok(value.as_deref())
+            }
+            TupleData::Binary(_) => bail!("binary pgoutput tuples are unsupported"),
+        }
     }
 }
 
@@ -151,12 +170,19 @@ impl Decoder {
             _ => bail!("unsupported logical replication message: {message:?}"),
         };
         let relation = self.relations.get(&id).context("row arrived before relation metadata")?;
+        // FULL old images must decode independently. Only the new side of the same
+        // UPDATE may inherit omitted TOAST; never read a later SQL source snapshot.
+        let old =
+            old.map(|tuple| relation.decode(tuple, None, self.limits.record_bytes)).transpose()?;
+        let prior = if operation == Operation::Update { old.as_ref() } else { None };
+        let new =
+            new.map(|tuple| relation.decode(tuple, prior, self.limits.record_bytes)).transpose()?;
         let change = Change {
             schema: relation.schema.clone(),
             table: relation.table.clone(),
             operation,
-            old: old.map(|tuple| relation.decode(tuple, self.limits.record_bytes)).transpose()?,
-            new: new.map(|tuple| relation.decode(tuple, self.limits.record_bytes)).transpose()?,
+            old,
+            new,
         };
         let bytes = crate::engine::execution::record_size(&change, self.limits.record_bytes)?;
         let next_bytes = self
@@ -174,3 +200,6 @@ impl Decoder {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod toast_tests;

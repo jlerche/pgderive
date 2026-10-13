@@ -166,7 +166,11 @@ typed DBSP tuples. Relation metadata is decoded with the pinned
 
 `max_transactions=0` listens until Ctrl-C; a positive value stops after that many
 commits. `max_transaction_changes` bounds buffered row changes per transaction.
-Unknown protocol events, binary tuples, and unchanged TOAST values fail closed.
+Unknown protocol events and binary tuples fail closed. An UPDATE's unchanged
+TOAST values are reconstructed from its complete same-update FULL old image;
+unresolved old/insert/delete markers and key-only images fail closed. The listener
+still never acknowledges diagnostic output. Reconstructed rows and complete
+transactions retain their byte limits.
 Use `REPLICA IDENTITY FULL` when complete old rows are required; a diagnostic
 connection does not reconstruct missing old images from primary-key-only CDC.
 
@@ -678,8 +682,10 @@ remain unsupported. Domains, enums, floating-point, arrays, JSON,
 generated columns and nondeterministic collations are unsupported. Snapshot SQL
 uses exact quoted column names and pgoutput-compatible text representations,
 including boolean `t`/`f`. Bounded cursors, server-side encoded-row limits and the
-same spill/output limits as CDC prevent an unbounded initial copy. Unchanged TOAST
-and TRUNCATE remain fail-closed; publications must emit TRUNCATE rather than omit it.
+same spill/output limits as CDC prevent an unbounded initial copy. New unchanged
+TOAST values inherit from the same UPDATE's complete FULL old image, with exact
+reconstructed-row/transaction budgets. Unresolved markers fail closed. TRUNCATE
+remains fail-closed; publications must emit TRUNCATE rather than omit it.
 
 After initial object PUTs, `Catalog::activate_snapshot` atomically publishes tick
 one memberships, initial destination rows, exclusive slot ownership and the
