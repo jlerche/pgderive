@@ -41,6 +41,13 @@ pub struct Terminal {
     program: Option<program::Program>,
 }
 impl Terminal {
+    pub(crate) fn native_rendering(&self) -> bool {
+        self.program.is_none()
+            && self
+                .transforms
+                .iter()
+                .all(|value| matches!(value, Transform::Identity | Transform::Numeric))
+    }
     pub(crate) fn new(transforms: Vec<Transform>, types: Vec<u32>) -> Result<Self> {
         let result = Self { transforms, types, environment: None, program: None };
         result.signatures()?;

@@ -61,6 +61,19 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
             .context("missing predicate compiler revision")?
             .push_str(":pg-checked-integral-predicate-v1");
     }
+    if compiled.predicates.as_ref().is_some_and(Expr::has_numeric)
+        || matches!(&compiled.program, Program::Relational { relational } if relational.nodes.iter().any(|node| match node {
+            Node::Map { computed, .. } => computed.iter().any(|value| value.column.oid == 1700),
+            Node::Filter { predicate, .. } => predicate.has_numeric(),
+            _ => false,
+        }))
+    {
+        compiled
+            .revision
+            .as_mut()
+            .context("missing numeric compiler revision")?
+            .push_str(":pg-circuit-numeric-bigint-scale-4096-v1");
+    }
     relational_revisions(compiled)?;
     Ok(())
 }

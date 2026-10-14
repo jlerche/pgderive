@@ -20,7 +20,10 @@ pub(super) fn bind(
         Ok(super::relational::qualify(super::resolve(name, &scopes)?))
     };
     let (columns, terminal) = super::relational::output(columns, &resolve)?;
-    ensure!(terminal.is_none(), "native scope cannot consume sink-deferred expressions");
+    ensure!(
+        terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
+        "native scope cannot consume sink-deferred expressions"
+    );
     let mut nodes = vec![Node::Source { id: "source".into(), source: 0 }];
     let input = if let Some(predicate) = predicate {
         nodes.push(Node::Filter {

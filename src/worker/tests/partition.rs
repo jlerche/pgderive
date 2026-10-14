@@ -299,12 +299,9 @@ fn native_timestamp_resolution_normalizes_offsets_and_rejects_cross_type_casts()
             .as_deref()
             .is_some_and(|revision| revision.contains("native-iso-utc-source-v1"))
     );
-    for predicate in [
-        "b.local=b.instant",
-        "b.instant<'2000-01-01 00:00:00'",
-        "b.amount>1",
-        "b.local<'1900-02-29 00:00:00'",
-    ] {
+    for predicate in
+        ["b.local=b.instant", "b.instant<'2000-01-01 00:00:00'", "b.local<'1900-02-29 00:00:00'"]
+    {
         assert!(
             compile(&format!("SELECT b.local FROM source.bid b WHERE {predicate}"), &native)
                 .is_err()

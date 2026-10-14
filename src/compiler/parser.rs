@@ -329,3 +329,14 @@ fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Tr
     let label = name.0.last().context("missing column name")?.clone();
     Ok((name, Transform::Identity, label))
 }
+
+pub(super) fn terminal_sql(sql: &str) -> Result<Parsed> {
+    let parsed = pg_query::parse(sql)?;
+    let statement =
+        parsed.protobuf.stmts.first().and_then(|v| v.stmt.as_ref()).context("missing statement")?;
+    let NodeEnum::SelectStmt(select) = node(statement)? else {
+        anyhow::bail!("missing SELECT");
+    };
+    validate_query(select)?;
+    terminal_query(select)
+}

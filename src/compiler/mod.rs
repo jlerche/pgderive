@@ -123,7 +123,7 @@ impl Compiled {
         {
             let base = self.revision.as_deref().unwrap_or(REVISION);
             self.revision = Some(format!(
-                "{base}:native-iso-utc-source-v1:pg-microsecond-timestamp-v1:exact-numeric-json-v1"
+                "{base}:native-iso-utc-source-v1:pg-microsecond-timestamp-v1:exact-numeric-json-v1:pg-circuit-numeric-bigint-scale-4096-v1"
             ));
         }
     }
@@ -140,7 +140,10 @@ impl Compiled {
 /// Rejects invalid/unsupported SQL, unresolved/ambiguous names and incompatible types.
 pub fn compile(sql: &str, contract: &Contract) -> Result<Compiled> {
     contract.validate()?;
-    let mut compiled = bind::bind(parser::parse(sql)?, contract)?;
+    let parsed = parser::parse(sql)?;
+    let mut compiled = bind::bind(parsed, contract).or_else(|prior| {
+        parser::terminal_sql(sql).and_then(|parsed| bind::bind(parsed, contract)).map_err(|_| prior)
+    })?;
     revision::bind(&mut compiled)?;
     compiled.bind_native_codecs(contract);
     Ok(compiled)

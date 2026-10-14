@@ -21,7 +21,7 @@ pub(super) fn bind(
         anyhow::bail!("derived partition requires relational lowering");
     };
     ensure!(
-        relational.output.terminal.is_none(),
+        relational.output.terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
         "derived scope cannot consume sink-deferred expressions"
     );
     let source = relational.sources.first().context("missing native source")?;

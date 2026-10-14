@@ -13,6 +13,7 @@ pub(super) enum Value {
     Boolean(bool),
     Text(String),
     Integer(i64),
+    Numeric(crate::numeric::Numeric),
     Uuid([u8; 16]),
     Timestamp(crate::temporal::Timestamp),
     Interval(crate::temporal::Gap),
@@ -38,7 +39,10 @@ type Resolve<'a> = dyn Fn(&Name) -> Result<ColumnRef> + 'a;
 pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
     Scalar::Column(column.clone())
         .evaluate((row, row))?
-        .map(|value| serde_json::to_string(&value).map_err(Into::into))
+        .map(|value| match value {
+            Value::Numeric(value) => serde_json::to_string(&value.key()).map_err(Into::into),
+            _ => serde_json::to_string(&value).map_err(Into::into),
+        })
         .transpose()
 }
 pub(super) fn integral_remainder(
@@ -72,7 +76,7 @@ pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
                 .or(column_type(&right, resolve)?)
                 .context("SQL type: comparison requires a native column")?;
             ensure!(
-                matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184 | 1186),
+                matches!(oid, 16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1114 | 1184 | 1186),
                 "SQL type: unsupported comparison type"
             );
             if matches!(oid, 25 | 1043) {
@@ -117,11 +121,15 @@ fn column_type(value: &syntax::Scalar, resolve: &Resolve<'_>) -> Result<Option<u
         syntax::Scalar::Difference(left, right) => {
             let left = resolve(left)?;
             let right = resolve(right)?;
-            Ok(Some(if integral(left.oid) && integral(right.oid) {
-                super::typed::difference(left, right).oid()
-            } else {
-                1186
-            }))
+            Ok(Some(
+                if (integral(left.oid) || left.oid == 1700)
+                    && (integral(right.oid) || right.oid == 1700)
+                {
+                    super::typed::difference(left, right).oid()
+                } else {
+                    1186
+                },
+            ))
         }
         _ => Ok(None),
     }
@@ -130,13 +138,18 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
     let value = match value {
         syntax::Scalar::Typed(value) => {
             let value = super::typed::bind(&value, &|name| resolve(name), 0)?;
-            ensure!(integral(oid) && integral(value.oid()), "typed integral operand required");
+            ensure!(
+                (integral(oid) || oid == 1700) && (integral(value.oid()) || value.oid() == 1700),
+                "typed integral operand required"
+            );
             return Ok(Scalar::Typed(Box::new(value)));
         }
         syntax::Scalar::Column(name) => {
             let column = resolve(&name)?;
             ensure!(
-                column.oid == oid || (integral(column.oid) && integral(oid)),
+                column.oid == oid
+                    || ((integral(column.oid) || column.oid == 1700)
+                        && (integral(oid) || oid == 1700)),
                 "SQL type: incompatible comparison operands"
             );
             return Ok(Scalar::Column(column));
@@ -151,7 +164,10 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
         }
         syntax::Scalar::Difference(left, right) => {
             let (left, right) = (resolve(&left)?, resolve(&right)?);
-            if integral(left.oid) && integral(right.oid) && integral(oid) {
+            if (integral(left.oid) || left.oid == 1700)
+                && (integral(right.oid) || right.oid == 1700)
+                && (integral(oid) || oid == 1700)
+            {
                 return Ok(Scalar::Typed(Box::new(super::typed::difference(left, right))));
             }
             ensure!(
@@ -162,6 +178,12 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
         }
         syntax::Scalar::Interval(value) if oid == 1186 => {
             Some(Value::Interval(crate::temporal::Gap::Finite(value)))
+        }
+        syntax::Scalar::Integer(value) if oid == 1700 => {
+            Some(Value::Numeric(crate::numeric::Numeric::parse(&value.to_string())?))
+        }
+        syntax::Scalar::String(value) if oid == 1700 => {
+            Some(Value::Numeric(crate::numeric::Numeric::parse(&value)?))
         }
         syntax::Scalar::Null => None,
         syntax::Scalar::Boolean(value) if oid == 16 => Some(Value::Boolean(value)),
@@ -183,6 +205,12 @@ impl Scalar {
         let column = match self {
             Self::Column(column) => column,
             Self::Literal(value) => return Ok(value.clone()),
+            Self::Typed(value) if value.oid() == 1700 => {
+                return value
+                    .text_pair(rows)?
+                    .map(|v| Ok(Value::Numeric(crate::numeric::Numeric::parse(&v)?)))
+                    .transpose();
+            }
             Self::Typed(value) => return Ok(value.evaluate_pair(rows)?.map(Value::Integer)),
             Self::Difference(left, right) => {
                 let (Some(Value::Timestamp(left)), Some(Value::Timestamp(right))) = (
@@ -221,6 +249,7 @@ impl Scalar {
                     _ => anyhow::bail!("invalid native boolean"),
                 },
                 20 | 21 | 23 => Ok(Value::Integer(text.parse()?)),
+                1700 => Ok(Value::Numeric(crate::numeric::Numeric::parse(text)?)),
                 25 | 1043 => Ok(Value::Text(text.to_owned())),
                 1114 | 1184 => {
                     Ok(Value::Timestamp(crate::temporal::Timestamp::parse(text, column.oid)?))
@@ -261,7 +290,15 @@ impl Expr {
                 else {
                     return Ok(None);
                 };
-                let ordering = left.cmp(&right);
+                let ordering = match (&left, &right) {
+                    (Value::Numeric(left), Value::Integer(right)) => {
+                        left.cmp(&crate::numeric::Numeric::parse(&right.to_string())?)
+                    }
+                    (Value::Integer(left), Value::Numeric(right)) => {
+                        crate::numeric::Numeric::parse(&left.to_string())?.cmp(right)
+                    }
+                    _ => left.cmp(&right),
+                };
                 Ok(Some(compare(op, ordering)))
             }
             Self::Not(value) => Ok(value.evaluate(rows)?.map(|value| !value)),
@@ -420,5 +457,25 @@ impl Predicate {
         };
         let limit = usize::try_from(limit).ok()?;
         (limit <= 1024).then_some(limit)
+    }
+}
+impl Expr {
+    pub(super) fn has_numeric(&self) -> bool {
+        let numeric = |value: &Scalar| {
+            matches!(value, Scalar::Typed(value) if value.oid() == 1700)
+                || matches!(value, Scalar::Column(column) if column.oid == 1700)
+                || matches!(value, Scalar::Literal(Some(Value::Numeric(_))))
+        };
+        match self {
+            Self::Value(value) | Self::Null(value, _) => numeric(value),
+            Self::Compare(_, left, right) => numeric(left) || numeric(right),
+            Self::Not(value) => value.has_numeric(),
+            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_numeric),
+        }
+    }
+}
+impl Predicate {
+    pub(super) fn has_numeric(&self) -> bool {
+        self.0.has_numeric()
     }
 }

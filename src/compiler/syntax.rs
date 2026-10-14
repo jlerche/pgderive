@@ -104,7 +104,7 @@ fn comparison(expr: &pg::AExpr) -> Result<Expr> {
 pub(super) fn scalar(value: &Node) -> Result<Scalar> {
     match node(value)? {
         NodeEnum::ColumnRef(_) => Ok(Scalar::Column(column(value)?)),
-        NodeEnum::AConst(value) => constant(value),
+        NodeEnum::AConst(literal) => constant(literal).or_else(|_| typed(value)),
         NodeEnum::AExpr(expression) if names(&expression.name)?.0 == ["-"] => {
             ensure!(
                 expression.kind == i32::from(pg::AExprKind::AexprOp),
@@ -200,7 +200,7 @@ fn validate_integral_syntax(value: &Node, depth: usize) -> Result<()> {
     match node(value)? {
         NodeEnum::AConst(value) => {
             if let Some(pg::a_const::Val::Fval(value)) = &value.val {
-                value.fval.parse::<i64>()?;
+                crate::numeric::Numeric::parse(&value.fval)?;
             }
         }
         NodeEnum::AExpr(value) => {

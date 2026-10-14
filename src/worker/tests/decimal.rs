@@ -30,7 +30,7 @@ fn decimal_projection_binds_factor_and_preserves_scale() -> Result<()> {
     Ok(())
 }
 #[test]
-fn decimal_projection_rejects_nonliteral_and_intermediate_arithmetic() {
+fn decimal_projection_rejects_unsupported_terminal_arithmetic() {
     let native = contract();
     for sql in [
         "SELECT 2 * price FROM source.bid",
@@ -40,7 +40,6 @@ fn decimal_projection_rejects_nonliteral_and_intermediate_arithmetic() {
         "SELECT 0.908 + price FROM source.bid",
         "SELECT 0.908 * category FROM source.auction",
         "SELECT NULL * price FROM source.bid",
-        "SELECT q.price FROM (SELECT 0.908 * price AS price FROM source.bid) q",
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");
     }

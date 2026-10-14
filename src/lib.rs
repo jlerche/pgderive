@@ -7,6 +7,7 @@ mod configuration;
 pub mod engine;
 mod harness;
 mod listener;
+mod numeric;
 mod outcome;
 pub mod source;
 mod storage;

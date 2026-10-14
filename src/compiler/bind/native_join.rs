@@ -245,7 +245,7 @@ fn keys(
                 a.value.oid == b.value.oid
                     && a.modifier == b.modifier
                     && a.collation == b.collation
-                    && matches!(a.value.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184),
+                    && matches!(a.value.oid, 16 | 20 | 21 | 23 | 1700 | 2950 | 1114 | 1184),
                 "unsupported or incompatible join-tree key types"
             );
             Ok((a.value.clone(), b.value.clone()))

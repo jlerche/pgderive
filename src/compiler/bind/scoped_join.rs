@@ -93,7 +93,10 @@ pub(super) fn scope(
     let Program::Relational { relational: mut ir } = compiled.program else {
         anyhow::bail!("scoped join requires relational input");
     };
-    ensure!(ir.output.terminal.is_none(), "scoped join cannot consume sink-deferred expressions");
+    ensure!(
+        ir.output.terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
+        "scoped join cannot consume sink-deferred expressions"
+    );
     super::partition::composition::lower_source_filter(&mut ir, compiled.predicates)?;
     let Some(Node::Output { input, .. }) = ir.nodes.pop() else {
         anyhow::bail!("scoped join requires terminal relational output");
@@ -220,7 +223,8 @@ fn keys(names: Vec<(Name, Name)>, scopes: &[Scope; 2]) -> Result<Vec<(ColumnRef,
             ensure!(left.0 != right.0, "scoped equality must connect both inputs");
             let (left, right) = if left.0 == 0 { (left.1, right.1) } else { (right.1, left.1) };
             ensure!(
-                left.oid == right.oid && matches!(left.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184),
+                left.oid == right.oid
+                    && matches!(left.oid, 16 | 20 | 21 | 23 | 1700 | 2950 | 1114 | 1184),
                 "unsupported or incompatible scoped join key types"
             );
             Ok((left, right))

@@ -13,6 +13,7 @@ pub struct Typed {
 enum Value {
     Column(ColumnRef),
     Literal(Option<i64>),
+    Numeric(String),
     Cast(Box<Typed>),
     Binary { operation: String, left: Box<Typed>, right: Box<Typed> },
     Coalesce(Vec<Typed>),
@@ -20,7 +21,7 @@ enum Value {
 }
 impl Typed {
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
-        self.integer((row, row)).map(|value| value.map(|value| value.to_string()))
+        self.text_pair((row, row))
     }
     fn integer(
         &self,
@@ -34,6 +35,7 @@ impl Typed {
                 .map(str::parse)
                 .transpose()?,
             Value::Literal(value) => *value,
+            Value::Numeric(_) => anyhow::bail!("numeric requires numeric evaluator"),
             Value::Cast(input) => input.integer(rows)?,
             Value::Case { branches, otherwise } => {
                 let mut selected = otherwise.as_ref();
@@ -102,34 +104,14 @@ pub(super) fn bind(
         NodeEnum::CaseExpr(value) => case::bind(value, resolve, depth),
         NodeEnum::ColumnRef(_) => {
             let column = resolve(&column(value)?)?;
-            ensure!(matches!(column.oid, 20 | 21 | 23), "typed scalar requires integral column");
+            ensure!(
+                matches!(column.oid, 20 | 21 | 23 | 1700),
+                "typed scalar requires integral column"
+            );
             Ok(Typed { oid: column.oid, value: Value::Column(column) })
         }
         NodeEnum::AConst(constant) => literal(constant),
-        NodeEnum::TypeCast(cast) => {
-            let kind = cast.type_name.as_ref().context("missing scalar cast type")?;
-            ensure!(
-                kind.typmods.is_empty()
-                    && kind.array_bounds.is_empty()
-                    && !kind.setof
-                    && !kind.pct_type,
-                "unsupported scalar cast modifier"
-            );
-            let name = names(&kind.names)?.0;
-            let name = match name.as_slice() {
-                [name] => name,
-                [schema, name] if schema == "pg_catalog" => name,
-                _ => anyhow::bail!("unsupported scalar cast namespace"),
-            };
-            let oid = match name.as_str() {
-                "int2" => 21,
-                "int4" => 23,
-                "int8" => 20,
-                _ => anyhow::bail!("unsupported scalar cast"),
-            };
-            let input = bind(optional(cast.arg.as_deref())?, resolve, depth + 1)?;
-            Ok(Typed { oid, value: Value::Cast(Box::new(input)) })
-        }
+        NodeEnum::TypeCast(cast) => cast_expression(cast, resolve, depth),
         NodeEnum::AExpr(expression) => {
             ensure!(
                 expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprOp),
@@ -174,7 +156,9 @@ pub(super) fn bind(
     }
 }
 fn common(types: &[u32]) -> u32 {
-    if types.contains(&20) {
+    if types.contains(&1700) {
+        1700
+    } else if types.contains(&20) {
         20
     } else if types.contains(&23) {
         23
@@ -192,7 +176,10 @@ pub(super) fn computed(
 ) -> Result<ColumnRef> {
     use sha2::{Digest, Sha256};
     let typed = bind(value, resolve, 0)?;
-    ensure!(matches!(typed.oid, 20 | 21 | 23), "computed scalar requires resolved integral type");
+    ensure!(
+        matches!(typed.oid, 20 | 21 | 23 | 1700),
+        "computed scalar requires resolved integral type"
+    );
     let name = format!("@typed_{scope:?}_{:x}", Sha256::digest(serde_json::to_vec(&typed)?));
     let column = ColumnRef { name, right: false, oid: typed.oid, nullable: true };
     if !computed.iter().any(|value| value.column == column) {
@@ -212,6 +199,15 @@ fn literal(constant: &pg_query::protobuf::AConst) -> Result<Typed> {
     if constant.isnull {
         return Ok(Typed { oid: 0, value: Value::Literal(None) });
     }
+    if let Some(pg_query::protobuf::a_const::Val::Fval(value)) = &constant.val {
+        if !value.fval.contains(['.', 'e', 'E'])
+            && let Ok(integer) = value.fval.parse::<i64>()
+        {
+            return Ok(Typed { oid: 20, value: Value::Literal(Some(integer)) });
+        }
+        crate::numeric::Numeric::parse(&value.fval)?;
+        return Ok(Typed { oid: 1700, value: Value::Numeric(value.fval.clone()) });
+    }
     let Some(pg_query::protobuf::a_const::Val::Ival(value)) = &constant.val else {
         anyhow::bail!("typed scalar requires integer literal");
     };
@@ -230,7 +226,7 @@ impl Typed {
     }
     fn predicates(&self, predicate: fn(&super::expression::Expr) -> bool) -> bool {
         match &self.value {
-            Value::Column(_) | Value::Literal(_) => false,
+            Value::Column(_) | Value::Literal(_) | Value::Numeric(_) => false,
             Value::Cast(input) => input.predicates(predicate),
             Value::Binary { left, right, .. } => {
                 left.predicates(predicate) || right.predicates(predicate)
@@ -266,4 +262,104 @@ pub(super) fn difference(left: ColumnRef, right: ColumnRef) -> Typed {
             right: Box::new(Typed { oid: right.oid, value: Value::Column(right) }),
         },
     }
+}
+
+impl Typed {
+    pub(super) fn text_pair(
+        &self,
+        rows: (&crate::transaction::Row, &crate::transaction::Row),
+    ) -> Result<Option<String>> {
+        if self.oid != 1700 {
+            return self.integer(rows).map(|v| v.map(|v| v.to_string()));
+        }
+        let value = match &self.value {
+            Value::Column(column) => (if column.right { rows.1 } else { rows.0 })
+                .get(&column.name)
+                .context("missing numeric input")?
+                .clone(),
+            Value::Literal(value) => value.map(|v| v.to_string()),
+            Value::Numeric(value) => Some(value.clone()),
+            Value::Cast(input) => input.text_pair(rows)?,
+            Value::Binary { operation, left, right } => {
+                let (Some(left), Some(right)) = (left.text_pair(rows)?, right.text_pair(rows)?)
+                else {
+                    return Ok(None);
+                };
+                Some(
+                    crate::numeric::Numeric::parse(&left)?
+                        .binary(&crate::numeric::Numeric::parse(&right)?, operation)?
+                        .text(),
+                )
+            }
+            Value::Coalesce(arguments) => {
+                let mut value = None;
+                for argument in arguments {
+                    value = argument.text_pair(rows)?;
+                    if value.is_some() {
+                        break;
+                    }
+                }
+                value
+            }
+            Value::Case { branches, otherwise } => {
+                let mut selected = otherwise.as_ref();
+                for (condition, result) in branches {
+                    if condition.evaluate(rows)? == Some(true) {
+                        selected = result;
+                        break;
+                    }
+                }
+                selected.text_pair(rows)?
+            }
+        };
+        value.map(|v| Ok(crate::numeric::Numeric::parse(&v)?.text())).transpose()
+    }
+}
+
+fn numeric_cast_input(
+    value: &Node,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    depth: usize,
+) -> Result<Typed> {
+    if let NodeEnum::AConst(constant) = super::parser::expressions::node(value)?
+        && let Some(pg_query::protobuf::a_const::Val::Sval(value)) = &constant.val
+    {
+        crate::numeric::Numeric::parse(&value.sval)?;
+        return Ok(Typed { oid: 1700, value: Value::Numeric(value.sval.clone()) });
+    }
+    bind(value, resolve, depth)
+}
+
+fn cast_expression(
+    cast: &pg_query::protobuf::TypeCast,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    depth: usize,
+) -> Result<Typed> {
+    use super::parser::expressions::{names, optional};
+    let kind = cast.type_name.as_ref().context("missing scalar cast type")?;
+    ensure!(
+        kind.typmods.is_empty() && kind.array_bounds.is_empty() && !kind.setof && !kind.pct_type,
+        "unsupported scalar cast modifier"
+    );
+    let name = names(&kind.names)?.0;
+    let name = match name.as_slice() {
+        [name] => name,
+        [schema, name] if schema == "pg_catalog" => name,
+        _ => anyhow::bail!("unsupported scalar cast namespace"),
+    };
+    let oid = match name.as_str() {
+        "int2" => 21,
+        "int4" => 23,
+        "int8" => 20,
+        "numeric" => 1700,
+        _ => anyhow::bail!("unsupported scalar cast"),
+    };
+    let argument = optional(cast.arg.as_deref())?;
+    let input = if oid == 1700 {
+        numeric_cast_input(argument, resolve, depth + 1)?
+    } else {
+        bind(argument, resolve, depth + 1)?
+    };
+    ensure!(oid == 1700 || input.oid != 1700, "numeric to integral circuit cast unsupported");
+    Ok(Typed { oid, value: Value::Cast(Box::new(input)) })
 }

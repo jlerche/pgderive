@@ -59,7 +59,7 @@ pub(super) fn keys_for(
     let lhs = native(0, &left.name)?;
     let rhs = native(1, &right.name)?;
     ensure!(
-        matches!(lhs.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184)
+        matches!(lhs.oid, 16 | 20 | 21 | 23 | 1700 | 2950 | 1114 | 1184)
             && lhs.oid == rhs.oid
             && lhs.modifier == rhs.modifier
             && lhs.collation == rhs.collation,

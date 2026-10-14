@@ -54,7 +54,7 @@ fn native_scopes_keep_filters_and_reject_deferred_inputs() -> Result<()> {
     for invalid in [
         sql.replace("l.auction,r.other", "l.price,r.other"),
         sql.replace("CROSS JOIN", "LEFT JOIN"),
-        sql.replace("SELECT auction FROM", "SELECT price*0.908 AS auction FROM"),
+        sql.replace("SELECT auction FROM", "SELECT abs(price) AS auction FROM"),
     ] {
         assert!(compile(&invalid, &native).is_err(), "{invalid}");
     }

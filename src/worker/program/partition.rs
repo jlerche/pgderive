@@ -64,6 +64,9 @@ fn ordinary_value(
     bag: &Bag,
     work: &mut crate::engine::dataflow::PartitionWork,
 ) -> Result<Option<String>> {
+    if aggregate.argument.as_ref().is_some_and(|arg| arg.oid == 1700) {
+        return numeric_value(aggregate, bag, work);
+    }
     work.charge(bag.iter().count())?;
     let mut count = BigInt::from(0);
     let mut sum = BigInt::from(0);
@@ -352,4 +355,53 @@ fn peers(
         }
     }
     updates.finish_batch()
+}
+
+fn numeric_value(
+    aggregate: &Aggregate,
+    bag: &Bag,
+    work: &mut crate::engine::dataflow::PartitionWork,
+) -> Result<Option<String>> {
+    use crate::numeric::Numeric;
+    work.charge(bag.iter().count())?;
+    let argument = aggregate.argument.as_ref().context("missing numeric argument")?;
+    let mut sum = Numeric::parse("0")?;
+    let mut count = BigInt::from(0);
+    let mut extremum: Option<Numeric> = None;
+    for (((), row), weight) in bag.iter() {
+        if aggregate.filter.as_ref().map(|p| p.qualifies(row)).transpose()?.is_some_and(|v| !v) {
+            continue;
+        }
+        let Some(text) = row.get(&argument.name).context("missing numeric measure")? else {
+            continue;
+        };
+        ensure!(*weight > 0, "negative numeric aggregate occurrence");
+        count += *weight;
+        let value = Numeric::parse(text)?;
+        match aggregate.function {
+            Function::Count => {}
+            Function::Sum => {
+                sum =
+                    sum.binary(&value.binary(&Numeric::parse(&weight.to_string())?, "*")?, "+")?;
+            }
+            Function::Min | Function::Max => {
+                if extremum.as_ref().is_none_or(|prior| {
+                    if matches!(aggregate.function, Function::Min) {
+                        value < *prior
+                    } else {
+                        value > *prior
+                    }
+                }) {
+                    extremum = Some(value);
+                }
+            }
+            _ => anyhow::bail!("unsupported numeric aggregate"),
+        }
+    }
+    match aggregate.function {
+        Function::Count => Ok(Some(i64::try_from(count).context("COUNT overflow")?.to_string())),
+        Function::Sum => Ok((count != BigInt::from(0)).then(|| sum.text())),
+        Function::Min | Function::Max => Ok(extremum.map(|v| v.text())),
+        _ => anyhow::bail!("unsupported numeric aggregate"),
+    }
 }

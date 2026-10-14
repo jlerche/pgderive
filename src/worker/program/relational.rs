@@ -401,8 +401,20 @@ fn partition_by(
         let key = keys
             .iter()
             .map(|key| {
-                serde_json::to_string(row.get(&key.name).context("missing partition key")?)
-                    .map_err(Into::into)
+                serde_json::to_string(
+                    &row.get(&key.name)
+                        .context("missing partition key")?
+                        .as_deref()
+                        .map(|v| {
+                            if key.oid == 1700 {
+                                crate::numeric::Numeric::parse(v).map(|v| v.key())
+                            } else {
+                                Ok(v.to_owned())
+                            }
+                        })
+                        .transpose()?,
+                )
+                .map_err(Into::into)
             })
             .collect::<Result<_>>()?;
         Ok(Some((key, row.clone())))

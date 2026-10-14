@@ -8,10 +8,10 @@ use crate::compiler::{
 pub(super) fn supports(spec: &Partition) -> bool {
     matches!(spec.mode, Mode::Grouped { .. })
         && !spec.aggregates.is_empty()
-        && spec
-            .aggregates
-            .iter()
-            .all(|value| matches!(value.function, Function::Min | Function::Max))
+        && spec.aggregates.iter().all(|value| {
+            value.argument.as_ref().is_none_or(|arg| arg.oid != 1700)
+                && matches!(value.function, Function::Min | Function::Max)
+        })
 }
 pub(super) fn nodes(keys: Vec<ColumnRef>, spec: Partition, computed: Vec<Computed>) -> Vec<Node> {
     let mapped = !computed.is_empty();

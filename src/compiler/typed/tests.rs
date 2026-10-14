@@ -51,7 +51,7 @@ fn typed_integral_widths_nulls_and_lazy_coalesce() -> Result<()> {
     for sql in ["32768::smallint", "2147483647 + 1", "COALESCE(b,32768::smallint)"] {
         assert!(expression(sql)?.evaluate(&row).is_err(), "{sql}");
     }
-    for sql in ["COALESCE(NULL,NULL)", "a::numeric", "random()", "a / 2", "NULL + NULL"] {
+    for sql in ["COALESCE(NULL,NULL)", "random()", "a / 2", "NULL + NULL"] {
         assert!(expression(sql).is_err(), "{sql}");
     }
     Ok(())
@@ -90,6 +90,25 @@ fn typed_predicates_preserve_null_unknown_and_width_errors() -> Result<()> {
         })?;
         assert!(predicate.has_typed());
         assert_eq!(predicate.evaluate((&row, &row))?, expected, "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn exact_numeric_computation_preserves_scale_and_special_values() -> Result<()> {
+    let row = [("a".into(), Some("7".into()))].into();
+    for (sql, expected) in [
+        ("a::numeric * 1.20", "8.40"),
+        ("1.20 + 2.3", "3.50"),
+        ("1.20 - 2.3", "-1.10"),
+        ("'NaN'::numeric + 1", "NaN"),
+        ("'Infinity'::numeric * 0", "NaN"),
+        ("COALESCE(NULL::numeric, 1.20)", "1.20"),
+    ] {
+        assert_eq!(expression(sql)?.evaluate(&row)?.as_deref(), Some(expected), "{sql}");
+    }
+    for sql in ["1.2 / 2", "1.2::integer", "1.2::numeric(10,2)"] {
+        assert!(expression(sql).is_err(), "{sql}");
     }
     Ok(())
 }

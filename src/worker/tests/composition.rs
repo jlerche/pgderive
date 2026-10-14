@@ -114,7 +114,6 @@ fn composed_scopes_reject_hidden_ambiguous_and_deferred_inputs() -> Result<()> {
         sql(false).replace("MAX(q.n)", "MAX(b.price)"),
         sql(false).replace("q.n>=2", "q.price>0"),
         sql(false).replace("b.auction AS g", "b.auction AS n"),
-        sql(false).replace("COUNT(*) AS n", "SUM(b.price) AS n"),
         sql(false).replace("MAX(q.n) OVER()", "row_number() OVER(ORDER BY q.n)"),
     ] {
         assert!(compile(&invalid, &native).is_err(), "{invalid}");

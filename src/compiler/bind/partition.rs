@@ -387,8 +387,10 @@ fn aggregate(
 
 fn validate_keys(keys: &[ColumnRef]) -> Result<()> {
     ensure!(
-        keys.iter()
-            .all(|key| matches!(key.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184)),
+        keys.iter().all(|key| matches!(
+            key.oid,
+            16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1114 | 1184
+        )),
         "partition key requires native deterministic scalar equality"
     );
     Ok(())
@@ -416,10 +418,10 @@ fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32>
         }
         Function::Sum => {
             ensure!(
-                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
+                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23 | 1700)),
                 "SUM requires an integral argument"
             );
-            Ok(if argument.is_some_and(|arg| arg.oid == 20) { 1700 } else { 20 })
+            Ok(if argument.is_some_and(|arg| matches!(arg.oid, 20 | 1700)) { 1700 } else { 20 })
         }
         Function::Average => {
             ensure!(
@@ -434,7 +436,7 @@ fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32>
         Function::Min | Function::Max => {
             let column = argument.context("missing aggregate argument")?;
             ensure!(
-                matches!(column.oid, 20 | 21 | 23 | 1114 | 1184),
+                matches!(column.oid, 20 | 21 | 23 | 1700 | 1114 | 1184),
                 "MIN/MAX require integral or timestamp columns"
             );
             Ok(column.oid)
@@ -495,7 +497,8 @@ fn nodes(
     let mapped = !computed.is_empty();
     let linear = matches!(spec.mode, Mode::Grouped { .. })
         && spec.aggregates.iter().all(|aggregate| {
-            matches!(aggregate.function, Function::Count | Function::Sum | Function::Average)
+            aggregate.argument.as_ref().is_none_or(|arg| arg.oid != 1700)
+                && matches!(aggregate.function, Function::Count | Function::Sum | Function::Average)
         });
     let aggregate = if linear {
         Node::Statistics {

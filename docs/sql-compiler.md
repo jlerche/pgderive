@@ -1521,3 +1521,42 @@ materialized view uses identical SQL; the independent oracle sorts raw source
 occurrences. A cache-disabled 128-block fixture compares a complete partition
 read with at most 12 reads for an unchanged three-occurrence prefix and a tail
 update. This measures that fixture, not worst-case fanout or end-to-end capacity.
+
+## Bounded exact circuit numeric
+
+Native PostgreSQL numeric can participate in circuit comparisons, equality join
+and grouping navigation, computed +, − and *, COALESCE/searched CASE, COUNT,
+SUM, MIN and MAX. Finite values use a signed BigInt coefficient and retained
+display scale. Addition/subtraction select the maximum operand scale;
+multiplication sums operand scales. These operations need no rounding.
+Numeric equality and navigation strip redundant fractional zeroes, while source
+and computed full tuples retain their display scale. PostgreSQL's numeric order
+is −Infinity < finite values < Infinity < NaN; NaN equals NaN for indexing and
+comparisons. Infinity arithmetic and zero-times-infinity produce the PostgreSQL
+special values. NULL propagates and lazy branches preserve evaluation order.
+
+Circuit input/result text and scale are bounded to 4,096 characters/digits; this
+is an explicit circuit resource restriction, far below PostgreSQL's full numeric
+range. Intermediate integer powers and products are bounded by operand limits.
+This is not an RSS bound. Numeric AVG/division, numeric-to-integral conversion,
+rounding functions and precision/scale cast modifiers are rejected before
+registration. Native numeric typmods are already applied authoritatively by
+PostgreSQL before CDC; they are not re-applied to circuit arithmetic.
+
+Numeric SUM and extrema currently use bounded affected-partition recomputation,
+retaining all input identities and scales so deleting the highest-scale input
+recomputes the correct result scale. Numeric navigation never collapses raw
+full-tuple identities. Numeric rendering-only sink maps may cross a derived
+scope because their raw circuit values are already usable; final presentation
+computations continue through PostgreSQL publication when possible. Numeric
+operators required by downstream scopes execute in the circuit.
+
+Used native numeric codecs and computed/predicate numeric semantics bind
+`pg-circuit-numeric-bigint-scale-4096-v1` into durable identity. The revised native
+source binding also applies when the captured source contract contains timestamp
+columns, even if the query does not consume numeric values. Existing registrations
+with these source contracts reject pre-upgrade checkpoints and require explicit
+rebuild/bootstrap. Published object bytes remain unchanged and readable. Feldera's local
+`sqllib/src/decimal.rs` provides design evidence for typed decimal arithmetic;
+its fixed precision/scale result types and panic-based overflow paths do not
+establish compatibility with PostgreSQL's unconstrained numeric semantics.

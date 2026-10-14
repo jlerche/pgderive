@@ -15,7 +15,7 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
         anyhow::bail!("derived query requires relational lowering");
     };
     ensure!(
-        relational.output.terminal.is_none(),
+        relational.output.terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
         "derived scope cannot consume sink-deferred expressions"
     );
     let resolve = |name: &crate::compiler::parser::Name| {
@@ -91,7 +91,7 @@ pub(super) fn compose_join(compiled: &mut Compiled) -> Result<()> {
         "composable projection requires a joined input"
     );
     ensure!(
-        relational.output.terminal.is_none(),
+        relational.output.terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
         "derived scope cannot consume sink-deferred expressions"
     );
     let id = id.clone();

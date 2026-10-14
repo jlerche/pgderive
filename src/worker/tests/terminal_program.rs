@@ -87,13 +87,9 @@ fn terminal_filter_retains_hidden_operand_without_exposing_it() -> Result<()> {
     let compiled =
         compile("SELECT auction FROM source.bid WHERE 0.908 * price > 1", &native(1184))?;
     let layout = compiled.projection().context("projection absent")?;
-    assert_eq!(layout.columns.len(), 2);
-    let value = serde_json::to_value(layout)?;
-    let outputs =
-        value["terminal"]["program"]["outputs"].as_array().context("output layout absent")?;
-    assert_eq!(outputs.len(), 1);
-    assert_eq!(outputs[0]["label"], "auction");
-    assert!(value["terminal"]["program"]["predicate"].is_number());
+    assert_eq!(layout.columns.len(), 1);
+    assert!(layout.terminal.is_none());
+
     Ok(())
 }
 
