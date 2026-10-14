@@ -29,6 +29,9 @@ pub type Entry<K, V> = ((K, V), i64);
 /// Borrowed current key/value/coefficient; None indicates exhaustion.
 pub type EntryRef<'a, K, V> = Option<(&'a K, &'a V, i64)>;
 
+/// Optional borrowed contiguous block rows.
+pub type EntrySpan<'a, K, V> = Option<&'a [Entry<K, V>]>;
+
 /// Open a fallible cursor without depending on the batch's physical storage.
 pub trait BatchReader {
     /// Navigation key.
@@ -58,6 +61,22 @@ pub trait BatchCursor: Send {
     type Val: BatchData;
     /// Current tuple; None indicates exhaustion.
     fn current(&self) -> EntryRef<'_, Self::Key, Self::Val>;
+    /// Remaining borrowed rows in the current verified block, when supported.
+    /// A key-restricted cursor exposes only matching rows.
+    fn current_span(&self) -> EntrySpan<'_, Self::Key, Self::Val> {
+        None
+    }
+    /// Consume the current borrowed span. Override together with `current_span`.
+    /// The standard cursor retains its position on a failed block load.
+    fn advance_span(&mut self) -> impl Future<Output = Result<()>> + Send {
+        async {
+            anyhow::ensure!(
+                self.current_span().is_none(),
+                "span cursor must implement advance_span"
+            );
+            self.advance().await
+        }
+    }
     /// Advance one full tuple.
     fn advance(&mut self) -> impl Future<Output = Result<()>> + Send;
     /// Seek to the first key greater than or equal to the target.
@@ -70,6 +89,12 @@ impl<K: BatchData, V: BatchData> BatchCursor for Cursor<K, V> {
     fn current(&self) -> Option<(&K, &V, i64)> {
         Self::current(self)
     }
+    fn current_span(&self) -> Option<&[Entry<K, V>]> {
+        Some(Self::current_span(self))
+    }
+    async fn advance_span(&mut self) -> Result<()> {
+        Self::advance_span(self).await
+    }
     async fn advance(&mut self) -> Result<()> {
         Self::advance(self).await
     }
@@ -77,3 +102,7 @@ impl<K: BatchData, V: BatchData> BatchCursor for Cursor<K, V> {
         Self::seek_key(self, key).await
     }
 }
+
+#[cfg(test)]
+#[path = "tests/performance.rs"]
+mod performance;

@@ -108,9 +108,17 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             references: Vec::new(),
             previous: None,
         };
-        while let Some((key, value, weight)) = cursor.current() {
-            writer.push(((key.clone(), value.clone()), weight)).await?;
-            cursor.advance().await?;
+        while cursor.current().is_some() {
+            if let Some(span) = cursor.current_span() {
+                ensure!(!span.is_empty(), "empty span at current tuple");
+                for row in span {
+                    writer.push(row.clone()).await?;
+                }
+                cursor.advance_span().await?;
+            } else if let Some((key, value, weight)) = cursor.current() {
+                writer.push(((key.clone(), value.clone()), weight)).await?;
+                cursor.advance().await?;
+            }
         }
         writer.flush_block().await?;
         writer.flush_root().await?;

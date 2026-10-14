@@ -35,9 +35,14 @@ retain failure evidence, correct the operational cause, and use explicit query
 rebuild when source history is unavailable. Rebuild takes a new consistent
 snapshot and replaces the active generation through the lifecycle cutover.
 
-Diagnostics report sampled logical time, run count and shared encoded-block cache
-usage, together with configured execution and source transaction budgets. These
-are serialized-record limits, not a bound on process RSS. Failure categories are
+Diagnostics report sampled logical time, run count and shared verified decoded
+block cache usage, together with configured execution and source transaction
+budgets. Cache `bytes` charges retained vector capacity plus encoded payload as
+a heap estimate; `live_bytes` includes retained and evicted blocks still alive,
+and `pins` counts reader references excluding cache ownership. Retained and live
+charges overlap. Active pins may exceed the retention cap; indexes, tracking
+metadata, allocator overhead and custom serde allocations are outside that cap.
+These diagnostics and serialized-record limits do not bound process RSS. Failure categories are
 coarse (`resource_limit`, `operation_timeout`, `diagnostics`, `execution_or_io`);
 full failure chains and retained scratch paths remain in the worker logs. Health
 does not copy arbitrary transport errors or credentials into the catalog.

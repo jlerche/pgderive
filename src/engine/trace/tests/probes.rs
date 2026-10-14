@@ -70,7 +70,7 @@ async fn probes_skip_irrelevant_runs_and_stop_before_unrelated_blocks() -> Resul
 #[tokio::test]
 async fn cached_cold_evicted_and_batched_probes_have_equal_results() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let cache = Arc::new(BlockCache::new(80, 2));
+    let cache = Arc::new(BlockCache::new(256, 2));
     let batch = Batch::from_updates((0..20).map(|n| ((n, n + 1), 1)))?;
     let data = object(store.clone(), cache.clone(), &batch, 1).await?;
     let mut trace = Trace::default();
@@ -89,7 +89,7 @@ async fn cached_cold_evicted_and_batched_probes_have_equal_results() -> Result<(
         rows(snapshot.key_cursor(&key).await?).await?;
     }
     let stats = cache.stats()?;
-    assert!(stats.bytes <= 80);
+    assert!(stats.bytes <= 256);
     assert!(stats.entries <= 2);
     let before = stats.misses;
     assert_eq!(rows(snapshot.key_cursor(&3).await?).await?, cold);

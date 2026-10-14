@@ -160,5 +160,6 @@ the new path: sixteen different live heads require 17 versus one value clone;
 three equal heads with coefficients `i64::MAX, 1, -i64::MAX` require six versus
 one, both producing coefficient one. These count selection work only, excluding
 cursor construction/staging, JSON decoding, object requests and wall time.
-Encoded-byte caching still redecodes blocks, memory cursors still clone source
-rows, and no decoded-resident-memory or RSS bound follows from this change.
+Subsequent decoded-block sharing and merged spans are described in
+[reader/storage measurements](reader-storage-performance.md). Memory cursors still
+clone source rows; cache accounting does not establish an RSS bound.

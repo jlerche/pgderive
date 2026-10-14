@@ -13,7 +13,8 @@ use tempfile::TempDir;
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
-    /// Shared query cache cap for encoded immutable block bytes.
+    /// Shared query cache cap for decoded structural-plus-payload charges.
+    /// Active pins, indexes and allocator overhead are outside this cap; not RSS.
     pub cache_bytes: usize,
     /// Shared query cache entry cap; zero disables retention.
     pub cache_entries: usize,

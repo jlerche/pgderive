@@ -1,11 +1,20 @@
+use super::{BatchData, Entry};
 use anyhow::{Context, Result};
 use std::{
+    any::{Any, TypeId},
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
 };
 
-/// Shared cache of checksum-verified immutable encoded block bytes.
-/// Decoded cursor blocks are separately pinned by active readers.
+type SharedRows<K, V> = Arc<Vec<Entry<K, V>>>;
+
+type Rows = dyn Any + Send + Sync;
+// v1/v2 manifests both use the same canonical JSON row codec.
+const ROW_CODEC: &str = "canonical-json-rows-v1";
+type Identity = (&'static str, String, String, TypeId);
+
+/// Shared verified decoded blocks. Charges include vector storage and encoded
+/// payload length as a heap estimate; they are not an allocator or RSS bound.
 #[derive(Debug)]
 pub struct BlockCache {
     bytes: usize,
@@ -14,80 +23,154 @@ pub struct BlockCache {
 }
 #[derive(Debug, Default)]
 struct State {
-    blocks: BTreeMap<String, Cached>,
+    blocks: BTreeMap<Identity, Cached>,
+    live: Vec<(Weak<Rows>, usize)>,
     stats: CacheStats,
     clock: u64,
 }
 #[derive(Debug)]
 struct Cached {
-    bytes: Arc<[u8]>,
+    rows: Arc<Rows>,
+    charge: usize,
     accessed: u64,
 }
-/// Cache counters and current resident encoded bytes.
+/// Cache counters. Charges exclude allocator overhead and cannot bound RSS.
 #[derive(Debug, Clone, Default)]
 pub struct CacheStats {
-    /// Current encoded byte count, excluding active decoded cursor blocks.
+    /// Retained decoded block charges (vector capacity plus encoded payload).
     pub bytes: usize,
-    /// Number of cached blocks.
+    /// Number of retained decoded blocks.
     pub entries: usize,
-    /// Successful cache lookups.
+    /// Live decoded block charges, including evicted blocks pinned by cursors.
+    pub live_bytes: usize,
+    /// Cursor/reader strong references, excluding the cache's own references.
+    pub pins: usize,
+    /// Successful decoded block lookups.
     pub hits: u64,
-    /// Lookups requiring an object-store read.
+    /// Lookups requiring an object-store read and decode.
     pub misses: u64,
 }
 impl BlockCache {
-    /// Set exact encoded-byte and entry caps; either zero disables retention.
+    /// Set decoded-charge and entry caps; either zero disables retention.
     #[must_use]
     pub fn new(bytes: usize, entries: usize) -> Self {
         Self { bytes, entries, state: Mutex::new(State::default()) }
     }
-    /// Read current cache usage and request counters.
+    /// Read usage including active pins and evicted live decoded blocks.
     ///
     /// # Errors
     /// Returns an error if a prior thread poisoned the cache lock.
     pub fn stats(&self) -> Result<CacheStats> {
-        Ok(self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?.stats.clone())
+        let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
+        state.live.retain(|(rows, _)| rows.strong_count() > 0);
+        let mut counters = state.stats.clone();
+        counters.live_bytes = state.live.iter().map(|(_, charge)| charge).sum();
+        let references: usize = state.live.iter().map(|(rows, _)| rows.strong_count()).sum();
+        counters.pins = references.saturating_sub(state.blocks.len());
+        drop(state);
+        Ok(counters)
     }
-    pub(super) fn get(&self, hash: &str) -> Result<Option<Arc<[u8]>>> {
+    pub(super) fn get<K: BatchData, V: BatchData>(
+        &self,
+        schema: &str,
+        hash: &str,
+    ) -> Result<Option<SharedRows<K, V>>> {
         let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
         state.clock = state.clock.saturating_add(1);
         let clock = state.clock;
-        let bytes = state.blocks.get_mut(hash).map(|entry| {
+        let identity =
+            (ROW_CODEC, schema.to_owned(), hash.to_owned(), TypeId::of::<Vec<Entry<K, V>>>());
+        let rows = state.blocks.get_mut(&identity).map(|entry| {
             entry.accessed = clock;
-            entry.bytes.clone()
+            entry.rows.clone()
         });
-        if bytes.is_some() {
+        if rows.is_some() {
             state.stats.hits = state.stats.hits.saturating_add(1);
         } else {
             state.stats.misses = state.stats.misses.saturating_add(1);
         }
         drop(state);
-        Ok(bytes)
+        rows.map(|rows| rows.downcast().map_err(|_| anyhow::anyhow!("cache type mismatch")))
+            .transpose()
     }
-    pub(super) fn insert(&self, hash: String, bytes: Arc<[u8]>) -> Result<()> {
-        if bytes.len() > self.bytes || self.entries == 0 || self.bytes == 0 {
-            return Ok(());
-        }
+    pub(super) fn insert<K: BatchData, V: BatchData>(
+        &self,
+        schema: &str,
+        hash: String,
+        rows: Arc<Vec<Entry<K, V>>>,
+        encoded_bytes: usize,
+    ) -> Result<()> {
+        let charge = rows
+            .capacity()
+            .checked_mul(std::mem::size_of::<Entry<K, V>>())
+            .and_then(|bytes| bytes.checked_add(encoded_bytes))
+            .context("decoded cache charge overflow")?;
         let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
-        if state.blocks.contains_key(&hash) {
+        state.live.retain(|(rows, _)| rows.strong_count() > 0);
+        let rows: Arc<Rows> = rows;
+        state.live.push((Arc::downgrade(&rows), charge));
+        if charge > self.bytes || self.entries == 0 || self.bytes == 0 {
             return Ok(());
         }
-        while state.stats.bytes > self.bytes - bytes.len() || state.blocks.len() >= self.entries {
+        let identity = (ROW_CODEC, schema.to_owned(), hash, TypeId::of::<Vec<Entry<K, V>>>());
+        if state.blocks.contains_key(&identity) {
+            return Ok(());
+        }
+        while state.stats.bytes > self.bytes - charge || state.blocks.len() >= self.entries {
             let oldest = state
                 .blocks
                 .iter()
                 .min_by_key(|(_, entry)| entry.accessed)
-                .map(|(hash, _)| hash.clone())
+                .map(|(identity, _)| identity.clone())
                 .context("cache eviction without entries")?;
             let evicted = state.blocks.remove(&oldest).context("cache eviction lost entry")?;
-            state.stats.bytes -= evicted.bytes.len();
+            state.stats.bytes -= evicted.charge;
         }
         state.clock = state.clock.saturating_add(1);
         let clock = state.clock;
-        state.stats.bytes += bytes.len();
-        state.blocks.insert(hash, Cached { bytes, accessed: clock });
+        state.stats.bytes += charge;
+        state.blocks.insert(identity, Cached { rows, charge, accessed: clock });
         state.stats.entries = state.blocks.len();
         drop(state);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlockCache;
+    use anyhow::Result;
+    use std::sync::Arc;
+
+    #[test]
+    fn decoded_sharing_tracks_evicted_and_disabled_pins() -> Result<()> {
+        let cache = BlockCache::new(1024, 1);
+        let rows = Arc::new(vec![((1_i64, "payload".to_owned()), 1)]);
+        cache.insert("schema", "first".into(), rows.clone(), 20)?;
+        let shared = cache
+            .get::<i64, String>("schema", "first")?
+            .ok_or_else(|| anyhow::anyhow!("missing block"))?;
+        assert!(Arc::ptr_eq(&rows, &shared));
+        assert!(cache.get::<i64, String>("other-schema", "first")?.is_none());
+        assert!(cache.get::<i64, i64>("schema", "first")?.is_none());
+        assert_eq!(cache.stats()?.pins, 2);
+        cache.insert("schema", "second".into(), Arc::new(vec![((2_i64, String::new()), 1)]), 10)?;
+        let stats = cache.stats()?;
+        assert_eq!(stats.entries, 1);
+        assert!(stats.live_bytes > stats.bytes);
+        assert_eq!(stats.pins, 2);
+        drop(shared);
+        drop(rows);
+        let stats = cache.stats()?;
+        assert_eq!(stats.live_bytes, stats.bytes);
+        assert_eq!(stats.pins, 0);
+        let disabled = BlockCache::new(0, 0);
+        let rows = Arc::new(vec![((1_i64, 2_i64), 1)]);
+        disabled.insert("schema", "hash".into(), rows.clone(), 8)?;
+        assert_eq!(disabled.stats()?.bytes, 0);
+        assert_eq!(disabled.stats()?.pins, 1);
+        drop(rows);
+        assert_eq!(disabled.stats()?.live_bytes, 0);
         Ok(())
     }
 }

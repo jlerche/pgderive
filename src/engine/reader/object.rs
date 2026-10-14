@@ -302,31 +302,36 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     pub(super) async fn read(&self, ordinal: usize) -> Result<Arc<Vec<Entry<K, V>>>> {
         let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
         let end = block.offset.checked_add(block.length).context("block range overflow")?;
-        let bytes = if let Some(bytes) = self.cache.get(&block.hash)? {
-            bytes
-        } else {
-            let bytes = self
-                .store
-                .get_range(
-                    &Path::from(block.path.as_ref().unwrap_or(&self.reference.path).clone()),
-                    block.offset..end,
-                )
-                .await?;
-            ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
-            let bytes: Arc<[u8]> = Arc::from(bytes.as_ref());
-            self.cache.insert(block.hash.clone(), bytes.clone())?;
-            bytes
-        };
-        ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
-        let rows: Vec<Entry<K, V>> = serde_json::from_slice(&bytes)?;
-        validate(&rows)?;
+        let rows =
+            if let Some(rows) = self.cache.get::<K, V>(&self.reference.schema, &block.hash)? {
+                rows
+            } else {
+                let bytes = self
+                    .store
+                    .get_range(
+                        &Path::from(block.path.as_ref().unwrap_or(&self.reference.path).clone()),
+                        block.offset..end,
+                    )
+                    .await?;
+                ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
+                let rows: Vec<Entry<K, V>> = serde_json::from_slice(&bytes)?;
+                validate(&rows)?;
+                let rows = Arc::new(rows);
+                self.cache.insert(
+                    &self.reference.schema,
+                    block.hash.clone(),
+                    rows.clone(),
+                    bytes.len(),
+                )?;
+                rows
+            };
         ensure!(
             rows.len() == block.rows
                 && rows.first().map(|row| &row.0) == Some(&block.first)
                 && rows.last().map(|row| &row.0) == Some(&block.last),
             "block fences/count mismatch"
         );
-        Ok(Arc::new(rows))
+        Ok(rows)
     }
 }
 

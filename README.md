@@ -563,10 +563,22 @@ comparing every left row to every unrelated right row.
 coefficients before uploading. It relies on the prior boundary having already
 been validated; it does not rescan unchanged state to detect unrelated external
 object loss. Full scans remain available for the independent oracle and storage
-validation. Cache residency is bounded by `execution.cache_bytes` and
-`cache_entries`, shared across all production query arrangements. The cache holds
-verified encoded bytes; active decoded blocks and resident indexes are separate
-reader pins. Cursor clones share decoded blocks rather than copying them.
+validation. Shared verified decoded blocks are retained within
+`execution.cache_bytes` and `cache_entries` across production query arrangements.
+The byte charge is vector capacity times entry size plus encoded payload length
+as a heap estimate; it excludes allocator overhead and cannot bound process RSS
+or arbitrary custom serde allocations. Active readers can pin evicted or oversized
+blocks beyond the retention cap. Diagnostics expose `bytes` for retained charges,
+`live_bytes` for all live decoded charges (including retained blocks), and `pins`
+for reader references excluding cache ownership; these overlapping charges must
+not be added together. Resident indexes and pin-tracking metadata are separate.
+Cursor clones and new readers share verified decoded blocks; cache hits still
+check the requesting object's row count and fences. Streaming compaction borrows
+uncontended block prefixes strictly before other run heads; overlapping full
+identities retain exact scalar consolidation and fallible staged advancement.
+The durable v1/v2 canonical JSON format is unchanged, and existing committed
+objects remain readable without migration. Controlled release measurements and
+format tradeoffs are recorded in [reader/storage performance](docs/reader-storage-performance.md).
 
 Cold, cached, evicted, and differently split runs are checked for equal weighted
 results. Selected-block failures retain cursor position for retry. Unrelated

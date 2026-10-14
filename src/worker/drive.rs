@@ -239,7 +239,7 @@ async fn publish(open: &mut Open, transaction: &Transaction) -> Result<()> {
         .await?;
     let cache = open.query.cache_stats()?;
     emit(
-        &json!({"event":"published","time":time,"end_lsn":transaction.end_lsn,"changes":transaction.changes.len(),"elapsed_ms":started.elapsed().as_millis(),"cache":{"bytes":cache.bytes,"entries":cache.entries,"hits":cache.hits,"misses":cache.misses}}),
+        &json!({"event":"published","time":time,"end_lsn":transaction.end_lsn,"changes":transaction.changes.len(),"elapsed_ms":started.elapsed().as_millis(),"cache":{"bytes":cache.bytes,"entries":cache.entries,"live_bytes":cache.live_bytes,"pins":cache.pins,"hits":cache.hits,"misses":cache.misses}}),
     )
 }
 async fn maintain(open: &mut Open, settings: &Settings, metrics: &mut Metrics) -> Result<()> {

@@ -58,6 +58,44 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
             .map(|((key, value), weight)| (key, value, *weight))
     }
 
+    /// Remaining verified rows in this block, honoring key restrictions.
+    #[must_use]
+    pub fn current_span(&self) -> &[Entry<K, V>] {
+        let remaining = &self.rows[self.position..];
+        let length = self.key.as_ref().map_or(remaining.len(), |key| {
+            remaining.iter().take_while(|row| &row.0.0 == key).count()
+        });
+        &remaining[..length]
+    }
+
+    pub(crate) async fn advance_rows(&mut self, count: usize) -> Result<()> {
+        anyhow::ensure!(count <= self.current_span().len(), "advance exceeds verified span");
+        if count < self.rows.len() - self.position {
+            self.position += count;
+            return Ok(());
+        }
+        self.advance_span().await
+    }
+
+    /// Consume the current span, loading at most one following block.
+    ///
+    /// # Errors
+    /// Returns corruption or GET errors without changing the prior position.
+    pub async fn advance_span(&mut self) -> Result<()> {
+        if let Source::Object(batch) = &self.source
+            && self.block + 1 < batch.blocks.len()
+            && self.key.as_ref().is_none_or(|key| batch.blocks[self.block + 1].first.0 <= *key)
+        {
+            let rows = batch.read(self.block + 1).await?;
+            self.rows = rows;
+            self.block += 1;
+            self.position = 0;
+        } else {
+            self.position = self.rows.len();
+        }
+        Ok(())
+    }
+
     /// Advance one full tuple, loading at most one next object block.
     ///
     /// # Errors

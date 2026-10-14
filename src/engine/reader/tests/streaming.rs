@@ -165,3 +165,133 @@ async fn closed_namespace_deletes_cannot_hit_recreated_equal_content() -> Result
     assert_eq!(streamed.cursor().await?.current(), Some((&1, &2, 3)));
     Ok(())
 }
+
+#[tokio::test]
+async fn borrowed_spans_share_decodes_preserve_restrictions_and_stream_objects() -> Result<()> {
+    use crate::engine::reader::{BlockCache, Cursor};
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let batch = Batch::from_updates((0..12).map(|n| ((n / 4, n), 1)))?;
+    let root = ObjectBatch::write(store.clone(), &batch, "span-v1", 3).await?;
+    let cache = Arc::new(BlockCache::new(4096, 16));
+    let object =
+        ObjectBatch::<i64, i64>::open_with_cache(store.clone(), root, "span-v1", cache.clone())
+            .await?;
+    let first = object.cursor().await?;
+    let second = object.cursor().await?;
+    assert_eq!(first.current_span().as_ptr(), second.current_span().as_ptr());
+    assert_eq!(cache.stats()?.pins, 2);
+    let mut restricted = Cursor::object_key(object.clone(), &1)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing key"))?;
+    assert!(restricted.current_span().iter().all(|row| row.0.0 == 1));
+    restricted.advance_span().await?;
+    assert_eq!(restricted.current_span(), &[((1, 6), 1), ((1, 7), 1)]);
+    restricted.advance_span().await?;
+    assert!(restricted.current().is_none());
+    let roots = ObjectBatch::write_stream(
+        store.clone(),
+        &mut object.cursor().await?,
+        "span-v1",
+        WriteLimits::default(),
+    )
+    .await?;
+    let restored = TraceSnapshot::<i64, i64>::reopen(
+        store,
+        Manifest { version: 1, time: 0, generation: 0, objects: roots },
+        "span-v1",
+        Arc::new(BlockCache::new(0, 0)),
+    )
+    .await?;
+    assert_eq!(restored.materialize().await?, batch);
+    Ok(())
+}
+
+#[tokio::test]
+async fn shared_decode_rechecks_fences_and_failed_span_load_retains_position() -> Result<()> {
+    use crate::engine::reader::BlockCache;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let batch = Batch::from_updates([((1_i64, 1_i64), 1), ((2, 2), 1)])?;
+    let root = ObjectBatch::write(store.clone(), &batch, "span-errors-v1", 1).await?;
+    let object = ObjectBatch::<i64, i64>::open_with_cache(
+        store.clone(),
+        root,
+        "span-errors-v1",
+        Arc::new(BlockCache::new(4096, 8)),
+    )
+    .await?;
+    let mut cursor = object.cursor().await?;
+    let mut wrong = object.clone();
+    let mut fences = (*wrong.blocks).clone();
+    fences[0].rows += 1;
+    wrong.blocks = Arc::new(fences);
+    assert!(wrong.cursor().await.is_err());
+    let path = Path::from(object.block_path(1).ok_or_else(|| anyhow::anyhow!("missing block"))?);
+    let original = store.get(&path).await?.bytes().await?;
+    store.put(&path, b"bad".to_vec().into()).await?;
+    assert!(cursor.advance_span().await.is_err());
+    assert_eq!(cursor.current(), Some((&1, &1, 1)));
+    store.put(&path, original.into()).await?;
+    cursor.advance_span().await?;
+    assert_eq!(cursor.current(), Some((&2, &2, 1)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn merged_spans_stop_before_overlap_and_compaction_preserves_weights() -> Result<()> {
+    use crate::engine::reader::{BatchCursor, BlockCache};
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let left = Batch::from_updates([((1_i64, 1_i64), 2), ((2, 2), 3), ((4, 4), -1)])?;
+    let right = Batch::from_updates([((2_i64, 2_i64), -3), ((3, 3), 5), ((5, 5), 1)])?;
+    let roots = vec![
+        ObjectBatch::write(store.clone(), &left, "merge-span-v1", 3).await?,
+        ObjectBatch::write(store.clone(), &right, "merge-span-v1", 3).await?,
+    ];
+    let prior = TraceSnapshot::<i64, i64>::reopen(
+        store.clone(),
+        Manifest { version: 1, time: 0, generation: 0, objects: roots },
+        "merge-span-v1",
+        Arc::new(BlockCache::new(4096, 8)),
+    )
+    .await?;
+    let mut cursor = prior.cursor().await?;
+    assert_eq!(cursor.current_span(), Some(&[((1, 1), 2)][..]));
+    cursor.advance_span().await?;
+    assert_eq!(cursor.current(), Some((&3, &3, 5)));
+    assert_eq!(cursor.current_span(), Some(&[((3, 3), 5)][..]));
+    let compacted =
+        Arrangement::<i64, i64>::new(store, "merge-span-v1".into(), 3)?.compact(&prior).await?;
+    assert_eq!(
+        compacted.materialize().await?,
+        Batch::from_updates([((1, 1), 2), ((3, 3), 5), ((4, 4), -1), ((5, 5), 1)])?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_merged_span_load_keeps_consolidated_position_for_retry() -> Result<()> {
+    use crate::engine::reader::{BatchCursor, BlockCache};
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let batch = Batch::from_updates([((1_i64, 1_i64), 2), ((2, 2), 3)])?;
+    let root = ObjectBatch::write(store.clone(), &batch, "span-retry-v1", 1).await?;
+    let object =
+        ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "span-retry-v1").await?;
+    let path = Path::from(object.block_path(1).ok_or_else(|| anyhow::anyhow!("missing block"))?);
+    let prior = TraceSnapshot::<i64, i64>::reopen(
+        store.clone(),
+        Manifest { version: 1, time: 0, generation: 0, objects: vec![root] },
+        "span-retry-v1",
+        Arc::new(BlockCache::new(0, 0)),
+    )
+    .await?;
+    let mut cursor = prior.cursor().await?;
+    assert_eq!(cursor.current_span(), Some(&[((1, 1), 2)][..]));
+    let original = store.get(&path).await?.bytes().await?;
+    store.put(&path, b"bad".to_vec().into()).await?;
+    assert!(cursor.advance_span().await.is_err());
+    assert_eq!(cursor.current(), Some((&1, &1, 2)));
+    assert_eq!(cursor.current_span(), Some(&[((1, 1), 2)][..]));
+    store.put(&path, original.into()).await?;
+    cursor.advance_span().await?;
+    assert_eq!(cursor.current(), Some((&2, &2, 3)));
+    Ok(())
+}

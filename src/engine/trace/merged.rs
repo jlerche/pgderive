@@ -3,6 +3,8 @@ use crate::engine::reader::{BatchCursor, BatchData, BatchReader, Cursor, Entry};
 use anyhow::{Context, Result};
 use num_bigint::BigInt;
 
+type UncontendedSpan<'a, K, V> = Option<(usize, &'a [Entry<K, V>])>;
+
 /// Merge pinned run cursors, summing complete identities before i64 narrowing.
 /// Each read operation stages cursor positions, preserving retry on GET errors.
 #[derive(Clone)]
@@ -65,6 +67,24 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
         }
         Ok(())
     }
+    fn uncontended_span(&self) -> UncontendedSpan<'_, K, V> {
+        let (tuple, _) = self.row.as_ref()?;
+        let ordinal = self.cursors.iter().position(|cursor| {
+            cursor.current().is_some_and(|(key, value, _)| (key, value) == (&tuple.0, &tuple.1))
+        })?;
+        let span = self.cursors[ordinal].current_span();
+        let other = self
+            .cursors
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != ordinal)
+            .filter_map(|(_, cursor)| cursor.current().map(|(key, value, _)| (key, value)))
+            .min();
+        let length = other
+            .map_or(span.len(), |bound| span.partition_point(|row| (&row.0.0, &row.0.1) < bound));
+        (length > 0).then_some((ordinal, &span[..length]))
+    }
+
     /// Advance atomically across all runs.
     ///
     /// # Errors
@@ -97,6 +117,20 @@ impl<K: BatchData, V: BatchData> BatchCursor for MergedCursor<K, V> {
     type Val = V;
     fn current(&self) -> Option<(&K, &V, i64)> {
         Self::current(self)
+    }
+    fn current_span(&self) -> crate::engine::reader::EntrySpan<'_, K, V> {
+        self.uncontended_span().map(|(_, span)| span)
+    }
+    async fn advance_span(&mut self) -> Result<()> {
+        let Some((ordinal, span)) = self.uncontended_span() else {
+            return self.advance().await;
+        };
+        let count = span.len();
+        let mut next = self.clone();
+        next.cursors[ordinal].advance_rows(count).await?;
+        next.find().await?;
+        *self = next;
+        Ok(())
     }
     async fn advance(&mut self) -> Result<()> {
         Self::advance(self).await
