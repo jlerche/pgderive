@@ -44,3 +44,19 @@ independent memory equality, simultaneous source changes and cold restart. This
 qualifies this private-network fixture, not AWS or another cloud provider, remote
 host failure durability, or production capacity. The proxy records header presence
 and create conditions without recording credentials or signature values.
+
+## Bounded garbage-collection deletes
+
+Collection completes bounded root marking and managed-object enumeration before
+issuing deletes under the lifecycle barrier. It submits at most 256 candidate
+paths per adapter stream and finishes that stream before submitting another.
+A request error or an object error inside HTTP 200 stops the sweep before
+protection retirement or metadata COMMIT. Retry re-enumerates; deleting an
+already missing object is idempotent. Quiescence, unknown-object retention and
+late-PUT namespace protection keep their existing contracts.
+
+The pinned S3 adapter implements even a singleton `delete()` as a bulk-delete
+POST. An actual-adapter local HTTP fixture measures 513 singleton POSTs versus
+three batches of 256, 256 and one path. Its partial-error retry deletes all keys,
+including 255 keys already removed by the first attempt. This measures request
+amplification, not cloud latency or capacity. The durable object format is unchanged.

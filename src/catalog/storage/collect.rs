@@ -1,8 +1,8 @@
 use super::{Catalog, lock};
 use crate::engine::{plan::Plan, reader::ObjectRef};
 use anyhow::{Context, Result, ensure};
-use futures_util::TryStreamExt;
-use object_store::{ObjectStore, ObjectStoreExt, path::Path};
+use futures_util::{StreamExt, TryStreamExt};
+use object_store::{ObjectStore, path::Path};
 use std::{collections::BTreeSet, sync::Arc};
 use tokio_postgres::{Client, Transaction};
 
@@ -81,9 +81,7 @@ impl Catalog {
         ensure!(sealed.len() <= limits.objects, "GC namespace metadata limit exceeded");
         let sweep = candidates(&store, &retained, &sealed, limits.objects).await?;
         let deleted = sweep.candidates.len();
-        for path in sweep.candidates {
-            store.delete(&path).await?;
-        }
+        delete_candidates(&store, sweep.candidates).await?;
         retire(&tx, self, &sealed, &sweep.surviving).await?;
         tx.commit()
             .await
@@ -221,3 +219,23 @@ fn listed_namespace(path: &str, sealed: &BTreeSet<String>) -> Option<String> {
     let namespace = format!("pgderive/upload-v1/{id}");
     sealed.contains(&namespace).then_some(namespace)
 }
+
+// Explicit application batches bound each adapter stream. S3's adapter otherwise
+// chunks 1,000 paths and buffers 20 requests; a finite <=256-path stream yields
+// one bulk request. Finish this stream before opening the next, and never retire
+// namespace protections following a request-level or per-object error.
+async fn delete_candidates(store: &Arc<dyn ObjectStore>, paths: Vec<Path>) -> Result<()> {
+    let mut paths = paths.into_iter();
+    loop {
+        let batch = paths.by_ref().take(256).collect::<Vec<_>>();
+        if batch.is_empty() {
+            return Ok(());
+        }
+        let stream = futures_util::stream::iter(batch.into_iter().map(Ok)).boxed();
+        store.delete_stream(stream).try_for_each(|_| async { Ok(()) }).await?;
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/collect_delete.rs"]
+mod tests;

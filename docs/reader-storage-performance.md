@@ -2,7 +2,8 @@
 
 The selected production change shares checksum-verified canonical decoded blocks
 across readers, retains them by decoded charge, borrows uncontended block prefixes
-through the real merge/streaming compaction path. It retains canonical JSON rows and v1/v2 durable
+through the real merge/streaming compaction path, and batches GC deletion through
+the actual object-store adapter. It retains canonical JSON rows and v1/v2 durable
 objects. Ordinary restart reads existing committed objects without migration;
 no published object is rewritten in place. New cache entries bind row-codec
 revision, schema, Rust key/value types and content hash. Every caller still

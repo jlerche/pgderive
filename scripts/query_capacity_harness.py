@@ -157,7 +157,7 @@ def qualify(output,binary):
         (output/'qualification.json').write_text(json.dumps({'source_rows':10000,'auctions':64,'source_distribution':distribution,'hot_bid_fraction':distribution['hot_rows']/distribution['rows'],
             'source_transactions':100,'publication_latency_seconds':latencies,'workload_elapsed_seconds_including_oracle_checks':elapsed,
             'sampled_peak_rss_bytes':peak,'coarse_membership_roots':membership,'physical_prefix_inventory':physical_inventory,'health':observed,'outage_seconds':duration,
-            'request_counts':{method:sum(row.get('method')==method for row in requests) for method in ['GET','PUT','DELETE','HEAD']},
+            'request_counts':{method:sum(row.get('method')==method for row in requests) for method in ['GET','PUT','POST','DELETE','HEAD']},
             'native_and_memory_equality':True,'cold_restart':True,'external_restart_policy_unavailable_and_recovered':True,
             'scope':'owned local fixture; measured envelope only'},indent=2)+'\n')
         command(fixture,binary,'drop',config)
