@@ -3,6 +3,7 @@ mod distinct;
 mod distinct_statistics;
 mod left_join;
 mod lookup;
+mod membership;
 mod navigation;
 mod ordered;
 mod partition;

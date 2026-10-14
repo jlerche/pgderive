@@ -4,6 +4,7 @@ use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) enum Tree {
     Source(Table),
+    Exists { left: Box<Self>, right: Table, keys: Vec<(Name, Name)>, anti: bool },
     Derived { source: Box<super::Parsed>, alias: String },
     Join { left: Box<Self>, right: Box<Self>, keys: Vec<(Name, Name)>, outer: bool },
 }
@@ -88,7 +89,7 @@ fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tree> {
         _ => anyhow::bail!("native join tree requires ordinary native tables"),
     }
 }
-fn equalities(value: &Node, keys: &mut Vec<(Name, Name)>) -> Result<()> {
+pub(super) fn equalities(value: &Node, keys: &mut Vec<(Name, Name)>) -> Result<()> {
     match node(value)? {
         NodeEnum::BoolExpr(value) if value.boolop == i32::from(pg::BoolExprType::AndExpr) => {
             ensure!(value.xpr.is_none(), "invalid join conjunction");

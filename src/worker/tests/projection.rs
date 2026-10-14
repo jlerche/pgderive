@@ -194,7 +194,7 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
         "SELECT id+1 FROM source.auction",
         "SELECT id FROM source.auction LIMIT 1",
         "SELECT id FROM source.auction ORDER BY id",
-        "SELECT DISTINCT category FROM source.auction",
+        "SELECT DISTINCT ON (category) category FROM source.auction",
         "SELECT auction.id FROM source.auction a",
         "SELECT b.id FROM source.auction a",
         "SELECT COUNT(*) FROM source.auction",

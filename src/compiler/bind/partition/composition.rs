@@ -181,6 +181,8 @@ pub(in crate::compiler::bind) fn rewrite(
         | Node::EquijoinKey { id, input, .. }
         | Node::LeftJoinInput { id, input, .. }
         | Node::LeftJoin { id, input, .. }
+        | Node::SetDistinct { id, input, .. }
+        | Node::Existence { id, input, .. }
         | Node::LookupInput { id, input, .. }
         | Node::Lookup { id, input, .. }
         | Node::Project { id, input }

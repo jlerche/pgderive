@@ -79,6 +79,8 @@ fn infer<'a>(
         }
         Node::Union { id, .. }
         | Node::LeftJoin { id, .. }
+        | Node::SetDistinct { id, .. }
+        | Node::Existence { id, .. }
         | Node::Lookup { id, .. }
         | Node::OrderedInput { id, .. }
         | Node::OrderedFirst { id, .. }

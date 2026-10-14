@@ -8,6 +8,7 @@ pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
 pub(super) mod lookup;
+mod membership;
 pub(super) mod native_join;
 pub(super) mod navigation;
 pub(super) mod offset;
@@ -25,6 +26,10 @@ pub(super) struct Table {
 }
 pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::Transform)>;
 pub(super) enum Parsed {
+    Membership {
+        parsed: native_join::Parsed,
+        distinct: bool,
+    },
     NativeJoin(native_join::Parsed),
     ScopedJoin(scoped_join::Parsed),
     Derived(derived::Derived),
@@ -141,6 +146,9 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
     Ok(())
 }
 fn query(select: &pg::SelectStmt) -> Result<Parsed> {
+    if let Some(parsed) = membership::parse(select)? {
+        return Ok(parsed);
+    }
     validate_query(select)?;
     if let Some(join) = scoped_join::parse(select)? {
         return Ok(Parsed::ScopedJoin(join));

@@ -1,5 +1,6 @@
 mod derived;
 mod lookup;
+mod membership;
 mod native_join;
 mod native_scope;
 mod partition;
@@ -22,6 +23,7 @@ struct Scope<'a> {
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
+        Parsed::Membership { parsed, distinct } => membership::bind(parsed, distinct, contract),
         Parsed::NativeJoin(parsed) => native_join::bind(parsed, contract),
         Parsed::NativeScope { source, columns, predicate } => {
             native_scope::bind(source, columns, predicate, contract)

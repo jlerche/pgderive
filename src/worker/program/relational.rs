@@ -36,9 +36,10 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
     for node in &ir.nodes {
         match node {
             Node::Source { .. } | Node::Union { .. } => {}
-            Node::LeftJoinInput { .. } | Node::LeftJoin { .. } => {
-                bind_left_join(node, &mut operators, settings);
-            }
+            Node::SetDistinct { .. }
+            | Node::Existence { .. }
+            | Node::LeftJoinInput { .. }
+            | Node::LeftJoin { .. } => bind_left_join(node, &mut operators, settings),
             Node::LookupInput { id, spec, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(super::lookup::input(spec)));
             }
@@ -271,12 +272,18 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         Node::OrderedFinalize { id, input, .. }
         | Node::Partition { id, input, .. }
         | Node::LeftJoin { id, input, .. }
+        | Node::SetDistinct { id, input, .. }
+        | Node::Existence { id, input, .. }
         | Node::Lookup { id, input, .. } => (id, plan::Kind::Aggregate, vec![input.clone()]),
         Node::Join { id, left, right } => (id, plan::Kind::Join, vec![left.clone(), right.clone()]),
     };
     plan::Node { id: id.clone(), kind, inputs, schema: schema(id) }
 }
 fn plan_revision(ir: &Relational) -> &'static str {
+    if ir.nodes.iter().any(|node| matches!(node, Node::SetDistinct { .. } | Node::Existence { .. }))
+    {
+        return "worker-relational-membership-v2";
+    }
     if ir.nodes.iter().any(|node| matches!(node, Node::TopK { .. })) {
         return "worker-relational-ordered-topk-v1";
     }
@@ -325,6 +332,8 @@ pub(in crate::worker) fn plan(
         | Node::OrderedFinalize { id, input, .. }
         | Node::Partition { id, input, .. }
         | Node::LeftJoin { id, input, .. }
+        | Node::SetDistinct { id, input, .. }
+        | Node::Existence { id, input, .. }
         | Node::Lookup { id, input, .. } = node
         {
             maintained.insert(input.clone(), input.clone());
@@ -457,6 +466,14 @@ fn bind_ordered(node: &Node, operators: &mut Operators<Key, Row>) {
 
 fn bind_left_join(node: &Node, operators: &mut Operators<Key, Row>, settings: &Settings) {
     match node {
+        Node::SetDistinct { id, columns, .. } => {
+            operators.partitions.insert(id.clone(), Arc::new(super::membership::distinct(columns)));
+        }
+        Node::Existence { id, anti, .. } => {
+            operators
+                .partitions
+                .insert(id.clone(), Arc::new(super::membership::existence(*anti, settings.limits)));
+        }
         Node::LeftJoinInput { id, spec, .. } => {
             operators.projects.insert(id.clone(), Arc::new(super::left_join::input(spec)));
         }

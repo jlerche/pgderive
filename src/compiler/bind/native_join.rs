@@ -76,6 +76,11 @@ impl Builder<'_> {
     fn tree(&mut self, tree: Tree) -> Result<Edge> {
         match tree {
             Tree::Source(table) => self.source(table),
+            Tree::Exists { left, right, keys, anti } => {
+                let left = self.tree(*left)?;
+                let right = self.source(right)?;
+                self.existence(left, right, keys, anti)
+            }
             Tree::Derived { source, alias } => self.derived(source, alias),
             Tree::Join { left, right, keys, outer } => {
                 let left = self.tree(*left)?;
@@ -199,6 +204,23 @@ impl Builder<'_> {
         }
         let mut columns = left.columns;
         columns.extend(right.columns);
+        Ok(Edge { id, columns })
+    }
+    fn existence(
+        &mut self,
+        left: Edge,
+        right: Edge,
+        names: Vec<(Name, Name)>,
+        anti: bool,
+    ) -> Result<Edge> {
+        let columns = left.columns.clone();
+        let edge = self.join(left, right, names, true)?;
+        let Some(Node::LeftJoin { id, input, .. }) = self.nodes.pop() else {
+            anyhow::bail!("missing existence join")
+        };
+        self.nodes.push(Node::Existence { id: id.clone(), input, anti });
+        self.revisions.push("pg-equality-existence-v1".into());
+        ensure!(edge.columns.len() > columns.len(), "missing existence source columns");
         Ok(Edge { id, columns })
     }
     fn key(&mut self, id: String, input: String, keys: Vec<ColumnRef>) {

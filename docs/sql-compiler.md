@@ -1522,6 +1522,50 @@ occurrences. A cache-disabled 128-block fixture compares a complete partition
 read with at most 12 reads for an unchanged three-occurrence prefix and a tail
 update. This measures that fixture, not worst-case fanout or end-to-end capacity.
 
+## Native DISTINCT and equality-correlated existence
+
+`SELECT DISTINCT` accepts native column projections from one ordinary source,
+optionally filtered by the existing predicate subset or the existence form below.
+It partitions by complete projected values, including NULL groups, while retaining
+every complete source row until membership is tested. A nonempty partition emits
+one projected occurrence without narrowing its total occurrence count. Supported
+output types are boolean, integral, deterministic text/varchar, UUID and timestamp
+types. Repeated
+output columns remain legal. Computed/deferred outputs, DISTINCT ON, GROUP BY and
+other relational source shapes reject before registration or slot creation.
+
+An outer ordinary source may use exactly `WHERE EXISTS (SELECT 1 FROM schema.table
+alias WHERE inner.key = outer.key [AND ...])`, or `WHERE NOT EXISTS (...)`.
+Correlations must use qualified columns and 1..16 native equalities connecting the
+inner and outer inputs. Key OIDs, modifiers and collations must match; supported
+keys are boolean, integral, numeric, UUID and timestamp types. Aliases expose source
+occurrences, permitting self correlation with distinct aliases. Additional outer
+or inner predicates, OR/inequality correlations, uncorrelated subqueries, nested
+subqueries, aggregates, ordering and limits remain rejected. NOT IN is unsupported
+and does not share NOT EXISTS semantics.
+
+Execution tags both complete full-row input bags, separates NULL keys by side,
+unions synchronized transaction deltas and computes current affected key
+partitions against retained output. EXISTS emits each left tuple with its original
+multiplicity when any right occurrence exists; NOT EXISTS emits it only when none
+exists. Right duplicates never multiply left rows. Both inputs change against the
+same prior logical boundary. Retractions, empty groups and cold recovery use the
+same operators and budgets. This implementation scans affected partitions; it
+claims no constant-work bound for popular keys.
+
+The compiler binds `pg-select-distinct-full-identity-v2` or
+`pg-existence-composition-v1`, with `pg-equality-existence-v1` for the correlation
+operator. The executable layout binds
+`worker-relational-membership-v2` plus complete typed node specifications and native
+contracts. Changed SQL cannot adopt incompatible state; existing registrations
+whose physical graph changes require explicit rebuild. Object format and
+PUT → atomic PG membership/result/progress COMMIT → slot ACK remain unchanged.
+
+The sequential `query_membership_harness.py` compares identical-SQL PostgreSQL
+materialized views and independent raw-row Counter calculations across duplicate
+projections, NULLs, inserts, updates, deletes, simultaneous input changes and cold
+restart. Rust tests additionally exercise weighted left duplicates directly and
+restore all maintained object-backed input/output arrangements.
 ## Bounded exact circuit numeric
 
 Native PostgreSQL numeric can participate in circuit comparisons, equality join
