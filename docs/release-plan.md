@@ -1,5 +1,9 @@
 # Controlled production release work
 
+The [PostgreSQL fidelity roadmap](postgres-fidelity-roadmap.md) defines the next
+semantic milestones and supersedes this document's public result-view target with
+a regular typed result table. Operational requirements below still apply.
+
 The release target is a containerized worker per query on PostgreSQL 17, using the
 documented SQL subset, fixed source layouts and engine-owned results. Correctness
 qualification does not establish capacity or remote storage durability. These four

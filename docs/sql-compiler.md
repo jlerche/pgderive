@@ -1,5 +1,9 @@
 # SQL compiler boundary and slices
 
+For the fidelity target, implementation inventory and known qualification gaps,
+see the [compatibility contract](postgres-compatibility.md) and
+[capability inventory](postgres-capabilities.md).
+
 The compiler executes a deliberately bounded PostgreSQL SELECT through durable
 grouped-join, single-source projection, ungrouped inner-join and affected-partition workers. It is not a general SQL planner
 or an interpreter for plan declarations. Configure it in place of selectors:

@@ -11,6 +11,13 @@ derived-query filtering and composed window/group stages, native left predecesso
 explicit revisable sessions, and bounded self/multiway/left join trees through durable circuits; see
 [the SQL subset and compiler boundaries](docs/sql-compiler.md).
 
+The [PostgreSQL fidelity roadmap](docs/postgres-fidelity-roadmap.md) defines the
+next milestones, including ordinary typed result tables and proven expression
+placement across sink, local execution and batched PostgreSQL fallback.
+The [compatibility contract](docs/postgres-compatibility.md) and
+[current capability inventory](docs/postgres-capabilities.md) distinguish that
+target from implemented and qualified behavior.
+
 ## Query inspection and typed results
 
 `cargo run --locked -- query validate worker.local.toml` resolves and type-checks
