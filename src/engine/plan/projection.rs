@@ -28,6 +28,15 @@ impl<V: BatchData> State for ProjectionState<V> {
         vec![Binding { id: "output".into(), schema: self.schema.clone(), time: self.output.time() }]
     }
 }
+impl<V: BatchData> super::checkpoint::DurableState for ProjectionState<V> {
+    fn memberships(&self) -> Result<Vec<Membership>> {
+        Ok(vec![Membership {
+            id: "output".into(),
+            schema: self.schema.clone(),
+            trace: self.output.manifest()?,
+        }])
+    }
+}
 /// Unpublished projection delta and candidate, bound to the exact runtime root.
 pub type Prepared<V> = PreparedGraph<ProjectionState<V>, Batch<(), V>>;
 /// Unpublished equivalent physical state, without advancing logical time.
@@ -193,29 +202,14 @@ impl<A: BatchData, V: BatchData> Projection<A, V> {
     /// # Errors
     /// Rejects invalid membership, codecs or clocks.
     pub fn checkpoint(&self) -> Result<Checkpoint> {
-        self.encode(&self.snapshot(), self.time())
-    }
-    fn encode(&self, state: &ProjectionState<V>, time: u64) -> Result<Checkpoint> {
-        let checkpoint = Checkpoint {
-            version: 1,
-            plan_identity: self.plan().identity().into(),
-            time,
-            arrangements: vec![Membership {
-                id: "output".into(),
-                schema: state.schema.clone(),
-                trace: state.output.manifest()?,
-            }],
-        };
-        checkpoint.validate(self.plan())?;
-        Ok(checkpoint)
+        self.engine.checkpoint()
     }
     /// Validate exact ownership before exposing unpublished object membership.
     ///
     /// # Errors
     /// Rejects stale/foreign candidates or invalid checkpoints.
     pub fn prepared_checkpoint(&self, prepared: &Prepared<V>) -> Result<Checkpoint> {
-        self.engine.validate_prepared(prepared)?;
-        self.encode(&prepared.candidate(), prepared.output().time)
+        self.engine.prepared_checkpoint(prepared)
     }
     /// Cold-validate authoritative objects and replace local visibility.
     ///
@@ -252,8 +246,7 @@ impl<A: BatchData, V: BatchData> Projection<A, V> {
     /// # Errors
     /// Rejects stale/foreign maintenance or invalid metadata.
     pub fn prepared_compaction_checkpoint(&self, prepared: &Compaction<V>) -> Result<Checkpoint> {
-        self.engine.validate_maintenance(prepared)?;
-        self.encode(&prepared.candidate(), self.time())
+        self.engine.prepared_compaction_checkpoint(prepared)
     }
     /// Publish equivalent object membership before changing the local root.
     ///
@@ -265,15 +258,7 @@ impl<A: BatchData, V: BatchData> Projection<A, V> {
         writer: &mut Writer,
         prepared: Compaction<V>,
     ) -> Result<()> {
-        self.engine.validate_maintenance(&prepared)?;
-        let durable = writer.confirmed(sql, self.plan()).await?;
-        ensure!(
-            durable.stored.checkpoint == self.checkpoint()?,
-            "compaction base differs from durable membership"
-        );
-        let checkpoint = self.prepared_compaction_checkpoint(&prepared)?;
-        writer.maintain(sql, self.plan(), &checkpoint).await?;
-        self.engine.commit_maintenance(prepared)
+        self.engine.publish_compaction(sql, writer, prepared).await
     }
 }
 fn validate_shape(plan: &Plan) -> Result<()> {

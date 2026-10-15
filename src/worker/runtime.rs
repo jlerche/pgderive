@@ -160,25 +160,13 @@ impl Runtime {
         }
     }
     pub(super) fn commit(&mut self, work: Prepared) -> Result<()> {
-        match self {
-            Self::Relational(query, _) => {
-                let Prepared::Relational(work, _) = work else {
-                    bail!("runtime candidate shape mismatch");
-                };
+        match (&mut *self, work) {
+            (Self::Relational(query, _), Prepared::Relational(work, _)) => {
                 query.commit(work).map(|_| ())
             }
-            Self::Grouped(query) => {
-                let Prepared::Grouped(work) = work else {
-                    bail!("runtime candidate shape mismatch");
-                };
-                query.commit(work).map(|_| ())
-            }
-            Self::Projection(query) => {
-                let Prepared::Projection(work) = work else {
-                    bail!("runtime candidate shape mismatch");
-                };
-                query.commit(work).map(|_| ())
-            }
+            (Self::Grouped(query), Prepared::Grouped(work)) => query.commit(work).map(|_| ()),
+            (Self::Projection(query), Prepared::Projection(work)) => query.commit(work).map(|_| ()),
+            _ => bail!("runtime candidate shape mismatch"),
         }
     }
     pub(super) async fn prepare_compaction_protected(

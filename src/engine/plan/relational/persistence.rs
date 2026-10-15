@@ -8,10 +8,9 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use tokio_postgres::Client;
-impl<K: BatchData, V: BatchData> Relational<K, V> {
-    fn encode(&self, state: &RelationalState<K, V>, time: u64) -> Result<Checkpoint> {
-        let arrangements = state
-            .entries
+impl<K: BatchData, V: BatchData> super::super::checkpoint::DurableState for RelationalState<K, V> {
+    fn memberships(&self) -> Result<Vec<Membership>> {
+        self.entries
             .iter()
             .map(|(id, entry)| {
                 Ok(Membership {
@@ -20,30 +19,23 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                     trace: entry.trace.manifest()?,
                 })
             })
-            .collect::<Result<_>>()?;
-        let checkpoint = Checkpoint {
-            version: 1,
-            plan_identity: self.plan().identity().into(),
-            time,
-            arrangements,
-        };
-        checkpoint.validate(self.plan())?;
-        Ok(checkpoint)
+            .collect()
     }
+}
+impl<K: BatchData, V: BatchData> Relational<K, V> {
     /// Export complete memberships without publishing progress or acknowledging CDC.
     ///
     /// # Errors
     /// Returns invalid membership or schema errors.
     pub fn checkpoint(&self) -> Result<Checkpoint> {
-        self.encode(&self.engine.snapshot(), self.time())
+        self.engine.checkpoint()
     }
     /// Export unpublished membership after verifying exact candidate ownership.
     ///
     /// # Errors
     /// Rejects foreign/stale candidates and invalid memberships.
     pub fn prepared_checkpoint(&self, work: &Prepared<K, V>) -> Result<Checkpoint> {
-        self.engine.validate_prepared(work)?;
-        self.encode(&work.candidate(), work.output().time)
+        self.engine.prepared_checkpoint(work)
     }
     /// Cold-validate and adopt authoritative membership, invalidating prior work.
     ///
@@ -98,8 +90,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     /// # Errors
     /// Rejects foreign/stale maintenance and incompatible metadata.
     pub fn prepared_compaction_checkpoint(&self, work: &Compaction<K, V>) -> Result<Checkpoint> {
-        self.engine.validate_maintenance(work)?;
-        self.encode(&work.candidate(), self.time())
+        self.engine.prepared_compaction_checkpoint(work)
     }
     /// Publish equivalent membership before moving local visibility.
     ///
@@ -111,15 +102,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         writer: &mut Writer,
         work: Compaction<K, V>,
     ) -> Result<()> {
-        self.engine.validate_maintenance(&work)?;
-        let durable = writer.confirmed(sql, self.plan()).await?;
-        ensure!(
-            durable.stored.checkpoint == self.checkpoint()?,
-            "compaction base differs from durable state"
-        );
-        let checkpoint = self.prepared_compaction_checkpoint(&work)?;
-        writer.maintain(sql, self.plan(), &checkpoint).await?;
-        self.engine.commit_maintenance(work)
+        self.engine.publish_compaction(sql, writer, work).await
     }
 }
 

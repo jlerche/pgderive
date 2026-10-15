@@ -52,6 +52,25 @@ impl Binding {
         }
         Ok(())
     }
+    pub(super) async fn initialize(
+        &self,
+        tx: &Transaction<'_>,
+        catalog: &Catalog,
+        boundary: Lsn,
+    ) -> Result<()> {
+        self.sink.install(tx, catalog).await?;
+        let rows: i64 = tx
+            .query_one(
+                &format!("SELECT COUNT(*) FROM {}.{}", catalog.schema, self.sink.table()),
+                &[],
+            )
+            .await?
+            .try_get(0)?;
+        ensure!(rows == 0, "publication destination must initially be empty");
+        let boundary = boundary.to_string();
+        tx.execute(&format!("INSERT INTO {}.pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn) VALUES($1,$2,$3,1,$4::text::pg_lsn,$4::text::pg_lsn)", catalog.schema), &[&catalog.query, &serde_json::to_value(self)?, &self.sink.table(), &boundary]).await?;
+        Ok(())
+    }
     pub(super) fn valid_identity(
         &self,
         time: u64,
@@ -193,20 +212,18 @@ async fn initialize(
         roots.try_get::<_, i64>(0)? == 0,
         "publication bootstrap has nonempty arrangement roots"
     );
-    binding.sink.install(tx, catalog).await?;
-    let rows = tx
-        .query_one(
-            &format!("SELECT COUNT(*) FROM {}.{}", catalog.schema, binding.sink.table()),
-            &[],
-        )
-        .await?;
-    ensure!(rows.try_get::<_, i64>(0)? == 0, "publication destination must initially be empty");
-    let encoded = serde_json::to_value(binding)?;
-    let initial = initial.to_string();
-    tx.execute(&format!("INSERT INTO {}.pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn) VALUES($1,$2,$3,1,$4::text::pg_lsn,$4::text::pg_lsn)", catalog.schema), &[&catalog.query, &encoded, &binding.sink.table(), &initial]).await?;
+    binding.initialize(tx, catalog, initial).await?;
     Ok(())
 }
 impl Writer {
+    pub(super) async fn commit(&mut self, tx: Transaction<'_>, operation: &str) -> Result<()> {
+        self.uncertain = true;
+        tx.commit().await.with_context(|| {
+            format!("{operation} COMMIT requires authoritative reload on failure")
+        })?;
+        self.uncertain = false;
+        Ok(())
+    }
     /// Last confirmed durable source end position; never advances on failed COMMIT.
     #[must_use]
     pub const fn end(&self) -> Lsn {
@@ -250,17 +267,13 @@ impl Writer {
             &[&self.catalog.query, &self.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.end.to_string(), &serde_json::to_value(&self.binding)?]).await?;
         ensure!(affected == 1, "stale or incompatible publication worker");
         deltas.apply(&tx, &self.catalog, &self.binding.sink).await?;
-        self.uncertain = true;
-        tx.commit()
-            .await
-            .context("publication COMMIT outcome requires authoritative reload on failure")?;
+        self.commit(tx, "publication").await?;
         self.epoch = epoch;
         self.time = checkpoint.time;
         self.end = progress.end;
         self.checkpoint = checkpoint.clone();
         self.last_commit = progress.commit;
         self.last_xid = Some(progress.xid);
-        self.uncertain = false;
         Ok(())
     }
 }

@@ -38,7 +38,18 @@ pub struct Checkpoint {
     /// Every registered arrangement, with no hidden or extra state.
     pub arrangements: Vec<Membership>,
 }
+/// Object membership exported by the durable executors.
+pub trait DurableState: super::State {
+    fn memberships(&self) -> Result<Vec<Membership>>;
+}
 impl Checkpoint {
+    pub(crate) fn new(plan: &Plan, time: u64, arrangements: Vec<Membership>) -> Result<Self> {
+        let checkpoint =
+            Self { version: 1, plan_identity: plan.identity().into(), time, arrangements };
+        checkpoint.validate(plan)?;
+        Ok(checkpoint)
+    }
+
     /// Verify plan identity, exact memberships, schemas, clocks and run codecs.
     ///
     /// # Errors

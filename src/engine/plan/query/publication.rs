@@ -28,15 +28,7 @@ impl<
         writer: &mut Writer,
         prepared: super::Compaction<K, L, R, G>,
     ) -> Result<()> {
-        self.engine.validate_maintenance(&prepared)?;
-        let durable = writer.confirmed(sql, self.plan()).await?;
-        anyhow::ensure!(
-            durable.stored.checkpoint == self.checkpoint()?,
-            "compaction base differs from durable membership"
-        );
-        let checkpoint = self.prepared_compaction_checkpoint(&prepared)?;
-        writer.maintain(sql, self.plan(), &checkpoint).await?;
-        self.engine.commit_maintenance(prepared)
+        self.engine.publish_compaction(sql, writer, prepared).await
     }
     /// Durably publish one prepared grouped transaction, then move local visibility.
     ///

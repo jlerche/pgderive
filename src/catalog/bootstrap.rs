@@ -53,17 +53,7 @@ impl Catalog {
         )
         .await?;
         write::stage(&tx, self, plan, snapshot.checkpoint, 0).await?;
-        binding.sink.install(&tx, self).await?;
-        let rows: i64 = tx
-            .query_one(
-                &format!("SELECT COUNT(*) FROM {}.{}", self.schema, binding.sink.table()),
-                &[],
-            )
-            .await?
-            .try_get(0)?;
-        ensure!(rows == 0, "snapshot destination must initially be empty");
-        let boundary = snapshot.boundary.to_string();
-        tx.execute(&format!("INSERT INTO {}.pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn) VALUES($1,$2,$3,1,$4::text::pg_lsn,$4::text::pg_lsn)", self.schema), &[&self.query,&serde_json::to_value(&binding)?,&binding.sink.table(),&boundary]).await?;
+        binding.initialize(&tx, self, snapshot.boundary).await?;
         snapshot.deltas.apply(&tx, self, &binding.sink).await?;
         tx.commit()
             .await

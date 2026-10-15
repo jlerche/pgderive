@@ -48,13 +48,9 @@ impl Writer {
         );
         self.binding.verify_ownership(&tx, &self.catalog).await?;
         let epoch = write::stage(&tx, &self.catalog, plan, checkpoint, self.epoch).await?;
-        self.uncertain = true;
-        tx.commit()
-            .await
-            .context("maintenance COMMIT requires authoritative resolution on failure")?;
+        self.commit(tx, "maintenance").await?;
         self.epoch = epoch;
         self.checkpoint = checkpoint.clone();
-        self.uncertain = false;
         Ok(())
     }
 }

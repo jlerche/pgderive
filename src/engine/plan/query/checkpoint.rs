@@ -5,8 +5,10 @@ use crate::engine::{
 };
 use anyhow::{Context, Result};
 use std::sync::Arc;
-impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> QueryState<K, L, R, G> {
-    pub(super) fn memberships(&self) -> Result<Vec<Membership>> {
+impl<K: BatchData, L: BatchData, R: BatchData, G: BatchData> super::super::checkpoint::DurableState
+    for QueryState<K, L, R, G>
+{
+    fn memberships(&self) -> Result<Vec<Membership>> {
         let traces = [
             self.left.manifest()?,
             self.right.manifest()?,
@@ -43,14 +45,7 @@ impl<
     /// # Errors
     /// Rejects non-object state or a registration/schema/clock mismatch.
     pub fn checkpoint(&self) -> Result<Checkpoint> {
-        let checkpoint = Checkpoint {
-            version: 1,
-            plan_identity: self.plan().identity().into(),
-            time: self.time(),
-            arrangements: self.snapshot().memberships()?,
-        };
-        checkpoint.validate(self.plan())?;
-        Ok(checkpoint)
+        self.engine.checkpoint()
     }
     /// Export unpublished memberships only after checking this runtime owns them.
     /// The caller must retain exclusive runtime ownership through durable publication
@@ -62,15 +57,7 @@ impl<
         &self,
         prepared: &super::Prepared<K, L, R, G>,
     ) -> Result<Checkpoint> {
-        self.engine.validate_prepared(prepared)?;
-        let checkpoint = Checkpoint {
-            version: 1,
-            plan_identity: self.plan().identity().into(),
-            time: prepared.output().time,
-            arrangements: prepared.candidate().memberships()?,
-        };
-        checkpoint.validate(self.plan())?;
-        Ok(checkpoint)
+        self.engine.prepared_checkpoint(prepared)
     }
     /// Export maintenance memberships only after checking exact runtime ownership.
     ///
@@ -80,15 +67,7 @@ impl<
         &self,
         prepared: &super::Compaction<K, L, R, G>,
     ) -> Result<Checkpoint> {
-        self.engine.validate_maintenance(prepared)?;
-        let checkpoint = Checkpoint {
-            version: 1,
-            plan_identity: self.plan().identity().into(),
-            time: self.time(),
-            arrangements: prepared.candidate().memberships()?,
-        };
-        checkpoint.validate(self.plan())?;
-        Ok(checkpoint)
+        self.engine.prepared_compaction_checkpoint(prepared)
     }
     /// Replace local visibility only after cold-validating an authoritative checkpoint.
     /// Recovery invalidates all previously prepared transactions and maintenance.

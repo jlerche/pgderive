@@ -141,3 +141,39 @@ impl<S: State, I: 'static, O: 'static> Engine<S, I, O> {
         self.graph.commit_maintenance(prepared)
     }
 }
+
+impl<S: super::checkpoint::DurableState, I: 'static, O: 'static> Engine<S, I, O> {
+    pub(crate) fn checkpoint(&self) -> Result<super::Checkpoint> {
+        super::Checkpoint::new(self.plan(), self.time(), self.snapshot().memberships()?)
+    }
+    pub(crate) fn prepared_checkpoint(
+        &self,
+        work: &PreparedGraph<S, O>,
+    ) -> Result<super::Checkpoint> {
+        self.validate_prepared(work)?;
+        super::Checkpoint::new(self.plan(), work.output().time, work.candidate().memberships()?)
+    }
+    pub(crate) fn prepared_compaction_checkpoint(
+        &self,
+        work: &crate::engine::dataflow::PreparedMaintenance<S>,
+    ) -> Result<super::Checkpoint> {
+        self.validate_maintenance(work)?;
+        super::Checkpoint::new(self.plan(), self.time(), work.candidate().memberships()?)
+    }
+    pub(crate) async fn publish_compaction(
+        &mut self,
+        sql: &mut tokio_postgres::Client,
+        writer: &mut crate::catalog::Writer,
+        work: crate::engine::dataflow::PreparedMaintenance<S>,
+    ) -> Result<()> {
+        self.validate_maintenance(&work)?;
+        let durable = writer.confirmed(sql, self.plan()).await?;
+        anyhow::ensure!(
+            durable.stored.checkpoint == self.checkpoint()?,
+            "compaction base differs from durable membership"
+        );
+        let checkpoint = self.prepared_compaction_checkpoint(&work)?;
+        writer.maintain(sql, self.plan(), &checkpoint).await?;
+        self.commit_maintenance(work)
+    }
+}
