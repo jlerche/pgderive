@@ -26,7 +26,7 @@ impl Default for GcLimits {
 pub enum Collection {
     /// An unresolved upload reservation protects the whole namespace.
     UploadProtected,
-    /// Completed idempotent deletion of unreferenced canonical v2 objects.
+    /// Completed idempotent deletion of unreferenced canonical immutable objects.
     Collected {
         /// Reachable root and block paths retained.
         retained: usize,
@@ -181,11 +181,7 @@ fn managed(path: &str, sealed: &BTreeSet<String>) -> bool {
     if !sealed.contains(namespace) {
         return false;
     }
-    let Some(hash) = relative
-        .strip_prefix("batch-v2/")
-        .or_else(|| relative.strip_prefix("block-v2/"))
-        .or_else(|| relative.strip_prefix("batch-v3/"))
-        .or_else(|| relative.strip_prefix("block-v3/"))
+    let Some(hash) = relative.strip_prefix("batch/").or_else(|| relative.strip_prefix("block/"))
     else {
         return false;
     };

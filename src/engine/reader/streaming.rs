@@ -82,7 +82,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             .map(|reference| reference.qualify(target.0))
             .collect()
     }
-    /// Stream a canonical cursor into bounded blocks and nonoverlapping v3 roots.
+    /// Stream a canonical cursor into bounded blocks and nonoverlapping roots.
     /// No trace membership is published here. Exact consolidation and final i64
     /// representability belong to the logical input cursor, before physical splits.
     ///
@@ -163,23 +163,19 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         ensure!(encoded.len() <= self.limits.block_bytes, "streaming block exceeds budget");
         let encoded = super::compression::compress(&encoded)?;
         let digest = hash(&encoded);
-        let path = format!("pgderive/block-v3/{digest}");
+        let path = format!("pgderive/block/{digest}");
         let block = Block {
-            path: Some(path.clone()),
+            path: path.clone(),
             first: self.rows.first().context("empty streaming block")?.0.clone(),
             last: self.rows.last().context("empty streaming block")?.0.clone(),
-            offset: 0,
             length: u64::try_from(encoded.len())?,
             rows: self.rows.len(),
             hash: digest,
         };
         let bytes = bounded::encode(&block)?.len();
-        let header = bounded::encode(&Index::<K, V> {
-            version: 3,
-            schema: self.schema.clone(),
-            blocks: Vec::new(),
-        })?
-        .len();
+        let header =
+            bounded::encode(&Index::<K, V> { schema: self.schema.clone(), blocks: Vec::new() })?
+                .len();
         ensure!(
             header.checked_add(bytes).is_some_and(|bytes| bytes <= self.limits.index_bytes),
             "streaming fence exceeds index budget"

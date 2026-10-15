@@ -68,12 +68,11 @@ def object_bytes(fixture, path):
 def verify_pins(fixture, roots):
     for root in roots:
         content = object_bytes(fixture,root['path'])
-        index = content[root['index_offset']:root['index_offset']+root['index_length']]
-        assert hashlib.sha256(index).hexdigest() == root['index_hash']
+        index = content
+        assert hashlib.sha256(index).hexdigest() == root['hash']
         for block in json.loads(index)['blocks']:
-            if block.get('path'):
-                content = object_bytes(fixture,root['namespace']+'/'+block['path'])
-                assert hashlib.sha256(content).hexdigest() == block['hash']
+            content = object_bytes(fixture,root['namespace']+'/'+block['path'])
+            assert hashlib.sha256(content).hexdigest() == block['hash']
 
 
 def verify_collected(fixture, roots):

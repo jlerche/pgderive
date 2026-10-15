@@ -64,16 +64,13 @@ def archive_objects(fixture, roots):
     for root in roots:
         key=fixture.name+'/'+root['path']
         content=pathlib.Path(records[key]['file']).read_bytes()
-        index=content[root['index_offset']:root['index_offset']+root['index_length']]
-        assert hashlib.sha256(index).hexdigest()==root['index_hash']
+        index=content
+        assert hashlib.sha256(index).hexdigest()==root['hash']
         decoded=json.loads(index)
         assert 'blocks' in decoded, 'fixture must exercise the directly indexed object format'
         for block in decoded['blocks']:
-            if block.get('path'):
-                block_key=fixture.name+'/'+root['namespace']+'/'+block['path']
-                data=pathlib.Path(records[block_key]['file']).read_bytes()
-            else:
-                data=content[block['offset']:block['offset']+block['length']]
+            block_key=fixture.name+'/'+root['namespace']+'/'+block['path']
+            data=pathlib.Path(records[block_key]['file']).read_bytes()
             assert hashlib.sha256(data).hexdigest()==block['hash']
     (fixture.output/'object-backup-manifest.json').write_text(json.dumps(records,indent=2)+'\n')
     return records

@@ -15,9 +15,7 @@ use std::sync::Arc;
 pub struct ObjectRef {
     path: String,
     bytes: u64,
-    index_offset: u64,
-    index_length: u64,
-    index_hash: String,
+    hash: String,
     schema: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     namespace: Option<String>,
@@ -36,23 +34,23 @@ impl ObjectRef {
         self.namespace = Some(namespace.into());
         Ok(self)
     }
-    pub(super) fn validate_namespace(&self) -> Result<()> {
+    pub(super) fn validate_identity(&self) -> Result<()> {
+        ensure!(
+            self.hash.len() == 64
+                && self
+                    .hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "invalid immutable root hash"
+        );
         if let Some(namespace) = &self.namespace {
-            ensure!(
-                valid_namespace(namespace)
-                    && self.path
-                        == format!(
-                            "{namespace}/pgderive/batch-v{}/{}",
-                            self.root_version(),
-                            self.index_hash
-                        ),
-                "invalid namespaced root identity"
-            );
+            ensure!(valid_namespace(namespace), "invalid upload namespace");
         }
+        ensure!(
+            self.path == self.child_path(&format!("pgderive/batch/{}", self.hash)),
+            "invalid immutable root identity"
+        );
         Ok(())
-    }
-    fn root_version(&self) -> u32 {
-        if self.path.contains("/batch-v3/") { 3 } else { 2 }
     }
     pub(super) fn child_path(&self, path: &str) -> String {
         self.namespace
@@ -64,26 +62,16 @@ impl ObjectRef {
     pub fn schema(&self) -> &str {
         &self.schema
     }
-    pub(super) const fn index_offset(&self) -> u64 {
-        self.index_offset
-    }
     pub(super) async fn index_bytes(&self, store: &Arc<dyn ObjectStore>) -> Result<Vec<u8>> {
-        self.validate_namespace()?;
+        self.validate_identity()?;
         ensure!(
-            self.index_length > 0 && self.index_length <= u64::try_from(super::bounded::MAX_BYTES)?,
-            "invalid reachability index size"
+            self.bytes > 0 && self.bytes <= u64::try_from(super::bounded::MAX_BYTES)?,
+            "invalid index byte limit"
         );
-        let end = self
-            .index_offset
-            .checked_add(self.index_length)
-            .context("reachability index range overflow")?;
-        ensure!(
-            end == self.bytes
-                && store.head(&Path::from(self.path.clone())).await?.size == self.bytes,
-            "reachability root size mismatch"
-        );
-        let bytes = store.get_range(&Path::from(self.path.clone()), self.index_offset..end).await?;
-        ensure!(hash(&bytes) == self.index_hash, "reachability root checksum mismatch");
+        let path = Path::from(self.path.clone());
+        ensure!(store.head(&path).await?.size == self.bytes, "root size mismatch");
+        let bytes = store.get_range(&path, 0..self.bytes).await?;
+        ensure!(hash(&bytes) == self.hash, "root checksum mismatch");
         Ok(bytes.to_vec())
     }
     /// Content-addressed object path.
@@ -95,14 +83,13 @@ impl ObjectRef {
 
 type Fences<K, V> = Arc<Vec<Block<(K, V)>>>;
 
-/// Open immutable versioned JSON batch with resident object-local fences and lazy blocks.
+/// Open immutable JSON+Zstd batch with resident object-local fences and lazy blocks.
 #[derive(Debug, Clone)]
 pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) store: Arc<dyn ObjectStore>,
     pub(super) reference: ObjectRef,
     pub(super) blocks: Fences<K, V>,
     cache: Arc<BlockCache>,
-    version: u32,
 }
 
 impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
@@ -145,13 +132,12 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             }
             let encoded = super::compression::encode(&chunk)?;
             let digest = hash(&encoded);
-            let path = format!("pgderive/block-v3/{digest}");
+            let path = format!("pgderive/block/{digest}");
             super::bounded::put(&store, &path, encoded.clone()).await?;
             let block = Block {
-                path: Some(path),
+                path,
                 first: chunk.first().context("empty chunk")?.0.clone(),
                 last: chunk.last().context("empty chunk")?.0.clone(),
-                offset: 0,
                 length: u64::try_from(encoded.len())?,
                 rows: chunk.len(),
                 hash: digest,
@@ -169,14 +155,11 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         schema: &str,
         blocks: Vec<Block<(K, V)>>,
     ) -> Result<ObjectRef> {
-        let index =
-            super::bounded::encode(&Index { version: 3, schema: schema.to_owned(), blocks })?;
+        let index = super::bounded::encode(&Index { schema: schema.to_owned(), blocks })?;
         let reference = ObjectRef {
-            path: format!("pgderive/batch-v3/{}", hash(&index)),
+            path: format!("pgderive/batch/{}", hash(&index)),
             bytes: u64::try_from(index.len())?,
-            index_offset: 0,
-            index_length: u64::try_from(index.len())?,
-            index_hash: hash(&index),
+            hash: hash(&index),
             schema: schema.to_owned(),
             namespace: None,
         };
@@ -187,9 +170,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     // Reachability scans use the same trusted size/hash boundary without decoding
     // application key/value types. They cannot infer liveness from object names alone.
     /// Reopen from a trusted catalog reference, validating the index and schema.
-    /// Per-block integrity is checked lazily before exposing rows. Legacy v1
-    /// objects are supported within the same 8 MiB block/index limit; larger
-    /// legacy objects require an offline rewrite before this reader accepts them.
+    /// Per-block integrity is checked lazily before exposing rows.
     ///
     /// # Errors
     /// Returns missing-object, invalid schema/index, or object-store errors.
@@ -210,77 +191,21 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         schema: &str,
         cache: Arc<BlockCache>,
     ) -> Result<Self> {
-        reference.validate_namespace()?;
-        ensure!(
-            reference.index_length <= u64::try_from(super::bounded::MAX_BYTES)?,
-            "index exceeds byte limit"
-        );
         ensure!(reference.schema == schema, "batch schema mismatch");
-        let end = reference
-            .index_offset
-            .checked_add(reference.index_length)
-            .context("index range overflow")?;
-        ensure!(end == reference.bytes && reference.index_length > 0, "invalid index range");
-        let path = Path::from(reference.path.clone());
-        ensure!(store.head(&path).await?.size == reference.bytes, "object size mismatch");
-        let bytes = store.get_range(&path, reference.index_offset..end).await?;
-        ensure!(hash(&bytes) == reference.index_hash, "object index checksum mismatch");
+        let bytes = reference.index_bytes(&store).await?;
         let mut index: Index<K, V> = serde_json::from_slice(&bytes)?;
-        ensure!(
-            matches!(index.version, 1..=3) && index.schema == schema,
-            "unsupported object codec/schema"
-        );
-        ensure!(index.version == 1 || reference.index_offset == 0, "invalid manifest range");
-        let mut offset = 0;
+        ensure!(index.schema == schema, "object schema mismatch");
         for (ordinal, block) in index.blocks.iter().enumerate() {
-            ensure!(
-                block.offset == if index.version == 1 { offset } else { 0 }
-                    && block.length > 0
-                    && block.rows > 0
-                    && (index.version == 1 || block.rows <= 65_536)
-                    && block.first <= block.last,
-                "invalid object block"
-            );
+            block.validate_address()?;
+            ensure!(block.first <= block.last, "invalid block fences");
             if ordinal > 0 {
                 ensure!(index.blocks[ordinal - 1].last < block.first, "overlapping object fences");
             }
-            ensure!(
-                block.length <= u64::try_from(super::compression::stored_limit(index.version))?,
-                "block exceeds byte limit"
-            );
-            ensure!(
-                if index.version == 1 {
-                    block.path.is_none()
-                } else {
-                    block.path.as_deref()
-                        == Some(
-                            format!("pgderive/block-v{}/{}", index.version, block.hash).as_str(),
-                        )
-                },
-                "invalid block address"
-            );
-            offset = offset.checked_add(block.length).context("block range overflow")?;
         }
-        ensure!(
-            index.version != 1 || offset == reference.index_offset,
-            "object block/index layout mismatch"
-        );
-        if let Some(namespace) = &reference.namespace {
-            ensure!(
-                index.version >= 2
-                    && valid_namespace(namespace)
-                    && reference
-                        .path
-                        .starts_with(&format!("{namespace}/pgderive/batch-v{}/", index.version)),
-                "invalid namespaced immutable root"
-            );
+        for block in &mut index.blocks {
+            block.path = reference.child_path(&block.path);
         }
-        if reference.namespace.is_some() {
-            for block in &mut index.blocks {
-                block.path = block.path.as_deref().map(|path| reference.child_path(path));
-            }
-        }
-        Ok(Self { store, reference, blocks: Arc::new(index.blocks), cache, version: index.version })
+        Ok(Self { store, reference, blocks: Arc::new(index.blocks), cache })
     }
 
     /// Coarse trusted catalog reference for this immutable run.
@@ -294,9 +219,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     /// Object containing a selected block; useful for integrity checks and reclamation.
     #[must_use]
     pub fn block_path(&self, ordinal: usize) -> Option<&str> {
-        self.blocks
-            .get(ordinal)
-            .map(|block| block.path.as_deref().unwrap_or_else(|| self.reference.path()))
+        self.blocks.get(ordinal).map(|block| block.path.as_str())
     }
 
     pub(crate) async fn tuple_weight(&self, tuple: &(K, V)) -> Result<i64> {
@@ -314,16 +237,13 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
 
     pub(super) async fn read(&self, ordinal: usize) -> Result<Arc<Vec<Entry<K, V>>>> {
         let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
-        let end = block.offset.checked_add(block.length).context("block range overflow")?;
+
         let rows =
             if let Some(rows) = self.cache.get::<K, V>(&self.reference.schema, &block.hash)? {
                 rows
             } else {
-                let path = block.path.as_ref().unwrap_or(&self.reference.path);
-                let key = format!(
-                    "json-block-v{}:{path}:{}:{end}:{}",
-                    self.version, block.offset, block.hash
-                );
+                let path = &block.path;
+                let key = format!("json-zstd:{path}:{}:{}", block.length, block.hash);
                 let cached = match &self.cache.encoded {
                     Some(cache) => cache.get(&key, &block.hash).await,
                     None => None,
@@ -333,7 +253,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 } else {
                     let bytes = self
                         .store
-                        .get_range(&Path::from(path.clone()), block.offset..end)
+                        .get_range(&Path::from(path.clone()), 0..block.length)
                         .await?
                         .to_vec();
                     ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
@@ -343,7 +263,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                     bytes
                 };
                 ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
-                let decoded = super::compression::decode(&bytes, self.version)?;
+                let decoded = super::compression::decode(&bytes)?;
                 let rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
                 validate(&rows)?;
                 let rows = Arc::new(rows);

@@ -62,11 +62,11 @@ including 255 keys already removed by the first attempt. This measures request
 amplification, not cloud latency or capacity. The durable object format is unchanged.
 
 New immutable data blocks use canonical full-tuple weighted JSON compressed with
-Zstd level 3 (`pgderive/block-v3/<sha256>`). Hashes cover compressed bytes. Resident
-fences and root indexes remain JSON (`pgderive/batch-v3/<sha256>`). The reader still
-accepts v1 embedded JSON and v2 separate JSON blocks. Compaction naturally rewrites
-old runs to v3; old binaries cannot read v3. Decoded JSON is capped at 8 MiB per
-block, stored bytes at 8 MiB + 64 KiB, and Zstd frames/windows are checked before
+Zstd level 3 (`pgderive/block/<sha256>`). Hashes cover compressed bytes. Resident
+fences and root indexes remain JSON (`pgderive/batch/<sha256>`). This is the sole
+object format; old JSON layouts and versioned paths are unsupported. Existing
+registrations using those layouts must be rebuilt. Decoded JSON is capped at
+8 MiB per block, stored bytes at 8 MiB + 64 KiB, and Zstd frames/windows are checked before
 rows are exposed. Streaming block-byte budgets refer to uncompressed JSON.
 
 An optional Foyer memory/disk cache retains encoded immutable blocks:

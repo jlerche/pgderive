@@ -211,35 +211,6 @@ async fn bounded_objects_round_trip_large_batches_and_reject_oversized_rows() ->
 }
 
 #[tokio::test]
-async fn legacy_packed_object_remains_readable() -> Result<()> {
-    use sha2::{Digest, Sha256};
-    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let data = serde_json::to_vec(&vec![((1_i64, 2_i64), 3_i64)])?;
-    let digest = format!("{:x}", Sha256::digest(&data));
-    let index = serde_json::to_vec(&serde_json::json!({
-        "version": 1, "schema": "legacy", "blocks": [{
-            "first": [1, 2], "last": [1, 2], "offset": 0,
-            "length": data.len(), "rows": 1, "hash": digest
-        }]
-    }))?;
-    let mut bytes = data.clone();
-    bytes.extend(&index);
-    let path = format!("pgderive/batch-v1/{:x}", Sha256::digest(&bytes));
-    store.put(&Path::from(path.clone()), bytes.clone().into()).await?;
-    let reference = serde_json::from_value(serde_json::json!({
-        "path": path, "bytes": bytes.len(), "index_offset": data.len(),
-        "index_length": index.len(), "index_hash": format!("{:x}", Sha256::digest(&index)),
-        "schema": "legacy"
-    }))?;
-    let object = ObjectBatch::<i64, i64>::open(store, reference, "legacy").await?;
-    let mut cursor = object.cursor().await?;
-    assert_eq!(cursor.current(), Some((&1, &2, 3)));
-    cursor.advance().await?;
-    assert!(cursor.current().is_none());
-    Ok(())
-}
-
-#[tokio::test]
 async fn malformed_manifest_limits_fail_before_reading_rows() -> Result<()> {
     use sha2::{Digest, Sha256};
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -253,11 +224,13 @@ async fn malformed_manifest_limits_fail_before_reading_rows() -> Result<()> {
     store.put(&path, malformed.clone().into()).await?;
     let mut descriptor = serde_json::to_value(&reference)?;
     descriptor["bytes"] = serde_json::json!(malformed.len());
-    descriptor["index_length"] = serde_json::json!(malformed.len());
-    descriptor["index_hash"] = serde_json::json!(format!("{:x}", Sha256::digest(&malformed)));
+    descriptor["hash"] = serde_json::json!(format!("{:x}", Sha256::digest(&malformed)));
+    let malformed_path = format!("pgderive/batch/{:x}", Sha256::digest(&malformed));
+    store.put(&Path::from(malformed_path.clone()), malformed.into()).await?;
+    descriptor["path"] = serde_json::json!(malformed_path);
     let invalid = serde_json::from_value(descriptor.clone())?;
     assert!(ObjectBatch::<i64, i64>::open(store.clone(), invalid, "limits").await.is_err());
-    descriptor["index_length"] = serde_json::json!(8 * 1024 * 1024 + 1);
+    descriptor["bytes"] = serde_json::json!(8 * 1024 * 1024 + 1);
     let invalid = serde_json::from_value(descriptor)?;
     assert!(ObjectBatch::<i64, i64>::open(store, invalid, "limits").await.is_err());
     Ok(())

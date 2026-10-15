@@ -9,7 +9,7 @@ use std::{
 type SharedRows<K, V> = Arc<Vec<Entry<K, V>>>;
 
 type Rows = dyn Any + Send + Sync;
-// All object versions use the same canonical JSON row identity after decompression.
+// Row identity is canonical JSON after decompression.
 const ROW_CODEC: &str = "canonical-json-rows-v1";
 type Identity = (&'static str, String, String, TypeId);
 

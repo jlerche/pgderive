@@ -4,20 +4,19 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Block<T> {
-    #[serde(default)]
-    pub(super) path: Option<String>,
+    pub(super) path: String,
     pub(super) first: T,
     pub(super) last: T,
-    pub(super) offset: u64,
     pub(super) length: u64,
     pub(super) rows: usize,
     pub(super) hash: String,
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct Index<K, V> {
-    pub(super) version: u32,
     pub(super) schema: String,
     pub(super) blocks: Vec<Block<(K, V)>>,
 }
@@ -33,4 +32,26 @@ pub(super) fn validate<K: BatchData, V: BatchData>(rows: &[Entry<K, V>]) -> Resu
         "noncanonical immutable batch order"
     );
     Ok(())
+}
+
+impl<T> Block<T> {
+    pub(super) fn validate_address(&self) -> Result<()> {
+        ensure!(
+            self.rows > 0
+                && self.rows <= 65_536
+                && self.length > 0
+                && self.length <= u64::try_from(super::compression::STORED_LIMIT)?,
+            "invalid immutable block size"
+        );
+        ensure!(
+            self.hash.len() == 64
+                && self
+                    .hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                && self.path == format!("pgderive/block/{}", self.hash),
+            "invalid immutable block address"
+        );
+        Ok(())
+    }
 }

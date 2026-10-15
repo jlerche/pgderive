@@ -169,13 +169,12 @@ def retire(command, fixture, config, validated):
     assert 'query removal is pending or complete' in rejected(command, fixture, 'restart', config)
     for root in roots:
         content = get(root['path'])
-        index_bytes = content[root['index_offset']:root['index_offset']+root['index_length']]
-        assert hashlib.sha256(index_bytes).hexdigest() == root['index_hash']
+        index_bytes = content
+        assert hashlib.sha256(index_bytes).hexdigest() == root['hash']
         index = json.loads(index_bytes)
         for block in index['blocks']:
-            if block.get('path'):
-                child = get(root['namespace']+'/'+block['path'])
-                assert hashlib.sha256(child).hexdigest() == block['hash']
+            child = get(root['namespace']+'/'+block['path'])
+            assert hashlib.sha256(child).hexdigest() == block['hash']
     fixture.sql(f"UPDATE {fixture.name}.pgderive_protections SET active=false WHERE token='external-reader'")
     inspect(command, fixture, 'drop', config)
     for root in roots:
