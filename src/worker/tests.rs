@@ -64,6 +64,7 @@ pub(super) fn settings() -> Settings {
         store: Arc::new(InMemory::new()),
         block_rows: 1,
         limits: crate::engine::execution::Limits::default(),
+        encoded_cache: None,
     }
 }
 pub(super) fn row(values: &[(&str, Option<&str>)]) -> Row {

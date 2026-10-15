@@ -9,7 +9,7 @@ use std::{
 type SharedRows<K, V> = Arc<Vec<Entry<K, V>>>;
 
 type Rows = dyn Any + Send + Sync;
-// v1/v2 manifests both use the same canonical JSON row codec.
+// All object versions use the same canonical JSON row identity after decompression.
 const ROW_CODEC: &str = "canonical-json-rows-v1";
 type Identity = (&'static str, String, String, TypeId);
 
@@ -20,6 +20,7 @@ pub struct BlockCache {
     bytes: usize,
     entries: usize,
     state: Mutex<State>,
+    pub(super) encoded: Option<Arc<super::EncodedCache>>,
 }
 #[derive(Debug, Default)]
 struct State {
@@ -47,14 +48,20 @@ pub struct CacheStats {
     pub pins: usize,
     /// Successful decoded block lookups.
     pub hits: u64,
-    /// Lookups requiring an object-store read and decode.
+    /// Decoded-cache misses, served by Foyer or object storage before decoding.
     pub misses: u64,
 }
 impl BlockCache {
     /// Set decoded-charge and entry caps; either zero disables retention.
     #[must_use]
     pub fn new(bytes: usize, entries: usize) -> Self {
-        Self { bytes, entries, state: Mutex::new(State::default()) }
+        Self { bytes, entries, state: Mutex::new(State::default()), encoded: None }
+    }
+    /// Attach a shared Foyer cache for encoded immutable blocks.
+    #[must_use]
+    pub fn with_encoded(mut self, cache: Option<Arc<super::EncodedCache>>) -> Self {
+        self.encoded = cache;
+        self
     }
     /// Read usage including active pins and evicted live decoded blocks.
     ///

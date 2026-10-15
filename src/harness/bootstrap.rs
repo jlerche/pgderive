@@ -101,6 +101,7 @@ async fn restore(
             store: recovery.store.clone(),
             block_rows: 3,
             limits: recovery.config.execution,
+            encoded_cache: None,
         },
         durable.stored.checkpoint,
     )

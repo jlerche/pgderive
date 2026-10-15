@@ -157,7 +157,7 @@ impl<
         settings: Settings,
     ) -> Result<Arc<Self>> {
         super::validate_shape(plan)?;
-        let Settings { store, block_rows, limits } = settings;
+        let Settings { store, block_rows, limits, encoded_cache } = settings;
         let limits = limits.validate()?;
         let schema = |id: &str| {
             plan.definition()
@@ -168,10 +168,10 @@ impl<
                 .context("missing grouped join arrangement")
         };
         let schemas = [schema("left")?, schema("right")?, schema("sums")?, schema("output")?];
-        let cache = Arc::new(crate::engine::reader::BlockCache::new(
-            limits.cache_bytes,
-            limits.cache_entries,
-        ));
+        let cache = Arc::new(
+            crate::engine::reader::BlockCache::new(limits.cache_bytes, limits.cache_entries)
+                .with_encoded(encoded_cache),
+        );
         Arc::new(Self {
             bound: std::sync::OnceLock::new(),
             plan: plan.clone(),

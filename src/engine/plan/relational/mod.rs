@@ -87,7 +87,10 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     pub fn new(plan: Plan, operators: Operators<K, V>, settings: &Settings) -> Result<Self> {
         circuit::validate(&plan, &operators)?;
         let limits = settings.limits.validate()?;
-        let cache = Arc::new(BlockCache::new(limits.cache_bytes, limits.cache_entries));
+        let cache = Arc::new(
+            BlockCache::new(limits.cache_bytes, limits.cache_entries)
+                .with_encoded(settings.encoded_cache.clone()),
+        );
         let writers = plan
             .definition()
             .arrangements

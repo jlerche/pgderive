@@ -5,6 +5,8 @@
 mod arrangement;
 mod builder;
 mod circuit;
+mod compaction;
+pub use compaction::{CompactionJob, CompactionResult};
 mod expand;
 mod join;
 mod operators;

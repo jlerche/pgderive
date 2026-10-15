@@ -1,4 +1,4 @@
-use super::{ObjectRef, bounded, format::Index};
+use super::{ObjectRef, format::Index};
 use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
 use std::sync::Arc;
@@ -14,17 +14,18 @@ impl ObjectRef {
         let bytes = self.index_bytes(store).await?;
         let index: Index<serde_json::Value, serde_json::Value> = serde_json::from_slice(&bytes)?;
         ensure!(
-            matches!(index.version, 1 | 2) && index.schema == self.schema(),
+            matches!(index.version, 1..=3) && index.schema == self.schema(),
             "invalid reachability root schema/version"
         );
-        ensure!(index.version != 2 || self.index_offset() == 0, "invalid immutable root range");
+        ensure!(index.version == 1 || self.index_offset() == 0, "invalid immutable root range");
         let mut paths = Vec::new();
         let mut offset = 0_u64;
         for block in index.blocks {
             ensure!(
                 block.rows > 0
                     && block.length > 0
-                    && block.length <= u64::try_from(bounded::MAX_BYTES)?,
+                    && block.length
+                        <= u64::try_from(super::compression::stored_limit(index.version))?,
                 "invalid reachability block size"
             );
             if index.version == 1 {
@@ -41,7 +42,7 @@ impl ObjectRef {
                         && block.hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
                     "invalid immutable block metadata"
                 );
-                let expected = format!("pgderive/block-v2/{}", block.hash);
+                let expected = format!("pgderive/block-v{}/{}", index.version, block.hash);
                 ensure!(
                     block.path.as_deref() == Some(expected.as_str()),
                     "invalid reachability child path"

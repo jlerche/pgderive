@@ -57,7 +57,10 @@ impl<A: BatchData, V: BatchData> Execution<A, V> {
         validate_shape(&plan)?;
         let schema = plan.definition().arrangements[0].schema.clone();
         let limits = settings.limits.validate()?;
-        let cache = Arc::new(BlockCache::new(limits.cache_bytes, limits.cache_entries));
+        let cache = Arc::new(
+            BlockCache::new(limits.cache_bytes, limits.cache_entries)
+                .with_encoded(settings.encoded_cache.clone()),
+        );
         let output = Arrangement::new(settings.store, schema.clone(), settings.block_rows)?
             .with_cache(cache.clone());
         let project = Arc::new(project);

@@ -40,11 +40,19 @@ impl ObjectRef {
         if let Some(namespace) = &self.namespace {
             ensure!(
                 valid_namespace(namespace)
-                    && self.path == format!("{namespace}/pgderive/batch-v2/{}", self.index_hash),
+                    && self.path
+                        == format!(
+                            "{namespace}/pgderive/batch-v{}/{}",
+                            self.root_version(),
+                            self.index_hash
+                        ),
                 "invalid namespaced root identity"
             );
         }
         Ok(())
+    }
+    fn root_version(&self) -> u32 {
+        if self.path.contains("/batch-v3/") { 3 } else { 2 }
     }
     pub(super) fn child_path(&self, path: &str) -> String {
         self.namespace
@@ -94,6 +102,7 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) reference: ObjectRef,
     pub(super) blocks: Fences<K, V>,
     cache: Arc<BlockCache>,
+    version: u32,
 }
 
 impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
@@ -134,9 +143,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             if chunk.is_empty() {
                 break;
             }
-            let encoded = super::bounded::encode(&chunk)?;
+            let encoded = super::compression::encode(&chunk)?;
             let digest = hash(&encoded);
-            let path = format!("pgderive/block-v2/{digest}");
+            let path = format!("pgderive/block-v3/{digest}");
             super::bounded::put(&store, &path, encoded.clone()).await?;
             let block = Block {
                 path: Some(path),
@@ -161,9 +170,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         blocks: Vec<Block<(K, V)>>,
     ) -> Result<ObjectRef> {
         let index =
-            super::bounded::encode(&Index { version: 2, schema: schema.to_owned(), blocks })?;
+            super::bounded::encode(&Index { version: 3, schema: schema.to_owned(), blocks })?;
         let reference = ObjectRef {
-            path: format!("pgderive/batch-v2/{}", hash(&index)),
+            path: format!("pgderive/batch-v3/{}", hash(&index)),
             bytes: u64::try_from(index.len())?,
             index_offset: 0,
             index_length: u64::try_from(index.len())?,
@@ -218,7 +227,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         ensure!(hash(&bytes) == reference.index_hash, "object index checksum mismatch");
         let mut index: Index<K, V> = serde_json::from_slice(&bytes)?;
         ensure!(
-            matches!(index.version, 1 | 2) && index.schema == schema,
+            matches!(index.version, 1..=3) && index.schema == schema,
             "unsupported object codec/schema"
         );
         ensure!(index.version == 1 || reference.index_offset == 0, "invalid manifest range");
@@ -236,7 +245,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 ensure!(index.blocks[ordinal - 1].last < block.first, "overlapping object fences");
             }
             ensure!(
-                block.length <= u64::try_from(super::bounded::MAX_BYTES)?,
+                block.length <= u64::try_from(super::compression::stored_limit(index.version))?,
                 "block exceeds byte limit"
             );
             ensure!(
@@ -244,21 +253,25 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                     block.path.is_none()
                 } else {
                     block.path.as_deref()
-                        == Some(format!("pgderive/block-v2/{}", block.hash).as_str())
+                        == Some(
+                            format!("pgderive/block-v{}/{}", index.version, block.hash).as_str(),
+                        )
                 },
                 "invalid block address"
             );
             offset = offset.checked_add(block.length).context("block range overflow")?;
         }
         ensure!(
-            index.version == 2 || offset == reference.index_offset,
+            index.version != 1 || offset == reference.index_offset,
             "object block/index layout mismatch"
         );
         if let Some(namespace) = &reference.namespace {
             ensure!(
-                index.version == 2
+                index.version >= 2
                     && valid_namespace(namespace)
-                    && reference.path.starts_with(&format!("{namespace}/pgderive/batch-v2/")),
+                    && reference
+                        .path
+                        .starts_with(&format!("{namespace}/pgderive/batch-v{}/", index.version)),
                 "invalid namespaced immutable root"
             );
         }
@@ -267,7 +280,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 block.path = block.path.as_deref().map(|path| reference.child_path(path));
             }
         }
-        Ok(Self { store, reference, blocks: Arc::new(index.blocks), cache })
+        Ok(Self { store, reference, blocks: Arc::new(index.blocks), cache, version: index.version })
     }
 
     /// Coarse trusted catalog reference for this immutable run.
@@ -306,22 +319,39 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             if let Some(rows) = self.cache.get::<K, V>(&self.reference.schema, &block.hash)? {
                 rows
             } else {
-                let bytes = self
-                    .store
-                    .get_range(
-                        &Path::from(block.path.as_ref().unwrap_or(&self.reference.path).clone()),
-                        block.offset..end,
-                    )
-                    .await?;
+                let path = block.path.as_ref().unwrap_or(&self.reference.path);
+                let key = format!(
+                    "json-block-v{}:{path}:{}:{end}:{}",
+                    self.version, block.offset, block.hash
+                );
+                let cached = match &self.cache.encoded {
+                    Some(cache) => cache.get(&key, &block.hash).await,
+                    None => None,
+                };
+                let bytes = if let Some(bytes) = cached {
+                    bytes
+                } else {
+                    let bytes = self
+                        .store
+                        .get_range(&Path::from(path.clone()), block.offset..end)
+                        .await?
+                        .to_vec();
+                    ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
+                    if let Some(cache) = &self.cache.encoded {
+                        cache.insert(key, bytes.clone());
+                    }
+                    bytes
+                };
                 ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
-                let rows: Vec<Entry<K, V>> = serde_json::from_slice(&bytes)?;
+                let decoded = super::compression::decode(&bytes, self.version)?;
+                let rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
                 validate(&rows)?;
                 let rows = Arc::new(rows);
                 self.cache.insert(
                     &self.reference.schema,
                     block.hash.clone(),
                     rows.clone(),
-                    bytes.len(),
+                    decoded.len(),
                 )?;
                 rows
             };
@@ -344,10 +374,14 @@ impl<K: BatchData, V: BatchData> BatchReader for ObjectBatch<K, V> {
     }
 }
 
-pub(super) fn valid_namespace(namespace: &str) -> bool {
+pub fn valid_namespace(namespace: &str) -> bool {
     namespace.strip_prefix("pgderive/upload-v1/").is_some_and(|suffix| {
         !suffix.is_empty()
             && suffix.len() <= 160
             && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     })
 }
+
+#[cfg(test)]
+#[path = "tests/codec.rs"]
+mod tests;

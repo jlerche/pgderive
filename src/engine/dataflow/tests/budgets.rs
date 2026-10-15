@@ -193,7 +193,7 @@ async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> R
     let mut reopened = GroupedJoin::reopen(
         plan()?,
         test_operators(),
-        Settings { store, block_rows: 1, limits: Limits::default() },
+        Settings { store, block_rows: 1, limits: Limits::default(), encoded_cache: None },
         checkpoint,
     )
     .await?;
@@ -240,7 +240,8 @@ async fn incompatible_checkpoint_memberships_fail_before_reopening() -> Result<(
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let original = GroupedJoin::new(plan()?, test_operators(), store.clone(), 1)?;
     let checkpoint = original.checkpoint()?;
-    let settings = Settings { store, block_rows: 1, limits: Limits::default() };
+    let settings =
+        Settings { store, block_rows: 1, limits: Limits::default(), encoded_cache: None };
     let mut incompatible = checkpoint.clone();
     incompatible.version = 9;
     assert!(

@@ -97,6 +97,7 @@ async fn chained_join_complete_deltas_recovery_and_ownership() -> Result<()> {
         store: Arc::new(InMemory::new()),
         block_rows: 1,
         limits: crate::engine::execution::Limits::default(),
+        encoded_cache: None,
     };
     let mut query = Relational::new(plan()?, operators(), &settings)?;
     let histories = [

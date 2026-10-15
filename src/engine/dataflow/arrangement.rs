@@ -12,10 +12,10 @@ use std::sync::Arc;
 /// Bound immutable object writer for one typed arrangement in an acyclic graph.
 #[derive(Clone)]
 pub struct Arrangement<K: BatchData, V: BatchData> {
-    store: Arc<dyn ObjectStore>,
-    schema: String,
+    pub(super) store: Arc<dyn ObjectStore>,
+    pub(super) schema: String,
     namespace: Option<String>,
-    block_rows: usize,
+    pub(super) block_rows: usize,
     cache: Arc<BlockCache>,
     marker: std::marker::PhantomData<(K, V)>,
 }

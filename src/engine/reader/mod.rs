@@ -1,8 +1,11 @@
 //! Fallible readers over immutable canonical memory and object batches.
 mod bounded;
 mod cache;
+mod compression;
 mod cursor;
 mod format;
+mod hybrid;
+pub use hybrid::{CacheConfig, EncodedCache};
 mod object;
 mod reachability;
 mod streaming;
@@ -12,6 +15,7 @@ use super::Batch;
 use anyhow::Result;
 pub use cache::{BlockCache, CacheStats};
 pub use cursor::Cursor;
+pub(crate) use object::valid_namespace;
 pub use object::{ObjectBatch, ObjectRef};
 use serde::{Serialize, de::DeserializeOwned};
 use std::future::Future;

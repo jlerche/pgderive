@@ -66,10 +66,15 @@ impl Open {
         let contract = registration::source(&mut session.client, config, settings).await?;
         let mut replication = config.clone();
         replication.replication.slot = contract.slot.clone();
+        let encoded_cache = match &config.encoded_cache {
+            Some(cache) => Some(Arc::new(cache.open().await?)),
+            None => None,
+        };
         let options = query::Settings {
             store: store.clone(),
             block_rows: settings.block_rows,
             limits: config.execution,
+            encoded_cache,
         };
         let compiled = settings.query.compile_bound(&session.client, &contract).await?;
         let mut query = Runtime::build(&contract, &compiled, options.clone())?;
@@ -178,6 +183,7 @@ async fn bootstrap(
                 .build(&settings.object_prefix)?,
             block_rows: settings.block_rows,
             limits: config.execution,
+            encoded_cache: None,
         },
     )?;
     ensure!(

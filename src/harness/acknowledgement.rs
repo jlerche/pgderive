@@ -23,7 +23,7 @@ pub(super) async fn check(
     let mut graph = mvp::Query::reopen(
         plan,
         mvp::operators(),
-        Settings { store, block_rows: 3, limits: config.execution },
+        Settings { store, block_rows: 3, limits: config.execution, encoded_cache: None },
         durable.stored.checkpoint.clone(),
     )
     .await?;

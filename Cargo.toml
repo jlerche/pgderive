@@ -25,6 +25,8 @@ tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "si
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime", "with-serde_json-1"] }
 pg_query = "=6.2.1"
 url = "2"
+zstd = "0.13"
+foyer = "=0.22.6"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"] }
@@ -64,3 +66,6 @@ wildcard_imports = "deny"
 [patch.crates-io]
 # Upstream 0.4.1 with a 1 MiB pre-allocation frame cap; see vendor README.pgderive.md.
 pgwire-replication = { path = "vendor/pgwire-replication" }
+
+# Namespace bundled xxHash to coexist with pg_query; see vendor/lz4-sys/README.pgderive.md.
+lz4-sys = { path = "vendor/lz4-sys" }

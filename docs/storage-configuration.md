@@ -60,3 +60,48 @@ POST. An actual-adapter local HTTP fixture measures 513 singleton POSTs versus
 three batches of 256, 256 and one path. Its partial-error retry deletes all keys,
 including 255 keys already removed by the first attempt. This measures request
 amplification, not cloud latency or capacity. The durable object format is unchanged.
+
+New immutable data blocks use canonical full-tuple weighted JSON compressed with
+Zstd level 3 (`pgderive/block-v3/<sha256>`). Hashes cover compressed bytes. Resident
+fences and root indexes remain JSON (`pgderive/batch-v3/<sha256>`). The reader still
+accepts v1 embedded JSON and v2 separate JSON blocks. Compaction naturally rewrites
+old runs to v3; old binaries cannot read v3. Decoded JSON is capped at 8 MiB per
+block, stored bytes at 8 MiB + 64 KiB, and Zstd frames/windows are checked before
+rows are exposed. Streaming block-byte budgets refer to uncompressed JSON.
+
+An optional Foyer memory/disk cache retains encoded immutable blocks:
+
+```toml
+[encoded_cache]
+directory = "/var/cache/pgderive/my-worker"
+memory_bytes = 16777216
+disk_bytes = 268435456
+```
+
+Use a dedicated directory per worker. Disk capacity must be a multiple of 16 MiB
+and at least 64 MiB. The existing execution cache limits still bound decoded
+blocks; the Foyer memory budget is additional. A directory lease prevents
+concurrent recovery/writes, including asynchronous cache shutdown. Cache hits are
+checked against the expected SHA-256; corrupt or failed cache reads fall back to
+object storage. Recovery always bypasses both cache tiers and verifies durable
+objects before attaching shared caches. Cache contents are disposable and confer
+no authority to publish or acknowledge WAL. Omit this section to disable Foyer.
+
+Compaction already streams consolidated weighted rows and advances only physical
+membership generation. `Arrangement::compaction_job` now exports a serializable
+`CompactionJob`; a separate process can deserialize it and call
+`execute::<K, V>(store)` with the same codec and object-store prefix. The result is
+an unpublished `CompactionResult`. `Arrangement::adopt_compaction` rejects stale
+input membership, foreign job/output namespaces, clock changes and any change to
+weighted tuple contents, cold-reading replacement objects before returning a new
+snapshot. The ordinary inline compactor and detached executor share the same
+streaming implementation.
+
+The coordinator must hold a durable checkpoint reader pin and upload reservation
+until the executor has stopped, then retain the upload reservation through fenced
+PG publication. A process failure or uncertain publication must preserve these
+protections for authoritative recovery; timeouts alone do not prove quiescence.
+Only the writer publishes with the existing PG transaction/fence; the executor
+has no PG publication or slot-ACK capability. GC remains a separate operation.
+This is a portable library boundary, not a job queue or automatic worker subprocess
+scheduler; the existing continuous worker continues to compact inline.

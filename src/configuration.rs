@@ -13,6 +13,8 @@ pub struct Config {
     #[serde(default)]
     pub(super) execution: crate::engine::execution::Limits,
     #[serde(default)]
+    pub(super) encoded_cache: Option<crate::engine::reader::CacheConfig>,
+    #[serde(default)]
     pub(super) object_store: Option<crate::storage::Storage>,
     #[serde(default)]
     pub(super) worker: Option<crate::worker::Settings>,
@@ -80,6 +82,9 @@ impl Config {
 
     pub(super) fn validate(&self) -> Result<()> {
         self.execution.validate()?;
+        if let Some(cache) = &self.encoded_cache {
+            cache.validate()?;
+        }
         if let Some(worker) = &self.worker {
             worker.validate()?;
         }

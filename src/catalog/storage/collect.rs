@@ -181,8 +181,11 @@ fn managed(path: &str, sealed: &BTreeSet<String>) -> bool {
     if !sealed.contains(namespace) {
         return false;
     }
-    let Some(hash) =
-        relative.strip_prefix("batch-v2/").or_else(|| relative.strip_prefix("block-v2/"))
+    let Some(hash) = relative
+        .strip_prefix("batch-v2/")
+        .or_else(|| relative.strip_prefix("block-v2/"))
+        .or_else(|| relative.strip_prefix("batch-v3/"))
+        .or_else(|| relative.strip_prefix("block-v3/"))
     else {
         return false;
     };

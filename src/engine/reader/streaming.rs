@@ -12,11 +12,11 @@ use std::sync::Arc;
 /// split into nonoverlapping immutable roots without changing their weights.
 #[derive(Debug, Clone, Copy)]
 pub struct WriteLimits {
-    /// Maximum encoded block bytes, at most the v2 codec's 8 MiB limit.
+    /// Maximum encoded block bytes, at most the codec's decoded 8 MiB limit.
     pub block_bytes: usize,
     /// Maximum complete rows per block, at most 65,536.
     pub block_rows: usize,
-    /// Maximum root/index bytes, at most the v2 codec's 8 MiB limit.
+    /// Maximum root/index bytes, at most the codec's decoded 8 MiB limit.
     pub index_bytes: usize,
     /// Maximum resident block fences before flushing a root.
     pub index_blocks: usize,
@@ -82,7 +82,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             .map(|reference| reference.qualify(target.0))
             .collect()
     }
-    /// Stream a canonical cursor into bounded blocks and nonoverlapping v2 roots.
+    /// Stream a canonical cursor into bounded blocks and nonoverlapping v3 roots.
     /// No trace membership is published here. Exact consolidation and final i64
     /// representability belong to the logical input cursor, before physical splits.
     ///
@@ -161,8 +161,9 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         validate(&self.rows)?;
         let encoded = bounded::encode(&self.rows)?;
         ensure!(encoded.len() <= self.limits.block_bytes, "streaming block exceeds budget");
+        let encoded = super::compression::compress(&encoded)?;
         let digest = hash(&encoded);
-        let path = format!("pgderive/block-v2/{digest}");
+        let path = format!("pgderive/block-v3/{digest}");
         let block = Block {
             path: Some(path.clone()),
             first: self.rows.first().context("empty streaming block")?.0.clone(),
@@ -174,7 +175,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         };
         let bytes = bounded::encode(&block)?.len();
         let header = bounded::encode(&Index::<K, V> {
-            version: 2,
+            version: 3,
             schema: self.schema.clone(),
             blocks: Vec::new(),
         })?

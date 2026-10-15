@@ -23,6 +23,8 @@ pub struct Settings {
     pub block_rows: usize,
     /// Transaction and cache resource limits.
     pub limits: Limits,
+    /// Optional shared encoded memory/disk cache; recovery always bypasses it.
+    pub encoded_cache: Option<Arc<crate::engine::reader::EncodedCache>>,
 }
 /// Visible GROUP BY COUNT(*) and nullable SUM row.
 pub type AggregateRow = (i64, Option<i64>);
@@ -209,7 +211,11 @@ impl<
         block_rows: usize,
         limits: Limits,
     ) -> Result<Self> {
-        let execution = Execution::build(&plan, operators, Settings { store, block_rows, limits })?;
+        let execution = Execution::build(
+            &plan,
+            operators,
+            Settings { store, block_rows, limits, encoded_cache: None },
+        )?;
         let initial = execution.empty();
         Self::bind(plan, execution, initial, 0)
     }
