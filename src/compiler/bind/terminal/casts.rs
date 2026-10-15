@@ -1,23 +1,17 @@
 //! Closed native integral casts; `PostgreSQL` evaluates narrowing overflow at publication.
 use super::{Builder, Expression, Function, names, optional};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use pg_query::{NodeEnum, protobuf as pg};
 impl Builder<'_> {
     pub(super) fn cast(&mut self, value: &pg::TypeCast, depth: usize) -> Result<usize> {
         let kind = value.type_name.as_ref().ok_or_else(|| anyhow::anyhow!("missing cast type"))?;
         ensure!(
-            kind.typmods.is_empty()
-                && kind.array_bounds.is_empty()
-                && !kind.setof
-                && !kind.pct_type,
+            crate::compiler::parser::expressions::unmodified_type(kind),
             "unsupported cast modifier"
         );
         let name = names(&kind.names)?.0;
-        let name = match name.as_slice() {
-            [name] => name.as_str(),
-            [schema, name] if schema == "pg_catalog" => name.as_str(),
-            _ => anyhow::bail!("unsupported cast namespace"),
-        };
+        let name = crate::compiler::parser::expressions::builtin_name(&name)
+            .context("unsupported cast namespace")?;
         let (function, oid) = match name {
             "int2" => (Function::Int2, 21),
             "int4" => (Function::Int4, 23),
@@ -54,13 +48,7 @@ impl Builder<'_> {
         let types = nullable.iter().flatten().map(|index| self.types[*index]).collect::<Vec<_>>();
         let integral = !types.is_empty() && types.iter().all(|oid| matches!(oid, 20 | 21 | 23));
         let target = if integral {
-            if types.contains(&20) {
-                20
-            } else if types.contains(&23) {
-                23
-            } else {
-                21
-            }
+            crate::compiler::scalar::common(&types)
         } else {
             types.first().copied().unwrap_or(25)
         };
@@ -81,13 +69,7 @@ impl Builder<'_> {
         right: usize,
     ) -> Result<usize> {
         use crate::catalog::terminal::program::Operation;
-        let oid = if [left, right].iter().any(|index| self.types[*index] == 20) {
-            20
-        } else if [left, right].iter().any(|index| self.types[*index] == 23) {
-            23
-        } else {
-            21
-        };
+        let oid = crate::compiler::scalar::common(&[self.types[left], self.types[right]]);
         let mut arguments = vec![left, right];
         for index in &mut arguments {
             if self.types[*index] != oid {

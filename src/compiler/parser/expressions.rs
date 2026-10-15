@@ -70,3 +70,14 @@ pub(in crate::compiler) fn aggregate<'a>(
     );
     Ok(args.first())
 }
+
+pub(in crate::compiler) const fn unmodified_type(kind: &pg::TypeName) -> bool {
+    kind.typmods.is_empty() && kind.array_bounds.is_empty() && !kind.setof && !kind.pct_type
+}
+pub(in crate::compiler) fn builtin_name(names: &[String]) -> Option<&str> {
+    match names {
+        [name] => Some(name),
+        [schema, name] if schema == "pg_catalog" => Some(name),
+        _ => None,
+    }
+}

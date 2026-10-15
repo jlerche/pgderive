@@ -111,12 +111,9 @@ fn parse_target(value: &Node) -> Result<Target> {
         )
     } else if let NodeEnum::FuncCall(call) = node(expression)? {
         let name = super::expressions::names(&call.funcname)?.0;
-        let function = match name.as_slice() {
-            [name] => name,
-            [schema, name] if schema == "pg_catalog" => name,
-            _ => anyhow::bail!("unsupported aggregate namespace"),
-        };
-        (Value::Aggregate(Box::new(aggregate(call, function)?)), function.clone())
+        let function = crate::compiler::parser::expressions::builtin_name(&name)
+            .context("unsupported aggregate namespace")?;
+        (Value::Aggregate(Box::new(aggregate(call, function)?)), function.to_owned())
     } else {
         let name = column(expression)?;
         let label = name.0.last().context("missing column")?.clone();

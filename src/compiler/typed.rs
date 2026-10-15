@@ -1,5 +1,5 @@
 //! Pure checked integral expression trees executed before relational state.
-use super::{ColumnRef, parser::Name};
+use super::{ColumnRef, parser::Name, scalar::common};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum};
 use serde::Serialize;
@@ -155,19 +155,6 @@ pub(super) fn bind(
         _ => anyhow::bail!("unsupported circuit scalar expression"),
     }
 }
-fn common(types: &[u32]) -> u32 {
-    if types.contains(&1700) {
-        1700
-    } else if types.contains(&20) {
-        20
-    } else if types.contains(&23) {
-        23
-    } else if types.contains(&21) {
-        21
-    } else {
-        23
-    }
-}
 pub(super) fn computed(
     value: &Node,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
@@ -224,7 +211,7 @@ impl Typed {
     pub(super) fn has_text_equality(&self) -> bool {
         self.predicates(super::expression::Expr::has_text_equality)
     }
-    fn predicates(&self, predicate: fn(&super::expression::Expr) -> bool) -> bool {
+    pub(super) fn predicates(&self, predicate: fn(&super::expression::Expr) -> bool) -> bool {
         match &self.value {
             Value::Column(_) | Value::Literal(_) | Value::Numeric(_) => false,
             Value::Cast(input) => input.predicates(predicate),
@@ -338,16 +325,13 @@ fn cast_expression(
     use super::parser::expressions::{names, optional};
     let kind = cast.type_name.as_ref().context("missing scalar cast type")?;
     ensure!(
-        kind.typmods.is_empty() && kind.array_bounds.is_empty() && !kind.setof && !kind.pct_type,
+        crate::compiler::parser::expressions::unmodified_type(kind),
         "unsupported scalar cast modifier"
     );
     let name = names(&kind.names)?.0;
-    let name = match name.as_slice() {
-        [name] => name,
-        [schema, name] if schema == "pg_catalog" => name,
-        _ => anyhow::bail!("unsupported scalar cast namespace"),
-    };
-    let oid = match name.as_str() {
+    let name = crate::compiler::parser::expressions::builtin_name(&name)
+        .context("unsupported scalar cast namespace")?;
+    let oid = match name {
         "int2" => 21,
         "int4" => 23,
         "int8" => 20,

@@ -13,11 +13,8 @@ pub enum Arm {
     Literal(Option<i64>),
 }
 impl Case {
-    pub(super) fn has_text_equality(&self) -> bool {
-        self.arms.iter().any(|(condition, _)| condition.has_text_equality())
-    }
-    pub(super) fn has_gap(&self) -> bool {
-        self.arms.iter().any(|(condition, _)| condition.has_gap())
+    pub(super) fn predicates(&self, predicate: fn(&expression::Expr) -> bool) -> bool {
+        self.arms.iter().any(|(condition, _)| predicate(condition))
     }
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         for (condition, value) in &self.arms {

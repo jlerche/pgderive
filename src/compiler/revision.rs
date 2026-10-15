@@ -7,110 +7,77 @@ pub(super) fn bind(compiled: &mut Compiled) -> Result<()> {
         Program::Relational { relational } => relational.output.terminal.as_ref(),
         Program::Grouped { .. } => None,
     };
-    if terminal.is_some_and(crate::catalog::Terminal::has_array) {
-        compiled
-            .revision
-            .as_mut()
-            .context("missing terminal compiler revision")?
-            .push_str(":pg-c-array-element-v1");
+    let nodes = match &compiled.program {
+        Program::Relational { relational } => relational.nodes.as_slice(),
+        _ => &[],
+    };
+    let predicate = |check: fn(&Expr) -> bool, include_map| {
+        compiled.predicates.as_ref().is_some_and(check)
+            || nodes.iter().any(|node| node_predicates(node, check, include_map))
+    };
+    for (used, suffix, context) in [
+        (
+            terminal.is_some_and(crate::catalog::Terminal::has_array),
+            ":pg-c-array-element-v1",
+            "missing terminal compiler revision",
+        ),
+        (
+            terminal.is_some_and(crate::catalog::Terminal::has_numeric_multiply),
+            ":pg-terminal-decimal-multiply-v1",
+            "missing decimal compiler revision",
+        ),
+        (
+            terminal.is_some_and(crate::catalog::Terminal::has_timestamp_format),
+            ":pg-terminal-utc-calendar-format-v1",
+            "missing timestamp format revision",
+        ),
+        (
+            predicate(Expr::has_text_equality, true),
+            ":pg-deterministic-text-equality-v1",
+            "missing text compiler revision",
+        ),
+        (predicate(Expr::has_gap, true), ":pg-timestamp-gap-v1", "missing gap compiler revision"),
+        (
+            predicate(Expr::has_typed, false),
+            ":pg-checked-integral-predicate-v1",
+            "missing predicate compiler revision",
+        ),
+        (
+            compiled.predicates.as_ref().is_some_and(Expr::has_numeric)
+                || nodes.iter().any(|node| match node {
+                    Node::Map { computed, .. } => {
+                        computed.iter().any(|value| value.column.oid == 1700)
+                    }
+                    Node::Filter { predicate, .. } => predicate.matches(Expr::has_numeric),
+                    _ => false,
+                }),
+            ":pg-circuit-numeric-bigint-scale-4096-v1",
+            "missing numeric compiler revision",
+        ),
+    ] {
+        if used {
+            compiled.revision.as_mut().context(context)?.push_str(suffix);
+        }
     }
-    if terminal.is_some_and(crate::catalog::Terminal::has_numeric_multiply) {
-        compiled
-            .revision
-            .as_mut()
-            .context("missing decimal compiler revision")?
-            .push_str(":pg-terminal-decimal-multiply-v1");
-    }
-    if terminal.is_some_and(crate::catalog::Terminal::has_timestamp_format) {
-        compiled
-            .revision
-            .as_mut()
-            .context("missing timestamp format revision")?
-            .push_str(":pg-terminal-utc-calendar-format-v1");
-    }
-    let text = compiled.predicates.as_ref().is_some_and(Expr::has_text_equality)
-        || match &compiled.program {
-            Program::Relational { relational } => relational.nodes.iter().any(node_text),
-            _ => false,
-        };
-    if text {
-        compiled
-            .revision
-            .as_mut()
-            .context("missing text compiler revision")?
-            .push_str(":pg-deterministic-text-equality-v1");
-    }
-    let gap = compiled.predicates.as_ref().is_some_and(Expr::has_gap)
-        || match &compiled.program {
-            Program::Relational { relational } => relational.nodes.iter().any(node_gap),
-            _ => false,
-        };
-    if gap {
-        compiled
-            .revision
-            .as_mut()
-            .context("missing gap compiler revision")?
-            .push_str(":pg-timestamp-gap-v1");
-    }
-    if compiled.predicates.as_ref().is_some_and(Expr::has_typed)
-        || matches!(&compiled.program, Program::Relational { relational } if relational.nodes.iter().any(node_typed))
-    {
-        compiled
-            .revision
-            .as_mut()
-            .context("missing predicate compiler revision")?
-            .push_str(":pg-checked-integral-predicate-v1");
-    }
-    if compiled.predicates.as_ref().is_some_and(Expr::has_numeric)
-        || matches!(&compiled.program, Program::Relational { relational } if relational.nodes.iter().any(|node| match node {
-            Node::Map { computed, .. } => computed.iter().any(|value| value.column.oid == 1700),
-            Node::Filter { predicate, .. } => predicate.has_numeric(),
-            _ => false,
-        }))
-    {
-        compiled
-            .revision
-            .as_mut()
-            .context("missing numeric compiler revision")?
-            .push_str(":pg-circuit-numeric-bigint-scale-4096-v1");
-    }
-    relational_revisions(compiled)?;
-    Ok(())
+    relational_revisions(compiled)
 }
-fn node_gap(node: &Node) -> bool {
+fn node_predicates(node: &Node, check: fn(&Expr) -> bool, include_map: bool) -> bool {
     match node {
-        Node::Filter { predicate, .. } => predicate.has_gap(),
-        Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
-            Native::Case { case } => case.has_gap(),
-            Native::Typed { typed } => typed.has_gap(),
-            Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
-        }),
+        Node::Filter { predicate, .. } => predicate.matches(check),
+        Node::Map { computed, .. } if include_map => {
+            computed.iter().any(|value| match &value.expression {
+                Native::Case { case } => case.predicates(check),
+                Native::Typed { typed } => typed.predicates(check),
+                Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
+            })
+        }
         Node::Partition { spec, .. }
         | Node::Statistics { spec, .. }
         | Node::OrderedFinalize { spec, .. }
         | Node::Finalize { spec, .. } => spec
             .aggregates
             .iter()
-            .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_gap)),
-        _ => false,
-    }
-}
-
-fn node_text(node: &Node) -> bool {
-    match node {
-        Node::Filter { predicate, .. } => predicate.has_text_equality(),
-        Node::Map { computed, .. } => computed.iter().any(|value| match &value.expression {
-            Native::Case { case } => case.has_text_equality(),
-            Native::Typed { typed } => typed.has_text_equality(),
-            Native::Bin(_) | Native::Offset { .. } | Native::Remainder { .. } => false,
-        }),
-        Node::Partition { spec, .. }
-        | Node::Statistics { spec, .. }
-        | Node::OrderedFinalize { spec, .. }
-        | Node::Finalize { spec, .. } => spec
-            .aggregates
-            .iter()
-            .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_text_equality)),
+            .any(|value| value.filter.as_ref().is_some_and(|filter| filter.matches(check))),
         _ => false,
     }
 }
@@ -175,18 +142,4 @@ fn relational_revisions(compiled: &mut Compiled) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn node_typed(node: &Node) -> bool {
-    match node {
-        Node::Filter { predicate, .. } => predicate.has_typed(),
-        Node::Partition { spec, .. }
-        | Node::Statistics { spec, .. }
-        | Node::OrderedFinalize { spec, .. }
-        | Node::Finalize { spec, .. } => spec
-            .aggregates
-            .iter()
-            .any(|value| value.filter.as_ref().is_some_and(super::Predicate::has_typed)),
-        _ => false,
-    }
 }

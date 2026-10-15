@@ -23,8 +23,7 @@ pub(super) fn is_bin(value: &Node) -> Result<bool> {
         return Ok(false);
     };
     let names = super::expressions::names(&call.funcname)?.0;
-    Ok(matches!(names.as_slice(), [name] if name == "date_bin")
-        || matches!(names.as_slice(), [schema,name] if schema == "pg_catalog" && name == "date_bin"))
+    Ok(super::expressions::builtin_name(&names) == Some("date_bin"))
 }
 pub(super) fn key(value: &Node) -> Result<Key> {
     if !is_bin(value)? {
@@ -51,19 +50,14 @@ pub(super) fn key(value: &Node) -> Result<Key> {
     let names =
         super::expressions::names(&cast.type_name.as_ref().context("missing origin type")?.names)?
             .0;
-    let oid = match names.as_slice() {
-        [schema, name] if schema == "pg_catalog" && name == "timestamp" => 1114,
-        [schema, name] if schema == "pg_catalog" && name == "timestamptz" => 1184,
-        [name] if name == "timestamp" => 1114,
-        [name] if name == "timestamptz" => 1184,
+    let oid = match super::expressions::builtin_name(&names) {
+        Some("timestamp") => 1114,
+        Some("timestamptz") => 1184,
         _ => anyhow::bail!("date_bin origin requires timestamp/timestamptz"),
     };
     let typename = cast.type_name.as_ref().context("missing origin type")?;
     ensure!(
-        typename.typmods.is_empty()
-            && typename.array_bounds.is_empty()
-            && !typename.setof
-            && !typename.pct_type,
+        crate::compiler::parser::expressions::unmodified_type(typename),
         "origin type modifiers unsupported"
     );
     Ok(Key::Bin(Bin {
@@ -135,15 +129,11 @@ pub(in crate::compiler) fn interval(value: &Node) -> Result<i64> {
         let typename = cast.type_name.as_ref().context("missing interval type")?;
         let names = super::expressions::names(&typename.names)?.0;
         ensure!(
-            matches!(names.as_slice(), [name] if name == "interval")
-                || matches!(names.as_slice(), [schema,name] if schema == "pg_catalog" && name == "interval"),
+            super::expressions::builtin_name(&names) == Some("interval"),
             "date_bin stride requires interval"
         );
         ensure!(
-            typename.typmods.is_empty()
-                && typename.array_bounds.is_empty()
-                && !typename.setof
-                && !typename.pct_type,
+            crate::compiler::parser::expressions::unmodified_type(typename),
             "interval modifiers unsupported"
         );
         string(optional(cast.arg.as_deref())?)?

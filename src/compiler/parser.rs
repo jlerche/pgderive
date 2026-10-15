@@ -310,15 +310,12 @@ fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Tr
     }
     if let NodeEnum::FuncCall(call) = node(value)? {
         let name = expressions::names(&call.funcname)?.0;
-        let function = match name.as_slice() {
-            [name] => name,
-            [schema, name] if schema == "pg_catalog" => name,
-            _ => anyhow::bail!("unsupported terminal function namespace"),
-        };
+        let function =
+            expressions::builtin_name(&name).context("unsupported terminal function namespace")?;
         if function == "to_char" {
             return timestamp_format::target(call);
         }
-        let transform = match function.as_str() {
+        let transform = match function {
             "abs" => Transform::Abs,
             "length" => Transform::Length,
             _ => anyhow::bail!("unsupported terminal function"),
@@ -326,12 +323,12 @@ fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Tr
         // Reuse the exact aggregate-call modifier checks with one ordinary argument.
         let mut plain = call.as_ref().clone();
         plain.funcname = vec![pg_query::Node {
-            node: Some(NodeEnum::String(pg::String { sval: function.clone() })),
+            node: Some(NodeEnum::String(pg::String { sval: function.to_owned() })),
         }];
         let normalized = Node { node: Some(NodeEnum::FuncCall(Box::new(plain))) };
         let operand =
             aggregate(&normalized, function, false)?.context("missing function operand")?;
-        return Ok((column(operand)?, transform, function.clone()));
+        return Ok((column(operand)?, transform, function.to_owned()));
     }
     let name = column(value)?;
     let label = name.0.last().context("missing column name")?.clone();

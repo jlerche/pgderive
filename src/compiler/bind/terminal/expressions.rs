@@ -1,5 +1,5 @@
 use super::{Builder, Expression, Function, names, node, optional};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use pg_query::{NodeEnum, protobuf as pg};
 impl Builder<'_> {
     pub(super) fn operator(&mut self, value: &pg::AExpr, depth: usize) -> Result<usize> {
@@ -46,11 +46,8 @@ impl Builder<'_> {
     }
     pub(super) fn call(&mut self, value: &pg::FuncCall, depth: usize) -> Result<usize> {
         let name = names(&value.funcname)?.0;
-        let function = match name.as_slice() {
-            [name] => name.as_str(),
-            [schema, name] if schema == "pg_catalog" => name.as_str(),
-            _ => anyhow::bail!("unsupported terminal function namespace"),
-        };
+        let function = crate::compiler::parser::expressions::builtin_name(&name)
+            .context("unsupported terminal function namespace")?;
         let mut plain = value.clone();
         if matches!(function, "extract" | "timezone") {
             ensure!(

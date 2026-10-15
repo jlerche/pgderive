@@ -364,29 +364,29 @@ impl Expr {
             }
         }
     }
+    fn any_scalar(&self, predicate: &impl Fn(&Scalar) -> bool) -> bool {
+        match self {
+            Self::Value(value) | Self::Null(value, _) => predicate(value),
+            Self::Compare(_, left, right) => predicate(left) || predicate(right),
+            Self::And(values) | Self::Or(values) => {
+                values.iter().any(|value| value.any_scalar(predicate))
+            }
+            Self::Not(value) => value.any_scalar(predicate),
+        }
+    }
     pub(super) fn has_gap(&self) -> bool {
         let gap = |value: &Scalar| {
             matches!(value, Scalar::Difference(..) | Scalar::Literal(Some(Value::Interval(_))))
                 || matches!(value, Scalar::Typed(value) if value.has_gap())
         };
-        match self {
-            Self::Value(value) | Self::Null(value, _) => gap(value),
-            Self::Compare(_, left, right) => gap(left) || gap(right),
-            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_gap),
-            Self::Not(value) => value.has_gap(),
-        }
+        self.any_scalar(&gap)
     }
     pub(super) fn has_remainder(&self) -> bool {
         let scalar = |value: &Scalar| {
             matches!(value, Scalar::Remainder(_, _))
                 || matches!(value, Scalar::Typed(value) if value.has_remainder())
         };
-        match self {
-            Self::Value(value) | Self::Null(value, _) => scalar(value),
-            Self::Compare(_, left, right) => scalar(left) || scalar(right),
-            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_remainder),
-            Self::Not(value) => value.has_remainder(),
-        }
+        self.any_scalar(&scalar)
     }
 }
 
@@ -394,11 +394,8 @@ impl Expr {
 #[serde(transparent)]
 pub struct Predicate(Expr);
 impl Predicate {
-    pub(super) fn has_text_equality(&self) -> bool {
-        self.0.has_text_equality()
-    }
-    pub(super) fn has_gap(&self) -> bool {
-        self.0.has_gap()
+    pub(super) fn matches(&self, predicate: fn(&Expr) -> bool) -> bool {
+        predicate(&self.0)
     }
     pub(super) const fn new(expr: Expr) -> Self {
         Self(expr)
@@ -411,17 +408,7 @@ impl Predicate {
 impl Expr {
     pub(super) fn has_typed(&self) -> bool {
         let typed = |value: &Scalar| matches!(value, Scalar::Typed(_));
-        match self {
-            Self::Value(value) | Self::Null(value, _) => typed(value),
-            Self::Compare(_, left, right) => typed(left) || typed(right),
-            Self::Not(value) => value.has_typed(),
-            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_typed),
-        }
-    }
-}
-impl Predicate {
-    pub(super) fn has_typed(&self) -> bool {
-        self.0.has_typed()
+        self.any_scalar(&typed)
     }
 }
 
@@ -466,16 +453,6 @@ impl Expr {
                 || matches!(value, Scalar::Column(column) if column.oid == 1700)
                 || matches!(value, Scalar::Literal(Some(Value::Numeric(_))))
         };
-        match self {
-            Self::Value(value) | Self::Null(value, _) => numeric(value),
-            Self::Compare(_, left, right) => numeric(left) || numeric(right),
-            Self::Not(value) => value.has_numeric(),
-            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_numeric),
-        }
-    }
-}
-impl Predicate {
-    pub(super) fn has_numeric(&self) -> bool {
-        self.0.has_numeric()
+        self.any_scalar(&numeric)
     }
 }

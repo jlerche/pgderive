@@ -160,3 +160,7 @@ pub(super) fn bind_offset(
     }
     Ok(column)
 }
+
+pub(super) fn common(types: &[u32]) -> u32 {
+    [1700, 20, 23, 21].into_iter().find(|oid| types.contains(oid)).unwrap_or(23)
+}
