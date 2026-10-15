@@ -40,6 +40,8 @@ pub struct Relation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Contract {
+    /// Bound server, codecs and catalog semantics; incompatible changes require rebuild.
+    pub environment: super::Environment,
     /// Replication protocol cluster/database identity.
     pub identity: Identity,
     /// Exact publication name.
@@ -55,6 +57,7 @@ impl Contract {
     /// # Errors
     /// Rejects malformed identity, empty/duplicate layouts or unsupported source types.
     pub fn validate(&self) -> Result<()> {
+        self.environment.validate()?;
         ensure!(
             self.identity.system.parse::<u64>()? > 0
                 && self.identity.timeline > 0
@@ -159,8 +162,18 @@ impl Contract {
             });
         }
         ensure!(!relations.is_empty(), "source publication is empty");
-        let contract =
-            Self { identity, publication: publication.into(), slot: slot.into(), relations };
+        let collations = relations
+            .iter()
+            .flat_map(|relation| relation.columns.iter().map(|column| column.collation))
+            .collect::<Vec<_>>();
+        let environment = super::Environment::inspect(sql, &collations).await?;
+        let contract = Self {
+            environment,
+            identity,
+            publication: publication.into(),
+            slot: slot.into(),
+            relations,
+        };
         contract.validate()?;
         Ok(contract)
     }
@@ -199,6 +212,7 @@ impl Contract {
     pub async fn verify(&self, sql: &(impl GenericClient + Sync)) -> Result<()> {
         let current =
             Self::inspect(sql, self.identity.clone(), &self.publication, &self.slot).await?;
+        ensure!(current.environment == self.environment, "source semantic environment changed");
         ensure!(current == *self, "source schema/publication contract changed");
         Ok(())
     }

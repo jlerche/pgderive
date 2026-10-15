@@ -11,8 +11,7 @@ pub use program::OutputMap;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Environment {
-    server: String,
-    encoding: String,
+    semantics: crate::source::Environment,
     functions: Vec<(String, Value)>,
     collations: Vec<Value>,
     calendar: Option<Value>,
@@ -49,23 +48,15 @@ impl Terminal {
         self.program.signatures(&self.types)
     }
     async fn inspect(&self, sql: &(impl GenericClient + Sync)) -> Result<Environment> {
-        let row = sql
-            .query_one(
-                "SELECT current_setting('server_version_num'),current_setting('server_encoding')",
-                &[],
-            )
-            .await?;
-        let server: String = row.try_get(0)?;
-        let encoding: String = row.try_get(1)?;
-        ensure!(encoding == "UTF8", "terminal codec requires UTF8");
+        let semantics = crate::source::Environment::inspect(sql, &[]).await?;
         let mut functions = Vec::new();
         for (signature, implementation) in self.signatures()? {
-            let row = sql.query_one("SELECT jsonb_build_object('oid',p.oid,'source',p.prosrc,'binary',p.probin,'config',p.proconfig,'args',p.proargtypes::text,'result',p.prorettype,'kind',p.prokind,'volatile',p.provolatile,'strict',p.proisstrict,'language',l.lanname,'schema',n.nspname) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE p.oid=pg_catalog.to_regprocedure($1)", &[&signature]).await?;
+            let row = sql.query_one("SELECT jsonb_build_object('oid',p.oid,'source',p.prosrc,'binary',p.probin,'config',p.proconfig,'args',p.proargtypes::text,'result',p.prorettype,'kind',p.prokind,'volatile',p.provolatile,'strict',p.proisstrict,'language',l.lanname,'schema',n.nspname,'definition',to_jsonb(p),'language_definition',to_jsonb(l)) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_language l ON l.oid=p.prolang JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE p.oid=pg_catalog.to_regprocedure($1)", &[&signature]).await?;
             let value: Value = row.try_get(0)?;
             let (argument, result, strict) = implementation_types(implementation)?;
             ensure!(
                 value["args"] == argument && value["result"] == result,
-                "terminal built-in types changed"
+                "terminal built-in {signature} types changed"
             );
             // General to_char is stable; the closed templates use only numeric
             // calendar fields, with UTC attested separately when formatting.
@@ -74,12 +65,16 @@ impl Terminal {
                     && value["binary"].is_null()
                     && value["config"].is_null()
                     && value["kind"] == "f"
+                    && value["definition"]["proretset"] == false
+                    && value["definition"]["provariadic"] == "0"
+                    && value["definition"]["prosecdef"] == false
+                    && value["definition"]["pronargdefaults"] == 0
                     && value["volatile"]
                         == if implementation == "timestamp_to_char" { "s" } else { "i" }
                     && value["strict"] == strict
                     && value["language"] == "internal"
                     && value["schema"] == "pg_catalog",
-                "terminal built-in signature has incompatible implementation"
+                "terminal built-in {signature} has incompatible implementation"
             );
             functions.push((signature.into(), value));
         }
@@ -90,7 +85,7 @@ impl Terminal {
         };
         let calendar =
             if self.program.has_calendar() { Some(calendar_context(sql).await?) } else { None };
-        Ok(Environment { server, encoding, functions, collations, calendar })
+        Ok(Environment { semantics, functions, collations, calendar })
     }
     pub(crate) async fn bind(&mut self, sql: &(impl GenericClient + Sync)) -> Result<()> {
         let environment = self.inspect(sql).await?;
@@ -118,6 +113,7 @@ impl Terminal {
         tx: &Transaction<'_>,
         rows: &[(Value, i64)],
     ) -> Result<Vec<(Value, i64)>> {
+        tx.batch_execute("SET LOCAL search_path=pg_catalog; SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO,MDY'; SET LOCAL IntervalStyle='iso_8601'; SET LOCAL extra_float_digits=3").await?;
         self.verify(tx).await?;
         // Only closed tuple-local forms render here; calendar formats have fixed
         // fields and an attested UTC context. Relation reads, clocks and SRFs do not.

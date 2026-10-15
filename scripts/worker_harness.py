@@ -84,8 +84,9 @@ class Worker:
 
 
 class Fixture:
-    def __init__(self, output, index, rows=256, auctions=32):
+    def __init__(self, output, index, rows=256, auctions=32, database="pgderive_dev"):
         self.output = output
+        self.database = database
         self.name = f'pgderive_worker_{os.getpid()}_{index}'
         self.environment = os.environ.copy()
         self.environment['PGPASSWORD'] = os.environ.get('PGPASSWORD', 'postgres')
@@ -93,7 +94,7 @@ class Fixture:
         self.port = str(int(os.environ.get('PGDERIVE_TEST_POSTGRES_PORT', '55434')))
         assert 1 <= int(self.port) <= 65535, 'invalid test PostgreSQL port'
         self.pg = ['psql', '-h', '127.0.0.1', '-p', self.port, '-U', 'postgres',
-                   '-d', 'pgderive_dev', '-v', 'ON_ERROR_STOP=1', '-Atc']
+                   '-d', self.database, '-v', 'ON_ERROR_STOP=1', '-Atc']
         self.workers = []
         self.rows = rows
         self.auctions = auctions
@@ -114,7 +115,7 @@ class Fixture:
         path.write_text(f'''[postgres]
 host="127.0.0.1"
 port={self.port}
-database="pgderive_dev"
+database="{self.database}"
 user="postgres"
 tls="disable"
 [replication]
@@ -233,7 +234,7 @@ record_bytes=16384
         for worker in self.workers:
             worker.abort()
         subprocess.run(['pg_dump', '-h', '127.0.0.1', '-p', self.port, '-U', 'postgres',
-                        '-d', 'pgderive_dev', f'--schema={self.name}',
+                        '-d', self.database, f'--schema={self.name}',
                         f'--file={self.output}/failure-fixture.sql'], env=self.environment, check=False)
 
 

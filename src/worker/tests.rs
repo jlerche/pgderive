@@ -20,6 +20,7 @@ pub(super) fn contract() -> Contract {
         collation: if oid == 25 { 100 } else { 0 },
     };
     Contract {
+        environment: crate::source::Environment::fixture(),
         identity: Identity { system: "1".into(), timeline: 1, database: "db".into() },
         publication: "publication".into(),
         slot: "slot".into(),

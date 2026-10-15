@@ -141,3 +141,50 @@ reference is evidence scope, not proof that every input or context is covered.
 Before adding a capability, update its inventory entry and qualify all enabled
 execution paths. Before changing durable semantics, verify restart rejection or
 explicit rebuild; unreleased IR refactors need not preserve historical formats.
+
+## Implemented M0 binding validation
+
+Source contracts now include a SHA-256 catalog fingerprint and exact server version
+and encoding, including queries without terminal expressions. The closed dependency
+manifest in `src/semantics/catalog.sql` covers supported native type definitions and
+I/O functions, casts between those types, catalog comparison/index support,
+the local date_bin/mod, aggregate, ranking/navigation and series families, their
+aggregate transition/finalization and planner-support dependencies, and generated-SQL
+transport helpers. Interval/float8 codecs and casts cover implicit hopping-expression
+operations; this does not enable those types as source columns.
+It includes registered source collation definitions/provider versions and database
+locale metadata. Terminal bindings independently include the same shared baseline,
+in addition to their explicit expression-function and UTC/C checks. Explicit
+functions retain full pg_proc/language definitions in the binding and must remain
+scalar, non-variadic, security-invoker built-ins without default arguments.
+
+Source verification compares this fingerprint during registration/restart and under
+source relation locks before snapshot activation and transactional publication.
+Terminal evaluation rechecks its environment inside the publication transaction.
+Workers set search_path to pg_catalog, UTC, ISO/MDY DateStyle, ISO interval format
+and extra_float_digits=3 on their SQL connections. Terminal evaluation also sets
+those locally so low-level publication callers do not inherit arbitrary defaults.
+
+These are conservative dependencies: a change to a supported built-in that an
+individual query does not use can require a rebuild. The catalog is hashed inside
+PostgreSQL, so each baseline check returns only version, encoding and a digest in
+one SQL request, not a full catalog transfer. Existing explicit terminal signature
+checks still inspect each distinct signature. This does not introduce
+intermediate network expression evaluation.
+
+An incompatible old serialized source/terminal binding is rejected; the unreleased
+format has no automatic migration. Registrations from before this shape change
+need retirement with a compatible older binary before upgrade, followed by fresh
+registration/bootstrap. New-format registrations with compatible structure but
+changed attested semantics require explicit rebuild after restoring or qualifying
+the supported environment. Fingerprints attest catalog
+metadata, not the contents of backend binaries, shared libraries or timezone files.
+They do not prevent concurrent administrative mutation. The quiescence policy above
+continues to apply. This slice establishes the baseline check schedule, not general
+function support or complete dependency invalidation.
+
+The owned-database `scripts/query_binding_harness.py` tests codec, local-function, aggregate/planner-helper and interval/coercion drift,
+incompatible restart, helper drift inside publication, unchanged durable state and
+ACK on failure, successful replay after restoration, and hostile database defaults.
+It is part of the sequential common gate; catalog changes never touch the shared
+test database, and failure databases/logs remain available for investigation.

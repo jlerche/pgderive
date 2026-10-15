@@ -4,6 +4,7 @@ use postgres_replication::protocol::LogicalReplicationMessage;
 
 fn contract() -> Contract {
     Contract {
+        environment: crate::source::Environment::fixture(),
         identity: Identity { system: "123".into(), timeline: 1, database: "test".into() },
         publication: "pgderive_pub".into(),
         slot: "pgderive_slot".into(),

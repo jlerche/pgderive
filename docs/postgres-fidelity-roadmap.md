@@ -44,8 +44,9 @@ approximate. Source LSN and DBSP logical time remain separate. Preserve object P
 
 The [compatibility specification](postgres-compatibility.md) and
 [capability inventory](postgres-capabilities.md) establish the first documentation
-slice. Binding-validation implementation and qualification remain open; M0 is
-not complete.
+slice. The shared binding-validation baseline and owned-database drift tests are
+implemented; see the specification for scope and remaining administrative fencing
+and external-runtime attestation limits.
 
 Deliver a compatibility specification and an inventory of current operations.
 Record supported signatures, type/coercion rules, NULL/strictness behavior,

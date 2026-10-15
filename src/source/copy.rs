@@ -17,7 +17,7 @@ pub async fn copy(
     contract: &Contract,
     limits: Limits,
 ) -> Result<Batch> {
-    snapshot.batch_execute("SET LOCAL row_security=off; SET LOCAL DateStyle='ISO,MDY'; SET LOCAL TimeZone='UTC'; SET LOCAL IntervalStyle='iso_8601'").await?;
+    snapshot.batch_execute("SET LOCAL row_security=off; SET LOCAL search_path=pg_catalog; SET LOCAL DateStyle='ISO,MDY'; SET LOCAL TimeZone='UTC'; SET LOCAL IntervalStyle='iso_8601'; SET LOCAL extra_float_digits=3").await?;
     contract.validate()?;
     contract.verify(snapshot).await?;
     let mut weights = Consolidator::new(limits)?;
@@ -47,14 +47,14 @@ async fn read_relation(
                     "CASE WHEN {name} IS NULL THEN NULL WHEN {name} THEN 't' ELSE 'f' END AS {name}"
                 )
             } else {
-                format!("{name}::text AS {name}")
+                format!("{name}::pg_catalog.text AS {name}")
             }
         })
         .collect::<Vec<_>>()
         .join(",");
     // Bound the encoded row on the server before transferring it to the client.
     // A null sentinel makes oversize input fail rather than silently omitting a row.
-    sql.batch_execute(&format!("DECLARE pgderive_snapshot_cursor NO SCROLL CURSOR FOR SELECT CASE WHEN octet_length(encoded::text)<={limit} THEN encoded ELSE NULL END FROM (SELECT to_jsonb(source_row) AS encoded FROM (SELECT {columns} FROM {}.{}) AS source_row) AS source_rows", super::contract::quote(&relation.schema),super::contract::quote(&relation.table))).await?;
+    sql.batch_execute(&format!("DECLARE pgderive_snapshot_cursor NO SCROLL CURSOR FOR SELECT CASE WHEN pg_catalog.octet_length(encoded::pg_catalog.text)<={limit} THEN encoded ELSE NULL END FROM (SELECT pg_catalog.to_jsonb(source_row) AS encoded FROM (SELECT {columns} FROM {}.{}) AS source_row) AS source_rows", super::contract::quote(&relation.schema),super::contract::quote(&relation.table))).await?;
     loop {
         let rows = sql.query("FETCH FORWARD 64 FROM pgderive_snapshot_cursor", &[]).await?;
         if rows.is_empty() {

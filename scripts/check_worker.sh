@@ -27,6 +27,8 @@ run_qualification() {
         exit 1
     fi
 }
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-binding \
+    python3 scripts/query_binding_harness.py "$output/query-binding" -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \
     python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 \
     "$output/transactions" -- "${worker[@]}"
@@ -103,7 +105,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==207,results
+assert len(results)==224,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))
@@ -126,7 +128,7 @@ credential_info=private_credential.stat()
 assert stat.S_ISREG(credential_info.st_mode) and stat.S_IMODE(credential_info.st_mode)==0o600
 assert credential_info.st_uid==10001
 files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),pathlib.Path(sys.argv[3]).with_name('postgres_tls_control_probe'),
-       *sorted((root/'src').rglob('*.rs')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
+       *sorted((root/'src').rglob('*.rs')), *sorted((root/'src').rglob('*.sql')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
        *sorted((root/'docs').glob('*.md')), root/'.dockerignore', *sorted((root/'deploy').glob('*')), output/'package/bin/pgderive',
        *sorted((root/'scripts').glob('*.sh')), *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(path for path in output.rglob('*.json') if path != private_credential),
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]

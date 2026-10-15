@@ -35,7 +35,7 @@ impl Session {
             (client, tokio::spawn(connection))
         };
         let session = Self { client, task };
-        session.client.batch_execute("SET statement_timeout='30s'; SET lock_timeout='10s'").await?;
+        session.client.batch_execute("SET statement_timeout='30s'; SET lock_timeout='10s'; SET search_path=pg_catalog; SET TimeZone='UTC'; SET DateStyle='ISO,MDY'; SET IntervalStyle='iso_8601'; SET extra_float_digits=3").await?;
         Ok(session)
     }
     pub(super) async fn own(&self, schema: &str, query: &str) -> Result<()> {

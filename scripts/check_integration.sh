@@ -76,7 +76,7 @@ assert 'MVP full-tuple bag multiplicity, cancellation and overflow rollback pass
 assert [len(tx['changes']) for tx in transactions]==[12,12,5,5,2,1,2,3,3,2,4,3,2,2,2]
 assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,5,2,4,4,2,2,2]
 binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')
-files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),binary,out/'transactions.jsonl',out/'harness.log',out/'proxy.jsonl',out/'storage-profile.json',out/'sql-commit-before.jsonl',out/'sql-commit-after.jsonl',out/'sql-commit-hold.jsonl']
+files=[root/'Cargo.lock',root/'config.example.toml',*sorted((root/'src').rglob('*.rs')),*sorted((root/'src').rglob('*.sql')),binary,out/'transactions.jsonl',out/'harness.log',out/'proxy.jsonl',out/'storage-profile.json',out/'sql-commit-before.jsonl',out/'sql-commit-after.jsonl',out/'sql-commit-hold.jsonl']
 provenance={
     'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p',os.environ['PGDERIVE_TEST_POSTGRES_PORT'],'-U','postgres','-d','postgres','-Atc','SELECT version()'],text=True).strip(),
     'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),
