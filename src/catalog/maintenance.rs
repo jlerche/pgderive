@@ -66,7 +66,8 @@ pub(super) fn validate(prior: &Checkpoint, candidate: &Checkpoint, plan: &Plan) 
             before.id == after.id
                 && before.schema == after.schema
                 && before.trace.time == after.trace.time
-                && before.trace.generation.checked_add(1) == Some(after.trace.generation),
+                && (before.trace == after.trace
+                    || before.trace.generation.checked_add(1) == Some(after.trace.generation)),
             "maintenance changed identity/clock or skipped physical generation"
         );
     }

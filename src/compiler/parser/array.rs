@@ -1,9 +1,9 @@
 //! Closed terminal text splitting with explicit C collation and array index.
 use super::{Name, column, expressions::names, node, optional};
-use crate::catalog::terminal::Transform;
+use crate::catalog::terminal::OutputMap;
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
-pub(super) fn target(value: &Node) -> Result<(Name, Transform, String)> {
+pub(super) fn target(value: &Node) -> Result<(Name, OutputMap, String)> {
     let NodeEnum::AIndirection(array) = node(value)? else {
         anyhow::bail!("expected terminal array selection");
     };
@@ -33,7 +33,7 @@ pub(super) fn target(value: &Node) -> Result<(Name, Transform, String)> {
     let delimiter = super::scalar::string(delimiter)?;
     ensure!(delimiter.len() <= 64, "terminal delimiter exceeds 64 bytes");
     let input = column(optional(collation.arg.as_deref())?)?;
-    Ok((input, Transform::ArrayElement { delimiter, index }, "string_to_array".into()))
+    Ok((input, OutputMap::ArrayElement { delimiter, index }, "string_to_array".into()))
 }
 fn subscript(value: &Node) -> Result<u16> {
     let NodeEnum::AIndices(index) = node(value)? else {

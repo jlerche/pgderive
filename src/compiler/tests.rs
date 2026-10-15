@@ -130,38 +130,6 @@ fn normalization_and_fail_closed_types() -> Result<()> {
 }
 
 #[test]
-fn projection_dispatch_preserves_grouped_v3_identity_bytes() -> Result<()> {
-    #[derive(serde::Serialize)]
-    struct Previous<'a> {
-        selectors: &'a crate::worker::Query,
-        predicates: &'a Option<Expr>,
-        revision: &'a Option<String>,
-    }
-    let selectors = crate::worker::Query {
-        left_schema: "source".into(),
-        left_table: "left".into(),
-        left_key: "id".into(),
-        group: "group".into(),
-        right_schema: "source".into(),
-        right_table: "right".into(),
-        right_key: "id".into(),
-        sum: "value".into(),
-    };
-    let compiled = super::Compiled {
-        program: super::Program::Grouped { selectors: selectors.clone() },
-        predicates: Some(expression("a OR (n < 0 AND b)")?),
-        revision: Some(super::REVISION.into()),
-    };
-    let previous = Previous {
-        selectors: &selectors,
-        predicates: &compiled.predicates,
-        revision: &compiled.revision,
-    };
-    assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&previous)?);
-    Ok(())
-}
-
-#[test]
 fn postgres_remainder_sign_null_and_minimum_integer() -> Result<()> {
     let cases = [(-7_i64, 3_i64, -1_i64), (7, -3, 1), (i64::MIN, -1, 0), (i64::MIN, 3, -2)];
     for (value, divisor, expected) in cases {
@@ -202,7 +170,6 @@ fn deterministic_text_equality_preserves_bytes_and_unknown() -> Result<()> {
             assert_eq!(equal.evaluate((&row, &empty))?, text.map(|value| value == literal));
             assert_eq!(equal.evaluate((&row, &empty))?, reverse.evaluate((&row, &empty))?);
             assert_eq!(different.evaluate((&row, &empty))?, text.map(|value| value != literal));
-            assert!(equal.has_text_equality());
         }
         assert_eq!(expression("text = NULL")?.evaluate((&row, &empty))?, None);
     }

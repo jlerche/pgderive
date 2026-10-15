@@ -51,7 +51,7 @@ pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, Strin
         Parsed::Terminal { .. } => Parsed::Partition(super::partition::parse(inner)?),
         Parsed::Projection { columns, .. }
             if columns.iter().any(|(_, _, transform)| {
-                matches!(transform, crate::catalog::terminal::Transform::NumericMultiply { .. })
+                matches!(transform, crate::catalog::terminal::OutputMap::NumericMultiply { .. })
             }) =>
         {
             Parsed::Partition(super::partition::parse(inner)?)
@@ -65,11 +65,11 @@ pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, Strin
         matches!(
             inner,
             Parsed::NativeScope { .. }
+                | Parsed::NativeJoin(_)
                 | Parsed::Partition(_)
                 | Parsed::ScopedJoin(_)
                 | Parsed::Derived(_)
                 | Parsed::Lookup(_)
-                | Parsed::JoinProjection { .. }
         ),
         "derived query requires a native partition query or derived scope"
     );

@@ -2,7 +2,6 @@ use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
 mod array;
-pub(super) mod case;
 mod decimal;
 pub(super) mod derived;
 pub(super) mod expansion;
@@ -24,42 +23,21 @@ pub(super) struct Table {
     pub(super) name: Name,
     pub(super) alias: Option<String>,
 }
-pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::Transform)>;
+pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::OutputMap)>;
 pub(super) enum Parsed {
-    Membership {
-        parsed: native_join::Parsed,
-        distinct: bool,
-    },
+    Membership { parsed: native_join::Parsed, distinct: bool },
     NativeJoin(native_join::Parsed),
     ScopedJoin(scoped_join::Parsed),
     Derived(derived::Derived),
     Lookup(lookup::Parsed),
     Grouped(Grouped),
     Partition(partition::Parsed),
-    JoinProjection {
-        left: Table,
-        right: Table,
-        keys: (Name, Name),
-        columns: Columns,
-        predicate: Option<super::syntax::Expr>,
-    },
-    Terminal {
-        source: Table,
-        targets: Vec<Node>,
-        predicate: Option<Box<Node>>,
-    },
-    NativeScope {
-        source: Table,
-        columns: Columns,
-        predicate: Option<super::syntax::Expr>,
-    },
-    Projection {
-        source: Table,
-        columns: Columns,
-        predicate: Option<super::syntax::Expr>,
-    },
+    Terminal { source: Table, targets: Vec<Node>, predicate: Option<Box<Node>> },
+    NativeScope { source: Table, columns: Columns, predicate: Option<super::syntax::Expr> },
+    Projection { source: Table, columns: Columns, predicate: Option<super::syntax::Expr> },
 }
 pub(super) struct Grouped {
+    pub(super) labels: Vec<String>,
     pub(super) group: Name,
     pub(super) sum: Name,
     pub(super) left: Table,
@@ -69,7 +47,7 @@ pub(super) struct Grouped {
     pub(super) grouping: Name,
 }
 
-pub(super) fn parse(sql: &str) -> Result<Parsed> {
+pub(super) fn parse(sql: &str) -> Result<(Parsed, Option<Parsed>)> {
     ensure!(sql.len() <= 16_384 && !sql.contains('\0'), "SQL exceeds size limit or contains NUL");
     scan_budget(sql)?;
     let parsed = pg_query::parse(sql).context("SQL parse (PostgreSQL 17.7)")?;
@@ -81,7 +59,8 @@ pub(super) fn parse(sql: &str) -> Result<Parsed> {
     else {
         anyhow::bail!("SQL requires SELECT");
     };
-    query(select).context("SQL lower: unsupported SELECT")
+    let fallback = validate_query(select).and_then(|()| terminal_query(select)).ok();
+    Ok((query(select).context("SQL lower: unsupported SELECT")?, fallback))
 }
 
 // Bound native parser recursion before parsing, using PostgreSQL's scanner so
@@ -200,8 +179,11 @@ fn grouped_query(select: &pg::SelectStmt) -> Result<Parsed> {
     aggregate(target(count)?, "count", true)?;
     let sum = aggregate(target(sum)?, "sum", false)?;
     let (left, right, keys) = join(from)?;
+    let group = column(target(group)?)?;
+    let labels = grouped_labels(target_list, &group)?;
     Ok(Parsed::Grouped(Grouped {
-        group: column(target(group)?)?,
+        labels,
+        group,
         sum: column(sum.context("SUM argument absent")?)?,
         left,
         right,
@@ -209,6 +191,19 @@ fn grouped_query(select: &pg::SelectStmt) -> Result<Parsed> {
         predicates: super::syntax::predicate(where_clause.as_deref())?,
         grouping: column(grouping)?,
     }))
+}
+
+fn grouped_labels(targets: &[Node], group: &Name) -> Result<Vec<String>> {
+    targets
+        .iter()
+        .zip([group.0.last().context("missing group label")?.as_str(), "count", "sum"])
+        .map(|(target, default)| {
+            let NodeEnum::ResTarget(target) = node(target)? else {
+                anyhow::bail!("invalid grouped target")
+            };
+            Ok(if target.name.is_empty() { default.into() } else { target.name.clone() })
+        })
+        .collect()
 }
 
 type Joined = (Table, Table, (Name, Name));
@@ -278,13 +273,9 @@ fn projection(targets: &[Node], from: &[Node], predicate: Option<&Node>) -> Resu
     };
     let columns = projection_columns(targets)?;
     let predicate = super::syntax::predicate(predicate)?;
-    if matches!(node(source)?, NodeEnum::JoinExpr(_)) {
-        let (left, right, keys) = join(source)?;
-        Ok(Parsed::JoinProjection { left, right, keys, columns, predicate })
-    } else {
-        Ok(Parsed::Projection { source: table(source)?, columns, predicate })
-    }
+    Ok(Parsed::Projection { source: table(source)?, columns, predicate })
 }
+
 fn projection_columns(targets: &[Node]) -> Result<Columns> {
     ensure!((1..=64).contains(&targets.len()), "projection requires 1..=64 columns");
     targets
@@ -300,8 +291,8 @@ fn projection_columns(targets: &[Node]) -> Result<Columns> {
         .collect()
 }
 
-fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Transform, String)> {
-    use crate::catalog::terminal::Transform;
+fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::OutputMap, String)> {
+    use crate::catalog::terminal::OutputMap;
     if matches!(node(value)?, NodeEnum::AIndirection(_)) {
         return array::target(value);
     }
@@ -316,8 +307,8 @@ fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Tr
             return timestamp_format::target(call);
         }
         let transform = match function {
-            "abs" => Transform::Abs,
-            "length" => Transform::Length,
+            "abs" => OutputMap::Abs,
+            "length" => OutputMap::Length,
             _ => anyhow::bail!("unsupported terminal function"),
         };
         // Reuse the exact aggregate-call modifier checks with one ordinary argument.
@@ -332,16 +323,5 @@ fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::Tr
     }
     let name = column(value)?;
     let label = name.0.last().context("missing column name")?.clone();
-    Ok((name, Transform::Identity, label))
-}
-
-pub(super) fn terminal_sql(sql: &str) -> Result<Parsed> {
-    let parsed = pg_query::parse(sql)?;
-    let statement =
-        parsed.protobuf.stmts.first().and_then(|v| v.stmt.as_ref()).context("missing statement")?;
-    let NodeEnum::SelectStmt(select) = node(statement)? else {
-        anyhow::bail!("missing SELECT");
-    };
-    validate_query(select)?;
-    terminal_query(select)
+    Ok((name, OutputMap::Identity, label))
 }

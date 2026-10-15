@@ -216,11 +216,22 @@ impl Plan {
 }
 mod checkpoint;
 pub use checkpoint::{Checkpoint, Membership};
-pub mod projection;
-pub mod query;
 pub mod relational;
 mod runtime;
 pub use runtime::Engine;
 #[cfg(test)]
 #[path = "tests/contract.rs"]
 mod tests;
+
+/// Object backend and resource configuration for query creation and recovery.
+#[derive(Clone)]
+pub struct Settings {
+    /// Backend scoped to the query's immutable object namespace.
+    pub store: std::sync::Arc<dyn object_store::ObjectStore>,
+    /// Maximum rows in one data block.
+    pub block_rows: usize,
+    /// Transaction and cache limits.
+    pub limits: crate::engine::execution::Limits,
+    /// Optional shared encoded cache; recovery bypasses it.
+    pub encoded_cache: Option<std::sync::Arc<crate::engine::reader::EncodedCache>>,
+}

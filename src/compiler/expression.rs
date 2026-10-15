@@ -350,65 +350,15 @@ fn uuid(text: &str) -> Result<[u8; 16]> {
     Ok(value)
 }
 
-impl Expr {
-    pub(super) fn has_text_equality(&self) -> bool {
-        match self {
-            Self::Compare(_, left, right) => [left, right].iter().any(|value| {
-                matches!(value, Scalar::Column(column) if matches!(column.oid, 25 | 1043))
-                    || matches!(value, Scalar::Typed(value) if value.has_text_equality())
-            }),
-            Self::And(values) | Self::Or(values) => values.iter().any(Self::has_text_equality),
-            Self::Not(value) => value.has_text_equality(),
-            Self::Value(value) | Self::Null(value, _) => {
-                matches!(value, Scalar::Typed(value) if value.has_text_equality())
-            }
-        }
-    }
-    fn any_scalar(&self, predicate: &impl Fn(&Scalar) -> bool) -> bool {
-        match self {
-            Self::Value(value) | Self::Null(value, _) => predicate(value),
-            Self::Compare(_, left, right) => predicate(left) || predicate(right),
-            Self::And(values) | Self::Or(values) => {
-                values.iter().any(|value| value.any_scalar(predicate))
-            }
-            Self::Not(value) => value.any_scalar(predicate),
-        }
-    }
-    pub(super) fn has_gap(&self) -> bool {
-        let gap = |value: &Scalar| {
-            matches!(value, Scalar::Difference(..) | Scalar::Literal(Some(Value::Interval(_))))
-                || matches!(value, Scalar::Typed(value) if value.has_gap())
-        };
-        self.any_scalar(&gap)
-    }
-    pub(super) fn has_remainder(&self) -> bool {
-        let scalar = |value: &Scalar| {
-            matches!(value, Scalar::Remainder(_, _))
-                || matches!(value, Scalar::Typed(value) if value.has_remainder())
-        };
-        self.any_scalar(&scalar)
-    }
-}
-
 #[derive(Clone, Serialize)]
 #[serde(transparent)]
 pub struct Predicate(Expr);
 impl Predicate {
-    pub(super) fn matches(&self, predicate: fn(&Expr) -> bool) -> bool {
-        predicate(&self.0)
-    }
     pub(super) const fn new(expr: Expr) -> Self {
         Self(expr)
     }
     pub(crate) fn qualifies(&self, row: &Row) -> Result<bool> {
         Ok(self.0.evaluate((row, row))? == Some(true))
-    }
-}
-
-impl Expr {
-    pub(super) fn has_typed(&self) -> bool {
-        let typed = |value: &Scalar| matches!(value, Scalar::Typed(_));
-        self.any_scalar(&typed)
     }
 }
 
@@ -444,15 +394,5 @@ impl Predicate {
         };
         let limit = usize::try_from(limit).ok()?;
         (limit <= 1024).then_some(limit)
-    }
-}
-impl Expr {
-    pub(super) fn has_numeric(&self) -> bool {
-        let numeric = |value: &Scalar| {
-            matches!(value, Scalar::Typed(value) if value.oid() == 1700)
-                || matches!(value, Scalar::Column(column) if column.oid == 1700)
-                || matches!(value, Scalar::Literal(Some(Value::Numeric(_))))
-        };
-        self.any_scalar(&numeric)
     }
 }

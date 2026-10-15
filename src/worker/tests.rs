@@ -1,6 +1,6 @@
 use super::{program, spec::Query};
 use crate::{
-    engine::{Batch, plan::query::Settings},
+    engine::{Batch, plan::Settings},
     source::{Column, Contract, Identity, Relation},
     transaction::Row,
     weighted,
@@ -85,27 +85,23 @@ pub(super) fn batch(rows: Vec<(&str, Row, i64)>) -> weighted::Batch {
 fn registration_binds_native_types_and_query_selectors() -> Result<()> {
     let native = contract();
     let original =
-        program::build(&native, &crate::compiler::Compiled::legacy(spec(), &native)?, settings())?;
+        build(&native, &crate::compiler::Compiled::legacy(spec(), &native)?, &settings())?;
     let mut changed = spec();
     changed.group = "other".into();
     assert_ne!(
         original.plan().identity(),
-        program::build(
-            &native,
-            &crate::compiler::Compiled::legacy(changed.clone(), &native)?,
-            settings()
-        )?
-        .plan()
-        .identity()
+        build(&native, &crate::compiler::Compiled::legacy(changed.clone(), &native)?, &settings())?
+            .plan()
+            .identity()
     );
     let mut changed_native = native.clone();
     changed_native.relations[1].columns[2].oid = 23;
     assert_ne!(
         original.plan().identity(),
-        program::build(
+        build(
             &changed_native,
             &crate::compiler::Compiled::legacy(spec(), &changed_native)?,
-            settings()
+            &settings()
         )?
         .plan()
         .identity()
@@ -119,11 +115,8 @@ fn registration_binds_native_types_and_query_selectors() -> Result<()> {
 #[tokio::test]
 async fn full_row_join_nulls_and_simultaneous_retractions_match_sql_semantics() -> Result<()> {
     let selectors = spec();
-    let mut query = program::build(
-        &contract(),
-        &crate::compiler::Compiled::legacy(selectors.clone(), &contract())?,
-        settings(),
-    )?;
+    let compiled = crate::compiler::Compiled::legacy(selectors, &contract())?;
+    let mut query = build(&contract(), &compiled, &settings())?;
     let left = row(&[("id", Some("1")), ("category", None), ("other", Some("a"))]);
     let nil = row(&[("id", Some("3")), ("auction", Some("1")), ("price", None)]);
     let bid = row(&[("id", Some("4")), ("auction", Some("1")), ("price", Some("7"))]);
@@ -134,10 +127,11 @@ async fn full_row_join_nulls_and_simultaneous_retractions_match_sql_semantics() 
         ("bid", bid.clone(), 1),
         ("bid", absent, 1),
     ]);
-    let prepared = query.prepare(program::inputs(&source, &selectors, 1)?).await?;
+    let prepared =
+        query.prepare(program::relational::inputs(&source, compiled.relational(), 1)?).await?;
     query.commit(prepared)?;
     assert_eq!(
-        query.snapshot().output.materialize().await?,
+        grouped_output(&query, &compiled).await?,
         Batch::from_updates([((None, (2, Some(7))), 1)])?
     );
     let mut next_left = left.clone();
@@ -150,10 +144,11 @@ async fn full_row_join_nulls_and_simultaneous_retractions_match_sql_semantics() 
         ("bid", bid, -1),
         ("bid", next_bid, 1),
     ]);
-    let prepared = query.prepare(program::inputs(&changes, &selectors, 2)?).await?;
+    let prepared =
+        query.prepare(program::relational::inputs(&changes, compiled.relational(), 2)?).await?;
     query.commit(prepared)?;
     assert_eq!(
-        query.snapshot().output.materialize().await?,
+        grouped_output(&query, &compiled).await?,
         Batch::from_updates([((Some("x".into()), (2, Some(9))), 1)])?
     );
     query.checkpoint()?.arrangements.first().context("missing worker membership")?;
@@ -242,4 +237,55 @@ async fn restart_relational(
     let checkpoint = query.checkpoint()?;
     *query = program::relational::build(native, compiled, options)?;
     query.restore_checkpoint(checkpoint).await
+}
+
+fn build(
+    native: &Contract,
+    compiled: &crate::compiler::Compiled,
+    options: &Settings,
+) -> Result<program::relational::Query> {
+    program::relational::build(native, compiled, options)
+}
+type ProjectedBag = Batch<(), Vec<Option<crate::compiler::Cell>>>;
+fn projected_batch(
+    batch: &Batch<program::relational::Key, Row>,
+    compiled: &crate::compiler::Compiled,
+) -> Result<ProjectedBag> {
+    Batch::from_updates(
+        batch
+            .iter()
+            .map(|((_, row), weight)| Ok((((), compiled.output().row(row)?), *weight)))
+            .collect::<Result<Vec<_>>>()?,
+    )
+}
+async fn projected_output(
+    query: &program::relational::Query,
+    compiled: &crate::compiler::Compiled,
+) -> Result<ProjectedBag> {
+    projected_batch(&query.snapshot().trace("output")?.materialize().await?, compiled)
+}
+type GroupedBag = Batch<Option<String>, (i64, Option<i64>)>;
+async fn grouped_output(
+    query: &program::relational::Query,
+    compiled: &crate::compiler::Compiled,
+) -> Result<GroupedBag> {
+    let projected = projected_output(query, compiled).await?;
+    let mut values = Vec::new();
+    for (((), row), weight) in projected.iter() {
+        let text = |index: usize| -> Result<Option<String>> {
+            row.get(index)
+                .context("missing grouped cell")?
+                .as_ref()
+                .map(|cell| {
+                    let json = serde_json::to_value(cell)?;
+                    Ok(json.as_str().map_or_else(|| json.to_string(), str::to_owned))
+                })
+                .transpose()
+        };
+        let group = text(0)?;
+        let count = text(1)?.context("NULL grouped count")?.parse()?;
+        let sum = text(2)?.map(|value| value.parse()).transpose()?;
+        values.push(((group, (count, sum)), *weight));
+    }
+    Batch::from_updates(values)
 }

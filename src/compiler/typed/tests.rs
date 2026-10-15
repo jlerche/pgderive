@@ -88,7 +88,6 @@ fn typed_predicates_preserve_null_unknown_and_width_errors() -> Result<()> {
                 nullable: true,
             })
         })?;
-        assert!(predicate.has_typed());
         assert_eq!(predicate.evaluate((&row, &row))?, expected, "{sql}");
     }
     Ok(())

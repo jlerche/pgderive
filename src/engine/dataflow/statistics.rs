@@ -8,16 +8,17 @@ use crate::engine::{
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{borrow::Borrow, collections::BTreeMap, sync::Arc};
 type Decode<V> = dyn Fn(&V) -> Result<Vec<BigInt>> + Send + Sync;
+type Measure<K, V> = dyn Fn(&K, &V) -> Result<Vec<BigInt>> + Send + Sync;
 type Encode<K, V> = dyn Fn(&K, &[BigInt]) -> Result<Option<V>> + Send + Sync;
 /// A linear map into exact additive statistics, followed by group finalization.
 /// Callers maintain valid full-tuple source bags; counts do not prove tuple validity.
-pub struct Statistics<K: BatchData, V: BatchData> {
+pub struct Statistics<K: BatchData, V: BatchData, S: BatchData = V> {
     width: usize,
-    measure: Arc<Decode<V>>,
-    decode: Arc<Decode<V>>,
-    encode: Arc<Encode<K, V>>,
+    measure: Arc<Measure<K, V>>,
+    decode: Arc<Decode<S>>,
+    encode: Arc<Encode<K, S>>,
 }
 impl<K: BatchData, V: BatchData> Statistics<K, V> {
     /// Bind fixed-width exact statistics and their persisted state codec.
@@ -27,6 +28,17 @@ impl<K: BatchData, V: BatchData> Statistics<K, V> {
         measure: impl Fn(&V) -> Result<Vec<BigInt>> + Send + Sync + 'static,
         decode: impl Fn(&V) -> Result<Vec<BigInt>> + Send + Sync + 'static,
         encode: impl Fn(&K, &[BigInt]) -> Result<Option<V>> + Send + Sync + 'static,
+    ) -> Self {
+        Self::with_measure(width, move |_, value| measure(value), decode, encode)
+    }
+}
+impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
+    /// Bind a keyed measure and an independent persisted sufficient-statistics type.
+    pub fn with_measure(
+        width: usize,
+        measure: impl Fn(&K, &V) -> Result<Vec<BigInt>> + Send + Sync + 'static,
+        decode: impl Fn(&S) -> Result<Vec<BigInt>> + Send + Sync + 'static,
+        encode: impl Fn(&K, &[BigInt]) -> Result<Option<S>> + Send + Sync + 'static,
     ) -> Self {
         Self {
             width,
@@ -39,18 +51,18 @@ impl<K: BatchData, V: BatchData> Statistics<K, V> {
     ///
     /// # Errors
     /// Rejects clock, codec, callback, read, resource and final arithmetic failures.
-    pub async fn evaluate(
+    pub async fn evaluate<B: Borrow<Batch<K, V>> + Sync>(
         &self,
-        input: &TimedBatch<Batch<K, V>>,
-        prior: &TraceSnapshot<K, V>,
+        input: &TimedBatch<B>,
+        prior: &TraceSnapshot<K, S>,
         limits: Limits,
-    ) -> Result<TimedBatch<Batch<K, V>>> {
+    ) -> Result<TimedBatch<Batch<K, S>>> {
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order statistics tick");
         ensure!((1..=129).contains(&self.width), "statistics width unsupported");
-        limits.check_batch(&input.batch)?;
+        limits.check_batch(input.batch.borrow())?;
         let mut contributions = Consolidator::new(limits)?;
-        for ((key, row), weight) in input.batch.iter() {
-            let values = (self.measure)(row)?;
+        for ((key, row), weight) in input.batch.borrow().iter() {
+            let values = (self.measure)(key, row)?;
             ensure!(values.len() == self.width, "statistics measure width mismatch");
             for (column, value) in values.into_iter().enumerate() {
                 contributions.add((key.clone(), column), value * weight)?;

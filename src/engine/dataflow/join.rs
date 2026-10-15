@@ -67,14 +67,6 @@ impl Join {
         })
     }
 }
-pub(super) async fn join_batches<K: BatchData, L: BatchData, R: BatchData>(
-    left: &Batch<K, L>,
-    right: &Batch<K, R>,
-    prior_left: &TraceSnapshot<K, L>,
-    prior_right: &TraceSnapshot<K, R>,
-) -> Result<Joined<K, L, R>> {
-    join_bounded(left, right, prior_left, prior_right, Limits::default()).await
-}
 async fn join_bounded<K: BatchData, L: BatchData, R: BatchData>(
     left: &Batch<K, L>,
     right: &Batch<K, R>,

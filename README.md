@@ -371,22 +371,18 @@ retries, catalog recovery and fenced concurrency control.
 
 ## Operators over pinned object traces
 
-`Stream<B>` is one typed, complete transaction batch with logical time. The
-initial `TraceQuery<K,L,R,G>` binds its pure, deterministic classification
-function at construction; changing query semantics requires a new graph. It is an explicit acyclic equijoin → fallible
-filter/group projection → grouped count graph. It probes prior arrangements
-through key seeks and evaluates `ΔL⋈R + L⋈ΔR + ΔL⋈ΔR` with exact intermediate
-products. Full `(key,value)` identity is preserved; neither source key is assumed
-unique. Counts read affected groups from their prior trace, incorporate prior
-counts before narrowing, and emit unit-weight old/new count rows.
+`TimedBatch<B>` carries one complete transaction delta and its logical time.
+`Project`, `Join`, `Statistics`, and `Arrangement` compose through typed circuit
+edges. Join evaluates `ΔL⋈R + L⋈ΔR + ΔL⋈ΔR` against the same pinned prior
+boundary with exact intermediate products. Full `(key,value)` identity is
+preserved; navigation keys do not imply uniqueness.
 
-Preparation uploads immutable input/count deltas and validates candidate states.
-One local root assignment publishes all three arrangements together. Failed
-reads, callbacks, finalization and uploads leave the root unchanged; stale or
-foreign candidates are rejected. Empty transactions advance the shared logical
-clock. Compaction publishes equivalent physical memberships at the same tick,
-invalidates preparations based on the replaced root, and retains pinned readers.
-It neither emits a logical batch nor deletes objects.
+Preparation uploads immutable deltas and validates the complete candidate state.
+One local root assignment publishes all arrangements together. Failed reads,
+callbacks, finalization, or uploads retain the old root; stale and foreign
+candidates are rejected. Empty transactions advance logical time. Compaction
+publishes equivalent physical membership at the same tick and retains pinned
+readers; physical collection remains separate.
 
 Tests compare signed updates with independent bag recomputation and memory
 operators. The accepted PoC event replay checks all 111 committed transactions
@@ -397,12 +393,6 @@ recorded event. The sequential live PostgreSQL harness compares the object graph
 and memory graph with SQL after every committed transaction. Missing objects,
 filesystem PUT failures, corrupt immutable-upload collisions, arithmetic failures, retries and compaction
 races are exercised. These are correctness checks, not performance benchmarks.
-
-This fixed Rust graph is not a SQL planner or general circuit scheduler. Object
-encoding and full candidate validation remain buffered; many runs cause repeated
-reads. The registered grouped-join composition below adds catalog publication,
-authoritative restart, sink DML, acknowledgement and object GC. This fixed
-reference graph itself remains a semantic baseline.
 
 ## Composable typed MVP operators
 
@@ -422,12 +412,13 @@ reference/custom compositions. Source transactions choose delta-tick boundaries
 in the PostgreSQL adapter; SQL syntax supports the bounded grouped and
 single-source projection subsets.
 
-The older `TraceQuery` count graph remains a reference/check fixture while the
-MVP composes these reusable operators. Graph tests cover project collisions,
-join fan-out/cross terms, pinned readers, downstream errors, empty transactions,
-and stale/foreign work. Aggregate and live S3 compositions build on these APIs.
+Graph tests cover project collisions, join fan-out/cross terms, pinned readers,
+downstream errors, empty transactions, and stale/foreign work. Recorded-event
+fixtures compose the same operators while retaining independent source-map
+oracles.
 
-`GroupSum` adds grouped weighted numeric aggregation. Its immutable `SumState`
+`Statistics` supplies exact grouped accumulation with separate input and state
+codecs. `GroupSum` binds its COUNT/non-NULL/SUM codec to this shared accumulator. Its immutable `SumState`
 contains total row multiplicity, non-NULL multiplicity, and sum. Products and
 prior-state accumulation use arbitrary precision before final i64 checks. A
 present zero sum is retained, all-NULL groups emit NULL, and removing a group's
@@ -448,8 +439,8 @@ check object-backed grouped sums, including prior-state/product cancellation.
 The live harness composes reusable typed operators into a query that projects
 auction categories and bid prices, joins by auction ID, groups by category, and
 computes SUM(price). Both projected input arrangements, aggregate statistics,
-and integrated visible SUM rows live in immutable S3 objects. Preparation stages
-all four traces and one graph root publishes them together. Every transaction is
+the retained grouped input, and integrated visible SUM rows live in immutable S3
+objects. Preparation stages all five traces and one graph root publishes them together. Every transaction is
 checked against direct PostgreSQL SUM and independent source-map recomputation.
 Compaction at tick five checks pinned readers and unchanged logical time.
 
@@ -496,17 +487,20 @@ These fixtures establish correctness within their workloads, not cloud throughpu
 ordered operator arities, reachable outputs, and named persisted arrangements.
 Its SHA-256 identity covers the complete registration and semantic revision.
 Callback implementation changes require a new revision; caller-supplied schema
-identities remain an explicit Rust/codec contract until SQL lowering exists.
+identities remain an explicit Rust/codec contract. The SQL compiler binds one
+normalized relational graph to this contract.
 
 `Engine` binds an executable evaluator to a plan and checks the actual immutable
 state membership, schema identities, and every arrangement tick before local
 publication. Missing, extra, duplicate, or differently timed state fails without
-moving visibility. `query::GroupedJoin` is the production reusable two-source
-project/join/group/COUNT/SUM executor; the live harness supplies only domain
-adapters and independent oracles. Its integrated output includes COUNT(*) and
-nullable SUM. A separate registered three-source chained-join test checks
-simultaneous input changes against full bag recomputation. Durable publication,
-resource-bounded execution and startup schema inspection remain subsequent slices.
+moving visibility. `plan::relational::Relational<K,V>` is the common executor for
+source projections, joins, grouped aggregates, and ordered/window compositions.
+The compiler lowers SQL and selector configurations to one relational IR; worker
+execution has one runtime and weighted-bag destination encoding. The live harness
+uses the same executor with independent domain adapters and memory/SQL oracles.
+A separate three-source chained-join test checks simultaneous input changes
+against full bag recomputation. Source transactions still determine acyclic
+logical ticks; recursion and frontiers are unsupported.
 
 ## Bounded immutable batch format
 
@@ -587,7 +581,7 @@ validates its complete durable membership through the manifest path below.
 
 ## Durable arrangement manifests
 
-`GroupedJoin::checkpoint` exports the committed plan identity, logical time,
+`Relational::checkpoint` exports the committed plan identity, logical time,
 arrangement schemas, physical generations, and ordered object-root membership.
 Repeated roots remain separate runs so their weighted multiplicity survives a
 restart. PostgreSQL stores this coarse membership, its count and digest; block
@@ -602,7 +596,7 @@ must fit PostgreSQL's nonnegative signed bigint range.
 Reopening validates all referenced roots and blocks with a cold reader before
 attaching the shared cache. A warm cache cannot conceal missing or corrupt
 storage during recovery. The live harness checkpoints at ticks 5 and 15 and
-restores all four arrangements in a separate process, comparing their state
+restores all five arrangements in a separate process, comparing their state
 with independent source recomputation. It also checks stale writes, rollback,
 metadata corruption, and missing roots and blocks.
 
@@ -617,7 +611,7 @@ an empty tick-zero checkpoint. PostgreSQL fences each claimed writer; reclaiming
 ownership invalidates older writers even when their publication epoch matches.
 Once bound, the metadata-only checkpoint API cannot overwrite that query.
 
-`GroupedJoin::publish_prepared` holds exclusive runtime ownership while checking
+`Relational::publish_prepared` holds exclusive runtime ownership while checking
 its preparation, encoding result deltas, and committing PostgreSQL membership,
 destination changes, and source commit/end LSN plus transaction ID together.
 Immutable objects were uploaded during preparation. Publication sets
@@ -650,7 +644,7 @@ unchanged prior boundary or the exact candidate, epoch and transaction identity.
 A writer marks COMMIT uncertain before awaiting its response, so cancellation or
 connection loss cannot permit blind retry or authorize acknowledgement.
 
-`GroupedJoin::restore_checkpoint` cold-validates every arrangement before replacing
+`Relational::restore_checkpoint` cold-validates every arrangement before replacing
 local visibility and invalidating old preparations. Replay uses WAL order; the
 transaction at the exact durable end must also match its commit position and ID.
 A conflicting or overlapping transaction fails closed.
@@ -708,7 +702,7 @@ transaction ID. No query or feedback capability exists before activation. An
 uncertain activation requires reloading the exact authoritative candidate;
 activation replay cannot apply destination DML twice. Cold reopen precedes CDC,
 which resumes at that point and records real source transactions from tick two.
-The legacy tick-zero claim path is retained for diagnostic/arithmetic fixtures;
+The tick-zero claim path is retained for diagnostic/arithmetic fixtures;
 registered native sources cannot use it to bypass initial-copy activation.
 
 Observed wire-layout drift and current native metadata drift reject execution or
@@ -740,7 +734,7 @@ its durable source boundary. Fenced collection handles abandoned upload objects.
 
 ### Streaming maintenance and physical collection
 
-`GroupedJoin::prepare_compaction` merges complete full-tuple identities through
+`Relational::prepare_compaction` merges complete full-tuple identities through
 bounded cursors, then writes consolidated v2 blocks and roots. Compaction never
 advances DBSP time or emits result deltas. Default writer budgets are 8 MiB per
 block/index, 4,096 rows per block, 4,096 block fences per root and 128 output roots;
@@ -804,16 +798,17 @@ See [storage configuration](docs/storage-configuration.md) for configuration and
 the qualification boundary; no cloud provider has been qualified.
 
 The worker imports an exported snapshot, atomically activates object membership,
-the grouped destination and source boundary, then consumes complete source
+the weighted-bag destination and source boundary, then consumes complete source
 transactions. Both join inputs may change together. Group keys preserve NULL;
 COUNT(*) counts matches and integral SUM ignores NULL measures. Every source
 transaction publishes immutable objects before committing membership, sink DML
 and progress together. Only authoritative publication permits slot feedback.
-The destination columns are `group_key` (JSONB), `row_count`, and nullable `total`.
-The worker accepts legacy selectors or the bounded SQL frontend described in
-[the compiler contract](docs/sql-compiler.md). Grouped SQL executes this composition;
-single-source projection/filter SQL binds a separate two-node circuit and weighted
-bag sink with explicit native scalar JSON encoding.
+The destination columns are `tuple` (JSONB) and nonzero signed `weight` (bigint).
+The tuple contains the ordered native output cells, preserving NULL and duplicate
+column positions. Selector configurations and the bounded SQL frontend described
+in [the compiler contract](docs/sql-compiler.md) both lower to the same relational
+IR and executor. Application-facing result views decode this bag into typed SQL
+columns and expand positive row multiplicity.
 
 The configured slot is a logical alias. A synchronous PostgreSQL registration
 journal records an unpredictable physical slot name before creating it. Restart

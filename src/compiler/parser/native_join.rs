@@ -15,15 +15,11 @@ pub(in crate::compiler) struct Parsed {
 }
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     let [from] = select.from_clause.as_slice() else { return Ok(None) };
-    let NodeEnum::JoinExpr(join) = node(from)? else { return Ok(None) };
+    let NodeEnum::JoinExpr(_) = node(from)? else { return Ok(None) };
     if !native_tree(from)? {
         return Ok(None);
     }
     if !select.group_clause.is_empty() {
-        return Ok(None);
-    }
-    // Keep existing two-source inner paths and their durable identity unchanged.
-    if legacy(join)? {
         return Ok(None);
     }
     let mut sources = 0;
@@ -32,20 +28,6 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         columns: super::projection_columns(&select.target_list)?,
         predicate: crate::compiler::syntax::predicate(select.where_clause.as_deref())?,
     }))
-}
-fn legacy(join: &pg::JoinExpr) -> Result<bool> {
-    if join.jointype != i32::from(pg::JoinType::JoinInner) {
-        return Ok(false);
-    }
-    let (NodeEnum::RangeVar(left), NodeEnum::RangeVar(right)) =
-        (node(optional(join.larg.as_deref())?)?, node(optional(join.rarg.as_deref())?)?)
-    else {
-        return Ok(false);
-    };
-    if left.schemaname == right.schemaname && left.relname == right.relname {
-        return Ok(false);
-    }
-    Ok(join.quals.as_deref().is_some_and(|value| matches!(node(value), Ok(NodeEnum::AExpr(_)))))
 }
 fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tree> {
     ensure!(depth < 16, "join tree depth exceeded");

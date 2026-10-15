@@ -11,30 +11,33 @@ pub(super) async fn check(
     writer: &mut Writer,
     recovery: &Recovery,
 ) -> Result<()> {
-    compact(sql, graph, writer, "gc-first").await?;
+    compact(sql, graph, writer, recovery, "gc-first").await?;
     let reader = catalog.protect_checkpoint(sql, graph.plan(), "gc-reader").await?;
     let old = reader.stored()?.checkpoint.clone();
     let pinned = graph.snapshot();
-    let expected = pinned.output.materialize().await?;
-    compact(sql, graph, writer, "gc-second").await?;
+    let expected = pinned.trace("output")?.materialize().await?;
+    compact(sql, graph, writer, recovery, "gc-second").await?;
     let limits = GcLimits::default();
     let result = catalog.collect(sql, recovery.store.clone(), limits).await?;
     ensure!(result != Collection::UploadProtected, "GC unexpectedly blocked by upload");
     graph.restore_checkpoint(old).await?;
     ensure!(
-        graph.snapshot().output.materialize().await? == expected,
+        graph.snapshot().trace("output")?.materialize().await? == expected,
         "pinned cold recovery failed"
     );
     let durable = writer.confirmed(sql, graph.plan()).await?;
     graph.restore_checkpoint(durable.stored.checkpoint).await?;
-    ensure!(pinned.output.materialize().await? == expected, "GC invalidated active reader");
+    ensure!(
+        pinned.trace("output")?.materialize().await? == expected,
+        "GC invalidated active reader"
+    );
     drop(pinned);
     reader.reader_finished(sql).await?;
     let result = catalog.collect(sql, recovery.store.clone(), limits).await?;
     collected(result, true)?;
     abandoned_and_ledger(sql, catalog, graph, writer, recovery).await?;
     ensure!(
-        graph.snapshot().output.materialize().await? == expected,
+        graph.snapshot().trace("output")?.materialize().await? == expected,
         "GC changed visible weighted state"
     );
     eprintln!(
@@ -47,13 +50,33 @@ async fn compact(
     sql: &mut Client,
     graph: &mut Query,
     writer: &mut Writer,
+    recovery: &Recovery,
     token: &str,
 ) -> Result<()> {
     let protection = writer.protect_upload(sql, token).await?;
-    let prepared = graph.prepare_compaction_protected(&protection).await?;
-    let checkpoint = graph.prepared_compaction_checkpoint(&prepared)?;
-    graph.publish_compaction(sql, writer, prepared).await?;
+    let checkpoint = rewrite(graph.checkpoint()?, &protection, recovery).await?;
+    writer.maintain(sql, graph.plan(), &checkpoint).await?;
+    graph.restore_checkpoint(checkpoint.clone()).await?;
     protection.published(sql, writer, graph.plan(), &checkpoint).await
+}
+
+async fn rewrite(
+    mut checkpoint: crate::engine::plan::Checkpoint,
+    protection: &crate::catalog::Protection,
+    recovery: &Recovery,
+) -> Result<crate::engine::plan::Checkpoint> {
+    // Selective runtime compaction may reuse every singleton. A detached rewrite
+    // gives this fixture distinct live, pinned and abandoned physical objects.
+    let member = &mut checkpoint.arrangements[0];
+    let arrangement = crate::engine::dataflow::Arrangement::<String, crate::transaction::Row>::new(
+        recovery.store.clone(),
+        member.schema.clone(),
+        3,
+    )?
+    .with_namespace(protection.namespace()?);
+    let prior = arrangement.reopen(member.trace.clone()).await?;
+    member.trace = arrangement.compact(&prior).await?.manifest()?;
+    Ok(checkpoint)
 }
 
 async fn abandoned(
@@ -65,7 +88,8 @@ async fn abandoned(
 ) -> Result<()> {
     let protection = writer.protect_upload(sql, "gc-abandoned").await?;
     let prepared = graph.prepare_compaction_protected(&protection).await?;
-    let checkpoint = graph.prepared_compaction_checkpoint(&prepared)?;
+    let checkpoint =
+        rewrite(graph.prepared_compaction_checkpoint(&prepared)?, &protection, recovery).await?;
     let root = checkpoint.arrangements[0].trace.objects[0].clone();
     let orphan_data = recovery.store.get(&Path::from(root.path())).await?.bytes().await?.to_vec();
     let limits = GcLimits::default();
@@ -87,6 +111,7 @@ async fn abandoned(
         after.end == before.end && after.stored.checkpoint == before.stored.checkpoint,
         "GC recovery changed durable progress"
     );
+    graph.restore_checkpoint(after.stored.checkpoint.clone()).await?;
     ensure!(
         graph.publish_compaction(sql, writer, prepared).await.is_err(),
         "closed namespace was resurrected"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Native GROUP BY without aggregates: distinct membership, projected bags."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import json
 from sql_compiler_harness import SqlFixture
@@ -47,9 +47,6 @@ def qualify(output,command,mode):
         fixture.rejected(command,'ungrouped-column',fixture.query.replace('SELECT b.auction,b.channel','SELECT b.id,b.channel'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"DELETE FROM {fixture.name}.bid WHERE id=300; UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=1",
             f"DELETE FROM {fixture.name}.bid WHERE id=301; UPDATE {fixture.name}.bid SET price=-1 WHERE id=302",
@@ -58,24 +55,14 @@ def qualify(output,command,mode):
             f"SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; UPDATE {fixture.name}.bid SET date_time='03.11.2024 01:30:09.999999-04',channel='é' WHERE id=306; UPDATE {fixture.name}.bid SET date_time='03.11.2024 01:30:10-05',channel='é' WHERE id=307",
             f"UPDATE {fixture.name}.auction SET group_id=3 WHERE id=2",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-key',fixture.query.replace('10 seconds','11 seconds'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.bid',
+            normalized=fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"'),
+            rejected=[('changed-key', fixture.query.replace('10 seconds', '11 seconds'))],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent source membership set projected to a weighted bag','duplicates':'partial delete retains membership; last delete removes it; hidden bucket projection collisions retained','restart':'cold same slot','identity':'changed key rejected; alias normalized'})+'\n')
 
 if __name__=='__main__':

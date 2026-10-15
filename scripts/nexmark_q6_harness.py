@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """q6 closed-auction ranking driven by a persisted PostgreSQL clock relation."""
+from worker_harness import History
 import collections
 from decimal import Decimal
 import json
@@ -58,9 +59,6 @@ def qualify(output, command, instant):
         fixture.rejected(command,'missing-identity',fixture.query.replace(',closed.auction_id DESC',''))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"UPDATE {fixture.name}.global_clock SET recorded_time='2000-01-01 00:00:12' WHERE id=0; UPDATE {fixture.name}.auction SET seller=NULL WHERE id=410; UPDATE {fixture.name}.bid SET price=999 WHERE id=400",
             f"UPDATE {fixture.name}.global_clock SET recorded_time='2000-01-01 00:00:30' WHERE id=0; INSERT INTO {fixture.name}.bid(id,auction,price,date_time) VALUES(500,413,9223372036854775807,'2000-01-01')",
@@ -70,24 +68,14 @@ def qualify(output, command, instant):
             f"UPDATE {fixture.name}.global_clock SET recorded_time='infinity' WHERE id=0; UPDATE {fixture.name}.bid SET price=NULL WHERE auction=410",
             f"UPDATE {fixture.name}.global_clock SET recorded_time='-infinity' WHERE id=1",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.global_clock; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-clock',fixture.query.replace('WHERE id=0','WHERE id=1'))
-        fixture.rejected(command,'changed-order',fixture.query.replace('closed.auction_id DESC','closed.auction_id ASC'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.global_clock WHERE id=0')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.global_clock; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.global_clock WHERE id=0',
+            normalized=fixture.query,
+            rejected=[('changed-clock', fixture.query.replace('WHERE id=0', 'WHERE id=1')),('changed-order', fixture.query.replace('closed.auction_id DESC', 'closed.auction_id ASC'))],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':'q6','instant':instant,'postgres':'exact native MV','memory':'independent eligibility/max/latest ten/exact average','clock':'ordinary revisable CDC; simultaneous three inputs; NULL/delete/reinsert/backward','restart':'cold same slot'})+'\n')
 
 

@@ -9,7 +9,7 @@ mod scoped_join;
 mod terminal;
 mod topk;
 use super::{
-    ColumnRef, Compiled, REVISION,
+    ColumnRef, Compiled,
     parser::{Name, Parsed, Table},
 };
 use crate::{
@@ -25,7 +25,8 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
         Parsed::Membership { parsed, distinct } => membership::bind(parsed, distinct, contract),
         Parsed::NativeJoin(parsed) => native_join::bind(parsed, contract),
-        Parsed::NativeScope { source, columns, predicate } => {
+        Parsed::NativeScope { source, columns, predicate }
+        | Parsed::Projection { source, columns, predicate } => {
             native_scope::bind(source, columns, predicate, contract)
         }
         Parsed::Terminal { source, targets, predicate } => {
@@ -36,41 +37,6 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         Parsed::Lookup(parsed) => lookup::bind(parsed, contract),
         Parsed::Grouped(parsed) => grouped(parsed, contract),
         Parsed::Partition(parsed) => partition::bind(parsed, contract),
-        Parsed::JoinProjection { left, right, keys, columns, predicate } => {
-            relational::bind((left, right), &keys, columns, predicate, contract)
-        }
-        Parsed::Projection { source, columns, predicate } => {
-            let scopes = [scope(source, contract)?];
-            let transforms =
-                columns.iter().map(|(_, _, transform)| transform.clone()).collect::<Vec<_>>();
-            let columns = columns
-                .into_iter()
-                .map(|(name, label, _)| {
-                    Ok(super::projection::OutputColumn { column: resolve(&name, &scopes)?, label })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let terminal = terminal(transforms, &columns)?;
-            let revision = if terminal.is_some() {
-                "sql-projection-v2:pg-query-6.2.1:pg-17.7:where-3vl-v1:row-text-v1:json-v2:native-bag-v1:terminal-builtins-v1"
-            } else {
-                "sql-projection-v1:pg-query-6.2.1:pg-17.7:where-3vl-v1:row-text-v1:json-v2:native-bag-v1"
-            };
-            let predicates = predicate
-                .map(|expr| super::expression::bind(expr, &|name| resolve(name, &scopes)))
-                .transpose()?;
-            Ok(Compiled {
-                program: super::Program::Projection {
-                    projection: super::Projected {
-                        schema: scopes[0].relation.schema.clone(),
-                        table: scopes[0].relation.table.clone(),
-                        columns,
-                        terminal,
-                    },
-                },
-                revision: Some(predicate_revision(revision, predicates.as_ref())),
-                predicates,
-            })
-        }
     }
 }
 fn grouped(parsed: super::parser::Grouped, contract: &Contract) -> Result<Compiled> {
@@ -120,14 +86,151 @@ fn grouped(parsed: super::parser::Grouped, contract: &Contract) -> Result<Compil
     selectors.validate(contract).context("SQL type checking")?;
     let predicates = parsed
         .predicates
-        .map(|expr| super::expression::bind(expr, &|name| resolve(name, &scopes)))
+        .map(|expr| {
+            super::expression::bind(expr, &|name| Ok(relational::qualify(resolve(name, &scopes)?)))
+        })
         .transpose()?;
-    Ok(Compiled {
-        program: super::Program::Grouped { selectors },
-        revision: Some(predicate_revision(REVISION, predicates.as_ref())),
-        predicates,
+    let mut compiled = legacy(selectors, contract)?;
+    if let Some(predicate) = predicates {
+        use super::relational::Node;
+        let group = compiled
+            .relational
+            .nodes
+            .iter_mut()
+            .find_map(|node| match node {
+                Node::PartitionBy { input, .. } => Some(input),
+                _ => None,
+            })
+            .context("missing grouped input")?;
+        let input = std::mem::replace(group, "qualified".into());
+        let position = compiled
+            .relational
+            .nodes
+            .iter()
+            .position(|node| matches!(node, Node::PartitionBy { .. }))
+            .context("missing grouped input")?;
+        compiled.relational.nodes.insert(
+            position,
+            Node::Filter {
+                id: "qualified".into(),
+                input,
+                predicate: super::Predicate::new(predicate),
+            },
+        );
+    }
+    compiled.relational.output.columns.iter_mut().zip(parsed.labels).for_each(|(column, label)| {
+        column.label = label;
+    });
+    Ok(compiled)
+}
+pub(super) fn legacy(selectors: Query, contract: &Contract) -> Result<Compiled> {
+    use super::{
+        partition::{Aggregate, Function, Mode, Partition},
+        projection::OutputColumn,
+        relational::{Relational, Source},
+    };
+    let relation = |schema: &str, table: &str| {
+        contract
+            .relations
+            .iter()
+            .find(|relation| relation.schema == schema && relation.table == table)
+            .context("missing grouped source")
+    };
+    let left = relation(&selectors.left_schema, &selectors.left_table)?;
+    let right = relation(&selectors.right_schema, &selectors.right_table)?;
+    let group = grouped_column(left, 0, &selectors.group)?;
+    let spec = Partition {
+        mode: Mode::Grouped { keys: vec![group.clone()] },
+        aggregates: vec![
+            Aggregate {
+                function: Function::Count,
+                argument: None,
+                filter: None,
+                field: "@aggregate_0".into(),
+                navigation: None,
+            },
+            Aggregate {
+                function: Function::Sum,
+                argument: Some(grouped_column(right, 1, &selectors.sum)?),
+                filter: None,
+                field: "@aggregate_1".into(),
+                navigation: None,
+            },
+        ],
+    };
+    let nodes = grouped_nodes(
+        [
+            grouped_column(left, 0, &selectors.left_key)?,
+            grouped_column(right, 1, &selectors.right_key)?,
+        ],
+        group.clone(),
+        spec,
+    );
+    let output = super::Projected {
+        schema: left.schema.clone(),
+        table: left.table.clone(),
+        columns: vec![
+            OutputColumn { column: group, label: selectors.group },
+            OutputColumn {
+                column: ColumnRef {
+                    name: "@aggregate_0".into(),
+                    right: false,
+                    oid: 20,
+                    nullable: false,
+                },
+                label: "count".into(),
+            },
+            OutputColumn {
+                column: ColumnRef {
+                    name: "@aggregate_1".into(),
+                    right: false,
+                    oid: 20,
+                    nullable: true,
+                },
+                label: "sum".into(),
+            },
+        ],
+        terminal: None,
+    };
+    let sources = [left, right]
+        .map(|relation| Source { schema: relation.schema.clone(), table: relation.table.clone() })
+        .into();
+    Ok(Compiled { relational: Relational { sources, nodes, output } })
+}
+
+fn grouped_column(relation: &Relation, source: usize, name: &str) -> Result<ColumnRef> {
+    let column = relation
+        .columns
+        .iter()
+        .find(|column| column.name == name)
+        .context("missing grouped column")?;
+    Ok(ColumnRef {
+        name: super::relational::field(source, name),
+        right: false,
+        oid: column.oid,
+        nullable: column.nullable,
     })
 }
+
+fn grouped_nodes(
+    [left, right]: [ColumnRef; 2],
+    group: ColumnRef,
+    spec: super::partition::Partition,
+) -> Vec<super::relational::Node> {
+    use super::relational::Node;
+    vec![
+        Node::Source { id: "left_source".into(), source: 0 },
+        Node::Source { id: "right_source".into(), source: 1 },
+        Node::EquijoinKey { id: "left".into(), input: "left_source".into(), keys: vec![left] },
+        Node::EquijoinKey { id: "right".into(), input: "right_source".into(), keys: vec![right] },
+        Node::Join { id: "join".into(), left: "left".into(), right: "right".into() },
+        Node::PartitionBy { id: "group".into(), input: "join".into(), keys: vec![group] },
+        Node::Statistics { id: "statistics".into(), input: "group".into(), spec: spec.clone() },
+        Node::Finalize { id: "finalized".into(), input: "statistics".into(), spec },
+        Node::Output { id: "output".into(), input: "finalized".into() },
+    ]
+}
+
 fn scope(table: Table, contract: &Contract) -> Result<Scope<'_>> {
     let relation = contract
         .relations
@@ -168,25 +271,17 @@ fn resolve(name: &Name, scopes: &[Scope<'_>]) -> Result<ColumnRef> {
     matches.pop().with_context(|| format!("SQL resolve: unknown column {}", name.0.join(".")))
 }
 
-fn predicate_revision(base: &str, predicate: Option<&super::expression::Expr>) -> String {
-    if predicate.is_some_and(super::expression::Expr::has_remainder) {
-        format!("{base}:integral-remainder-v1")
-    } else {
-        base.into()
-    }
-}
-
 fn terminal(
-    mut transforms: Vec<crate::catalog::terminal::Transform>,
+    mut transforms: Vec<crate::catalog::terminal::OutputMap>,
     columns: &[crate::compiler::projection::OutputColumn],
 ) -> Result<Option<crate::catalog::Terminal>> {
-    use crate::catalog::terminal::Transform;
+    use crate::catalog::terminal::OutputMap;
     for (transform, column) in transforms.iter_mut().zip(columns) {
-        if *transform == Transform::Identity && column.column.oid == 1700 {
-            *transform = Transform::Numeric;
+        if *transform == OutputMap::Identity && column.column.oid == 1700 {
+            *transform = OutputMap::Numeric;
         }
     }
-    if transforms.iter().all(|transform| *transform == Transform::Identity) {
+    if transforms.iter().all(|transform| *transform == OutputMap::Identity) {
         return Ok(None);
     }
     Ok(Some(crate::catalog::Terminal::new(

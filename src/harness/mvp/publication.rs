@@ -2,10 +2,10 @@ mod bags;
 mod cancellation;
 mod checks;
 mod recovery;
-use super::{Group, MvpFixture, Query};
+use super::{MvpFixture, Query};
 use crate::{
     catalog::{Binding, Catalog, Deltas, Lsn, Progress, Publication, Sink, Writer},
-    engine::plan::query::Prepared,
+    engine::plan::relational::Prepared,
     transaction::Transaction,
 };
 use anyhow::{Result, ensure};
@@ -36,8 +36,7 @@ impl MvpFixture {
         catalog.install(sql).await?;
         bags::check(sql, schema, self.graph.plan(), &checkpoint).await?;
         catalog.checkpoint(sql, self.graph.plan(), &checkpoint, 0).await?;
-        let binding =
-            Binding { source: source.clone(), sink: Sink::Grouped("derived_groups".into()) };
+        let binding = Binding { source: source.clone(), sink: Sink::Bag("derived_groups".into()) };
         let initial: Lsn = initial.parse()?;
         let stale = catalog.claim(sql, self.graph.plan(), binding.clone(), initial).await?;
         let grouped = catalog.claim(sql, self.graph.plan(), binding, initial).await?;
@@ -69,28 +68,28 @@ impl PublicationFixture {
         &mut self,
         sql: &mut Client,
         graph: &mut Query,
-        prepared: Prepared<super::Key, Group, super::Bid, Group>,
+        prepared: Prepared<super::Key, crate::transaction::Row>,
         transaction: &Transaction,
     ) -> Result<()> {
         let checkpoint = graph.prepared_checkpoint(&prepared)?;
         let progress =
             Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
-        let deltas = Deltas::grouped(&prepared.output().batch)?;
+        let deltas = Deltas::bag(&prepared.output().batch)?;
         let publication =
             || Publication { checkpoint: &checkpoint, progress: &progress, deltas: &deltas };
         if checkpoint.time == 1 {
             self.failure_checks(sql, graph, publication()).await?;
         }
-        let bag = Deltas::bag(&prepared.output().batch)?;
         if !self.uncertain_commit(sql, graph, publication()).await? {
-            graph.publish_prepared(sql, &mut self.grouped, prepared, &progress).await?;
+            self.grouped.publish(sql, graph.plan(), publication()).await?;
+            graph.commit(prepared)?;
         }
 
         self.bag
             .publish(
                 sql,
                 graph.plan(),
-                Publication { checkpoint: &checkpoint, progress: &progress, deltas: &bag },
+                Publication { checkpoint: &checkpoint, progress: &progress, deltas: &deltas },
             )
             .await?;
         ensure!(
@@ -116,22 +115,14 @@ impl PublicationFixture {
         Ok(())
     }
     async fn verify(&self, sql: &Client) -> Result<()> {
-        let source = format!(
-            "SELECT to_jsonb(a.category::text),COUNT(*) AS row_count,SUM(b.price)::bigint AS total FROM {0}.auction a JOIN {0}.bid b ON a.id=b.auction GROUP BY a.category",
+        let expected = format!(
+            "SELECT jsonb_build_array('',jsonb_build_object('category',a.category::text,'count',COUNT(*)::text,'sum',(SUM(b.price)::bigint)::text)) AS tuple,1::bigint AS weight FROM {0}.auction a JOIN {0}.bid b ON a.id=b.auction GROUP BY a.category",
             self.schema
         );
-        // JSON null is a value in this codec, not SQL NULL: nullable group identity survives.
-        let grouped = format!(
-            "SELECT COALESCE(to_jsonb(a.category::text),'null'::jsonb) AS group_key,COUNT(*) AS row_count,SUM(b.price)::bigint AS total FROM {0}.auction a JOIN {0}.bid b ON a.id=b.auction GROUP BY a.category",
-            self.schema
-        );
-        let different = sql.query_one(&format!("SELECT EXISTS((SELECT group_key,row_count,total FROM {0}.derived_groups EXCEPT {grouped}) UNION ALL ({grouped} EXCEPT SELECT group_key,row_count,total FROM {0}.derived_groups))", self.schema), &[]).await?.try_get::<_, bool>(0)?;
-        ensure!(!different, "durable grouped destination differs from SQL recomputation");
-        let bag = format!(
-            "SELECT jsonb_build_array(COALESCE(group_key,'null'::jsonb),jsonb_build_array(row_count,total)) AS tuple,1::bigint AS weight FROM ({source}) AS groups(group_key,row_count,total)"
-        );
-        let different = sql.query_one(&format!("SELECT EXISTS((SELECT tuple,weight FROM {0}.derived_bag EXCEPT {bag}) UNION ALL ({bag} EXCEPT SELECT tuple,weight FROM {0}.derived_bag))", self.schema), &[]).await?.try_get::<_, bool>(0)?;
-        ensure!(!different, "durable full-tuple bag destination differs from SQL recomputation");
+        for table in ["derived_groups", "derived_bag"] {
+            let different = sql.query_one(&format!("SELECT EXISTS((SELECT tuple,weight FROM {0}.{table} EXCEPT {expected}) UNION ALL ({expected} EXCEPT SELECT tuple,weight FROM {0}.{table}))",self.schema),&[]).await?.try_get::<_,bool>(0)?;
+            ensure!(!different, "durable bag destination differs from SQL recomputation");
+        }
         Ok(())
     }
 }

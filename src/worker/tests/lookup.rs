@@ -58,7 +58,7 @@ async fn history(inclusive: bool) -> Result<()> {
     let native = native(20);
     let sql = if inclusive { SQL.into() } else { SQL.replace("r.at<=l.at", "r.at<l.at") };
     let compiled = compile(&sql, &native)?;
-    let ir = compiled.relational().context("missing lookup IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let left = |id, key, at| {
@@ -176,7 +176,7 @@ fn lookup_resolution_normalizes_correlations_and_rejects_unsupported_sql() -> Re
 async fn lookup_work_failure_retains_prior_and_can_retry() -> Result<()> {
     let native = native(20);
     let compiled = compile(SQL, &native)?;
-    let ir = compiled.relational().context("missing lookup IR")?;
+    let ir = compiled.relational();
     let mut limits = settings();
     limits.limits.contributions = 20;
     let query = relational::build(&native, &compiled, &limits)?;
@@ -225,7 +225,7 @@ async fn derived_lookup_filter_runs_after_match_selection() -> Result<()> {
         &format!("SELECT q.category,q.price FROM({SQL}) q WHERE q.price IS NULL"),
         &native,
     )?;
-    let ir = compiled.relational().context("missing derived lookup IR")?;
+    let ir = compiled.relational();
     let mut query = relational::build(&native, &compiled, &settings())?;
     let left = row(&[
         ("id", Some("1")),

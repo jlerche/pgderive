@@ -68,8 +68,12 @@ fn oracle(left: &BTreeMap<Row, i64>, right: &BTreeMap<Row, i64>, winner: bool) -
 async fn history(winner: bool) -> Result<()> {
     let native = contract();
     let compiled = compile(&sql(winner), &native)?;
-    let ir = compiled.relational().context("missing joined IR")?;
-    assert!(ir.nodes.iter().any(|node| matches!(node, crate::compiler::relational::Node::Filter { id, .. } if id == "joined_source_filter")));
+    let ir = compiled.relational();
+    assert!(
+        ir.nodes
+            .iter()
+            .any(|node| matches!(node, crate::compiler::relational::Node::Filter { .. }))
+    );
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", None)]);
@@ -123,7 +127,10 @@ fn joined_scopes_reject_incomplete_order_hidden_and_terminal_columns() -> Result
         assert!(compile(&invalid, &native).is_err(), "{invalid}");
     }
     assert!(
-        compile(&sql(true).replace(",q.bid,q.aid)", ",q.bid)"), &native)?.relational().is_some()
+        !compile(&sql(true).replace(",q.bid,q.aid)", ",q.bid)"), &native)?
+            .relational()
+            .nodes
+            .is_empty()
     );
     let original = compile(&sql(true), &native)?;
     let alias = sql(true).replace("a.", "\"A\".").replace("auction a ", "auction AS \"A\" ");

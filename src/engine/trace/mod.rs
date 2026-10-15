@@ -57,15 +57,6 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     pub(super) const fn empty() -> Self {
         Self { runs: Vec::new(), generation: 0, time: 0 }
     }
-    pub(super) async fn append(&self, run: Run<K, V>, time: u64) -> Result<Self> {
-        ensure!(self.time.checked_add(1) == Some(time), "out-of-order trace tick");
-        let generation = self.generation.checked_add(1).context("trace generation overflow")?;
-        let mut runs = self.runs.clone();
-        runs.push(run);
-        let next = Self { runs, generation, time };
-        next.validate().await?;
-        Ok(next)
-    }
     pub(crate) async fn replace_runs(&self, runs: Vec<Run<K, V>>) -> Result<Self> {
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
         let next = Self { runs, generation, time: self.time };

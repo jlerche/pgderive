@@ -1,7 +1,7 @@
 //! Native left joins preserve full rows, NULL nonmatches and synchronized changes.
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 const SQL: &str = "SELECT a.category AS c,b.price AS p FROM source.auction a LEFT JOIN source.bid b ON a.other=b.auction WHERE b.price IS NULL OR b.price<0";
 fn oracle(
@@ -52,7 +52,7 @@ async fn native_left_join_signed_history_nulls_restart_and_atomic_rejection() ->
     native.relations[0].columns[2].oid = 23;
     native.relations[0].columns[2].collation = 0;
     let compiled = compile(SQL, &native)?;
-    let ir = compiled.relational().context("missing join IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", Some("1"))]);
@@ -127,7 +127,7 @@ async fn repeated_history(multiway: bool) -> Result<()> {
     };
     let native = contract();
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational().context("missing repeated-source graph")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", None)]);
@@ -233,8 +233,8 @@ fn join_tree_aliases_keys_and_unsupported_shapes_bind_identity() -> Result<()> {
         assert!(compile(&bad, &native).is_err(), "accepted {bad}");
     }
     let scoped = "SELECT l.auction,l.n,r.category FROM (SELECT auction,COUNT(*) AS n FROM source.bid GROUP BY auction) l LEFT JOIN source.auction r ON l.auction=r.id";
-    assert!(compile(scoped, &native)?.relational().is_some());
-    assert!(compile("SELECT l.id,r.n FROM source.auction l LEFT JOIN (SELECT auction,COUNT(*) AS n FROM source.bid GROUP BY auction) r ON l.id=r.auction", &native)?.relational().is_some());
+    assert!(!compile(scoped, &native)?.relational().nodes.is_empty());
+    assert!(!compile("SELECT l.id,r.n FROM source.auction l LEFT JOIN (SELECT auction,COUNT(*) AS n FROM source.bid GROUP BY auction) r ON l.id=r.auction", &native)?.relational().nodes.is_empty());
     assert!(compile("SELECT l.id,r.id FROM source.auction l LEFT JOIN (SELECT id,abs(price) AS value FROM source.bid) r ON l.id=r.id",&native).is_err());
     Ok(())
 }

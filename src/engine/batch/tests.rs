@@ -1,4 +1,4 @@
-use crate::engine::{Batch, BatchBuilder, GroupedCount, IncrementalJoin, ZSet};
+use crate::engine::{Batch, BatchBuilder, ZSet};
 use anyhow::Result;
 use num_bigint::BigInt;
 use std::collections::BTreeMap;
@@ -17,30 +17,8 @@ fn boundary_cancellation_and_final_overflow() -> Result<()> {
     );
     assert!(ZSet::from_updates([(0, i64::MAX), (0, 1)]).is_err());
     assert!(ZSet::from_updates([(0, i64::MIN), (0, -1)]).is_err());
-    let mapped = ZSet::from_updates([(0, i64::MAX), (1, 1), (2, -1)])?.try_map(|_| Ok(0))?;
+    let mapped = ZSet::from_updates([(0, i64::MAX), (0, 1), (0, -1)])?;
     assert_eq!(mapped, ZSet::from_updates([(0, i64::MAX)])?);
-    Ok(())
-}
-
-#[test]
-fn count_narrows_after_combining_prior_state_and_delta() -> Result<()> {
-    let mut count = GroupedCount::default();
-    count.step(&ZSet::from_updates([((1, 0), i64::MIN)])?)?;
-    // Group delta exceeds i64, but the final group count is zero.
-    let output = count.step(&ZSet::from_updates([((1, 1), i64::MAX), ((1, 2), 1)])?)?;
-    assert_eq!(output, ZSet::from_updates([((1, i64::MIN), -1)])?);
-    Ok(())
-}
-
-#[test]
-fn join_narrows_after_all_cross_terms() -> Result<()> {
-    let mut join = IncrementalJoin::<i32, i32, i32>::default();
-    join.step(&ZSet::from_updates([((1, 1), i64::MAX)])?, &ZSet::default())?;
-    let step = join.step(
-        &ZSet::from_updates([((1, 1), 1 - i64::MAX)])?,
-        &ZSet::from_updates([((1, 1), 2)])?,
-    )?;
-    assert_eq!(step.delta, ZSet::from_updates([((1, 1, 1), 2)])?);
     Ok(())
 }
 

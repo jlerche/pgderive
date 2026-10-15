@@ -7,12 +7,7 @@ fn decimal_projection_binds_factor_and_preserves_scale() -> Result<()> {
     let native = contract();
     let sql = "SELECT 0.908 * b.price AS price FROM source.bid b";
     let compiled = compile(sql, &native)?;
-    assert!(
-        compiled
-            .revision
-            .as_deref()
-            .is_some_and(|s| s.ends_with(":pg-terminal-decimal-multiply-v1"))
-    );
+
     for normalized in
         [sql.replace("0.908 * b.price", "b.price * .908"), sql.replace("0.908", "00.908")]
     {

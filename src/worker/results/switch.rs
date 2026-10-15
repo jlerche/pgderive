@@ -1,6 +1,6 @@
 //! Transactional presentation cutover with catalog attestation and dependency checks.
 use super::{Settings, catalog_definition, definition, quote};
-use crate::{catalog::Sink, compiler::Compiled};
+use crate::compiler::Compiled;
 use anyhow::{Result, ensure};
 use serde_json::Value;
 use tokio_postgres::Transaction;
@@ -14,8 +14,8 @@ pub(in crate::worker) async fn replace(
     let Some(view) = &new.result_view else {
         return Ok(());
     };
-    let desired =
-        definition(sql, new, matches!(compiled.sink(&new.sink_table), Sink::Grouped(_))).await?;
+    compiled.validate_bound()?;
+    let desired = definition(sql, new).await?;
     let table = format!("{}.pgderive_result_views", new.catalog_schema);
     sql.batch_execute(&format!("CREATE TABLE IF NOT EXISTS {table}(query_id text PRIMARY KEY,view_name text NOT NULL UNIQUE,definition text NOT NULL,catalog_definition text NOT NULL)")).await?;
     let prior = sql

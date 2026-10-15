@@ -6,7 +6,7 @@ use crate::{
     transaction::Row,
     worker::program::relational,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 fn query(condition: &str) -> String {
     format!(
@@ -26,7 +26,7 @@ fn top_k_specialization_requires_one_bounded_occurrence_cutoff() -> Result<()> {
         ("q.rn<=3 AND q.price>0", false),
     ] {
         let compiled = compile(&query(condition), &contract())?;
-        let ir = compiled.relational().context("missing IR")?;
+        let ir = compiled.relational();
         assert_eq!(
             ir.nodes.iter().any(|node| matches!(node, Node::TopK { .. })),
             expected,
@@ -34,14 +34,7 @@ fn top_k_specialization_requires_one_bounded_occurrence_cutoff() -> Result<()> {
         );
     }
     let ranked = compile(&query("q.rn<=3").replace("ROW_NUMBER()", "RANK()"), &contract())?;
-    assert!(
-        !ranked
-            .relational()
-            .context("missing ranking IR")?
-            .nodes
-            .iter()
-            .any(|node| matches!(node, Node::TopK { .. }))
-    );
+    assert!(!ranked.relational().nodes.iter().any(|node| matches!(node, Node::TopK { .. })));
     Ok(())
 }
 fn oracle(
@@ -94,7 +87,7 @@ async fn history(condition: &str) -> Result<()> {
     let native = contract();
     let options = settings();
     let compiled = compile(&query(condition), &native)?;
-    let ir = compiled.relational().context("missing IR")?;
+    let ir = compiled.relational();
     let mut circuit = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("7"))]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", Some("7"))]);

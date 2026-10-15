@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{
-    compiler::{Compiled, Program, compile, partition::Mode, relational::Node},
+    compiler::{Compiled, compile, partition::Mode, relational::Node},
     engine::Batch,
     worker::program::relational,
 };
@@ -9,9 +9,7 @@ use futures_util::TryStreamExt;
 use std::collections::BTreeMap;
 fn baseline(compiled: &Compiled) -> Result<Compiled> {
     let mut result = compiled.clone();
-    let Program::Relational { relational: ir } = &mut result.program else {
-        anyhow::bail!("missing IR");
-    };
+    let ir = &mut result.relational;
     let spec = ir
         .nodes
         .iter()
@@ -60,7 +58,7 @@ async fn ordered_extrema_reduce_cold_reads_with_measured_write_amplification() -
         options.block_rows = 8;
         options.limits.cache_bytes = 0;
         options.limits.cache_entries = 0;
-        let ir = definition.relational().context("missing IR")?;
+        let ir = definition.relational();
         let mut query = relational::build(&native, definition, &options)?;
         query.commit(query.prepare(relational::inputs(&initial, ir, 1)?).await?)?;
         let checkpoint = query.checkpoint()?;
@@ -126,7 +124,7 @@ async fn ordered_extrema_history_full_identity_null_filter_and_cold_restart() ->
         "SELECT b.auction AS g,MIN(b.price) AS lo,MAX(b.price) AS hi,MIN(b.price) FILTER(WHERE b.price>0) AS p FROM source.bid b GROUP BY b.auction",
         &native,
     )?;
-    let ir = compiled.relational().context("missing IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-9"))]);
@@ -186,15 +184,7 @@ async fn ordered_layout_rejects_previous_partition_checkpoint() -> Result<()> {
     let previous = relational::build(&native, &old, &options)?;
     let mut current = relational::build(&native, &compiled, &options)?;
     assert_ne!(previous.plan().identity(), current.plan().identity());
-    assert!(
-        current.plan().definition().revision.starts_with("worker-relational-ordered-extrema-v4:")
-    );
-    assert!(
-        compiled
-            .revision
-            .as_deref()
-            .is_some_and(|revision| revision.contains("pg-ordered-full-identity-extrema-v1"))
-    );
+
     assert!(current.restore_checkpoint(previous.checkpoint()?).await.is_err());
     Ok(())
 }

@@ -106,13 +106,13 @@ def fault(output, command, stage, mode):
 def competing_sink(output, command):
     fixture, config = setup(output, command, public=False)
     try:
-        before = fixture.sql(f'SELECT * FROM {fixture.name}.groups ORDER BY group_key')
+        before = fixture.sql(f'SELECT * FROM {fixture.name}.groups ORDER BY tuple')
         other = output/'other.toml'
         other.write_text(config.read_text().replace('query_id="grouped"', 'query_id="other"').replace(
             f'slot="{fixture.name}"', f'slot="{fixture.name}_other"').replace('retry_attempts=8', 'retry_attempts=1'))
         assert 'destination belongs to another query' in rejected(command, fixture, 'create', other)
         assert inspect(command, fixture, 'drop', other)['state'] == 'dropped'
-        assert fixture.sql(f'SELECT * FROM {fixture.name}.groups ORDER BY group_key') == before
+        assert fixture.sql(f'SELECT * FROM {fixture.name}.groups ORDER BY tuple') == before
         fixture.verify()
         inspect(command, fixture, 'drop', config)
         (output/'qualification.json').write_text(json.dumps({'unactivated_competitor': 'removed', 'active_sink': 'preserved'})+'\n')
@@ -125,7 +125,7 @@ def competing_sink(output, command):
 def unowned_sink(output, command):
     fixture = grouped(output)
     try:
-        fixture.sql(f'CREATE TABLE {fixture.name}.groups(group_key jsonb PRIMARY KEY,row_count bigint,total bigint)')
+        fixture.sql(f'CREATE TABLE {fixture.name}.groups(tuple jsonb PRIMARY KEY,weight bigint)')
         oid = fixture.sql(f"SELECT '{fixture.name}.groups'::regclass::oid")
         config = fixture.config()
         config.write_text(config.read_text().replace('retry_attempts=8', 'retry_attempts=1'))

@@ -96,7 +96,7 @@ Independent review and the common 80% coverage/quality gate remain required.
 
 ## Executable typed circuit slice
 
-The production grouped worker now binds its operator nodes through typed
+The production relational worker binds its operator nodes through typed
 `Stream<T>` handles and a topological circuit builder. `TimedBatch<T>` is a single
 stream element; source transactions select complete synchronized delta batches
 in the PostgreSQL adapter. Graph evaluation retains one immutable prior boundary
@@ -111,7 +111,9 @@ The trace join groups complete delta identities by navigation key and scans each
 selected prior-key cursor once per delta term. Cloned borrowed delta iterators
 produce every full-tuple pair; no resident copy of the prior key bag is needed.
 This changes physical reads, not identity, coefficients or the simultaneous-input
-cross term. The codec and durable plan identity remain compatible.
+cross term. Physical read sharing does not define a compatibility boundary;
+normalized relational graphs and their explicit codecs determine registration
+identity. This unreleased engine rebuilds state when that contract changes.
 
 A cache-disabled object fixture with eight nonzero delta values sharing a key and
 three one-row prior blocks measures the previous cursor-per-value path at 17
@@ -122,9 +124,10 @@ spilling, compaction and restart qualification remain required.
 
 ## Ordered selection and physical maintenance
 
-OrderedFirst selects one full identity for extrema. OrderedTopK instead counts
-row occurrences and clips weighted multiplicity at its cutoff. OrderedSelection
-binds either callback to the retained input/output circuit bridge. A complete
+`OrderedSelection` implements both first-identity selection for extrema and
+first-K occurrence selection, clipping weighted multiplicity at the cutoff. The
+shared implementation binds either mode to the retained input/output circuit
+bridge. A complete
 changed bag is validated before prefix selection; the operator differentiates
 the exact retained result without exposing staged state. Immutable full-identity
 input remains available for retractions and late changes. These contracts do not

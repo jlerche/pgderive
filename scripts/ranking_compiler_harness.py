@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PostgreSQL peer/occurrence ranking with an independent raw-source oracle."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import json
 from sql_compiler_harness import SqlFixture
@@ -63,9 +63,6 @@ def qualify(output, command, mode, fixture_class=RankingFixture):
         if mode == 'number':
             fixture.rejected(command, 'peer-order', fixture.query.replace(',b.id)', ')'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f'INSERT INTO {fixture.name}.bid VALUES(100,NULL,NULL),(101,1,2),(102,1,2)',
             f'UPDATE {fixture.name}.bid SET price=7,auction=1 WHERE id IN (100,101); UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=1',
@@ -74,23 +71,12 @@ def qualify(output, command, mode, fixture_class=RankingFixture):
             f'INSERT INTO {fixture.name}.bid VALUES(103,100,NULL),(104,100,NULL)',
             f'UPDATE {fixture.name}.auction SET group_id=3 WHERE id=2',
         ]
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;' + change + ';COMMIT')
-            worker.event('published', minimum_time=ready['time'] + index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command, 'changed', fixture.changed_query())
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        fixture.query = fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"')
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time'] + len(changes)
-        fixture.verify()
-        fixture.sql(f'UPDATE {fixture.name}.bid SET price=-7 WHERE id=104')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'UPDATE {fixture.name}.bid SET price=-7 WHERE id=104',
+            normalized=fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"'),
+            rejected=[('changed', fixture.changed_query())],
+        ))
         (output/'result.json').write_text(json.dumps({'sql_oracle':'exact bag','memory_oracle':fixture.oracle_name,'null_peers':True,'retractions':True,'restart':'cold','mode':mode})+'\n')
 
 

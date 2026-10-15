@@ -7,18 +7,8 @@ const SQL: &str = "SELECT a.id,(pg_catalog.string_to_array(a.category COLLATE pg
 fn array_projection_normalizes_names_and_binds_index_delimiter_semantics() -> Result<()> {
     let native = contract();
     let compiled = compile(SQL, &native)?;
-    assert!(
-        compiled
-            .revision
-            .as_deref()
-            .is_some_and(|revision| revision.ends_with(":pg-c-array-element-v1"))
-    );
-    assert!(
-        compiled
-            .projection()
-            .and_then(|p| p.terminal.as_ref())
-            .is_some_and(crate::catalog::Terminal::has_array)
-    );
+
+    assert!(compiled.output().terminal.is_some());
     let normalized = SQL
         .replace("a.", "\"A\".")
         .replace("auction a", "auction AS \"A\"")

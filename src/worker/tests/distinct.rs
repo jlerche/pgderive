@@ -1,7 +1,7 @@
 //! Distinct cardinality oracle counts value presence, not source occurrences.
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 const SQL: &str = "SELECT b.auction AS g,COUNT(*) AS rows,COUNT(DISTINCT b.price) AS values,COUNT(DISTINCT b.price) FILTER(WHERE b.price<0) AS negative FROM source.bid b GROUP BY b.auction";
 type Counts = (i64, BTreeSet<i64>);
@@ -28,13 +28,8 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Batch<relational::Key, Row>> {
 async fn distinct_retracts_only_the_last_occurrence_and_restores() -> Result<()> {
     let native = contract();
     let compiled = compile(SQL, &native)?;
-    let ir = compiled.relational().context("missing distinct IR")?;
-    assert!(
-        compiled
-            .revision
-            .as_deref()
-            .is_some_and(|value| value.contains("pg-integral-distinct-count-v1"))
-    );
+    let ir = compiled.relational();
+
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-2"))]);

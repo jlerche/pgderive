@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 type Bag = Batch<relational::Key, Row>;
 const SQL: &str = "SELECT b.auction,COUNT(*),COUNT(b.price) AS present,SUM(b.price),AVG(b.price),COUNT(*) FILTER(WHERE b.price<0) AS negative FROM source.bid b GROUP BY b.auction";
@@ -40,13 +40,8 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Bag> {
 async fn linear_statistics_match_full_bag_oracle_through_retractions_and_restart() -> Result<()> {
     let native = contract();
     let compiled = compile(SQL, &native)?;
-    let ir = compiled.relational().context("missing linear IR")?;
-    assert!(
-        compiled
-            .revision
-            .as_deref()
-            .is_some_and(|revision| revision.contains("exact-linear-statistics-v1"))
-    );
+    let ir = compiled.relational();
+
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-2"))]);
@@ -84,7 +79,7 @@ async fn linear_statistics_update_large_group_under_delta_budget() -> Result<()>
         "SELECT b.auction,COUNT(*),SUM(b.price) FROM source.bid b GROUP BY b.auction",
         &native,
     )?;
-    let ir = compiled.relational().context("missing linear IR")?;
+    let ir = compiled.relational();
     let mut options = settings();
     options.block_rows = 64;
     let mut query = relational::build(&native, &compiled, &options)?;

@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 const GROUPED: &str = "SELECT b.auction AS g,COUNT(*) AS n,COUNT(b.price) AS present,SUM(b.price) AS total,MIN(b.price) AS lo,MAX(b.price) AS hi,COUNT(*) FILTER(WHERE b.price<0) AS negative FROM source.bid b GROUP BY b.auction";
 const WINDOW: &str = "SELECT b.id AS id,b.auction AS g,COUNT(*) OVER (PARTITION BY b.auction ORDER BY b.id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS n,SUM(b.price) OVER (PARTITION BY b.auction ORDER BY b.id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS total FROM source.bid b";
@@ -59,7 +59,7 @@ async fn history(window: bool) -> Result<()> {
     native.relations[1].columns[2].oid = 23;
     let sql = if window { WINDOW } else { GROUPED };
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational().context("missing partition IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-2"))]);
@@ -155,7 +155,7 @@ async fn accepted_frame_boundaries_match_independent_positions() -> Result<()> {
             "SELECT b.id,COUNT(*) OVER (ORDER BY b.price {direction},b.id ROWS BETWEEN {frame}) FROM source.bid b"
         );
         let compiled = compile(&sql, &native)?;
-        let ir = compiled.relational().context("missing IR")?;
+        let ir = compiled.relational();
         let mut query = relational::build(&native, &compiled, &settings())?;
         let mut order = source.to_vec();
         order.sort_by_key(|(id, price)| {
@@ -187,7 +187,7 @@ async fn accepted_frame_boundaries_match_independent_positions() -> Result<()> {
 async fn window_resource_failure_preserves_root_and_time() -> Result<()> {
     let native = contract();
     let compiled = compile(&WINDOW.replace("SUM(b.price)", "COUNT(b.price)"), &native)?;
-    let ir = compiled.relational().context("missing IR")?;
+    let ir = compiled.relational();
     let mut options = settings();
     options.limits.output_bytes = 200;
     let query = relational::build(&native, &compiled, &options)?;
@@ -218,7 +218,7 @@ async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()
         &native,
     )?;
     assert!(compiled.validate_bound().is_err());
-    let ir = compiled.relational().context("missing numeric IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let large =
@@ -282,12 +282,7 @@ fn native_timestamp_resolution_normalizes_offsets_and_rejects_cross_type_casts()
         compile(&sql.replace("2000-01-01 00:00:00+00", "1999-12-31 16:00:00-08"), &native)?;
     assert_eq!(serde_json::to_vec(&original)?, serde_json::to_vec(&equivalent)?);
     assert!(original.validate_bound().is_err());
-    assert!(
-        original
-            .revision
-            .as_deref()
-            .is_some_and(|revision| revision.contains("native-iso-utc-source-v1"))
-    );
+
     for predicate in
         ["b.local=b.instant", "b.instant<'2000-01-01 00:00:00'", "b.local<'1900-02-29 00:00:00'"]
     {
@@ -320,7 +315,7 @@ async fn compiled_date_bins_retract_groups_and_preserve_nulls_across_restart() -
     let equivalent =
         compile(&sql.replace("'10 seconds'", "INTERVAL '10000 milliseconds'"), &native)?;
     assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&equivalent)?);
-    let ir = compiled.relational().context("missing date bin IR")?;
+    let ir = compiled.relational();
     let field = ir.output.columns[0].column.name.clone();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
@@ -398,7 +393,7 @@ async fn date_bin_rejects_unqualified_semantics_and_filters_before_errors() -> R
     let sql = format!("SELECT {bin} FROM source.bid b WHERE b.id<0")
         .replace("2000-01-01 00:00:00+00", "4714-11-24 00:00:00+00 BC");
     let compiled = compile(&sql, &native)?;
-    let ir = compiled.relational().context("missing map IR")?;
+    let ir = compiled.relational();
     let mut query = relational::build(&native, &compiled, &settings())?;
     let input = row(&[
         ("id", Some("1")),

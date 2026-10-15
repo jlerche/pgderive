@@ -1,7 +1,7 @@
 //! Durable acyclic source/project/join circuits with explicitly registered state.
 mod circuit;
 mod persistence;
-use super::{Binding, Engine, Plan, State, query::Settings};
+use super::{Binding, Engine, Plan, Settings, State};
 use crate::{
     catalog::Protection,
     engine::{
@@ -48,6 +48,15 @@ struct Entry<K: BatchData, V: BatchData> {
 #[derive(Clone)]
 pub struct RelationalState<K: BatchData, V: BatchData> {
     entries: BTreeMap<String, Entry<K, V>>,
+}
+impl<K: BatchData, V: BatchData> RelationalState<K, V> {
+    /// Pin a registered arrangement by its stable name.
+    ///
+    /// # Errors
+    /// Rejects an unknown arrangement name.
+    pub fn trace(&self, id: &str) -> Result<&TraceSnapshot<K, V>> {
+        self.entries.get(id).map(|entry| &entry.trace).context("unknown arrangement")
+    }
 }
 impl<K: BatchData, V: BatchData> State for RelationalState<K, V> {
     fn bindings(&self) -> Vec<Binding> {
@@ -172,6 +181,11 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
             self.execution.limits.check_batch(batch)?;
         }
         Ok(())
+    }
+    /// Pin all committed arrangements at one boundary.
+    #[must_use]
+    pub fn snapshot(&self) -> Arc<RelationalState<K, V>> {
+        self.engine.snapshot()
     }
     /// Stage one synchronized delta tick without changing visibility.
     ///

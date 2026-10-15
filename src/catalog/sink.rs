@@ -1,12 +1,12 @@
 use super::Catalog;
-use crate::engine::{Batch, plan::query::AggregateRow, reader::BatchData};
+use crate::engine::{Batch, reader::BatchData};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::borrow::Cow;
 use tokio_postgres::Transaction;
 
-/// Initial explicit destination encoding; SQL lowering will select native columns.
+/// Owned full-tuple weighted-bag destination encoding.
 /// The registered JSON codec must preserve full tuple identity under JSONB equality.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,13 +20,11 @@ pub enum Sink {
         /// Bound built-in function signatures and environment.
         map: super::Terminal,
     },
-    /// One encoded group, COUNT(*) and nullable SUM, with unit row multiplicity.
-    Grouped(String),
 }
 impl Sink {
     pub(crate) fn table(&self) -> &str {
         match self {
-            Self::Bag(table) | Self::Grouped(table) | Self::MappedBag { table, .. } => table,
+            Self::Bag(table) | Self::MappedBag { table, .. } => table,
         }
     }
     pub(crate) fn validate(&self) -> Result<()> {
@@ -47,14 +45,7 @@ impl Sink {
         if self.owned(tx, catalog).await?.is_some() {
             return Ok(());
         }
-        let columns = match self {
-            Self::Bag(_) | Self::MappedBag { .. } => {
-                "tuple jsonb PRIMARY KEY, weight bigint NOT NULL CHECK(weight<>0)"
-            }
-            Self::Grouped(_) => {
-                "group_key jsonb PRIMARY KEY, row_count bigint NOT NULL CHECK(row_count>0), total bigint"
-            }
-        };
+        let columns = "tuple jsonb PRIMARY KEY, weight bigint NOT NULL CHECK(weight<>0)";
         tx.batch_execute(&format!("CREATE TABLE {}.{} ({columns})", catalog.schema, self.table()))
             .await?;
         let table = format!("{}.{}", catalog.schema, self.table());
@@ -88,16 +79,7 @@ impl Sink {
 /// Immutable destination mutations encoded from a complete canonical edge batch.
 /// Construct these from the exact preparation whose memberships are published.
 pub struct Deltas {
-    pub(super) rows: Rows,
-}
-pub(super) enum Rows {
-    Bag(Vec<(Value, i64)>),
-    Grouped(Vec<GroupChange>),
-}
-pub(super) struct GroupChange {
-    key: Value,
-    before: Option<AggregateRow>,
-    after: Option<AggregateRow>,
+    pub(super) rows: Vec<(Value, i64)>,
 }
 impl Deltas {
     /// Preserve full `(key,value)` weighted identity in the destination bag.
@@ -109,28 +91,7 @@ impl Deltas {
             .iter()
             .map(|(tuple, weight)| Ok((serde_json::to_value(tuple)?, *weight)))
             .collect::<Result<_>>()?;
-        Ok(Self { rows: Rows::Bag(rows) })
-    }
-    /// Encode exact old/new grouped rows; NULL SUM and absent groups stay distinct.
-    ///
-    /// # Errors
-    /// Rejects non-unit coefficients, invalid counts, or multiple old/new rows.
-    pub fn grouped<G: BatchData>(batch: &Batch<G, AggregateRow>) -> Result<Self> {
-        let mut groups = BTreeMap::<G, GroupChange>::new();
-        for ((key, value), weight) in batch.iter() {
-            ensure!(
-                value.0 > 0 && (*weight == -1 || *weight == 1),
-                "invalid grouped sink row coefficient/count"
-            );
-            let change = groups.entry(key.clone()).or_insert(GroupChange {
-                key: serde_json::to_value(key)?,
-                before: None,
-                after: None,
-            });
-            let target = if *weight == -1 { &mut change.before } else { &mut change.after };
-            ensure!(target.replace(*value).is_none(), "multiple grouped sink rows for one group");
-        }
-        Ok(Self { rows: Rows::Grouped(groups.into_values().collect()) })
+        Ok(Self { rows })
     }
     pub(super) async fn apply(
         &self,
@@ -139,23 +100,12 @@ impl Deltas {
         sink: &Sink,
     ) -> Result<()> {
         let table = format!("{}.{}", catalog.schema, sink.table());
-        match (&self.rows, sink) {
-            (Rows::Bag(rows), Sink::Bag(_)) => {
-                for (tuple, delta) in rows {
-                    apply_bag(tx, &table, tuple, *delta).await?;
-                }
-            }
-            (Rows::Bag(rows), Sink::MappedBag { map, .. }) => {
-                for (tuple, delta) in map.evaluate(tx, rows).await? {
-                    apply_bag(tx, &table, &tuple, delta).await?;
-                }
-            }
-            (Rows::Grouped(rows), Sink::Grouped(_)) => {
-                for change in rows {
-                    apply_group(tx, &table, change).await?;
-                }
-            }
-            _ => anyhow::bail!("destination encoding does not match registered sink"),
+        let rows: Cow<'_, [(Value, i64)]> = match sink {
+            Sink::Bag(_) => Cow::Borrowed(&self.rows),
+            Sink::MappedBag { map, .. } => Cow::Owned(map.evaluate(tx, &self.rows).await?),
+        };
+        for (tuple, delta) in rows.iter() {
+            apply_bag(tx, &table, tuple, *delta).await?;
         }
         Ok(())
     }
@@ -175,41 +125,5 @@ async fn apply_bag(tx: &Transaction<'_>, table: &str, tuple: &Value, delta: i64)
             .await?
     };
     ensure!(affected == 1, "destination bag DML was suppressed");
-    Ok(())
-}
-async fn apply_group(tx: &Transaction<'_>, table: &str, change: &GroupChange) -> Result<()> {
-    let row = tx
-        .query_opt(
-            &format!("SELECT row_count,total FROM {table} WHERE group_key=$1 FOR UPDATE"),
-            &[&change.key],
-        )
-        .await?;
-    let prior = row
-        .map(|row| -> Result<_> {
-            Ok((row.try_get::<_, i64>(0)?, row.try_get::<_, Option<i64>>(1)?))
-        })
-        .transpose()?;
-    ensure!(prior == change.before, "destination grouped row does not match expected prior state");
-    let affected = match (change.before, change.after) {
-        (None, Some((count, sum))) => {
-            tx.execute(
-                &format!("INSERT INTO {table}(group_key,row_count,total) VALUES($1,$2,$3)"),
-                &[&change.key, &count, &sum],
-            )
-            .await?
-        }
-        (Some(_), Some((count, sum))) => {
-            tx.execute(
-                &format!("UPDATE {table} SET row_count=$2,total=$3 WHERE group_key=$1"),
-                &[&change.key, &count, &sum],
-            )
-            .await?
-        }
-        (Some(_), None) => {
-            tx.execute(&format!("DELETE FROM {table} WHERE group_key=$1"), &[&change.key]).await?
-        }
-        (None, None) => anyhow::bail!("empty grouped sink mutation"),
-    };
-    ensure!(affected == 1, "destination grouped DML was suppressed");
     Ok(())
 }

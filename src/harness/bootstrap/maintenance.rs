@@ -16,7 +16,7 @@ pub(super) async fn check(
     let config = &recovery.config;
     let pinned = graph.snapshot();
     let before = writer.confirmed(sql, graph.plan()).await?;
-    let visible = pinned.output.materialize().await?;
+    let visible = pinned.trace("output")?.materialize().await?;
     for mode in ["BEFORE", "AFTER"] {
         exercise(sql, graph, writer, config, mode).await?;
     }
@@ -35,8 +35,8 @@ pub(super) async fn check(
         "maintenance advanced logical/source state"
     );
     ensure!(
-        pinned.output.materialize().await? == visible
-            && graph.snapshot().output.materialize().await? == visible,
+        pinned.trace("output")?.materialize().await? == visible
+            && graph.snapshot().trace("output")?.materialize().await? == visible,
         "maintenance changed weighted state or pinned readers"
     );
     let report = recovery.recover_query(sql, schema, "snapshot_grouped").await?;

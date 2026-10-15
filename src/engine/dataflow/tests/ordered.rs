@@ -1,6 +1,6 @@
 use crate::engine::{
     Batch,
-    dataflow::{Arrangement, OrderedFirst, Project, TimedBatch},
+    dataflow::{Arrangement, OrderedSelection, Project, TimedBatch},
     execution::Limits,
 };
 use anyhow::Result;
@@ -12,7 +12,7 @@ async fn ordered_first_retracts_prefix_merges_complete_delta_and_reopens() -> Re
     let inputs = Arrangement::<i64, i64>::new(store.clone(), "ordered-input-v1".into(), 1)?;
     let outputs = Arrangement::<i64, i64>::new(store, "ordered-output-v1".into(), 1)?;
     let operator =
-        OrderedFirst::new(Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value)))));
+        OrderedSelection::first(Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value)))));
     let mut input = inputs.empty();
     let mut output = outputs.empty();
     let history = [
@@ -44,14 +44,15 @@ async fn ordered_first_rejects_bad_clocks_weights_projection_state_and_work() ->
     let delta = TimedBatch { time: 1, batch: Batch::from_updates([((0, 1), 1)])? };
     let state = writer.stage(&empty, &delta).await?;
     let operator =
-        OrderedFirst::new(Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value)))));
+        OrderedSelection::first(Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value)))));
     assert!(operator.evaluate(&delta, &empty, &state, Limits::default()).await.is_err());
     let wrong_time = TimedBatch { time: 0, batch: delta.batch.clone() };
     assert!(operator.evaluate(&wrong_time, &empty, &empty, Limits::default()).await.is_err());
     let negative =
         TimedBatch { time: 2, batch: Batch::from_updates([((0, 999), -1), ((0, 998), 1)])? };
     assert!(operator.evaluate(&negative, &state, &state, Limits::default()).await.is_err());
-    let invalid = OrderedFirst::new(Project::new(|_: &i64, value: &i64| Ok(Some((1, *value)))));
+    let invalid =
+        OrderedSelection::first(Project::new(|_: &i64, value: &i64| Ok(Some((1, *value)))));
     assert!(invalid.evaluate(&delta, &empty, &empty, Limits::default()).await.is_err());
     let heavy = writer
         .stage(&empty, &TimedBatch { time: 1, batch: Batch::from_updates([((0, 1), 2)])? })
@@ -73,5 +74,70 @@ async fn ordered_first_rejects_bad_clocks_weights_projection_state_and_work() ->
         .await?;
     let overflow = TimedBatch { time: 2, batch: delta.batch };
     assert!(operator.evaluate(&overflow, &maximum, &state, Limits::default()).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_first_does_not_read_unselected_tail_after_cutoff() -> Result<()> {
+    use crate::engine::reader::ObjectBatch;
+    use object_store::{ObjectStoreExt, path::Path};
+    let store = Arc::new(InMemory::new());
+    let inputs = Arrangement::new(store.clone(), "ordered-tail-input".into(), 1)?;
+    let outputs = Arrangement::new(store.clone(), "ordered-tail-output".into(), 1)?;
+    let prior = inputs
+        .stage(
+            &inputs.empty(),
+            &TimedBatch {
+                time: 1,
+                batch: Batch::from_updates([((0, 1), 1), ((0, 2), 1), ((0, 3), 1)])?,
+            },
+        )
+        .await?;
+    let retained = outputs
+        .stage(
+            &outputs.empty(),
+            &TimedBatch { time: 1, batch: Batch::from_updates([((0, 1), 1)])? },
+        )
+        .await?;
+    let reference = prior.manifest()?.objects[0].clone();
+    let object =
+        ObjectBatch::<i32, i32>::open(store.clone(), reference, "ordered-tail-input").await?;
+    let tail = object.block_path(1).ok_or_else(|| anyhow::anyhow!("missing tail block"))?;
+    store.delete(&Path::from(tail)).await?;
+    let operator =
+        OrderedSelection::first(Project::new(|key: &i32, value: &i32| Ok(Some((*key, *value)))));
+    let delta = operator
+        .evaluate(
+            &TimedBatch { time: 2, batch: Batch::from_updates([((0, 3), -1), ((0, 4), 1)])? },
+            &prior,
+            &retained,
+            Limits::default(),
+        )
+        .await?;
+    assert_eq!(delta.batch, Batch::from_updates([])?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_first_filters_the_selected_identity_without_falling_through() -> Result<()> {
+    let writer = Arrangement::new(Arc::new(InMemory::new()), "ordered-filter".into(), 1)?;
+    let prior = writer
+        .stage(
+            &writer.empty(),
+            &TimedBatch { time: 1, batch: Batch::from_updates([((0, 1), 2), ((0, 2), 1)])? },
+        )
+        .await?;
+    let retained = writer
+        .stage(&writer.empty(), &TimedBatch { time: 1, batch: Batch::from_updates([])? })
+        .await?;
+    let input = TimedBatch { time: 2, batch: Batch::from_updates([((0, 3), 1)])? };
+    let operator = OrderedSelection::first(Project::new(|key: &i32, value: &i32| {
+        Ok((*value != 1).then_some((*key, *value)))
+    }));
+    let limits = Limits { contributions: 1, ..Limits::default() };
+    assert_eq!(
+        operator.evaluate(&input, &prior, &retained, limits).await?.batch,
+        Batch::from_updates([])?
+    );
     Ok(())
 }

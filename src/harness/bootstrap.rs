@@ -7,7 +7,7 @@ use super::{Fixture, apply, connect, source_state};
 use crate::{
     Config,
     catalog::{Catalog, Deltas, Lsn, Snapshot, Writer},
-    engine::{dataflow::TimedBatch as Tick, plan::query::Settings},
+    engine::{dataflow::TimedBatch as Tick, plan::Settings},
     source::{Contract, Export},
 };
 use anyhow::{Context, Result, ensure};
@@ -24,12 +24,15 @@ pub(super) async fn check(
     let export = Export::create(config, &slot).await?;
     let boundary = export.consistent();
     let (contract, mut model, batch) = snapshot_copy(sql, fixture, config, export).await?;
-    let mut graph = super::mvp::Query::new_with_limits(
+    let mut graph = super::mvp::Query::new(
         plan(&contract)?,
         super::mvp::operators(),
-        recovery.store.clone(),
-        3,
-        config.execution,
+        &Settings {
+            store: recovery.store.clone(),
+            block_rows: 3,
+            limits: config.execution,
+            encoded_cache: None,
+        },
     )?;
     let catalog = Catalog::new(&fixture.schema, "snapshot_grouped")?;
     let protection = activate(
@@ -39,7 +42,7 @@ pub(super) async fn check(
         Initial { contract: &contract, boundary, batch: &batch, config },
     )
     .await?;
-    let (mut graph, mut writer) = restore(sql, &catalog, graph, recovery, boundary).await?;
+    let (mut graph, mut writer) = restore(sql, &catalog, graph, boundary).await?;
     protection.published(sql, &writer, graph.plan(), &graph.checkpoint()?).await?;
     let mut config = config.clone();
     config.replication.slot = slot.clone();
@@ -85,7 +88,6 @@ async fn restore(
     sql: &mut Client,
     catalog: &Catalog,
     mut graph: super::mvp::Query,
-    recovery: &super::recovery::Recovery,
     boundary: Lsn,
 ) -> Result<(super::mvp::Query, Writer)> {
     let durable =
@@ -94,18 +96,7 @@ async fn restore(
         durable.stored.checkpoint.time == 1 && durable.xid.is_none() && durable.end == boundary,
         "snapshot fabricated a source transaction"
     );
-    graph = super::mvp::Query::reopen(
-        graph.plan().clone(),
-        super::mvp::operators(),
-        Settings {
-            store: recovery.store.clone(),
-            block_rows: 3,
-            limits: recovery.config.execution,
-            encoded_cache: None,
-        },
-        durable.stored.checkpoint,
-    )
-    .await?;
+    graph.restore_checkpoint(durable.stored.checkpoint).await?;
     let writer = catalog.claim(sql, graph.plan(), durable.binding, boundary).await?;
     Ok((graph, writer))
 }
@@ -141,22 +132,22 @@ async fn activate(
         .prepare_protected(
             Tick {
                 time: 1,
-                batch: (
+                batch: vec![
                     super::mvp::input(batch, "auction", "id")?,
                     super::mvp::input(batch, "bid", "auction")?,
-                ),
+                ],
             },
             &protection,
         )
         .await?;
     let checkpoint = graph.prepared_checkpoint(&prepared)?;
-    let deltas = Deltas::grouped(&prepared.output().batch)?;
+    let deltas = Deltas::bag(&prepared.output().batch)?;
     let snapshot = Snapshot {
         checkpoint: &checkpoint,
         deltas: &deltas,
         source: contract,
         boundary,
-        sink: crate::catalog::Sink::Grouped("snapshot_groups".into()),
+        sink: crate::catalog::Sink::Bag("snapshot_groups".into()),
     };
     activation::check(sql, catalog, graph.plan(), snapshot, config).await?;
     graph.commit(prepared)?;
@@ -178,10 +169,10 @@ async fn catch_up(
         .prepare_protected(
             Tick {
                 time: 2,
-                batch: (
+                batch: vec![
                     super::mvp::input(&transaction.batch, "auction", "id")?,
                     super::mvp::input(&transaction.batch, "bid", "auction")?,
-                ),
+                ],
             },
             &protection,
         )
@@ -192,11 +183,26 @@ async fn catch_up(
         &transaction.end_lsn,
     )?;
     let checkpoint = graph.prepared_checkpoint(&prepared)?;
-    graph.publish_prepared(sql, writer, prepared, &progress).await?;
+    let deltas = Deltas::bag(&prepared.output().batch)?;
+    writer
+        .publish(
+            sql,
+            graph.plan(),
+            crate::catalog::Publication {
+                checkpoint: &checkpoint,
+                progress: &progress,
+                deltas: &deltas,
+            },
+        )
+        .await?;
+    graph.commit(prepared)?;
     protection.published(sql, writer, graph.plan(), &checkpoint).await?;
     stream.acknowledge(sql, writer, graph.plan()).await?;
     reject_publication_drift(sql, schema, graph, writer).await?;
-    let different: bool = sql.query_one(&format!("SELECT EXISTS((SELECT group_key,row_count,total FROM {schema}.snapshot_groups EXCEPT SELECT COALESCE(to_jsonb(a.category::text),'null'::jsonb),COUNT(*),SUM(b.price)::bigint FROM {schema}.auction a JOIN {schema}.bid b ON a.id=b.auction GROUP BY a.category) UNION ALL (SELECT COALESCE(to_jsonb(a.category::text),'null'::jsonb),COUNT(*),SUM(b.price)::bigint FROM {schema}.auction a JOIN {schema}.bid b ON a.id=b.auction GROUP BY a.category EXCEPT SELECT group_key,row_count,total FROM {schema}.snapshot_groups))"), &[]).await?.try_get(0)?;
+    let expected = format!(
+        "SELECT jsonb_build_array('',jsonb_build_object('category',a.category::text,'count',COUNT(*)::text,'sum',(SUM(b.price)::bigint)::text)),1::bigint FROM {schema}.auction a JOIN {schema}.bid b ON a.id=b.auction GROUP BY a.category"
+    );
+    let different: bool = sql.query_one(&format!("SELECT EXISTS((SELECT tuple,weight FROM {schema}.snapshot_groups EXCEPT {expected}) UNION ALL ({expected} EXCEPT SELECT tuple,weight FROM {schema}.snapshot_groups))"),&[]).await?.try_get(0)?;
     ensure!(!different, "snapshot/CDC sink differs from SQL");
     Ok(transaction)
 }
@@ -211,14 +217,14 @@ async fn reject_publication_drift(
     let prepared = graph
         .prepare(Tick {
             time: 3,
-            batch: (
+            batch: vec![
                 crate::engine::Batch::from_updates([])?,
                 crate::engine::Batch::from_updates([])?,
-            ),
+            ],
         })
         .await?;
     let checkpoint = graph.prepared_checkpoint(&prepared)?;
-    let deltas = Deltas::grouped(&prepared.output().batch)?;
+    let deltas = Deltas::bag(&prepared.output().batch)?;
     sql.batch_execute(&format!("ALTER TABLE {schema}.person DROP CONSTRAINT person_pkey")).await?;
     let end: String = sql.query_one("SELECT pg_current_wal_lsn()::text", &[]).await?.try_get(0)?;
     let progress = crate::catalog::Progress::new(1, &end, &end)?;

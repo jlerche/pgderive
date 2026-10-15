@@ -2,13 +2,13 @@
 use super::{Compiled, scope};
 use crate::{
     compiler::{
-        Predicate, Program,
+        Predicate,
         parser::{Columns, Table},
         relational::{Node, Relational, Source},
     },
     source::Contract,
 };
-use anyhow::{Result, ensure};
+use anyhow::Result;
 pub(super) fn bind(
     source: Table,
     columns: Columns,
@@ -20,10 +20,6 @@ pub(super) fn bind(
         Ok(super::relational::qualify(super::resolve(name, &scopes)?))
     };
     let (columns, terminal) = super::relational::output(columns, &resolve)?;
-    ensure!(
-        terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
-        "native scope cannot consume sink-deferred expressions"
-    );
     let mut nodes = vec![Node::Source { id: "source".into(), source: 0 }];
     let input = if let Some(predicate) = predicate {
         nodes.push(Node::Filter {
@@ -41,11 +37,16 @@ pub(super) fn bind(
         schema: relation.schema.clone(),
         table: relation.table.clone(),
         columns,
-        terminal: None,
+        terminal,
     };
     Ok(Compiled {
-        program: Program::Relational { relational: Relational { sources: vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }], nodes, output } },
-        predicates: None,
-        revision: Some("sql-native-scope-v1:pg-query-6.2.1:pg-17.7:native-field-map-v1:where-3vl-v1:raw-record-v1:json-v2".into()),
+        relational: Relational {
+            sources: vec![Source {
+                schema: relation.schema.clone(),
+                table: relation.table.clone(),
+            }],
+            nodes,
+            output,
+        },
     })
 }

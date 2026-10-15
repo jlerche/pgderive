@@ -1,6 +1,6 @@
 use crate::engine::{
     Batch,
-    dataflow::{Arrangement, OrderedTopK, TimedBatch},
+    dataflow::{Arrangement, OrderedSelection, TimedBatch},
     execution::Limits,
 };
 use anyhow::Result;
@@ -13,7 +13,7 @@ async fn top_k_counts_occurrences_clips_cutoffs_and_reopens() -> Result<()> {
         let store = Arc::new(InMemory::new());
         let inputs = Arrangement::<i64, i64>::new(store.clone(), "topk-input-v1".into(), 1)?;
         let outputs = Arrangement::<i64, i64>::new(store, "topk-output-v1".into(), 1)?;
-        let operator = OrderedTopK::new(limit, |key: &i64, value: &i64, _| Ok((*key, *value)));
+        let operator = OrderedSelection::new(limit, |key: &i64, value: &i64, _| Ok((*key, *value)));
         let mut input = inputs.empty();
         let mut output = outputs.empty();
         let mut memory = BTreeMap::<(i64, i64), i64>::new();
@@ -61,15 +61,15 @@ async fn top_k_validates_complete_delta_even_outside_selected_prefix() -> Result
         .stage(&empty, &TimedBatch { time: 1, batch: Batch::from_updates([((0, 1), 1)])? })
         .await?;
     for limit in [0, 1] {
-        let operator = OrderedTopK::new(limit, |key: &i64, value: &i64, _| Ok((*key, *value)));
+        let operator = OrderedSelection::new(limit, |key: &i64, value: &i64, _| Ok((*key, *value)));
         let negative = TimedBatch { time: 2, batch: Batch::from_updates([((0, 99), -3)])? };
         assert!(operator.evaluate(&negative, &prior, &retained, Limits::default()).await.is_err());
     }
-    let operator = OrderedTopK::new(1, |key: &i64, value: &i64, _| Ok((*key, *value)));
+    let operator = OrderedSelection::new(1, |key: &i64, value: &i64, _| Ok((*key, *value)));
     let next = TimedBatch { time: 2, batch: Batch::from_updates([((0, 1), -3)])? };
     let limits = Limits { contributions: 1, ..Limits::default() };
     assert!(operator.evaluate(&next, &prior, &retained, limits).await.is_err());
-    let wrong = OrderedTopK::new(1, |_: &i64, value: &i64, _| Ok((1, *value)));
+    let wrong = OrderedSelection::new(1, |_: &i64, value: &i64, _| Ok((1, *value)));
     assert!(wrong.evaluate(&first, &empty, &empty, Limits::default()).await.is_err());
     assert!(operator.evaluate(&first, &prior, &retained, Limits::default()).await.is_err());
     Ok(())
@@ -107,7 +107,7 @@ async fn top_k_reads_selected_prefix_instead_of_full_partition() -> Result<()> {
     assert_eq!(materialized.iter().count(), 128);
     let baseline = cache.stats()?.misses - before;
     let before = cache.stats()?.misses;
-    let operator = OrderedTopK::new(3, |key: &i64, value: &i64, _| Ok((*key, *value)));
+    let operator = OrderedSelection::new(3, |key: &i64, value: &i64, _| Ok((*key, *value)));
     let changed = operator
         .evaluate(
             &TimedBatch { time: 2, batch: Batch::from_updates([((0, 128), -1), ((0, 129), 1)])? },

@@ -2,7 +2,7 @@
 use super::relational::Key;
 use crate::{
     compiler::topk::Spec,
-    engine::dataflow::{OrderedTopK, Project},
+    engine::dataflow::{OrderedSelection, Project},
     transaction::Row,
 };
 use anyhow::{Context, Result, ensure};
@@ -37,9 +37,9 @@ pub(super) fn input(spec: &Spec) -> Project<Key, Row, Key, Row> {
         Ok(Some((key.clone(), indexed)))
     })
 }
-pub(super) fn operator(spec: &Spec) -> OrderedTopK<Key, Row> {
+pub(super) fn operator(spec: &Spec) -> OrderedSelection<Key, Row> {
     let spec = spec.clone();
-    OrderedTopK::new(spec.limit, move |key: &Key, row: &Row, position| {
+    OrderedSelection::new(spec.limit, move |key: &Key, row: &Row, position| {
         ensure!(
             row.get(ORDER) == Some(&Some(encoding(&spec, row)?)),
             "invalid top-k identity codec"

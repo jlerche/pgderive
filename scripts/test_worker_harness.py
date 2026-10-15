@@ -37,3 +37,66 @@ class ManagedFixtureTests(unittest.TestCase):
                     self.assertIs(caught.exception, error)
                     expected = ['body', 'preserve'] if failure == 'body' else ['body', 'cleanup', 'preserve']
                     self.assertEqual(events, expected)
+
+
+class HistoryTests(unittest.TestCase):
+    def test_transactions_rejections_and_restart(self):
+        from worker_harness import History
+        events = []
+        reopened = {'time': 12, 'slot': 'owned'}
+
+        class Process:
+            def __init__(self, resumed):
+                self.resumed = resumed
+
+            def event(self, kind, **options):
+                events.append((kind, options))
+                return reopened if self.resumed else {'time': 10, 'slot': 'owned'}
+
+            def abort(self):
+                events.append('abort')
+
+            def finish(self):
+                events.append('finish')
+
+        class OwnedFixture(Fixture):
+            name = 'owned'
+            query = 'original'
+
+            def __init__(self):
+                pass
+
+            def start(self, command, label, maximum=0):
+                events.append((label, maximum, self.query))
+                return Process(label == 'resumed')
+
+            def sql(self, sql):
+                events.append(sql)
+                return 'progress'
+
+            def verify(self):
+                events.append('verify')
+
+            def rejected(self, command, label, query):
+                events.append((label, query))
+
+        fixture = OwnedFixture()
+        fixture.run_history([], History(['one', 'two'], 'final', 'normalized',
+                                       [('changed', 'invalid')], session='SET x=y;'),
+                            initial=lambda: events.append('initial'))
+        self.assertEqual(events[0], ('first', 0, 'original'))
+        self.assertIn('SET x=y;BEGIN;one;COMMIT', events)
+        self.assertIn(('published', {'minimum_time': 12}), events)
+        self.assertLess(events.index('abort'), events.index(('changed', 'invalid')))
+        self.assertLess(events.index(('changed', 'invalid')), events.index(('resumed', 1, 'normalized')))
+        self.assertEqual(events.count('verify'), 5)
+        self.assertEqual(events[-3:], [('published', {}), 'finish', 'verify'])
+
+        for field, value in [('time', 11), ('slot', 'replaced')]:
+            with self.subTest(field=field):
+                reopened.update(time=12, slot='owned')
+                reopened[field] = value
+                events.clear()
+                with self.assertRaises(AssertionError):
+                    fixture.run_history([], History(['one', 'two'], 'final', 'normalized', []))
+                self.assertNotIn('final', events)

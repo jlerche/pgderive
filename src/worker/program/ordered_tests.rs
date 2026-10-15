@@ -25,7 +25,6 @@ fn ordered_temporal_codec_infinity_equivalent_offsets_and_filter_null() -> Resul
     )?;
     let spec = compiled
         .relational()
-        .context("missing IR")?
         .nodes
         .iter()
         .find_map(|node| if let Node::OrderedInput { spec, .. } = node { Some(spec) } else { None })
@@ -59,7 +58,6 @@ fn ordered_identity_token_precedes_arbitrary_fields_and_rejects_reserved_collisi
     )?;
     let spec = compiled
         .relational()
-        .context("missing IR")?
         .nodes
         .iter()
         .find_map(|node| if let Node::OrderedInput { spec, .. } = node { Some(spec) } else { None })

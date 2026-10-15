@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 const SQL: &str = "SELECT a.category AS c,b.price AS p FROM source.auction a JOIN source.bid b ON a.id=b.auction WHERE b.price IS NULL OR b.price<0";
 fn oracle(
@@ -29,7 +29,7 @@ fn oracle(
 async fn compiled_join_deltas_cold_restart_and_atomic_failure() -> Result<()> {
     let native = contract();
     let compiled = compile(SQL, &native)?;
-    let ir = compiled.relational().context("missing IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", None)]);

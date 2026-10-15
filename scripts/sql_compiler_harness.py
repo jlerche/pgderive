@@ -34,7 +34,7 @@ class SqlFixture(Fixture):
 
     def expected_query(self):
         self.sql(f"EXPLAIN {self.query}")
-        return (f"SELECT COALESCE(to_jsonb(a.group_id::text),'null'::jsonb) group_key,count(*) row_count,sum(b.price) total "
+        return (f"SELECT a.group_id group_key,count(*) row_count,sum(b.price) total "
                 f"FROM {self.name}.auction a JOIN {self.name}.bid b ON a.id=b.auction "
                 "WHERE " + self.where + "GROUP BY a.group_id")
 
@@ -63,12 +63,13 @@ class SqlFixture(Fixture):
                                    and b['price'] is not None and b['price'] < 0)
                     if not (ordinary or exceptional):
                         continue
-                group = expected.setdefault(None if a['group_id'] is None else str(a['group_id']), [0, None])
+                group = expected.setdefault(a['group_id'], [0, None])
                 group[0] += 1
                 if b['price'] is not None:
                     group[1] = (group[1] or 0) + b['price']
         actual = json.loads(self.sql(f'SELECT COALESCE(json_agg(g),\'[]\') FROM {self.name}.groups g'))
-        assert {g['group_key']: [g['row_count'], g['total']] for g in actual} == expected
+        assert all(g['weight'] == 1 for g in actual)
+        assert {g['tuple'][1][0]: g['tuple'][1][1:] for g in actual} == expected
 
     def rejected(self, command, label, query):
         original = self.query

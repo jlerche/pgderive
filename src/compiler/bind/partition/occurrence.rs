@@ -90,12 +90,10 @@ fn infer<'a>(
         | Node::DistinctMembership { id, .. } => (id, None),
         Node::Filter { id, input, .. }
         | Node::Map { id, input, .. }
-        | Node::KeyBy { id, input, .. }
         | Node::CrossKey { id, input }
         | Node::EquijoinKey { id, input, .. }
         | Node::LeftJoinInput { id, input, .. }
         | Node::LookupInput { id, input, .. }
-        | Node::Project { id, input }
         | Node::Output { id, input }
         | Node::PartitionBy { id, input, .. }
         | Node::Finalize { id, input, .. } => (id, prior(input, identities)?),

@@ -37,7 +37,7 @@ fn q13_modulo_keys_use_postgres_integer_promotion() -> Result<()> {
         let native = native(input, key);
         let sql = sql.replace("10000", divisor);
         let compiled = compile(&sql, &native)?;
-        assert!(compiled.relational().is_some());
+        assert!(!compiled.relational().nodes.is_empty());
         let equivalent = compile(
             &sql.replace(&format!("mod(b.auction,{divisor})"), &format!("b.auction%{divisor}")),
             &native,
@@ -147,7 +147,7 @@ async fn modulo_predecessor_matches_independent_signed_bags_and_restart() -> Res
         );
     let native = native(23, 23);
     let compiled = compile(&sql, &native)?;
-    let ir = compiled.relational().context("missing q13 IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let mut state = State::new();

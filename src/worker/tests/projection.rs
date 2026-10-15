@@ -1,5 +1,5 @@
 use super::super::{
-    program::{self, projected},
+    program::{self, relational},
     runtime,
 };
 use super::{batch, contract, row, settings};
@@ -11,7 +11,7 @@ use crate::{
 use anyhow::Result;
 use std::collections::BTreeMap;
 const SQL: &str = "SELECT a.category AS c, a.other AS o, a.category AS again FROM source.auction a WHERE a.id >= 1 AND (a.other IS NOT NULL OR a.category IS NULL)";
-fn oracle(rows: &BTreeMap<Row, i64>) -> Result<Batch<(), projected::Output>> {
+fn oracle(rows: &BTreeMap<Row, i64>) -> Result<super::ProjectedBag> {
     Batch::from_updates(
         rows.iter()
             .filter(|(row, weight)| {
@@ -32,7 +32,7 @@ async fn projection_collisions_retractions_nulls_and_cold_restart() -> Result<()
     let native = contract();
     let compiled = compile(SQL, &native)?;
     let options = settings();
-    let mut query = projected::build(&native, &compiled, options.clone())?;
+    let mut query = super::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", None)]);
     let b = row(&[("id", Some("2")), ("category", None), ("other", None)]);
     let mut changed = b.clone();
@@ -59,48 +59,35 @@ async fn projection_collisions_retractions_nulls_and_cold_restart() -> Result<()
         }
         let after = oracle(&rows)?;
         let expected = super::bag_delta(&before, &after)?;
-        let input = projected::inputs(
-            &changes,
-            compiled.projection().ok_or_else(|| anyhow::anyhow!("missing projection"))?,
-            query.time() + 1,
-        )?;
+        let input = relational::inputs(&changes, compiled.relational(), query.time() + 1)?;
         let prepared = query.prepare(input).await?;
-        assert_eq!(&prepared.output().batch, &expected);
+        assert_eq!(&super::projected_batch(&prepared.output().batch, &compiled)?, &expected);
         let candidate = query.prepared_checkpoint(&prepared)?;
         assert_eq!(candidate.time, query.time() + 1);
         query.commit(prepared)?;
-        assert_eq!(query.snapshot().output.materialize().await?, after);
+        assert_eq!(super::projected_output(&query, &compiled).await?, after);
         if index == 2 {
             let checkpoint = query.checkpoint()?;
-            query = projected::build(&native, &compile(SQL, &native)?, options.clone())?;
+            query = super::build(&native, &compile(SQL, &native)?, &options)?;
             query.restore_checkpoint(checkpoint).await?;
         }
     }
     assert_eq!(query.time(), 6);
-    assert!(query.snapshot().output.materialize().await?.iter().next().is_none());
+    assert!(super::projected_output(&query, &compiled).await?.iter().next().is_none());
     Ok(())
 }
 #[tokio::test]
 async fn exact_layout_identity_ownership_and_failed_evaluation() -> Result<()> {
     let native = contract();
     let compiled = compile(SQL, &native)?;
-    let mut query = projected::build(&native, &compiled, settings())?;
+    let mut query = super::build(&native, &compiled, &settings())?;
     let before = query.checkpoint()?;
     let bad = batch(vec![("auction", row(&[("id", Some("1"))]), 1)]);
-    assert!(
-        query
-            .prepare(projected::inputs(
-                &bad,
-                compiled.projection().ok_or_else(|| anyhow::anyhow!("missing projection"))?,
-                1
-            )?)
-            .await
-            .is_err()
-    );
+    assert!(query.prepare(relational::inputs(&bad, compiled.relational(), 1)?).await.is_err());
     assert_eq!(query.checkpoint()?, before);
-    let input = crate::engine::dataflow::TimedBatch { time: 1, batch: Batch::from_updates([])? };
+    let input = relational::inputs(&batch(vec![]), compiled.relational(), 1)?;
     let prepared = query.prepare(input.clone()).await?;
-    let mut other = projected::build(&native, &compiled, settings())?;
+    let mut other = super::build(&native, &compiled, &settings())?;
     assert!(other.prepared_checkpoint(&prepared).is_err());
     assert!(other.commit(prepared).is_err());
     let prepared = query.prepare(input).await?;
@@ -111,7 +98,7 @@ async fn exact_layout_identity_ownership_and_failed_evaluation() -> Result<()> {
         program::plan(&native, &compiled)?.identity(),
         program::plan(&native, &changed)?.identity()
     );
-    let mut changed_query = projected::build(&native, &changed, settings())?;
+    let mut changed_query = super::build(&native, &changed, &settings())?;
     assert!(changed_query.restore_checkpoint(before).await.is_err());
     assert_eq!(
         program::plan(&native, &compiled)?.identity(),
@@ -142,13 +129,13 @@ async fn exact_layout_identity_ownership_and_failed_evaluation() -> Result<()> {
         n.relations[0].columns[1].collation = 0;
         n
     };
-    let mut grouped = runtime::Runtime::build(&n, &compiled, settings())?;
-    let prepared = other
-        .prepare(crate::engine::dataflow::TimedBatch { time: 1, batch: Batch::from_updates([])? })
-        .await?;
-    let work = runtime::Prepared::Projection(prepared);
-    assert!(grouped.prepared_checkpoint(&work).is_err());
-    assert!(grouped.commit(work).is_err());
+    let grouped = runtime::Runtime::build(&n, &compiled, &settings())?;
+    let prepared =
+        other.prepare(relational::inputs(&batch(vec![]), changed.relational(), 1)?).await?;
+    assert!(grouped.checkpoint()?.plan_identity != other.checkpoint()?.plan_identity);
+    assert!(other.prepared_checkpoint(&prepared).is_ok());
+    assert!(changed_query.prepared_checkpoint(&prepared).is_err());
+    assert!(changed_query.commit(prepared).is_err());
     Ok(())
 }
 #[test]
@@ -168,20 +155,24 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
         "SELECT id,enabled,token,category,category AS duplicate FROM source.auction",
         &native,
     )?;
-    let projection = compiled.projection().ok_or_else(|| anyhow::anyhow!("missing projection"))?;
+    let projection = compiled.output();
     let row = row(&[
         ("id", Some("-1")),
         ("enabled", Some("t")),
         ("token", Some("00000000-0000-0000-0000-000000000000")),
         ("category", None),
     ]);
+    let row = row
+        .into_iter()
+        .map(|(name, value)| (crate::compiler::relational::field(0, &name), value))
+        .collect();
     let value = projection.row(&row)?;
     assert_eq!(
         serde_json::to_value(&value)?,
         serde_json::json!([-1, true, "00000000-0000-0000-0000-000000000000", null, null])
     );
     assert_eq!(
-        serde_json::from_value::<projected::Output>(serde_json::to_value(value)?)?,
+        serde_json::from_value::<Vec<Option<Cell>>>(serde_json::to_value(value)?)?,
         projection.row(&row)?
     );
     for sql in [
@@ -221,7 +212,7 @@ fn terminal_map_requires_binding_and_rejects_unsafe_positions() -> Result<()> {
         "SELECT pg_catalog.abs(id) AS positive, length(category) AS characters FROM source.auction",
         &native,
     )?;
-    assert!(mapped.projection().is_some());
+    assert!(!mapped.output().columns.is_empty());
     assert!(program::plan(&native, &mapped).is_err());
     assert!(mapped.sink("sink").validate().is_err());
     for sql in [
@@ -243,7 +234,6 @@ fn terminal_map_requires_binding_and_rejects_unsafe_positions() -> Result<()> {
 #[test]
 fn text_equality_revision_binds_each_expression_boundary() -> Result<()> {
     let native = contract();
-    let suffix = "pg-deterministic-text-equality-v1";
     for sql in [
         "SELECT id FROM source.auction WHERE category='OR'",
         "SELECT id,CASE WHEN category='OR' THEN 1 ELSE 0 END AS flag FROM source.auction",
@@ -252,12 +242,17 @@ fn text_equality_revision_binds_each_expression_boundary() -> Result<()> {
     ] {
         let compiled =
             compile(sql, &native).map_err(|error| anyhow::anyhow!("{sql}: {error:#}"))?;
-        assert!(compiled.revision.as_deref().is_some_and(|value| value.contains(suffix)), "{sql}");
+
         let changed = compile(&sql.replace("'OR'", "'ID'"), &native)?;
         assert_ne!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&changed)?, "{sql}");
     }
-    let plain = compile("SELECT id FROM source.auction WHERE category IS NULL", &native)?;
-    assert!(plain.revision.as_deref().is_some_and(|value| !value.contains(suffix)));
+    assert!(
+        compile("SELECT id FROM source.auction WHERE category IS NULL", &native)?
+            .output()
+            .terminal
+            .is_none()
+    );
+
     Ok(())
 }
 
@@ -269,12 +264,7 @@ fn timestamp_terminal_formats_normalize_context_and_reject_unsafe_shapes() -> Re
     column.collation = 0;
     let sql = "SELECT to_char(other AT TIME ZONE 'UTC','HH24:MI') AS minute FROM source.auction";
     let compiled = compile(sql, &native)?;
-    assert!(
-        compiled
-            .revision
-            .as_deref()
-            .is_some_and(|value| value.contains("pg-terminal-utc-calendar-format-v1"))
-    );
+
     assert_eq!(
         serde_json::to_vec(&compiled)?,
         serde_json::to_vec(&compile(
@@ -291,7 +281,7 @@ fn timestamp_terminal_formats_normalize_context_and_reject_unsafe_shapes() -> Re
         assert!(compile(&invalid, &native).is_err(), "{invalid}");
     }
     let derived = "SELECT q.id,to_char(q.latest AT TIME ZONE 'UTC','HH24:MI') AS minute FROM(SELECT id,MAX(other) AS latest FROM source.auction GROUP BY id) q";
-    assert!(compile(derived, &native)?.relational().is_some());
+    assert!(!compile(derived, &native)?.relational().nodes.is_empty());
     let consumed = format!("SELECT z.minute FROM({derived}) z");
     assert!(compile(&consumed, &native).is_err());
     native.relations[0].columns[2].oid = 1114;
@@ -317,20 +307,8 @@ fn named_calendar_queries_lower_text_groups_and_terminal_max() -> Result<()> {
         include_str!("../../../queries/nexmark/q16.sql"),
     ] {
         let compiled = compile(&sql.replace("nexmark.", "source."), &native)?;
-        assert!(
-            compiled
-                .revision
-                .as_deref()
-                .is_some_and(|value| value.contains("pg-terminal-utc-calendar-format-v1"))
-        );
-        if compiled.relational().is_some() {
-            assert!(
-                compiled
-                    .revision
-                    .as_deref()
-                    .is_some_and(|value| value.contains("pg-deterministic-text-partition-v1"))
-            );
-        }
+
+        assert!(compiled.output().terminal.is_some());
     }
     Ok(())
 }
@@ -353,7 +331,7 @@ fn named_hot_auction_and_highest_bid_queries_lower() -> Result<()> {
     ] {
         let sql = sql.replace("nexmark.", "source.");
         let compiled = compile(&sql, &native)?;
-        assert!(compiled.relational().is_some());
+        assert!(!compiled.relational().nodes.is_empty());
         let equivalent =
             compile(&sql.replace("b.", "\"B\".").replace("bid b", "bid AS \"B\""), &native)?;
         assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&equivalent)?);

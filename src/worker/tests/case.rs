@@ -76,14 +76,9 @@ async fn history(running: bool) -> Result<()> {
     let mut native = contract();
     native.relations[1].columns[2].oid = 1114;
     let compiled = compile(&sql(running), &native)?;
-    let ir = compiled.relational().context("missing CASE IR")?;
+    let ir = compiled.relational();
     let field = &ir.output.columns[3].column.name;
-    assert!(
-        compiled
-            .revision
-            .as_deref()
-            .is_some_and(|revision| revision.contains("pg-timestamp-gap-v1"))
-    );
+
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let null_time = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
@@ -167,7 +162,7 @@ async fn gap_errors_discard_all_staged_state_before_retry() -> Result<()> {
     native.relations[1].columns[2].oid = 1114;
     let unsafe_sql = sql(false).replace("WHEN q.price=q.previous THEN 0 ", "");
     let compiled = compile(&unsafe_sql, &native)?;
-    let ir = compiled.relational().context("missing gap IR")?;
+    let ir = compiled.relational();
     for (initial, bad_values, retry_value) in [
         ("2000-01-01 00:00:00", vec!["infinity", "infinity"], "infinity"),
         ("4714-11-24 00:00:00 BC", vec!["294276-12-31 23:59:59.999999"], "2000-01-01 00:00:00"),

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Scoped grouped memberships with compound native identity/time join keys."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import json
 import pathlib
@@ -63,9 +63,6 @@ def qualify(output,command,mode):
             fixture.rejected(command,label,query)
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {fixture.name}.person VALUES(400,'new','2000-01-01'); INSERT INTO {fixture.name}.auction(id,seller,date_time) VALUES(400,400,'2000-01-01'),(401,400,'2000-01-01')",
             f"DELETE FROM {fixture.name}.auction WHERE id=400; UPDATE {fixture.name}.person SET name=NULL WHERE id=400",
@@ -76,26 +73,14 @@ def qualify(output,command,mode):
             f"UPDATE {fixture.name}.person SET date_time=NULL WHERE id=8; UPDATE {fixture.name}.auction SET date_time=NULL WHERE id=307; DELETE FROM {fixture.name}.person WHERE id=450; UPDATE {fixture.name}.auction SET seller=NULL WHERE id=402",
             f"UPDATE {fixture.name}.bid SET price=NULL WHERE id=1",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.person; DELETE FROM {fixture.name}.auction; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-key',fixture.query.replace('AND p.starttime=a.starttime',''))
-        fixture.rejected(command,'changed-stride',fixture.query.replace('10 seconds','11 seconds'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('p.','"P".').replace('a.','"A".').replace('person p','person AS "P"').replace('auction a','auction AS "A"').replace(') p',') AS "P"').replace(') a',') AS "A"')
-        fixture.query = fixture.query.replace('"P".id="A".seller AND "P".starttime="A".starttime','"A".starttime="P".starttime AND "A".seller="P".id')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.person; DELETE FROM {fixture.name}.auction')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.person; DELETE FROM {fixture.name}.auction; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.person; DELETE FROM {fixture.name}.auction',
+            normalized=fixture.query.replace('p.', '"P".').replace('a.', '"A".').replace('person p', 'person AS "P"').replace('auction a', 'auction AS "A"').replace(') p', ') AS "P"').replace(') a', ') AS "A"').replace('"P".id="A".seller AND "P".starttime="A".starttime', '"A".starttime="P".starttime AND "A".seller="P".id'),
+            rejected=[('changed-key', fixture.query.replace('AND p.starttime=a.starttime', '')),('changed-stride', fixture.query.replace('10 seconds', '11 seconds'))],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent grouped memberships and compound identity/bucket equality','transactions':'complete simultaneous sources; duplicate partial/last deletion; PK/key/bucket moves; NULLs/infinities; rollback; empty bid-only input tick','restart':'cold same slot; aliases/operand orientation/conjunction order normalized','identity':'changed stride and compound join key rejected'})+'\n')
 
 if __name__=='__main__':

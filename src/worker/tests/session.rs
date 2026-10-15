@@ -63,12 +63,10 @@ async fn complete_sessions_merge_split_move_and_restore_signed_bags() -> Result<
     let mut native = contract();
     native.relations[1].columns[2].oid = 1114;
     let compiled = compile(&sql(), &native)?;
-    let ir = compiled.relational().context("missing session IR")?;
+    let ir = compiled.relational();
     let fields =
         ir.output.columns.iter().map(|value| value.column.name.clone()).collect::<Vec<_>>();
-    let revision = compiled.revision.as_deref().context("missing revision")?;
-    assert!(revision.contains("pg-fixed-time-offset-v1"));
-    assert!(revision.contains("pg-native-temporal-extrema-v1"));
+
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let first = source(1, None, Some(10));
@@ -130,7 +128,7 @@ async fn offset_range_error_leaves_checkpoint_unchanged() -> Result<()> {
             &format!("SELECT b.price{operator}INTERVAL '1 microsecond' FROM source.bid b"),
             &native,
         )?;
-        let ir = compiled.relational().context("missing offset IR")?;
+        let ir = compiled.relational();
         let mut query = relational::build(&native, &compiled, &settings())?;
         let prior = serde_json::to_vec(&query.checkpoint()?)?;
         let bad = row(&[("id", Some("1")), ("auction", None), ("price", Some(time))]);

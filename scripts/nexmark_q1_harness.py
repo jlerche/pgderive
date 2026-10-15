@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exact terminal decimal q1: independent Decimal bag and PostgreSQL, CDC/restart."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import decimal
 import json
@@ -54,10 +54,6 @@ def qualify(output,command,mode):
         fixture.rejected(command,'unsupported-arithmetic',fixture.query.replace(fixture.factor+' *',fixture.factor+' +'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
-        assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups'))>1
         changes = [
             f"INSERT INTO {fixture.name}.auction(id,category,enabled) VALUES(400,'new',true); INSERT INTO {fixture.name}.bid(id,auction,price,bidder,date_time,extra) VALUES(400,400,9,5,NULL,'new'),(401,400,NULL,NULL,NULL,NULL)",
             f"UPDATE {fixture.name}.bid SET price=-9 WHERE id=300; UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=400",
@@ -65,25 +61,15 @@ def qualify(output,command,mode):
             f"UPDATE {fixture.name}.bid SET price=0,extra=NULL WHERE id=400; DELETE FROM {fixture.name}.auction WHERE id=400",
             f"UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=2",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-factor',fixture.query.replace(fixture.factor,'0.909'))
-        fixture.rejected(command,'changed-scale',fixture.query.replace(fixture.factor,fixture.factor+'0'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace(fixture.factor,'0'+fixture.factor)
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups'))>1
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.bid',
+            normalized=fixture.query.replace(fixture.factor, '0' + fixture.factor),
+            rejected=[('changed-factor', fixture.query.replace(fixture.factor, '0.909')),('changed-scale', fixture.query.replace(fixture.factor, fixture.factor + '0'))],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':'q1','mode':mode,'postgres':'exact weighted numeric bag','memory':'independent Decimal multiplication','restart':'cold same slot','factor_change':'rejected before progress change','simultaneous':'both source changes','terminal':'PG numeric_mul, retained raw integral bag'})+'\n')
 
 if __name__=='__main__':

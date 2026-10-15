@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """q14 native terminal DAG: exact MV, independent Decimal/Unicode oracle, CDC/restart."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import decimal
 import json
@@ -74,10 +74,6 @@ def qualify(output,command,mode):
             fixture.rejected(command,label,query)
         assert fixture.sql(f"SELECT to_regclass('{name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
-        assert fixture.sql(f'SELECT max(weight)>1 FROM {name}.groups').strip()=='t'
         changes = [
             f"INSERT INTO {name}.bid(id,auction,price,bidder,date_time,extra) VALUES(400,1,2000000,9,'2000-01-01 06:59:59','c🙂c'); UPDATE {name}.bid SET price=60000000 WHERE id=300",
             f"UPDATE {name}.bid SET price=2000000,date_time='2024-03-10 01:30:00-08',extra='çcc' WHERE id IN(301,308)",
@@ -85,25 +81,15 @@ def qualify(output,command,mode):
             f"UPDATE {name}.bid SET price=2000000,date_time='2024-11-03 01:30:00-07',extra=NULL WHERE id=400; UPDATE {name}.bid SET id=501 WHERE id=308",
             f"UPDATE {name}.auction SET group_id=NULL WHERE id=2",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {name}.bid; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {name}.pgderive_progress p')
-        fixture.rejected(command,'changed-filter',fixture.query.replace('50000000','40000000'))
-        fixture.rejected(command,'changed-output',fixture.query.replace("'dayTime'","'day'"))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('pg_catalog.','').replace('SELECT auction,bidder','SELECT b.auction,b.bidder').replace(f'FROM {name}.bid',f'FROM {name}.bid b')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            assert fixture.sql(f'SELECT max(weight)>1 FROM {name}.groups').strip()=='t'
+            fixture.sql(f'BEGIN; DELETE FROM {name}.bid; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {name}.bid',
+            normalized=fixture.query.replace('pg_catalog.', '').replace('SELECT auction,bidder', 'SELECT b.auction,b.bidder').replace(f'FROM {name}.bid', f'FROM {name}.bid b'),
+            rejected=[('changed-filter', fixture.query.replace('50000000', '40000000')),('changed-output', fixture.query.replace("'dayTime'", "'day'"))],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':'q14','mode':mode,'postgres':'exact native materialized-view weighted bag','memory':'independent Decimal Unicode and hour classification','restart':'cold same slot','terminal':'typed tuple-local DAG with native CASE and IS TRUE'})+'\n')
 
 if __name__=='__main__':

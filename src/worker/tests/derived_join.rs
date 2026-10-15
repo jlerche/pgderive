@@ -6,7 +6,7 @@ use crate::{
     transaction::Row,
     worker::program::relational,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 
 fn native() -> crate::source::Contract {
@@ -45,7 +45,7 @@ fn named_q8_joins_independent_grouped_scopes() -> Result<()> {
         .trim_end_matches(';')
         .to_owned();
     let compiled = compile(&sql, &native())?;
-    assert!(compiled.relational().is_some());
+    assert!(!compiled.relational().nodes.is_empty());
     Ok(())
 }
 
@@ -111,7 +111,7 @@ async fn history(nested: u8) -> Result<()> {
     native.relations[0].columns[2].collation = 0;
     let sql = query_sql(nested);
     let compiled = compile(&sql, &native)?;
-    let ir = compiled.relational().context("missing scoped join IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let bid = row(&[("id", Some("1")), ("auction", Some("7")), ("price", None)]);
@@ -203,7 +203,7 @@ fn scoped_join_normalizes_equalities_and_rejects_unsupported_shapes() -> Result<
         assert!(compile(&invalid, &native).is_err(), "{invalid}");
     }
     let grouped = format!("SELECT q.id,COUNT(*) FROM({sql}) q GROUP BY q.id");
-    assert!(compile(&grouped, &native)?.relational().is_some());
+    assert!(!compile(&grouped, &native)?.relational().nodes.is_empty());
     let changed = compile(&sql.replace("10 seconds", "11 seconds"), &native)?;
     assert_ne!(serde_json::to_vec(&original)?, serde_json::to_vec(&changed)?);
     Ok(())

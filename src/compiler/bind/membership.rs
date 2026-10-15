@@ -1,15 +1,13 @@
 //! Bind projected membership while retaining complete source identities.
 use super::{Compiled, native_join};
 use crate::{
-    compiler::{Program, parser::native_join::Parsed, relational::Node},
+    compiler::{parser::native_join::Parsed, relational::Node},
     source::Contract,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 pub(super) fn bind(parsed: Parsed, distinct: bool, contract: &Contract) -> Result<Compiled> {
     let mut compiled = native_join::bind(parsed, contract)?;
-    let Program::Relational { relational } = &mut compiled.program else {
-        anyhow::bail!("membership requires relational input")
-    };
+    let relational = &mut compiled.relational;
     ensure!(relational.output.terminal.is_none(), "membership cannot consume deferred expressions");
     if distinct {
         ensure!(
@@ -40,10 +38,5 @@ pub(super) fn bind(parsed: Parsed, distinct: bool, contract: &Contract) -> Resul
         });
         relational.nodes.push(Node::Output { id, input: "distinct".into() });
     }
-    compiled.revision.as_mut().context("missing membership revision")?.push_str(if distinct {
-        ":pg-select-distinct-full-identity-v2"
-    } else {
-        ":pg-existence-composition-v1"
-    });
     Ok(compiled)
 }

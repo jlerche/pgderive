@@ -2,7 +2,7 @@ use super::{Operators, Relational};
 use crate::engine::{
     Batch,
     dataflow::{Project, TimedBatch},
-    plan::{Arrangement, Definition, Kind, Node, Plan, Source, query::Settings},
+    plan::{Arrangement, Definition, Kind, Node, Plan, Settings, Source},
 };
 use anyhow::{Context, Result};
 use object_store::memory::InMemory;

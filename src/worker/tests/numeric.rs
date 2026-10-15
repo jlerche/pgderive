@@ -9,7 +9,7 @@ async fn numeric_grouped_history_uses_raw_scale_and_cold_restart() -> Result<()>
         "SELECT auction AS g, COUNT(price) AS n, SUM(price) AS s, MIN(price) AS lo, MAX(price) AS hi FROM source.bid GROUP BY auction",
         &native,
     )?;
-    let ir = compiled.relational().context("missing decimal IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let inputs = [
@@ -108,7 +108,7 @@ async fn computed_numeric_group_keys_and_native_join_keys_use_value_equality() -
         "SELECT a.id AS a,b.id AS b FROM source.bid a JOIN source.bid b ON a.price=b.price",
     ] {
         let compiled = compile(sql, &native)?;
-        let ir = compiled.relational().context("missing numeric relational IR")?;
+        let ir = compiled.relational();
         let options = settings();
         let mut query = relational::build(&native, &compiled, &options)?;
         let change = batch(vec![
@@ -139,7 +139,7 @@ async fn numeric_sum_retracts_highest_scale_and_special_inputs() -> Result<()> {
     let native = numeric_contract();
     let compiled =
         compile("SELECT auction AS g,SUM(price) AS s FROM source.bid GROUP BY auction", &native)?;
-    let ir = compiled.relational().context("missing numeric SUM IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let high = row(&[("id", Some("1")), ("auction", Some("1")), ("price", Some("1.2000"))]);

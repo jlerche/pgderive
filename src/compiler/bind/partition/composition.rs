@@ -2,7 +2,7 @@
 use super::{Body, Stage, build};
 use crate::{
     compiler::{
-        Compiled, Predicate, Program,
+        Compiled, Predicate,
         parser::Parsed,
         relational::{Node, Relational},
     },
@@ -16,10 +16,7 @@ pub(super) fn bind(
     contract: &Contract,
 ) -> Result<Compiled> {
     let mut compiled = crate::compiler::bind::bind(inner, contract)?;
-    crate::compiler::bind::derived::compose_join(&mut compiled)?;
-    let Program::Relational { relational } = &mut compiled.program else {
-        anyhow::bail!("derived partition requires relational lowering");
-    };
+    let relational = &mut compiled.relational;
     ensure!(
         relational.output.terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
         "derived scope cannot consume sink-deferred expressions"
@@ -46,18 +43,9 @@ pub(super) fn bind(
             scalar_scope: Some(relational.nodes.len()),
         },
     )?;
-    let Program::Relational { relational: stage } = &mut outer.program else {
-        anyhow::bail!("missing partition stage");
-    };
-    let positional = validate_occurrences(known_occurrence, stage)?;
-    lower_source_filter(relational, compiled.predicates.take())?;
-    compose(relational, stage, outer.predicates.take())?;
-    let revision = compiled.revision.as_mut().context("missing inner compiler revision")?;
-    revision.push_str(":derived-partition-composition-v1:");
-    revision.push_str(outer.revision.as_deref().context("missing stage revision")?);
-    if positional {
-        revision.push_str(":logical-occurrence-proof-v1");
-    }
+    let stage = &mut outer.relational;
+    validate_occurrences(known_occurrence, stage)?;
+    compose(relational, stage)?;
     Ok(compiled)
 }
 fn aggregate_base(relational: &Relational) -> Result<usize> {
@@ -126,26 +114,11 @@ pub(in crate::compiler::bind) fn lower_source_filter(
     );
     Ok(())
 }
-fn compose(
-    inner: &mut Relational,
-    outer: &mut Relational,
-    expression: Option<crate::compiler::expression::Expr>,
-) -> Result<()> {
+fn compose(inner: &mut Relational, outer: &mut Relational) -> Result<()> {
     let Some(Node::Output { input, .. }) = inner.nodes.pop() else {
         anyhow::bail!("missing inner output");
     };
     let prefix = format!("stage_{}_", inner.nodes.len());
-    let input = if let Some(expression) = expression {
-        let id = format!("{prefix}where");
-        inner.nodes.push(Node::Filter {
-            id: id.clone(),
-            input,
-            predicate: Predicate::new(expression),
-        });
-        id
-    } else {
-        input
-    };
     for mut node in std::mem::take(&mut outer.nodes) {
         if matches!(node, Node::Source { .. }) {
             continue;
@@ -175,7 +148,6 @@ pub(in crate::compiler::bind) fn rewrite(
         Node::Filter { id, input, .. }
         | Node::Expand { id, input, .. }
         | Node::Map { id, input, .. }
-        | Node::KeyBy { id, input, .. }
         | Node::Rebind { id, input, .. }
         | Node::CrossKey { id, input }
         | Node::EquijoinKey { id, input, .. }
@@ -185,7 +157,6 @@ pub(in crate::compiler::bind) fn rewrite(
         | Node::Existence { id, input, .. }
         | Node::LookupInput { id, input, .. }
         | Node::Lookup { id, input, .. }
-        | Node::Project { id, input }
         | Node::Output { id, input }
         | Node::PartitionBy { id, input, .. }
         | Node::Partition { id, input, .. }

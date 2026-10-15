@@ -37,7 +37,7 @@ async fn hopping_preserves_weighted_memberships_nulls_and_restart() -> Result<()
         &native,
     )?;
     assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&equivalent)?);
-    let ir = compiled.relational().context("missing expansion IR")?;
+    let ir = compiled.relational();
     let computed = ir
         .nodes
         .iter()
@@ -140,7 +140,7 @@ fn series_binding_rejects_ambiguous_and_unqualified_semantics() -> Result<()> {
 async fn expansion_limits_fail_before_visibility_and_empty_series_is_empty() -> Result<()> {
     let native = native();
     let compiled = compile(&sql(), &native)?;
-    let ir = compiled.relational().context("missing expansion IR")?;
+    let ir = compiled.relational();
     let mut options = settings();
     options.limits = Limits { contributions: 4, ..options.limits };
     let query = relational::build(&native, &compiled, &options)?;
@@ -155,7 +155,7 @@ async fn expansion_limits_fail_before_visibility_and_empty_series_is_empty() -> 
     assert!(query.prepare(relational::inputs(&delta, ir, 1)?).await.is_err());
     assert_eq!(serde_json::to_vec(&query.checkpoint()?)?, before);
     let empty = compile(&sql().replace("0,4", "4,0"), &native)?;
-    let ir = empty.relational().context("missing empty IR")?;
+    let ir = empty.relational();
     let query = relational::build(&native, &empty, &settings())?;
     let prepared = query.prepare(relational::inputs(&delta, ir, 1)?).await?;
     assert_eq!(prepared.output().batch.iter().count(), 0);
@@ -168,7 +168,7 @@ async fn expanded_rows_require_explicit_composite_order_and_match_neighbors() ->
     let sql = "SELECT b.id,w.n,COUNT(*) OVER(PARTITION BY b.auction ORDER BY b.id,w.n ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS neighbors FROM source.bid b CROSS JOIN generate_series(0,2) w(n)";
     assert!(compile(&sql.replace("ORDER BY b.id,w.n", "ORDER BY b.id"), &native).is_err());
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational().context("missing expanded ROWS IR")?;
+    let ir = compiled.relational();
     let query = relational::build(&native, &compiled, &settings())?;
     let input = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
     let delta = batch(vec![("bid", input, 1)]);

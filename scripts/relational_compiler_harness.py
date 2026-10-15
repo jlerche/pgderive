@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned sequential ungrouped join circuit qualification against two oracles."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import json
 from sql_compiler_harness import SqlFixture
@@ -52,10 +52,6 @@ def qualify(output, command, terminal):
             fixture.rejected(command, label, query)
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
-        assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups')) > 1
         changes = [
             f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(100,'é🙂',NULL,true); INSERT INTO {fixture.name}.bid VALUES(100,100,-7),(101,100,NULL),(102,NULL,4)",
             f"UPDATE {fixture.name}.auction SET category=NULL,enabled=NULL WHERE id=100; UPDATE {fixture.name}.bid SET price=9 WHERE id=100",
@@ -64,23 +60,14 @@ def qualify(output, command, terminal):
             f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(100,'new',2,false); UPDATE {fixture.name}.bid SET price=NULL WHERE id=100",
             f"DELETE FROM {fixture.name}.bid WHERE id=102",  # null key empty output tick
         ]
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;' + change + ';COMMIT')
-            worker.event('published', minimum_time=ready['time'] + index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command, 'changed', fixture.query.replace('a.group_id AS g', 'a.id AS g'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        fixture.query = fixture.query.replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('INNER JOIN', 'JOIN')
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time'] + len(changes)
-        fixture.verify()
-        fixture.sql(f'UPDATE {fixture.name}.bid SET price=NULL WHERE id=2')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups')) > 1
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'UPDATE {fixture.name}.bid SET price=NULL WHERE id=2',
+            normalized=fixture.query.replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('INNER JOIN', 'JOIN'),
+            rejected=[('changed', fixture.query.replace('a.group_id AS g', 'a.id AS g'))],
+        ), initial=initial)
         (output / 'result.json').write_text(json.dumps({'sql_oracle': 'exact weighted bag', 'memory_oracle': 'independent nested loop', 'simultaneous': 'insert/update/delete', 'nulls': 'keys/predicates/outputs', 'restart': 'cold same slot', 'changed': 'rejected without progress', 'terminal': terminal}) + '\n')
 
 

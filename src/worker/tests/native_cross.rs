@@ -1,7 +1,7 @@
 //! Scoped Cartesian products preserve bag coefficients, NULLs and synchronized deltas.
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 #[tokio::test]
 async fn native_scopes_cross_null_tuples_and_restore() -> Result<()> {
@@ -10,7 +10,7 @@ async fn native_scopes_cross_null_tuples_and_restore() -> Result<()> {
         "SELECT l.auction,r.other FROM(SELECT auction FROM source.bid) l CROSS JOIN(SELECT other FROM source.auction) r",
         &native,
     )?;
-    let ir = compiled.relational().context("missing cross join graph")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let bid = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
@@ -40,7 +40,7 @@ fn native_scopes_keep_filters_and_reject_deferred_inputs() -> Result<()> {
     let native = contract();
     let sql = "SELECT l.auction,r.other FROM(SELECT auction FROM source.bid WHERE price>=0 OR price IS NULL) l CROSS JOIN(SELECT other FROM source.auction WHERE category IS NULL) r";
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational().context("missing cross join graph")?;
+    let ir = compiled.relational();
     assert_eq!(ir.sources.len(), 2);
     assert_eq!(
         ir.nodes

@@ -2,7 +2,7 @@
 use super::{Compiled, scope};
 use crate::{
     compiler::{
-        ColumnRef, Predicate, Program,
+        ColumnRef, Predicate,
         parser::{
             Name,
             native_join::{Parsed, Tree},
@@ -29,16 +29,9 @@ struct Builder<'a> {
     sources: Vec<Source>,
     nodes: Vec<Node>,
     joins: usize,
-    revisions: Vec<String>,
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
-    let mut builder = Builder {
-        contract,
-        sources: Vec::new(),
-        nodes: Vec::new(),
-        joins: 0,
-        revisions: Vec::new(),
-    };
+    let mut builder = Builder { contract, sources: Vec::new(), nodes: Vec::new(), joins: 0 };
     let edge = builder.tree(parsed.tree)?;
     let resolve = |name: &Name| Ok(resolve(name, &edge.columns)?.value.clone());
     let (columns, terminal) = super::relational::output(parsed.columns, &resolve)?;
@@ -60,16 +53,8 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         columns,
         terminal,
     };
-    let revision = format!(
-        "sql-native-join-tree-v1:source-occurrences-v1:compound-native-key-v1:retained-left-join-v1:pg-query-6.2.1:pg-17.7:raw-record-v1:json-v2:{}",
-        builder.revisions.join(":")
-    );
     Ok(Compiled {
-        program: Program::Relational {
-            relational: Relational { sources: builder.sources, nodes: builder.nodes, output },
-        },
-        predicates: None,
-        revision: Some(revision),
+        relational: Relational { sources: builder.sources, nodes: builder.nodes, output },
     })
 }
 impl Builder<'_> {
@@ -110,7 +95,6 @@ impl Builder<'_> {
                 collation: 0,
             })
             .collect();
-        self.revisions.push(scope.revision);
         self.sources.extend(scope.ir.sources);
         ensure!(self.sources.len() <= 16, "join source occurrence limit exceeded");
         self.nodes.extend(scope.ir.nodes);
@@ -219,7 +203,6 @@ impl Builder<'_> {
             anyhow::bail!("missing existence join")
         };
         self.nodes.push(Node::Existence { id: id.clone(), input, anti });
-        self.revisions.push("pg-equality-existence-v1".into());
         ensure!(edge.columns.len() > columns.len(), "missing existence source columns");
         Ok(Edge { id, columns })
     }

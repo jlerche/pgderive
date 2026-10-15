@@ -8,8 +8,7 @@ use crate::{
         Batch,
         dataflow::{Project, TimedBatch},
         plan::{
-            self, Plan,
-            query::Settings,
+            self, Plan, Settings,
             relational::{Operators, Relational as Circuit},
         },
     },
@@ -28,10 +27,10 @@ pub(in crate::worker) fn build(
     compiled: &Compiled,
     settings: &Settings,
 ) -> Result<Query> {
-    let ir = compiled.relational().context("expected relational program")?;
-    Query::new(plan(contract, compiled, ir)?, operators(ir, compiled, settings), settings)
+    let ir = compiled.relational();
+    Query::new(plan(contract, compiled, ir)?, operators(ir, settings), settings)
 }
-fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Operators<Key, Row> {
+fn operators(ir: &Relational, settings: &Settings) -> Operators<Key, Row> {
     let mut operators = empty_operators();
     for node in &ir.nodes {
         match node {
@@ -47,16 +46,16 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
                 operators.partitions.insert(id.clone(), lookup_operator(spec, settings));
             }
             Node::Expand { id, series, .. } => {
-                operators.expansions.insert(id.clone(), Arc::new(expand(series, compiled)));
+                operators.expansions.insert(id.clone(), Arc::new(expand(series)));
             }
             Node::Filter { id, predicate, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(filter(predicate)));
             }
             Node::Map { id, computed, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(map(computed, compiled)));
+                operators.projects.insert(id.clone(), Arc::new(map(computed)));
             }
-            Node::KeyBy { .. } | Node::PartitionBy { .. } => {
-                bind_keys(node, &mut operators, compiled);
+            Node::PartitionBy { id, keys, .. } => {
+                operators.projects.insert(id.clone(), Arc::new(partition_by(keys)));
             }
             Node::Rebind { id, fields, .. } => {
                 operators.projects.insert(id.clone(), Arc::new(super::bindings::rebind(fields)));
@@ -102,11 +101,8 @@ fn operators(ir: &Relational, compiled: &Compiled, settings: &Settings) -> Opera
             Node::Partition { id, spec, .. } => {
                 operators.partitions.insert(id.clone(), partition_operator(spec, settings));
             }
-            Node::Project { id, .. } | Node::Output { id, .. } => {
-                operators.projects.insert(
-                    id.clone(),
-                    Arc::new(output(&ir.output, compiled, matches!(node, Node::Project { .. }))),
-                );
+            Node::Output { id, .. } => {
+                operators.projects.insert(id.clone(), Arc::new(output(&ir.output)));
             }
         }
     }
@@ -147,13 +143,9 @@ const fn empty_operators() -> Operators<Key, Row> {
     }
 }
 
-fn output(output: &Projected, compiled: &Compiled, filter: bool) -> Project<Key, Row, Key, Row> {
-    let compiled = compiled.clone();
+fn output(output: &Projected) -> Project<Key, Row, Key, Row> {
     let output = output.clone();
     Project::new(move |_: &Key, row: &Row| {
-        if filter && !compiled.qualifies((row, row))? {
-            return Ok(None);
-        }
         let selected = output
             .columns
             .iter()
@@ -175,12 +167,10 @@ fn filter(predicate: &crate::compiler::Predicate) -> Project<Key, Row, Key, Row>
 
 fn expand(
     series: &crate::compiler::expansion::Series,
-    compiled: &Compiled,
 ) -> crate::engine::dataflow::Expand<Key, Row, Key, Row> {
     let series = series.clone();
-    let compiled = compiled.clone();
     crate::engine::dataflow::Expand::new(move |key: &Key, row: &Row, emit| {
-        if series.start > series.end || !compiled.qualifies((row, row))? {
+        if series.start > series.end {
             return Ok(());
         }
         for ordinal in series.start..=series.end {
@@ -207,16 +197,9 @@ fn join_map() -> Project<Key, (Row, Row), Key, Row> {
     })
 }
 
-fn map(
-    computed: &[crate::compiler::scalar::Computed],
-    compiled: &Compiled,
-) -> Project<Key, Row, Key, Row> {
+fn map(computed: &[crate::compiler::scalar::Computed]) -> Project<Key, Row, Key, Row> {
     let computed = computed.to_vec();
-    let filter = compiled.clone();
     Project::new(move |key: &Key, row: &Row| {
-        if !filter.qualifies((row, row))? {
-            return Ok(None);
-        }
         let mut mapped = row.clone();
         for value in &computed {
             ensure!(
@@ -227,26 +210,14 @@ fn map(
         Ok(Some((key.clone(), mapped)))
     })
 }
-fn key_by(key: &crate::compiler::ColumnRef) -> Project<Key, Row, Key, Row> {
-    let name = key.name.clone();
-    Project::new(move |_: &Key, row: &Row| {
-        Ok(row
-            .get(&name)
-            .context("missing join column")?
-            .as_ref()
-            .map(|value| (vec![value.clone()], row.clone())))
-    })
-}
 fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
     let (id, kind, inputs) = match node {
         Node::Source { id, source } => (id, plan::Kind::Source, vec![format!("source_{source}")]),
         Node::Filter { id, input, .. }
         | Node::Map { id, input, .. }
-        | Node::KeyBy { id, input, .. }
         | Node::Rebind { id, input, .. }
         | Node::CrossKey { id, input }
         | Node::EquijoinKey { id, input, .. }
-        | Node::Project { id, input }
         | Node::Output { id, input }
         | Node::PartitionBy { id, input, .. }
         | Node::Finalize { id, input, .. }
@@ -279,28 +250,6 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
     };
     plan::Node { id: id.clone(), kind, inputs, schema: schema(id) }
 }
-fn plan_revision(ir: &Relational) -> &'static str {
-    if ir.nodes.iter().any(|node| matches!(node, Node::SetDistinct { .. } | Node::Existence { .. }))
-    {
-        return "worker-relational-membership-v2";
-    }
-    if ir.nodes.iter().any(|node| matches!(node, Node::TopK { .. })) {
-        return "worker-relational-ordered-topk-v1";
-    }
-    if ir.nodes.iter().any(|node| matches!(node, Node::OrderedFirst { .. })) {
-        return "worker-relational-ordered-extrema-v4";
-    }
-    if ir.nodes.iter().any(|node| matches!(node, Node::DistinctCounts { .. })) {
-        return "worker-relational-exact-distinct-v3";
-    }
-    if ir.nodes.iter().any(|node| {
-        matches!(node, Node::Partition { .. } | Node::LeftJoin { .. } | Node::Lookup { .. })
-    }) {
-        "worker-relational-retained-partition-v2"
-    } else {
-        "worker-relational-v1"
-    }
-}
 pub(in crate::worker) fn plan(
     contract: &Contract,
     compiled: &Compiled,
@@ -308,7 +257,10 @@ pub(in crate::worker) fn plan(
 ) -> Result<Plan> {
     contract.validate()?;
     let identity = format!("{:x}", Sha256::digest(serde_json::to_vec(&(contract, compiled))?));
-    let revision = plan_revision(ir);
+    let revision = "relational";
+    let Some(Node::Output { id: output, .. }) = ir.nodes.last() else {
+        anyhow::bail!("relational program must end in an output node");
+    };
     let schema = |id: &str| format!("{revision}:{identity}:{id}");
     let nodes = ir.nodes.iter().map(|node| declaration(node, &schema)).collect();
     let sources = ir
@@ -345,7 +297,7 @@ pub(in crate::worker) fn plan(
             }
         }
     }
-    maintained.insert("output".into(), "project".into());
+    maintained.insert("output".into(), output.clone());
     let arrangements = maintained
         .into_iter()
         .map(|(id, node)| plan::Arrangement { id, schema: schema(&node), node })
@@ -355,7 +307,7 @@ pub(in crate::worker) fn plan(
         sources,
         nodes,
         arrangements,
-        outputs: vec!["project".into()],
+        outputs: vec![output.clone()],
     })
 }
 pub(in crate::worker) fn inputs(
@@ -397,16 +349,9 @@ pub(in crate::worker) fn deltas(batch: &Batch<Key, Row>, output: &Projected) -> 
     Deltas::bag(&Batch::from_updates(updates)?)
 }
 
-fn partition_by(
-    keys: &[crate::compiler::ColumnRef],
-    compiled: &Compiled,
-) -> Project<Key, Row, Key, Row> {
+fn partition_by(keys: &[crate::compiler::ColumnRef]) -> Project<Key, Row, Key, Row> {
     let keys = keys.to_vec();
-    let compiled = compiled.clone();
     Project::new(move |_: &Key, row: &Row| {
-        if !compiled.qualifies((row, row))? {
-            return Ok(None);
-        }
         let key = keys
             .iter()
             .map(|key| {
@@ -436,23 +381,13 @@ fn bind_ordered(node: &Node, operators: &mut Operators<Key, Row>) {
             operators.projects.insert(id.clone(), Arc::new(super::topk::input(spec)));
         }
         Node::TopK { id, spec, .. } => {
-            operators.ordered.insert(
-                id.clone(),
-                Arc::new(crate::engine::dataflow::OrderedSelection::TopK(super::topk::operator(
-                    spec,
-                ))),
-            );
+            operators.ordered.insert(id.clone(), Arc::new(super::topk::operator(spec)));
         }
         Node::OrderedInput { id, spec, .. } => {
             operators.expansions.insert(id.clone(), Arc::new(super::ordered::input(spec)));
         }
         Node::OrderedFirst { id, spec, .. } => {
-            operators.ordered.insert(
-                id.clone(),
-                Arc::new(crate::engine::dataflow::OrderedSelection::First(super::ordered::first(
-                    spec,
-                ))),
-            );
+            operators.ordered.insert(id.clone(), Arc::new(super::ordered::first(spec)));
         }
         Node::OrderedGroup { id, .. } => {
             operators.projects.insert(id.clone(), Arc::new(super::ordered::group()));
@@ -481,18 +416,6 @@ fn bind_left_join(node: &Node, operators: &mut Operators<Key, Row>, settings: &S
             operators
                 .partitions
                 .insert(id.clone(), Arc::new(super::left_join::operator(spec, settings.limits)));
-        }
-        _ => {}
-    }
-}
-
-fn bind_keys(node: &Node, operators: &mut Operators<Key, Row>, compiled: &Compiled) {
-    match node {
-        Node::KeyBy { id, key, .. } => {
-            operators.projects.insert(id.clone(), Arc::new(key_by(key)));
-        }
-        Node::PartitionBy { id, keys, .. } => {
-            operators.projects.insert(id.clone(), Arc::new(partition_by(keys, compiled)));
         }
         _ => {}
     }

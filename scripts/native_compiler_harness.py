@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Native PostgreSQL timestamp/numeric source identity through snapshot/CDC/restart."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 from decimal import Decimal
 import json
@@ -111,9 +111,6 @@ def qualify(output, command, mode, fixture_class=NativeFixture):
     with fixture.managed():
         fixture.rejected(command,'unsupported',fixture.query + ' ORDER BY id')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {fixture.name}.bid(id,auction,price,event_at,event_time,amount) VALUES(100,NULL,NULL,NULL,NULL,NULL),(101,1,-7,'2000-01-01 00:00:00','1999-12-31 16:00:00-08',0.000000000000000000000000000001)",
             f"UPDATE {fixture.name}.bid SET event_at='2024-03-10 01:59:59.999999',event_time='2024-03-10 01:59:59.999999-08',amount=1.00 WHERE id=1; UPDATE {fixture.name}.bid SET event_at='2024-03-10 03:00:00',event_time='2024-03-10 03:00:00-07',amount=1.000 WHERE id=2; UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=1",
@@ -123,23 +120,13 @@ def qualify(output, command, mode, fixture_class=NativeFixture):
         ]
         if mode == 'join':
             changes[1] += f"; UPDATE {fixture.name}.auction SET event_time='2024-03-10 03:00:00-07' WHERE id=2"
-        for index, change in enumerate(changes,1):
-            fixture.sql("SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; BEGIN;"+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed',fixture.query.replace(' AS '+fixture.labels[0],' AS changed',1))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        fixture.query = fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f"UPDATE {fixture.name}.bid SET event_time='1999-12-31 23:59:59.999999+00',event_at='1999-12-31 23:59:59.999999',amount=9223372036854775806.6666666666666667 WHERE id=100")
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f"UPDATE {fixture.name}.bid SET event_time='1999-12-31 23:59:59.999999+00',event_at='1999-12-31 23:59:59.999999',amount=9223372036854775806.6666666666666667 WHERE id=100",
+            normalized=fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"'),
+            rejected=[('changed', fixture.query.replace(' AS ' + fixture.labels[0], ' AS changed', 1))],
+            session="SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; ",
+        ))
         (output/'result.json').write_text(json.dumps({'mode':mode,'sql_oracle':'exact bag','memory_oracle':'native scalar/partition recomputation','restart':'cold',**fixture.evidence})+'\n')
 
 

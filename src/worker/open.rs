@@ -7,7 +7,7 @@ use super::{
 use crate::{
     Config,
     catalog::{Catalog, Snapshot, Writer},
-    engine::plan::query,
+    engine::plan::Settings as EngineSettings,
     source::{Contract, Export},
 };
 use anyhow::{Context, Result, ensure};
@@ -70,14 +70,14 @@ impl Open {
             Some(cache) => Some(Arc::new(cache.open().await?)),
             None => None,
         };
-        let options = query::Settings {
+        let options = EngineSettings {
             store: store.clone(),
             block_rows: settings.block_rows,
             limits: config.execution,
             encoded_cache,
         };
         let compiled = settings.query.compile_bound(&session.client, &contract).await?;
-        let mut query = Runtime::build(&contract, &compiled, options.clone())?;
+        let mut query = Runtime::build(&contract, &compiled, &options)?;
         if catalog.load_durable(&mut session.client, query.plan()).await?.is_none() {
             registration::reset_unactivated(&session.client, &contract).await?;
             bootstrap(&replication, settings, &mut session, &catalog, &mut query).await?;
@@ -175,7 +175,7 @@ async fn bootstrap(
     let exact = Runtime::build(
         &contract,
         &compiled,
-        query::Settings {
+        &EngineSettings {
             store: config
                 .object_store
                 .as_ref()

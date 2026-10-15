@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named local-item join: native deterministic text equality and complete deltas."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import json
 import pathlib
@@ -53,9 +53,6 @@ def qualify(output,command,mode):
             fixture.sql(f'ALTER TABLE {fixture.name}.person ALTER COLUMN state TYPE text COLLATE pg_catalog."und-x-icu"')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
           f"INSERT INTO {fixture.name}.person VALUES(400,'new','city','CA'); INSERT INTO {fixture.name}.auction(id,category,seller) VALUES(400,10,400),(401,10,400)",
           f"UPDATE {fixture.name}.person SET state='or',city=NULL WHERE id=400; UPDATE {fixture.name}.auction SET seller=1 WHERE id=401",
@@ -66,24 +63,14 @@ def qualify(output,command,mode):
           f"UPDATE {fixture.name}.person SET state='CA ' WHERE id=3; UPDATE {fixture.name}.person SET state='OR' WHERE id=1; UPDATE {fixture.name}.auction SET category=NULL WHERE id=400",
           f"UPDATE {fixture.name}.bid SET price=NULL WHERE id=1",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.person; DELETE FROM {fixture.name}.auction; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-filter',fixture.query.replace("p.state='OR'","p.state='WA'"))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('p.','"P".').replace('a.','"A".').replace('person p','person AS "P"').replace('auction a','auction AS "A"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.person; DELETE FROM {fixture.name}.auction; COMMIT')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.person; DELETE FROM {fixture.name}.auction; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'BEGIN; DELETE FROM {fixture.name}.person; DELETE FROM {fixture.name}.auction; COMMIT',
+            normalized=fixture.query.replace('p.', '"P".').replace('a.', '"A".').replace('person p', 'person AS "P"').replace('auction a', 'auction AS "A"'),
+            rejected=[('changed-filter', fixture.query.replace("p.state='OR'", "p.state='WA'"))],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':'q3','mode':mode,'postgres':'native MV exact bag','memory':'raw nested-loop local suggestions','restart':'cold same slot','changes':'simultaneous inserts updates deletes and key moves','text':'case/trailing spaces/NULL; deterministic source collation','identity':'changed literal rejected; aliases normalize'})+'\n')
 
 if __name__=='__main__':

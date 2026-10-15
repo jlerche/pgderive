@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 mod context;
 mod functions;
 mod normalize;
+mod outputs;
+pub use outputs::OutputMap;
 mod render;
 pub use functions::{Calendar, Function, Operation, implementation_types};
 use functions::{Signature, call_type};
@@ -18,6 +20,7 @@ pub enum Literal {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Expression {
     Input(usize),
+    Average(usize),
     Null(u32),
     Literal(Literal),
     Call { function: Function, arguments: Vec<usize> },
@@ -73,7 +76,15 @@ impl Program {
             if let Expression::Call { function, arguments } = expression {
                 let arguments = argument_types(arguments, &types)?;
                 signatures.push(function.signature(&arguments)?);
-            } else if matches!(expression, Expression::Literal(Literal::Numeric(_))) {
+            } else if matches!(expression, Expression::Average(_)) {
+                signatures.extend([
+                    ("pg_catalog.numeric_in(cstring,oid,integer)", "numeric_in"),
+                    ("pg_catalog.numeric_div(numeric,numeric)", "numeric_div"),
+                    ("pg_catalog.split_part(text,text,integer)", "split_part"),
+                ]);
+            } else if matches!(expression, Expression::Literal(Literal::Numeric(_)))
+                || matches!(expression, Expression::Input(index) if inputs.get(*index) == Some(&1700))
+            {
                 signatures.push(("pg_catalog.numeric_in(cstring,oid,integer)", "numeric_in"));
             }
         }
@@ -86,7 +97,13 @@ impl Program {
     }
     pub(super) fn has_calendar(&self) -> bool {
         self.expressions.iter().any(|expression| {
-            matches!(expression, Expression::Call { function: Function::Utc, .. })
+            matches!(
+                expression,
+                Expression::Call {
+                    function: Function::Utc | Function::FormatDate | Function::FormatMinute,
+                    ..
+                }
+            )
         })
     }
 }
@@ -103,10 +120,14 @@ pub fn expression_type(expression: &Expression, types: &[u32], inputs: &[u32]) -
         Expression::Input(index) => {
             let oid = *inputs.get(*index).context("terminal input absent")?;
             ensure!(
-                matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184),
+                matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184 | 1700),
                 "unsupported terminal input codec"
             );
             Ok(oid)
+        }
+        Expression::Average(index) => {
+            ensure!(inputs.get(*index) == Some(&1700), "average finalization requires ratio input");
+            Ok(1700)
         }
         Expression::Null(oid) => {
             ensure!(
@@ -152,7 +173,7 @@ pub fn expression_type(expression: &Expression, types: &[u32], inputs: &[u32]) -
         }
         Expression::ArrayElement { input, index } => {
             ensure!(
-                types.get(*input) == Some(&1009) && (1..=2).contains(index),
+                types.get(*input) == Some(&1009) && (1..=1024).contains(index),
                 "terminal capture requires text array and index 1 or 2"
             );
             Ok(25)

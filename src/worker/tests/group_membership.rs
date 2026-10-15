@@ -1,7 +1,7 @@
 //! Group-only SQL retains distinct membership, then preserves projected bag collisions.
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 
 type Bag = Batch<relational::Key, Row>;
@@ -23,7 +23,7 @@ async fn group_only_membership_preserves_duplicates_nulls_and_restart() -> Resul
     let native = contract();
     let sql = "SELECT b.auction FROM source.bid b GROUP BY b.auction,b.price";
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational().context("missing group-only IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
@@ -59,9 +59,7 @@ fn group_only_identity_and_scope_validation() -> Result<()> {
     let native = contract();
     let sql = "SELECT b.auction FROM source.bid b GROUP BY b.auction,b.price";
     let compiled = compile(sql, &native)?;
-    assert!(
-        compiled.revision.as_deref().is_some_and(|value| value.contains("pg-group-membership-v1"))
-    );
+
     let equivalent =
         compile(&sql.replace("b.", "\"B\".").replace("bid b", "bid AS \"B\""), &native)?;
     assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&equivalent)?);
@@ -69,13 +67,15 @@ fn group_only_identity_and_scope_validation() -> Result<()> {
     assert_ne!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&changed)?);
     assert!(compile("SELECT b.id FROM source.bid b GROUP BY b.auction", &native).is_err());
     let derived = format!("SELECT q.auction FROM({sql}) q WHERE q.auction IS NULL");
-    assert!(compile(&derived, &native)?.relational().is_some());
+    assert!(!compile(&derived, &native)?.relational().nodes.is_empty());
     let projection = compile("SELECT b.auction FROM source.bid b", &native)?;
     assert!(
-        projection
-            .revision
-            .as_deref()
-            .is_none_or(|value| !value.contains("pg-group-membership-v1"))
+        !projection
+            .relational()
+            .nodes
+            .iter()
+            .any(|node| matches!(node, crate::compiler::relational::Node::Statistics { .. }))
     );
+
     Ok(())
 }

@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{
-    compiler::{Compiled, Program, compile, partition::Mode, relational::Node},
+    compiler::{Compiled, compile, partition::Mode, relational::Node},
     engine::Batch,
     worker::program::relational,
 };
@@ -13,7 +13,7 @@ async fn distinct_occurrence_counts_exceed_i64_without_narrowing_membership() ->
         "SELECT b.auction AS g,COUNT(DISTINCT b.price) AS n FROM source.bid b GROUP BY b.auction",
         &native,
     )?;
-    let ir = compiled.relational().context("missing distinct IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let a = row(&[("id", Some("1")), ("auction", Some("1")), ("price", Some("7"))]);
     let b = row(&[("id", Some("2")), ("auction", Some("1")), ("price", Some("7"))]);
@@ -38,9 +38,7 @@ async fn distinct_occurrence_counts_exceed_i64_without_narrowing_membership() ->
 }
 fn scan_baseline(compiled: &Compiled) -> Result<Compiled> {
     let mut baseline = compiled.clone();
-    let Program::Relational { relational: ir } = &mut baseline.program else {
-        anyhow::bail!("missing relational IR");
-    };
+    let ir = &mut baseline.relational;
     let spec = ir
         .nodes
         .iter()
@@ -90,7 +88,7 @@ async fn distinct_delta_uses_fewer_cold_blocks_than_affected_group_scan() -> Res
     let delta = batch(vec![("bid", source[0].clone(), -1), ("bid", changed, 1)]);
     let mut measurements = Vec::new();
     for definition in [&baseline, &compiled] {
-        let ir = definition.relational().context("missing measurement IR")?;
+        let ir = definition.relational();
         let mut query = relational::build(&native, definition, &options)?;
         query.commit(query.prepare(relational::inputs(&initial, ir, 1)?).await?)?;
         let checkpoint = query.checkpoint()?;
@@ -158,7 +156,7 @@ async fn mixed_distinct_sum_average_filters_and_group_moves_restore() -> Result<
         "SELECT b.auction AS g,COUNT(*) AS n,SUM(b.price) AS s,AVG(b.price) AS a,COUNT(DISTINCT b.price) AS d,COUNT(DISTINCT b.price) FILTER(WHERE b.price<0) AS negative,COUNT(DISTINCT b.auction) AS keys FROM source.bid b GROUP BY b.auction",
         &native,
     )?;
-    let ir = compiled.relational().context("missing mixed IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("2"))]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", None)]);

@@ -44,7 +44,7 @@ fn q14_has_distinct_native_inputs_and_visible_typed_outputs() -> Result<()> {
             sql.clone()
         };
         let compiled = compile(&sql, &native(oid))?;
-        let layout = compiled.projection().context("projection absent")?;
+        let layout = compiled.output();
         assert_eq!(layout.columns.len(), 5);
         assert!(layout.terminal.is_some());
         assert!(compiled.validate_bound().is_err());
@@ -86,7 +86,7 @@ fn terminal_programs_reject_non_native_or_untyped_semantics() {
 fn terminal_filter_retains_hidden_operand_without_exposing_it() -> Result<()> {
     let compiled =
         compile("SELECT auction FROM source.bid WHERE 0.908 * price > 1", &native(1184))?;
-    let layout = compiled.projection().context("projection absent")?;
+    let layout = compiled.output();
     assert_eq!(layout.columns.len(), 1);
     assert!(layout.terminal.is_none());
 
@@ -109,7 +109,7 @@ fn integral_casts_and_coalesce_bind_closed_signatures() -> Result<()> {
         "SELECT price::smallint - auction::smallint AS value FROM source.bid",
     ] {
         let compiled = compile(sql, &native)?;
-        assert!(compiled.projection().context("missing projection")?.terminal.is_some());
+        assert!(compiled.output().terminal.is_some());
     }
     for sql in [
         "SELECT price::text AS value FROM source.bid",
@@ -124,14 +124,12 @@ fn integral_casts_and_coalesce_bind_closed_signatures() -> Result<()> {
 
 #[test]
 fn grouped_scalar_keys_execute_before_partition_state() -> Result<()> {
-    use crate::compiler::{Program, relational::Node};
+    use crate::compiler::relational::Node;
     let compiled = compile(
         "SELECT COALESCE(price, 1) AS key, COUNT(*) AS n FROM source.bid GROUP BY COALESCE(price, 1)",
         &native(1114),
     )?;
-    let Program::Relational { relational } = &compiled.program else {
-        anyhow::bail!("missing relational graph");
-    };
+    let relational = compiled.relational();
     let computed = relational
         .nodes
         .iter()
@@ -144,32 +142,43 @@ fn grouped_scalar_keys_execute_before_partition_state() -> Result<()> {
         computed[0].expression.evaluate(&[(field, Some("9".into()))].into())?,
         Some("9".into())
     );
-    assert!(serde_json::to_string(&compiled)?.contains("pg-checked-integral-scalar-v1"));
     Ok(())
 }
 
 #[test]
-fn typed_predicate_discovers_nested_semantic_dependencies() -> Result<()> {
+fn typed_predicates_execute_nested_case_conditions_and_nulls() -> Result<()> {
+    use crate::compiler::relational::Node;
     let native = native(1114);
-    for (predicate, marker) in [
-        (
-            "(CASE WHEN extra='x' THEN price+1 ELSE price END)>0",
-            "pg-deterministic-text-equality-v1",
-        ),
+    for (predicate, zero, null) in [
+        ("(CASE WHEN extra='x' THEN price+1 ELSE price END)>0", true, false),
         (
             "(CASE WHEN date_time-date_time>interval '1 second' THEN price+1 ELSE price END)>0",
-            "pg-timestamp-gap-v1",
+            false,
+            false,
         ),
-        (
-            "(CASE WHEN extra='x' THEN price+1 ELSE price END) IS NULL",
-            "pg-deterministic-text-equality-v1",
-        ),
-        ("(CASE WHEN mod(price,3)=0 THEN price+1 ELSE price END) IS NULL", "integral-remainder-v1"),
+        ("(CASE WHEN extra='x' THEN price+1 ELSE price END) IS NULL", false, true),
+        ("(CASE WHEN mod(price,3)=0 THEN price+1 ELSE price END) IS NULL", false, true),
     ] {
         let compiled =
             compile(&format!("SELECT price FROM source.bid WHERE {predicate}"), &native)?;
-        assert!(serde_json::to_string(&compiled)?.contains(marker));
-        assert!(serde_json::to_string(&compiled)?.contains("pg-checked-integral-predicate-v1"));
+        let predicate = compiled
+            .relational()
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                Node::Filter { predicate, .. } => Some(predicate),
+                _ => None,
+            })
+            .context("missing compiled filter")?;
+        for (price, expected) in [(Some("0"), zero), (None, null)] {
+            let row = [
+                ("0:price".into(), price.map(str::to_owned)),
+                ("0:extra".into(), Some("x".into())),
+                ("0:date_time".into(), Some("2000-01-01 00:00:00".into())),
+            ]
+            .into();
+            assert_eq!(predicate.qualifies(&row)?, expected);
+        }
     }
     Ok(())
 }

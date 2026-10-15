@@ -6,6 +6,7 @@ command after -- is an instrumented or ordinary worker executable prefix.
 """
 import argparse
 from contextlib import contextmanager
+from dataclasses import dataclass
 import json
 import os
 import pathlib
@@ -21,6 +22,16 @@ def harness_arguments():
     output = pathlib.Path(sys.argv[1])
     command = sys.argv[2:]
     return output, command[1:] if command and command[0] == '--' else command
+
+
+@dataclass
+class History:
+    changes: list[str]
+    final: str
+    normalized: str
+    rejected: list[tuple[str, str]]
+    session: str = ''
+    verify_reopen: bool = True
 
 
 class Worker:
@@ -148,19 +159,48 @@ record_bytes=16384
         return worker
 
     def expected_query(self):
-        return f"""SELECT COALESCE(to_jsonb(a.category),'null'::jsonb) group_key,
+        return f"""SELECT a.category group_key,
           count(*) row_count,sum(b.price) total FROM {self.name}.auction a
           JOIN {self.name}.bid b ON a.id=b.auction GROUP BY a.category"""
 
     def verify(self):
         # Compare every weighted aggregate with an independent PostgreSQL query.
-        difference = self.sql(f'''WITH expected AS ({self.expected_query()}),
-          actual AS (SELECT group_key,row_count,total FROM {self.name}.groups)
+        difference = self.sql(f'''WITH source AS ({self.expected_query()}),
+          expected AS (SELECT jsonb_build_array(NULL,jsonb_build_array(group_key,row_count,total)) tuple,1::bigint weight FROM source),
+          actual AS (SELECT tuple,weight FROM {self.name}.groups)
           SELECT count(*) FROM ((SELECT * FROM expected EXCEPT SELECT * FROM actual)
           UNION ALL (SELECT * FROM actual EXCEPT SELECT * FROM expected)) differences''').strip()
         assert difference == '0', 'worker sink differs from independent SQL'
         beyond = self.acknowledgement_ahead().strip()
         assert beyond == '0', 'slot acknowledged beyond durable publication'
+
+    def run_history(self, command, history, initial=None):
+        worker = self.start(command, 'first')
+        ready = worker.event('ready')
+        self.verify()
+        if initial is not None:
+            initial()
+        for index, change in enumerate(history.changes, 1):
+            self.sql(history.session + 'BEGIN;' + change + ';COMMIT')
+            worker.event('published', minimum_time=ready['time'] + index)
+            self.verify()
+        worker.abort()
+        progress_sql = f'SELECT row_to_json(p) FROM {self.name}.pgderive_progress p'
+        prior = self.sql(progress_sql)
+        for label, query in history.rejected:
+            self.rejected(command, label, query)
+        assert self.sql(progress_sql) == prior, 'rejected query changed durable progress'
+        self.query = history.normalized
+        resumed = self.start(command, 'resumed', maximum=1)
+        reopened = resumed.event('ready')
+        assert reopened['slot'] == ready['slot'], 'resume recreated physical slot'
+        assert reopened['time'] == ready['time'] + len(history.changes), 'resume lost or duplicated a transaction'
+        if history.verify_reopen:
+            self.verify()
+        self.sql(history.final)
+        resumed.event('published')
+        resumed.finish()
+        self.verify()
 
     def bag_difference(self, expected, context=''):
         return self.sql(context + f"""WITH expected AS ({expected}),

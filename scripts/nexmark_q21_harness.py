@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Explicit C text q21: native MV and independent ASCII/channel scanner bags."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import json
 import pathlib
@@ -84,10 +84,6 @@ def qualify(output,command,mode):
             fixture.rejected(command,label,query)
         assert fixture.sql(f"SELECT to_regclass('{name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
-        assert fixture.sql(f'SELECT max(weight)>1 FROM {name}.groups').strip()=='t'
         changes = [
             f"DELETE FROM {name}.bid WHERE id=300; UPDATE {name}.bid SET url='channel_id=changed' WHERE id=315",
             f"UPDATE {name}.bid SET channel='other',url='channel_id=' WHERE id=301; UPDATE {name}.bid SET channel='APPLE' WHERE id=310",
@@ -95,26 +91,15 @@ def qualify(output,command,mode):
             f"UPDATE {name}.bid SET id=501,url='ignored' WHERE id=310; INSERT INTO {name}.bid(id,auction,price,bidder,channel,url) VALUES(400,2,7,9,'other','channel_id=first&new')",
             f"UPDATE {name}.auction SET group_id=NULL WHERE id=2",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {name}.bid; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {name}.pgderive_progress p')
-        fixture.rejected(command,'changed-label',fixture.query.replace("THEN '0'","THEN '4'"))
-        fixture.rejected(command,'changed-capture',fixture.query.replace('[2]','[1]'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('SELECT auction,bidder','SELECT b.auction,b.bidder').replace(f'FROM {name}.bid',f'FROM {name}.bid b')
-        fixture.query = fixture.query.replace("lower(channel COLLATE pg_catalog.\"C\") IN ('apple','google','facebook','baidu')", "(lower(channel COLLATE pg_catalog.\"C\")='apple' OR lower(channel COLLATE pg_catalog.\"C\")='google' OR lower(channel COLLATE pg_catalog.\"C\")='facebook' OR lower(channel COLLATE pg_catalog.\"C\")='baidu')")
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            assert fixture.sql(f'SELECT max(weight)>1 FROM {name}.groups').strip()=='t'
+            fixture.sql(f'BEGIN; DELETE FROM {name}.bid; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {name}.bid',
+            normalized=fixture.query.replace('SELECT auction,bidder', 'SELECT b.auction,b.bidder').replace(f'FROM {name}.bid', f'FROM {name}.bid b').replace('lower(channel COLLATE pg_catalog."C") IN (\'apple\',\'google\',\'facebook\',\'baidu\')', '(lower(channel COLLATE pg_catalog."C")=\'apple\' OR lower(channel COLLATE pg_catalog."C")=\'google\' OR lower(channel COLLATE pg_catalog."C")=\'facebook\' OR lower(channel COLLATE pg_catalog."C")=\'baidu\')'),
+            rejected=[('changed-label', fixture.query.replace("THEN '0'", "THEN '4'")),('changed-capture', fixture.query.replace('[2]', '[1]'))],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':'q21','mode':mode,'postgres':'exact native materialized-view weighted bag','memory':'independent ASCII-C lower and delimiter scanner','restart':'cold same slot','hidden':'URL omitted from visible tuple; collisions consolidated','terminal':'attested C lower texteq regexp_match and array capture'})+'\n')
 
 if __name__=='__main__':

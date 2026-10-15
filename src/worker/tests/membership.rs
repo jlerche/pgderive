@@ -1,7 +1,7 @@
 //! Native DISTINCT/existence against independent raw-row bags through restart.
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 type State = BTreeMap<Row, i64>;
 fn oracle(
@@ -56,7 +56,7 @@ async fn history(anti: Option<bool>, distinct: bool) -> Result<()> {
         if distinct { "DISTINCT " } else { "" }
     );
     let compiled = compile(&sql, &native)?;
-    let ir = compiled.relational().context("missing membership graph")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", Some("1"))]);
@@ -133,7 +133,7 @@ async fn compound_self_existence_and_repeated_distinct_columns_preserve_null_sem
     let native = contract();
     let sql = "SELECT DISTINCT l.auction,l.auction AS again FROM source.bid l WHERE EXISTS(SELECT 1 FROM source.bid r WHERE r.auction=l.auction AND r.price=l.price)";
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational().context("missing self-existence graph")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", Some("1")), ("price", Some("4"))]);
@@ -205,7 +205,7 @@ fn membership_identity_normalizes_aliases_and_distinguishes_anti_and_distinct() 
 async fn distinct_threshold_retains_full_rows_without_narrowing_occurrence_totals() -> Result<()> {
     let native = contract();
     let compiled = compile("SELECT DISTINCT category FROM source.auction", &native)?;
-    let ir = compiled.relational().context("missing full-identity DISTINCT graph")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", None)]);

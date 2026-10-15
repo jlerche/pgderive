@@ -48,7 +48,7 @@ fn malformed_programs_fail_before_environment_binding() {
         assert!(program(expressions, None).validate(&[25]).is_err());
     }
     assert!(program(vec![Expression::Input(0)], Some(0)).validate(&[25]).is_err());
-    assert!(program(vec![Expression::Input(0)], None).validate(&[1700]).is_err());
+    assert!(program(vec![Expression::Input(0)], None).validate(&[9999]).is_err());
     for value in ["", ".", "NaN", "1e3", "-1", "'", "1..0"] {
         assert!(
             program(vec![Expression::Literal(Literal::Numeric(value.into()))], None)

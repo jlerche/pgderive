@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Scoped native Cartesian products against exact PostgreSQL MV and raw bags."""
+from worker_harness import History
 import collections
 import json
 import pathlib
@@ -35,9 +36,6 @@ def qualify(output, command):
         fixture.rejected(command, 'hidden-column', fixture.query.replace('l.auction,r.group_id', 'l.price,r.group_id'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {fixture.name}.bid VALUES(100,NULL,NULL),(101,NULL,7); UPDATE {fixture.name}.auction SET category='included',group_id=NULL WHERE id=1",
             f"DELETE FROM {fixture.name}.bid WHERE id=100; UPDATE {fixture.name}.auction SET category=NULL WHERE id=2",
@@ -46,23 +44,14 @@ def qualify(output, command):
             f"UPDATE {fixture.name}.auction SET category=NULL",
             f"UPDATE {fixture.name}.auction SET category='restored' WHERE id=1; INSERT INTO {fixture.name}.bid VALUES(103,NULL,NULL)",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;' + change + ';COMMIT')
-            worker.event('published', minimum_time=ready['time'] + index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command, 'changed-filter', fixture.query.replace('price>=0', 'price>=1'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time'] + len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.bid',
+            normalized=fixture.query,
+            rejected=[('changed-filter', fixture.query.replace('price>=0', 'price>=1'))],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'postgres': 'exact native MV bag', 'memory': 'raw nested-loop bag', 'restart': 'cold same slot', 'simultaneous': 'both inputs; NULLs; collisions; retractions; empty input'})+'\n')
 
 

@@ -4,7 +4,7 @@ import collections
 import json
 from native_mv_oracle import expected
 from sql_compiler_harness import SqlFixture
-from worker_harness import Worker, harness_arguments
+from worker_harness import Worker, harness_arguments, History
 
 
 class ExpressionFixture(SqlFixture):
@@ -53,9 +53,6 @@ def qualify(output, command, grouped):
         fixture.rejected(command, 'constant-case-overflow', f'SELECT CASE WHEN price>0 THEN price ELSE 32768::smallint END AS value FROM {fixture.name}.bid')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f'INSERT INTO {fixture.name}.bid VALUES(100,1,NULL),(101,NULL,7),(102,1,7)',
             f'UPDATE {fixture.name}.bid SET price=9 WHERE id=100; UPDATE {fixture.name}.bid SET price=NULL WHERE id=101',
@@ -63,22 +60,12 @@ def qualify(output, command, grouped):
             f'UPDATE {fixture.name}.bid SET price=0 WHERE id=101; INSERT INTO {fixture.name}.bid VALUES(103,2,0)',
             f'DELETE FROM {fixture.name}.bid WHERE id IN(101,102,103)',
         ]
-        for index, change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-expression',fixture.query.replace('price*2','price*3').replace('bigint*2','bigint*3'))
-        assert prior == fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'INSERT INTO {fixture.name}.bid VALUES(104,NULL,NULL)')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'INSERT INTO {fixture.name}.bid VALUES(104,NULL,NULL)',
+            normalized=fixture.query,
+            rejected=[('changed-expression', fixture.query.replace('price*2', 'price*3').replace('bigint*2', 'bigint*3'))],
+        ))
         (output/'result.json').write_text(json.dumps({'native_mv':'identical SQL exact bag','memory':'independent integer/source-row oracle','cold_restart':True,'grouped':grouped,'transactions':len(changes)+1})+'\n')
 
 

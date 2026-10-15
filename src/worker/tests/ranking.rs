@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 type Bag = Batch<relational::Key, Row>;
 const PEERS: &str = "SELECT b.id,rank() OVER(PARTITION BY b.auction ORDER BY b.price DESC NULLS FIRST) AS r,dense_rank() OVER(PARTITION BY b.auction ORDER BY b.price DESC NULLS FIRST) AS d FROM source.bid b";
@@ -48,7 +48,7 @@ async fn history(numbered: bool) -> Result<()> {
     let native = contract();
     let sql = if numbered { NUMBER } else { PEERS };
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational().context("missing ranking IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
@@ -105,7 +105,7 @@ fn rejects_unsupported_ranking_and_binds_order() -> Result<()> {
         assert!(compile(&sql, &native).is_err(), "{sql}");
     }
     let empty_order = compile(&PEERS.replace(" ORDER BY b.price DESC NULLS FIRST", ""), &native)?;
-    assert!(empty_order.relational().is_some());
+    assert!(!empty_order.relational().nodes.is_empty());
     assert_ne!(
         serde_json::to_vec(&compile(PEERS, &native)?)?,
         serde_json::to_vec(&compile(&PEERS.replace("DESC", "ASC"), &native)?)?

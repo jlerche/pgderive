@@ -17,7 +17,6 @@ pub(in crate::compiler) enum Value {
     Typed(Box<Node>),
     Column(Name),
     Bin(super::scalar::Bin),
-    Case(super::case::Case),
     Offset(super::offset::Offset),
     Aggregate(Box<Aggregate>),
 }
@@ -104,11 +103,8 @@ fn parse_target(value: &Node) -> Result<Target> {
         NodeEnum::TypeCast(_) | NodeEnum::CoalesceExpr(_) | NodeEnum::AExpr(_)
     ) {
         (Value::Typed(Box::new(expression.clone())), "?column?".into())
-    } else if let NodeEnum::CaseExpr(case) = node(expression)? {
-        super::case::parse(case).map_or_else(
-            |_| (Value::Typed(Box::new(expression.clone())), "case".into()),
-            |case| (Value::Case(case), "case".into()),
-        )
+    } else if matches!(node(expression)?, NodeEnum::CaseExpr(_)) {
+        (Value::Typed(Box::new(expression.clone())), "case".into())
     } else if let NodeEnum::FuncCall(call) = node(expression)? {
         let name = super::expressions::names(&call.funcname)?.0;
         let function = crate::compiler::parser::expressions::builtin_name(&name)

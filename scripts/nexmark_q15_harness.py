@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named q15 UTC-day portfolio qualification against PG and source-value sets."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import json
 import pathlib
@@ -62,9 +62,6 @@ def qualify(output,command):
         fixture.rejected(command,'unsupported',fixture.query+' ORDER BY day_start')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {fixture.name}.bid(id,auction,price,date_time,bidder) VALUES(206,900,9999,'2000-01-01 23:59:59.999999+00',500),(207,NULL,1000000,NULL,NULL)",
             f"DELETE FROM {fixture.name}.bid WHERE id=200; UPDATE {fixture.name}.bid SET price=1000000,bidder=502,auction=NULL WHERE id=201; UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=1",
@@ -73,25 +70,15 @@ def qualify(output,command):
             f"UPDATE {fixture.name}.bid SET date_time=NULL,price=NULL WHERE id IN(203,205); DELETE FROM {fixture.name}.bid WHERE id IN(201,206)",
             f"UPDATE {fixture.name}.auction SET group_id=3 WHERE id=2",
         ]
-        fixture.sql(f"BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK")
-        for index,change in enumerate(changes,1):
-            fixture.sql("SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; BEGIN;"+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-threshold',fixture.query.replace('10000','10001'))
-        fixture.rejected(command,'changed-distinct',fixture.query.replace('COUNT(DISTINCT','COUNT('))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        fixture.query = fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f"DELETE FROM {fixture.name}.bid")
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            fixture.sql(f"BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK")
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.bid',
+            normalized=fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"'),
+            rejected=[('changed-threshold', fixture.query.replace('10000', '10001')),('changed-distinct', fixture.query.replace('COUNT(DISTINCT', 'COUNT('))],
+            session="SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; ",
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':'q15','day':'UTC midnight timestamptz','sql_oracle':'exact bag','memory_oracle':'UTC-day price bands and value-presence sets','restart':'cold','infinities':'included','null_day':'included','thresholds':[10000,1000000]})+'\n')
 
 

@@ -7,6 +7,10 @@ pub use integral::Operation;
 pub(super) type Signature = (&'static str, &'static str);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Function {
+    Abs { oid: u32 },
+    Split,
+    FormatDate,
+    FormatMinute,
     Integral { operation: Operation, oid: u32 },
     Numeric,
     Int2,
@@ -29,6 +33,7 @@ pub enum Function {
 }
 pub(super) fn call_type(function: Function, arguments: &[u32]) -> Result<u32> {
     let result = match (function, arguments) {
+        (Function::Abs { oid }, [input]) if matches!(oid, 20 | 21 | 23) && oid == *input => oid,
         (Function::Integral { oid, .. }, [left, right])
             if matches!(oid, 20 | 21 | 23) && *left == oid && *right == oid =>
         {
@@ -47,8 +52,10 @@ pub(super) fn call_type(function: Function, arguments: &[u32]) -> Result<u32> {
         (Function::Int4, [20 | 21])
         | (Function::Length, [25 | 1043])
         | (Function::Subtract, [23, 23]) => 23,
-        (Function::Replace, [25 | 1043, 25, 25]) | (Function::Lower, [25 | 1043]) => 25,
-        (Function::RegexMatch, [25 | 1043, 25]) => 1009,
+        (Function::Replace, [25 | 1043, 25, 25])
+        | (Function::Lower, [25 | 1043])
+        | (Function::FormatDate | Function::FormatMinute, [1114]) => 25,
+        (Function::RegexMatch | Function::Split, [25 | 1043, 25]) => 1009,
         (Function::Utc, [1184]) => 1114,
         _ => anyhow::bail!("SQL type: unsupported terminal built-in signature"),
     };
@@ -58,6 +65,14 @@ impl Function {
     pub(super) fn signature(self, arguments: &[u32]) -> Result<Signature> {
         call_type(self, arguments)?;
         Ok(match self {
+            Self::Abs { oid: 20 } => ("pg_catalog.abs(bigint)", "int8abs"),
+            Self::Abs { oid: 21 } => ("pg_catalog.abs(smallint)", "int2abs"),
+            Self::Abs { oid: 23 } => ("pg_catalog.abs(integer)", "int4abs"),
+            Self::Abs { .. } => anyhow::bail!("unsupported ABS type"),
+            Self::Split => ("pg_catalog.string_to_array(text,text)", "text_to_array"),
+            Self::FormatDate | Self::FormatMinute => {
+                ("pg_catalog.to_char(timestamp,text)", "timestamp_to_char")
+            }
             Self::Integral { operation, oid } => integral::signature(operation, oid)?,
             Self::Int2 | Self::Int4 | Self::Int8 => integral_cast(self, arguments)?,
             Self::Numeric => match arguments {
@@ -85,6 +100,9 @@ impl Function {
     }
     pub(super) const fn name(self) -> &'static str {
         match self {
+            Self::Abs { .. } => "abs",
+            Self::Split => "string_to_array",
+            Self::FormatDate | Self::FormatMinute => "to_char",
             Self::Integral { operation, oid } => integral::name(operation, oid),
             Self::Int2 => "int2",
             Self::Int4 => "int4",

@@ -6,19 +6,20 @@ pub(super) type Joined = (String, Row, Row);
 pub(super) type Projected = (String, Option<String>);
 
 pub(super) fn project(delta: &ZSet<Joined>) -> Result<ZSet<Projected>> {
-    delta
-        .try_filter(|(_, auction, bid)| {
-            Ok(number(auction, "category")? == Some(20)
-                && number(bid, "price")?.is_some_and(|price| price >= 205))
-        })?
-        .try_map(|(_, auction, bid)| {
+    let mut rows = Vec::new();
+    for ((_, auction, bid), weight) in delta.iter() {
+        if number(auction, "category")? == Some(20)
+            && number(bid, "price")?.is_some_and(|price| price >= 205)
+        {
             let category = auction
                 .get("category")
                 .and_then(Option::as_ref)
                 .context("missing qualifying category")?;
             let bidder = bid.get("bidder").context("missing fixture bidder column")?;
-            Ok((category.clone(), bidder.clone()))
-        })
+            rows.push(((category.clone(), bidder.clone()), *weight));
+        }
+    }
+    ZSet::from_updates(rows)
 }
 
 pub(super) async fn verify(sql: &Client, schema: &str, output: &ZSet<Projected>) -> Result<()> {

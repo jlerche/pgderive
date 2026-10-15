@@ -1,16 +1,9 @@
 use super::TimedBatch;
-use crate::engine::{
-    Batch,
-    execution::{Consolidator, Limits},
-    reader::BatchData,
-    trace::TraceSnapshot,
-};
+use crate::engine::{Batch, execution::Limits, reader::BatchData, trace::TraceSnapshot};
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
-use std::sync::Arc;
-type Measure<K, V> = dyn Fn(&K, &V) -> Result<Option<i64>> + Send + Sync;
 
 /// Object-persisted sufficient statistics for SQL bag GROUP BY SUM semantics.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -21,37 +14,6 @@ pub struct SumState {
     pub non_null: i64,
     /// Exact weighted sum narrowed at the complete transaction boundary.
     pub sum: i64,
-}
-#[derive(Default)]
-struct Total {
-    rows: BigInt,
-    non_null: BigInt,
-    sum: BigInt,
-}
-impl Total {
-    fn add_exact(&mut self, column: u8, weight: BigInt) -> Result<()> {
-        match column {
-            0 => self.rows += weight,
-            1 => self.non_null += weight,
-            2 => self.sum += weight,
-            _ => anyhow::bail!("invalid aggregate statistic"),
-        }
-        Ok(())
-    }
-    fn prior(&mut self, state: &SumState) {
-        self.rows += state.rows;
-        self.non_null += state.non_null;
-        self.sum += state.sum;
-    }
-    fn finish(self) -> Result<SumState> {
-        let state = SumState {
-            rows: i64::try_from(self.rows).context("group row count overflow")?,
-            non_null: i64::try_from(self.non_null).context("group non-NULL count overflow")?,
-            sum: i64::try_from(self.sum).context("group sum overflow")?,
-        };
-        validate(&state)?;
-        Ok(state)
-    }
 }
 fn validate(state: &SumState) -> Result<()> {
     ensure!(
@@ -73,12 +35,40 @@ pub struct SumDelta<K: BatchData> {
 /// Input deltas may be negative; callers maintain valid full-tuple input bags.
 /// Final grouped statistics are checked, but do not prove per-tuple validity.
 pub struct GroupSum<K: BatchData, V: BatchData> {
-    measure: Arc<Measure<K, V>>,
+    statistics: super::Statistics<K, V, SumState>,
 }
 impl<K: BatchData, V: BatchData> GroupSum<K, V> {
     /// Bind a pure deterministic numeric projection; None contributes SQL NULL.
     pub fn new(measure: impl Fn(&K, &V) -> Result<Option<i64>> + Send + Sync + 'static) -> Self {
-        Self { measure: Arc::new(measure) }
+        Self {
+            statistics: super::Statistics::with_measure(
+                3,
+                move |key, value| {
+                    let value = measure(key, value)?;
+                    Ok(vec![
+                        BigInt::from(1),
+                        BigInt::from(u8::from(value.is_some())),
+                        BigInt::from(value.unwrap_or_default()),
+                    ])
+                },
+                |state: &SumState| {
+                    validate(state)?;
+                    ensure!(state.rows > 0, "invalid aggregate arrangement");
+                    Ok(vec![state.rows.into(), state.non_null.into(), state.sum.into()])
+                },
+                |_, values| {
+                    let state = SumState {
+                        rows: i64::try_from(values[0].clone())
+                            .context("group row count overflow")?,
+                        non_null: i64::try_from(values[1].clone())
+                            .context("group non-NULL count overflow")?,
+                        sum: i64::try_from(values[2].clone()).context("group sum overflow")?,
+                    };
+                    validate(&state)?;
+                    Ok((state.rows != 0).then_some(state))
+                },
+            ),
+        }
     }
     /// Sum exact weight×value contributions and prior statistics before narrowing.
     ///
@@ -101,64 +91,14 @@ impl<K: BatchData, V: BatchData> GroupSum<K, V> {
         prior: &TraceSnapshot<K, SumState>,
         limits: Limits,
     ) -> Result<SumDelta<K>> {
-        ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order aggregate tick");
-        limits.check_batch(input.batch.borrow())?;
-        let mut contributions = Consolidator::new(limits)?;
-        for ((key, value), weight) in input.batch.borrow().iter() {
-            contributions.add((key.clone(), 0_u8), *weight)?;
-            if let Some(value) = (self.measure)(key, value)? {
-                contributions.add((key.clone(), 1_u8), *weight)?;
-                contributions.add((key.clone(), 2_u8), BigInt::from(*weight) * value)?;
-            }
-        }
-        let mut totals = Vec::<(K, Total)>::new();
-        contributions.finish(|(key, column), weight| {
-            if totals.last().is_none_or(|(group, _)| group != &key) {
-                totals.push((key, Total::default()));
-            }
-            totals.last_mut().context("missing aggregate total")?.1.add_exact(column, weight)
-        })?;
-
-        let mut state = Consolidator::new(limits)?;
-        let mut output = Consolidator::new(limits)?;
-        for (key, mut total) in totals {
-            let mut cursor = prior.key_cursor(&key).await?;
-            let before = if let Some((group, value, weight)) = cursor.current()
-                && group == &key
-            {
-                ensure!(weight == 1 && value.rows > 0, "invalid aggregate arrangement");
-                validate(value)?;
-                let value = value.clone();
-                cursor.advance().await?;
-                ensure!(
-                    cursor.current().is_none_or(|(group, _, _)| group != &key),
-                    "multiple aggregate states for group"
-                );
-                Some(value)
-            } else {
-                None
-            };
-            if let Some(before) = &before {
-                total.prior(before);
-            }
-            let next = total.finish()?;
-            let after = (next.rows != 0).then_some(next);
-            if before == after {
-                continue;
-            }
-            if let Some(before) = before {
-                state.add((key.clone(), before.clone()), -1)?;
-                output.add((key.clone(), visible(&before)), -1)?;
-            }
-            if let Some(after) = after {
-                state.add((key.clone(), after.clone()), 1)?;
-                output.add((key, visible(&after)), 1)?;
-            }
-        }
-        Ok(SumDelta {
-            state: TimedBatch { time: input.time, batch: state.finish_batch()? },
-            output: TimedBatch { time: input.time, batch: output.finish_batch()? },
-        })
+        let state = self.statistics.evaluate(input, prior, limits).await?;
+        let output = Batch::from_updates(
+            state
+                .batch
+                .iter()
+                .map(|((key, value), weight)| ((key.clone(), visible(value)), *weight)),
+        )?;
+        Ok(SumDelta { state, output: TimedBatch { time: input.time, batch: output } })
     }
 }
 fn visible(state: &SumState) -> Option<i64> {

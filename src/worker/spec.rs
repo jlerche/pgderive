@@ -74,7 +74,7 @@ pub struct Settings {
     pub catalog_schema: String,
     /// Stable registered query name.
     pub query_id: String,
-    /// Owned grouped-row or weighted-bag destination table inside the catalog schema.
+    /// Owned weighted-bag destination table inside the catalog schema.
     pub sink_table: String,
     /// Optional application-facing typed bag view, distinct from the internal sink.
     #[serde(default)]
@@ -109,7 +109,7 @@ impl Settings {
             !self.query_id.is_empty() && self.query_id.len() <= 200,
             "invalid worker query name"
         );
-        crate::catalog::Sink::Grouped(self.sink_table.clone()).validate()?;
+        crate::catalog::Sink::Bag(self.sink_table.clone()).validate()?;
         if let Some(view) = &self.result_view {
             ensure!(
                 identifier(view) && !view.starts_with("pgderive_") && view != &self.sink_table,

@@ -2,7 +2,7 @@
 use super::{Compiled, Name, Scope, qualifier, relational::qualify, resolve, scope};
 use crate::{
     compiler::{
-        ColumnRef, Program,
+        ColumnRef,
         lookup::{Input, Lookup},
         parser::lookup::Parsed,
         partition::Order,
@@ -64,7 +64,6 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
             .map(|column| field(1, &column.name))
             .collect(),
     };
-    let has_computed = !conditions.computed.is_empty();
     let nodes = nodes((left_keys, right_keys), spec, predicate, conditions.computed);
     let sources = scopes
         .iter()
@@ -79,19 +78,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         columns,
         terminal,
     };
-    Ok(Compiled {
-        program: Program::Relational { relational: Relational { sources, nodes, output } },
-        predicates: None,
-        revision: Some(revision(has_computed)),
-    })
-}
-fn revision(computed: bool) -> String {
-    let base = "sql-predecessor-v1:pg-query-6.2.1:pg-17.7:native-bag-v1:row-text-v1:json-exact-number-v1:signed-union-v1:affected-partition-v1:sql-limit-one-v1:where-3vl-v1:terminal-builtins-v1";
-    if computed {
-        format!("{base}:native-lookup-remainder-v1:pg-integral-promotion-v1")
-    } else {
-        base.into()
-    }
+    Ok(Compiled { relational: Relational { sources, nodes, output } })
 }
 fn correlated(name: &Name, scopes: &[Scope<'_>; 2]) -> Result<ColumnRef> {
     // The inner local relation shadows an unqualified outer column.
@@ -226,7 +213,7 @@ fn labels(
         .into_iter()
         .map(|(name, label, transform)| {
             ensure!(
-                transform == crate::catalog::terminal::Transform::Identity,
+                transform == crate::catalog::terminal::OutputMap::Identity,
                 "lookup inner expressions require native column projection"
             );
             let mut column = resolve(&name)?;

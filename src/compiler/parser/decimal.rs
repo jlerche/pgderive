@@ -1,10 +1,10 @@
 //! Exact decimal multiplication deferred only across the final projection boundary.
 use super::{Name, column, expressions::names, node, optional};
-use crate::catalog::terminal::{Transform, validate_factor};
+use crate::catalog::terminal::{OutputMap, validate_factor};
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
-pub(super) fn target(value: &Node) -> Result<(Name, Transform, String)> {
+pub(super) fn target(value: &Node) -> Result<(Name, OutputMap, String)> {
     let NodeEnum::AExpr(expression) = node(value)? else {
         anyhow::bail!("expected decimal multiplication");
     };
@@ -30,5 +30,5 @@ pub(super) fn target(value: &Node) -> Result<(Name, Transform, String)> {
     let decimal = decimal.fval.trim_start_matches('0');
     let factor = if decimal.starts_with('.') { format!("0{decimal}") } else { decimal.into() };
     validate_factor(&factor)?;
-    Ok((input, Transform::NumericMultiply { factor }, "?column?".into()))
+    Ok((input, OutputMap::NumericMultiply { factor }, "?column?".into()))
 }

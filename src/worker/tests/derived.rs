@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 type Bag = Batch<relational::Key, Row>;
 fn sql(numbered: bool) -> String {
@@ -60,7 +60,7 @@ async fn history(numbered: bool, layered: bool) -> Result<()> {
     let equivalent =
         compile(&sql.replace("q.", "\"Q\".").replace(") q WHERE", ") AS \"Q\" WHERE"), &native)?;
     assert_eq!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&equivalent)?);
-    let ir = compiled.relational().context("missing derived IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
@@ -116,9 +116,10 @@ fn derived_scope_rejects_ambiguous_and_deferred_values() -> Result<()> {
         "SELECT q.g FROM(SELECT b.auction AS g,AVG(b.price) AS a FROM source.bid b GROUP BY b.auction) q WHERE q.g IS NULL".into(),
     ] { assert!(compile(&query, &native).is_err(), "{query}"); }
     assert!(
-        compile("SELECT q.id FROM(SELECT b.id FROM source.bid b) q WHERE q.id>0", &native)?
+        !compile("SELECT q.id FROM(SELECT b.id FROM source.bid b) q WHERE q.id>0", &native)?
             .relational()
-            .is_some()
+            .nodes
+            .is_empty()
     );
     assert_ne!(
         serde_json::to_vec(&compile(&sql(false), &native)?)?,
@@ -140,7 +141,7 @@ fn nested_scopes_expose_only_inner_labels() -> Result<()> {
     let native = contract();
     let query = scoped_sql(false, true);
     let compiled = compile(&query, &native)?;
-    let ir = compiled.relational().context("missing scoped IR")?;
+    let ir = compiled.relational();
     let filters = ir
         .nodes
         .iter()
@@ -165,57 +166,32 @@ fn nested_scopes_expose_only_inner_labels() -> Result<()> {
     );
     let no_filter = format!("SELECT q.price FROM({}) q", sql(false));
     let plain = compile(&no_filter, &native)?;
-    assert!(
-        plain
-            .revision
-            .as_deref()
-            .is_some_and(|revision| revision.contains(":derived-scope-projection-v1")
-                && revision.ends_with(":retained-partition-output-v1"))
-    );
+
     assert_eq!(
-        plain.relational().context("missing projection IR")?.nodes.len(),
-        compile(&sql(false), &native)?.relational().context("missing baseline IR")?.nodes.len()
+        plain.relational().nodes.len(),
+        compile(&sql(false), &native)?.relational().nodes.len()
     );
     Ok(())
 }
 
 #[test]
-fn retained_output_revision_only_binds_partition_layouts() -> Result<()> {
+fn aggregate_plans_select_statistics_or_partition_state() -> Result<()> {
     let native = contract();
     let linear = compile(
         "SELECT b.auction AS g,COUNT(*) AS n FROM source.bid b GROUP BY b.auction",
         &native,
     )?;
-    assert!(
-        linear
-            .revision
-            .as_deref()
-            .is_some_and(|value| !value.contains("retained-partition-output"))
-    );
-    let linear_plan =
-        relational::plan(&native, &linear, linear.relational().context("missing linear IR")?)?;
-    assert!(linear_plan.definition().revision.starts_with("worker-relational-v1:"));
+
+    let linear_plan = relational::plan(&native, &linear, linear.relational())?;
+    assert!(linear_plan.definition().arrangements.iter().any(|entry| entry.node == "statistics"));
+
     let partition = compile(
         "SELECT b.auction AS g,MIN(b.price) AS n,COUNT(*) AS c FROM source.bid b GROUP BY b.auction",
         &native,
     )?;
-    assert!(
-        partition
-            .revision
-            .as_deref()
-            .is_some_and(|value| value.contains("retained-partition-output-v1"))
-    );
-    let partition_plan = relational::plan(
-        &native,
-        &partition,
-        partition.relational().context("missing partition IR")?,
-    )?;
-    assert!(
-        partition_plan
-            .definition()
-            .revision
-            .starts_with("worker-relational-retained-partition-v2:")
-    );
+
+    let partition_plan = relational::plan(&native, &partition, partition.relational())?;
+
     assert!(partition_plan.definition().arrangements.iter().any(|entry| entry.node == "partition"));
     Ok(())
 }

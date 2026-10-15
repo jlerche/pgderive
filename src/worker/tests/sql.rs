@@ -22,7 +22,7 @@ fn identity(sql: &str) -> Result<String> {
 }
 #[test]
 fn normalized_identity_and_native_layout_are_restart_boundaries() -> Result<()> {
-    let normalized = "select category as g, count(*) as n, sum(price) as s from SOURCE.AUCTION as x inner join source.bid as y on y.auction=x.id where x.other is not null and x.other is not null group by category;";
+    let normalized = "select category, count(*), sum(price) from SOURCE.AUCTION as x inner join source.bid as y on y.auction=x.id where x.other is not null and x.other is not null group by category;";
     assert_eq!(identity(SQL)?, identity(normalized)?);
     assert_eq!(identity(SQL)?, identity(&SQL.replace("SELECT", "/* comment */ SELECT"))?);
     assert_ne!(identity(SQL)?, identity(&SQL.replace("IS NOT NULL", "IS NULL"))?);
@@ -45,17 +45,10 @@ fn normalized_identity_and_native_layout_are_restart_boundaries() -> Result<()> 
     let mut changed = native();
     changed.relations[1].columns[2].nullable = false;
     assert_ne!(identity(SQL)?, program::plan(&changed, &compile(SQL, &changed)?)?.identity());
-    let mut compiled = compile(SQL, &native())?;
-    compiled.revision =
-        Some("sql-grouped-v1:row-text-v1:json-v2:group-string-v1:i64-sum-v1".into());
-    assert_ne!(identity(SQL)?, program::plan(&native(), &compiled)?.identity());
-    let mut selectors = compile(SQL, &native())?.selectors()?.clone();
+    let mut selectors = super::spec();
     selectors.group = "id".into();
-    let legacy = Compiled::legacy(selectors, &native())?;
-    assert_ne!(
-        identity(&SQL.replace("a.category", "a.id"))?,
-        program::plan(&native(), &legacy)?.identity()
-    );
+    let translated = Compiled::legacy(selectors, &native())?;
+    assert_ne!(identity(SQL)?, program::plan(&native(), &translated)?.identity());
     Ok(())
 }
 #[test]
@@ -204,7 +197,7 @@ fn oracle(tables: &[BTreeMap<Row, i64>; 2]) -> Result<Output> {
     ))
 }
 async fn step(
-    query: &mut program::Query,
+    query: &mut program::relational::Query,
     compiled: &Compiled,
     tables: &mut [BTreeMap<Row, i64>; 2],
     changes: weighted::Batch,
@@ -213,17 +206,18 @@ async fn step(
         let index = usize::from(update.tuple.table == "bid");
         *tables[index].entry(update.tuple.row.clone()).or_default() += update.weight;
     }
-    let prepared =
-        query.prepare(program::inputs(&changes, compiled.selectors()?, query.time() + 1)?).await?;
+    let prepared = query
+        .prepare(program::relational::inputs(&changes, compiled.relational(), query.time() + 1)?)
+        .await?;
     query.commit(prepared)?;
-    assert_eq!(query.snapshot().output.materialize().await?, oracle(tables)?);
+    assert_eq!(super::grouped_output(query, compiled).await?, oracle(tables)?);
     Ok(())
 }
 #[tokio::test]
 async fn compiled_history_matches_independent_memory_oracle_and_cold_restart() -> Result<()> {
     let compiled = compile(SQL, &native())?;
     let options = settings();
-    let mut query = program::build(&native(), &compiled, options.clone())?;
+    let mut query = super::build(&native(), &compiled, &options)?;
     let mut tables = [BTreeMap::new(), BTreeMap::new()];
     let left = row(&[("id", Some("1")), ("category", None), ("other", Some("yes"))]);
     let nil = row(&[("id", Some("3")), ("auction", Some("1")), ("price", None)]);
@@ -258,9 +252,9 @@ async fn compiled_history_matches_independent_memory_oracle_and_cold_restart() -
     )
     .await?;
     let checkpoint = query.checkpoint()?;
-    query = program::build(&native(), &compile(SQL, &native())?, options)?;
+    query = super::build(&native(), &compile(SQL, &native())?, &options)?;
     query.restore_checkpoint(checkpoint).await?;
-    assert_eq!(query.snapshot().output.materialize().await?, oracle(&tables)?);
+    assert_eq!(super::grouped_output(&query, &compiled).await?, oracle(&tables)?);
     let mut excluded = next_left.clone();
     excluded.insert("other".into(), None);
     step(
@@ -282,49 +276,65 @@ async fn compiled_history_matches_independent_memory_oracle_and_cold_restart() -
     )
     .await?;
     assert_eq!(
-        query.snapshot().output.materialize().await?,
+        super::grouped_output(&query, &compiled).await?,
         Batch::from_updates([((Some("2".into()), (1, None)), 1)])?
     );
     step(&mut query, &compiled, &mut tables, batch(vec![("bid", nil, -1)])).await?;
     let empty = row(&[]);
-    assert!(compiled.qualifies((&empty, &empty)).is_err());
+    let invalid = batch(vec![("auction", empty, 1)]);
+    let before = query.checkpoint()?;
+    assert!(
+        query
+            .prepare(program::relational::inputs(
+                &invalid,
+                compiled.relational(),
+                query.time() + 1
+            )?)
+            .await
+            .is_err()
+    );
+    assert_eq!(query.checkpoint()?, before);
     Ok(())
 }
 
 #[tokio::test]
 async fn right_null_predicate_and_overflow_fail_without_advancing_state() -> Result<()> {
     let compiled = compile(&SQL.replace("WHERE", "WHERE b.price IS NULL AND"), &native())?;
-    let mut query = program::build(&native(), &compiled, settings())?;
+    let mut query = super::build(&native(), &compiled, &settings())?;
     let left = row(&[("id", Some("1")), ("category", None), ("other", Some("yes"))]);
     let nil = row(&[("id", Some("3")), ("auction", Some("1")), ("price", None)]);
     let source = batch(vec![("auction", left.clone(), 1), ("bid", nil.clone(), 1)]);
-    let prepared = query.prepare(program::inputs(&source, compiled.selectors()?, 1)?).await?;
+    let prepared =
+        query.prepare(program::relational::inputs(&source, compiled.relational(), 1)?).await?;
     query.commit(prepared)?;
     let expected = Batch::from_updates([((None, (1, None)), 1)])?;
-    assert_eq!(query.snapshot().output.materialize().await?, expected);
+    assert_eq!(super::grouped_output(&query, &compiled).await?, expected);
     let mut value = nil.clone();
     value.insert("price".into(), Some("7".into()));
     let changes = batch(vec![("bid", nil.clone(), -1), ("bid", value.clone(), 1)]);
-    let prepared = query.prepare(program::inputs(&changes, compiled.selectors()?, 2)?).await?;
+    let prepared =
+        query.prepare(program::relational::inputs(&changes, compiled.relational(), 2)?).await?;
     query.commit(prepared)?;
-    assert_eq!(query.snapshot().output.materialize().await?, Batch::from_updates([])?);
+    assert_eq!(super::grouped_output(&query, &compiled).await?, Batch::from_updates([])?);
     let changes = batch(vec![("bid", value, -1), ("bid", nil, 1)]);
-    let prepared = query.prepare(program::inputs(&changes, compiled.selectors()?, 3)?).await?;
+    let prepared =
+        query.prepare(program::relational::inputs(&changes, compiled.relational(), 3)?).await?;
     query.commit(prepared)?;
-    assert_eq!(query.snapshot().output.materialize().await?, expected);
+    assert_eq!(super::grouped_output(&query, &compiled).await?, expected);
 
     let compiled = compile(SQL, &native())?;
-    let query = program::build(&native(), &compiled, settings())?;
+    let query = super::build(&native(), &compiled, &settings())?;
     let huge =
         row(&[("id", Some("4")), ("auction", Some("1")), ("price", Some("9223372036854775807"))]);
     let extra = row(&[("id", Some("5")), ("auction", Some("1")), ("price", Some("1"))]);
     let source = batch(vec![("auction", left, 1), ("bid", huge, 1), ("bid", extra, 1)]);
     let before = query.checkpoint()?;
-    assert!(query.prepare(program::inputs(&source, compiled.selectors()?, 1)?).await.is_err());
+    let prepared =
+        query.prepare(program::relational::inputs(&source, compiled.relational(), 1)?).await?;
+    assert!(program::relational::deltas(&prepared.output().batch, compiled.output()).is_err());
     assert_eq!(query.checkpoint()?, before);
-    let mut revised = compiled;
-    revised.revision = Some("incompatible".into());
-    let mut other = program::build(&native(), &revised, settings())?;
+    let alternate = compile(&SQL.replace("IS NOT NULL", "IS NULL"), &native())?;
+    let mut other = super::build(&native(), &alternate, &settings())?;
     assert!(other.restore_checkpoint(before).await.is_err());
     Ok(())
 }

@@ -148,7 +148,6 @@ mod tests {
         )?;
         compiled
             .relational()
-            .context("missing distinct IR")?
             .nodes
             .iter()
             .find_map(|node| match node {

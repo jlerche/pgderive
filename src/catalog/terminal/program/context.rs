@@ -25,14 +25,27 @@ pub(super) fn validate(expression: &Expression, prior: &[Expression]) -> Result<
                 "only the closed channel_id capture pattern is supported"
             );
         }
-        Expression::ArrayElement { input, .. } => {
+        Expression::Call { function: Function::Split, arguments } => {
+            let [input, delimiter] = arguments.as_slice() else {
+                anyhow::bail!("split requires two operands")
+            };
+            ensure!(collated(*input, prior), "split requires explicit C collation");
             ensure!(
-                matches!(
-                    prior.get(*input),
-                    Some(Expression::Call { function: Function::RegexMatch, .. })
-                ),
-                "terminal array selection requires regexp_match"
+                matches!(prior.get(*delimiter), Some(Expression::Literal(Literal::Text(text))) if !text.is_empty() && !text.contains('\0') && text.len() <= 64),
+                "invalid split delimiter"
             );
+        }
+        Expression::ArrayElement { input, index } => {
+            let supported = match prior.get(*input) {
+                Some(Expression::Call { function: Function::RegexMatch, .. }) => {
+                    (1..=2).contains(index)
+                }
+                Some(Expression::Call { function: Function::Split, .. }) => {
+                    (1..=1024).contains(index)
+                }
+                _ => false,
+            };
+            ensure!(supported, "terminal array selection requires supported regex/split index");
         }
         _ => {}
     }

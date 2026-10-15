@@ -6,26 +6,15 @@ use tokio_postgres::{GenericClient, Transaction};
 
 pub mod program;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Transform {
-    Identity,
-    Abs,
-    Length,
-    Numeric,
-    Average,
-    NumericMultiply { factor: String },
-    ArrayElement { delimiter: String, index: u16 },
-    TimestampFormat { pattern: String, utc: bool },
-}
+pub use program::OutputMap;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Environment {
     server: String,
     encoding: String,
     functions: Vec<(String, Value)>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     collations: Vec<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     calendar: Option<Value>,
 }
 /// Bound pure tuple-local scalar map; its raw input bag remains object-backed.
@@ -33,54 +22,31 @@ struct Environment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Terminal {
-    transforms: Vec<Transform>,
     types: Vec<u32>,
-    // Keep attestation metadata behind an allocation; serde identity is unchanged.
     environment: Option<Box<Environment>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    program: Option<program::Program>,
+    program: program::Program,
 }
 impl Terminal {
     pub(crate) fn native_rendering(&self) -> bool {
-        self.program.is_none()
-            && self
-                .transforms
-                .iter()
-                .all(|value| matches!(value, Transform::Identity | Transform::Numeric))
+        self.program.predicate.is_none()
+            && self.program.outputs.iter().all(|output| {
+                matches!(
+                    self.program.expressions.get(output.expression),
+                    Some(program::Expression::Input(_))
+                )
+            })
     }
-    pub(crate) fn new(transforms: Vec<Transform>, types: Vec<u32>) -> Result<Self> {
-        let result = Self { transforms, types, environment: None, program: None };
-        result.signatures()?;
-        Ok(result)
+    pub(crate) fn new(transforms: Vec<OutputMap>, types: Vec<u32>) -> Result<Self> {
+        Self::from_program(program::Program::outputs(transforms, &types)?, types)
     }
     pub(crate) fn from_program(program: program::Program, types: Vec<u32>) -> Result<Self> {
-        let result =
-            Self { transforms: Vec::new(), types, environment: None, program: Some(program) };
+        let result = Self { types, environment: None, program };
         result.signatures()?;
         Ok(result)
     }
     fn signatures(&self) -> Result<Vec<(&'static str, &'static str)>> {
-        if let Some(program) = &self.program {
-            ensure!(
-                self.transforms.is_empty() && (1..=64).contains(&self.types.len()),
-                "invalid terminal program layout"
-            );
-            return program.signatures(&self.types);
-        }
-        ensure!(
-            !self.types.is_empty()
-                && self.types.len() == self.transforms.len()
-                && self.types.len() <= 64,
-            "invalid terminal layout"
-        );
-        let mut signatures = Vec::new();
-        for (transform, oid) in self.transforms.iter().zip(&self.types) {
-            signatures.extend(signatures_for(transform, *oid)?);
-        }
-        signatures.sort_unstable();
-        signatures.dedup();
-        ensure!(!signatures.is_empty(), "terminal map has no functions");
-        Ok(signatures)
+        ensure!((1..=64).contains(&self.types.len()), "invalid terminal input layout");
+        self.program.signatures(&self.types)
     }
     async fn inspect(&self, sql: &(impl GenericClient + Sync)) -> Result<Environment> {
         let row = sql
@@ -117,20 +83,13 @@ impl Terminal {
             );
             functions.push((signature.into(), value));
         }
-        let collations = if self.has_array()
-            || self.program.as_ref().is_some_and(program::Program::has_collation)
-        {
+        let collations = if self.program.has_collation() {
             vec![array_collation(sql).await?]
         } else {
             Vec::new()
         };
-        let calendar = if self.has_timestamp_format()
-            || self.program.as_ref().is_some_and(program::Program::has_calendar)
-        {
-            Some(calendar_context(sql).await?)
-        } else {
-            None
-        };
+        let calendar =
+            if self.program.has_calendar() { Some(calendar_context(sql).await?) } else { None };
         Ok(Environment { server, encoding, functions, collations, calendar })
     }
     pub(crate) async fn bind(&mut self, sql: &(impl GenericClient + Sync)) -> Result<()> {
@@ -154,60 +113,6 @@ impl Terminal {
         );
         Ok(())
     }
-    pub(crate) fn has_array(&self) -> bool {
-        self.transforms.iter().any(|transform| matches!(transform, Transform::ArrayElement { .. }))
-    }
-    pub(crate) fn has_numeric_multiply(&self) -> bool {
-        self.transforms
-            .iter()
-            .any(|transform| matches!(transform, Transform::NumericMultiply { .. }))
-    }
-    pub(crate) fn has_timestamp_format(&self) -> bool {
-        self.transforms
-            .iter()
-            .any(|transform| matches!(transform, Transform::TimestampFormat { .. }))
-    }
-    fn expression(&self, index: usize) -> Result<String> {
-        let value = format!("tuple->1->{index}");
-        let text = format!("tuple->1->>{index}");
-        match (&self.transforms[index], self.types[index]) {
-            (Transform::Identity, _) => Ok(value),
-            (Transform::Abs, oid) => {
-                let native = match oid {
-                    20 => "int8",
-                    21 => "int2",
-                    23 => "int4",
-                    _ => anyhow::bail!("invalid ABS type"),
-                };
-                Ok(format!("pg_catalog.to_jsonb(pg_catalog.abs(({text})::pg_catalog.{native}))"))
-            }
-            (Transform::Numeric, _) => {
-                Ok(format!("pg_catalog.to_jsonb(({text})::pg_catalog.numeric)"))
-            }
-            (Transform::Average, _) => Ok(format!(
-                "pg_catalog.to_jsonb(pg_catalog.numeric_div(pg_catalog.split_part({text},'/',1)::pg_catalog.numeric,pg_catalog.split_part({text},'/',2)::pg_catalog.numeric))"
-            )),
-            (Transform::ArrayElement { index: subscript, .. }, _) => Ok(format!(
-                "pg_catalog.to_jsonb((pg_catalog.string_to_array(({text})::pg_catalog.text COLLATE pg_catalog.\"C\",($2::pg_catalog.jsonb)->{index}->'ArrayElement'->>'delimiter'))[{subscript}])"
-            )),
-            (Transform::NumericMultiply { .. }, _) => Ok(format!(
-                "pg_catalog.to_jsonb(pg_catalog.numeric_mul(({text})::pg_catalog.numeric,(($2::pg_catalog.jsonb)->{index}->'NumericMultiply'->>'factor')::pg_catalog.numeric))"
-            )),
-            (Transform::TimestampFormat { utc, .. }, _) => {
-                let input = if *utc {
-                    format!("pg_catalog.timezone('UTC',({text})::pg_catalog.timestamptz)")
-                } else {
-                    format!("({text})::pg_catalog.timestamp")
-                };
-                Ok(format!(
-                    "pg_catalog.to_jsonb(pg_catalog.to_char({input},($2::pg_catalog.jsonb)->{index}->'TimestampFormat'->>'pattern'))"
-                ))
-            }
-            (Transform::Length, _) => {
-                Ok(format!("pg_catalog.to_jsonb(pg_catalog.length(({text})::pg_catalog.text))"))
-            }
-        }
-    }
     pub(crate) async fn evaluate(
         &self,
         tx: &Transaction<'_>,
@@ -216,28 +121,13 @@ impl Terminal {
         self.verify(tx).await?;
         // Only closed tuple-local forms render here; calendar formats have fixed
         // fields and an attested UTC context. Relation reads, clocks and SRFs do not.
-        let (columns, predicate) = if let Some(program) = &self.program {
-            program.render(&self.types)?
-        } else {
-            let columns = (0..self.types.len())
-                .map(|index| self.expression(index))
-                .collect::<Result<Vec<_>>>()?
-                .join(",");
-            (columns, "TRUE".into())
-        };
+        let (columns, predicate) = self.program.render(&self.types)?;
         let query = format!(
             "WITH raw AS (SELECT value->0 tuple,(value->>1)::bigint weight FROM pg_catalog.jsonb_array_elements($1)), mapped AS (SELECT pg_catalog.jsonb_build_array(NULL,pg_catalog.jsonb_build_array({columns})) tuple,weight FROM raw WHERE {predicate}) SELECT tuple,pg_catalog.sum(weight)::text FROM mapped GROUP BY tuple HAVING pg_catalog.sum(weight)<>0"
         );
         let input = json!(rows);
-        let rows = if let Some(program) = &self.program {
-            let parameters = json!(program);
-            tx.query(&query, &[&input, &parameters]).await?
-        } else if self.has_array() || self.has_numeric_multiply() || self.has_timestamp_format() {
-            let parameters = json!(&self.transforms);
-            tx.query(&query, &[&input, &parameters]).await?
-        } else {
-            tx.query(&query, &[&input]).await?
-        };
+        let parameters = json!(&self.program);
+        let rows = tx.query(&query, &[&input, &parameters]).await?;
         rows.into_iter()
             .map(|row| {
                 let weight: String = row.try_get(1)?;
@@ -250,55 +140,6 @@ impl Terminal {
     }
 }
 
-fn signatures_for(transform: &Transform, oid: u32) -> Result<Vec<(&'static str, &'static str)>> {
-    let mut signatures = match (transform, oid) {
-        (Transform::Identity, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184) => Vec::new(),
-        (Transform::Abs, 20) => vec![("pg_catalog.abs(bigint)", "int8abs")],
-        (Transform::Abs, 21) => vec![("pg_catalog.abs(smallint)", "int2abs")],
-        (Transform::Abs, 23) => vec![("pg_catalog.abs(integer)", "int4abs")],
-        (Transform::ArrayElement { delimiter, index }, 25 | 1043) => {
-            ensure!(
-                !delimiter.is_empty()
-                    && !delimiter.contains('\0')
-                    && delimiter.len() <= 64
-                    && (1..=1024).contains(index),
-                "invalid terminal array selection"
-            );
-            vec![("pg_catalog.string_to_array(text,text)", "text_to_array")]
-        }
-        (Transform::NumericMultiply { factor }, 20 | 21 | 23) => {
-            validate_factor(factor)?;
-            vec![
-                ("pg_catalog.numeric_in(cstring,oid,integer)", "numeric_in"),
-                ("pg_catalog.numeric_mul(numeric,numeric)", "numeric_mul"),
-            ]
-        }
-        (Transform::TimestampFormat { pattern, utc }, oid) => {
-            ensure!(
-                matches!(pattern.as_str(), "YYYY-MM-DD" | "HH24:MI")
-                    && ((*utc && oid == 1184) || (!utc && oid == 1114)),
-                "timestamp formatting requires closed date/minute format and explicit UTC for timestamptz"
-            );
-            let mut result = vec![("pg_catalog.to_char(timestamp,text)", "timestamp_to_char")];
-            if *utc {
-                result.push(("pg_catalog.timezone(text,timestamptz)", "timestamptz_zone"));
-            }
-            result
-        }
-        (Transform::Length, 25 | 1043) => vec![("pg_catalog.length(text)", "textlen")],
-        (Transform::Numeric | Transform::Average, 1700) => {
-            vec![("pg_catalog.numeric_in(cstring,oid,integer)", "numeric_in")]
-        }
-        _ => anyhow::bail!("SQL type: unsupported terminal function signature"),
-    };
-    if *transform == Transform::Average {
-        signatures.extend([
-            ("pg_catalog.numeric_div(numeric,numeric)", "numeric_div"),
-            ("pg_catalog.split_part(text,text,integer)", "split_part"),
-        ]);
-    }
-    Ok(signatures)
-}
 pub fn validate_factor(factor: &str) -> Result<()> {
     let (whole, fraction) = factor.split_once('.').context("decimal factor requires a point")?;
     ensure!(

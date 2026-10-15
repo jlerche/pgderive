@@ -1,9 +1,9 @@
 //! Closed calendar fields; no locale names, arbitrary time zones or runtime formats.
 use super::{Name, column, expressions::names, node};
-use crate::catalog::terminal::Transform;
+use crate::catalog::terminal::OutputMap;
 use anyhow::{Result, ensure};
 use pg_query::{NodeEnum, protobuf as pg};
-pub(super) fn target(call: &pg::FuncCall) -> Result<(Name, Transform, String)> {
+pub(super) fn target(call: &pg::FuncCall) -> Result<(Name, OutputMap, String)> {
     super::scalar::validate_call(call)?;
     let [input, pattern] = call.args.as_slice() else {
         anyhow::bail!("to_char requires timestamp and literal date/minute format");
@@ -35,5 +35,5 @@ pub(super) fn target(call: &pg::FuncCall) -> Result<(Name, Transform, String)> {
     } else {
         (column(input)?, false)
     };
-    Ok((input, Transform::TimestampFormat { pattern, utc }, "to_char".into()))
+    Ok((input, OutputMap::TimestampFormat { pattern, utc }, "to_char".into()))
 }

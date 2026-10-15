@@ -118,7 +118,6 @@ fn build(
         columns,
         terminal,
     };
-    let mapped = !computed.is_empty();
     let mut nodes = if projection {
         vec![
             Node::Source { id: "source".into(), source: 0 },
@@ -131,15 +130,9 @@ fn build(
     attach_expansion(&mut nodes, parsed.expansion.as_ref())?;
     let predicates = source_predicate(parsed.predicate.clone(), resolve)?;
     let sources = vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }];
-    let numeric = output.terminal.is_some();
-    let revision = plan_revision(numeric, mapped, &nodes);
-    Ok(Compiled {
-        program: crate::compiler::Program::Relational {
-            relational: Relational { sources, nodes, output },
-        },
-        predicates,
-        revision: Some(revision),
-    })
+    let mut relational = Relational { sources, nodes, output };
+    composition::lower_source_filter(&mut relational, predicates)?;
+    Ok(Compiled { relational })
 }
 fn source_predicate(
     predicate: Option<crate::compiler::syntax::Expr>,
@@ -161,7 +154,7 @@ fn source_predicate(
 }
 struct BoundTargets {
     columns: Vec<OutputColumn>,
-    transforms: Vec<crate::catalog::terminal::Transform>,
+    transforms: Vec<crate::catalog::terminal::OutputMap>,
 }
 #[derive(Clone, Copy)]
 struct TargetContext<'a> {
@@ -179,7 +172,7 @@ fn bind_targets(
     let mut columns = Vec::new();
     let mut transforms = Vec::new();
     for target in targets {
-        let mut transform = crate::catalog::terminal::Transform::Identity;
+        let mut transform = crate::catalog::terminal::OutputMap::Identity;
         let column = match target.value {
             syntax::Value::Column(name) => resolve(&name)?,
             syntax::Value::Typed(value) => {
@@ -187,9 +180,6 @@ fn bind_targets(
             }
             syntax::Value::Bin(bin) => {
                 crate::compiler::scalar::bind(&bin, resolve, computed, context.scalar_scope)?
-            }
-            syntax::Value::Case(case) => {
-                crate::compiler::scalar::bind_case(&case, resolve, computed, context.scalar_scope)?
             }
             syntax::Value::Offset(offset) => crate::compiler::scalar::bind_offset(
                 &offset,
@@ -278,51 +268,6 @@ fn keys(
         .collect()
 }
 
-fn plan_revision(numeric: bool, mapped: bool, nodes: &[Node]) -> String {
-    let bin = nodes.iter().any(|node| matches!(node, Node::Map { computed, .. } if computed.iter().any(|value| matches!(value.expression, crate::compiler::scalar::Native::Bin(_)))));
-    let mut revision = revision(numeric, mapped, bin);
-    if nodes.iter().any(|node| matches!(node, Node::Statistics { .. })) {
-        revision.push_str(":exact-linear-statistics-v1");
-    }
-    if nodes
-        .iter()
-        .any(|node| matches!(node, Node::Statistics { spec, .. } if spec.aggregates.is_empty()))
-    {
-        revision.push_str(":pg-group-membership-v1");
-    }
-    if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if matches!(spec.mode, Mode::Ranking { .. }))) {
-        revision.push_str(":sql-peer-ranking-v1");
-    }
-    if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if matches!(spec.mode, Mode::Peers { .. }))) {
-        revision.push_str(":sql-peer-frames-v1");
-    }
-    if nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. } if spec.aggregates.iter().any(|value| value.navigation.is_some()))) {
-        revision.push_str(":pg-native-navigation-v1");
-    }
-    if nodes.iter().any(|node| matches!(node, Node::Map { computed, .. } if computed.iter().any(|value| matches!(value.expression, crate::compiler::scalar::Native::Case { .. })))) {
-        revision.push_str(":pg-lazy-integral-case-v1");
-    }
-    if nodes.iter().any(|node| matches!(node, Node::Expand { .. })) {
-        revision.push_str(":bounded-series-expansion-v1:fixed-duration-offset-v1");
-    }
-    revision
-}
-fn revision(numeric: bool, mapped: bool, bin: bool) -> String {
-    let base = if numeric {
-        "sql-partition-v2:pg-query-6.2.1:pg-17.7:row-text-v1:json-exact-number-v1:native-bag-v1:affected-partition-v1:integer-numeric-aggregate-v1:rows-frame-v1"
-    } else {
-        "sql-partition-v1:pg-query-6.2.1:pg-17.7:row-text-v1:json-v2:native-bag-v1:affected-partition-v1:integral-aggregate-v1:rows-frame-v1"
-    };
-    let mut revision = base.to_string();
-    if mapped {
-        revision.push_str(":native-scalar-map-v1");
-    }
-    if bin {
-        revision.push_str(":date-bin-microseconds-v1");
-    }
-    revision
-}
-
 struct Targets {
     base: usize,
     mode: Option<Mode>,
@@ -334,8 +279,8 @@ fn aggregate(
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     context: (&[ColumnRef], &[String]),
     state: &mut Targets,
-) -> Result<(ColumnRef, crate::catalog::terminal::Transform)> {
-    use crate::catalog::terminal::Transform;
+) -> Result<(ColumnRef, crate::catalog::terminal::OutputMap)> {
+    use crate::catalog::terminal::OutputMap;
     if let Some(window) = value.window {
         ensure!(context.0.is_empty(), "grouped window composition requires subquery lowering");
         let (candidate, window_keys) =
@@ -367,9 +312,9 @@ fn aggregate(
         .as_ref()
         .map_or_else(|| result_type(&value.function, argument.as_ref()), |value| Ok(value.oid))?;
     let transform = match (&value.function, oid) {
-        (Function::Average, _) => Transform::Average,
-        (Function::Sum | Function::Lag | Function::Lead, 1700) => Transform::Numeric,
-        _ => Transform::Identity,
+        (Function::Average, _) => OutputMap::Average,
+        (Function::Sum | Function::Lag | Function::Lead, 1700) => OutputMap::Numeric,
+        _ => OutputMap::Identity,
     };
     let name = format!("@aggregate_{}", state.base + state.aggregates.len());
     let filter =

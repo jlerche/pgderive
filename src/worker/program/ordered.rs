@@ -4,7 +4,7 @@ use crate::{
     compiler::partition::{Function, Mode, Partition as Spec},
     engine::{
         Batch,
-        dataflow::{Expand, OrderedFirst, Partition, Project},
+        dataflow::{Expand, OrderedSelection, Partition, Project},
     },
     transaction::Row,
 };
@@ -67,9 +67,9 @@ pub(super) fn input(spec: &Spec) -> Expand<Key, Row, Key, Row> {
         Ok(())
     })
 }
-pub(super) fn first(spec: &Spec) -> OrderedFirst<Key, Row> {
+pub(super) fn first(spec: &Spec) -> OrderedSelection<Key, Row> {
     let spec = spec.clone();
-    OrderedFirst::new(Project::new(move |key: &Key, row: &Row| {
+    OrderedSelection::first(Project::new(move |key: &Key, row: &Row| {
         let group_width = width(&spec)?;
         ensure!(key.len() == group_width + 1, "ordered selection key width mismatch");
         let index = key.last().context("missing ordered aggregate index")?.parse::<usize>()?;

@@ -37,21 +37,10 @@ fn render(
     inputs: &[u32],
 ) -> Result<String> {
     match expression {
-        Expression::Input(index) => {
-            let oid = inputs.get(*index).context("terminal input absent")?;
-            let native = match oid {
-                16 => "bool",
-                20 => "int8",
-                21 => "int2",
-                23 => "int4",
-                25 | 1043 => "text",
-                2950 => "uuid",
-                1114 => "timestamp",
-                1184 => "timestamptz",
-                _ => anyhow::bail!("unsupported terminal input codec"),
-            };
-            Ok(format!("(tuple->1->>{index})::pg_catalog.{native}"))
-        }
+        Expression::Input(index) => input(*index, inputs),
+        Expression::Average(input) => Ok(format!(
+            "pg_catalog.numeric_div(pg_catalog.split_part(tuple->1->>{input},'/',1)::pg_catalog.numeric,pg_catalog.split_part(tuple->1->>{input},'/',2)::pg_catalog.numeric)"
+        )),
         Expression::Null(oid) => typed_null(*oid),
         Expression::Literal(literal) => {
             let (variant, native) = match literal {
@@ -70,6 +59,12 @@ fn render(
                 .collect::<Result<Vec<_>>>()?;
             if let Function::Calendar(field) = function {
                 arguments.insert(0, format!("'{}'::pg_catalog.text", field.name()));
+            }
+            if matches!(function, Function::FormatDate | Function::FormatMinute) {
+                arguments.push(format!(
+                    "'{}'::pg_catalog.text",
+                    if *function == Function::FormatDate { "YYYY-MM-DD" } else { "HH24:MI" }
+                ));
             }
             if *function == Function::Hour {
                 arguments.insert(0, "'hour'::pg_catalog.text".into());
@@ -130,4 +125,21 @@ fn typed_null(oid: u32) -> Result<String> {
         _ => anyhow::bail!("unsupported typed NULL"),
     };
     Ok(format!("NULL::pg_catalog.{name}"))
+}
+
+fn input(index: usize, inputs: &[u32]) -> Result<String> {
+    let oid = inputs.get(index).context("terminal input absent")?;
+    let native = match oid {
+        16 => "bool",
+        1700 => "numeric",
+        20 => "int8",
+        21 => "int2",
+        23 => "int4",
+        25 | 1043 => "text",
+        2950 => "uuid",
+        1114 => "timestamp",
+        1184 => "timestamptz",
+        _ => anyhow::bail!("unsupported terminal input codec"),
+    };
+    Ok(format!("(tuple->1->>{index})::pg_catalog.{native}"))
 }

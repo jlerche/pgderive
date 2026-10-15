@@ -1,5 +1,6 @@
 //! Terminal-only `PostgreSQL` expressions over explicit native input operands.
 use super::{Scope, resolve, scope};
+use crate::compiler::relational::{Node as RelationalNode, Relational, Source};
 use crate::{
     catalog::{
         Terminal,
@@ -55,12 +56,9 @@ pub(super) fn bind(
         builder.program.outputs.push(Output { label, expression });
     }
     builder.program.predicate = predicate.map(|value| builder.expression(value, 0)).transpose()?;
-    let revision = if builder.program.has_collation() {
+    if builder.program.has_collation() {
         builder.program.prune()?;
-        "sql-terminal-program-v1:pg-query-6.2.1:pg-17.7:typed-native-dag-v1:terminal-3vl-v1:raw-bag-v1:json-v2:pg-terminal-c-text-regex-v1"
-    } else {
-        "sql-terminal-program-v1:pg-query-6.2.1:pg-17.7:typed-native-dag-v1:terminal-3vl-v1:raw-bag-v1:json-v2"
-    };
+    }
     if builder.columns.is_empty() {
         let column = builder
             .scope
@@ -71,7 +69,7 @@ pub(super) fn bind(
         builder.columns.push(OutputColumn {
             label: column.name.clone(),
             column: ColumnRef {
-                name: column.name.clone(),
+                name: crate::compiler::relational::field(0, &column.name),
                 right: false,
                 oid: column.oid,
                 nullable: column.nullable,
@@ -79,40 +77,21 @@ pub(super) fn bind(
         });
     }
     let input_types = builder.columns.iter().map(|output| output.column.oid).collect();
-    let extended = builder.program.expressions.iter().any(|value| {
-        matches!(
-            value,
-            Expression::Null(_)
-                | Expression::Coalesce(_)
-                | Expression::Call {
-                    function: Function::Int2
-                        | Function::Int4
-                        | Function::Int8
-                        | Function::Integral { .. }
-                        | Function::Calendar(_),
-                    ..
-                }
-        )
-    });
-    let revision = if extended {
-        format!("{revision}:pg-typed-terminal-integral-calendar-v2")
-    } else {
-        revision.into()
-    };
     let terminal = Terminal::from_program(builder.program, input_types)?;
-    Ok(Compiled {
-        program: crate::compiler::Program::Projection {
-            projection: Projected {
-                schema: builder.scope.relation.schema.clone(),
-                table: builder.scope.relation.table.clone(),
-                columns: builder.columns,
-                terminal: Some(terminal),
-            },
-        },
-        revision: Some(revision),
-        predicates: None,
-    })
+    let output = Projected {
+        schema: builder.scope.relation.schema.clone(),
+        table: builder.scope.relation.table.clone(),
+        columns: builder.columns,
+        terminal: Some(terminal),
+    };
+    let sources = vec![Source { schema: output.schema.clone(), table: output.table.clone() }];
+    let nodes = vec![
+        RelationalNode::Source { id: "source".into(), source: 0 },
+        RelationalNode::Output { id: "output".into(), input: "source".into() },
+    ];
+    Ok(Compiled { relational: Relational { sources, nodes, output } })
 }
+
 impl Builder<'_> {
     fn push(&mut self, expression: Expression) -> Result<usize> {
         let expression =
@@ -146,7 +125,10 @@ impl Builder<'_> {
         if conjunction { Expression::And(arguments) } else { Expression::Or(arguments) }
     }
     fn input(&mut self, value: &Node) -> Result<usize> {
-        let column: ColumnRef = resolve(&column(value)?, std::slice::from_ref(&self.scope))?;
+        let column = super::relational::qualify(resolve(
+            &column(value)?,
+            std::slice::from_ref(&self.scope),
+        )?);
         let index =
             if let Some(index) = self.columns.iter().position(|output| output.column == column) {
                 index

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned PostgreSQL exact MV and raw occurrence oracle for retractable top-k."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import json
 from native_mv_oracle import expected
@@ -53,8 +53,6 @@ class TopKFixture(SqlFixture):
 def qualify(output,command,mode):
     fixture=TopKFixture(output,mode)
     with fixture.managed():
-        worker=fixture.start(command,'first')
-        ready=worker.event('ready'); fixture.verify()
         changes=[
             f'INSERT INTO {fixture.name}.bid VALUES(100,NULL,NULL),(101,1,{fixture.value(7)}),(102,1,{fixture.value(7)}),(103,1,{fixture.value(7)})',
             f'UPDATE {fixture.name}.bid SET price=NULL WHERE id=101; UPDATE {fixture.name}.bid SET price={fixture.value(-8)} WHERE id=2',
@@ -62,18 +60,12 @@ def qualify(output,command,mode):
             f'DELETE FROM {fixture.name}.bid WHERE auction=1',
             f'INSERT INTO {fixture.name}.bid VALUES(104,1,{fixture.value(-9)}),(105,1,NULL),(106,1,{fixture.value(-9)}),(107,1,{fixture.value(0)})',
         ]
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index); fixture.verify()
-        worker.abort()
-        prior=fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-cutoff',fixture.query.replace(f'WHERE {fixture.condition}','WHERE q.rn<=2'))
-        assert prior==fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        resumed=fixture.start(command,'resumed',maximum=1)
-        reopened=resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify();fixture.sql(f'DELETE FROM {fixture.name}.bid WHERE id=107')
-        resumed.event('published');resumed.finish();fixture.verify()
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.bid WHERE id=107',
+            normalized=fixture.query,
+            rejected=[('changed-cutoff', fixture.query.replace(f'WHERE {fixture.condition}', 'WHERE q.rn<=2'))],
+        ))
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':'identical SQL exact bag','memory':'independent sorted raw source occurrences','duplicates':'cutoff and projection bag','restart':True,'transactions':len(changes)+1})+'\n')
 
 if __name__=='__main__':

@@ -20,7 +20,6 @@ pub struct Computed {
 pub enum Native {
     Typed { typed: super::typed::Typed },
     Bin(DateBin),
-    Case { case: super::case::Case },
     Offset { offset: Offset },
     Remainder { remainder: super::remainder::Remainder },
 }
@@ -29,7 +28,6 @@ impl Native {
         match self {
             Self::Typed { typed } => typed.evaluate(row),
             Self::Bin(value) => value.evaluate(row),
-            Self::Case { case } => case.evaluate(row),
             Self::Offset { offset } => offset.evaluate(row),
             Self::Remainder { remainder } => remainder.evaluate(row),
         }
@@ -37,10 +35,7 @@ impl Native {
     pub(super) const fn shift(&self) -> Option<&(ColumnRef, i64)> {
         match self {
             Self::Bin(value) => value.shift.as_ref(),
-            Self::Typed { .. }
-            | Self::Case { .. }
-            | Self::Offset { .. }
-            | Self::Remainder { .. } => None,
+            Self::Typed { .. } | Self::Offset { .. } | Self::Remainder { .. } => None,
         }
     }
 }
@@ -101,24 +96,6 @@ pub(super) fn bind(
     let column = ColumnRef { name, right: false, oid: input.oid, nullable: input.nullable };
     if !computed.iter().any(|prior| prior.column == column) {
         computed.push(Computed { column: column.clone(), expression: Native::Bin(expression) });
-    }
-    Ok(column)
-}
-
-pub(super) fn bind_case(
-    parsed: &super::parser::case::Case,
-    resolve: &impl Fn(&super::parser::Name) -> Result<ColumnRef>,
-    computed: &mut Vec<Computed>,
-    scope: Option<usize>,
-) -> Result<ColumnRef> {
-    use sha2::{Digest, Sha256};
-    let (case, oid, nullable) = super::case::bind(parsed, resolve)?;
-    let expression = Native::Case { case };
-    let prefix = scope.map_or_else(|| "@case_".into(), |scope| format!("@case_stage_{scope}_"));
-    let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
-    let column = ColumnRef { name, right: false, oid, nullable };
-    if !computed.iter().any(|prior| prior.column == column) {
-        computed.push(Computed { column: column.clone(), expression });
     }
     Ok(column)
 }

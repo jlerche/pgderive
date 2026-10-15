@@ -1,7 +1,7 @@
 //! Independent recomputation for multiple retained SQL stages.
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 type Bag = Batch<relational::Key, Row>;
 fn sql(layered: bool) -> String {
@@ -60,7 +60,7 @@ async fn history(layered: bool) -> Result<()> {
     let native = contract();
     let query_sql = sql(layered);
     let compiled = compile(&query_sql, &native)?;
-    let ir = compiled.relational().context("missing composed IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
@@ -130,7 +130,7 @@ async fn repeated_date_bin_maps_keep_scope_fields_distinct() -> Result<()> {
     let outer = bin.replace("b.", "q.");
     let sql = format!("SELECT {outer} AS bucket,COUNT(*) AS n FROM({inner}) q GROUP BY {outer}");
     let compiled = compile(&sql, &native)?;
-    let ir = compiled.relational().context("missing bin IR")?;
+    let ir = compiled.relational();
     let names = ir
         .nodes
         .iter()

@@ -17,6 +17,7 @@ mod cases;
 mod count_oracle;
 mod join_oracle;
 mod mvp;
+pub mod object_oracle;
 mod projection_oracle;
 mod recovery;
 pub use recovery::{RecoveryReport, run_recovery};

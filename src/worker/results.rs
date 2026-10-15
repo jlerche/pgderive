@@ -4,7 +4,7 @@ use super::{
     admin::{query_sql, quote},
     spec::Settings,
 };
-use crate::{catalog::Sink, compiler::Compiled};
+use crate::compiler::Compiled;
 use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
 pub(super) use switch::replace;
@@ -43,8 +43,8 @@ pub(super) async fn install(
         "SET LOCAL synchronous_commit=on; SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO,MDY'",
     )
     .await?;
-    let grouped = matches!(compiled.sink(&settings.sink_table), Sink::Grouped(_));
-    let definition = definition(&tx, settings, grouped).await?;
+    compiled.validate_bound()?;
+    let definition = definition(&tx, settings).await?;
     tx.batch_execute(&format!(
         "CREATE TABLE IF NOT EXISTS {}.pgderive_result_views(query_id text PRIMARY KEY,view_name text NOT NULL UNIQUE,definition text NOT NULL,catalog_definition text NOT NULL)", settings.catalog_schema,
     )).await?;
@@ -87,22 +87,12 @@ pub(super) async fn install(
 pub(super) async fn definition(
     sql: &(impl GenericClient + Sync),
     settings: &Settings,
-    grouped: bool,
 ) -> Result<String> {
     let statement = sql.prepare(&query_sql(&settings.query)).await?;
     validate_columns(&statement)?;
     let mut columns = Vec::new();
     for (index, column) in statement.columns().iter().enumerate() {
-        let value = if grouped {
-            match index {
-                0 => "group_key #>> '{}'".into(),
-                1 => "row_count".into(),
-                2 => "total".into(),
-                _ => anyhow::bail!("unexpected grouped result column"),
-            }
-        } else {
-            format!("tuple->1->>{index}")
-        };
+        let value = format!("tuple->1->>{index}");
         let native = native_type(column.type_().oid())?;
         let native = type_spec(column, native)?;
         let expression = if column.type_().oid() == 1009 {
@@ -116,13 +106,9 @@ pub(super) async fn definition(
         columns.push(format!("{expression}{collation} AS {}", quote(column.name())));
     }
     let table = format!("{}.{}", settings.catalog_schema, settings.sink_table);
-    let rows = if grouped {
-        table
-    } else {
-        format!(
-            "{table} CROSS JOIN LATERAL pg_catalog.generate_series(1::bigint,weight) AS multiplicity(occurrence)"
-        )
-    };
+    let rows = format!(
+        "{table} CROSS JOIN LATERAL pg_catalog.generate_series(1::bigint,weight) AS multiplicity(occurrence)"
+    );
     Ok(format!("SELECT {} FROM {rows}", columns.join(",")))
 }
 

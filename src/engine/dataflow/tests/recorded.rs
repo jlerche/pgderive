@@ -1,6 +1,6 @@
 use crate::engine::{
-    Batch, Circuit, GroupedCount, IncrementalJoin, ZSet,
-    dataflow::{Arrangement, GroupSum, Join, Project, SumState, TimedBatch, TraceQuery},
+    Batch, ZSet,
+    dataflow::{Arrangement, GroupSum, Join, Project, SumState, TimedBatch},
     trace::TraceSnapshot,
 };
 use anyhow::{Result, bail, ensure};
@@ -23,23 +23,6 @@ struct Record {
     tx: u64,
     rollback: bool,
     events: Vec<Event>,
-}
-
-#[derive(Clone, Default)]
-struct Graph {
-    join: IncrementalJoin<i64, Task, i64>,
-    count: GroupedCount<(i64, i64)>,
-    output: ZSet<CountRow>,
-}
-
-fn evaluate(state: &mut Graph, input: &Inputs) -> Result<()> {
-    let joined = state.join.step(&input.0, &input.1)?;
-    let selected = joined
-        .delta
-        .try_filter(|(_, task, _)| Ok(task.2 == "open" && task.3 >= 8))?
-        .try_map(|(project, task, organization)| Ok(((*project, *organization), task.clone())))?;
-    state.output.apply(&state.count.step(&selected)?)?;
-    Ok(())
 }
 
 fn oracle(tasks: &BTreeMap<i64, Task>, projects: &BTreeMap<i64, i64>) -> Result<ZSet<CountRow>> {
@@ -118,10 +101,9 @@ async fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()
         .collect::<BTreeMap<_, Task>>();
     tasks.extend((20_000..20_512).map(|id| (id, (id, 1, "open".into(), 9))));
     let mut projects = (1..=32).map(|key| (key, key)).collect::<BTreeMap<_, _>>();
-    let mut circuit = Circuit::<Graph>::default();
-    let counts = TraceQuery::new(
+    let counts = crate::harness::object_oracle::counts(
         Arc::new(InMemory::new()),
-        "poc-tasks-projects-v1".into(),
+        "poc-tasks-projects-v1",
         64,
         |project, task: &Task, organization| {
             Ok((task.2 == "open" && task.3 >= 8).then_some((*project, *organization)))
@@ -133,9 +115,7 @@ async fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()
         ZSet::from_updates(tasks.values().map(|task| ((task.1, task.clone()), 1)))?,
         ZSet::from_updates(projects.iter().map(|(key, org)| ((*key, *org), 1)))?,
     );
-    circuit.step(&initial, evaluate)?;
     verify_trace(&mut trace, 1, &initial, &tasks, &projects).await?;
-    assert_eq!(circuit.state().output, oracle(&tasks, &projects)?);
     let mut committed = 0;
     let mut rollbacks = 0;
     for (ordinal, line) in
@@ -148,11 +128,8 @@ async fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()
             continue;
         }
         let input = replay(record, &mut tasks, &mut projects)?;
-        let step = circuit.step(&input, evaluate)?;
         committed += 1;
-        assert_eq!(step.time, committed + 1);
-        verify_trace(&mut trace, step.time, &input, &tasks, &projects).await?;
-        assert_eq!(circuit.state().output, oracle(&tasks, &projects)?, "transaction {ordinal}");
+        verify_trace(&mut trace, committed + 1, &input, &tasks, &projects).await?;
     }
     assert_eq!(committed, 111);
     assert_eq!(rollbacks, 9);
@@ -161,7 +138,7 @@ async fn accepted_poc_trace_matches_independent_source_map_oracle() -> Result<()
 
 type Group = (i64, i64);
 struct TraceGraph {
-    counts: TraceQuery<i64, Task, i64, Group>,
+    counts: crate::harness::object_oracle::Counts<i64, Task, i64, Group>,
     sums: TraceSnapshot<Group, SumState>,
     writer: Arrangement<Group, SumState>,
 }
@@ -196,7 +173,8 @@ async fn verify_trace(
     let delta = sum.evaluate(&selected, &graph.sums).await?;
     graph.sums = graph.writer.stage(&graph.sums, &delta.state).await?;
     verify_sum(&graph.sums, tasks, projects).await?;
-    let prepared = graph.counts.prepare(&left, &right).await?;
+    let prepared =
+        graph.counts.prepare(crate::harness::object_oracle::inputs(&left, &right)?).await?;
     graph.counts.commit(prepared)?;
     let snapshot = graph.counts.snapshot();
     assert_eq!(

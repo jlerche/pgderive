@@ -19,9 +19,9 @@ fn native() -> crate::source::Contract {
 fn q21_keeps_url_hidden_and_normalizes_in_to_or() -> Result<()> {
     let sql = include_str!("../../../queries/nexmark/q21.sql").replace("nexmark.", "source.");
     let compiled = compile(&sql, &native())?;
-    let layout = compiled.projection().context("projection absent")?;
+    let layout = compiled.output();
     assert_eq!(layout.columns.len(), 5);
-    assert_eq!(layout.columns[4].column.name, "url");
+    assert_eq!(layout.columns[4].column.name, crate::compiler::relational::field(0, "url"));
     let value = serde_json::to_value(layout)?;
     let outputs = value["terminal"]["program"]["outputs"].as_array().context("outputs absent")?;
     assert_eq!(outputs.len(), 5);

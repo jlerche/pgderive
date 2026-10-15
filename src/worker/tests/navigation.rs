@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::BTreeMap;
 type Bag = Batch<relational::Key, Row>;
 fn native() -> crate::source::Contract {
@@ -94,7 +94,7 @@ fn oracle(state: &BTreeMap<Row, i64>, derived: bool) -> Result<Bag> {
 async fn history(derived: bool) -> Result<()> {
     let native = native();
     let compiled = compile(&sql(derived), &native)?;
-    let ir = compiled.relational().context("missing navigation IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let input = |id, price, step| {
@@ -198,7 +198,7 @@ fn navigation_binds_postgres_common_types_and_native_defaults() -> Result<()> {
         native.relations[1].columns[2].oid = argument;
         let sql = format!("SELECT lag(b.price,1,{default}) OVER(ORDER BY b.id) FROM source.bid b");
         let compiled = compile(&sql, &native)?;
-        let ir = compiled.relational().context("missing native navigation")?;
+        let ir = compiled.relational();
         assert_eq!(ir.output.columns[0].column.oid, expected);
         assert_eq!(ir.output.terminal.is_some(), expected == 1700);
     }
@@ -221,7 +221,7 @@ async fn navigation_copies_native_values_and_never_replaces_present_nulls() -> R
             "SELECT b.id,lag(b.price,1,b.price) OVER(ORDER BY b.id) AS previous,lead(b.price,1,b.price) OVER(ORDER BY b.id) AS next FROM source.bid b",
             &native,
         )?;
-        let ir = compiled.relational().context("missing native navigation")?;
+        let ir = compiled.relational();
         let mut query = relational::build(&native, &compiled, &settings())?;
         let changes = batch(vec![
             (
@@ -285,7 +285,7 @@ async fn expanded_navigation_counts_occurrences_before_output_collisions() -> Re
     let native = native();
     let sql = "SELECT lag(b.price) OVER(ORDER BY b.id,w.n) FROM source.bid b CROSS JOIN generate_series(0,2) w(n)";
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational().context("missing expanded navigation")?;
+    let ir = compiled.relational();
     let mut query = relational::build(&native, &compiled, &settings())?;
     let input = row(&[("id", Some("1")), ("auction", None), ("price", Some("7")), ("step", None)]);
     let changes = batch(vec![("bid", input.clone(), 2)]);

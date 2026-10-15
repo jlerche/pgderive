@@ -46,7 +46,7 @@ assert any(row.get('range') for row in requests)
 harness_log=(out/'harness.log').read_text()
 assert 'MVP project/join/group/sum passed SQL+memory at tick 15' in harness_log
 for tick,epoch in [(5,1),(15,2)]:
-    assert f'MVP durable manifest recovered all four arrangements at tick {tick} epoch {epoch}' in harness_log
+    assert f'MVP durable manifest recovered all registered arrangements at tick {tick} epoch {epoch}' in harness_log
 assert harness_log.count('expected cold-recovery failure for ')==2
 assert 'MVP incomplete and corrupt catalog membership rejected without epoch change' in harness_log
 assert harness_log.count('MVP atomic sink/membership/source publication passed at tick ')==15

@@ -2,7 +2,7 @@
 use super::{Compiled, bind as bind_inner};
 use crate::{
     compiler::{
-        ColumnRef, Predicate, Program,
+        ColumnRef, Predicate,
         parser::{Name, scoped_join::Parsed},
         projection::OutputColumn,
         relational::{Binding, Node, Relational, field},
@@ -14,7 +14,6 @@ use anyhow::{Context, Result, ensure};
 pub(super) struct Scope {
     pub(super) alias: String,
     pub(super) ir: Relational,
-    pub(super) revision: String,
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let left = scope(parsed.left, "left_", 0, contract)?;
@@ -22,11 +21,6 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     ensure!(left.alias != right.alias, "duplicate scoped join qualifier");
     let scopes = [left, right];
     let keys = parsed.keys.map(|value| keys(value, &scopes)).transpose()?;
-    let join_revision = if keys.is_some() {
-        "sql-scoped-equijoin-v1:typed-boundary-map-v1:canonical-compound-key-v1"
-    } else {
-        "sql-scoped-crossjoin-v1:typed-boundary-map-v1:constant-navigation-key-v1"
-    };
     let resolve = |name: &Name| Ok(resolve(name, &scopes)?.1);
     let (columns, terminal) = super::relational::output(parsed.columns, &resolve)?;
     let predicate = parsed
@@ -34,7 +28,6 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         .map(|value| crate::compiler::expression::bind(value, &resolve).map(Predicate::new))
         .transpose()?;
     let [mut left, right] = scopes;
-    let revision = format!("{join_revision}:{}:{}", left.revision, right.revision);
     left.ir.sources.extend(right.ir.sources);
     left.ir.nodes.extend(right.ir.nodes);
     left.ir.nodes.extend(join_keys(keys));
@@ -56,11 +49,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     left.ir.nodes.push(Node::Output { id: "project".into(), input: input.into() });
     left.ir.output.columns = columns;
     left.ir.output.terminal = terminal;
-    Ok(Compiled {
-        program: Program::Relational { relational: left.ir },
-        predicates: None,
-        revision: Some(revision),
-    })
+    Ok(Compiled { relational: left.ir })
 }
 fn join_keys(keys: Option<Vec<(ColumnRef, ColumnRef)>>) -> [Node; 2] {
     let Some(keys) = keys else {
@@ -88,16 +77,12 @@ pub(super) fn scope(
     offset: usize,
     contract: &Contract,
 ) -> Result<Scope> {
-    let mut compiled = bind_inner(*parsed, contract)?;
-    super::derived::compose_join(&mut compiled)?;
-    let Program::Relational { relational: mut ir } = compiled.program else {
-        anyhow::bail!("scoped join requires relational input");
-    };
+    let compiled = bind_inner(*parsed, contract)?;
+    let mut ir = compiled.relational;
     ensure!(
         ir.output.terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
         "scoped join cannot consume sink-deferred expressions"
     );
-    super::partition::composition::lower_source_filter(&mut ir, compiled.predicates)?;
     let Some(Node::Output { input, .. }) = ir.nodes.pop() else {
         anyhow::bail!("scoped join requires terminal relational output");
     };
@@ -130,11 +115,7 @@ pub(super) fn scope(
         fields,
     });
     adapt_sources(&mut ir, offset, contract)?;
-    Ok(Scope {
-        alias,
-        ir,
-        revision: compiled.revision.context("missing scoped compiler revision")?,
-    })
+    Ok(Scope { alias, ir })
 }
 fn adapt_sources(ir: &mut Relational, offset: usize, contract: &Contract) -> Result<()> {
     let sources = ir

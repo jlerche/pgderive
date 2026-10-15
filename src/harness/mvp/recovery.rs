@@ -1,12 +1,7 @@
-use super::{Batch, Bid, Group, Key, Model, MvpFixture, Query, operators};
+use super::{Batch, Key, Model, MvpFixture, Query, operators};
 use crate::{
     catalog::{Catalog, Stored},
-    engine::{
-        execution::Limits,
-        plan::Checkpoint,
-        plan::query::{AggregateRow, Settings},
-        reader::ObjectBatch,
-    },
+    engine::{execution::Limits, plan::Checkpoint, plan::Settings, reader::ObjectBatch},
     harness::recovery::{QUERY, Recovery, RecoveryReport},
 };
 use anyhow::{Context, Result, ensure};
@@ -47,7 +42,7 @@ impl MvpFixture {
         ensure!(
             report.time == self.graph.time()
                 && report.epoch == self.epoch
-                && report.arrangements == 4
+                && report.arrangements == self.graph.plan().definition().arrangements.len()
                 && report.plan_identity == self.graph.plan().identity(),
             "fresh process recovered wrong boundary"
         );
@@ -60,7 +55,7 @@ impl MvpFixture {
             }
         }
         eprintln!(
-            "MVP durable manifest recovered all four arrangements at tick {} epoch {}",
+            "MVP durable manifest recovered all registered arrangements at tick {} epoch {}",
             report.time, report.epoch
         );
         Ok(())
@@ -78,7 +73,7 @@ impl MvpFixture {
             .find(|member| member.id == "output")
             .context("missing output member")?;
         let reference = member.trace.objects.first().context("missing output object")?;
-        let object = ObjectBatch::<Group, AggregateRow>::open(
+        let object = ObjectBatch::<Key, crate::transaction::Row>::open(
             recovery.store.clone(),
             reference.clone(),
             &member.schema,
@@ -132,49 +127,75 @@ pub(in crate::harness) async fn recover_plan(
         plan_identity: checkpoint.plan_identity.clone(),
         source_end: None,
     };
-    let graph = Query::reopen(
+    let mut graph = Query::new(
         plan,
         operators(),
-        Settings { store, block_rows: 3, limits, encoded_cache: None },
-        checkpoint.clone(),
-    )
-    .await?;
+        &Settings { store, block_rows: 3, limits, encoded_cache: None },
+    )?;
+    graph.restore_checkpoint(checkpoint.clone()).await?;
     let state = graph.snapshot();
     let (left, right) = projected(model)?;
     ensure!(
-        state.left.materialize().await? == left && state.right.materialize().await? == right,
+        state.trace("left")?.materialize().await? == left
+            && state.trace("right")?.materialize().await? == right,
         "recovered projected input arrangements differ from source SQL"
     );
     let sums = super::memory(model)?;
     ensure!(
-        state.sums.materialize().await? == sums,
+        state.trace("sums")?.materialize().await? == sums,
         "recovered statistics differ from independent source recomputation"
     );
-    let output = Batch::from_updates(sums.iter().map(|((key, value), _)| {
-        ((key.clone(), (value.rows, (value.non_null != 0).then_some(value.sum))), 1)
-    }))?;
+    let output = Batch::from_updates(
+        sums.iter()
+            .map(|((key, value), _)| {
+                let category = serde_json::from_str(key)?;
+                let rows = super::integer(value, "rows")?;
+                let non_null = super::integer(value, "non_null")?;
+                let sum = super::integer(value, "sum")?;
+                Ok((
+                    (
+                        String::new(),
+                        super::visible_row(category, rows, (non_null != 0).then_some(sum)),
+                    ),
+                    1,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?,
+    )?;
     ensure!(
-        state.output.materialize().await? == output,
+        state.trace("output")?.materialize().await? == output,
         "recovered COUNT/SUM rows differ from recomputation"
     );
     ensure!(graph.checkpoint()? == checkpoint, "reopen changed membership/generation/clock");
     Ok(report)
 }
-type Projected = (Batch<Key, Group>, Batch<Key, Bid>);
+type Projected = (Batch<Key, crate::transaction::Row>, Batch<Key, crate::transaction::Row>);
 fn projected(model: &Model) -> Result<Projected> {
     let mut left = Vec::new();
     let mut right = Vec::new();
     for ((table, id), row) in model {
         if table == "auction" {
             left.push((
-                (id.clone(), row.get("category").context("missing auction category")?.clone()),
+                (
+                    id.clone(),
+                    crate::transaction::Row::from([(
+                        "category".into(),
+                        row.get("category").context("missing category")?.clone(),
+                    )]),
+                ),
                 1,
             ));
         } else if table == "bid"
             && let Some(auction) = row.get("auction").and_then(Option::as_ref)
         {
             right.push((
-                (auction.clone(), (id.clone(), super::projection_oracle::number(row, "price")?)),
+                (
+                    auction.clone(),
+                    crate::transaction::Row::from([
+                        ("bid_id".into(), Some(id.clone())),
+                        ("price".into(), row.get("price").context("missing price")?.clone()),
+                    ]),
+                ),
                 1,
             ));
         }

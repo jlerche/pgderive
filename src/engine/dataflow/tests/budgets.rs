@@ -1,14 +1,15 @@
 use crate::engine::{
     Batch,
-    dataflow::{Arrangement, GroupSum, Join, Project, SumState, TimedBatch},
+    dataflow::{Arrangement, GroupSum, Join, Project, Statistics, SumState, TimedBatch},
     execution::Limits,
     plan::{
-        Definition, Kind, Node, Plan, Source,
-        query::{GroupedJoin, Operators},
+        Checkpoint, Definition, Kind, Node, Plan, Settings, Source,
+        relational::{Operators, Relational},
     },
 };
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use object_store::{ObjectStore, memory::InMemory};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 fn limits() -> Limits {
@@ -22,81 +23,137 @@ fn stream(
 }
 fn plan() -> Result<Plan> {
     Plan::new(Definition {
-        revision: "budget-test-v1".into(),
+        revision: "budget-test-v2".into(),
         sources: ["as", "bs"]
             .into_iter()
-            .map(|id| Source { id: id.into(), schema: "int".into() })
+            .map(|id| Source { id: id.into(), schema: "values".into() })
             .collect(),
         nodes: [
-            ("a", Kind::Source, vec!["as"], "int"),
-            ("b", Kind::Source, vec!["bs"], "int"),
-            ("left", Kind::Project, vec!["a"], "int"),
-            ("right", Kind::Project, vec!["b"], "int"),
-            ("join", Kind::Join, vec!["left", "right"], "pair"),
-            ("group", Kind::Project, vec!["join"], "int"),
-            ("aggregate", Kind::Aggregate, vec!["group"], "sum"),
+            ("a", Kind::Source, vec!["as"]),
+            ("b", Kind::Source, vec!["bs"]),
+            ("left", Kind::Project, vec!["a"]),
+            ("right", Kind::Project, vec!["b"]),
+            ("join", Kind::Join, vec!["left", "right"]),
+            ("aggregate", Kind::Statistics, vec!["join"]),
+            ("output", Kind::Project, vec!["aggregate"]),
         ]
         .into_iter()
-        .map(|(id, kind, inputs, schema)| Node {
+        .map(|(id, kind, inputs)| Node {
             id: id.into(),
             kind,
             inputs: inputs.into_iter().map(str::to_owned).collect(),
-            schema: schema.into(),
+            schema: "values".into(),
         })
         .collect(),
         arrangements: [
-            ("left", "left", "int"),
-            ("right", "right", "int"),
-            ("sums", "aggregate", "sum"),
-            ("output", "aggregate", "visible"),
+            ("left", "left"),
+            ("right", "right"),
+            ("joined", "join"),
+            ("sums", "aggregate"),
+            ("output", "output"),
         ]
         .into_iter()
-        .map(|(id, node, schema)| crate::engine::plan::Arrangement {
+        .map(|(id, node)| crate::engine::plan::Arrangement {
             id: id.into(),
             node: node.into(),
-            schema: schema.into(),
+            schema: "values".into(),
         })
         .collect(),
-        outputs: vec!["aggregate".into()],
+        outputs: vec!["output".into()],
     })
+}
+type Query = Relational<i64, Vec<i64>>;
+type SourceBatches = Vec<Batch<i64, Vec<i64>>>;
+fn query(settings: &Settings) -> Result<Query> {
+    let identity =
+        || Arc::new(Project::new(|key: &i64, value: &Vec<i64>| Ok(Some((*key, value.clone())))));
+    let statistics = Statistics::new(
+        3,
+        |value: &Vec<i64>| Ok(vec![1.into(), 1.into(), value[0].into()]),
+        |value: &Vec<i64>| Ok(value.iter().copied().map(Into::into).collect()),
+        |_, values| {
+            let row = values
+                .iter()
+                .map(|value| i64::try_from(value.clone()).map_err(Into::into))
+                .collect::<Result<Vec<_>>>()?;
+            ensure!(row[0] >= 0 && row[0] == row[1], "invalid group multiplicity");
+            Ok((row[0] != 0).then_some(row))
+        },
+    );
+    Query::new(
+        plan()?,
+        Operators {
+            projects: [
+                ("left".into(), identity()),
+                ("right".into(), identity()),
+                (
+                    "output".into(),
+                    Arc::new(Project::new(|key: &i64, value: &Vec<i64>| {
+                        Ok(Some((*key, vec![value[0], value[2]])))
+                    })),
+                ),
+            ]
+            .into(),
+            joins: [(
+                "join".into(),
+                Arc::new(Project::new(|key: &i64, pair: &(Vec<i64>, Vec<i64>)| {
+                    Ok(Some((*key, vec![pair.0[0] + pair.1[0]])))
+                })),
+            )]
+            .into(),
+            statistics: [("aggregate".into(), Arc::new(statistics))].into(),
+            partitions: BTreeMap::new(),
+            expansions: BTreeMap::new(),
+            ordered: BTreeMap::new(),
+        },
+        settings,
+    )
+}
+fn settings(store: Arc<dyn ObjectStore>, limits: Limits) -> Settings {
+    Settings { store, block_rows: 1, limits, encoded_cache: None }
+}
+fn tag_batches(left: Batch<i64, i64>, right: Batch<i64, i64>) -> Result<SourceBatches> {
+    [left, right]
+        .into_iter()
+        .map(|batch| {
+            Batch::from_updates(
+                batch.iter().map(|((key, value), weight)| ((*key, vec![*value]), *weight)),
+            )
+        })
+        .collect()
+}
+async fn reopen(settings: &Settings, checkpoint: Checkpoint) -> Result<Query> {
+    let mut result = query(settings)?;
+    result.restore_checkpoint(checkpoint).await?;
+    Ok(result)
 }
 #[tokio::test]
 async fn join_budget_failure_retains_complete_query_root_and_can_retry() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let identity = || Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value))));
-    let operators = Operators {
-        left: identity(),
-        right: identity(),
-        group: Project::new(|key: &i64, value: &(i64, i64)| Ok(Some((*key, value.0 + value.1)))),
-        sum: GroupSum::new(|_: &i64, value: &i64| Ok(Some(*value))),
-    };
-    let mut query = GroupedJoin::new_with_limits(
-        plan()?,
-        operators,
-        store,
-        1,
-        Limits { output_entries: 3, ..limits() },
-    )?;
+    let mut query = query(&settings(store, Limits { output_entries: 3, ..limits() }))?;
     let before = query.snapshot();
     let left = stream(1, [((1, 1), 1), ((1, 2), 1)])?;
     let right = stream(1, [((1, 3), 1), ((1, 4), 1)])?;
     assert!(
         query
-            .prepare(TimedBatch { time: 1, batch: (left.batch, right.batch.clone()) })
+            .prepare(TimedBatch { time: 1, batch: tag_batches(left.batch, right.batch.clone())? })
             .await
             .is_err()
     );
     assert!(Arc::ptr_eq(&before, &query.snapshot()));
     assert_eq!(query.time(), 0);
     let prepared = query
-        .prepare(TimedBatch { time: 1, batch: (stream(1, [((1, 1), 1)])?.batch, right.batch) })
+        .prepare(TimedBatch {
+            time: 1,
+            batch: tag_batches(stream(1, [((1, 1), 1)])?.batch, right.batch)?,
+        })
         .await?;
     query.commit(prepared)?;
     assert_eq!(query.time(), 1);
     assert!(query.cache_stats()?.bytes <= Limits::default().cache_bytes);
     assert_eq!(
-        query.snapshot().output.materialize().await?,
-        Batch::from_updates([((1, (2, Some(9))), 1)])?
+        query.snapshot().trace("output")?.materialize().await?,
+        Batch::from_updates([((1, vec![2, 9]), 1)])?
     );
     Ok(())
 }
@@ -164,48 +221,40 @@ async fn spilled_projection_join_and_aggregate_preserve_exact_cancellation() -> 
     Ok(())
 }
 
-type TestOperators = Operators<i64, i64, i64, i64, i64, i64, i64>;
-fn test_operators() -> TestOperators {
-    let identity = || Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value))));
-    Operators {
-        left: identity(),
-        right: identity(),
-        group: Project::new(|key: &i64, values: &(i64, i64)| Ok(Some((*key, values.0 + values.1)))),
-        sum: GroupSum::new(|_: &i64, value: &i64| Ok(Some(*value))),
-    }
-}
 #[tokio::test]
 async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> Result<()> {
-    use crate::engine::plan::query::Settings;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let mut original = GroupedJoin::new(plan()?, test_operators(), store.clone(), 1)?;
+    let mut original = query(&settings(store.clone(), Limits::default()))?;
     let bootstrap = original.checkpoint()?;
     original.commit(
         original
             .prepare(TimedBatch {
                 time: 1,
-                batch: (stream(1, [((1, 2), 1)])?.batch, stream(1, [((1, 3), 1)])?.batch),
+                batch: tag_batches(
+                    stream(1, [((1, 2), 1)])?.batch,
+                    stream(1, [((1, 3), 1)])?.batch,
+                )?,
             })
             .await?,
     )?;
     let checkpoint = original.checkpoint()?;
     let checkpoint = serde_json::from_slice(&serde_json::to_vec(&checkpoint)?)?;
-    let mut reopened = GroupedJoin::reopen(
-        plan()?,
-        test_operators(),
-        Settings { store, block_rows: 1, limits: Limits::default(), encoded_cache: None },
-        checkpoint,
-    )
-    .await?;
+    let mut reopened = reopen(&settings(store, Limits::default()), checkpoint).await?;
     assert_eq!(reopened.time(), 1);
     assert_eq!(reopened.checkpoint()?, original.checkpoint()?);
     let foreign = original
-        .prepare(TimedBatch { time: 2, batch: (stream(2, [])?.batch, stream(2, [])?.batch) })
+        .prepare(TimedBatch {
+            time: 2,
+            batch: tag_batches(stream(2, [])?.batch, stream(2, [])?.batch)?,
+        })
         .await?;
     assert!(reopened.prepared_checkpoint(&foreign).is_err());
     assert!(reopened.commit(foreign).is_err());
     let pending = reopened
-        .prepare(TimedBatch { time: 2, batch: (stream(2, [])?.batch, stream(2, [])?.batch) })
+        .prepare(TimedBatch {
+            time: 2,
+            batch: tag_batches(stream(2, [])?.batch, stream(2, [])?.batch)?,
+        })
         .await?;
     reopened.restore_checkpoint(original.checkpoint()?).await?;
     assert!(reopened.commit(pending).is_err());
@@ -215,10 +264,10 @@ async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> R
     let staged = reopened
         .prepare(TimedBatch {
             time: 2,
-            batch: (
+            batch: tag_batches(
                 stream(2, [((1, 2), -1), ((1, 4), 1)])?.batch,
                 stream(2, [((1, 3), -1), ((1, 7), 1)])?.batch,
-            ),
+            )?,
         })
         .await?;
     let staged_checkpoint = reopened.prepared_checkpoint(&staged)?;
@@ -228,64 +277,39 @@ async fn reopened_query_restores_all_arrangements_and_continues_next_tick() -> R
     assert_eq!(reopened.checkpoint()?, staged_checkpoint);
     assert_eq!(reopened.time(), 2);
     assert_eq!(
-        reopened.snapshot().output.materialize().await?,
-        Batch::from_updates([((1, (1, Some(11))), 1)])?
+        reopened.snapshot().trace("output")?.materialize().await?,
+        Batch::from_updates([((1, vec![1, 11]), 1)])?
     );
     assert_eq!(original.time(), 1);
     Ok(())
 }
 #[tokio::test]
 async fn incompatible_checkpoint_memberships_fail_before_reopening() -> Result<()> {
-    use crate::engine::plan::query::Settings;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let original = GroupedJoin::new(plan()?, test_operators(), store.clone(), 1)?;
+    let original = query(&settings(store.clone(), Limits::default()))?;
     let checkpoint = original.checkpoint()?;
     let settings =
         Settings { store, block_rows: 1, limits: Limits::default(), encoded_cache: None };
     let mut incompatible = checkpoint.clone();
     incompatible.version = 9;
-    assert!(
-        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
-            .await
-            .is_err()
-    );
+    assert!(reopen(&settings, incompatible).await.is_err());
     let mut incompatible = checkpoint.clone();
     incompatible.plan_identity.push('x');
-    assert!(
-        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
-            .await
-            .is_err()
-    );
+    assert!(reopen(&settings, incompatible).await.is_err());
     let mut incompatible = checkpoint.clone();
     incompatible.arrangements.pop();
-    assert!(
-        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
-            .await
-            .is_err()
-    );
+    assert!(reopen(&settings, incompatible).await.is_err());
     let mut incompatible = checkpoint.clone();
     incompatible.arrangements[1] = incompatible.arrangements[0].clone();
-    assert!(
-        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
-            .await
-            .is_err()
-    );
+    assert!(reopen(&settings, incompatible).await.is_err());
     let mut incompatible = checkpoint.clone();
     incompatible.arrangements[0].trace.time = 1;
-    assert!(
-        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
-            .await
-            .is_err()
-    );
+    assert!(reopen(&settings, incompatible).await.is_err());
     let mut incompatible = checkpoint.clone();
     incompatible.arrangements[0].schema.push('x');
-    assert!(
-        GroupedJoin::reopen(plan()?, test_operators(), settings.clone(), incompatible)
-            .await
-            .is_err()
-    );
+    assert!(reopen(&settings, incompatible).await.is_err());
     let mut incompatible = checkpoint;
     incompatible.arrangements[0].trace.version = 2;
-    assert!(GroupedJoin::reopen(plan()?, test_operators(), settings, incompatible).await.is_err());
+    assert!(reopen(&settings, incompatible).await.is_err());
     Ok(())
 }

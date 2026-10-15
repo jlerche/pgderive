@@ -37,6 +37,42 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     pub fn prepared_checkpoint(&self, work: &Prepared<K, V>) -> Result<Checkpoint> {
         self.engine.prepared_checkpoint(work)
     }
+    /// Reopen an authoritative object checkpoint.
+    ///
+    /// # Errors
+    /// Rejects incompatible registrations or missing/corrupt objects.
+    pub async fn reopen(
+        plan: super::super::Plan,
+        operators: super::Operators<K, V>,
+        settings: super::super::Settings,
+        checkpoint: Checkpoint,
+    ) -> Result<Self> {
+        let mut query = Self::new(plan, operators, &settings)?;
+        query.restore_checkpoint(checkpoint).await?;
+        Ok(query)
+    }
+    /// Atomically publish a prepared full-tuple bag before changing local visibility.
+    ///
+    /// # Errors
+    /// Rejects foreign work, invalid codecs, fencing or publication failures.
+    pub async fn publish_prepared(
+        &mut self,
+        sql: &mut Client,
+        writer: &mut Writer,
+        work: Prepared<K, V>,
+        progress: &crate::catalog::Progress,
+    ) -> Result<crate::engine::dataflow::TimedBatch<crate::engine::Batch<K, V>>> {
+        let checkpoint = self.prepared_checkpoint(&work)?;
+        let deltas = crate::catalog::Deltas::bag(&work.output().batch)?;
+        writer
+            .publish(
+                sql,
+                self.plan(),
+                crate::catalog::Publication { checkpoint: &checkpoint, progress, deltas: &deltas },
+            )
+            .await?;
+        self.commit(work)
+    }
     /// Cold-validate and adopt authoritative membership, invalidating prior work.
     ///
     /// # Errors
@@ -68,22 +104,38 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         &self,
         protection: &Protection,
     ) -> Result<Compaction<K, V>> {
-        let namespace = protection.namespace()?.to_owned();
+        self.prepare_compaction_scoped(Some(protection.namespace()?)).await
+    }
+    /// Prepare equivalent local physical state.
+    ///
+    /// # Errors
+    /// Returns storage, resource or equivalence failures.
+    pub async fn prepare_compaction(&self) -> Result<Compaction<K, V>> {
+        self.prepare_compaction_scoped(None).await
+    }
+    async fn prepare_compaction_scoped(&self, namespace: Option<&str>) -> Result<Compaction<K, V>> {
+        let namespace = namespace.map(str::to_owned);
         let writers = self.execution.writers.clone();
         self.engine
             .maintenance(move |state| async move {
                 let mut entries = std::collections::BTreeMap::new();
                 for (id, entry) in &state.entries {
-                    let writer = writers
-                        .get(id)
-                        .context("missing compaction writer")?
-                        .clone()
-                        .with_namespace(&namespace);
+                    let mut writer = writers.get(id).context("missing compaction writer")?.clone();
+                    if let Some(namespace) = &namespace {
+                        writer = writer.with_namespace(namespace);
+                    }
                     entries.insert(id.clone(), compact_entry(entry, &writer).await?);
                 }
                 Ok(RelationalState { entries })
             })
             .await
+    }
+    /// Install equivalent local physical state.
+    ///
+    /// # Errors
+    /// Rejects stale or foreign candidates.
+    pub fn commit_compaction(&mut self, work: Compaction<K, V>) -> Result<()> {
+        self.engine.commit_maintenance(work)
     }
     /// Export an owned physical candidate without advancing logical time.
     ///

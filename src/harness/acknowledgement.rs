@@ -3,7 +3,7 @@ use crate::{
     Config,
     acknowledged::Stream,
     catalog::{Catalog, Progress},
-    engine::{dataflow::TimedBatch as Tick, plan::query::Settings},
+    engine::{dataflow::TimedBatch as Tick, plan::Settings},
 };
 use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
@@ -76,10 +76,10 @@ async fn exercise(
     let prepared = graph
         .prepare(Tick {
             time: graph.time() + 1,
-            batch: (
+            batch: vec![
                 mvp::input(&transaction.batch, "auction", "id")?,
                 mvp::input(&transaction.batch, "bid", "auction")?,
-            ),
+            ],
         })
         .await?;
     graph.publish_prepared(sql, writer, prepared, &progress).await?;

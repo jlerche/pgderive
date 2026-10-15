@@ -168,7 +168,7 @@ pub(super) fn computed(
         "computed scalar requires resolved integral type"
     );
     let name = format!("@typed_{scope:?}_{:x}", Sha256::digest(serde_json::to_vec(&typed)?));
-    let column = ColumnRef { name, right: false, oid: typed.oid, nullable: true };
+    let column = ColumnRef { name, right: false, oid: typed.oid, nullable: typed.nullable() };
     if !computed.iter().any(|value| value.column == column) {
         computed.push(super::scalar::Computed {
             column: column.clone(),
@@ -202,34 +202,19 @@ fn literal(constant: &pg_query::protobuf::AConst) -> Result<Typed> {
 }
 
 impl Typed {
-    pub(super) fn has_remainder(&self) -> bool {
-        self.predicates(super::expression::Expr::has_remainder)
-    }
-    pub(super) fn has_gap(&self) -> bool {
-        self.predicates(super::expression::Expr::has_gap)
-    }
-    pub(super) fn has_text_equality(&self) -> bool {
-        self.predicates(super::expression::Expr::has_text_equality)
-    }
-    pub(super) fn predicates(&self, predicate: fn(&super::expression::Expr) -> bool) -> bool {
+    fn nullable(&self) -> bool {
         match &self.value {
-            Value::Column(_) | Value::Literal(_) | Value::Numeric(_) => false,
-            Value::Cast(input) => input.predicates(predicate),
-            Value::Binary { left, right, .. } => {
-                left.predicates(predicate) || right.predicates(predicate)
-            }
-            Value::Coalesce(arguments) => arguments.iter().any(|value| value.predicates(predicate)),
+            Value::Column(column) => column.nullable,
+            Value::Literal(value) => value.is_none(),
+            Value::Numeric(_) => false,
+            Value::Cast(input) => input.nullable(),
+            Value::Binary { left, right, .. } => left.nullable() || right.nullable(),
+            Value::Coalesce(arguments) => arguments.iter().all(Self::nullable),
             Value::Case { branches, otherwise } => {
-                branches
-                    .iter()
-                    .any(|(condition, value)| predicate(condition) || value.predicates(predicate))
-                    || otherwise.predicates(predicate)
+                otherwise.nullable() || branches.iter().any(|(_, value)| value.nullable())
             }
         }
     }
-}
-
-impl Typed {
     pub(super) const fn oid(&self) -> u32 {
         self.oid
     }

@@ -63,7 +63,7 @@ fn oracle(state: &BTreeMap<Row, i64>, case: usize) -> Result<Bag> {
 async fn history(case: usize) -> Result<()> {
     let native = contract();
     let compiled = compile(&sql(case), &native)?;
-    let ir = compiled.relational().context("missing peer IR")?;
+    let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
@@ -129,7 +129,7 @@ fn rejects_unimplemented_distance_and_exclusions() -> Result<()> {
 async fn whole_partition_aggregates_share_work_between_peers() -> Result<()> {
     let native = contract();
     let compiled = compile(&sql(4), &native)?;
-    let ir = compiled.relational().context("missing peer IR")?;
+    let ir = compiled.relational();
     let mut options = settings();
     options.limits.contributions = 1024;
     let mut query = relational::build(&native, &compiled, &options)?;
