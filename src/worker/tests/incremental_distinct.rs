@@ -32,9 +32,7 @@ async fn distinct_occurrence_counts_exceed_i64_without_narrowing_membership() ->
             Batch::from_updates([((Vec::new(), expected.clone()), weight)])?
         );
         query.commit(prepared)?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, &compiled, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }
     Ok(())
 }
@@ -190,18 +188,11 @@ async fn mixed_distinct_sum_average_filters_and_group_moves_restore() -> Result<
             *state.entry(update.tuple.row.clone()).or_default() += update.weight;
         }
         let after = mixed_oracle(&state)?;
-        let expected = Batch::from_updates(
-            before
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let expected = super::bag_delta(&before, &after)?;
         let prepared = query.prepare(relational::inputs(&input, ir, query.time() + 1)?).await?;
         assert_eq!(prepared.output().batch, expected);
         query.commit(prepared)?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, &compiled, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }
     let before = query.checkpoint()?;
     let absent = row(&[("id", Some("absent")), ("auction", None), ("price", Some("-7"))]);

@@ -160,9 +160,7 @@ async fn ordered_extrema_history_full_identity_null_filter_and_cold_restart() ->
         )?;
         assert_eq!(output, oracle(&source)?);
         query.commit(work)?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, &compiled, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }
     let live = row(&[("id", Some("10")), ("auction", None), ("price", Some("-999"))]);
     let live = batch(vec![("bid", live, 1)]);

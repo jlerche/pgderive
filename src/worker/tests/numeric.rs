@@ -66,21 +66,14 @@ async fn numeric_grouped_history_uses_raw_scale_and_cold_restart() -> Result<()>
                 1,
             )])?
         };
-        let expected = Batch::from_updates(
-            previous
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let expected = super::bag_delta(&previous, &after)?;
         let changes = batch(changes);
         let candidate = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(candidate.output().batch, expected);
         query.commit(candidate)?;
         previous = after;
         if index == 1 {
-            let checkpoint = query.checkpoint()?;
-            query = relational::build(&native, &compiled, &options)?;
-            query.restore_checkpoint(checkpoint).await?;
+            super::restart_relational(&mut query, &native, &compiled, &options).await?;
         }
     }
     Ok(())
@@ -168,9 +161,7 @@ async fn numeric_sum_retracts_highest_scale_and_special_inputs() -> Result<()> {
             .context("missing numeric sum replacement")?;
         assert_eq!(positive.0.1["@aggregate_0"].as_deref(), Some(expected));
         query.commit(candidate)?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, &compiled, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }
     Ok(())
 }

@@ -58,12 +58,7 @@ async fn projection_collisions_retractions_nulls_and_cold_restart() -> Result<()
             }
         }
         let after = oracle(&rows)?;
-        let expected = Batch::from_updates(
-            before
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let expected = super::bag_delta(&before, &after)?;
         let input = projected::inputs(
             &changes,
             compiled.projection().ok_or_else(|| anyhow::anyhow!("missing projection"))?,

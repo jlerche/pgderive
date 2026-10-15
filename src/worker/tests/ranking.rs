@@ -72,23 +72,14 @@ async fn history(numbered: bool) -> Result<()> {
     .enumerate()
     {
         let before = oracle(&state, numbered)?;
-        for change in &changes.updates {
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
+        super::apply_rows(&mut state, &changes);
         let after = oracle(&state, numbered)?;
-        let expected = Batch::from_updates(
-            before
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let expected = super::bag_delta(&before, &after)?;
         let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(prepared.output().batch, expected);
         query.commit(prepared)?;
         if index == 1 {
-            let checkpoint = query.checkpoint()?;
-            query = relational::build(&native, &compiled, &options)?;
-            query.restore_checkpoint(checkpoint).await?;
+            super::restart_relational(&mut query, &native, &compiled, &options).await?;
         }
     }
     Ok(())

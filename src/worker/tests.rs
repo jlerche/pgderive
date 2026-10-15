@@ -212,3 +212,34 @@ mod numeric;
 mod topk;
 
 mod membership;
+
+/// Apply full-row signed updates to the independent source bag used by an oracle.
+fn apply_rows(state: &mut std::collections::BTreeMap<Row, i64>, changes: &weighted::Batch) {
+    for change in &changes.updates {
+        *state.entry(change.tuple.row.clone()).or_default() += change.weight;
+    }
+}
+
+/// Compute the signed difference of independently evaluated full-bag snapshots.
+fn bag_delta<K: Ord + Clone, V: Ord + Clone>(
+    before: &Batch<K, V>,
+    after: &Batch<K, V>,
+) -> Result<Batch<K, V>> {
+    Batch::from_updates(
+        before
+            .iter()
+            .map(|(tuple, weight)| (tuple.clone(), -*weight))
+            .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
+    )
+}
+
+async fn restart_relational(
+    query: &mut program::relational::Query,
+    native: &Contract,
+    compiled: &crate::compiler::Compiled,
+    options: &Settings,
+) -> Result<()> {
+    let checkpoint = query.checkpoint()?;
+    *query = program::relational::build(native, compiled, options)?;
+    query.restore_checkpoint(checkpoint).await
+}

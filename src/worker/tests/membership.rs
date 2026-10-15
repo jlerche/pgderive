@@ -88,19 +88,12 @@ async fn history(anti: Option<bool>, distinct: bool) -> Result<()> {
             *state.entry(change.tuple.row.clone()).or_default() += change.weight;
         }
         let after = oracle(&left, &right, anti, distinct)?;
-        let expected = Batch::from_updates(
-            before
-                .iter()
-                .map(|(tuple, w)| (tuple.clone(), -*w))
-                .chain(after.iter().map(|(tuple, w)| (tuple.clone(), *w))),
-        )?;
+        let expected = super::bag_delta(&before, &after)?;
         let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(work.output().batch, expected, "{sql}, tick {index}");
         query.commit(work)?;
         if index == 2 {
-            let checkpoint = query.checkpoint()?;
-            query = relational::build(&native, &compiled, &options)?;
-            query.restore_checkpoint(checkpoint).await?;
+            super::restart_relational(&mut query, &native, &compiled, &options).await?;
         }
     }
     let before = query.checkpoint()?;
@@ -161,9 +154,7 @@ async fn compound_self_existence_and_repeated_distinct_columns_preserve_null_sem
     let mut state = State::new();
     let mut previous = Batch::from_updates([])?;
     for changes in histories {
-        for change in &changes.updates {
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
+        super::apply_rows(&mut state, &changes);
         let rows = state.iter().filter(|(left, weight)| {
             **weight > 0
                 && state.iter().any(|(right, count)| {
@@ -189,9 +180,7 @@ async fn compound_self_existence_and_repeated_distinct_columns_preserve_null_sem
         assert_eq!(work.output().batch, delta);
         query.commit(work)?;
         previous = current;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, &compiled, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }
     Ok(())
 }

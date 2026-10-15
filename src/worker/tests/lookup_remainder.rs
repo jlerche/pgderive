@@ -158,19 +158,12 @@ async fn modulo_predecessor_matches_independent_signed_bags_and_restart() -> Res
                 update.weight;
         }
         let after = oracle(&state)?;
-        let expected = crate::engine::Batch::from_updates(
-            before
-                .iter()
-                .map(|(row, weight)| (row.clone(), -*weight))
-                .chain(after.iter().map(|(row, weight)| (row.clone(), *weight))),
-        )?;
+        let expected = super::bag_delta(&before, &after)?;
         let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(prepared.output().batch, expected);
         query.commit(prepared)?;
         if index == 2 {
-            let checkpoint = query.checkpoint()?;
-            query = relational::build(&native, &compiled, &options)?;
-            query.restore_checkpoint(checkpoint).await?;
+            super::restart_relational(&mut query, &native, &compiled, &options).await?;
         }
     }
     Ok(())

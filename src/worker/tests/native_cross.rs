@@ -30,9 +30,7 @@ async fn native_scopes_cross_null_tuples_and_restore() -> Result<()> {
         }
         assert_eq!(integrated, expected);
         query.commit(prepared)?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, &compiled, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }
     Ok(())
 }

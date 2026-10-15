@@ -90,22 +90,13 @@ async fn complete_sessions_merge_split_move_and_restore_signed_bags() -> Result<
         batch(vec![("bid", first, -1), ("bid", last, -1), ("bid", null, -1)]),
     ] {
         let before = oracle(&state, &fields)?;
-        for update in &changes.updates {
-            *state.entry(update.tuple.row.clone()).or_default() += update.weight;
-        }
+        super::apply_rows(&mut state, &changes);
         let after = oracle(&state, &fields)?;
-        let delta = Batch::from_updates(
-            before
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let delta = super::bag_delta(&before, &after)?;
         let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(prepared.output().batch, delta);
         query.commit(prepared)?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, &compiled, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }
     Ok(())
 }

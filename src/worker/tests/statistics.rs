@@ -64,23 +64,14 @@ async fn linear_statistics_match_full_bag_oracle_through_retractions_and_restart
     for (index, updates) in histories.into_iter().enumerate() {
         let before = oracle(&state)?;
         let delta = batch(updates);
-        for change in &delta.updates {
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
+        super::apply_rows(&mut state, &delta);
         let after = oracle(&state)?;
-        let expected = Batch::from_updates(
-            before
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let expected = super::bag_delta(&before, &after)?;
         let prepared = query.prepare(relational::inputs(&delta, ir, query.time() + 1)?).await?;
         assert_eq!(prepared.output().batch, expected);
         query.commit(prepared)?;
         if index == 1 {
-            let checkpoint = query.checkpoint()?;
-            query = relational::build(&native, &compiled, &options)?;
-            query.restore_checkpoint(checkpoint).await?;
+            super::restart_relational(&mut query, &native, &compiled, &options).await?;
         }
     }
     assert_eq!(query.time(), 5);

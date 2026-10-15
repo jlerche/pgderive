@@ -77,24 +77,15 @@ async fn history(window: bool) -> Result<()> {
     let mut state = BTreeMap::new();
     for (index, changes) in histories.into_iter().enumerate() {
         let before = oracle(&state, window)?;
-        for change in &changes.updates {
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
+        super::apply_rows(&mut state, &changes);
         let after = oracle(&state, window)?;
-        let expected = Batch::from_updates(
-            before
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let expected = super::bag_delta(&before, &after)?;
         let candidate = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(candidate.output().batch, expected);
         relational::deltas(&candidate.output().batch, &ir.output)?;
         query.commit(candidate)?;
         if index == 2 {
-            let checkpoint = query.checkpoint()?;
-            query = relational::build(&native, &compiled, &options)?;
-            query.restore_checkpoint(checkpoint).await?;
+            super::restart_relational(&mut query, &native, &compiled, &options).await?;
         }
     }
     Ok(())
@@ -253,9 +244,7 @@ async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()
     );
     relational::deltas(&candidate.output().batch, &ir.output)?;
     query.commit(candidate)?;
-    let checkpoint = query.checkpoint()?;
-    query = relational::build(&native, &compiled, &options)?;
-    query.restore_checkpoint(checkpoint).await?;
+    super::restart_relational(&mut query, &native, &compiled, &options).await?;
     let changes = batch(vec![("bid", large, -2), ("bid", negative, -3)]);
     let candidate = query.prepare(relational::inputs(&changes, ir, 2)?).await?;
     let empty: Row =
@@ -362,9 +351,7 @@ async fn compiled_date_bins_retract_groups_and_preserve_nulls_across_restart() -
         Batch::from_updates([((Vec::new(), before.clone()), 1), ((Vec::new(), null.clone()), 1)])?
     );
     query.commit(candidate)?;
-    let checkpoint = query.checkpoint()?;
-    query = relational::build(&native, &compiled, &options)?;
-    query.restore_checkpoint(checkpoint).await?;
+    super::restart_relational(&mut query, &native, &compiled, &options).await?;
     let changes = batch(vec![("bid", a, -1), ("bid", moved, 1), ("bid", b, -1)]);
     let candidate = query.prepare(relational::inputs(&changes, ir, 2)?).await?;
     assert_eq!(

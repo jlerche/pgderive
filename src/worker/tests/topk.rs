@@ -113,25 +113,16 @@ async fn history(condition: &str) -> Result<()> {
     .into_iter()
     .enumerate()
     {
-        for change in &changes.updates {
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
+        super::apply_rows(&mut state, &changes);
         let after = oracle(&state, limit, equality)?;
-        let expected = Batch::from_updates(
-            prior
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let expected = super::bag_delta(&prior, &after)?;
         let prepared =
             circuit.prepare(relational::inputs(&changes, ir, circuit.time() + 1)?).await?;
         assert_eq!(prepared.output().batch, expected, "{condition} tick {index}");
         circuit.commit(prepared)?;
         prior = after;
         if index == 1 {
-            let checkpoint = circuit.checkpoint()?;
-            circuit = relational::build(&native, &compiled, &options)?;
-            circuit.restore_checkpoint(checkpoint).await?;
+            super::restart_relational(&mut circuit, &native, &compiled, &options).await?;
         }
     }
     Ok(())

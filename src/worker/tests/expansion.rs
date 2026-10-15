@@ -82,9 +82,7 @@ async fn hopping_preserves_weighted_memberships_nulls_and_restart() -> Result<()
         )?
     );
     query.commit(prepared)?;
-    let checkpoint = query.checkpoint()?;
-    query = relational::build(&native, &compiled, &options)?;
-    query.restore_checkpoint(checkpoint).await?;
+    super::restart_relational(&mut query, &native, &compiled, &options).await?;
     let mut moved = input.clone();
     moved.insert("event_time".into(), Some("2000-01-01 00:00:02+00".into()));
     let delta = batch(vec![("bid", input, -2), ("bid", moved, 2), ("bid", null, -3)]);

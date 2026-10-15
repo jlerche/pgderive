@@ -52,22 +52,13 @@ async fn distinct_retracts_only_the_last_occurrence_and_restores() -> Result<()>
         batch(vec![]),
     ] {
         let before = oracle(&state)?;
-        for change in &changes.updates {
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
+        super::apply_rows(&mut state, &changes);
         let after = oracle(&state)?;
-        let delta = Batch::from_updates(
-            before
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let delta = super::bag_delta(&before, &after)?;
         let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(prepared.output().batch, delta);
         query.commit(prepared)?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, &compiled, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }
     let prior = serde_json::to_vec(&query.checkpoint()?)?;
     let changes = batch(vec![("bid", a, -1)]);

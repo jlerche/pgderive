@@ -168,9 +168,7 @@ async fn history(nested: u8) -> Result<()> {
         assert_eq!(output, oracle(&state)?);
         query.commit(prepared)?;
         if index == 1 {
-            let checkpoint = query.checkpoint()?;
-            query = relational::build(&native, &compiled, &options)?;
-            query.restore_checkpoint(checkpoint).await?;
+            super::restart_relational(&mut query, &native, &compiled, &options).await?;
         }
     }
     Ok(())

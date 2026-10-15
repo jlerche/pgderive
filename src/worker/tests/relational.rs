@@ -57,21 +57,14 @@ async fn compiled_join_deltas_cold_restart_and_atomic_failure() -> Result<()> {
             *state.entry(change.tuple.row.clone()).or_default() += change.weight;
         }
         let after = oracle(&left, &right)?;
-        let expected = Batch::from_updates(
-            before
-                .iter()
-                .map(|(tuple, weight)| (tuple.clone(), -*weight))
-                .chain(after.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
-        )?;
+        let expected = super::bag_delta(&before, &after)?;
         let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(work.output().batch, expected);
         relational::deltas(&work.output().batch, &ir.output)?;
         query.prepared_checkpoint(&work)?;
         query.commit(work)?;
         if index == 1 {
-            let checkpoint = query.checkpoint()?;
-            query = relational::build(&native, &compiled, &options)?;
-            query.restore_checkpoint(checkpoint).await?;
+            super::restart_relational(&mut query, &native, &compiled, &options).await?;
         }
     }
     let before = query.checkpoint()?;
