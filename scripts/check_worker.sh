@@ -17,254 +17,88 @@ fi
 mkdir -p artifacts/worker
 output=$(mktemp -d "$PWD/artifacts/worker/run-XXXXXXXX")
 printf 'Worker evidence: %s\n' "$output"
-mkdir "$output/transactions" "$output/crashes" "$output/compiler" "$output/projection" "$output/relational" "$output/partition" "$output/numeric" "$output/native" "$output/date-bin" "$output/hopping" "$output/ranking" "$output/peer-frames" "$output/derived" "$output/navigation" "$output/lookup" "$output/composition" "$output/case" "$output/session" "$output/distinct" "$output/nexmark-q15" "$output/join-composition" "$output/nexmark-auction" "$output/nexmark-q22" "$output/nexmark-q1" "$output/nexmark-projection" "$output/nexmark-q20" "$output/nexmark-ordered" "$output/nexmark-temporal" "$output/nexmark-q3" "$output/nexmark-calendar" "$output/nexmark-hot" "$output/group-membership" "$output/nexmark-q8" "$output/nexmark-q13" "$output/nexmark-q14" "$output/nexmark-q21"
 export PGDERIVE__POSTGRES__PASSWORD=${PGPASSWORD:-postgres}
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/transactions" \
+run_qualification() {
+    local name=$1
+    shift
+    mkdir "$output/$name"
+    if ! python3 scripts/run_with_s3_proxy.py "$output/$name" "$@"; then
+        cat "$output/$name/harness.log" >&2
+        exit 1
+    fi
+}
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \
     python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 \
-    "$output/transactions" -- "${worker[@]}"; then
-    cat "$output/transactions/harness.log" >&2
-    exit 1
-fi
-if ! python3 scripts/run_with_s3_proxy.py "$output/crashes" \
-    python3 scripts/worker_crash_harness.py "$output/crashes" -- "${worker[@]}"; then
-    cat "$output/crashes/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/compiler" \
-    python3 scripts/sql_compiler_harness.py "$output/compiler" -- "${worker[@]}"; then
-    cat "$output/compiler/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/projection" \
-    python3 scripts/projection_compiler_harness.py "$output/projection" -- "${worker[@]}"; then
-    cat "$output/projection/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/relational" \
-    python3 scripts/relational_compiler_harness.py "$output/relational" -- "${worker[@]}"; then
-    cat "$output/relational/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/partition" \
-    python3 scripts/partition_compiler_harness.py "$output/partition" -- "${worker[@]}"; then
-    cat "$output/partition/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/numeric" \
-    python3 scripts/numeric_compiler_harness.py "$output/numeric" -- "${worker[@]}"; then
-    cat "$output/numeric/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/native" \
-    python3 scripts/native_compiler_harness.py "$output/native" -- "${worker[@]}"; then
-    cat "$output/native/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/date-bin" \
-    python3 scripts/date_bin_compiler_harness.py "$output/date-bin" -- "${worker[@]}"; then
-    cat "$output/date-bin/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/hopping" \
-    python3 scripts/hopping_compiler_harness.py "$output/hopping" -- "${worker[@]}"; then
-    cat "$output/hopping/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/ranking" \
-    python3 scripts/ranking_compiler_harness.py "$output/ranking" -- "${worker[@]}"; then
-    cat "$output/ranking/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/peer-frames" \
-    python3 scripts/peer_frames_compiler_harness.py "$output/peer-frames" -- "${worker[@]}"; then
-    cat "$output/peer-frames/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/derived" \
-    python3 scripts/derived_compiler_harness.py "$output/derived" -- "${worker[@]}"; then
-    cat "$output/derived/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/navigation" \
-    python3 scripts/navigation_compiler_harness.py "$output/navigation" -- "${worker[@]}"; then
-    cat "$output/navigation/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/lookup" \
-    python3 scripts/lookup_compiler_harness.py "$output/lookup" -- "${worker[@]}"; then
-    cat "$output/lookup/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/composition" \
-    python3 scripts/composition_compiler_harness.py "$output/composition" -- "${worker[@]}"; then
-    cat "$output/composition/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/case" \
-    python3 scripts/case_compiler_harness.py "$output/case" -- "${worker[@]}"; then
-    cat "$output/case/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/session" \
-    python3 scripts/session_compiler_harness.py "$output/session" -- "${worker[@]}"; then
-    cat "$output/session/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/distinct" \
-    python3 scripts/distinct_compiler_harness.py "$output/distinct" -- "${worker[@]}"; then
-    cat "$output/distinct/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q15" \
-    python3 scripts/nexmark_q15_harness.py "$output/nexmark-q15" -- "${worker[@]}"; then
-    cat "$output/nexmark-q15/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/join-composition" \
-    python3 scripts/join_composition_harness.py "$output/join-composition" -- "${worker[@]}"; then
-    cat "$output/join-composition/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-auction" \
-    python3 scripts/nexmark_auction_harness.py "$output/nexmark-auction" -- "${worker[@]}"; then
-    cat "$output/nexmark-auction/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q22" \
-    python3 scripts/nexmark_q22_harness.py "$output/nexmark-q22" -- "${worker[@]}"; then
-    cat "$output/nexmark-q22/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q1" \
-    python3 scripts/nexmark_q1_harness.py "$output/nexmark-q1" -- "${worker[@]}"; then
-    cat "$output/nexmark-q1/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-projection" \
-    python3 scripts/nexmark_projection_harness.py "$output/nexmark-projection" -- "${worker[@]}"; then
-    cat "$output/nexmark-projection/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q20" \
-    python3 scripts/nexmark_q20_harness.py "$output/nexmark-q20" -- "${worker[@]}"; then
-    cat "$output/nexmark-q20/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-ordered" \
-    python3 scripts/nexmark_ordered_harness.py "$output/nexmark-ordered" -- "${worker[@]}"; then
-    cat "$output/nexmark-ordered/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-temporal" \
-    python3 scripts/nexmark_temporal_harness.py "$output/nexmark-temporal" -- "${worker[@]}"; then
-    cat "$output/nexmark-temporal/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q3" \
-    python3 scripts/nexmark_q3_harness.py "$output/nexmark-q3" -- "${worker[@]}"; then
-    cat "$output/nexmark-q3/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-calendar" \
-    python3 scripts/nexmark_calendar_harness.py "$output/nexmark-calendar" -- "${worker[@]}"; then
-    cat "$output/nexmark-calendar/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-hot" \
-    python3 scripts/nexmark_hot_harness.py "$output/nexmark-hot" -- "${worker[@]}"; then
-    cat "$output/nexmark-hot/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/group-membership" \
-    python3 scripts/group_membership_harness.py "$output/group-membership" -- "${worker[@]}"; then
-    cat "$output/group-membership/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q8" \
-    python3 scripts/nexmark_q8_harness.py "$output/nexmark-q8" -- "${worker[@]}"; then
-    cat "$output/nexmark-q8/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q13" \
-    python3 scripts/nexmark_q13_harness.py "$output/nexmark-q13" -- "${worker[@]}"; then
-    cat "$output/nexmark-q13/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q14" \
-    python3 scripts/nexmark_q14_harness.py "$output/nexmark-q14" -- "${worker[@]}"; then
-    cat "$output/nexmark-q14/harness.log" >&2
-    exit 1
-fi
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q21" \
-    python3 scripts/nexmark_q21_harness.py "$output/nexmark-q21" -- "${worker[@]}"; then
-    cat "$output/nexmark-q21/harness.log" >&2
-    exit 1
-fi
+    "$output/transactions" -- "${worker[@]}"
+run_qualification crashes python3 scripts/worker_crash_harness.py "$output/crashes" -- "${worker[@]}"
+while read -r qualification script; do
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
+        python3 "scripts/${script}_harness.py" "$output/$qualification" -- "${worker[@]}"
+done <<'QUALIFICATIONS'
+compiler sql_compiler
+projection projection_compiler
+relational relational_compiler
+partition partition_compiler
+numeric numeric_compiler
+native native_compiler
+date-bin date_bin_compiler
+hopping hopping_compiler
+ranking ranking_compiler
+peer-frames peer_frames_compiler
+derived derived_compiler
+navigation navigation_compiler
+lookup lookup_compiler
+composition composition_compiler
+case case_compiler
+session session_compiler
+distinct distinct_compiler
+nexmark-q15 nexmark_q15
+join-composition join_composition
+nexmark-auction nexmark_auction
+nexmark-q22 nexmark_q22
+nexmark-q1 nexmark_q1
+nexmark-projection nexmark_projection
+nexmark-q20 nexmark_q20
+nexmark-ordered nexmark_ordered
+nexmark-temporal nexmark_temporal
+nexmark-q3 nexmark_q3
+nexmark-calendar nexmark_calendar
+nexmark-hot nexmark_hot
+group-membership group_membership
+nexmark-q8 nexmark_q8
+nexmark-q13 nexmark_q13
+nexmark-q14 nexmark_q14
+nexmark-q21 nexmark_q21
+QUALIFICATIONS
 for qualification in query-toast query-ordered-state query-expression query-expression-calendar query-native-join query-topk query-membership circuit-numeric; do
-    mkdir "$output/$qualification"
-    if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/$qualification" \
-        python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${worker[@]}"; then
-        cat "$output/$qualification/harness.log" >&2
-        exit 1
-    fi
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
+        python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${worker[@]}"
 done
-mkdir "$output/query-storage-soak"
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/query-storage-soak" \
-    python3 scripts/query_storage_soak_harness.py --duration 1 --transactions 6 --rows 256 "$output/query-storage-soak" -- "${worker[@]}"; then
-    cat "$output/query-storage-soak/harness.log" >&2
-    exit 1
-fi
-mkdir "$output/native-cross"
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/native-cross" \
-    python3 scripts/native_cross_harness.py "$output/native-cross" -- "${worker[@]}"; then
-    cat "$output/native-cross/harness.log" >&2
-    exit 1
-fi
-mkdir "$output/nexmark-q6"
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/nexmark-q6" \
-    python3 scripts/nexmark_q6_harness.py "$output/nexmark-q6" -- "${worker[@]}"; then
-    cat "$output/nexmark-q6/harness.log" >&2
-    exit 1
-fi
-mkdir "$output/query-lifecycle"
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/query-lifecycle" \
-    python3 scripts/query_lifecycle_harness.py "$output/query-lifecycle" -- "${admin[@]}"; then
-    cat "$output/query-lifecycle/harness.log" >&2
-    exit 1
-fi
-mkdir "$output/query-removal"
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/query-removal" \
-    python3 scripts/query_removal_harness.py "$output/query-removal" -- "${admin[@]}"; then
-    cat "$output/query-removal/harness.log" >&2
-    exit 1
-fi
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-storage-soak \
+    python3 scripts/query_storage_soak_harness.py --duration 1 --transactions 6 --rows 256 "$output/query-storage-soak" -- "${worker[@]}"
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification native-cross \
+    python3 scripts/native_cross_harness.py "$output/native-cross" -- "${worker[@]}"
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification nexmark-q6 \
+    python3 scripts/nexmark_q6_harness.py "$output/nexmark-q6" -- "${worker[@]}"
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-lifecycle \
+    python3 scripts/query_lifecycle_harness.py "$output/query-lifecycle" -- "${admin[@]}"
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-removal \
+    python3 scripts/query_removal_harness.py "$output/query-removal" -- "${admin[@]}"
 for qualification in query-rebuild query-rebuild-limits query-rebuild-fault; do
-    mkdir "$output/$qualification"
-    if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/$qualification" \
-        python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${admin[@]}"; then
-        cat "$output/$qualification/harness.log" >&2
-        exit 1
-    fi
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
+        python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${admin[@]}"
 done
 for qualification in query-health query-health-failure query-health-slot query-storage-tls query-postgres-tls query-recovery; do
-    mkdir "$output/$qualification"
-    if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/$qualification" \
-        python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${admin[@]}"; then
-        cat "$output/$qualification/harness.log" >&2
-        exit 1
-    fi
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
+        python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${admin[@]}"
 done
 ./scripts/package_release.sh "$output/package"
 container_tag="pgderive-qualification:gate-${BASHPID}"
 python3 scripts/build_container.py "$output/package" "$output/container-image" --tag "$container_tag"
 python3 scripts/query_container_harness.py "$output/query-container" --image "$container_tag" \
     --image-manifest "$output/container-image/manifest.json" --duration-seconds 35 --interval-seconds 1
-mkdir "$output/query-capacity"
-if ! PGDERIVE_S3_LATENCY_SCALE=0 python3 scripts/run_with_s3_proxy.py "$output/query-capacity" \
-    python3 scripts/query_capacity_harness.py "$output/query-capacity" -- "$output/package/bin/pgderive"; then
-    cat "$output/query-capacity/harness.log" >&2
-    exit 1
-fi
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-capacity \
+    python3 scripts/query_capacity_harness.py "$output/query-capacity" -- "$output/package/bin/pgderive"
 python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
