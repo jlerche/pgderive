@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Owned partition aggregate and non-temporal ROWS CDC qualification."""
+from worker_harness import harness_arguments
 import collections
 import json
-import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 
 
@@ -30,10 +29,7 @@ class PartitionFixture(SqlFixture):
     def verify(self):
         values = ','.join(self.labels)
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.sql(f'''WITH expected AS ({expected}), actual AS
-            (SELECT tuple,weight FROM {self.name}.groups), difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip() == '0', 'partition result differs from PostgreSQL'
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
@@ -55,15 +51,13 @@ class PartitionFixture(SqlFixture):
                 expected_memory[prefix + stats] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
-        beyond = self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN
-            {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN
-            {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''')
+        beyond = self.acknowledgement_ahead()
         assert beyond.strip() == '0'
 
 
 def qualify(output, command, window, frame_spec=None, fixture_class=PartitionFixture):
     fixture = fixture_class(output, window, frame_spec)
-    try:
+    with fixture.managed():
         fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY auction')
         if window:
             fixture.rejected(command, 'peer-order', fixture.query.replace(',b.id ROWS', ' ROWS'))
@@ -99,17 +93,10 @@ def qualify(output, command, window, frame_spec=None, fixture_class=PartitionFix
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'sql_oracle':'exact bag','memory_oracle':'independent partitions','null_group':True,'all_null':True,'retractions':True,'restart':'cold','window':window})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0] == '--':
-        command = command[1:]
+    output, command = harness_arguments()
     cases = [
         ('grouped', None), ('rows', ('2 PRECEDING AND 1 FOLLOWING', -2, 1, True)),
         ('unbounded', ('UNBOUNDED PRECEDING AND CURRENT ROW', None, 0, False)),

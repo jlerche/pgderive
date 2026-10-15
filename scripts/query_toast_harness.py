@@ -106,7 +106,7 @@ def start(fixture,command,label,config=None):
 
 def qualify(output,command,mode):
     fixture = ToastFixture(output,mode)
-    try:
+    with fixture.managed():
         worker = start(fixture,command,'first')
         ready = worker.event('ready')
         fixture.verify()
@@ -155,10 +155,6 @@ def qualify(output,command,mode):
             'unchanged_new_wire_updates':witnessed,'old_wire_images':'complete, no unchanged markers',
             'mode':mode,'reconstructed_record_budget':'exact complete old/new images',
             'restart':'cold exact source boundary','no_ack_beyond_publication':True})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':

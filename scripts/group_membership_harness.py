@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Native GROUP BY without aggregates: distinct membership, projected bags."""
+from worker_harness import harness_arguments
 import collections
 import json
-import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
 from nexmark_temporal_harness import bucket, encode
@@ -32,22 +31,19 @@ class MembershipFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-          (SELECT tuple,weight FROM {self.name}.groups),difference AS
-          ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-           (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip()=='0','membership differs from exact native MV'
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         memberships = {(row['auction'],row['channel'],encode(bucket(row['date_time'],10),self.instant)) for row in source if row['price'] is None or row['price']>=0}
         memory = collections.Counter((auction,channel) for auction,channel,_ in memberships)
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'membership differs from independent set/projected bag'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,mode):
     fixture = MembershipFixture(output,mode)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'ungrouped-column',fixture.query.replace('SELECT b.auction,b.channel','SELECT b.id,b.channel'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
@@ -81,16 +77,9 @@ def qualify(output,command,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent source membership set projected to a weighted bag','duplicates':'partial delete retains membership; last delete removes it; hidden bucket projection collisions retained','restart':'cold same slot','identity':'changed key rejected; alias normalized'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('local','c','icu'):
         directory = output/mode
         directory.mkdir()

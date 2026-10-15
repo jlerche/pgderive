@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Sequential owned-fixture retirement faults and destructive-ownership checks."""
 import json
-import pathlib
 import subprocess
 import sys
 import time
 
 from query_lifecycle_harness import configured, grouped, inspect, rejected, verify_result
-from worker_harness import Worker
+from worker_harness import Worker, harness_arguments
 
 
 def setup(output, command, public=True):
@@ -172,10 +171,7 @@ def guarded_drop(output, command, kind):
 
 
 if __name__ == '__main__':
-    root = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0] == '--':
-        command = command[1:]
+    root, command = harness_arguments()
     for stage in ('intent', 'finish'):
         for mode in ('before', 'after', 'hold'):
             output = root/f'{stage}-{mode}'

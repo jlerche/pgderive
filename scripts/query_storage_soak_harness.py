@@ -25,7 +25,7 @@ class StorageFixture(SqlFixture):
         return path
     def verify(self):
         native=expected(self,self.labels)
-        difference=self.sql(f'''WITH expected AS ({native}),actual AS (SELECT tuple,weight FROM {self.name}.groups),diff AS ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM diff''')
+        difference=self.bag_difference(native)
         assert difference.strip()=='0','sustained sink differs from exact native MV'
         bids=json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         auctions=json.loads(self.sql(f"SELECT json_agg(a) FROM {self.name}.auction a"))
@@ -40,7 +40,7 @@ class StorageFixture(SqlFixture):
             for row in ordered[:3]:oracle[(key,row['price'],row['category'])]+=1
         actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(oracle),(actual,oracle)
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 def sample(fixture,worker,event,elapsed,ticks):
     status=pathlib.Path(f'/proc/{worker.process.pid}/status').read_text()

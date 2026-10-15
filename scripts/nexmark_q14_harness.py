@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """q14 native terminal DAG: exact MV, independent Decimal/Unicode oracle, CDC/restart."""
+from worker_harness import harness_arguments
 import collections
 import decimal
 import json
 import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
 from nexmark_temporal_harness import encode
@@ -42,10 +42,7 @@ class Q14Fixture(SqlFixture):
     def verify(self):
         context = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,LABELS)
-        difference = self.sql(context+f'''WITH expected AS({expected}),actual AS
-          (SELECT tuple,weight FROM {self.name}.groups),difference AS
-          ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-           (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=context)
         assert difference.strip()=='0','q14 differs from exact native MV'
         source = json.loads(self.sql(context+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         memory = collections.Counter()
@@ -60,13 +57,13 @@ class Q14Fixture(SqlFixture):
             memory[(row['auction'],row['bidder'],price,label,encode(timestamp,self.instant),row['extra'],count)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=decimal.Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q14 differs from independent Decimal/Unicode/hour oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,mode):
     fixture = Q14Fixture(output,mode)
     name = fixture.name
-    try:
+    with fixture.managed():
         for label,query in [
             ('clock',fixture.query.replace('length(extra)','length(now()::text)',1)),
             ('user-function',fixture.query.replace('replace(extra','public.replace(extra')),
@@ -108,15 +105,9 @@ def qualify(output,command,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':'q14','mode':mode,'postgres':'exact native materialized-view weighted bag','memory':'independent Decimal Unicode and hour classification','restart':'cold same slot','terminal':'typed tuple-local DAG with native CASE and IS TRUE'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--': command = command[1:]
+    output, command = harness_arguments()
     for mode in ('local','instant'):
         directory = output/mode
         directory.mkdir()

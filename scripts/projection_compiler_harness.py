@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Owned sequential projection CDC, native bag codec and restart qualification."""
+from worker_harness import harness_arguments
 import collections
 import json
-import pathlib
 import sys
 import subprocess
 import time
@@ -29,10 +29,7 @@ class ProjectionFixture(SqlFixture):
                     f"FROM {self.name}.auction a WHERE a.id > 0 AND (a.enabled OR a.group_id IS NULL) GROUP BY 1")
         if self.terminal:
             expected = expected.replace('jsonb_build_array(a.group_id,a.category,a.enabled,a.token,a.group_id)', 'jsonb_build_array(abs(a.group_id),length(a.category),a.enabled,a.token,abs(a.group_id),abs(a.small_value),abs(a.large_value),length(a.vartext))')
-        difference = self.sql(f'''WITH expected AS ({expected}), actual AS
-            (SELECT tuple,weight FROM {self.name}.groups), difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip() == '0', 'projection sink differs from PostgreSQL bag'
         # Independent raw-source recomputation with explicit true-only qualification.
         rows = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a')) or []
@@ -51,9 +48,7 @@ class ProjectionFixture(SqlFixture):
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
         assert all(row['tuple'][0] is None and row['weight'] > 0 for row in actual)
-        beyond = self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN
-            {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN
-            {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''')
+        beyond = self.acknowledgement_ahead()
         assert beyond.strip() == '0', 'slot acknowledged beyond publication'
 
 
@@ -139,10 +134,7 @@ def qualify(output, command, terminal=False):
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0] == '--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('plain', 'terminal'):
         directory = output / mode
         directory.mkdir()

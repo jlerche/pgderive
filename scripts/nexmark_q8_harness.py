@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Scoped grouped memberships with compound native identity/time join keys."""
+from worker_harness import harness_arguments
 import collections
 import json
 import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
 from nexmark_temporal_harness import bucket, encode
@@ -40,10 +40,7 @@ class Q8Fixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,LABELS)
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-          (SELECT tuple,weight FROM {self.name}.groups),difference AS
-          ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-           (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip()=='0','q8 differs from exact native MV'
         people = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(p),'[]') FROM {self.name}.person p"))
         auctions = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
@@ -52,12 +49,12 @@ class Q8Fixture(SqlFixture):
         memory = collections.Counter((identity,name,start) for identity,name,start in persons if start is not None and (identity,start) in sellers)
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q8 differs from independent membership set/join oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,mode):
     fixture = Q8Fixture(output,mode)
-    try:
+    with fixture.managed():
         for label,query in [
             ('or',fixture.query.replace('AND p.starttime=a.starttime','OR p.starttime=a.starttime')),
             ('non-equality',fixture.query.replace('p.starttime=a.starttime','p.starttime>=a.starttime')),
@@ -100,16 +97,9 @@ def qualify(output,command,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent grouped memberships and compound identity/bucket equality','transactions':'complete simultaneous sources; duplicate partial/last deletion; PK/key/bucket moves; NULLs/infinities; rollback; empty bid-only input tick','restart':'cold same slot; aliases/operand orientation/conjunction order normalized','identity':'changed stride and compound join key rejected'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('local','instant','c','icu'):
         directory = output/mode
         directory.mkdir()

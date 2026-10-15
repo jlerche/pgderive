@@ -5,7 +5,6 @@ import collections
 import pathlib
 import re
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -17,7 +16,7 @@ from nexmark_q1_harness import Q1Fixture
 from nexmark_q14_harness import Q14Fixture
 from native_compiler_harness import NativeFixture
 from native_mv_oracle import expected as native_expected
-from worker_harness import Worker
+from worker_harness import Worker, harness_arguments
 
 
 def configured(fixture):
@@ -302,10 +301,7 @@ class ArrayFixture(ScalarFixture):
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0] == '--':
-        command = command[1:]
+    output, command = harness_arguments()
     race = output/'namespace-race'
     race.mkdir()
     namespace_race(race, command)

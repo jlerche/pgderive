@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Native date_bin map/group semantics against PostgreSQL and datetime recomputation."""
+from worker_harness import harness_arguments
 import collections
 import datetime as dt
 from decimal import Decimal
 import json
-import pathlib
-import sys
 from native_compiler_harness import NativeFixture, qualify
 from numeric_compiler_harness import average
 
@@ -39,10 +38,7 @@ class BinFixture(NativeFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         query = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1"
-        difference = self.sql(prefix + f'''WITH expected AS ({query}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(query, context=prefix)
         assert difference.strip()=='0','date_bin output differs from PostgreSQL'
         source = json.loads(self.sql(prefix + f"SELECT json_agg(x) FROM (SELECT auction,price,event_at::text local,event_time::text instant FROM {self.name}.bid) x"))
         expected = collections.Counter()
@@ -58,14 +54,11 @@ class BinFixture(NativeFixture):
                 expected[key + (len(group),sum(prices) if prices else None,average(prices))] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(expected)
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('local','instant','projection'):
         directory = output/mode
         directory.mkdir()

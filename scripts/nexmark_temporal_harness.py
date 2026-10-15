@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Named sessions, recorded processing buckets and exact daily statistics."""
+from worker_harness import harness_arguments
 import collections
 import datetime
 from decimal import Decimal
 import json
 import pathlib
-import sys
 from numeric_compiler_harness import average
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
@@ -82,10 +82,7 @@ class TemporalFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip()=='0',self.kind+' differs from PostgreSQL'
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
@@ -122,7 +119,7 @@ class TemporalFixture(SqlFixture):
                 memory[(auction,encode(day,self.instant),len(rows),*bands,min(prices) if prices else None,max(prices) if prices else None,average(prices),sum(prices) if prices else None)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent temporal/statistics oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
     def bag(self):
         return self.sql(f'SELECT jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple) FROM {self.name}.groups')
@@ -130,7 +127,7 @@ class TemporalFixture(SqlFixture):
 
 def qualify(output,command,query,instant):
     fixture = TemporalFixture(output,query,instant)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'unsupported',fixture.query+' ORDER BY '+fixture.labels[0])
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
@@ -170,16 +167,9 @@ def qualify(output,command,query,instant):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':query,'time':'timestamptz' if instant else 'timestamp','postgres':'exact weighted bag','memory':'independent adjacency components / integer buckets / exact price statistics','restart':'cold same slot','session':'gap >=10 starts new component; late bridges merge and deletion splits','processing':'recorded source column, event-only change does not affect q12','statistics':'exact integral extrema/sum and PG-scale Decimal average','nulls':'NULL bidder/auction, q11 excludes NULL time, q12/q17 keep NULL bucket','infinities':'retained with guarded equal-time sessions','identity':'changed gap/stride/threshold rejected'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for query in ('q11','q12','q17'):
         for instant in (False,True):
             directory = output/(query+('-instant' if instant else '-local'))

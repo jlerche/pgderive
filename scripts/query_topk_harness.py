@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Owned PostgreSQL exact MV and raw occurrence oracle for retractable top-k."""
+from worker_harness import harness_arguments
 import collections
 import json
-import pathlib
-import sys
 from native_mv_oracle import expected
 from sql_compiler_harness import SqlFixture
 from query_ordered_state_harness import temporal_key
@@ -31,7 +30,7 @@ class TopKFixture(SqlFixture):
         return f"'{text}'::{self.mode}"
     def verify(self):
         native=expected(self,self.labels)
-        difference=self.sql(f'''WITH expected AS ({native}),actual AS (SELECT tuple,weight FROM {self.name}.groups),diff AS ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM diff''')
+        difference=self.bag_difference(native)
         assert difference.strip()=='0','top-k differs from native materialized view'
         rows=json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         partitions=collections.defaultdict(list)
@@ -49,11 +48,11 @@ class TopKFixture(SqlFixture):
                 if position<=self.limit and (self.mode!='equality' or position==3):oracle[(key,value)]+=1
         actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(oracle),(actual,oracle)
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 def qualify(output,command,mode):
     fixture=TopKFixture(output,mode)
-    try:
+    with fixture.managed():
         worker=fixture.start(command,'first')
         ready=worker.event('ready'); fixture.verify()
         changes=[
@@ -76,12 +75,8 @@ def qualify(output,command,mode):
         fixture.verify();fixture.sql(f'DELETE FROM {fixture.name}.bid WHERE id=107')
         resumed.event('published');resumed.finish();fixture.verify()
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':'identical SQL exact bag','memory':'independent sorted raw source occurrences','duplicates':'cutoff and projection bag','restart':True,'transactions':len(changes)+1})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve();raise
 
 if __name__=='__main__':
-    root=pathlib.Path(sys.argv[1]);command=sys.argv[2:]
-    if command and command[0]=='--':command=command[1:]
+    root, command = harness_arguments()
     for mode in ['descending','ascending','nulls-first','equality','strict','reversed','empty','timestamp','timestamptz','integral-extremes']:
         directory=root/mode;directory.mkdir();qualify(directory,command,mode)

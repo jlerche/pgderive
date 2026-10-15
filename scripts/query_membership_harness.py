@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Owned DISTINCT/existence identical-MV/raw-row oracle qualification; run sequentially."""
+from worker_harness import harness_arguments
 import collections
 import json
-import pathlib
-import sys
 from native_mv_oracle import expected
 from sql_compiler_harness import SqlFixture
 
@@ -33,15 +32,15 @@ class MembershipFixture(SqlFixture):
 
     def verify(self):
         native=expected(self,self.labels)
-        assert self.sql(f'''WITH expected AS({native}),actual AS(SELECT tuple,weight FROM {self.name}.groups),differences AS((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL(SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM differences''').strip()=='0','native MV mismatch'
+        assert self.bag_difference(native).strip()=='0','native MV mismatch'
         actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(self.memory())
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,mode):
     fixture=MembershipFixture(output,mode)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'unsupported',fixture.query+' ORDER BY 1')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         worker=fixture.start(command,'first')
@@ -73,17 +72,10 @@ def qualify(output,command,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':'identical SQL exact bag','memory':'independent nested-loop raw-row oracle','cold_restart':True,'simultaneous_changes':True,'transactions':len(changes)+1})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__=='__main__':
-    root=pathlib.Path(sys.argv[1])
-    command=sys.argv[2:]
-    if command and command[0]=='--':
-        command=command[1:]
+    root, command = harness_arguments()
     for mode in ['distinct', 'semi', 'anti', 'distinct-semi', 'distinct-anti']:
         directory=root/mode
         directory.mkdir()

@@ -19,7 +19,7 @@ class CalendarFixture(SqlFixture):
 
     def verify(self):
         native=expected(self,self.labels)
-        assert self.sql(f'''WITH expected AS ({native}),actual AS(SELECT tuple,weight FROM {self.name}.groups),differences AS((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL(SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM differences''').strip()=='0'
+        assert self.bag_difference(native).strip()=='0'
         rows=json.loads(self.sql(f"SELECT COALESCE(json_agg(date_time),'[]') FROM {self.name}.bid"))
         memory=collections.Counter()
         for value in rows:
@@ -38,7 +38,7 @@ class CalendarFixture(SqlFixture):
 
 def qualify(output,command):
     fixture=CalendarFixture(output)
-    try:
+    with fixture.managed():
         worker=fixture.start(command,'first')
         ready=worker.event('ready')
         fixture.verify()
@@ -60,10 +60,6 @@ def qualify(output,command):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'native_mv':'exact identical SQL','memory':'independent datetime/Decimal UTC','dst_instants':True,'cold_restart':True,'fields':fixture.labels})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__=='__main__':

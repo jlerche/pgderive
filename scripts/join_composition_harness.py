@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Join-fed scopes against PostgreSQL and independent weighted recomputation."""
+from worker_harness import harness_arguments
 import collections
 import json
-import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 
 
@@ -29,10 +28,7 @@ class JoinedFixture(SqlFixture):
     def verify(self):
         values = ','.join(self.labels)
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.sql(f'''WITH expected AS ({expected}), actual AS
-            (SELECT tuple,weight FROM {self.name}.groups), difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip() == '0', 'join-fed scope differs from PostgreSQL'
         auctions = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         bids = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
@@ -58,14 +54,12 @@ class JoinedFixture(SqlFixture):
                 memory.update((a['group_id'],b['price']) for a,b in rows)
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory), 'join-fed scope differs from memory oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN
-            {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN
-            {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+        assert self.acknowledgement_ahead().strip() == '0'
 
 
 def qualify(output, command, mode):
     fixture = JoinedFixture(output, mode)
-    try:
+    with fixture.managed():
         fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY g')
         fixture.rejected(command, 'hidden', fixture.query.replace('q.g','q.enabled'))
         fixture.rejected(command, 'terminal', fixture.query.replace('b.price AS p','abs(b.price) AS p'))
@@ -106,17 +100,10 @@ def qualify(output, command, mode):
         fixture.verify()
         assert fixture.sql(f'SELECT count(*) FROM {fixture.name}.groups').strip() == '0'
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact bag','memory':'independent nested loop and group/order recomputation','simultaneous':'both sources insert/update/delete','restart':'same slot cold recovery','changed':'rejected without progress'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0] == '--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('projection','group','winner'):
         directory = output/mode
         directory.mkdir()

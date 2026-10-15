@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """PostgreSQL LATERAL LIMIT-one lookup against independent native source bags."""
+from worker_harness import harness_arguments
 import collections
 from decimal import Decimal
 import json
-import pathlib
 import re
-import sys
 from native_compiler_harness import NativeFixture, encoded, instant
 
 
@@ -40,10 +39,7 @@ class LookupFixture(NativeFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array(category,price,amount,chosen)) tuple,count(*)::bigint weight FROM({self.query}) q GROUP BY 1'
-        difference = self.sql(prefix+f'''WITH expected AS({expected}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip() == '0', 'lookup differs from PostgreSQL'
         left = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(x),'[]') FROM(SELECT id,category,lookup_key,enabled,token,{self.field}::text AS time FROM {self.name}.auction) x"))
         right = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(x),'[]') FROM(SELECT id,auction,price,enabled,token,{self.field}::text AS time,amount::text AS amount FROM {self.name}.bid) x"))
@@ -71,9 +67,7 @@ class LookupFixture(NativeFixture):
             memory[(probe['category'],price,amount,encoded(selected['time'],self.timezone) if selected else None)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory), 'lookup differs from independent memory oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN
-            {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN
-            {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+        assert self.acknowledgement_ahead().strip() == '0'
 
 
 def quoted_left(query):
@@ -83,7 +77,7 @@ def quoted_left(query):
 def qualify(output, command, mode):
     fixture = LookupFixture(output,mode)
     name = fixture.name
-    try:
+    with fixture.managed():
         fixture.rejected(command,'limit',fixture.query.replace('LIMIT 1','LIMIT 2'))
         fixture.rejected(command,'ties',fixture.query.replace(',r.id DESC',''))
         fixture.rejected(command,'hidden',fixture.query.replace('p.price','r.price'))
@@ -122,17 +116,10 @@ def qualify(output, command, mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'sql_oracle':'exact bag','memory_oracle':'independent native correlated LIMIT-one selection','simultaneous_inputs':True,'late_right_changes':True,'nulls':True,'restart':'cold','mode':mode})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('local','instant','strict','filtered','composite'):
         directory = output/mode
         directory.mkdir()

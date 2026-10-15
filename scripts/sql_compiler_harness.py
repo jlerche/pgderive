@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Sequential SQL-compiled worker oracle/restart tests in an owned fixture."""
 import json
-import pathlib
-import sys
-from worker_harness import Fixture, Worker
+from worker_harness import Fixture, Worker, harness_arguments
 
 
 class SqlFixture(Fixture):
@@ -91,7 +89,7 @@ class SqlFixture(Fixture):
 
 def qualify(output, command, null_only, typed=False, remainder=False):
     fixture = SqlFixture(output, null_only, typed, remainder)
-    try:
+    with fixture.managed():
         fixture.rejected(command, 'unsupported', fixture.query + ' HAVING COUNT(*)>1')
         if remainder:
             fixture.rejected(command, 'zero-divisor', fixture.query.replace('mod(b.price,3)', 'mod(b.price,0)'))
@@ -135,17 +133,10 @@ def qualify(output, command, null_only, typed=False, remainder=False):
         (output / 'result.json').write_text(json.dumps({'sql_oracle': 'exact', 'memory_oracle': 'exact',
             'transactions': len(changes) + 1, 'restart': 'normalized SQL reuses durable slot',
             'unsupported': 'before registration/slot', 'changed': 'rejected with unchanged progress'}) + '\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0] == '--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('regular', 'null-only', 'typed', 'remainder'):
         directory = output / mode
         directory.mkdir()

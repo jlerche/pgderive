@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Named local-item join: native deterministic text equality and complete deltas."""
+from worker_harness import harness_arguments
 import collections
 import json
 import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
 
@@ -28,10 +28,7 @@ class Q3Fixture(SqlFixture):
 
     def verify(self):
         expected = native_expected(self,LABELS)
-        difference = self.sql(f'''WITH expected AS ({expected}),actual AS
-          (SELECT tuple,weight FROM {self.name}.groups),difference AS
-          ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-           (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip()=='0','q3 differs from native PostgreSQL MV'
         people = json.loads(self.sql(f"SELECT COALESCE(json_agg(p),'[]') FROM {self.name}.person p"))
         auctions = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
@@ -42,12 +39,12 @@ class Q3Fixture(SqlFixture):
                     memory[(p['name'],p['city'],p['state'],a['id'])] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q3 differs from independent nested-loop memory bag'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,mode):
     fixture = Q3Fixture(output,mode)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'text-order',fixture.query.replace("p.state='OR'","p.state<'OR'"))
         fixture.rejected(command,'column-collation',fixture.query.replace("p.state='OR'","p.state=p.city"))
         if mode=='icu':
@@ -88,16 +85,9 @@ def qualify(output,command,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':'q3','mode':mode,'postgres':'native MV exact bag','memory':'raw nested-loop local suggestions','restart':'cold same slot','changes':'simultaneous inserts updates deletes and key moves','text':'case/trailing spaces/NULL; deterministic source collation','identity':'changed literal rejected; aliases normalize'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('default','c','icu'):
         directory = output/mode
         directory.mkdir()

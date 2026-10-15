@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Terminal PG URL components: absent vs empty, raw bag, CDC and cold replay."""
+from worker_harness import harness_arguments
 import collections
 import json
 import pathlib
@@ -38,10 +39,7 @@ class Q22Fixture(SqlFixture):
 
     def verify(self):
         expected = native_expected(self,self.labels)
-        difference = self.sql(f'''WITH expected AS ({expected}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip()=='0','q22 differs from PostgreSQL'
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         auctions = {a['id']:a for a in json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))}
@@ -57,7 +55,7 @@ class Q22Fixture(SqlFixture):
             memory[tuple(row[label] for label in self.labels[:4])+tuple(dirs)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q22 differs from independent component splitting oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,mode):
@@ -134,10 +132,7 @@ def qualify(output,command,mode):
 
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('text','varchar','delimiter','join'):
         directory = output/mode
         directory.mkdir()

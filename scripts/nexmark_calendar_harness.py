@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Native calendar terminal maps and text-grouped daily statistics, exact MV bags."""
+from worker_harness import harness_arguments
 import collections
 import json
 import pathlib
-import sys
 from native_compiler_harness import NativeFixture, encoded, instant
 from nexmark_q15_harness import counts, day_start
 from native_mv_oracle import expected as native_expected
@@ -46,10 +46,7 @@ class CalendarFixture(NativeFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-          (SELECT tuple,weight FROM {self.name}.groups),difference AS
-          ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-           (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip()=='0',self.kind+' differs from native PostgreSQL MV'
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(q),'[]') FROM(SELECT id,auction,price,bidder,extra,channel,date_time::text AS time FROM {self.name}.bid) q"))
         memory = collections.Counter()
@@ -79,12 +76,12 @@ class CalendarFixture(NativeFixture):
                 memory[tuple(output)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent calendar/weighted statistics oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,query,mode):
     fixture = CalendarFixture(output,query,mode)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'unsafe-format',fixture.query.replace('HH24:MI','Month'))
         if fixture.instant:
             invalid = fixture.query.replace(" AT TIME ZONE 'UTC'", " AT TIME ZONE 'America/New_York'")
@@ -131,16 +128,9 @@ def qualify(output,command,query,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':query,'mode':mode,'postgres':'native MV exact weighted bag','memory':'direct calendar fields and raw grouped value sets','restart':'cold same slot','format':'BC/max-year/infinities/NULL, exact minute fields','changes':'latest retractions text/day moves simultaneous sources rollback empty ticks','identity':'changed pattern/threshold rejected; timezone spelling normalizes'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for query,modes in [('q10',('local','instant')),('q16',('local','instant','c','icu'))]:
         for mode in modes:
             directory = output/(query+'-'+mode)

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Lazy native CASE/gap flags and running totals, without implicit session expiry."""
+from worker_harness import harness_arguments
 import collections
 import datetime
 import json
-import pathlib
-import sys
 from native_compiler_harness import NativeFixture, encoded, instant, qualify
 
 
@@ -37,10 +36,7 @@ class CaseFixture(NativeFixture):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         values = ','.join(self.labels)
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip() == '0','CASE/gap output differs from PostgreSQL'
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(q),'[]') FROM(SELECT id,auction,{self.temporal}::text AS time FROM {self.name}.bid) q"))
         groups = collections.defaultdict(list)
@@ -74,16 +70,11 @@ class CaseFixture(NativeFixture):
                 memory[(row['id'],row['auction'],encoded(time,self.temporal=='event_time'),total if self.running else flag)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory),'CASE/gap output differs from memory oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN
-            {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN
-            {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+        assert self.acknowledgement_ahead().strip() == '0'
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('flags-local','flags-instant','running-local','running-instant','nullable','descending'):
         directory = output/mode
         directory.mkdir()

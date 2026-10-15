@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Owned sequential ungrouped join circuit qualification against two oracles."""
+from worker_harness import harness_arguments
 import collections
 import json
-import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 
 
@@ -20,10 +19,7 @@ class RelationalFixture(SqlFixture):
 
     def verify(self):
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array(g,c,p,e)) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.sql(f'''WITH expected AS ({expected}), actual AS
-            (SELECT tuple,weight FROM {self.name}.groups), difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip() == '0', 'join projection differs from PostgreSQL'
         left = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         right = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
@@ -41,15 +37,13 @@ class RelationalFixture(SqlFixture):
                 expected[(a['group_id'], category, price, a['enabled'])] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected)
-        beyond = self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN
-            {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN
-            {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''')
+        beyond = self.acknowledgement_ahead()
         assert beyond.strip() == '0'
 
 
 def qualify(output, command, terminal):
     fixture = RelationalFixture(output, terminal)
-    try:
+    with fixture.managed():
         for label, query in [
             ('ambiguous', fixture.query.replace('a.enabled OR', 'id > 0 OR')),
             ('unsupported', fixture.query + ' ORDER BY g'),
@@ -88,17 +82,10 @@ def qualify(output, command, terminal):
         resumed.finish()
         fixture.verify()
         (output / 'result.json').write_text(json.dumps({'sql_oracle': 'exact weighted bag', 'memory_oracle': 'independent nested loop', 'simultaneous': 'insert/update/delete', 'nulls': 'keys/predicates/outputs', 'restart': 'cold same slot', 'changed': 'rejected without progress', 'terminal': terminal}) + '\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0] == '--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('plain', 'terminal'):
         directory = output / mode
         directory.mkdir()

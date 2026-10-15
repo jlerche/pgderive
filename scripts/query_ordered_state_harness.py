@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Sequential owned PostgreSQL MV/memory/cold-restart ordered-extrema checks."""
+from worker_harness import harness_arguments
 import collections
 import datetime
 import json
-import pathlib
-import sys
 from native_mv_oracle import expected
 from sql_compiler_harness import SqlFixture
 
@@ -49,7 +48,7 @@ class OrderedFixture(SqlFixture):
 
     def verify(self):
         native = expected(self, self.labels)
-        difference = self.sql(f'''WITH expected AS ({native}), actual AS (SELECT tuple,weight FROM {self.name}.groups), differences AS ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM differences''')
+        difference = self.bag_difference(native)
         assert difference.strip() == '0', 'ordered extrema differs from native MV'
         bids = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         auctions = json.loads(self.sql(f"SELECT json_agg(a) FROM {self.name}.auction a"))
@@ -70,12 +69,12 @@ class OrderedFixture(SqlFixture):
             oracle[(group, normalize(min(values, key=key)) if values else None, normalize(max(values, key=key)) if values else None, normalize(min(filtered, key=key)) if filtered else None)] = 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == oracle, (actual, oracle)
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+        assert self.acknowledgement_ahead().strip() == '0'
 
 
 def qualify(output, command, oid, joined):
     fixture = OrderedFixture(output, oid, joined)
-    try:
+    with fixture.managed():
         fixture.rejected(command, 'unsupported', fixture.query+' ORDER BY g')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         worker = fixture.start(command, 'first')
@@ -107,17 +106,10 @@ def qualify(output, command, oid, joined):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'native_mv':'identical SQL exact bag','memory':'independent source-row extrema','restart':'cold','null_group':True,'all_null':True,'filter_empty':True,'ties':True,'simultaneous_inputs':joined,'type':oid,'transactions':len(changes)+1})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':
-    root = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0] == '--':
-        command = command[1:]
+    root, command = harness_arguments()
     for oid in ('smallint', 'integer', 'bigint', 'timestamp', 'timestamptz'):
         directory = root/oid
         directory.mkdir()

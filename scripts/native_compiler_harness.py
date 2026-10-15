@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Native PostgreSQL timestamp/numeric source identity through snapshot/CDC/restart."""
+from worker_harness import harness_arguments
 import collections
 from decimal import Decimal
 import json
-import pathlib
-import sys
 from numeric_compiler_harness import average
 from sql_compiler_harness import SqlFixture
 
@@ -68,10 +67,7 @@ class NativeFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         query = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1"
-        difference = self.sql(prefix + f'''WITH expected AS ({query}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(query, context=prefix)
         assert difference.strip().splitlines()[-1] == '0', 'native output differs from PostgreSQL'
         raw = self.sql(prefix + f"SELECT COALESCE(json_agg(x),'[]') FROM (SELECT id,auction,price,event_at::text local,event_time::text instant,amount::text amount FROM {self.name}.bid) x").strip()
         source = json.loads(raw)
@@ -107,12 +103,12 @@ class NativeFixture(SqlFixture):
                     expected[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"), parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(expected)
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+        assert self.acknowledgement_ahead().strip() == '0'
 
 
 def qualify(output, command, mode, fixture_class=NativeFixture):
     fixture = fixture_class(output, mode)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'unsupported',fixture.query + ' ORDER BY id')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         worker = fixture.start(command,'first')
@@ -145,17 +141,10 @@ def qualify(output, command, mode, fixture_class=NativeFixture):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'mode':mode,'sql_oracle':'exact bag','memory_oracle':'native scalar/partition recomputation','restart':'cold',**fixture.evidence})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('projection','grouped','rows','join'):
         directory = output/mode
         directory.mkdir()

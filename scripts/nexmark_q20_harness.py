@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Named full-payload category join against PostgreSQL and raw nested-loop bag."""
+from worker_harness import harness_arguments
 import collections
 import json
 import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
 
@@ -39,10 +39,7 @@ class Q20Fixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,LABELS)
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip()=='0','q20 differs from PostgreSQL'
         auctions = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         bids = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
@@ -54,12 +51,12 @@ class Q20Fixture(SqlFixture):
                 memory[(b['auction'],b['bidder'],b['price'],b['channel'],b['url'],b['date_time'],b['extra'],a['item_name'],a['description'],a['initial_bid'],a['reserve'],a['date_time'],a['expires'],a['seller'],a['category'],a['extra'])] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q20 differs from independent full-payload nested-loop oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,mode):
     fixture = Q20Fixture(output,mode)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'ambiguous-column',fixture.query.replace('b.date_time AS bid_date_time','date_time AS bid_date_time'))
         fixture.rejected(command,'unsupported-full-join',fixture.query.replace('INNER JOIN','FULL JOIN'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
@@ -98,16 +95,9 @@ def qualify(output,command,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':'q20','mode':mode,'postgres':'exact full-payload weighted bag','memory':'independent raw nested-loop category join','restart':'cold same slot','changes':'both-input insert/update/delete and coordinated key moves','nulls':'join key/category/payload/temporal','identity':'changed filter/projection rejected; quoted aliases normalize','bag':'projected collisions retain distinct source occurrences'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('local','instant','int2','int4'):
         directory = output/mode
         directory.mkdir()

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Named q0/q2 exact weighted projection, remainder, CDC and cold restart."""
+from worker_harness import harness_arguments
 import collections
 import json
 import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
 
@@ -26,10 +26,7 @@ class ProjectionFixture(SqlFixture):
 
     def verify(self):
         expected = native_expected(self,self.labels)
-        difference = self.sql(f'''WITH expected AS ({expected}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-             (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip()=='0',self.query_name+' differs from PostgreSQL'
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         memory = collections.Counter()
@@ -43,12 +40,12 @@ class ProjectionFixture(SqlFixture):
             memory[tuple(row[label] for label in self.labels)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.query_name+' differs from independent raw bag oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,query,mode):
     fixture = ProjectionFixture(output,query,mode)
-    try:
+    with fixture.managed():
         invalid = fixture.query.replace('pg_catalog.mod(auction,123)','pg_catalog.mod(auction,0)') if query=='q2' else fixture.query.replace('SELECT auction,','SELECT auction+1,')
         fixture.rejected(command,'unsupported',invalid)
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
@@ -88,16 +85,9 @@ def qualify(output,command,query,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':query,'mode':mode,'postgres':'exact weighted bag','memory':'independent raw projection and integer divisibility','restart':'cold same slot','changes':'inserts updates deletes NULLs PK moves complete transactions and rollback','identity':'alias/remainder syntax normalize; changed query rejected','empty_tick':'other published relation changes advance progress'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for query,modes in [('q0',('local','instant')),('q2',('int2','int4','int8'))]:
         for mode in modes:
             directory = output/(query+'-'+mode)

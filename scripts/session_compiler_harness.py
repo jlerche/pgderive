@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Explicit PostgreSQL session connectivity and temporal extrema; no expiry."""
+from worker_harness import harness_arguments
 import collections
 import datetime
 import json
-import pathlib
-import sys
 from native_compiler_harness import NativeFixture, encoded, instant
 
 
@@ -44,10 +43,7 @@ class SessionFixture(NativeFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1"
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip() == '0','session/extrema output differs from PostgreSQL'
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(q),'[]') FROM(SELECT id,auction,{self.temporal}::text AS time FROM {self.name}.bid) q"))
         groups = collections.defaultdict(list)
@@ -96,12 +92,12 @@ class SessionFixture(NativeFixture):
                 memory[(bidder,encoded(component[0],timezone),encoded(finish,timezone),len(component))] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory),'session/extrema output differs from connected-component oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+        assert self.acknowledgement_ahead().strip() == '0'
 
 
 def qualify(output, command, mode):
     fixture = SessionFixture(output,mode)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'unsupported',fixture.query+' ORDER BY bidder')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         worker = fixture.start(command,'first')
@@ -136,17 +132,10 @@ def qualify(output, command, mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'mode':mode,'sql_oracle':'exact bag','memory_oracle':'direct components/extrema','restart':'cold',**fixture.evidence})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('session-local','session-instant','extrema-local','extrema-instant','frames-local','frames-instant','offsets-local','offsets-instant'):
         directory = output/mode
         directory.mkdir()

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Named latest/top-ten bids: independent ordered occurrence bag, PG and restart."""
+from worker_harness import harness_arguments
 import collections
 import datetime
 import json
 import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
 
@@ -54,10 +54,7 @@ class OrderedFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip()=='0',self.kind+' differs from PostgreSQL'
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
@@ -77,12 +74,12 @@ class OrderedFixture(SqlFixture):
                 memory[payload+((index,) if self.kind=='q19' else ())] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent occurrence ordering'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,query,instant):
     fixture = OrderedFixture(output,query,instant)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'missing-stable-key',fixture.query.replace(',b.id ASC',''))
         fixture.rejected(command,'unsupported-function',fixture.query.replace('row_number()','ntile(10)'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
@@ -122,16 +119,9 @@ def qualify(output,command,query,instant):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':query,'time':'timestamptz' if instant else 'timestamp','postgres':'exact occurrence-ranked bag','memory':'independent timestamp/integral tuple ordering','restart':'cold same slot','ties':'explicit stable bid PK, omitted from output','changes':'late inserts, deleting winners/backfill, PK and partition moves, NULLs, infinities, rollback, empty query-input tick','identity':'changed cutoff/null order rejected; quoted aliases normalize'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for query in ('q18','q19'):
         for instant in (False,True):
             directory = output/(query+('-instant' if instant else '-local'))

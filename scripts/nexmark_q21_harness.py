@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Explicit C text q21: native MV and independent ASCII/channel scanner bags."""
+from worker_harness import harness_arguments
 import collections
 import json
 import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
 
@@ -55,10 +55,7 @@ class Q21Fixture(SqlFixture):
 
     def verify(self):
         expected = native_expected(self,LABELS)
-        difference = self.sql(f'''WITH expected AS({expected}),actual AS
-          (SELECT tuple,weight FROM {self.name}.groups),difference AS
-          ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-           (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip()=='0','q21 differs from exact native MV'
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         memory = collections.Counter()
@@ -68,13 +65,13 @@ class Q21Fixture(SqlFixture):
                 memory[(row['auction'],row['bidder'],row['price'],row['channel'],selected)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q21 differs from independent ASCII and delimiter scanner oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,mode):
     fixture = Q21Fixture(output,mode)
     name = fixture.name
-    try:
+    with fixture.managed():
         for label,query in [
             ('implicit-collation',fixture.query.replace(' COLLATE pg_catalog."C"','')),
             ('other-collation',fixture.query.replace('pg_catalog."C"','pg_catalog."default"')),
@@ -119,15 +116,9 @@ def qualify(output,command,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':'q21','mode':mode,'postgres':'exact native materialized-view weighted bag','memory':'independent ASCII-C lower and delimiter scanner','restart':'cold same slot','hidden':'URL omitted from visible tuple; collisions consolidated','terminal':'attested C lower texteq regexp_match and array capture'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--': command = command[1:]
+    output, command = harness_arguments()
     for mode in ('default','c','icu'):
         directory = output/mode
         directory.mkdir()

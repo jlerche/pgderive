@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Named q4/q9 PG eligibility and winner histories with source recomputation."""
+from worker_harness import harness_arguments
 import collections
 import datetime
 from decimal import Decimal
 import json
 import pathlib
-import sys
 from numeric_compiler_harness import average
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
@@ -58,10 +58,7 @@ class AuctionFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip()=='0',f'{self.kind} differs from PostgreSQL'
         auctions = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         bids = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
@@ -86,12 +83,12 @@ class AuctionFixture(SqlFixture):
                 memory[(a['id'],a['item_name'],a['description'],a['initial_bid'],a['reserve'],a['date_time'],a['expires'],a['seller'],a['category'],a['extra'],b['auction'],b['bidder'],b['price'],b['date_time'],b['extra'])] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),f'{self.kind} differs from independent nested-loop eligibility/winner/average oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output,command,query,instant):
     fixture = AuctionFixture(output,query,instant)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'unsupported',fixture.query+' ORDER BY category')
         if query=='q9':
             fixture.rejected(command,'missing-bid-key',fixture.query.replace('j.bid_id,j.auction_id','j.auction_id'))
@@ -130,17 +127,10 @@ def qualify(output,command,query,instant):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':query,'native_time':'timestamptz' if instant else 'timestamp','eligibility':'inclusive both endpoints, no clock','postgres':'exact bag','memory':'independent eligibility/max/winner/Decimal average','nulls':'times/keys/prices/categories/payload','restart':'cold same slot','simultaneous':'both inputs'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for query in ('q4','q9'):
         for instant in (False,True):
             directory = output/(query+('-instant' if instant else '-local'))

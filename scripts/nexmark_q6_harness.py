@@ -27,10 +27,7 @@ class Q6Fixture(AuctionFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self, ['seller','avg_price'])
-        difference = self.sql(prefix+f'''WITH expected AS ({expected}),actual AS
-          (SELECT tuple,weight FROM {self.name}.groups),difference AS
-          ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-           (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip() == '0', 'q6 differs from exact native MV'
         auctions = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         bids = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
@@ -52,12 +49,12 @@ class Q6Fixture(AuctionFixture):
             memory[(seller,average([row[2] for row in recent if row[2] is not None]))] = 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
         assert {tuple(g['tuple'][1]):g['weight'] for g in actual} == memory, 'q6 differs from independent closed-auction oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
 
 def qualify(output, command, instant):
     fixture = Q6Fixture(output, instant)
-    try:
+    with fixture.managed():
         fixture.rejected(command,'missing-identity',fixture.query.replace(',closed.auction_id DESC',''))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip()=='0'
@@ -92,10 +89,6 @@ def qualify(output, command, instant):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':'q6','instant':instant,'postgres':'exact native MV','memory':'independent eligibility/max/latest ten/exact average','clock':'ordinary revisable CDC; simultaneous three inputs; NULL/delete/reinsert/backward','restart':'cold same slot'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__=='__main__':

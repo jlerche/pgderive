@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """PostgreSQL peer/occurrence ranking with an independent raw-source oracle."""
+from worker_harness import harness_arguments
 import collections
 import json
-import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 
 
@@ -29,10 +28,7 @@ class RankingFixture(SqlFixture):
     def verify(self):
         values = ','.join(self.labels)
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.sql(f'''WITH expected AS ({expected}), actual AS
-            (SELECT tuple,weight FROM {self.name}.groups), difference AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip() == '0', 'ranking differs from PostgreSQL'
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
@@ -57,14 +53,12 @@ class RankingFixture(SqlFixture):
                 memory[prefix + ranks] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN
-            {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN
-            {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+        assert self.acknowledgement_ahead().strip() == '0'
 
 
 def qualify(output, command, mode, fixture_class=RankingFixture):
     fixture = fixture_class(output, mode)
-    try:
+    with fixture.managed():
         fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY id')
         if mode == 'number':
             fixture.rejected(command, 'peer-order', fixture.query.replace(',b.id)', ')'))
@@ -98,17 +92,10 @@ def qualify(output, command, mode, fixture_class=RankingFixture):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'sql_oracle':'exact bag','memory_oracle':fixture.oracle_name,'null_peers':True,'retractions':True,'restart':'cold','mode':mode})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0] == '--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('peers', 'number', 'unordered'):
         directory = output/mode
         directory.mkdir()

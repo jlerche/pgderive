@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Recorded processing-time predecessor with native signed modulo key lowering."""
+from worker_harness import harness_arguments
 import collections
 import json
 import pathlib
-import sys
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
 from nexmark_temporal_harness import encode, ordered
@@ -47,10 +47,7 @@ class Q13Fixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,LABELS)
-        difference = self.sql(prefix+f'''WITH expected AS({expected}),actual AS
-          (SELECT tuple,weight FROM {self.name}.groups),difference AS
-          ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-           (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected, context=prefix)
         assert difference.strip()=='0','q13 differs from exact native MV'
         bids = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         sides = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(s),'[]') FROM {self.name}.side_input s"))
@@ -64,7 +61,7 @@ class Q13Fixture(SqlFixture):
             memory[(bid['auction'],bid['bidder'],bid['price'],encode(bid['date_time'],self.instant),chosen['value'] if chosen else None)] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q13 differs from independent modulo/predecessor oracle'
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()=='0'
+        assert self.acknowledgement_ahead().strip()=='0'
 
     def values(self):
         return self.sql(f"SELECT COALESCE(jsonb_agg(x ORDER BY x.auction,x.value),'[]') FROM(SELECT tuple->1->0 auction,tuple->1->4 value,sum(weight)::text count FROM {self.name}.groups GROUP BY 1,2) x")
@@ -73,7 +70,7 @@ class Q13Fixture(SqlFixture):
 def qualify(output,command,mode):
     fixture = Q13Fixture(output,mode)
     name = fixture.name
-    try:
+    with fixture.managed():
         for label,query in [
             ('zero',fixture.query.replace('10000','0')),
             ('right-mod',fixture.query.replace('s.key=mod(b.auction,10000)','mod(s.key,10000)=b.auction')),
@@ -120,16 +117,9 @@ def qualify(output,command,mode):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent signed modulo and deterministic predecessor','transactions':'complete simultaneous sources; late/tied right updates; NULLs/infinities; modulo collisions; source/key/time/PK changes; rollback; empty input tick','processing':'recorded source field; event-only update preserves selected values','restart':'cold same slot; MOD/% and aliases normalize','identity':'changed divisor or bound rejected'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 if __name__=='__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
+    output, command = harness_arguments()
     for mode in ('local','instant','smallint','bigint'):
         directory = output/mode
         directory.mkdir()

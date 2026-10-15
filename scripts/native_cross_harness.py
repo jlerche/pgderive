@@ -18,10 +18,7 @@ class CrossFixture(SqlFixture):
 
     def verify(self):
         expected = native_expected(self, ['auction', 'group_id'])
-        difference = self.sql(f'''WITH expected AS ({expected}),actual AS
-          (SELECT tuple,weight FROM {self.name}.groups),difference AS
-          ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-           (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM difference''')
+        difference = self.bag_difference(expected)
         assert difference.strip() == '0', 'cross join differs from exact native MV'
         left = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         right = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
@@ -29,12 +26,12 @@ class CrossFixture(SqlFixture):
                                      if (b['price'] is None or b['price'] >= 0) and a['category'] is not None)
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(g['tuple'][1]): g['weight'] for g in actual} == dict(memory)
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+        assert self.acknowledgement_ahead().strip() == '0'
 
 
 def qualify(output, command):
     fixture = CrossFixture(output)
-    try:
+    with fixture.managed():
         fixture.rejected(command, 'hidden-column', fixture.query.replace('l.auction,r.group_id', 'l.price,r.group_id'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
@@ -67,10 +64,6 @@ def qualify(output, command):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'postgres': 'exact native MV bag', 'memory': 'raw nested-loop bag', 'restart': 'cold same slot', 'simultaneous': 'both inputs; NULLs; collisions; retractions; empty input'})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':

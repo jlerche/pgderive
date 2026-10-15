@@ -5,6 +5,7 @@ Run through run_with_s3_proxy.py for a recorded storage latency profile. The
 command after -- is an instrumented or ordinary worker executable prefix.
 """
 import argparse
+from contextlib import contextmanager
 import json
 import os
 import pathlib
@@ -14,6 +15,12 @@ import subprocess
 import sys
 import threading
 import time
+
+
+def harness_arguments():
+    output = pathlib.Path(sys.argv[1])
+    command = sys.argv[2:]
+    return output, command[1:] if command and command[0] == '--' else command
 
 
 class Worker:
@@ -152,11 +159,29 @@ record_bytes=16384
           SELECT count(*) FROM ((SELECT * FROM expected EXCEPT SELECT * FROM actual)
           UNION ALL (SELECT * FROM actual EXCEPT SELECT * FROM expected)) differences''').strip()
         assert difference == '0', 'worker sink differs from independent SQL'
-        beyond = self.sql(f'''SELECT count(*) FROM pg_replication_slots s
+        beyond = self.acknowledgement_ahead().strip()
+        assert beyond == '0', 'slot acknowledged beyond durable publication'
+
+    def bag_difference(self, expected, context=''):
+        return self.sql(context + f"""WITH expected AS ({expected}),
+          actual AS (SELECT tuple,weight FROM {self.name}.groups)
+          SELECT count(*) FROM ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual)
+          UNION ALL (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) differences""")
+
+    def acknowledgement_ahead(self):
+        return self.sql(f"""SELECT count(*) FROM pg_replication_slots s
           JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name
           CROSS JOIN {self.name}.pgderive_progress p
-          WHERE s.confirmed_flush_lsn>p.end_lsn''').strip()
-        assert beyond == '0', 'slot acknowledged beyond durable publication'
+          WHERE s.confirmed_flush_lsn>p.end_lsn""")
+
+    @contextmanager
+    def managed(self):
+        try:
+            yield self
+            self.cleanup()
+        except BaseException:
+            self.preserve()
+            raise
 
     def cleanup(self):
         slots = self.sql(f'SELECT slot_name FROM {self.name}.pgderive_worker_registration').splitlines()

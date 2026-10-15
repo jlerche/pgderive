@@ -2,11 +2,9 @@
 """Owned exact native-MV/raw-row expression histories and cold restart."""
 import collections
 import json
-import pathlib
-import sys
 from native_mv_oracle import expected
 from sql_compiler_harness import SqlFixture
-from worker_harness import Worker
+from worker_harness import Worker, harness_arguments
 
 
 class ExpressionFixture(SqlFixture):
@@ -26,10 +24,7 @@ class ExpressionFixture(SqlFixture):
 
     def verify(self):
         native = expected(self, self.labels)
-        difference = self.sql(f'''WITH expected AS ({native}),actual AS
-            (SELECT tuple,weight FROM {self.name}.groups),differences AS
-            ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual) UNION ALL
-            (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) SELECT count(*) FROM differences''')
+        difference = self.bag_difference(native)
         assert difference.strip() == '0', 'expression results differ from native MV'
         rows = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         oracle = collections.Counter()
@@ -47,14 +42,12 @@ class ExpressionFixture(SqlFixture):
             oracle = collections.Counter({(key,total):1 for key,total in groups.items()})
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(oracle), (actual,oracle)
-        assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s JOIN
-            {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN
-            {self.name}.pgderive_progress p ON true WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+        assert self.acknowledgement_ahead().strip() == '0'
 
 
 def qualify(output, command, grouped):
     fixture = ExpressionFixture(output, grouped)
-    try:
+    with fixture.managed():
         fixture.rejected(command, 'unsupported-function', fixture.query.replace('COALESCE(price,1)', 'random()'))
         fixture.rejected(command, 'constant-coalesce-overflow', f'SELECT COALESCE(price,32768::smallint) AS value FROM {fixture.name}.bid')
         fixture.rejected(command, 'constant-case-overflow', f'SELECT CASE WHEN price>0 THEN price ELSE 32768::smallint END AS value FROM {fixture.name}.bid')
@@ -87,17 +80,13 @@ def qualify(output, command, grouped):
         resumed.finish()
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'native_mv':'identical SQL exact bag','memory':'independent integer/source-row oracle','cold_restart':True,'grouped':grouped,'transactions':len(changes)+1})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 def overflow(output, command, grouped):
     fixture = ExpressionFixture(output, grouped)
     fixture.query = (f'SELECT price::smallint AS key,COUNT(*) AS n FROM {fixture.name}.bid GROUP BY price::smallint'
                      if grouped else f'SELECT price::smallint AS value FROM {fixture.name}.bid')
-    try:
+    with fixture.managed():
         config = fixture.config()
         config.write_text(config.read_text().replace('retry_attempts=8','retry_attempts=1'))
         logs = output/'first'
@@ -118,17 +107,10 @@ def overflow(output, command, grouped):
         assert fixture.sql(f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{slot}'") == acknowledged
         assert fixture.sql(f'SELECT json_agg(g ORDER BY tuple) FROM {fixture.name}.groups g') == sink
         (output/'result.json').write_text(json.dumps({'narrowing_overflow':True,'grouped':grouped,'unchanged_progress_sink_and_ack':True})+'\n')
-        fixture.cleanup()
-    except BaseException:
-        fixture.preserve()
-        raise
 
 
 if __name__ == '__main__':
-    output=pathlib.Path(sys.argv[1])
-    command=sys.argv[2:]
-    if command and command[0]=='--':
-        command=command[1:]
+    output, command = harness_arguments()
     for grouped in [False,True]:
         directory=output/('grouped' if grouped else 'terminal')
         directory.mkdir()
