@@ -168,3 +168,76 @@ fn lower_is_reported_only_in_the_existing_qualified_terminal_domain() -> Result<
     assert!(compile("SELECT lower(label COLLATE pg_catalog.\"C\"),COUNT(*) FROM source.bid GROUP BY lower(label COLLATE pg_catalog.\"C\")",&contract()).is_err());
     Ok(())
 }
+
+#[test]
+fn field_lineage_distinguishes_unused_siblings_and_follows_rebinding() -> Result<()> {
+    use crate::compiler::{ColumnRef, relational::Binding};
+    let mut compiled = compile(
+        "SELECT date_bin(interval '1 minute',date_time,timestamp '2000-01-01 00:00:00') AS bucket FROM source.bid",
+        &contract(),
+    )?;
+    let value = compiled
+        .relational
+        .nodes
+        .iter()
+        .find_map(|node| {
+            if let Node::Map { computed, .. } = node { computed.first().cloned() } else { None }
+        })
+        .context("computed value absent")?;
+    let mut unused = value.clone();
+    unused.column.name = "unused".into();
+    let alias = ColumnRef { name: "alias".into(), ..value.column };
+    compiled.relational.nodes = vec![
+        Node::Source { id: "source".into(), source: 0 },
+        Node::Map {
+            id: "map".into(),
+            input: "source".into(),
+            computed: vec![value.clone(), unused],
+        },
+        Node::Rebind {
+            id: "scope".into(),
+            input: "map".into(),
+            fields: vec![Binding { input: value.column, output: alias.clone() }],
+        },
+        Node::PartitionBy { id: "key".into(), input: "scope".into(), keys: vec![alias] },
+        Node::Output { id: "output".into(), input: "key".into() },
+    ];
+    let report = compiled.placement()?;
+    let used = &report.expressions[0];
+    let unused = &report.expressions[1];
+    assert!(used.field_consumers.iter().any(|consumer| consumer.node == "key"));
+    assert!(unused.field_consumers.is_empty());
+    // Both still cross a conservative maintenance barrier: no movement is authorized.
+    assert_eq!(used.status, Status::MaintenanceRequired);
+    assert_eq!(unused.status, Status::MaintenanceRequired);
+    assert!(unused.obligations.contains(&"full_tuple_state_identity"));
+    assert!(
+        matches!(used.dependencies.first(), Some(super::Dependency::Operand { column, .. }) if column.name.ends_with("date_time"))
+    );
+    Ok(())
+}
+
+#[test]
+fn scalar_lineage_visits_lazy_conditions_and_values_without_evaluation() -> Result<()> {
+    let compiled = compile(
+        "SELECT CASE WHEN id > 0 THEN price + id ELSE coalesce(price, 9223372036854775807 + id) END AS value FROM source.bid",
+        &contract(),
+    )?;
+    let report = compiled.placement()?;
+    let columns = report
+        .expressions
+        .iter()
+        .filter(|entry| entry.current_execution == Execution::Local)
+        .flat_map(|entry| &entry.dependencies)
+        .filter_map(|dependency| {
+            if let super::Dependency::Operand { column, .. } = dependency {
+                Some(column.name.as_str())
+            } else {
+                None
+            }
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(columns.iter().any(|name| name.ends_with("price")));
+    assert!(columns.iter().any(|name| name.ends_with("id")));
+    Ok(())
+}

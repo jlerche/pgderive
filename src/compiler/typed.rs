@@ -20,6 +20,29 @@ enum Value {
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
 }
 impl Typed {
+    pub(super) fn columns(&self, columns: &mut Vec<ColumnRef>) {
+        match &self.value {
+            Value::Column(column) => columns.push(column.clone()),
+            Value::Literal(_) | Value::Numeric(_) => {}
+            Value::Cast(value) => value.columns(columns),
+            Value::Binary { left, right, .. } => {
+                left.columns(columns);
+                right.columns(columns);
+            }
+            Value::Coalesce(values) => {
+                for value in values {
+                    value.columns(columns);
+                }
+            }
+            Value::Case { branches, otherwise } => {
+                for (condition, value) in branches {
+                    condition.columns(columns);
+                    value.columns(columns);
+                }
+                otherwise.columns(columns);
+            }
+        }
+    }
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         self.text_pair((row, row))
     }

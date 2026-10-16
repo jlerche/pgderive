@@ -24,6 +24,24 @@ pub enum Native {
     Remainder { remainder: super::remainder::Remainder },
 }
 impl Native {
+    pub(super) fn columns(&self) -> Vec<ColumnRef> {
+        let mut columns = Vec::new();
+        match self {
+            Self::Typed { typed } => typed.columns(&mut columns),
+            Self::Bin(value) => {
+                columns.push(value.input.clone());
+                if let Some((column, _)) = &value.shift {
+                    columns.push(column.clone());
+                }
+            }
+            Self::Offset { offset } => columns.push(offset.input.clone()),
+            Self::Remainder { remainder } => columns.push(remainder.column().clone()),
+        }
+        columns.sort();
+        columns.dedup();
+        columns
+    }
+
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         match self {
             Self::Typed { typed } => typed.evaluate(row),

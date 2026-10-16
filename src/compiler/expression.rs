@@ -396,3 +396,43 @@ impl Predicate {
         (limit <= 1024).then_some(limit)
     }
 }
+
+impl Scalar {
+    fn columns(&self, columns: &mut Vec<ColumnRef>) {
+        match self {
+            Self::Typed(value) => value.columns(columns),
+            Self::Column(column) | Self::Remainder(column, _) => columns.push(column.clone()),
+            Self::Difference(left, right) => {
+                columns.push(left.clone());
+                columns.push(right.clone());
+            }
+            Self::Literal(_) => {}
+        }
+    }
+}
+impl Expr {
+    pub(super) fn columns(&self, columns: &mut Vec<ColumnRef>) {
+        match self {
+            Self::Value(value) | Self::Null(value, _) => value.columns(columns),
+            Self::Compare(_, left, right) => {
+                left.columns(columns);
+                right.columns(columns);
+            }
+            Self::And(values) | Self::Or(values) => {
+                for value in values {
+                    value.columns(columns);
+                }
+            }
+            Self::Not(value) => value.columns(columns),
+        }
+    }
+}
+impl Predicate {
+    pub(super) fn columns(&self) -> Vec<ColumnRef> {
+        let mut columns = Vec::new();
+        self.0.columns(&mut columns);
+        columns.sort();
+        columns.dedup();
+        columns
+    }
+}

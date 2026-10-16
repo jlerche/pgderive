@@ -115,8 +115,13 @@ complete field-lineage or general movement proof. Candidates list outstanding
 liveness, evaluation-domain/error, lazy-branch, cardinality, context, retraction
 and runtime-equivalence obligations. Diagnostics do not affect executable plan
 identity or pending rebuild signatures. No new expressions move or become accepted.
-The next M2 slice must refine field-level lineage, including predicates, rebinds,
-aggregate finalizers and shared local computations, before enabling new deferral.
+Field-lineage refinement now reports exact local scalar operands and separately
+traces field consumers through row-preserving maps/rebinds, including predicates,
+keys, aggregate input/filter and window/navigation operands. Packed state remains
+an explicit conservative boundary; empty field-consumer lists do not prove
+movability. Full-tuple arrangement identity and evaluation/error obligations remain
+blocking. Next: model packed aggregate finalizers and shared-value reuse, establish
+error-domain equivalence fixtures, then qualify the first new deferral rule.
 
 Introduce typed expression nodes and consumer dependencies in the executable plan.
 Mark maintenance consumers (predicates, join/group/distinct keys, aggregate

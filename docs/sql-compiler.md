@@ -1495,7 +1495,7 @@ establish compatibility with PostgreSQL's unconstrained numeric semantics.
 
 ## Expression placement report
 
-`pgderive query validate` includes a `placement` object with revision 1 and
+`pgderive query validate` includes a `placement` object with revision 2 and
 `report_only: true`. It is advisory and read-only: no execution path changes,
 new supported SQL, registration, slot creation or per-publication checks arise
 from producing this report. Diagnostics are excluded from executable plan identity
@@ -1511,13 +1511,21 @@ reachable consumer. The report does not infer that unused columns are safe to mo
 its dependency precision is explicitly conservative at the operator boundary.
 
 Each local Map expression lists its current local execution path, native result
-OID, typed definition and input-stage dependency. `maintenance_required` means a
+OID, typed definition and exact typed input-field dependencies. `maintenance_required` means a
 maintenance consumer reaches that stage in this conservative graph. An expression
 outside that closure is `candidate_requires_proof`; outstanding obligations include
 column liveness, evaluation domains/errors, lazy branches, cardinality, contextual
 determinism, exact retractions and a qualified target runtime. Candidates continue
 executing locally. A different field in the same stage can conservatively keep a
-candidate marked as required; field-level lineage remains the next analysis step.
+candidate marked as required. `field_consumers` separately records proven field
+uses: scalar operands (including all CASE conditions/results and COALESCE branches),
+predicates, join/group/distinct keys, aggregate arguments/filters, window order and
+navigation operands, and output operands. Lineage follows maps and rebind aliases
+through row-preserving nodes; packed join/aggregate/window state remains opaque.
+An empty list is not proof that no consumer exists beyond an opaque boundary.
+The conservative `consumers` closure and status remain the movement gate. Required
+local expressions explicitly retain full-tuple-state and evaluation/error proof
+obligations. Terminal `field_consumers` equals its exact consumer list.
 
 Existing terminal expressions expose exact typed expression edges, native OIDs,
 source operand references, and all reachable output/predicate consumers. Their
@@ -1530,7 +1538,7 @@ maps whose internal output labels are positional.
 `network_fallback_stages` is currently empty. Unsupported functions or query shapes
 still fail compilation before activation; absence of a maintenance consumer does
 not establish volatility safety, hidden-read tracking, error equivalence or a new
-runtime capability. This first slice reports local Map roots and the terminal DAG,
+runtime capability. This report inventories local Map roots and the terminal DAG,
 not a unified field-level expression graph for every relational operator. Inline
 predicate/aggregate expressions retain their existing typed operator contracts;
 the report does not yet inventory every such expression as a separate node.

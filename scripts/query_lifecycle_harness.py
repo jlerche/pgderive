@@ -67,7 +67,7 @@ def qualify(output, command, factory):
         validated = inspect(command, fixture, 'validate', config)
         labels = [column['name'] for column in validated['columns']]
         placement = validated['placement']
-        assert placement['report_only'] and placement['revision'] == 1
+        assert placement['report_only'] and placement['revision'] == 2
         assert placement['stages'] and placement['network_fallback_stages'] == []
         for expression in placement['expressions']:
             assert expression['type_oid'] > 0

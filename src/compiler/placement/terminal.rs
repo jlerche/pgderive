@@ -77,6 +77,7 @@ pub(super) fn append(compiled: &Compiled, entries: &mut Vec<Entry>) -> Result<()
             },
             dependencies,
             consumers: consumers[index].iter().cloned().collect(),
+            field_consumers: consumers[index].iter().cloned().collect(),
             definition: serde_json::to_value(expression)?,
             obligations: vec![],
         });

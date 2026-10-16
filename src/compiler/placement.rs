@@ -1,4 +1,5 @@
 //! Report-only placement inventory. Operator-level liveness is deliberately conservative.
+mod fields;
 mod graph;
 mod terminal;
 use super::{Compiled, relational::Node};
@@ -33,7 +34,6 @@ struct Stage {
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 enum Dependency {
-    Stage { id: String },
     Expression { id: String },
     Operand { stage: String, column: super::ColumnRef },
 }
@@ -59,6 +59,7 @@ struct Expression {
     status: Status,
     dependencies: Vec<Dependency>,
     consumers: Vec<Consumer>,
+    field_consumers: Vec<Consumer>,
     definition: Value,
     obligations: Vec<&'static str>,
 }
@@ -76,6 +77,7 @@ pub struct Report {
 
 pub(super) fn analyze(compiled: &Compiled) -> Result<Report> {
     let stages = graph::stages(&compiled.relational.nodes)?;
+    let field_consumers = fields::consumers(compiled, &stages);
     let mut expressions = Vec::new();
     for (node, stage) in compiled.relational.nodes.iter().zip(&stages) {
         if let Node::Map { input, computed, .. } = node {
@@ -90,11 +92,23 @@ pub(super) fn analyze(compiled: &Compiled) -> Result<Report> {
                     } else {
                         Status::CandidateRequiresProof
                     },
-                    dependencies: vec![Dependency::Stage { id: input.clone() }],
+                    dependencies: computed
+                        .expression
+                        .columns()
+                        .into_iter()
+                        .map(|column| Dependency::Operand { stage: input.clone(), column })
+                        .collect(),
+                    field_consumers: field_consumers
+                        .get(&format!("local:{}:{}", stage.id, computed.column.name))
+                        .map_or_else(Vec::new, |values| values.iter().cloned().collect()),
                     consumers: stage.maintenance_consumers.clone(),
                     definition: serde_json::to_value(&computed.expression)?,
                     obligations: if required {
-                        vec!["operator_level_dependency_is_conservative"]
+                        vec![
+                            "operator_level_dependency_is_conservative",
+                            "full_tuple_state_identity",
+                            "evaluation_domain_and_errors",
+                        ]
                     } else {
                         vec![
                             "column_liveness",
@@ -112,9 +126,9 @@ pub(super) fn analyze(compiled: &Compiled) -> Result<Report> {
     }
     terminal::append(compiled, &mut expressions)?;
     Ok(Report {
-        revision: 1,
+        revision: 2,
         analysis_only: true,
-        dependency_precision: "conservative_operator_edges_and_exact_terminal_expression_edges",
+        dependency_precision: "exact_scalar_operands_and_row_preserving_lineage_with_conservative_stateful_barriers",
         context: "registered_source_and_terminal_semantic_environment",
         network_fallback_stages: Vec::new(),
         stages,
