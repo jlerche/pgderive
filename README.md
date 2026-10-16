@@ -112,11 +112,30 @@ The instance needs logical replication and the `pgderive_dev` database. Docker
 fixtures must use tmpfs for database storage; leave shared PoC containers intact.
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
-Rust tests, coverage, and unused-dependency detection. GitHub Actions runs the
-same gate. Coverage combines unit tests and the sequential live PostgreSQL
-harness, so the common gate needs `psql` and Docker with BuildKit for owned tmpfs
-fixtures and actual image/runtime checks, even when a local PostgreSQL endpoint
-is supplied. Compiler warnings and dead/unused code
+Rust tests, coverage, and unused-dependency detection. The default development
+profile runs the complete low-level live PostgreSQL harness and 74 worker cases:
+result-table decoding/representation, semantic bindings, transaction faults,
+witnessed process kills, representative query families, lifecycle and rebuild.
+It disables synthetic S3 latency but keeps real PostgreSQL/object storage and
+explicit fault barriers. PostgreSQL-mutating harnesses remain sequential.
+
+`./scripts/check.sh --full` runs the complete query matrix and operational release
+qualification, including TLS, backup recovery, packaging, containers and capacity.
+GitHub Actions always uses `--full`; run it locally before release or when changing
+families/operational paths outside the core profile. Both profiles enforce the same
+lint rules, unit tests and >=80% production line coverage. Core success is not a
+claim of full release qualification. Standalone `check_worker.sh` and
+`check_coverage.sh` retain the full profile by default; set
+`PGDERIVE_CHECK_PROFILE=core` to select their core profile explicitly.
+
+The gates need `psql` and a logical-replication PostgreSQL/object-store endpoint.
+Docker can provision the local services; full qualification additionally needs
+Docker with BuildKit for its owned tmpfs fixtures and actual image/runtime checks.
+Every proxy-wrapped harness records `timing.json` (including nonzero exits and
+harness exceptions/timeouts), and prints its elapsed time as it finishes. Evidence remains under
+`artifacts/worker/run-*` and `artifacts/replication/run-*`.
+
+Compiler warnings and dead/unused code
 are errors; unsafe code is forbidden. Clippy denies `all`, `pedantic`, and
 `nursery`, plus explicit complexity and selected restriction lints.
 

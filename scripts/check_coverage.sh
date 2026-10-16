@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+profile=${PGDERIVE_CHECK_PROFILE:-full}
+case "$profile" in
+    core) export PGDERIVE_S3_LATENCY_SCALE=0 ;;
+    full) ;;
+    *) printf 'Invalid check profile: %s\n' "$profile" >&2; exit 2 ;;
+esac
 mkdir -p artifacts/coverage
 output=$(mktemp -d "$PWD/artifacts/coverage/run-XXXXXXXX")
 printf 'Coverage evidence: %s\n' "$output"

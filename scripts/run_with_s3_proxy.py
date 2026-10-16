@@ -115,5 +115,20 @@ def run(output, command):
             proxy.wait(timeout=10)
 
 
+def timed_run(output, command):
+    started = time.monotonic()
+    code = None
+    try:
+        code = run(output, command)
+        return code
+    finally:
+        elapsed = time.monotonic() - started
+        (output / 'timing.json').write_text(json.dumps({
+            'elapsed_seconds': elapsed, 'returncode': code,
+            'completed': code is not None,
+        }, indent=2)+'\n')
+        print(f'{output.name}: {elapsed:.2f}s (exit {code})', file=sys.stderr, flush=True)
+
+
 if __name__ == "__main__":
-    sys.exit(run(pathlib.Path(sys.argv[1]), sys.argv[2:]))
+    sys.exit(timed_run(pathlib.Path(sys.argv[1]), sys.argv[2:]))

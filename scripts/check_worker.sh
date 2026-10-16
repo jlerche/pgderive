@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+profile=${PGDERIVE_CHECK_PROFILE:-full}
+case "$profile" in
+    core|full) ;;
+    *) printf 'Invalid check profile: %s\n' "$profile" >&2; exit 2 ;;
+esac
 if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
     # Run the instrumented executable directly so SIGKILL targets the worker,
     # rather than a cargo launcher whose child would survive the crash test.
@@ -34,8 +39,16 @@ PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-binding \
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \
     python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 \
     "$output/transactions" -- "${worker[@]}"
-run_qualification crashes python3 scripts/worker_crash_harness.py "$output/crashes" -- "${worker[@]}"
+crash_scale=${PGDERIVE_S3_LATENCY_SCALE:-1}
+if [[ "$profile" == core ]]; then crash_scale=0; fi
+PGDERIVE_S3_LATENCY_SCALE="$crash_scale" run_qualification crashes python3 scripts/worker_crash_harness.py "$output/crashes" -- "${worker[@]}"
 while read -r qualification script; do
+    if [[ "$profile" == core ]]; then
+        case "$qualification" in
+            compiler|projection|relational|partition|numeric|native|navigation|case) ;;
+            *) continue ;;
+        esac
+    fi
     PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
         python3 "scripts/${script}_harness.py" "$output/$qualification" -- "${worker[@]}"
 done <<'QUALIFICATIONS'
@@ -74,6 +87,14 @@ nexmark-q13 nexmark_q13
 nexmark-q14 nexmark_q14
 nexmark-q21 nexmark_q21
 QUALIFICATIONS
+if [[ "$profile" == core ]]; then
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-lifecycle \
+        python3 scripts/query_lifecycle_harness.py "$output/query-lifecycle" -- "${admin[@]}"
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-rebuild \
+        python3 scripts/query_rebuild_harness.py "$output/query-rebuild" -- "${admin[@]}"
+    python3 scripts/verify_worker_core.py "$output" "${worker[0]}" "${admin[0]}"
+    exit 0
+fi
 for qualification in query-toast query-ordered-state query-expression query-expression-calendar query-native-join query-topk query-membership circuit-numeric; do
     PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
         python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${worker[@]}"
