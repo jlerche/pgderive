@@ -114,3 +114,27 @@ impl Typed {
         if let Value::Bin(value) = &self.value { value.shift.as_ref() } else { None }
     }
 }
+impl Typed {
+    pub(in crate::compiler) fn filtered(
+        self,
+        condition: crate::compiler::expression::Expr,
+    ) -> Self {
+        let otherwise = Self { oid: self.oid, value: Value::Literal(None) };
+        Self {
+            oid: self.oid,
+            value: Value::Case {
+                branches: vec![(condition, self)],
+                otherwise: Box::new(otherwise),
+            },
+        }
+    }
+    pub(in crate::compiler) const fn null_text() -> Self {
+        Self { oid: 25, value: Value::Literal(None) }
+    }
+    pub(in crate::compiler) const fn unknown_text(mut self) -> Self {
+        if self.oid == 705 {
+            self.oid = 25;
+        }
+        self
+    }
+}

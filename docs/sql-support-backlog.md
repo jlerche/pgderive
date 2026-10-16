@@ -25,5 +25,7 @@ connected PostgreSQL computation and sink deferral are not fallback strategies.
 
 Computed aggregate arguments, computed relational keys, joins/subqueries/windows
 and dependency invalidation belong to M4. Supporting a function in the registry
-does not automatically enable every relational position. Live-query delivery
+does not automatically enable every relational position. The first M4 slice
+qualifies [computed grouped aggregate inputs](m4-computed-aggregate-inputs.md);
+computed window inputs and broader invalidation remain open. Live-query delivery
 remains outside the project scope.

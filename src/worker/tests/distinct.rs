@@ -69,7 +69,6 @@ fn distinct_rejects_unqualified_types_modifiers_and_window_forms() -> Result<()>
         "SELECT b.auction,SUM(DISTINCT b.price) FROM source.bid b GROUP BY b.auction",
         "SELECT b.auction,COUNT(DISTINCT b.price,b.id) FROM source.bid b GROUP BY b.auction",
         "SELECT b.auction,COUNT(DISTINCT b.price ORDER BY b.price) FROM source.bid b GROUP BY b.auction",
-        "SELECT b.auction,COUNT(DISTINCT b.price+1) FROM source.bid b GROUP BY b.auction",
         "SELECT a.id,COUNT(DISTINCT a.category) FROM source.auction a GROUP BY a.id",
     ] {
         assert!(compile(query, &native).is_err(), "{query}");

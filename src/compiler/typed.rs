@@ -250,6 +250,12 @@ fn literal(constant: &pg_query::protobuf::AConst) -> Result<Typed> {
     if let Some(pg_query::protobuf::a_const::Val::Sval(value)) = &constant.val {
         return Ok(Typed { oid: 705, value: Value::Text(value.sval.clone()) });
     }
+    if let Some(pg_query::protobuf::a_const::Val::Boolval(value)) = &constant.val {
+        return Ok(Typed {
+            oid: 16,
+            value: Value::Encoded(Some(if value.boolval { "t" } else { "f" }.into())),
+        });
+    }
     let Some(pg_query::protobuf::a_const::Val::Ival(value)) = &constant.val else {
         anyhow::bail!("typed scalar requires integer literal");
     };

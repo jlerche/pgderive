@@ -287,3 +287,5 @@ async fn grouped_output(
     }
     Batch::from_updates(values)
 }
+
+mod computed_aggregates;

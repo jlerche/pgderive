@@ -114,7 +114,7 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 74 worker cases:
+profile runs the complete low-level live PostgreSQL harness and 80 worker cases:
 result-table decoding/representation, semantic bindings, transaction faults,
 witnessed process kills, representative query families, lifecycle and rebuild.
 It disables synthetic S3 latency but keeps real PostgreSQL/object storage and

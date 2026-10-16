@@ -152,6 +152,11 @@ computed aggregate inputs, composed derived queries, then additional joins,
 subqueries and windows. Every operation requires an in-engine implementation.
 No new SQL syntax is considered complete without retractions and recovery evidence.
 
+The first implemented slice is [computed grouped aggregate inputs](m4-computed-aggregate-inputs.md).
+Its coverage matrix defines argument types, lazy FILTER evaluation, WHERE ordering,
+derived-source composition and explicit window restrictions. Broader dependency
+invalidation and further relational shapes remain open M4 work.
+
 Broaden M0's dependency tracking and fencing to support more changes: DDL, function/type
 changes, extensions, settings, collation providers and timezone data. Merely
 checking once at startup is insufficient if concurrent administrative changes can

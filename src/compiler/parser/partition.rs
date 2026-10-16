@@ -28,10 +28,15 @@ pub(in crate::compiler) struct Target {
 #[derive(Clone)]
 pub(in crate::compiler) struct Aggregate {
     pub function: crate::compiler::partition::Function,
-    pub argument: Option<Name>,
+    pub argument: Option<Argument>,
     pub filter: Option<crate::compiler::syntax::Expr>,
     pub window: Option<Window>,
     pub navigation: Option<super::navigation::Navigation>,
+}
+#[derive(Clone)]
+pub(in crate::compiler) enum Argument {
+    Column(Name),
+    Expression(Box<Node>),
 }
 #[derive(Clone)]
 pub(in crate::compiler) struct Window {
@@ -72,7 +77,11 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
         let (table, expansion) = super::expansion::source(from)?;
         (Source::Native(table), expansion)
     };
-    let targets = select.target_list.iter().map(parse_target).collect::<Result<_>>()?;
+    let targets = select
+        .target_list
+        .iter()
+        .map(|value| parse_target(value, !select.group_clause.is_empty()))
+        .collect::<Result<_>>()?;
     let groups = select.group_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
     Ok(Parsed {
         source,
@@ -82,7 +91,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
         predicate: crate::compiler::syntax::predicate(select.where_clause.as_deref())?,
     })
 }
-fn parse_target(value: &Node) -> Result<Target> {
+fn parse_target(value: &Node, grouped: bool) -> Result<Target> {
     let NodeEnum::ResTarget(output) = node(value)? else {
         anyhow::bail!("unsupported target");
     };
@@ -107,9 +116,20 @@ fn parse_target(value: &Node) -> Result<Target> {
         (Value::Typed(Box::new(expression.clone())), "case".into())
     } else if let NodeEnum::FuncCall(call) = node(expression)? {
         let name = super::expressions::names(&call.funcname)?.0;
-        let function = crate::compiler::parser::expressions::builtin_name(&name)
-            .context("unsupported aggregate namespace")?;
-        (Value::Aggregate(Box::new(aggregate(call, function)?)), function.to_owned())
+        let function = crate::compiler::parser::expressions::builtin_name(&name);
+        if let Some(
+            function @ ("count" | "sum" | "avg" | "min" | "max" | "rank" | "dense_rank"
+            | "row_number" | "lag" | "lead"),
+        ) = function
+        {
+            (Value::Aggregate(Box::new(aggregate(call, function)?)), function.to_owned())
+        } else {
+            ensure!(grouped, "scalar function targets in this relational scope require grouping");
+            (
+                Value::Typed(Box::new(expression.clone())),
+                name.last().context("missing function name")?.clone(),
+            )
+        }
     } else {
         let name = column(expression)?;
         let label = name.0.last().context("missing column")?.clone();
@@ -149,7 +169,7 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         None
     };
     let argument = if let Some(navigation) = &navigation {
-        Some(navigation.argument.clone())
+        Some(Argument::Column(navigation.argument.clone()))
     } else if ranking {
         ensure!(
             call.over.is_some()
@@ -164,9 +184,17 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         None
     } else {
         let [argument] = call.args.as_slice() else {
-            anyhow::bail!("aggregate requires one column");
+            anyhow::bail!("aggregate requires one scalar argument");
         };
-        Some(column(argument)?)
+        if matches!(node(argument)?, NodeEnum::ColumnRef(_)) {
+            Some(Argument::Column(column(argument)?))
+        } else {
+            ensure!(
+                call.over.is_none(),
+                "computed window aggregate arguments require frame-aware evaluation and are not supported"
+            );
+            Some(Argument::Expression(Box::new(argument.clone())))
+        }
     };
     Ok(Aggregate {
         function,

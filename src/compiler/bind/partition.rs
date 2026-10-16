@@ -9,6 +9,7 @@ use crate::{
     source::Contract,
 };
 use anyhow::{Context, Result, ensure};
+mod argument;
 pub(in crate::compiler::bind) mod composition;
 mod distinct;
 mod occurrence;
@@ -188,8 +189,7 @@ fn bind_targets(
                 context.scalar_scope,
             )?,
             syntax::Value::Aggregate(value) => {
-                let result =
-                    aggregate(*value, resolve, (context.groups, context.occurrence_keys), state)?;
+                let result = aggregate(*value, resolve, context, state, computed)?;
                 transform = result.1;
                 result.0
             }
@@ -277,14 +277,18 @@ struct Targets {
 fn aggregate(
     value: syntax::Aggregate,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
-    context: (&[ColumnRef], &[String]),
+    context: TargetContext<'_>,
     state: &mut Targets,
+    computed: &mut Vec<crate::compiler::scalar::Computed>,
 ) -> Result<(ColumnRef, crate::compiler::output::OutputMap)> {
     use crate::compiler::output::OutputMap;
     if let Some(window) = value.window {
-        ensure!(context.0.is_empty(), "grouped window composition requires subquery lowering");
-        let (candidate, window_keys) =
-            bind_window(window, resolve, (context.1, value.function.occurrence_order()))?;
+        ensure!(context.groups.is_empty(), "grouped window composition requires subquery lowering");
+        let (candidate, window_keys) = bind_window(
+            window,
+            resolve,
+            (context.occurrence_keys, value.function.occurrence_order()),
+        )?;
         if let Some(prior) = &state.mode {
             ensure!(
                 serde_json::to_vec(&(prior, &state.keys))?
@@ -295,9 +299,18 @@ fn aggregate(
         state.keys = window_keys;
         state.mode = Some(candidate);
     } else {
-        ensure!(!context.0.is_empty(), "ungrouped aggregates unsupported");
+        ensure!(!context.groups.is_empty(), "ungrouped aggregates unsupported");
     }
-    let argument = value.argument.as_ref().map(resolve).transpose()?;
+    let argument::Bound { column: argument, filter } = argument::bind(
+        value.argument,
+        value.filter,
+        resolve,
+        computed,
+        argument::Context {
+            scope: context.scalar_scope,
+            count: matches!(value.function, Function::Count),
+        },
+    )?;
     let navigation = value
         .navigation
         .map(|parsed| {
@@ -316,13 +329,11 @@ fn aggregate(
         _ => OutputMap::Identity,
     };
     let name = format!("@aggregate_{}", state.base + state.aggregates.len());
-    let filter =
-        value.filter.map(|expr| crate::compiler::expression::bind(expr, resolve)).transpose()?;
     let nullable = !value.function.ranking();
     state.aggregates.push(Aggregate {
         function: value.function,
         argument,
-        filter: filter.map(crate::compiler::Predicate::new),
+        filter,
         field: name.clone(),
         navigation,
     });

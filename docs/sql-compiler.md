@@ -1151,3 +1151,20 @@ establish compatibility with PostgreSQL's unconstrained numeric semantics.
 Constant subexpressions are checked by the local typed binder, including inside
 row-dependent lazy expressions. An unqualified constant-error subtree rejects
 before activation; the engine does not ask PostgreSQL's planner to evaluate it.
+
+## Computed grouped aggregate inputs
+
+Grouped COUNT, integral SUM/AVG/MIN/MAX, numeric SUM/MIN/MAX and integral
+COUNT(DISTINCT) accept locally supported typed scalar arguments. The
+[admission matrix](m4-computed-aggregate-inputs.md) records exact boundaries.
+Argument maps run after WHERE. For computed arguments, FILTER becomes a lazy
+CASE with a typed NULL ELSE; excluded or UNKNOWN-filter rows do not evaluate
+the argument. Empty/all-filtered groups remain present, and distinct values
+retain full source multiplicity. Repeated identical arguments and filters share
+a map within their stage. Scalar grouping calls can also be selected.
+
+Already supported derived sources retain these rules. Computed window arguments
+remain rejected until evaluation can respect frame membership. Ungrouped or
+nested aggregates and unavailable scalar overloads continue to reject explicitly.
+COUNT(NULL) resolves the untyped NULL to text; other ambiguous NULL arguments
+require an explicit cast. This slice adds no PostgreSQL computation path.
