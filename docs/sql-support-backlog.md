@@ -23,9 +23,12 @@ connected PostgreSQL computation and sink deferral are not fallback strategies.
 | Floating point | Native codecs, scalar operations and aggregates; special values, rounding and order-dependent evaluation |
 | Extensions and user functions | Explicit implementation/dependency/security design before admission; volatility declarations alone are insufficient |
 
-Computed aggregate arguments, computed relational keys, joins/subqueries/windows
-and dependency invalidation belong to M4. Supporting a function in the registry
+M4 has a completed bounded structural baseline covering computed grouped
+aggregate arguments, computed integral inner-join keys, derived compositions and
+cooperative dependency fencing. Further joins/subqueries/windows are future
+relational expansion tasks. Supporting a function in the registry
 does not automatically enable every relational position. The first M4 slice
 qualifies [computed grouped aggregate inputs](m4-computed-aggregate-inputs.md);
-computed window inputs and broader invalidation remain open. Live-query delivery
+computed window inputs and additional automatic invalidation policies remain
+separate follow-up work. Live-query delivery
 remains outside the project scope.

@@ -2,8 +2,8 @@
 
 M4 completes a bounded architecture baseline. Individual SQL functions and further
 query shapes remain the separate SQL support backlog. The existing computed
-aggregate matrix is the first slice. The remaining implementation is scoped here
-before changes.
+aggregate matrix is the first slice. This completion scope was published before
+implementation and is now implemented and qualified.
 
 | Boundary | Implementation and acceptance evidence |
 | --- | --- |
@@ -28,3 +28,26 @@ and rebuild each database afterward. A single database barrier cannot protect
 other databases or hosts. An interrupted rebuild from before maintenance can
 have an incompatible recorded signature; explicitly drop/recreate that pending
 query if ordinary rebuild cannot resume. Do not edit its journal to bypass this.
+
+Computed ON operands evaluate eagerly on each side, including when the opposite
+input is empty. The conservative local-map error contract applies; later WHERE
+clauses do not guard ON maps. The Rust history test empties both inputs, then
+proves that an overflowing unmatched operand fails without changing its checkpoint.
+
+Qualification: `scripts/environment_harness.py` covers the maintenance protocol;
+`scripts/computed_join_harness.py` covers six new join shapes against native
+materialized views and independent source recomputation. Both run in the common
+core gate. `src/worker/tests/computed_join.rs` adds weighted histories, simultaneous
+input changes, cold object-state restart, rejected shapes and failure atomicity.
+The existing native-join, join-composition and native-cross live harnesses supply
+additional regression evidence for unchanged outer/self/multiway/scoped paths.
+
+Use one maintenance coordinator for an affected environment. `finish` is the
+operator's explicit attestation that all coordinated mutations have completed;
+it must not race another administrator's changes or another maintenance cycle.
+The command serializes database state changes, not arbitrary administrator actions.
+
+Maintenance does not qualify a new function implementation, overload or runtime
+by recording its metadata. Restore qualified definitions or first qualify the
+corresponding engine implementation before finishing and rebuilding. The closed
+capability registry and supported-environment contract still govern admission.

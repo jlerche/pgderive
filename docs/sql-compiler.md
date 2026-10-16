@@ -1168,3 +1168,27 @@ remain rejected until evaluation can respect frame membership. Ungrouped or
 nested aggregates and unavailable scalar overloads continue to reject explicitly.
 COUNT(NULL) resolves the untyped NULL to text; other ambiguous NULL arguments
 require an explicit cast. This slice adds no PostgreSQL computation path.
+
+## Computed inner-join keys
+
+Native and already supported derived inner-join inputs accept an AND of at most
+16 ordinary equalities between side-local scalar operands. Computed operands
+require integral result types and matching OIDs on both sides; cast explicitly
+where supported. Raw-column key types keep their prior restrictions. The binder
+resolves operand direction and maps each expression only on its own input before
+keying. Repeated expressions share fields; complete source tuples remain the
+weighted identity. NULL keys never match, and simultaneous input changes retain
+the join cross term. Derived state and computed fields remain scope-local.
+
+Mixed-input operands, constants-only operands, computed numeric/text result keys,
+and computed outer/existence ON operands reject. Computed window arguments/keys,
+hidden relation reads and volatile/time-dependent expressions remain unsupported.
+The finite accepted matrix and maintenance boundaries are in
+[M4 completion](m4-completion-matrix.md).
+
+ON maps evaluate each input row eagerly. An argument error can therefore stop
+the worker even when the opposite input is empty or a later WHERE would exclude
+the row. This is the conservative error boundary already used by local maps;
+PostgreSQL optimizer-specific evaluation order is not promised. Use an explicit
+lazy CASE or an admitted derived-source filter to guard an operand. Errors retain
+the last sink/progress/ACK boundary.

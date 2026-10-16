@@ -4,9 +4,22 @@ use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) enum Tree {
     Source(Table),
-    Exists { left: Box<Self>, right: Table, keys: Vec<(Name, Name)>, anti: bool },
-    Derived { source: Box<super::Parsed>, alias: String },
-    Join { left: Box<Self>, right: Box<Self>, keys: Vec<(Name, Name)>, outer: bool },
+    Exists {
+        left: Box<Self>,
+        right: Table,
+        keys: Vec<(Name, Name)>,
+        anti: bool,
+    },
+    Derived {
+        source: Box<super::Parsed>,
+        alias: String,
+    },
+    Join {
+        left: Box<Self>,
+        right: Box<Self>,
+        keys: Vec<(super::scalar::Key, super::scalar::Key)>,
+        outer: bool,
+    },
 }
 pub(in crate::compiler) struct Parsed {
     pub tree: Tree,
@@ -58,7 +71,7 @@ fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tree> {
             let right = tree(optional(join.rarg.as_deref())?, sources, depth + 1)?;
             let mut keys = Vec::new();
             if let Some(condition) = join.quals.as_deref() {
-                equalities(condition, &mut keys)?;
+                computed_equalities(condition, &mut keys, 0)?;
             }
             ensure!(keys.len() <= 16, "join key count exceeded");
             Ok(Tree::Join {
@@ -105,4 +118,33 @@ fn native_tree(value: &Node) -> Result<bool> {
         }
         _ => false,
     })
+}
+fn computed_equalities(
+    value: &Node,
+    keys: &mut Vec<(super::scalar::Key, super::scalar::Key)>,
+    depth: usize,
+) -> Result<()> {
+    ensure!(depth < 16, "join condition nesting limit exceeded");
+    match node(value)? {
+        NodeEnum::BoolExpr(value) if value.boolop == i32::from(pg::BoolExprType::AndExpr) => {
+            ensure!(value.xpr.is_none(), "invalid join conjunction");
+            for value in &value.args {
+                computed_equalities(value, keys, depth + 1)?;
+            }
+        }
+        NodeEnum::AExpr(value) => {
+            ensure!(
+                value.kind == i32::from(pg::AExprKind::AexprOp)
+                    && super::expressions::names(&value.name)?.0 == ["="],
+                "ON requires ordinary equality"
+            );
+            ensure!(keys.len() < 16, "join key count exceeded");
+            keys.push((
+                super::scalar::key(optional(value.lexpr.as_deref())?)?,
+                super::scalar::key(optional(value.rexpr.as_deref())?)?,
+            ));
+        }
+        _ => anyhow::bail!("ON requires an AND of ordinary equalities"),
+    }
+    Ok(())
 }

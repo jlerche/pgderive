@@ -28,8 +28,9 @@ The scalar architecture uses one bound IR in `src/compiler/typed.rs` for maps an
 predicate operands. `src/compiler/value.rs` owns native decoding and literal
 normalization. Function/operator dispatch resolves at binding time. Existing
 computed key/window maps use the same IR; specialized temporal/MOD kernels retain
-bounded parser/context guards. These structures do not enable computed aggregate
-arguments or arbitrary computed join/window keys.
+bounded parser/context guards. M4 adds computed grouped aggregate arguments and side-local integral inner-join
+keys. Computed window inputs/keys and outer/existence ON expressions retain
+explicit restrictions.
 
 ## Relational capabilities
 
@@ -41,10 +42,11 @@ establish uniqueness. See linked SQL-subset sections for exact syntax restrictio
 | --- | --- | --- |
 | Source/filter/map/rebind/output | Complete source transactions; projection collisions consolidate; typed scalar consumers run before state | `src/compiler/relational.rs`, `src/worker/program.rs`; `scripts/relational_compiler_harness.py` |
 | INNER/CROSS/self/multiway joins, tagged union | Full-tuple multiplicity; simultaneous-input cross term; matching typed equality keys | `src/compiler/bind/native_join.rs`; `scripts/query_native_join_harness.py`, `scripts/join_composition_harness.py` |
+| Computed inner-join keys | Side-local integral result expressions; exact matching OIDs; no mixed-input operands, constants-only operands or computed outer/existence keys | `src/compiler/bind/native_join/keys.rs`; `scripts/computed_join_harness.py`, `src/worker/tests/computed_join.rs` |
 | LEFT joins | NULL extension only for unmatched left occurrences; post-join WHERE does not manufacture unmatched rows; retained affected-key recomputation | `src/compiler/left_join.rs`; `scripts/query_native_join_harness.py` |
 | SELECT DISTINCT, EXISTS / NOT EXISTS | NULL grouping distinct from NULL join equality; right duplicates do not multiply existence output; restricted equality correlation | `src/compiler/bind/membership.rs`; `scripts/query_membership_harness.py` |
 | GROUP BY and group-only membership | Retractions, NULL groups, complete identity retained; accepted key families depend on compiled query shape | `src/compiler/partition.rs`; `scripts/group_membership_harness.py`, `src/worker/tests/grouped_occurrence.rs` |
-| COUNT, SUM, AVG, MIN, MAX, FILTER and distinct aggregate membership | Empty/all-NULL semantics; integer exact statistics or retained affected partitions; result type bounds vary; numeric display scale retained | `src/compiler/partition.rs`, `src/compiler/bind/partition`; `scripts/numeric_compiler_harness.py`, `scripts/group_membership_harness.py`, `scripts/circuit_numeric_harness.py` |
+| COUNT, SUM, AVG, MIN, MAX, FILTER and distinct aggregate membership | Empty/all-NULL semantics; integer exact statistics or retained affected partitions; result type bounds vary; numeric display scale retained | `src/compiler/partition.rs`, `src/compiler/bind/partition`; `scripts/numeric_compiler_harness.py`, `scripts/group_membership_harness.py`, `scripts/circuit_numeric_harness.py`, `scripts/aggregate_inputs_compiler_harness.py` |
 | ROW_NUMBER, RANK, DENSE_RANK, top-k | Occurrences versus peers; NULL placement and direction; uniqueness proof where needed; specialized cutoff ≤1,024 | `src/compiler/topk.rs`; `scripts/ranking_compiler_harness.py`, `scripts/query_topk_harness.py` |
 | ROWS/RANGE/GROUPS aggregate frames and LAG/LEAD | Bounded accepted frame/offset forms; peers distinct from occurrences; no generic SQL-window promise | `src/compiler/partition.rs`, `src/compiler/navigation.rs`; `scripts/peer_frames_compiler_harness.py`, `scripts/navigation_compiler_harness.py` |
 | Left predecessor lookup | Explicit typed partition/order and supported offset/key forms; retractable retained inputs | `src/compiler/lookup.rs`; `scripts/lookup_compiler_harness.py`, `src/worker/tests/lookup_remainder.rs` |
@@ -74,6 +76,11 @@ restored replay and controlled connection settings. Protocol observation verifie
 zero semantic inspections during publication, including cold resume.
 
 The implementation is conservative rather than a minimal per-query dependency set.
-Remaining work includes stronger administrative fencing, binary/library/timezone-file
-attestation and future capability-specific dependencies. These remain explicit
-operational restrictions; the implementation does not claim automatic invalidation.
+M4 adds cooperative database-wide semantic maintenance in
+`src/semantics/maintenance.rs`, qualified by `scripts/environment_harness.py`.
+Session leases exclude maintenance while managed workers/validators are active.
+Pending state blocks startup and a monotonic revision requires explicit rebuild.
+Catalog scans remain initialization-only. Shared files require operator attestation
+and barriers in every affected database. Direct privileged mutation and automatic
+file attestation remain outside the deployment contract. Future capabilities must
+add their own dependencies before admission.

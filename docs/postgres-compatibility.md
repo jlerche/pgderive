@@ -2,8 +2,8 @@
 
 Status: M0 specification and implementation inventory. This document defines the
 target contract; the [capability inventory](postgres-capabilities.md) distinguishes
-existing behavior from missing qualification and enforcement. It does not certify
-arbitrary PostgreSQL SQL or declare M0 complete. See the
+existing behavior from missing qualification and enforcement. It records the completed bounded M0–M4 baseline and does not certify
+arbitrary PostgreSQL SQL. See the
 [implementation roadmap](postgres-fidelity-roadmap.md).
 
 ## Reference result

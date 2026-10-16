@@ -38,7 +38,7 @@ with an explicit reason. The sink receives complete result values and performs
 ordinary typed table DML. Keep source LSNs distinct from logical time and preserve
 object PUT → one PG membership/result/progress transaction → slot ACK.
 
-## M0 — Freeze the semantic contract
+## M0 — Freeze the semantic contract (complete baseline)
 
 The [compatibility specification](postgres-compatibility.md) and
 [capability inventory](postgres-capabilities.md) establish the first documentation
@@ -52,7 +52,7 @@ collations, error cases, resource bounds, execution paths and evidence. Bind
 resolved catalog identities, relevant settings, PostgreSQL/runtime versions and
 semantic revisions into registration/restart validation. OIDs alone do not prove
 that a function definition or environment is unchanged. Establish the minimum
-supported-environment policy here before M1–M5 ship: validate semantics during
+supported-environment policy here before later milestones ship: validate semantics during
 initialization/restart/rebuild and require administrators to quiesce workers before
 semantic changes. Publication retains structural source checks but does not rescan
 semantic catalogs.
@@ -65,7 +65,7 @@ Acceptance: every currently accepted operation has an inventory entry, known
 qualification gaps are visible, and changed semantics require explicit rebuild.
 Implement as separate contract/inventory and binding-validation commits.
 
-## M1 — Publish an ordinary typed result table
+## M1 — Publish an ordinary typed result table (complete baseline)
 
 Implementation baseline: native-column tables, physical occurrences, binary-value
 retractions, atomic publication, compatible stable-OID cutover and real pgoutput
@@ -141,10 +141,10 @@ Acceptance: shared-IR and bind-once regression tests; consistent function errors
 projection, WHERE, grouping keys and aggregate FILTER; native literal/alias identity;
 the common gate plus sequential temporal/hopping/lookup/session CDC and restart
 qualifications. No new function catalog entries or query compositions are required.
-Computed aggregate arguments, arbitrary computed join/window keys and broader
-relational lowering remain M4 work.
+Computed aggregate arguments and further relational lowering are qualified by
+M4 below. Arbitrary computed join/window keys are outside M3 acceptance.
 
-## M4 — Expand relational coverage and invalidation
+## M4 — Expand relational coverage and invalidation (complete baseline)
 
 Use the capability inventory to select concrete workload queries and publish a
 coverage matrix before implementation. Prioritize computed predicates/keys,
@@ -154,8 +154,12 @@ No new SQL syntax is considered complete without retractions and recovery eviden
 
 The first implemented slice is [computed grouped aggregate inputs](m4-computed-aggregate-inputs.md).
 Its coverage matrix defines argument types, lazy FILTER evaluation, WHERE ordering,
-derived-source composition and explicit window restrictions. Broader dependency
-invalidation and further relational shapes remain open M4 work.
+derived-source composition and explicit window restrictions. The [completion matrix](m4-completion-matrix.md) defines the final bounded slice:
+side-local computed integral inner-join keys, composed derived aggregates/joins,
+and cooperative semantic maintenance. These have native-MV, independent oracle,
+retraction and recovery evidence. Arbitrary window keys/arguments, outer ON
+expressions and additional subqueries remain explicitly rejected or bounded;
+future syntax belongs to the SQL support backlog.
 
 Broaden M0's dependency tracking and fencing to support more changes: DDL, function/type
 changes, extensions, settings, collation providers and timezone data. Merely
@@ -169,6 +173,20 @@ a correct source-boundary evaluation design before support.
 Acceptance: supported environment changes safely reevaluate or rebuild; unsupported
 ones cannot silently reuse old keys/results. Each new query shape has native-MV,
 independent relational-oracle and recovery coverage.
+
+Implemented maintenance uses database-wide session leases and a durable revision.
+`environment begin` refuses active workers/validators and persists pending state;
+`environment finish` permits fresh initialization after operator attestation.
+Every old registration must rebuild, even if catalog contents were restored.
+Shared runtime changes require barriers in every affected database. This is a
+cooperative deployment protocol, not an automatic superuser DDL/file interceptor.
+Source DDL retains transaction-local layout fencing; semantic inspection remains
+initialization-only. Pending pre-maintenance rebuilds with incompatible signatures
+require explicit drop/recreate.
+
+M0–M4 are complete for these bounded baselines. This completes the structural
+roadmap; it does not claim arbitrary PostgreSQL SQL support or eliminate the
+separate function/type/query expansion backlog and operational limits.
 
 ## Qualification and sequencing
 

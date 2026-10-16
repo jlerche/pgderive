@@ -35,7 +35,10 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     let right = super::derived::source_query(right)?;
     let keys = if let Some(quals) = join.quals.as_deref() {
         let mut keys = Vec::new();
-        equalities(quals, &mut keys)?;
+        if equalities(quals, &mut keys).is_err() {
+            // The native tree binder owns computed ON operands.
+            return Ok(None);
+        }
         ensure!((1..=16).contains(&keys.len()), "scoped join requires 1..=16 equalities");
         Some(keys)
     } else {

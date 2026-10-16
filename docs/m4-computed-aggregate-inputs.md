@@ -1,7 +1,9 @@
 # M4 slice: computed grouped aggregate inputs
 
-This is the first relational-coverage slice of M4. Dependency invalidation,
-additional joins/subqueries and window input expressions remain separate work.
+This records the first relational-coverage slice of M4. The completed bounded
+baseline, including semantic maintenance and computed inner-join keys, is in the
+[completion matrix](m4-completion-matrix.md). Further subquery/window forms remain
+separate SQL expansion work.
 All expressions execute locally through M3's typed scalar IR.
 
 ## Admission and qualification matrix

@@ -1,4 +1,5 @@
 //! Resolve native source occurrences into an executable join tree.
+mod keys;
 use super::{Compiled, scope};
 use crate::{
     compiler::{
@@ -136,9 +137,9 @@ impl Builder<'_> {
     }
     fn join(
         &mut self,
-        left: Edge,
+        mut left: Edge,
         mut right: Edge,
-        names: Vec<(Name, Name)>,
+        names: Vec<(crate::compiler::parser::scalar::Key, crate::compiler::parser::scalar::Key)>,
         outer: bool,
     ) -> Result<Edge> {
         ensure!(
@@ -148,8 +149,15 @@ impl Builder<'_> {
                 .any(|right| left.qualifiers.last() == right.qualifiers.last())),
             "duplicate exposed table qualifier"
         );
-        let keys = keys(names, &left.columns, &right.columns)?;
         let id = format!("tree_join_{}", self.joins);
+        let keys::Bound { keys, computed } = keys::bind(names, &left.columns, &right.columns, &id)?;
+        ensure!(
+            !outer || computed.iter().all(Vec::is_empty),
+            "computed outer/existence ON operands are not supported"
+        );
+        let [left_computed, right_computed] = computed;
+        self.map(&mut left, left_computed, &format!("{id}_left_map"));
+        self.map(&mut right, right_computed, &format!("{id}_right_map"));
         self.joins += 1;
         let left_key = format!("{id}_left");
         let right_key = format!("{id}_right");
@@ -199,6 +207,15 @@ impl Builder<'_> {
         anti: bool,
     ) -> Result<Edge> {
         let columns = left.columns.clone();
+        let names = names
+            .into_iter()
+            .map(|(a, b)| {
+                (
+                    crate::compiler::parser::scalar::Key::Column(a),
+                    crate::compiler::parser::scalar::Key::Column(b),
+                )
+            })
+            .collect();
         let edge = self.join(left, right, names, true)?;
         let Some(Node::LeftJoin { id, input, .. }) = self.nodes.pop() else {
             anyhow::bail!("missing existence join")
@@ -206,6 +223,12 @@ impl Builder<'_> {
         self.nodes.push(Node::Existence { id: id.clone(), input, anti });
         ensure!(edge.columns.len() > columns.len(), "missing existence source columns");
         Ok(Edge { id, columns })
+    }
+    fn map(&mut self, edge: &mut Edge, computed: Vec<crate::compiler::scalar::Computed>, id: &str) {
+        if !computed.is_empty() {
+            self.nodes.push(Node::Map { id: id.into(), input: edge.id.clone(), computed });
+            edge.id = id.into();
+        }
     }
     fn key(&mut self, id: String, input: String, keys: Vec<ColumnRef>) {
         self.nodes.push(if keys.is_empty() {
@@ -230,34 +253,4 @@ fn resolve<'a>(name: &Name, columns: &'a [Column]) -> Result<&'a Column> {
     let result = matches.next().context("unknown join-tree column")?;
     ensure!(matches.next().is_none(), "ambiguous join-tree column");
     Ok(result)
-}
-fn keys(
-    names: Vec<(Name, Name)>,
-    left: &[Column],
-    right: &[Column],
-) -> Result<Vec<(ColumnRef, ColumnRef)>> {
-    let mut all = left.to_vec();
-    all.extend_from_slice(right);
-    let mut keys = names
-        .into_iter()
-        .map(|(a, b)| {
-            let a = resolve(&a, &all)?;
-            let b = resolve(&b, &all)?;
-            let a_left = left.iter().any(|value| value.value.name == a.value.name);
-            let b_left = left.iter().any(|value| value.value.name == b.value.name);
-            ensure!(a_left != b_left, "ON equality must connect both inputs");
-            let (a, b) = if a_left { (a, b) } else { (b, a) };
-            ensure!(
-                a.value.oid == b.value.oid
-                    && a.modifier == b.modifier
-                    && a.collation == b.collation
-                    && matches!(a.value.oid, 16 | 20 | 21 | 23 | 1700 | 2950 | 1114 | 1184),
-                "unsupported or incompatible join-tree key types"
-            );
-            Ok((a.value.clone(), b.value.clone()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    keys.sort_unstable();
-    keys.dedup();
-    Ok(keys)
 }
