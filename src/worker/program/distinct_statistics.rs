@@ -1,7 +1,7 @@
 //! Sparse exact value counts and zero/positive membership for integral DISTINCT.
 use super::relational::Key;
 use crate::{
-    compiler::partition::{Function, Mode, Partition},
+    compiler::partition::{Function, Mode, Partition, statistics},
     engine::dataflow::{Expand, Project, Statistics},
     transaction::Row,
 };
@@ -127,8 +127,8 @@ pub(super) fn measure(spec: &Partition, row: &Row) -> Result<Option<Vec<BigInt>>
     ensure!(row.len() == 1, "distinct membership/ordinary field collision");
     let text = member.as_deref().context("NULL distinct membership")?;
     let (index, _) = payload(spec, text)?;
-    let mut values = vec![BigInt::from(0); 1 + spec.aggregates.len() * 2];
-    values[1 + index * 2] = BigInt::from(1);
+    let mut values = vec![BigInt::from(0); statistics::width(spec.aggregates.len())];
+    values[statistics::count(index)] = BigInt::from(1);
     Ok(Some(values))
 }
 

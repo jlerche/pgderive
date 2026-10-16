@@ -1,5 +1,6 @@
 //! Report-only placement inventory. Operator-level liveness is deliberately conservative.
 mod fields;
+mod finalizers;
 mod graph;
 mod terminal;
 use super::{Compiled, relational::Node};
@@ -73,6 +74,7 @@ pub struct Report {
     network_fallback_stages: Vec<String>,
     stages: Vec<Stage>,
     expressions: Vec<Expression>,
+    finalizers: Vec<finalizers::Finalizer>,
 }
 
 pub(super) fn analyze(compiled: &Compiled) -> Result<Report> {
@@ -126,7 +128,8 @@ pub(super) fn analyze(compiled: &Compiled) -> Result<Report> {
     }
     terminal::append(compiled, &mut expressions)?;
     Ok(Report {
-        revision: 2,
+        revision: 3,
+        finalizers: finalizers::analyze(&compiled.relational.nodes)?,
         analysis_only: true,
         dependency_precision: "exact_scalar_operands_and_row_preserving_lineage_with_conservative_stateful_barriers",
         context: "registered_source_and_terminal_semantic_environment",
@@ -136,5 +139,7 @@ pub(super) fn analyze(compiled: &Compiled) -> Result<Report> {
     })
 }
 
+#[cfg(test)]
+mod finalizers_tests;
 #[cfg(test)]
 mod tests;

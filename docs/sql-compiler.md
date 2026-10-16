@@ -1495,7 +1495,7 @@ establish compatibility with PostgreSQL's unconstrained numeric semantics.
 
 ## Expression placement report
 
-`pgderive query validate` includes a `placement` object with revision 2 and
+`pgderive query validate` includes a `placement` object with revision 3 and
 `report_only: true`. It is advisory and read-only: no execution path changes,
 new supported SQL, registration, slot creation or per-publication checks arise
 from producing this report. Diagnostics are excluded from executable plan identity
@@ -1521,11 +1521,32 @@ candidate marked as required. `field_consumers` separately records proven field
 uses: scalar operands (including all CASE conditions/results and COALESCE branches),
 predicates, join/group/distinct keys, aggregate arguments/filters, window order and
 navigation operands, and output operands. Lineage follows maps and rebind aliases
-through row-preserving nodes; packed join/aggregate/window state remains opaque.
+through row-preserving nodes; additive statistics/finalizer fields have explicit codec lineage; other packed
+join/window/ordered/distinct-membership state remains opaque.
 An empty list is not proof that no consumer exists beyond an opaque boundary.
 The conservative `consumers` closure and status remain the movement gate. Required
 local expressions explicitly retain full-tuple-state and evaluation/error proof
 obligations. Terminal `field_consumers` equals its exact consumer list.
+
+`finalizers` inventories existing additive `Finalize` stages. Each entry names its
+input stage, grouping fields, arbitrary-precision decimal state encoding, every
+field decoded/validated, and each output's value fields, SQL result OID and current
+encoding. COUNT reads a count value; SUM and AVG read count plus sum. All outputs
+still depend on whole-row validation and group presence. AVG's `sum_count_ratio`
+is an internal operand encoding, not a PostgreSQL numeric datum: the existing
+terminal conversion remains required. Codec field names/positions are shared with
+the runtime. This does not qualify ordered extrema/window finalizers for movement.
+
+The live PostgreSQL harness compares local CASE/COALESCE/cast values and overflow
+presence with PostgreSQL using bound input values. These comparisons include PostgreSQL's
+planning behavior; they do not assert which phase raises an error. A separate
+counterexample uses a physical fixture row to avoid planner-constant folding:
+a row filtered before `price+1` can
+avoid overflow, while a materialized computation before that filter errors.
+Unit fixtures pin finalizer width checks, NULLs, AVG ratios, whole-row validation
+and identical validation on positive and negative weights. These are bounded
+qualification evidence, not a general proof of error equivalence or SQLSTATE
+compatibility for arbitrary local expressions.
 
 Existing terminal expressions expose exact typed expression edges, native OIDs,
 source operand references, and all reachable output/predicate consumers. Their

@@ -61,7 +61,7 @@ struct Graph<'a> {
 }
 
 fn trace(index: usize, column: ColumnRef, consumer: &Consumer, uses: &mut Uses, graph: &Graph<'_>) {
-    let mut pending = vec![(index, column)];
+    let mut pending = vec![(index, column.name)];
     let mut visited = BTreeSet::new();
     while let Some((index, column)) = pending.pop() {
         if !visited.insert((index, column.clone())) {
@@ -70,27 +70,31 @@ fn trace(index: usize, column: ColumnRef, consumer: &Consumer, uses: &mut Uses, 
         let stage = &graph.stages[index];
         let columns = match &graph.nodes[index] {
             Node::Map { computed, .. } => {
-                if let Some(value) = computed.iter().find(|value| value.column.name == column.name)
-                {
-                    uses.entry(format!("local:{}:{}", stage.id, column.name))
+                if let Some(value) = computed.iter().find(|value| value.column.name == column) {
+                    uses.entry(format!("local:{}:{}", stage.id, column))
                         .or_default()
                         .insert(consumer.clone());
-                    value.expression.columns()
+                    value.expression.columns().into_iter().map(|column| column.name).collect()
                 } else {
                     vec![column]
                 }
             }
+            Node::Finalize { spec, .. } => super::finalizers::operands(spec, &column),
+            Node::Statistics { spec, .. } => super::finalizers::measurements(spec, &column)
+                .into_iter()
+                .map(|column| column.name)
+                .collect(),
             Node::Rebind { fields, .. } => fields
                 .iter()
-                .filter(|binding| binding.output.name == column.name)
-                .map(|binding| binding.input.clone())
+                .filter(|binding| binding.output.name == column)
+                .map(|binding| binding.input.name.clone())
                 .collect(),
             Node::Filter { .. }
             | Node::CrossKey { .. }
             | Node::EquijoinKey { .. }
             | Node::PartitionBy { .. }
             | Node::Output { .. } => vec![column],
-            // Do not infer field identity through packed aggregate/window/join state.
+            // Do not infer field identity through other packed aggregate/window/join state.
             _ => continue,
         };
         if let Some(input) = stage.inputs.first() {

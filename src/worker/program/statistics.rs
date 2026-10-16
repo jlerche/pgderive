@@ -1,14 +1,17 @@
 //! SQL sufficient statistics codec and terminal aggregate finalization.
 use super::relational::Key;
 use crate::{
-    compiler::partition::{Function, Mode, Partition},
+    compiler::partition::{
+        Function, Mode, Partition,
+        statistics::{count, field, sum, width},
+    },
     engine::dataflow::{Project, Statistics},
     transaction::Row,
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 pub(super) fn operator(spec: &Partition) -> Statistics<Key, Row> {
-    let width = 1 + spec.aggregates.len() * 2;
+    let width = width(spec.aggregates.len());
     let measured = spec.clone();
     let encoded = spec.clone();
     Statistics::new(
@@ -54,9 +57,6 @@ fn measure(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
         values.push(sum);
     }
     Ok(values)
-}
-fn field(index: usize) -> String {
-    format!("@statistic_{index}")
 }
 fn decode(row: &Row, width: usize) -> Result<Vec<BigInt>> {
     (0..width)
@@ -104,7 +104,7 @@ fn encode(spec: &Partition, key: &Key, values: &[BigInt]) -> Result<Option<Row>>
 pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
     let spec = spec.clone();
     Project::new(move |key: &Key, row: &Row| {
-        let values = decode(row, 1 + spec.aggregates.len() * 2)?;
+        let values = decode(row, width(spec.aggregates.len()))?;
         ensure!(validate(&values)?, "empty retained statistics");
         let Mode::Grouped { keys } = &spec.mode else {
             anyhow::bail!("statistics require grouped mode");
@@ -119,8 +119,8 @@ pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
             })
             .collect::<Result<Row>>()?;
         for (index, aggregate) in spec.aggregates.iter().enumerate() {
-            let count = &values[1 + index * 2];
-            let sum = &values[2 + index * 2];
+            let count = &values[count(index)];
+            let sum = &values[sum(index)];
             let value = match aggregate.function {
                 Function::Count | Function::CountDistinct => {
                     Some(i64::try_from(count).context("COUNT overflow")?.to_string())
@@ -156,3 +156,6 @@ pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
         Ok(Some((key.clone(), output)))
     })
 }
+
+#[cfg(test)]
+mod tests;

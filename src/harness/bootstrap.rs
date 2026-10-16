@@ -335,5 +335,6 @@ async fn snapshot_copy(
     export.close().await?;
     drop(reader);
     task.await.context("snapshot SQL driver failed")??;
+    super::evaluation::check(sql, &fixture.schema, &contract).await?;
     Ok((contract, model, batch))
 }

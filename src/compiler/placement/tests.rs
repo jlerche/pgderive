@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 
-fn contract() -> Contract {
+pub(super) fn contract() -> Contract {
     let column = |position, name: &str, oid| Column {
         position,
         name: name.into(),

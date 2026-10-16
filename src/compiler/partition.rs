@@ -1,4 +1,5 @@
 //! Typed partition aggregates and row-position window semantics.
+pub mod statistics;
 use super::{ColumnRef, Predicate};
 use serde::Serialize;
 #[derive(Clone, Serialize)]
