@@ -45,7 +45,7 @@ PGDERIVE_S3_LATENCY_SCALE="$crash_scale" run_qualification crashes python3 scrip
 while read -r qualification script; do
     if [[ "$profile" == core ]]; then
         case "$qualification" in
-            compiler|projection|functions|computed-join|environment|aggregate-inputs|relational|partition|numeric|native|navigation|case) ;;
+            compiler|application|projection|functions|computed-join|environment|aggregate-inputs|relational|partition|numeric|native|navigation|case) ;;
             *) continue ;;
         esac
     fi
@@ -53,6 +53,7 @@ while read -r qualification script; do
         python3 "scripts/${script}_harness.py" "$output/$qualification" -- "${worker[@]}"
 done <<'QUALIFICATIONS'
 compiler sql_compiler
+application application_portfolio
 projection projection_compiler
 functions functions_compiler
 environment environment
@@ -132,7 +133,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==240,results
+assert len(results)==252,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))

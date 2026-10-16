@@ -1,13 +1,24 @@
 # Controlled production release work
 
-The [PostgreSQL fidelity roadmap](postgres-fidelity-roadmap.md) defines the next
-semantic milestones and supersedes this document's public result-view target with
-a regular typed result table. Operational requirements below still apply.
+The [PostgreSQL fidelity roadmap](postgres-fidelity-roadmap.md) completed the
+M0–M4 structural baseline with ordinary typed result tables and in-engine
+computation. The [application qualification roadmap](application-qualification-roadmap.md)
+continues with M5–M9. The requirements below describe the release contract and
+remaining deployment qualification; they are not a list of wholly unimplemented features.
 
-The release target is a containerized worker per query on PostgreSQL 17, using the
-documented SQL subset, fixed source layouts and engine-owned results. Correctness
-qualification does not establish capacity or remote storage durability. These four
-slices must finish before declaring the release work complete.
+Bounded implementations and fixture qualification already cover query lifecycle,
+health and failure handling, TLS/storage configuration, deployment and recovery,
+and the Feldera audit. See [deployment](deployment.md), [health](worker-health.md),
+[backup/failover](backup-failover.md), [storage](storage-configuration.md), and the
+[pinned audit and implemented improvements](feldera-audit.md). M5 adds application
+composition evidence and a local release baseline. M6–M8 expand composition and
+measured scalability; M9 must qualify the actual provider, deployment and workload.
+Neither local fixture success nor a small release baseline establishes production
+capacity, cloud-provider durability or solved WAL retention.
+
+The release target remains a containerized worker per query on PostgreSQL 17,
+using the documented SQL subset, fixed source layouts and engine-owned results.
+The following requirements remain binding as that supported envelope expands.
 
 ## 1. Query lifecycle and application results
 

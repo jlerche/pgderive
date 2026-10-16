@@ -260,6 +260,16 @@ impl Writer {
         plan: &Plan,
         publication: Publication<'_>,
     ) -> Result<()> {
+        self.publish_timed(sql, plan, publication, false).await.map(|_| ())
+    }
+    pub(crate) async fn publish_timed(
+        &mut self,
+        sql: &mut Client,
+        plan: &Plan,
+        publication: Publication<'_>,
+        measured: bool,
+    ) -> Result<std::collections::BTreeMap<&'static str, u128>> {
+        let mut clock = crate::timing::Clock::new(measured);
         ensure!(!self.uncertain, "uncertain COMMIT must be reconciled before publication");
         let Publication { checkpoint, progress, deltas } = publication;
         checkpoint.validate(plan)?;
@@ -279,14 +289,22 @@ impl Writer {
         let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn AND binding=$7", self.catalog.schema),
             &[&self.catalog.query, &self.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.end.to_string(), &serde_json::to_value(&self.binding)?]).await?;
         ensure!(affected == 1, "stale or incompatible publication worker");
+        let membership = clock.lap();
         deltas.apply(&tx, &self.catalog, &self.binding.sink).await?;
+        let sink = clock.lap();
         self.commit(tx, "publication").await?;
+        let commit = clock.lap();
         self.epoch = epoch;
         self.time = checkpoint.time;
         self.end = progress.end;
         self.checkpoint = checkpoint.clone();
         self.last_commit = progress.commit;
         self.last_xid = Some(progress.xid);
-        Ok(())
+        Ok(if measured {
+            [("membership_layout_progress", membership), ("sink_dml", sink), ("commit", commit)]
+                .into()
+        } else {
+            std::collections::BTreeMap::new()
+        })
     }
 }

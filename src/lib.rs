@@ -13,6 +13,7 @@ mod semantics;
 pub mod source;
 mod storage;
 mod temporal;
+mod timing;
 mod transaction;
 mod weighted;
 pub mod worker;

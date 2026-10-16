@@ -43,11 +43,10 @@ output_entries = 250000
 catalog_schema = "pgderive_worker"
 query_id = "auction_totals"
 sink_table = "groups"
-# Optional typed SQL view: named output columns and duplicate rows from bag weights.
-# result_view = "auction_totals"
 object_prefix = "pgderive_worker" # Exclusively owned and stable across restarts.
 block_rows = 4096
 maintenance_ticks = 16
+phase_metrics = false # Opt-in execution boundary timings; see application qualification roadmap.
 retry_attempts = 8
 retry_delay_ms = 250
 startup_timeout_secs = 180

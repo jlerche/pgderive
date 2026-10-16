@@ -235,3 +235,5 @@ through duplicate collisions, NULL transitions, signed updates, filtered rows an
 object-backed cold restart. Reference PostgreSQL computations occur only in tests.
 The initialization catalog fingerprint includes these function families; existing
 registrations with the previous fingerprint require the normal explicit rebuild.
+
+The next milestones are tracked in the [M5–M9 application qualification and production roadmap](application-qualification-roadmap.md).

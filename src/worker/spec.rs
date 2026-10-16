@@ -84,6 +84,9 @@ pub struct Settings {
     /// Maximum startup/recovery duration before cancellation and authoritative retry.
     #[serde(default = "default_startup_timeout")]
     pub startup_timeout_secs: u64,
+    /// Opt-in execution-boundary timing; disabled by default.
+    #[serde(default)]
+    pub phase_metrics: bool,
     /// Diagnostic observation and physical WAL alerts.
     #[serde(default)]
     pub health: super::HealthPolicy,

@@ -124,6 +124,7 @@ async fn attempt(
     initial: (Session, &super::health::attempts::Ticket),
 ) -> Result<(u64, String)> {
     let ticket = initial.1;
+    let mut startup = crate::timing::Clock::new(settings.phase_metrics);
     let opening = Open::connect_with_session(config, settings, initial.0);
     let mut open = timeout(Duration::from_secs(settings.startup_timeout_secs), Box::pin(opening))
         .await
@@ -138,7 +139,9 @@ async fn attempt(
         "worker attempt ownership changed"
     );
     let result = async {
-        emit(&json!({"event":"ready","time":open.query.time(),"end_lsn":durable.end.to_string(),"epoch":durable.stored.epoch,"slot":open.replication.replication.slot}))?;
+        let mut ready = json!({"event":"ready","time":open.query.time(),"end_lsn":durable.end.to_string(),"epoch":durable.stored.epoch,"slot":open.replication.replication.slot});
+        if settings.phase_metrics { ready["open_recovery_us"] = serde_json::to_value(startup.lap())?; }
+        emit(&ready)?;
         tokio::select! {
             result = consume(&mut open, &mut stream, settings, stop, (base, metrics, &reporter)) => result,
             result = health.failed() => result,
@@ -205,7 +208,7 @@ async fn consume(
         count.2.record(open, "publishing")?;
         timeout(
             Duration::from_secs(settings.health.operation_timeout_secs),
-            publish(open, &transaction),
+            publish(open, &transaction, stream.decode_us()),
         )
         .await
         .context("worker publication timed out; recover authoritative progress without ACK")??;
@@ -214,35 +217,47 @@ async fn consume(
         count.1.failures = 0;
     }
 }
-async fn publish(open: &mut Open, transaction: &Transaction) -> Result<()> {
+async fn publish(open: &mut Open, transaction: &Transaction, decode_us: u128) -> Result<()> {
+    let measured = open.settings.phase_metrics;
+    let mut phases = super::measurements::Phases::new(measured);
     let started = Instant::now();
     let time = open.query.time().checked_add(1).context("worker logical time overflow")?;
     let token = format!("worker:{}:transaction:{time}", open.nonce);
     let protection = open.writer.protect_upload(&mut open.session.client, &token).await?;
-    let prepared = open
-        .query
-        .prepare_protected(runtime::inputs(&transaction.batch, &open.compiled, time)?, &protection)
-        .await?;
+    phases.mark("upload_reservation");
+    let input = runtime::inputs(&transaction.batch, &open.compiled, time)?;
+    phases.mark("inputs");
+    let prepared = open.query.prepare_protected(input, &protection).await?;
+    phases.mark("prepare_including_object_io");
     let checkpoint = open.query.prepared_checkpoint(&prepared)?;
     let deltas = prepared.deltas()?;
     let progress = Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
-    open.writer
-        .publish(
+    phases.mark("finalize");
+    let publication = open
+        .writer
+        .publish_timed(
             &mut open.session.client,
             open.query.plan(),
             Publication { checkpoint: &checkpoint, progress: &progress, deltas: &deltas },
+            measured,
         )
         .await?;
+    phases.mark("publication");
     open.query.commit(prepared)?;
     protection
         .published(&mut open.session.client, &open.writer, open.query.plan(), &checkpoint)
         .await?;
+    phases.mark("local_completion");
     let cache = open.query.cache_stats()?;
-    emit(
-        &json!({"event":"published","time":time,"end_lsn":transaction.end_lsn,"changes":transaction.changes.len(),"elapsed_ms":started.elapsed().as_millis(),"cache":{"bytes":cache.bytes,"entries":cache.entries,"live_bytes":cache.live_bytes,"pins":cache.pins,"hits":cache.hits,"misses":cache.misses}}),
-    )
+    let mut event = json!({"event":"published","time":time,"end_lsn":transaction.end_lsn,"changes":transaction.changes.len(),"elapsed_ms":started.elapsed().as_millis(),"cache":{"bytes":cache.bytes,"entries":cache.entries,"live_bytes":cache.live_bytes,"pins":cache.pins,"hits":cache.hits,"misses":cache.misses}});
+    if let Some(phases) = phases.finish(decode_us)? {
+        event["phases_us"] = phases;
+        event["publication_us"] = serde_json::to_value(publication)?;
+    }
+    emit(&event)
 }
 async fn maintain(open: &mut Open, settings: &Settings, metrics: &mut Metrics) -> Result<()> {
+    let mut clock = crate::timing::Clock::new(settings.phase_metrics);
     let runs = open.query.run_count();
     if u64::try_from(runs)? < settings.maintenance_ticks {
         return Ok(());
@@ -267,9 +282,11 @@ async fn maintain(open: &mut Open, settings: &Settings, metrics: &mut Metrics) -
     metrics.maintenance =
         metrics.maintenance.checked_add(1).context("worker maintenance metric overflow")?;
     ensure!(open.query.time() == checkpoint.time, "worker maintenance advanced time");
-    emit(
-        &json!({"event":"maintenance","time":open.query.time(),"epoch":open.writer.epoch(),"previous_runs":runs,"collection":format!("{collection:?}")}),
-    )
+    let mut event = json!({"event":"maintenance","time":open.query.time(),"epoch":open.writer.epoch(),"previous_runs":runs,"collection":format!("{collection:?}")});
+    if settings.phase_metrics {
+        event["elapsed_us"] = serde_json::to_value(clock.lap())?;
+    }
+    emit(&event)
 }
 pub(super) fn emit(event: &Value) -> Result<()> {
     let mut output = io::stdout().lock();

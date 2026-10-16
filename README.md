@@ -114,7 +114,7 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 87 worker cases:
+profile runs the complete low-level live PostgreSQL harness and 93 worker cases:
 result-table decoding/representation, semantic bindings, transaction faults,
 witnessed process kills, representative query families, lifecycle and rebuild.
 It disables synthetic S3 latency but keeps real PostgreSQL/object storage and
@@ -948,3 +948,14 @@ and rebuild each database afterward. A single database barrier cannot protect
 other databases or hosts. An interrupted rebuild from before maintenance can
 have an incompatible recorded signature; explicitly drop/recreate that pending
 query if ordinary rebuild cannot resume. Do not edit its journal to bypass this.
+
+The [application roadmap](docs/application-qualification-roadmap.md) continues
+with M5–M9. M5's finite account/ledger portfolio lives in
+`queries/application/portfolio.json`. The core gate runs one seed per recipe;
+full qualification runs two. Generated traces and native-MV/source-model evidence
+are retained alongside opt-in worker phase timings (`worker.phase_metrics=true`).
+Run `python3 scripts/application_baseline.py artifacts/application-baseline-NEW`
+against an owned fixture PostgreSQL port to build isolated uninstrumented release
+workers and collect the local baseline. This does not establish production capacity.
+Replay an artifact through a fresh proxy/output directory with
+`python3 scripts/run_with_s3_proxy.py OUTPUT python3 scripts/application_portfolio_harness.py OUTPUT --replay REPLAY.json -- WORKER_BINARY`.

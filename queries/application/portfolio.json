@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "accepted": [
+    {
+      "id": "catalog_cards",
+      "recipe": "projection",
+      "purpose": "UTF8 catalog labels and normalized label buckets"
+    },
+    {
+      "id": "order_totals",
+      "recipe": "group",
+      "purpose": "Nullable order summaries, distinct prices and exact retractions"
+    },
+    {
+      "id": "account_matches",
+      "recipe": "join",
+      "purpose": "Computed account keys with duplicate visible rows and simultaneous changes"
+    },
+    {
+      "id": "optional_matches",
+      "recipe": "left",
+      "purpose": "Optional accounts and post-join NULL predicates"
+    },
+    {
+      "id": "cohort_summary",
+      "recipe": "derived",
+      "purpose": "Filter independently maintained grouped cohort results"
+    },
+    {
+      "id": "running_balance",
+      "recipe": "window",
+      "purpose": "Revisable bounded running balances with explicit occurrence order"
+    }
+  ],
+  "rejected": [
+    {
+      "id": "global_count",
+      "sql": "SELECT COUNT(*) AS n FROM {schema}.entry",
+      "blocker": "ungrouped aggregate seeding",
+      "diagnostic": "function count is not available in-engine",
+      "diagnostic_gap": "reports aggregate placement as function availability"
+    },
+    {
+      "id": "computed_window",
+      "sql": "SELECT id,SUM(abs(amount)) OVER(PARTITION BY account_id ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS total FROM {schema}.entry",
+      "blocker": "frame-aware computed window inputs (M6)",
+      "diagnostic": "scalar/series modifiers unsupported",
+      "diagnostic_gap": "fallback obscures frame-aware argument rejection"
+    },
+    {
+      "id": "derived_average",
+      "sql": "SELECT d.v FROM (SELECT account_id,AVG(amount) AS v FROM {schema}.entry GROUP BY account_id) d",
+      "blocker": "intermediate aggregate finalization (M6)",
+      "diagnostic": "unfinalized"
+    },
+    {
+      "id": "computed_outer",
+      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON abs(a.id)=abs(b.account_id)",
+      "blocker": "computed outer ON evaluation domains (M6)",
+      "diagnostic": "computed outer"
+    },
+    {
+      "id": "numeric_abs",
+      "sql": "SELECT abs(amount::numeric) AS amount FROM {schema}.entry",
+      "blocker": "numeric ABS overload (function backlog)",
+      "diagnostic": "overload"
+    },
+    {
+      "id": "locale_label",
+      "sql": "SELECT lower(label) AS label FROM {schema}.account",
+      "blocker": "locale-sensitive text kernel (function backlog)",
+      "diagnostic": "not available in-engine"
+    }
+  ]
+}

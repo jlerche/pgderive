@@ -4,6 +4,7 @@ mod drive;
 mod health;
 mod lifecycle;
 pub use health::Policy as HealthPolicy;
+mod measurements;
 mod open;
 mod program;
 mod registration;

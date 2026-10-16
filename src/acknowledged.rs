@@ -18,6 +18,8 @@ pub struct Stream {
     received: Lsn,
     change_limit: usize,
     durable: Durable,
+    measured: bool,
+    decode_us: u128,
 }
 impl Stream {
     /// Caller cold-restores the compatible engine before connecting.
@@ -66,33 +68,49 @@ impl Stream {
             received: durable.end,
             change_limit: config.listener.max_transaction_changes,
             durable: durable.clone(),
+            measured: config.worker.as_ref().is_some_and(|worker| worker.phase_metrics),
+            decode_us: 0,
         })
     }
     pub(crate) async fn recv(&mut self) -> Result<Transaction> {
         loop {
-            match self.client.recv().await?.context("durable source stream ended")? {
-                ReplicationEvent::Begin { xid, .. } => self.decoder.begin(xid)?,
-                ReplicationEvent::XLogData { data, .. } => self
-                    .decoder
-                    .message(&LogicalReplicationMessage::parse(&data)?, self.change_limit)?,
-                ReplicationEvent::Commit { lsn, end_lsn, .. } => {
-                    let transaction = self.decoder.commit(lsn.to_string(), end_lsn.to_string())?;
-                    self.received = self.received.max(transaction.end_lsn.parse()?);
-                    let progress = crate::catalog::Progress::new(
-                        transaction.xid,
-                        &transaction.commit_lsn,
-                        &transaction.end_lsn,
-                    )?;
-                    if self.durable.covers(&progress)? {
-                        continue;
-                    }
-
-                    return Ok(transaction);
-                }
-                ReplicationEvent::KeepAlive { .. } => {}
-                other => bail!("unsupported durable replication event: {other:?}"),
+            let event = self.client.recv().await?.context("durable source stream ended")?;
+            if matches!(event, ReplicationEvent::Begin { .. }) {
+                self.decode_us = 0;
+            }
+            let mut clock = crate::timing::Clock::new(self.measured);
+            let result = self.event(event)?;
+            self.decode_us = self.decode_us.saturating_add(clock.lap());
+            if let Some(transaction) = result {
+                return Ok(transaction);
             }
         }
+    }
+    pub(crate) const fn decode_us(&self) -> u128 {
+        self.decode_us
+    }
+    fn event(&mut self, event: ReplicationEvent) -> Result<Option<Transaction>> {
+        match event {
+            ReplicationEvent::Begin { xid, .. } => self.decoder.begin(xid)?,
+            ReplicationEvent::XLogData { data, .. } => self
+                .decoder
+                .message(&LogicalReplicationMessage::parse(&data)?, self.change_limit)?,
+            ReplicationEvent::Commit { lsn, end_lsn, .. } => {
+                let transaction = self.decoder.commit(lsn.to_string(), end_lsn.to_string())?;
+                self.received = self.received.max(transaction.end_lsn.parse()?);
+                let progress = crate::catalog::Progress::new(
+                    transaction.xid,
+                    &transaction.commit_lsn,
+                    &transaction.end_lsn,
+                )?;
+                if !self.durable.covers(&progress)? {
+                    return Ok(Some(transaction));
+                }
+            }
+            ReplicationEvent::KeepAlive { .. } => {}
+            other => bail!("unsupported durable replication event: {other:?}"),
+        }
+        Ok(None)
     }
     pub(crate) async fn acknowledge(
         &mut self,
