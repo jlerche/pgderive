@@ -117,12 +117,12 @@ class TemporalFixture(SqlFixture):
                 prices = [row['price'] for row in rows if row['price'] is not None]
                 bands = [sum(p<10000 for p in prices),sum(10000<=p<1000000 for p in prices),sum(p>=1000000 for p in prices)]
                 memory[(auction,encode(day,self.instant),len(rows),*bands,min(prices) if prices else None,max(prices) if prices else None,average(prices),sum(prices) if prices else None)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent temporal/statistics oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 
     def bag(self):
-        return self.sql(f'SELECT jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple) FROM {self.name}.groups')
+        return self.sql(f'SELECT jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple) FROM {self.bag_relation()}')
 
 
 def qualify(output,command,query,instant):

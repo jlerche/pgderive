@@ -46,7 +46,7 @@ class TopKFixture(SqlFixture):
                 value=row['price']
                 if self.temporal and value is not None:value=value.replace(' ','T')
                 if position<=self.limit and (self.mode!='equality' or position==3):oracle[(key,value)]+=1
-        actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(oracle),(actual,oracle)
         assert self.acknowledgement_ahead().strip()=='0'
 

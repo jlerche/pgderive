@@ -111,7 +111,7 @@ class NavigationFixture(NativeFixture):
                             value = default
                     outputs.append(value)
                 memory[(row['id'],)+tuple(outputs)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"), parse_float=Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=Decimal)
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
         assert self.acknowledgement_ahead().strip() == '0'
 

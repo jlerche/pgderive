@@ -147,7 +147,7 @@ async fn activate(
         deltas: &deltas,
         source: contract,
         boundary,
-        sink: crate::catalog::Sink::Bag("snapshot_groups".into()),
+        sink: crate::catalog::Sink::Json("snapshot_groups".into()),
     };
     activation::check(sql, catalog, graph.plan(), snapshot, config).await?;
     graph.commit(prepared)?;
@@ -202,7 +202,7 @@ async fn catch_up(
     let expected = format!(
         "SELECT jsonb_build_array('',jsonb_build_object('category',a.category::text,'count',COUNT(*)::text,'sum',(SUM(b.price)::bigint)::text)),1::bigint FROM {schema}.auction a JOIN {schema}.bid b ON a.id=b.auction GROUP BY a.category"
     );
-    let different: bool = sql.query_one(&format!("SELECT EXISTS((SELECT tuple,weight FROM {schema}.snapshot_groups EXCEPT {expected}) UNION ALL ({expected} EXCEPT SELECT tuple,weight FROM {schema}.snapshot_groups))"),&[]).await?.try_get(0)?;
+    let different: bool = sql.query_one(&format!("SELECT EXISTS((SELECT tuple,count(*)::bigint weight FROM {schema}.snapshot_groups GROUP BY tuple EXCEPT {expected}) UNION ALL ({expected} EXCEPT SELECT tuple,count(*)::bigint weight FROM {schema}.snapshot_groups GROUP BY tuple))"),&[]).await?.try_get(0)?;
     ensure!(!different, "snapshot/CDC sink differs from SQL");
     Ok(transaction)
 }

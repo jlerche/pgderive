@@ -51,7 +51,7 @@ class Q15Fixture(NativeFixture):
             for field in range(3):
                 output.extend(value[field] for value in all_counts)
             memory[tuple(output)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory),'q15 output differs from independent UTC-day/value-presence oracle'
         assert self.acknowledgement_ahead().strip() == '0'
 

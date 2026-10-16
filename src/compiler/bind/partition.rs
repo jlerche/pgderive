@@ -132,7 +132,7 @@ fn build(
     let sources = vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }];
     let mut relational = Relational { sources, nodes, output };
     composition::lower_source_filter(&mut relational, predicates)?;
-    Ok(Compiled { relational })
+    Ok(Compiled { result_columns: Vec::new(), relational })
 }
 fn source_predicate(
     predicate: Option<crate::compiler::syntax::Expr>,

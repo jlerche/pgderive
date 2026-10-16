@@ -50,6 +50,7 @@ impl QueryDefinition {
     ) -> Result<crate::compiler::Compiled> {
         let mut compiled = self.compile(contract)?;
         compiled.bind_terminal(sql).await?;
+        compiled.result_columns = super::results::columns(sql, self).await?;
         if let Self::Sql(query) = self {
             // Parse/Describe does not run the planner. Planning the validated,
             // closed SELECT catches immutable constant errors before registration.
@@ -74,11 +75,8 @@ pub struct Settings {
     pub catalog_schema: String,
     /// Stable registered query name.
     pub query_id: String,
-    /// Owned weighted-bag destination table inside the catalog schema.
+    /// Owned ordinary typed result table inside the catalog schema.
     pub sink_table: String,
-    /// Optional application-facing typed bag view, distinct from the internal sink.
-    #[serde(default)]
-    pub result_view: Option<String>,
     /// Exclusively owned durable object-store prefix, reused across resumes.
     pub object_prefix: String,
     /// Maximum rows in one immutable data block.
@@ -109,13 +107,7 @@ impl Settings {
             !self.query_id.is_empty() && self.query_id.len() <= 200,
             "invalid worker query name"
         );
-        crate::catalog::Sink::Bag(self.sink_table.clone()).validate()?;
-        if let Some(view) = &self.result_view {
-            ensure!(
-                identifier(view) && !view.starts_with("pgderive_") && view != &self.sink_table,
-                "invalid, reserved or conflicting result view"
-            );
-        }
+        crate::catalog::Sink::Json(self.sink_table.clone()).validate()?;
         ensure!(
             !self.object_prefix.is_empty()
                 && self.object_prefix.len() <= 200

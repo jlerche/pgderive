@@ -42,7 +42,7 @@ class NumericFixture(PartitionFixture):
             expected_memory = self.group_key_memory(source)
         else:
             expected_memory = self.aggregate_memory(source)
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"), parse_float=decimal.Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=decimal.Decimal)
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == expected_memory, 'numeric differs from independent Decimal raw-row oracle'
         assert self.acknowledgement_ahead().strip() == '0'
 

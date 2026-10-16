@@ -35,7 +35,7 @@ class RelationalFixture(SqlFixture):
                     category = None if category is None else len(category)
                     price = None if price is None else abs(price)
                 expected[(a['group_id'], category, price, a['enabled'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected)
         beyond = self.acknowledgement_ahead()
         assert beyond.strip() == '0'
@@ -61,7 +61,7 @@ def qualify(output, command, terminal):
             f"DELETE FROM {fixture.name}.bid WHERE id=102",  # null key empty output tick
         ]
         def initial():
-            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups')) > 1
+            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}')) > 1
         fixture.run_history(command, History(
             changes=changes,
             final=f'UPDATE {fixture.name}.bid SET price=NULL WHERE id=2',

@@ -22,8 +22,8 @@ pub(super) async fn check(
     advance(&mut checkpoint);
     let batch = Batch::from_updates([
         ((1, "a".to_owned()), 2),
-        ((1, "b".to_owned()), -3),
-        ((2, "c".to_owned()), i64::MAX),
+        ((1, "b".to_owned()), 3),
+        ((2, "c".to_owned()), 4),
     ])?;
     let deltas = Deltas::bag(&batch)?;
     writer
@@ -38,11 +38,11 @@ pub(super) async fn check(
         )
         .await?;
     advance(&mut checkpoint);
-    overflow(sql, &mut writer, &checkpoint, Contract { catalog: &catalog, plan, schema }).await?;
+    underflow(sql, &mut writer, &checkpoint, Contract { catalog: &catalog, plan, schema }).await?;
     let delta = Deltas::bag(&Batch::from_updates([
         ((1, "a".to_owned()), -1),
-        ((1, "b".to_owned()), 1),
-        ((2, "c".to_owned()), -i64::MAX),
+        ((1, "b".to_owned()), -1),
+        ((2, "c".to_owned()), -4),
     ])?)?;
     writer
         .publish(
@@ -56,17 +56,15 @@ pub(super) async fn check(
         )
         .await?;
     let rows = sql
-        .query(&format!("SELECT tuple,weight FROM {schema}.coefficient_bag ORDER BY tuple"), &[])
+        .query(&format!("SELECT tuple,count(*)::bigint weight FROM {schema}.coefficient_bag GROUP BY tuple ORDER BY tuple"), &[])
         .await?;
     ensure!(
-        rows.len() == 2
-            && rows[0].try_get::<_, i64>(1)? == 1
-            && rows[1].try_get::<_, i64>(1)? == -2,
+        rows.len() == 2 && rows[0].try_get::<_, i64>(1)? == 1 && rows[1].try_get::<_, i64>(1)? == 2,
         "bag sink lost same-key full identity/multiplicity"
     );
     advance(&mut checkpoint);
     let delta =
-        Deltas::bag(&Batch::from_updates([((1, "a".to_owned()), -1), ((1, "b".to_owned()), 2)])?)?;
+        Deltas::bag(&Batch::from_updates([((1, "a".to_owned()), -1), ((1, "b".to_owned()), -2)])?)?;
     writer
         .publish(
             sql,
@@ -85,7 +83,9 @@ pub(super) async fn check(
             == 0,
         "bag zero coefficients were retained"
     );
-    eprintln!("MVP full-tuple bag multiplicity, cancellation and overflow rollback passed");
+    eprintln!(
+        "MVP full-tuple result occurrences, cancellation and negative multiplicity rollback passed"
+    );
     Ok(())
 }
 pub(super) fn advance(checkpoint: &mut Checkpoint) {
@@ -101,13 +101,14 @@ struct Contract<'a> {
     plan: &'a Plan,
     schema: &'a str,
 }
-async fn overflow(
+async fn underflow(
     sql: &mut Client,
     writer: &mut Writer,
     checkpoint: &Checkpoint,
     contract: Contract<'_>,
 ) -> Result<()> {
-    let overflow = Deltas::bag(&Batch::from_updates([((2, "c".to_owned()), 1)])?)?;
+    let underflow =
+        Deltas::bag(&Batch::from_updates([((1, "a".to_owned()), 1), ((2, "c".to_owned()), -5)])?)?;
     ensure!(
         writer
             .publish(
@@ -116,29 +117,29 @@ async fn overflow(
                 Publication {
                     checkpoint,
                     progress: &Progress::new(2, "0/3", "0/4")?,
-                    deltas: &overflow
+                    deltas: &underflow
                 }
             )
             .await
             .is_err(),
-        "bag sink accepted final coefficient overflow"
+        "result sink accepted negative final multiplicity"
     );
     let unchanged =
         contract.catalog.load(sql, contract.plan).await?.context("missing coefficient catalog")?;
     ensure!(
         unchanged.epoch == 2 && unchanged.checkpoint.time == 1 && writer.end().to_string() == "0/2",
-        "overflow changed durable bag boundary"
+        "underflow changed durable bag boundary"
     );
     let row = sql
         .query_one(
             &format!(
-                "SELECT weight FROM {}.coefficient_bag WHERE tuple='[2,\"c\"]'::jsonb",
+                "SELECT count(*) FROM {}.coefficient_bag WHERE tuple='[2,\"c\"]'::jsonb",
                 contract.schema
             ),
             &[],
         )
         .await?;
-    ensure!(row.try_get::<_, i64>(0)? == i64::MAX, "overflow changed sink coefficient");
+    ensure!(row.try_get::<_, i64>(0)? == 4, "underflow changed sink coefficient");
     Ok(())
 }
 
@@ -149,7 +150,7 @@ async fn writer(sql: &mut Client, catalog: &Catalog, plan: &Plan) -> Result<Writ
             plan,
             Binding {
                 source: "isolated destination arithmetic".into(),
-                sink: Sink::Bag("coefficient_bag".into()),
+                sink: Sink::Json("coefficient_bag".into()),
             },
             "0/0".parse()?,
         )

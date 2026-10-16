@@ -51,7 +51,7 @@ class BindingFixture(Fixture):
             'progress',(SELECT to_jsonb(p)-'fence' FROM {self.name}.pgderive_progress p),
             'queries',(SELECT jsonb_agg(to_jsonb(q) ORDER BY query_id) FROM {self.name}.pgderive_queries q),
             'members',(SELECT jsonb_agg(to_jsonb(a) ORDER BY query_id,arrangement_id) FROM {self.name}.pgderive_arrangements a),
-            'sink',(SELECT jsonb_agg(to_jsonb(g) ORDER BY tuple) FROM {self.name}.groups g))''')
+            'sink',(SELECT jsonb_agg(to_jsonb(g) ORDER BY tuple) FROM {self.bag_relation()} g))''')
 
     def failed(self, worker, label):
         worker.process.wait(timeout=60)

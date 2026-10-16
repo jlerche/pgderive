@@ -119,8 +119,10 @@ impl Terminal {
         // Only closed tuple-local forms render here; calendar formats have fixed
         // fields and an attested UTC context. Relation reads, clocks and SRFs do not.
         let (columns, predicate) = self.program.render(&self.types)?;
+        // JSONB equality alone ignores numeric display scale. Preserve the
+        // binary representation too, including same-value scale-only updates.
         let query = format!(
-            "WITH raw AS (SELECT value->0 tuple,(value->>1)::bigint weight FROM pg_catalog.jsonb_array_elements($1)), mapped AS (SELECT pg_catalog.jsonb_build_array(NULL,pg_catalog.jsonb_build_array({columns})) tuple,weight FROM raw WHERE {predicate}) SELECT tuple,pg_catalog.sum(weight)::text FROM mapped GROUP BY tuple HAVING pg_catalog.sum(weight)<>0"
+            "WITH raw AS (SELECT value->0 tuple,(value->>1)::bigint weight FROM pg_catalog.jsonb_array_elements($1)), mapped AS (SELECT pg_catalog.jsonb_build_array(NULL,pg_catalog.jsonb_build_array({columns})) tuple,weight FROM raw WHERE {predicate}) SELECT tuple,pg_catalog.sum(weight)::text FROM mapped GROUP BY tuple,pg_catalog.jsonb_send(tuple) HAVING pg_catalog.sum(weight)<>0"
         );
         let input = json!(rows);
         let parameters = json!(&self.program);

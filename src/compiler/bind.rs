@@ -195,7 +195,7 @@ pub(super) fn legacy(selectors: Query, contract: &Contract) -> Result<Compiled> 
     let sources = [left, right]
         .map(|relation| Source { schema: relation.schema.clone(), table: relation.table.clone() })
         .into();
-    Ok(Compiled { relational: Relational { sources, nodes, output } })
+    Ok(Compiled { result_columns: Vec::new(), relational: Relational { sources, nodes, output } })
 }
 
 fn grouped_column(relation: &Relation, source: usize, name: &str) -> Result<ColumnRef> {

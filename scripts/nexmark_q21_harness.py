@@ -63,7 +63,7 @@ class Q21Fixture(SqlFixture):
             selected = channel_id(row['channel'],row['url'])
             if selected is not None:
                 memory[(row['auction'],row['bidder'],row['price'],row['channel'],selected)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q21 differs from independent ASCII and delimiter scanner oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 
@@ -92,7 +92,7 @@ def qualify(output,command,mode):
             f"UPDATE {name}.auction SET group_id=NULL WHERE id=2",
         ]
         def initial():
-            assert fixture.sql(f'SELECT max(weight)>1 FROM {name}.groups').strip()=='t'
+            assert fixture.sql(f'SELECT max(weight)>1 FROM {fixture.bag_relation()}').strip()=='t'
             fixture.sql(f'BEGIN; DELETE FROM {name}.bid; ROLLBACK')
         fixture.run_history(command, History(
             changes=changes,

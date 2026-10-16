@@ -83,7 +83,7 @@ impl PublicationFixture {
 
 pub(super) async fn require_synchronous_commit(sql: &Client, schema: &str) -> Result<()> {
     sql.batch_execute(&format!("CREATE FUNCTION {schema}.assert_sync_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF current_setting('synchronous_commit') <> 'on' THEN RAISE EXCEPTION 'publication did not enable synchronous commit'; END IF; RETURN NULL; END $$;
-        CREATE TRIGGER assert_sync_commit BEFORE INSERT OR UPDATE OR DELETE ON {schema}.derived_groups FOR EACH STATEMENT EXECUTE FUNCTION {schema}.assert_sync_commit();
+        CREATE TRIGGER assert_sync_commit BEFORE INSERT OR UPDATE OR DELETE ON {schema}.pgderive_progress FOR EACH STATEMENT EXECUTE FUNCTION {schema}.assert_sync_commit();
         SET synchronous_commit=off")).await?;
     Ok(())
 }

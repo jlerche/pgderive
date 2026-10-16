@@ -1,5 +1,5 @@
 //! Journaled query removal; reader roots remain protected after membership retirement.
-use super::{results, spec::Settings, sql::Session};
+use super::{spec::Settings, sql::Session};
 use crate::{
     Config,
     catalog::{Catalog, GcLimits, Sink},
@@ -18,7 +18,6 @@ struct Removal {
     sink: Sink,
     sink_oid: Option<u32>,
     prefix: String,
-    view: Option<String>,
     finished: bool,
 }
 
@@ -126,32 +125,9 @@ async fn load_removal(sql: &Client, settings: &Settings) -> Result<Removal> {
                 && relation.table == sink.table()),
         "removal destination is a source table"
     );
-    let views = format!("{}.pgderive_result_views", settings.catalog_schema);
-    let exists: bool = sql
-        .query_one("SELECT pg_catalog.to_regclass($1) IS NOT NULL", &[&views])
-        .await?
-        .try_get(0)?;
-    let view = if exists {
-        sql.query_opt(
-            &format!("SELECT view_name FROM {views} WHERE query_id=$1"),
-            &[&settings.query_id],
-        )
-        .await?
-        .map(|row| row.try_get(0))
-        .transpose()?
-    } else {
-        None
-    };
     let sink_oid = owned_sink(sql, settings, &source, &sink).await?;
-    let removal = Removal {
-        version: 1,
-        source,
-        sink,
-        sink_oid,
-        prefix: row.try_get(3)?,
-        view,
-        finished: false,
-    };
+    let removal =
+        Removal { version: 1, source, sink, sink_oid, prefix: row.try_get(3)?, finished: false };
     Ok(removal)
 }
 
@@ -242,9 +218,6 @@ async fn finish(sql: &mut Client, settings: &Settings, removal: &Removal) -> Res
     let tx = sql.transaction().await?;
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
     barrier(&tx, settings).await?;
-    if let Some(view) = &removal.view {
-        results::remove(&tx, settings, view).await?;
-    }
     if let Some(oid) = removal.sink_oid {
         let catalog = Catalog::new(&settings.catalog_schema, &settings.query_id)?;
         tx.batch_execute(&format!(

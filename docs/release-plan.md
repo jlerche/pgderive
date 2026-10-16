@@ -16,11 +16,12 @@ restart, rebuild and drop. Validation resolves the actual catalog and binds
 terminal functions without installing metadata or creating a slot. Report native
 output names/types and the executable plan identity. Creation and restart reuse
 the existing journal and worker. Results expose correctly typed named PostgreSQL
-columns and expand positive bag multiplicities; retain weighted internal storage.
+columns with physical query-produced occurrences; weighted state remains in the
+engine/object store.
 Reject ambiguous/duplicate public column labels with actionable diagnostics.
 
 Rebuild must bootstrap a fresh query generation and object namespace, then switch
-the public result view atomically after activation. Preserve the old result until
+the public result table contents atomically after activation. Preserve the old result until
 the replacement is ready; interrupted operations must be restartable. Drop must
 take the same exclusive ownership lock, validate journaled resources and respect
 reader/upload pins. Retire resources in recoverable phases rather than deleting

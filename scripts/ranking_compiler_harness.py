@@ -51,7 +51,7 @@ class RankingFixture(SqlFixture):
                     preceding = sum(other['price'] is None or (price is not None and other['price'] > price) for other in group if other['price'] != price)
                     ranks = (preceding + 1, len(distinct))
                 memory[prefix + ranks] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
         assert self.acknowledgement_ahead().strip() == '0'
 

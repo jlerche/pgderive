@@ -29,14 +29,25 @@ binds the independently journaled physical slot. `query status` reports whether
 the query is unregistered, registered or activated and its exact durable progress.
 Activation alone does not establish current worker readiness or freshness.
 
-Set `worker.result_view = "auction_totals"` to expose an application-facing SQL
-view in the owned catalog schema. It presents named native columns, preserves
-output type modifiers and collations, and expands committed positive bag weights
-into duplicate rows. NULL values remain NULL. The weighted sink remains internal;
-applications can `SELECT` the result view normally. Output labels must be unique
-and fit PostgreSQL's identifier limit; add explicit aliases when needed. Restart
-rejects a changed or externally altered result view. Source/application tables
-and external writers remain outside the worker's ownership.
+`worker.sink_table` names the ordinary typed result table in the owned catalog
+schema. Its columns match the query output names, native types, modifiers and
+collations. It contains exactly the query's row occurrences: duplicates and NULLs
+appear only when produced by the query. There is no expanding SQL view, persisted
+weight column or PostgreSQL table of internal engine tuples. Weighted arrangements
+and retained operands remain in the engine and object storage. Output labels must
+be unique and fit PostgreSQL's identifier limit; add explicit aliases when needed.
+Restart rejects an altered or unlogged result table. External writes, triggers, RLS, rules and
+administrative changes while a worker runs are unsupported. Do not grant consumers
+write access. The table uses `REPLICA IDENTITY FULL` and may be published separately
+for downstream logical replication; never include it in the source publication.
+
+The removed `worker.result_view` option and old weighted-sink bindings are rejected.
+This is a storage-format break, not an automatic migration. Quiesce the old worker,
+use its original binary/configuration to retire its owned resources, and register
+with this version in a fresh owned catalog namespace/object prefix. Preserve any
+needed old result snapshot before retirement. Recreate downstream publications and
+resnapshot consumers when a table is replaced; a new relation OID is not a
+continuation of an existing logical-replication stream.
 
 `query create` requires an unregistered query; `query restart` requires an
 existing registration. Both hold exclusive query ownership across that check
@@ -46,7 +57,7 @@ listener's original `cargo run -- config.local.toml` interface remains available
 
 `query drop CONFIG.toml` takes exclusive query ownership, journals removal intent,
 fences prior writers and removes the exact registered physical slot. It retires
-the public view, internal sink and query membership transactionally, then runs
+the result table and query membership transactionally, then runs
 pin-aware garbage collection. Repeat `drop` after an interrupted or uncertain
 operation; `status` distinguishes `dropping` and `dropped`. External reader pins
 retain their objects until released. Source tables and dependent application
@@ -56,10 +67,11 @@ retrying the requested drop. Restart cannot recreate removed state. Explicit
 
 `query rebuild CONFIG.toml` validates the current SQL before reserving a fresh
 physical generation and bootstrapping a consistent snapshot. The public result
-view and active generation switch in one PostgreSQL transaction; the old result
+table contents and active generation switch in one PostgreSQL transaction; the old result
 remains visible until that transaction commits. Compatible columns preserve the
-view OID and consumers. Incompatible names/types/modifiers/collations require a
-replacement view, and PostgreSQL dependency checks can reject that switch.
+table OID and consumers, which observe the committed DELETE/INSERT replacement.
+Incompatible names/types/modifiers/collations require explicit drop/create and
+a downstream consumer resnapshot.
 The old generation then retires through the same pin-aware removal protocol.
 Rebuild finishes with the replacement activated but stopped; use `query restart`
 to start consuming changes. Source tables are never reset.
@@ -503,7 +515,7 @@ publication. Missing, extra, duplicate, or differently timed state fails without
 moving visibility. `plan::relational::Relational<K,V>` is the common executor for
 source projections, joins, grouped aggregates, and ordered/window compositions.
 The compiler lowers SQL and selector configurations to one relational IR; worker
-execution has one runtime and weighted-bag destination encoding. The live harness
+execution has one runtime and an ordinary typed occurrence destination. The live harness
 uses the same executor with independent domain adapters and memory/SQL oracles.
 A separate three-source chained-join test checks simultaneous input changes
 against full bag recomputation. Source transactions still determine acyclic
@@ -805,17 +817,25 @@ See [storage configuration](docs/storage-configuration.md) for configuration and
 the qualification boundary; no cloud provider has been qualified.
 
 The worker imports an exported snapshot, atomically activates object membership,
-the weighted-bag destination and source boundary, then consumes complete source
+the typed result table and source boundary, then consumes complete source
 transactions. Both join inputs may change together. Group keys preserve NULL;
 COUNT(*) counts matches and integral SUM ignores NULL measures. Every source
-transaction publishes immutable objects before committing membership, sink DML
+transaction publishes immutable objects before committing result DML, membership
 and progress together. Only authoritative publication permits slot feedback.
-The destination columns are `tuple` (JSONB) and nonzero signed `weight` (bigint).
-The tuple contains the ordered native output cells, preserving NULL and duplicate
-column positions. Selector configurations and the bounded SQL frontend described
-in [the compiler contract](docs/sql-compiler.md) both lower to the same relational
-IR and executor. Application-facing result views decode this bag into typed SQL
-columns and expand positive row multiplicity.
+Selector configurations and the bounded SQL frontend described in
+[the compiler contract](docs/sql-compiler.md) lower to the same relational IR and
+executor. PostgreSQL stores user-visible result rows and coordination metadata;
+weighted result/operand state is engine-owned and object-backed.
+
+The first occurrence publisher limits bootstrap/incremental deltas to 1,000,000 inserted/deleted
+rows, rejecting larger work without advancing progress. It issues DML per distinct
+delta tuple, expands inserts in SQL, and deletes an exact bounded number of
+occurrences using transaction-local CTIDs. Native binary comparison preserves
+representation distinctions such as numeric display scale. Retraction currently
+scans the result table; it does not create a fine-grained index or occurrence map
+in PostgreSQL. Compatible rebuild cutover rewrites the complete public result
+with DELETE/INSERT and is separate from this per-delta limit. This is a correctness
+baseline, not a large-result performance claim.
 
 The configured slot is a logical alias. A synchronous PostgreSQL registration
 journal records an unpredictable physical slot name before creating it. Restart

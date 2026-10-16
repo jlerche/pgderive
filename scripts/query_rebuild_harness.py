@@ -30,7 +30,7 @@ def verify(fixture, labels):
         fixture.native_oracle_ready = False
     native_expected(fixture, labels)
     oracle = fixture.name+'.pgderive_native_oracle'
-    result = fixture.name+'.result'
+    result = fixture.name+'.groups'
     assert fixture.sql(f'''SELECT count(*) FROM
         ((SELECT * FROM {oracle} EXCEPT ALL SELECT * FROM {result}) UNION ALL
          (SELECT * FROM {result} EXCEPT ALL SELECT * FROM {oracle})) d''').strip() == '0'
@@ -96,8 +96,8 @@ def qualify(output, binary):
         first = worker.event('ready')
         verify(fixture,labels)
         worker.finish(graceful=True)
-        oid = fixture.sql(f"SELECT '{fixture.name}.result'::regclass::oid").strip()
-        fixture.sql(f'CREATE VIEW {fixture.name}.consumer AS SELECT * FROM {fixture.name}.result')
+        oid = fixture.sql(f"SELECT '{fixture.name}.groups'::regclass::oid").strip()
+        fixture.sql(f'CREATE VIEW {fixture.name}.consumer AS SELECT * FROM {fixture.name}.groups')
         fixture.sql(f'''BEGIN; UPDATE {fixture.name}.bid SET price=NULL WHERE id=1;
             UPDATE {fixture.name}.auction SET category='changed' WHERE id=1;
             DELETE FROM {fixture.name}.bid WHERE id=2; COMMIT''')
@@ -107,7 +107,7 @@ def qualify(output, binary):
         assert rebuilt['lifecycle']['phase'] == 'Active'
         assert rebuilt['lifecycle']['retired'] == []
         verify_pins(fixture,roots)
-        assert fixture.sql(f"SELECT '{fixture.name}.result'::regclass::oid").strip() == oid
+        assert fixture.sql(f"SELECT '{fixture.name}.groups'::regclass::oid").strip() == oid
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{first['slot']}'").strip() == '0'
         verify(fixture,labels)
         resumed_dir = output/'resumed'
@@ -143,7 +143,15 @@ def qualify(output, binary):
         rejected(binary,fixture,'rebuild',config)
         config.write_text(original)
         fixture.sql(f'DROP VIEW {fixture.name}.consumer')
-        command(fixture,binary,'rebuild',config)
+        # Incompatible native schemas require an explicit consumer resnapshot.
+        rejected(binary,fixture,'rebuild',config)
+        command(fixture,binary,'drop',config)
+        recreated_schema = output/'schema-recreated'
+        recreated_schema.mkdir()
+        replacement = Worker(binary+['query','create'],config,recreated_schema,fixture.environment)
+        fixture.workers.append(replacement)
+        replacement.event('ready')
+        replacement.finish(graceful=True)
         labels[1] = 'new count'
         verify(fixture,labels)
         command(fixture,binary,'drop',config)

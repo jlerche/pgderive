@@ -37,7 +37,7 @@ class Q3Fixture(SqlFixture):
             for p in people:
                 if a['seller'] is not None and a['seller']==p['id'] and a['category']==10 and p['state'] in ('OR','ID','CA'):
                     memory[(p['name'],p['city'],p['state'],a['id'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q3 differs from independent nested-loop memory bag'
         assert self.acknowledgement_ahead().strip()=='0'
 

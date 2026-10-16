@@ -68,7 +68,7 @@ class CaseFixture(NativeFixture):
                 if self.running:
                     total += flag
                 memory[(row['id'],row['auction'],encoded(time,self.temporal=='event_time'),total if self.running else flag)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory),'CASE/gap output differs from memory oracle'
         assert self.acknowledgement_ahead().strip() == '0'
 

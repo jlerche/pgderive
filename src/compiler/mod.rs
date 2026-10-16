@@ -35,6 +35,8 @@ pub(crate) struct ColumnRef {
 #[derive(Clone, Serialize)]
 pub struct Compiled {
     pub(crate) relational: relational::Relational,
+    #[serde(skip)]
+    pub(crate) result_columns: Vec<crate::catalog::ResultColumn>,
 }
 impl Compiled {
     pub(crate) const fn relational(&self) -> &relational::Relational {
@@ -59,11 +61,13 @@ impl Compiled {
         Ok(())
     }
     pub(crate) fn sink(&self, table: &str) -> crate::catalog::Sink {
-        self.output().terminal.as_ref().map_or_else(
-            || crate::catalog::Sink::Bag(table.into()),
-            |map| crate::catalog::Sink::MappedBag { table: table.into(), map: map.clone() },
-        )
+        crate::catalog::Sink::Rows {
+            table: table.into(),
+            columns: self.result_columns.clone(),
+            map: self.output().terminal.clone(),
+        }
     }
+
     pub(crate) fn legacy(selectors: Query, contract: &Contract) -> Result<Self> {
         selectors.validate(contract)?;
         bind::legacy(selectors, contract)

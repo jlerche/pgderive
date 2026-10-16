@@ -25,7 +25,7 @@ class CrossFixture(SqlFixture):
         right = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         memory = collections.Counter((b['auction'], a['group_id']) for b in left for a in right
                                      if (b['price'] is None or b['price'] >= 0) and a['category'] is not None)
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(g['tuple'][1]): g['weight'] for g in actual} == dict(memory)
         assert self.acknowledgement_ahead().strip() == '0'
 

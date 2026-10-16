@@ -47,7 +47,7 @@ class Q8Fixture(SqlFixture):
         persons = {(p['id'],p['name'],encode(bucket(p['date_time'],10),self.instant)) for p in people}
         sellers = {(a['seller'],encode(bucket(a['date_time'],10),self.instant)) for a in auctions}
         memory = collections.Counter((identity,name,start) for identity,name,start in persons if start is not None and (identity,start) in sellers)
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q8 differs from independent membership set/join oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 

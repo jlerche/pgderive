@@ -52,7 +52,7 @@ class JoinedFixture(SqlFixture):
                 memory[(a['group_id'],b['price'])] += 1
             else:
                 memory.update((a['group_id'],b['price']) for a,b in rows)
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory), 'join-fed scope differs from memory oracle'
         assert self.acknowledgement_ahead().strip() == '0'
 
@@ -85,7 +85,7 @@ def qualify(output, command, mode):
             normalized=fixture.query.replace('b.', '"B".').replace('bid b ', 'bid AS "B" '),
             rejected=[('changed', fixture.query.replace('a.enabled OR', 'a.enabled AND'))],
         ), initial=initial)
-        assert fixture.sql(f'SELECT count(*) FROM {fixture.name}.groups').strip() == '0'
+        assert fixture.sql(f'SELECT count(*) FROM {fixture.bag_relation()}').strip() == '0'
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact bag','memory':'independent nested loop and group/order recomputation','simultaneous':'both sources insert/update/delete','restart':'same slot cold recovery','changed':'rejected without progress'})+'\n')
 
 

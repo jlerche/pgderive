@@ -81,7 +81,7 @@ class AuctionFixture(SqlFixture):
             for rows in groups.values():
                 a,b = min(rows,key=lambda pair:(pair[1]['price'] is not None,-(pair[1]['price'] or 0),time_key(pair[1]['date_time']),pair[1]['id'],pair[0]['id']))
                 memory[(a['id'],a['item_name'],a['description'],a['initial_bid'],a['reserve'],a['date_time'],a['expires'],a['seller'],a['category'],a['extra'],b['auction'],b['bidder'],b['price'],b['date_time'],b['extra'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),f'{self.kind} differs from independent nested-loop eligibility/winner/average oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 

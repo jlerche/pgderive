@@ -14,7 +14,7 @@ fn writer() -> Result<Writer> {
     };
     Ok(Writer {
         catalog: Catalog::new("fixture", "query")?,
-        binding: Binding { source: "source".into(), sink: Sink::Bag("sink".into()) },
+        binding: Binding { source: "source".into(), sink: Sink::Json("sink".into()) },
         fence: 1,
         epoch: 1,
         time: 0,

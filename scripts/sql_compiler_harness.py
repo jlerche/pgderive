@@ -67,7 +67,7 @@ class SqlFixture(Fixture):
                 group[0] += 1
                 if b['price'] is not None:
                     group[1] = (group[1] or 0) + b['price']
-        actual = json.loads(self.sql(f'SELECT COALESCE(json_agg(g),\'[]\') FROM {self.name}.groups g'))
+        actual = json.loads(self.sql(f'SELECT COALESCE(json_agg(g),\'[]\') FROM {self.bag_relation()} g'))
         assert all(g['weight'] == 1 for g in actual)
         assert {g['tuple'][1][0]: g['tuple'][1][1:] for g in actual} == expected
 

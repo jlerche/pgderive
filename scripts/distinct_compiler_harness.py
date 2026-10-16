@@ -38,7 +38,7 @@ class DistinctFixture(PartitionFixture):
             if self.mode == 'nested':
                 output += (maximum,)
             expected_memory[output] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(expected_memory),'distinct output differs from source-value-presence oracle'
         assert self.acknowledgement_ahead().strip() == '0'
 

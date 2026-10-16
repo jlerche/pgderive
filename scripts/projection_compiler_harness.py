@@ -45,7 +45,7 @@ class ProjectionFixture(SqlFixture):
                               None if row['large_value'] is None else abs(row['large_value']),
                               None if row['vartext'] is None else len(row['vartext']))
                 expected_memory[values] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
         assert all(row['tuple'][0] is None and row['weight'] > 0 for row in actual)
         beyond = self.acknowledgement_ahead()
@@ -76,7 +76,7 @@ def qualify(output, command, terminal=False):
         worker = fixture.start(command, 'first')
         ready = worker.event('ready')
         fixture.verify()
-        assert fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups').strip() == '2'
+        assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
         changes = [
             f"UPDATE {fixture.name}.auction SET group_id=1,enabled=false WHERE id=2; UPDATE {fixture.name}.bid SET price=9 WHERE id=2",
             f"UPDATE {fixture.name}.auction SET group_id=NULL,enabled=NULL WHERE id=2; DELETE FROM {fixture.name}.auction WHERE id=1",
@@ -106,7 +106,7 @@ def qualify(output, command, terminal=False):
         fixture.verify()
         if terminal:
             before = fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p")
-            sink_before = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.name}.groups")
+            sink_before = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}")
             bad = fixture.start(command, 'overflow')
             bad.event('ready')
             fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(999,'overflow',-2147483648,true)")
@@ -114,7 +114,7 @@ def qualify(output, command, terminal=False):
             assert bad.process.returncode != 0, 'terminal integer overflow was accepted'
             bad.abort()
             assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
-            assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.name}.groups") == sink_before
+            assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink_before
             beyond = fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{ready['slot']}' AND confirmed_flush_lsn > (SELECT end_lsn FROM {fixture.name}.pgderive_progress)")
             assert beyond.strip() == '0', 'failed terminal map advanced slot ACK'
         (output / 'result.json').write_text(json.dumps({'sql_oracle': 'exact native weighted bag',

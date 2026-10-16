@@ -90,7 +90,7 @@ class SessionFixture(NativeFixture):
                 finish = component[-1]
                 finish = offset(finish,10)
                 memory[(bidder,encoded(component[0],timezone),encoded(finish,timezone),len(component))] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory),'session/extrema output differs from connected-component oracle'
         assert self.acknowledgement_ahead().strip() == '0'
 

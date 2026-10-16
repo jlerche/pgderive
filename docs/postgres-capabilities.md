@@ -64,7 +64,7 @@ establish uniqueness. See linked SQL-subset sections for exact syntax restrictio
 | Terminal environment | Shared native codec/helper/catalog fingerprint, exact server_version_num, UTF8, explicit C collation, UTC abbreviation context | Runtime libraries/timezone file contents and administrative races remain outside attestation |
 | Execution settings | SQL worker and low-level terminal initialization set pg_catalog search_path, UTC, ISO/MDY and ISO intervals; source COPY/replication set canonical text formats | Consumers of the public SQL view still have their own presentation settings |
 | Durable semantics | Normalized resolved IR, full source contract and bound terminal environment participate in plan identity | No separate global engine-version attestation; incompatible IR changes require rebuild, not migration |
-| Public result representation | Typed expanding SQL view over JSONB weighted sink | Ordinary typed table, representation-preserving identity and logical decoding remain M1 |
+| Public result representation | Ordinary typed occurrence table; engine/object store retains weighted state; FULL replica identity | Bounded output types; exact binary-value retractions scan the table; 1,000,000 changes/publication limit; incompatible schema needs drop/create and consumer resnapshot |
 
 No general execution-placement proof, automatic dependency invalidation, arbitrary
 function execution, named-zone runtime, floating-point aggregate fidelity, or

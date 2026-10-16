@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Owned CLI/result-view qualification; preserve dumps and process logs on failure."""
+"""Owned CLI/result-table qualification; preserve dumps and process logs on failure."""
 import json
 import collections
 import pathlib
@@ -20,10 +20,8 @@ from worker_harness import Worker, harness_arguments
 
 
 def configured(fixture):
-    config = fixture.config()
-    config.write_text(config.read_text().replace(
-        'sink_table="groups"', 'sink_table="groups"\nresult_view="result"'))
-    return config
+    return fixture.config()
+
 
 
 def inspect(command, fixture, action, config):
@@ -50,7 +48,7 @@ def verify_result(fixture, labels):
     fixture.verify()
     native_expected(fixture, labels)
     oracle = fixture.name+'.pgderive_native_oracle'
-    result = fixture.name+'.result'
+    result = fixture.name+'.groups'
     difference = fixture.sql(f'''SELECT count(*) FROM
         ((SELECT * FROM {oracle} EXCEPT ALL SELECT * FROM {result}) UNION ALL
          (SELECT * FROM {result} EXCEPT ALL SELECT * FROM {oracle})) differences''')
@@ -113,12 +111,12 @@ def qualify(output, command, factory):
         logical = fixture.sql(f"SELECT logical_time FROM {fixture.name}.pgderive_queries")
         progress = fixture.sql(f"SELECT end_lsn FROM {fixture.name}.pgderive_progress")
         first_column = '"'+labels[0].replace('"', '""')+'"'
-        fixture.sql(f'ALTER VIEW {fixture.name}.result RENAME COLUMN {first_column} TO tampered')
+        fixture.sql(f'ALTER TABLE {fixture.name}.groups RENAME COLUMN {first_column} TO tampered')
         config.write_text(original.replace('retry_attempts=8', 'retry_attempts=1'))
         rejected(command, fixture, 'restart', config)
         assert fixture.sql(f"SELECT logical_time FROM {fixture.name}.pgderive_queries") == logical
         assert fixture.sql(f"SELECT end_lsn FROM {fixture.name}.pgderive_progress") == progress
-        fixture.sql(f'ALTER VIEW {fixture.name}.result RENAME COLUMN tampered TO {first_column}')
+        fixture.sql(f'ALTER TABLE {fixture.name}.groups RENAME COLUMN tampered TO {first_column}')
         config.write_text(original)
         resumed = output/'resumed'
         resumed.mkdir()
@@ -216,7 +214,6 @@ def namespace_race(output, command):
                 text = text.replace('query_id="grouped"', 'query_id="different"').replace(
                     f'slot="{fixture.name}"', f'slot="{fixture.name}_other"').replace(
                     'sink_table="groups"', 'sink_table="other_groups"').replace(
-                    'result_view="result"', 'result_view="other_result"').replace(
                     f'object_prefix="{fixture.name}"', f'object_prefix="{fixture.name}_other"')
             path.write_text(text)
             logs = output/f'create-{index}'
@@ -279,7 +276,7 @@ class ScalarFixture(SqlFixture):
     def verify(self):
         raw = json.loads(self.sql(f"SELECT json_agg(b) FROM {self.name}.bid b"), parse_float=str)
         memory = collections.Counter(tuple(row[label] for label in self.labels) for row in raw)
-        actual = json.loads(self.sql(f"SELECT json_agg(g) FROM {self.name}.groups g"), parse_float=str)
+        actual = json.loads(self.sql(f"SELECT json_agg(g) FROM {self.bag_relation()} g"), parse_float=str)
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
 
 
@@ -295,7 +292,7 @@ class ArrayFixture(ScalarFixture):
         for label in labels:
             match = None if label is None else re.search('(&|^)channel_id=([^&]*)', label)
             memory[None if match is None else match.groups()] += 1
-        actual = json.loads(self.sql(f"SELECT json_agg(g) FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT json_agg(g) FROM {self.bag_relation()} g"))
         assert {(None if row['tuple'][1][0] is None else tuple(row['tuple'][1][0])):
                 row['weight'] for row in actual} == dict(memory)
 

@@ -89,7 +89,7 @@ pub(super) fn bind(
         RelationalNode::Source { id: "source".into(), source: 0 },
         RelationalNode::Output { id: "output".into(), input: "source".into() },
     ];
-    Ok(Compiled { relational: Relational { sources, nodes, output } })
+    Ok(Compiled { result_columns: Vec::new(), relational: Relational { sources, nodes, output } })
 }
 
 impl Builder<'_> {

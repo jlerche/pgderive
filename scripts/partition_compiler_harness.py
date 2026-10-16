@@ -49,7 +49,7 @@ class PartitionFixture(SqlFixture):
                          sum(price < 0 for price in prices))
                 prefix = (group[index]['id'], key, group[index]['price']) if self.window else (key,)
                 expected_memory[prefix + stats] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
         beyond = self.acknowledgement_ahead()
         assert beyond.strip() == '0'

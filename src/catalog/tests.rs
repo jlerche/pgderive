@@ -26,10 +26,10 @@ fn sink_encodings_preserve_full_tuple_and_group_null_semantics() -> Result<()> {
         Deltas::bag(&grouped)?.rows,
         vec![(json!([null, [1, null]]), -1), (json!([null, [2, 0]]), 1)]
     );
-    for sink in [Sink::Bag("bad;sql".into()), Sink::Bag("pgderive_queries".into())] {
+    for sink in [Sink::Json("bad;sql".into()), Sink::Json("pgderive_queries".into())] {
         assert!(sink.validate().is_err());
     }
-    Sink::Bag("derived".into()).validate()?;
+    Sink::Json("derived".into()).validate()?;
     Ok(())
 }
 

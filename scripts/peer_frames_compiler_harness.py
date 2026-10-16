@@ -58,7 +58,7 @@ class PeerFramesFixture(RankingFixture):
                          min(prices) if prices else None, max(prices) if prices else None,
                          sum(price < 0 for price in prices), average(prices))
                 memory[(row['id'], row['auction'], row['price']) + stats] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"), parse_float=Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=Decimal)
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
         assert self.acknowledgement_ahead().strip() == '0'
 

@@ -78,7 +78,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         columns,
         terminal,
     };
-    Ok(Compiled { relational: Relational { sources, nodes, output } })
+    Ok(Compiled { result_columns: Vec::new(), relational: Relational { sources, nodes, output } })
 }
 fn correlated(name: &Name, scopes: &[Scope<'_>; 2]) -> Result<ColumnRef> {
     // The inner local relation shadows an unqualified outer column.

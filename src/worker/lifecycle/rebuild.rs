@@ -100,8 +100,6 @@ async fn prepare(
         active: (!dropped).then(|| Generation::original(config, settings)),
         pending: None,
         signature: String::new(),
-        presentation: format!("presentation:{token}"),
-        public_owner: settings.query_id.clone(),
         phase: Phase::Active,
         retired: Vec::new(),
     });
@@ -194,22 +192,17 @@ async fn cutover(
     state: &mut State,
     generation: Generation,
 ) -> Result<()> {
-    let mut old = settings.clone();
-    old.query_id = state.public_owner.clone();
-    let mut new = settings.clone();
-    new.query_id = state.presentation.clone();
-    new.sink_table = generation.sink.clone();
     let tx = opened.session.client.transaction().await?;
-    tx.batch_execute(
-        "SET LOCAL synchronous_commit=on; SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO,MDY'",
-    )
-    .await?;
-    super::super::results::replace(&tx, &old, &new, &opened.compiled).await?;
-    if let Some(old) = state.active.replace(generation) {
+    tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
+    let mut generation = generation;
+    if let Some(mut old) = state.active.take() {
+        super::tables::cutover(&tx, settings, &mut old, &mut generation).await?;
         state.retired.push(old);
+    } else {
+        super::tables::rename(&tx, settings, &mut generation).await?;
     }
+    state.active = Some(generation);
     state.pending = None;
-    state.public_owner.clone_from(&state.presentation);
     state.phase = Phase::Active;
     save(&tx, settings, state).await?;
     tx.commit().await.context("rebuild cutover COMMIT uncertain; repeat rebuild to reconcile")?;

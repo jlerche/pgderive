@@ -126,14 +126,23 @@ preserving SQL bag multiplicity without source primary keys as output identity.
 The output arrangement supports cold restore and fenced compaction/GC. Complete
 transactions on unrelated source relations advance the query with empty deltas.
 
-The owned sink uses `tuple jsonb PRIMARY KEY, weight bigint`: tuple is
-`[null, [column_1, ..., column_n]]`. The first null is the unit navigation key.
-Boolean/integral columns encode native JSON booleans/i64 numbers; text/varchar and
-UUID columns encode canonical source strings; SQL NULL encodes JSON null.
-The resolved output layout, names and native types bind identity.
-This is an explicit weighted bag representation, not a native-column destination
-SQL table or general function/type runtime. Frozen supported source types and
-deterministic source text equality define its tested domain.
+The owned destination is an ordinary native-column PostgreSQL table. The engine
+encodes signed output deltas as `[null, [column_1, ..., column_n]]` for publication
+transport only; these tuples and their weights are not persisted in PostgreSQL.
+The first null is the unit navigation key. Resolved output labels, OIDs, modifiers
+and collations bind the table layout. Publication casts qualified native values,
+inserts each positive occurrence and deletes exactly the required occurrences for
+negative deltas. A missing occurrence rejects the entire transaction. Binary native
+comparison preserves representations which SQL equality can ignore. There are no
+visible bookkeeping columns, persisted weights, presentation views or SQL-side
+occurrence maps. Engine arrangements and retained operands remain object-backed.
+
+The first implementation limits each publication to 1,000,000 physical row changes
+and scans the destination for retractions. Supported output types remain bounded:
+bool, int2/int4/int8, text/varchar, UUID, timestamp/timestamptz, numeric and text[].
+Unique output labels are required. Destinations use FULL replica identity and must
+be excluded from source capture. Application writes and destination triggers,
+rules or RLS are unsupported; initialization verifies the owned table layout.
 
 ## PostgreSQL terminal expression execution
 

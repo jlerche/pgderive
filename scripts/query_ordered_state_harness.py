@@ -67,7 +67,7 @@ class OrderedFixture(SqlFixture):
             key = temporal_key if self.temporal else None
             normalize = lambda value: value.replace(' ', 'T') if self.temporal and value not in (None, 'infinity', '-infinity') else value
             oracle[(group, normalize(min(values, key=key)) if values else None, normalize(max(values, key=key)) if values else None, normalize(min(filtered, key=key)) if filtered else None)] = 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == oracle, (actual, oracle)
         assert self.acknowledgement_ahead().strip() == '0'
 

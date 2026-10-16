@@ -1,9 +1,6 @@
 //! Recoverable removal of the stable logical query and all its generations.
 use super::{Phase, own, read, save};
-use crate::{
-    Config,
-    worker::{results, retire},
-};
+use crate::{Config, worker::retire};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
@@ -28,7 +25,6 @@ pub async fn drop_query(config: &Config) -> Result<Value> {
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
     save(&tx, &settings, &state).await?;
     tx.commit().await.context("logical removal intent COMMIT uncertain; repeat drop")?;
-    remove_view(&mut session, &settings, &state).await?;
     remove_generations(config, &mut session, &settings, &state).await?;
     state.active = None;
     state.pending = None;
@@ -39,34 +35,6 @@ pub async fn drop_query(config: &Config) -> Result<Value> {
     save(&tx, &settings, &state).await?;
     tx.commit().await.context("logical removal completion COMMIT uncertain; repeat drop")?;
     collected(config, &settings, &mut session).await
-}
-
-async fn remove_view(
-    session: &mut crate::worker::sql::Session,
-    settings: &crate::worker::Settings,
-    state: &super::State,
-) -> Result<()> {
-    if let Some(view) = &settings.result_view {
-        let mut presentation = settings.clone();
-        presentation.query_id = state.public_owner.clone();
-        let table = format!("{}.pgderive_result_views", settings.catalog_schema);
-        if super::exists(&session.client, &table).await?
-            && session
-                .client
-                .query_opt(
-                    &format!("SELECT query_id FROM {table} WHERE query_id=$1"),
-                    &[&presentation.query_id],
-                )
-                .await?
-                .is_some()
-        {
-            let tx = session.client.transaction().await?;
-            tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-            results::remove(&tx, &presentation, view).await?;
-            tx.commit().await.context("logical result removal COMMIT uncertain; repeat drop")?;
-        }
-    }
-    Ok(())
 }
 
 async fn remove_generations(

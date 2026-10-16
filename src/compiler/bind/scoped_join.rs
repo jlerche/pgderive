@@ -49,7 +49,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     left.ir.nodes.push(Node::Output { id: "project".into(), input: input.into() });
     left.ir.output.columns = columns;
     left.ir.output.terminal = terminal;
-    Ok(Compiled { relational: left.ir })
+    Ok(Compiled { result_columns: Vec::new(), relational: left.ir })
 }
 fn join_keys(keys: Option<Vec<(ColumnRef, ColumnRef)>>) -> [Node; 2] {
     let Some(keys) = keys else {

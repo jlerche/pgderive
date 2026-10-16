@@ -48,7 +48,7 @@ class HoppingFixture(BinFixture):
         assert difference.strip() == '0','hopping output differs from PostgreSQL'
         source = json.loads(self.sql(prefix + f"SELECT json_agg(x) FROM (SELECT id,auction,price,event_at::text local,event_time::text instant FROM {self.name}.bid) x"))
         expected = self.expected(source)
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(expected)
         assert self.acknowledgement_ahead().strip() == '0'
 

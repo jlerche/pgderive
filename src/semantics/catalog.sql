@@ -1,6 +1,6 @@
 WITH RECURSIVE native AS (
     SELECT t.* FROM pg_catalog.pg_type t
-    WHERE t.oid = ANY(ARRAY[16,20,21,23,25,26,701,1009,1043,1114,1184,1186,1700,2275,2950,3802]::oid[])
+    WHERE t.oid = ANY(ARRAY[16,17,20,21,23,25,26,701,1009,1043,1114,1184,1186,1700,2275,2950,3802]::oid[])
 ), casts AS (
     SELECT c.* FROM pg_catalog.pg_cast c
     WHERE c.castsource IN (SELECT oid FROM native)

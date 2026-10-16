@@ -168,7 +168,7 @@ record_bytes=16384
         # Compare every weighted aggregate with an independent PostgreSQL query.
         difference = self.sql(f'''WITH source AS ({self.expected_query()}),
           expected AS (SELECT jsonb_build_array(NULL,jsonb_build_array(group_key,row_count,total)) tuple,1::bigint weight FROM source),
-          actual AS (SELECT tuple,weight FROM {self.name}.groups)
+          actual AS (SELECT tuple,weight FROM {self.bag_relation()})
           SELECT count(*) FROM ((SELECT * FROM expected EXCEPT SELECT * FROM actual)
           UNION ALL (SELECT * FROM actual EXCEPT SELECT * FROM expected)) differences''').strip()
         assert difference == '0', 'worker sink differs from independent SQL'
@@ -203,9 +203,15 @@ record_bytes=16384
         resumed.finish()
         self.verify()
 
+    def bag_relation(self):
+        """Test-only weighted projection of ordinary typed destination occurrences."""
+        columns = json.loads(self.sql(f"SELECT json_agg(attname ORDER BY attnum) FROM pg_attribute WHERE attrelid='{self.name}.groups'::regclass AND attnum>0 AND NOT attisdropped"))
+        selected = ','.join('"'+name.replace('"','""')+'"' for name in columns)
+        return f'(SELECT jsonb_build_array(NULL,jsonb_build_array({selected})) tuple,count(*)::bigint weight FROM {self.name}.groups GROUP BY 1)'
+
     def bag_difference(self, expected, context=''):
         return self.sql(context + f"""WITH expected AS ({expected}),
-          actual AS (SELECT tuple,weight FROM {self.name}.groups)
+          actual AS (SELECT tuple,weight FROM {self.bag_relation()})
           SELECT count(*) FROM ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual)
           UNION ALL (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) differences""")
 

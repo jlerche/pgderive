@@ -38,14 +38,14 @@ class ToastFixture(Fixture):
     def verify(self):
         query = native_expected(self, ['auction_id','label','price'])
         self.sql(f'''DO $$ BEGIN IF EXISTS((SELECT tuple,weight FROM ({query}) oracle
-          EXCEPT ALL SELECT tuple,weight FROM {self.name}.groups) UNION ALL
-          (SELECT tuple,weight FROM {self.name}.groups EXCEPT ALL SELECT tuple,weight
+          EXCEPT ALL SELECT tuple,weight FROM {self.bag_relation()}) UNION ALL
+          (SELECT tuple,weight FROM {self.bag_relation()} EXCEPT ALL SELECT tuple,weight
           FROM ({query}) oracle)) THEN RAISE EXCEPTION 'native MV mismatch'; END IF; END $$''')
         left = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a'))
         right = json.loads(self.sql(f'SELECT json_agg(b) FROM {self.name}.bid b')) or []
         memory = collections.Counter((a['id'],a['category'],b['price']) for a in left
                                      for b in right if a['id'] == b['auction'])
-        rows = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        rows = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in rows} == dict(memory)
         assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s
             JOIN {self.name}.pgderive_worker_registration r ON s.slot_name=r.slot_name

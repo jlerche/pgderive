@@ -40,7 +40,7 @@ class ExpressionFixture(SqlFixture):
                 oracle[(None if row['auction'] is None else key*2+row['auction'],)] += 1
         if self.grouped:
             oracle = collections.Counter({(key,total):1 for key,total in groups.items()})
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(oracle), (actual,oracle)
         assert self.acknowledgement_ahead().strip() == '0'
 
@@ -84,7 +84,7 @@ def overflow(output, command, grouped):
         before = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
         slot = ready['slot']
         acknowledged = fixture.sql(f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{slot}'")
-        sink = fixture.sql(f'SELECT json_agg(g ORDER BY tuple) FROM {fixture.name}.groups g')
+        sink = fixture.sql(f'SELECT json_agg(g ORDER BY tuple) FROM {fixture.bag_relation()} g')
         fixture.sql(f'UPDATE {fixture.name}.bid SET price=32768 WHERE id=1')
         worker.process.wait(timeout=60)
         assert worker.process.returncode != 0
@@ -92,7 +92,7 @@ def overflow(output, command, grouped):
         assert 'overflow' in (logs/'stderr.log').read_text() or 'out of range' in (logs/'stderr.log').read_text()
         assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == before
         assert fixture.sql(f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{slot}'") == acknowledged
-        assert fixture.sql(f'SELECT json_agg(g ORDER BY tuple) FROM {fixture.name}.groups g') == sink
+        assert fixture.sql(f'SELECT json_agg(g ORDER BY tuple) FROM {fixture.bag_relation()} g') == sink
         (output/'result.json').write_text(json.dumps({'narrowing_overflow':True,'grouped':grouped,'unchanged_progress_sink_and_ack':True})+'\n')
 
 

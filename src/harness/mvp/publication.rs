@@ -3,6 +3,7 @@ mod bindings;
 mod cancellation;
 mod checks;
 mod recovery;
+mod representations;
 use super::{MvpFixture, Query};
 use crate::{
     catalog::{Binding, Catalog, Deltas, Lsn, Progress, Publication, Sink, Writer},
@@ -36,9 +37,10 @@ impl MvpFixture {
         let catalog = Catalog::new(schema, "atomic_grouped")?;
         catalog.install(sql).await?;
         bags::check(sql, schema, self.graph.plan(), &checkpoint).await?;
+        representations::check(sql, schema, self.graph.plan(), &checkpoint).await?;
         bindings::check(sql, schema, self.graph.plan(), &checkpoint, config).await?;
         catalog.checkpoint(sql, self.graph.plan(), &checkpoint, 0).await?;
-        let binding = Binding { source: source.clone(), sink: Sink::Bag("derived_groups".into()) };
+        let binding = Binding { source: source.clone(), sink: Sink::Json("derived_groups".into()) };
         let initial: Lsn = initial.parse()?;
         let stale = catalog.claim(sql, self.graph.plan(), binding.clone(), initial).await?;
         let grouped = catalog.claim(sql, self.graph.plan(), binding, initial).await?;
@@ -50,7 +52,7 @@ impl MvpFixture {
             .claim(
                 sql,
                 self.graph.plan(),
-                Binding { source, sink: Sink::Bag("derived_bag".into()) },
+                Binding { source, sink: Sink::Json("derived_bag".into()) },
                 initial,
             )
             .await?;
@@ -122,7 +124,7 @@ impl PublicationFixture {
             self.schema
         );
         for table in ["derived_groups", "derived_bag"] {
-            let different = sql.query_one(&format!("SELECT EXISTS((SELECT tuple,weight FROM {0}.{table} EXCEPT {expected}) UNION ALL ({expected} EXCEPT SELECT tuple,weight FROM {0}.{table}))",self.schema),&[]).await?.try_get::<_,bool>(0)?;
+            let different = sql.query_one(&format!("SELECT EXISTS((SELECT tuple,count(*)::bigint weight FROM {0}.{table} GROUP BY tuple EXCEPT {expected}) UNION ALL ({expected} EXCEPT SELECT tuple,count(*)::bigint weight FROM {0}.{table} GROUP BY tuple))",self.schema),&[]).await?.try_get::<_,bool>(0)?;
             ensure!(!different, "durable bag destination differs from SQL recomputation");
         }
         Ok(())

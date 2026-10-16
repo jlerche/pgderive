@@ -139,7 +139,7 @@ def qualify(output, binary):
         worker.event('published',minimum_time=ready['time']+1)
         verify(fixture,labels);worker.finish(graceful=True)
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{ready['slot']}' AND active").strip()=='0'
-        fixture.sql(f'CREATE VIEW {fixture.name}.consumer AS SELECT * FROM {fixture.name}.result')
+        fixture.sql(f'CREATE VIEW {fixture.name}.consumer AS SELECT * FROM {fixture.name}.groups')
         roots=pin_roots(fixture)
         before=command(fixture,binary,'status',config)
         sources=source_state(fixture)
@@ -180,10 +180,10 @@ def qualify(output, binary):
         fixture.workers.append(worker);active=worker.event('ready')
         bootstrap_seconds=time.monotonic()-began
         assert active['slot']!=ready['slot']
-        verify_fresh(fixture,new+'.result',labels)
+        verify_fresh(fixture,new+'.groups',labels)
         consumer_oid=fixture.sql(f"SELECT '{fixture.name}.consumer'::regclass::oid").strip()
-        assert fixture.sql(f"SELECT pg_get_viewdef('{fixture.name}.consumer'::regclass,true)").find(new+'.result')<0
-        fixture.sql(f'BEGIN; CREATE OR REPLACE VIEW {fixture.name}.consumer AS SELECT * FROM {new}.result; COMMIT')
+        assert fixture.sql(f"SELECT pg_get_viewdef('{fixture.name}.consumer'::regclass,true)").find(new+'.groups')<0
+        fixture.sql(f'BEGIN; CREATE OR REPLACE VIEW {fixture.name}.consumer AS SELECT * FROM {new}.groups; COMMIT')
         verify_fresh(fixture,fixture.name+'.consumer',labels)
         assert fixture.sql(f"SELECT '{fixture.name}.consumer'::regclass::oid").strip()==consumer_oid
         fixture.sql(f'BEGIN; UPDATE {fixture.name}.auction SET group_id=20 WHERE id=1; '

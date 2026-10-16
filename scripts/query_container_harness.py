@@ -126,7 +126,7 @@ def qualify(output,image,image_manifest,duration,interval):
                     if index==2:
                         expected.append((key,min(nonnull) if nonnull else None,max(nonnull) if nonnull else None)); continue
                     expected.append((key,len(values),sum(nonnull) if nonnull else None, sum(nonnull)/len(nonnull) if nonnull else None,len(set(nonnull))))
-                actual=json.loads(fixture.sql(f"SELECT coalesce(json_agg(r),'[]') FROM {fixture.name}.result r"))
+                actual=json.loads(fixture.sql(f"SELECT coalesce(json_agg(r),'[]') FROM {fixture.name}.groups r"))
                 # AVG numeric may be decimal-rounded; compare using the native
                 # oracle for exact decimals, plus independently calculated count,
                 # sum and distinct fields and tolerance for memory mean.
@@ -134,12 +134,12 @@ def qualify(output,image,image_manifest,duration,interval):
                 bykey={r[labels[0]]:r for r in actual}
                 if index==2:
                     assert collections.Counter(tuple(row[label] for label in labels) for row in actual)==collections.Counter(expected)
-                    assert fixture.sql(f"SELECT count(*) FROM ((SELECT * FROM {fixture.name}.pgderive_native_oracle EXCEPT ALL SELECT * FROM {fixture.name}.result) UNION ALL (SELECT * FROM {fixture.name}.result EXCEPT ALL SELECT * FROM {fixture.name}.pgderive_native_oracle)) d").strip()=='0'
+                    assert fixture.sql(f"SELECT count(*) FROM ((SELECT * FROM {fixture.name}.pgderive_native_oracle EXCEPT ALL SELECT * FROM {fixture.name}.groups) UNION ALL (SELECT * FROM {fixture.name}.groups EXCEPT ALL SELECT * FROM {fixture.name}.pgderive_native_oracle)) d").strip()=='0'
                     return
                 for key,count,total,average,distinct in expected:
                     row=bykey[key]; assert (row[labels[1]],row[labels[2]],row[labels[4]])==(count,total,distinct)
                     assert row[labels[3]] is None if average is None else abs(row[labels[3]]-average)<1e-8
-                assert fixture.sql(f"SELECT count(*) FROM ((SELECT * FROM {fixture.name}.pgderive_native_oracle EXCEPT ALL SELECT * FROM {fixture.name}.result) UNION ALL (SELECT * FROM {fixture.name}.result EXCEPT ALL SELECT * FROM {fixture.name}.pgderive_native_oracle)) d").strip()=='0'
+                assert fixture.sql(f"SELECT count(*) FROM ((SELECT * FROM {fixture.name}.pgderive_native_oracle EXCEPT ALL SELECT * FROM {fixture.name}.groups) UNION ALL (SELECT * FROM {fixture.name}.groups EXCEPT ALL SELECT * FROM {fixture.name}.pgderive_native_oracle)) d").strip()=='0'
             check(); worker.finish()
             container=f'pgderive-container-{os.getpid()}-{index}-restart'; names.append(container)
             worker=ContainerWorker(image,container,config,secret,scratch,directory/'restart','restart','owned-container-password'); workers.append(worker)

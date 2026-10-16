@@ -43,7 +43,7 @@ class Q1Fixture(SqlFixture):
                     continue
             price = None if row['price'] is None else decimal.Decimal(row['price'])*decimal.Decimal(self.factor)
             memory[(row['auction'],row['bidder'],price,row['date_time'],row['extra'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=decimal.Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=decimal.Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q1 differs from exact Decimal oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 
@@ -62,7 +62,7 @@ def qualify(output,command,mode):
             f"UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=2",
         ]
         def initial():
-            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups'))>1
+            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}'))>1
             fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
         fixture.run_history(command, History(
             changes=changes,

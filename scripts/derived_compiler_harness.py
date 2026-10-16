@@ -56,7 +56,7 @@ class DerivedFixture(RankingFixture):
                     rank = sum(other['price'] is None or (price is not None and other['price']>price) for other in group if other['price'] != price)+1
                 if rank<=3 and (price is None or price>0) and (not self.layered or price is None or price<5):
                     memory[(price,)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
         assert self.acknowledgement_ahead().strip() == '0'
 

@@ -53,7 +53,7 @@ class Q22Fixture(SqlFixture):
             components = [] if url is None or url=='' else url.split(self.delimiter)
             dirs = [components[index] if index<len(components) else None for index in (3,4,5)]
             memory[tuple(row[label] for label in self.labels[:4])+tuple(dirs)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q22 differs from independent component splitting oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 
@@ -86,7 +86,7 @@ def qualify(output,command,mode):
         worker = fixture.start(command,'first')
         ready = worker.event('ready')
         fixture.verify()
-        assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups'))>1
+        assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}'))>1
         url = literal(fixture.delimiter.join(['https:','','new','a','b','c']))
         changes = [
             f"INSERT INTO {fixture.name}.auction(id,category,enabled) VALUES(400,'new',true); INSERT INTO {fixture.name}.bid(id,auction,price,bidder,channel,url) VALUES(400,400,9,5,'é🙂',{url}),(401,400,NULL,NULL,NULL,NULL)",

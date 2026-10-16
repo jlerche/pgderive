@@ -27,6 +27,8 @@ run_qualification() {
         exit 1
     fi
 }
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification result-table \
+    python3 scripts/result_table_harness.py "$output/result-table" -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-binding \
     python3 scripts/query_binding_harness.py "$output/query-binding" -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \
@@ -105,7 +107,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==225,results
+assert len(results)==227,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))

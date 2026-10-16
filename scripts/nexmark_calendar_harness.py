@@ -74,7 +74,7 @@ class CalendarFixture(NativeFixture):
                 for field in range(3):
                     output.extend(value[field] for value in all_counts)
                 memory[tuple(output)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent calendar/weighted statistics oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 
@@ -92,7 +92,7 @@ def qualify(output,command,query,mode):
         ready = worker.event('ready')
         fixture.verify()
         if query=='q10':
-            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups'))>1
+            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}'))>1
         changes = [
           f"INSERT INTO {fixture.name}.bid(id,auction,price,date_time,bidder,extra,channel) VALUES(400,900,1000000,'2000-01-01 23:59:59.999999+00',500,'same','web'); UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=1",
           f"DELETE FROM {fixture.name}.bid WHERE id IN(300,301,400); UPDATE {fixture.name}.bid SET price=999999,bidder=NULL,extra=NULL WHERE id=302",

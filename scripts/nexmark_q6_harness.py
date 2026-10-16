@@ -48,7 +48,7 @@ class Q6Fixture(AuctionFixture):
         for seller, auctions in sellers.items():
             recent = sorted(auctions,key=lambda row:(row[0],row[1]),reverse=True)[:10]
             memory[(seller,average([row[2] for row in recent if row[2] is not None]))] = 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
         assert {tuple(g['tuple'][1]):g['weight'] for g in actual} == memory, 'q6 differs from independent closed-auction oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 

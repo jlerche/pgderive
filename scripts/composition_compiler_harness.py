@@ -85,7 +85,7 @@ class CompositionFixture(RankingFixture):
                     if previous is None or previous>0:
                         count += 1
                         memory[(row['id'],key,previous,count)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory), 'composed stages differ from memory oracle'
         assert self.acknowledgement_ahead().strip() == '0'
 

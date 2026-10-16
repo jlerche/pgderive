@@ -1,6 +1,7 @@
 //! Stable logical query ownership over independently bootstrapped generations.
 mod control;
 mod rebuild;
+mod tables;
 use super::{spec::Settings, sql::Session};
 use crate::Config;
 use anyhow::{Context, Result, ensure};
@@ -25,7 +26,6 @@ struct Base {
     publication: String,
     sink: String,
     prefix: String,
-    view: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,8 +35,6 @@ struct State {
     active: Option<Generation>,
     pending: Option<Generation>,
     signature: String,
-    presentation: String,
-    public_owner: String,
     phase: Phase,
     retired: Vec<Generation>,
 }
@@ -50,7 +48,6 @@ enum Phase {
 pub(super) struct Resolved {
     pub config: Config,
     pub settings: Settings,
-    pub presentation: Settings,
 }
 impl Base {
     fn new(config: &Config, settings: &Settings) -> Self {
@@ -59,7 +56,6 @@ impl Base {
             publication: config.replication.publication.clone(),
             sink: settings.sink_table.clone(),
             prefix: settings.object_prefix.clone(),
-            view: settings.result_view.clone(),
         }
     }
 }
@@ -76,7 +72,6 @@ impl Generation {
         let mut settings = settings.clone();
         settings.query_id.clone_from(&self.query);
         settings.sink_table.clone_from(&self.sink);
-        settings.result_view = None;
         settings.validate()?;
         config.replication.slot.clone_from(&self.slot);
         config.worker = Some(settings.clone());
@@ -154,11 +149,7 @@ pub(super) async fn resolve(
 ) -> Result<Resolved> {
     require_public(sql, settings).await?;
     let Some(state) = read(sql, settings).await? else {
-        return Ok(Resolved {
-            config: config.clone(),
-            settings: settings.clone(),
-            presentation: settings.clone(),
-        });
+        return Ok(Resolved { config: config.clone(), settings: settings.clone() });
     };
     ensure!(
         state.base == Base::new(config, settings),
@@ -181,10 +172,7 @@ pub(super) async fn resolve(
         .try_get(0)?;
     ensure!(owner == settings.query_id, "generation logical owner changed");
     let (config, native) = generation.apply(config, settings)?;
-    let mut presentation = settings.clone();
-    presentation.query_id = state.public_owner;
-    presentation.sink_table = generation.sink;
-    Ok(Resolved { config, settings: native, presentation })
+    Ok(Resolved { config, settings: native })
 }
 pub(super) async fn current(
     sql: &(impl GenericClient + Sync),

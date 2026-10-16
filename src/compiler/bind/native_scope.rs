@@ -40,6 +40,7 @@ pub(super) fn bind(
         terminal,
     };
     Ok(Compiled {
+        result_columns: Vec::new(),
         relational: Relational {
             sources: vec![Source {
                 schema: relation.schema.clone(),

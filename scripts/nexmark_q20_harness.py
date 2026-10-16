@@ -49,7 +49,7 @@ class Q20Fixture(SqlFixture):
                 if b['auction'] is None or b['auction']!=a['id'] or a['category']!=10:
                     continue
                 memory[(b['auction'],b['bidder'],b['price'],b['channel'],b['url'],b['date_time'],b['extra'],a['item_name'],a['description'],a['initial_bid'],a['reserve'],a['date_time'],a['expires'],a['seller'],a['category'],a['extra'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q20 differs from independent full-payload nested-loop oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 
@@ -72,7 +72,7 @@ def qualify(output,command,mode):
             f"UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=3",
         ]
         def initial():
-            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups'))>1
+            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}'))>1
             fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; DELETE FROM {fixture.name}.auction; ROLLBACK')
         fixture.run_history(command, History(
             changes=changes,

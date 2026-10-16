@@ -72,7 +72,7 @@ class OrderedFixture(SqlFixture):
             for index,row in enumerate(selected,1):
                 payload = tuple(row[label] for label in PAYLOAD)
                 memory[payload+((index,) if self.kind=='q19' else ())] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent occurrence ordering'
         assert self.acknowledgement_ahead().strip()=='0'
 
@@ -88,7 +88,7 @@ def qualify(output,command,query,instant):
         ready = worker.event('ready')
         fixture.verify()
         if query=='q19':
-            assert fixture.sql(f"SELECT sum(weight) FROM {fixture.name}.groups WHERE tuple->1->>0='1'").strip()=='10'
+            assert fixture.sql(f"SELECT sum(weight) FROM {fixture.bag_relation()} WHERE tuple->1->>0='1'").strip()=='10'
         changes = [
             f"INSERT INTO {fixture.name}.bid(id,auction,price,bidder,channel,url,date_time,extra) VALUES(400,1,11,5,'new','', '2000-01-01 00:00:09','late arrival'),(401,1,10,5,'tie','', '2000-01-01 00:00:10','new tie'); UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=1",
             f"DELETE FROM {fixture.name}.bid WHERE id IN(340,341); UPDATE {fixture.name}.bid SET price=12,date_time='2000-01-01 00:00:11' WHERE id=339; UPDATE {fixture.name}.auction SET enabled=true WHERE id=1",

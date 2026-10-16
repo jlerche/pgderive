@@ -52,7 +52,7 @@ class BinFixture(NativeFixture):
             else:
                 prices = [row['price'] for row in group if row['price'] is not None]
                 expected[key + (len(group),sum(prices) if prices else None,average(prices))] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(expected)
         assert self.acknowledgement_ahead().strip()=='0'
 

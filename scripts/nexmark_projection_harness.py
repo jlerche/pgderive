@@ -38,7 +38,7 @@ class ProjectionFixture(SqlFixture):
                 if auction is None or abs(auction)//123*123!=abs(auction):
                     continue
             memory[tuple(row[label] for label in self.labels)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.query_name+' differs from independent raw bag oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 
@@ -53,7 +53,7 @@ def qualify(output,command,query,mode):
         worker = fixture.start(command,'first')
         ready = worker.event('ready')
         fixture.verify()
-        assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.name}.groups'))>1
+        assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}'))>1
         changes = [
             f"INSERT INTO {fixture.name}.auction(id,category,enabled) VALUES(400,'new',true); INSERT INTO {fixture.name}.bid(id,auction,price,bidder,date_time,extra) VALUES(400,246,9,5,NULL,'new'),(401,-246,NULL,NULL,NULL,NULL)",
             f"UPDATE {fixture.name}.bid SET auction=124,price=NULL WHERE id=300; UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=400",

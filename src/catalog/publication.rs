@@ -56,7 +56,7 @@ impl Binding {
         if let Some(source) = self.registered_source()? {
             source.verify(sql).await?;
         }
-        if let Sink::MappedBag { map, .. } = &self.sink {
+        if let Some(map) = self.sink.map() {
             map.verify_environment(sql).await?;
         }
         Ok(())
@@ -165,6 +165,11 @@ impl Catalog {
                 "source/destination binding mismatch"
             );
             binding.verify_environment(&tx).await?;
+            binding
+                .sink
+                .owned(&tx, self)
+                .await?
+                .context("registered destination ownership missing")?;
             let fence =
                 row.try_get::<_, i64>(1)?.checked_add(1).context("worker fence overflow")?;
             let end = row.try_get::<_, String>(2)?.parse()?;

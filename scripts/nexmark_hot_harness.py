@@ -71,7 +71,7 @@ class HotFixture(SqlFixture):
                 for row in rows:
                     if row['price']==maximum:
                         memory[(row['auction'],row['price'],row['bidder'],encode(row['date_time'],self.instant),row['extra'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent bucket/max bag oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 

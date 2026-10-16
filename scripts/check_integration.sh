@@ -72,7 +72,7 @@ assert 'MVP durable streaming compaction preserved source/sink/logical state and
 assert 'MVP GC retained committed and pinned state; fenced abandoned uploads reclaimed without source/logical advance' in harness_log
 assert 'MVP source schema drift blocked publication and preserved durable boundary' in harness_log
 assert 'MVP exported snapshot plus concurrent insert/update/delete CDC reconstructed exact source state; native schema drift rejected' in harness_log
-assert 'MVP full-tuple bag multiplicity, cancellation and overflow rollback passed' in harness_log
+assert 'MVP full-tuple result occurrences, cancellation and negative multiplicity rollback passed' in harness_log
 assert [len(tx['changes']) for tx in transactions]==[12,12,5,5,2,1,2,3,3,2,4,3,2,2,2]
 assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,5,2,4,4,2,2,2]
 binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')

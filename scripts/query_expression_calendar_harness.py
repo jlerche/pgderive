@@ -32,7 +32,7 @@ class CalendarFixture(SqlFixture):
             epoch=decimal.Decimal(delta.days*86400+delta.seconds)+decimal.Decimal(delta.microseconds)/1000000
             second=decimal.Decimal(dt.second)+decimal.Decimal(dt.microsecond)/1000000
             memory[(dt.year,dt.month,dt.day,dt.minute,second,epoch,iso.week,iso.year,iso.weekday,(dt.weekday()+1)%7,dt.timetuple().tm_yday,(dt.month-1)//3+1)]+=1
-        actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=decimal.Decimal)
+        actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=decimal.Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory)
 
 

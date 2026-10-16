@@ -59,12 +59,12 @@ class Q13Fixture(SqlFixture):
               and ordered(side['date_time'])<=ordered(bid['processing_time'])]
             chosen = max(candidates,key=lambda side:(ordered(side['date_time']),side['id'])) if candidates else None
             memory[(bid['auction'],bid['bidder'],bid['price'],encode(bid['date_time'],self.instant),chosen['value'] if chosen else None)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q13 differs from independent modulo/predecessor oracle'
         assert self.acknowledgement_ahead().strip()=='0'
 
     def values(self):
-        return self.sql(f"SELECT COALESCE(jsonb_agg(x ORDER BY x.auction,x.value),'[]') FROM(SELECT tuple->1->0 auction,tuple->1->4 value,sum(weight)::text count FROM {self.name}.groups GROUP BY 1,2) x")
+        return self.sql(f"SELECT COALESCE(jsonb_agg(x ORDER BY x.auction,x.value),'[]') FROM(SELECT tuple->1->0 auction,tuple->1->4 value,sum(weight)::text count FROM {self.bag_relation()} GROUP BY 1,2) x")
 
 
 def qualify(output,command,mode):

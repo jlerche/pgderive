@@ -66,7 +66,7 @@ class NumericFixture(SqlFixture):
                 prices = [row['price'] for row in frame if row['price'] is not None]
                 prefix = (group[index]['id'], key, group[index]['price']) if self.window else (key,)
                 memory[prefix + (len(frame),len(prices),sum(prices) if prices else None,average(prices),average([p for p in prices if p<0]))] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"), parse_float=Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=Decimal)
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
         beyond = self.acknowledgement_ahead()
         assert beyond.strip() == '0'

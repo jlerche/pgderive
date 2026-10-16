@@ -31,7 +31,7 @@ pub(super) async fn check(
     catalog.checkpoint(sql, plan, empty, 0).await?;
     let binding = Binding {
         source: "mapped-reopen-synthetic".into(),
-        sink: Sink::MappedBag { table: "mapped_reopen_rows".into(), map },
+        sink: Sink::MappedJson { table: "mapped_reopen_rows".into(), map },
     };
     let initial: Lsn = "0/0".parse()?;
     catalog.claim(sql, plan, binding.clone(), initial).await?;

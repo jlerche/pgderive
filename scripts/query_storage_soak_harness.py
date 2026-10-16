@@ -38,7 +38,7 @@ class StorageFixture(SqlFixture):
         for key,group in groups.items():
             ordered=sorted(group,key=lambda row:(row['price'] is None,0 if row['price'] is None else -row['price'],row['id'],row['aid']))
             for row in ordered[:3]:oracle[(key,row['price'],row['category'])]+=1
-        actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"))
+        actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(oracle),(actual,oracle)
         assert self.acknowledgement_ahead().strip()=='0'
 

@@ -1,20 +1,29 @@
 use super::Catalog;
 use crate::engine::{Batch, reader::BatchData};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::borrow::Cow;
+mod rows;
+pub use rows::ResultColumn;
 use tokio_postgres::Transaction;
 
-/// Owned full-tuple weighted-bag destination encoding.
-/// The registered JSON codec must preserve full tuple identity under JSONB equality.
+/// Owned destination containing physical result occurrences, never persisted weights.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Sink {
-    /// One full encoded tuple and its nonzero signed bag coefficient.
-    Bag(String),
-    /// Pure scalar map over the persisted raw bag, evaluated atomically at publication.
-    MappedBag {
+    /// Generic JSON result occurrences for the low-level publication API.
+    Json(String),
+    /// Pure scalar map over engine operands, evaluated atomically at publication.
+    Rows {
+        /// Owned ordinary typed result table.
+        table: String,
+        /// Native output metadata.
+        columns: Vec<ResultColumn>,
+        /// Optional qualified sink-deferred expression program.
+        map: Option<super::Terminal>,
+    },
+    /// Generic JSON occurrences after a qualified terminal expression.
+    MappedJson {
         /// Owned destination table.
         table: String,
         /// Bound built-in function signatures and environment.
@@ -22,9 +31,22 @@ pub enum Sink {
     },
 }
 impl Sink {
+    pub(crate) const fn map(&self) -> Option<&super::Terminal> {
+        match self {
+            Self::MappedJson { map, .. } | Self::Rows { map: Some(map), .. } => Some(map),
+            _ => None,
+        }
+    }
+    pub(crate) fn rename(&mut self, name: &str) {
+        match self {
+            Self::Json(table) | Self::MappedJson { table, .. } | Self::Rows { table, .. } => {
+                name.clone_into(table);
+            }
+        }
+    }
     pub(crate) fn table(&self) -> &str {
         match self {
-            Self::Bag(table) | Self::MappedBag { table, .. } => table,
+            Self::Json(table) | Self::MappedJson { table, .. } | Self::Rows { table, .. } => table,
         }
     }
     pub(crate) fn validate(&self) -> Result<()> {
@@ -33,8 +55,11 @@ impl Sink {
                 && !self.table().starts_with("pgderive_"),
             "invalid or reserved sink table"
         );
-        if let Self::MappedBag { map, .. } = self {
+        if let Some(map) = self.map() {
             map.validate()?;
+        }
+        if let Self::Rows { columns, .. } = self {
+            rows::validate(columns)?;
         }
         Ok(())
     }
@@ -42,9 +67,18 @@ impl Sink {
         if self.owned(tx, catalog).await?.is_some() {
             return Ok(());
         }
-        let columns = "tuple jsonb PRIMARY KEY, weight bigint NOT NULL CHECK(weight<>0)";
+        let columns = match self {
+            Self::Rows { columns, .. } => rows::declaration(columns)?,
+            _ => "tuple jsonb NOT NULL".into(),
+        };
         tx.batch_execute(&format!("CREATE TABLE {}.{} ({columns})", catalog.schema, self.table()))
             .await?;
+        tx.batch_execute(&format!(
+            "ALTER TABLE {}.{} REPLICA IDENTITY FULL",
+            catalog.schema,
+            self.table()
+        ))
+        .await?;
         let table = format!("{}.{}", catalog.schema, self.table());
         let oid: u32 =
             tx.query_one("SELECT pg_catalog.to_regclass($1)::oid", &[&table]).await?.try_get(0)?;
@@ -70,6 +104,7 @@ impl Sink {
         let actual: Option<u32> =
             sql.query_one("SELECT pg_catalog.to_regclass($1)::oid", &[&table]).await?.try_get(0)?;
         ensure!(actual == Some(oid), "owned destination was removed or replaced");
+        rows::verify(sql, self, oid).await?;
         Ok(Some(oid))
     }
 }
@@ -97,30 +132,13 @@ impl Deltas {
         sink: &Sink,
     ) -> Result<()> {
         let table = format!("{}.{}", catalog.schema, sink.table());
-        let rows: Cow<'_, [(Value, i64)]> = match sink {
-            Sink::Bag(_) => Cow::Borrowed(&self.rows),
-            Sink::MappedBag { map, .. } => Cow::Owned(map.evaluate(tx, &self.rows).await?),
+        let mapped;
+        let rows = if let Some(map) = sink.map() {
+            mapped = map.evaluate(tx, &self.rows).await?;
+            &mapped
+        } else {
+            &self.rows
         };
-        for (tuple, delta) in rows.iter() {
-            apply_bag(tx, &table, tuple, *delta).await?;
-        }
-        Ok(())
+        rows::apply(tx, &table, sink, rows).await
     }
-}
-async fn apply_bag(tx: &Transaction<'_>, table: &str, tuple: &Value, delta: i64) -> Result<()> {
-    let row = tx
-        .query_opt(&format!("SELECT weight FROM {table} WHERE tuple=$1 FOR UPDATE"), &[tuple])
-        .await?;
-    let prior = row.as_ref().map(|row| row.try_get::<_, i64>(0)).transpose()?.unwrap_or_default();
-    let next = prior.checked_add(delta).context("destination bag coefficient overflow")?;
-    let affected = if next == 0 {
-        tx.execute(&format!("DELETE FROM {table} WHERE tuple=$1"), &[tuple]).await?
-    } else if row.is_some() {
-        tx.execute(&format!("UPDATE {table} SET weight=$2 WHERE tuple=$1"), &[tuple, &next]).await?
-    } else {
-        tx.execute(&format!("INSERT INTO {table}(tuple,weight) VALUES($1,$2)"), &[tuple, &next])
-            .await?
-    };
-    ensure!(affected == 1, "destination bag DML was suppressed");
-    Ok(())
 }

@@ -65,7 +65,7 @@ class LookupFixture(NativeFixture):
             if amount is not None and amount not in ('NaN','Infinity','-Infinity'):
                 amount = Decimal(amount)
             memory[(probe['category'],price,amount,encoded(selected['time'],self.timezone) if selected else None)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.name}.groups g"),parse_float=Decimal)
+        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
         assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory), 'lookup differs from independent memory oracle'
         assert self.acknowledgement_ahead().strip() == '0'
 

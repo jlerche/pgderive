@@ -15,7 +15,7 @@ pub use terminal::Terminal;
 mod write;
 pub use position::{Lsn, Progress};
 pub use publication::{Binding, Publication, Writer};
-pub use sink::{Deltas, Sink};
+pub use sink::{Deltas, ResultColumn, Sink};
 #[cfg(test)]
 mod tests;
 

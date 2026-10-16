@@ -54,6 +54,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         terminal,
     };
     Ok(Compiled {
+        result_columns: Vec::new(),
         relational: Relational { sources: builder.sources, nodes: builder.nodes, output },
     })
 }

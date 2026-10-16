@@ -22,12 +22,13 @@ last complete result and durable progress; no source acknowledgement advances.
 Error qualification must distinguish observable query errors from incidental
 PostgreSQL planner/evaluation order, and reject cases without a justified contract.
 
-Today the internal sink stores JSONB tuples and weights; `worker.result_view`
-exposes typed rows through a SQL view that expands weights. That is not yet the
-regular-table destination described here. Existing foundations include complete
-transaction CDC, object-backed state, atomic publication, bounded SQL compilation,
-terminal PostgreSQL expressions, numeric/temporal support and native-MV harnesses.
-Existing features remain bounded; this roadmap does not retroactively certify them.
+The worker publishes an ordinary typed result table directly. Weighted arrangements,
+keys, retained operands and retraction state stay in the engine and object storage;
+PostgreSQL holds source data, result occurrences and agreed coordination metadata.
+Existing foundations include complete transaction CDC, object-backed state, atomic
+publication, bounded SQL compilation, terminal PostgreSQL expressions and native-MV
+harnesses. Existing features remain bounded; this roadmap does not retroactively
+certify every type/expression domain.
 
 Execution has three paths:
 
@@ -69,15 +70,24 @@ Implement as separate contract/inventory and binding-validation commits.
 
 ## M1 — Publish an ordinary typed result table
 
+Implementation baseline: native-column tables, physical occurrences, binary-value
+retractions, atomic publication, compatible stable-OID cutover and real pgoutput
+qualification replace the old weighted SQL sink and expanding view. Internal
+weights and retraction state remain engine/object-store owned; no SQL-side
+occurrence map is introduced. Incompatible schemas currently require explicit
+drop/create plus consumer resnapshot. Retractions scan the destination and a
+publication is bounded to 1,000,000 row changes. Further performance and broad
+representation-domain qualification remain incremental work.
+
 Add a public result-table configuration and migration/rebuild path from existing
 result views; do not silently change an existing registration. Keep weighted
 storage internal. Materialize one physical row per positive result occurrence,
 including identical duplicates, without adding visible bookkeeping columns or
-inventing a primary key. Design exact occurrence deletion using private identity
-metadata if necessary; SQL equality alone must not erase representation distinctions.
+inventing a primary key. Design exact occurrence deletion using engine-owned identity
+state if necessary; SQL equality alone must not erase representation distinctions.
 
-Apply public table changes in the same transaction as internal sink, membership
-and source progress. Reject negative final multiplicities. Preserve ownership
+Apply public table changes in the same transaction as membership and source
+progress. Never retain a separate internal sink table in PostgreSQL. Reject negative final multiplicities. Preserve ownership
 checks and prohibit external writes. Qualify native types, scales, NULLs and
 output collisions rather than assuming JSONB equality preserves every type.
 

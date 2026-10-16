@@ -28,9 +28,9 @@ comparison is insufficient. Intermediate navigation equality must remain separat
 from full-tuple identity and physical occurrence identity.
 
 A regular public table must contain one row per positive result occurrence,
-including identical duplicates, with only query output columns. The current
-weighted internal table plus expanding public view does not satisfy that storage
-requirement. Source primary keys never imply result uniqueness. External writes
+including identical duplicates only when produced by the query, with only query
+output columns. The worker now publishes this ordinary typed table directly;
+weighted arrangements and retained operands stay in the engine/object store. Source primary keys never imply result uniqueness. External writes
 to owned results are unsupported. Logical-replication consumers own delivery;
 Pgderive must document replica identity, feedback exclusion and rebuild boundaries.
 
@@ -198,3 +198,35 @@ statement executions are counted even when their SQL was prepared earlier; SQL
 text and parameters are never logged. All fixtures run sequentially in the common
 gate; catalog changes never touch the shared test database, and failures preserve
 their database and logs.
+
+## Result-table lifecycle and replication
+
+`worker.sink_table` is the sole public destination. PostgreSQL holds actual native
+result occurrences, registration/ownership metadata, object memberships and durable
+progress. It holds no internal weighted result table or presentation view. The
+low-level publication API also supports ordinary JSON-result occurrence tables;
+these are explicit destinations, never coefficient stores.
+
+FULL replica identity supplies old tuples for logical replication for the bounded
+output types. Destination tables must not enter the source publication. Consumers
+may follow a separate publication. Real pgoutput tests cover duplicate/NULL result
+inserts, exact deletes, rollback and cold restart. Compatible rebuilds replace
+contents using DELETE/INSERT in the cutover transaction while preserving the public
+OID; consumers observe that committed replacement. Incompatible schemas require
+explicit drop/create and consumer resnapshot. Rebuild staging tables contain only
+replacement result rows and are retired after cutover.
+
+The first publisher rejects over 1,000,000 physical changes in a bootstrap or
+incremental delta publication. Compatible rebuild cutover separately rewrites
+the complete result with DELETE/INSERT. It
+uses binary native-value comparison and transaction-local CTIDs for exact occurrence
+deletion; no persistent per-occurrence SQL metadata is created. Deletions scan the
+result table. Engine weights, keys, indexes and retraction operands remain
+object-backed. DML and source progress roll back together on a missing occurrence,
+resource limit or evaluation error. External writes and runtime administrative
+changes are unsupported; consumer roles must have read-only access.
+
+Old `result_view` configurations and weighted sink bindings require explicit
+migration using the prior binary to retire the old registration and a fresh owned
+namespace with this version. There is no silent adoption or conversion of existing
+relations. A replaced relation requires downstream publication setup and resnapshot.

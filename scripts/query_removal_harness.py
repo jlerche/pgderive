@@ -106,13 +106,13 @@ def fault(output, command, stage, mode):
 def competing_sink(output, command):
     fixture, config = setup(output, command, public=False)
     try:
-        before = fixture.sql(f'SELECT * FROM {fixture.name}.groups ORDER BY tuple')
+        before = fixture.sql(f'SELECT * FROM {fixture.bag_relation()} ORDER BY tuple')
         other = output/'other.toml'
         other.write_text(config.read_text().replace('query_id="grouped"', 'query_id="other"').replace(
             f'slot="{fixture.name}"', f'slot="{fixture.name}_other"').replace('retry_attempts=8', 'retry_attempts=1'))
         assert 'destination belongs to another query' in rejected(command, fixture, 'create', other)
         assert inspect(command, fixture, 'drop', other)['state'] == 'dropped'
-        assert fixture.sql(f'SELECT * FROM {fixture.name}.groups ORDER BY tuple') == before
+        assert fixture.sql(f'SELECT * FROM {fixture.bag_relation()} ORDER BY tuple') == before
         fixture.verify()
         inspect(command, fixture, 'drop', config)
         (output/'qualification.json').write_text(json.dumps({'unactivated_competitor': 'removed', 'active_sink': 'preserved'})+'\n')
@@ -144,17 +144,17 @@ def guarded_drop(output, command, kind):
     fixture, config = setup(output, command, public=kind != 'replaced-sink')
     try:
         if kind == 'dependent-view':
-            fixture.sql(f'CREATE VIEW {fixture.name}.consumer AS SELECT * FROM {fixture.name}.result')
+            fixture.sql(f'CREATE VIEW {fixture.name}.consumer AS SELECT * FROM {fixture.name}.groups')
             assert 'depend' in rejected(command, fixture, 'drop', config)
             assert inspect(command, fixture, 'status', config)['state'] == 'dropping'
             fixture.sql(f'DROP VIEW {fixture.name}.consumer')
-        elif kind == 'altered-view':
-            column = fixture.sql(f"SELECT attname FROM pg_attribute WHERE attrelid='{fixture.name}.result'::regclass AND attnum=1").strip()
+        elif kind == 'altered-table':
+            column = fixture.sql(f"SELECT attname FROM pg_attribute WHERE attrelid='{fixture.name}.groups'::regclass AND attnum=1").strip()
             quote = '"'+column.replace('"', '""')+'"'
-            fixture.sql(f'ALTER VIEW {fixture.name}.result RENAME COLUMN {quote} TO tampered')
-            assert 'removal result view was altered' in rejected(command, fixture, 'drop', config)
-            assert inspect(command, fixture, 'status', config)['state'] == 'dropping'
-            fixture.sql(f'ALTER VIEW {fixture.name}.result RENAME COLUMN tampered TO {quote}')
+            fixture.sql(f'ALTER TABLE {fixture.name}.groups RENAME COLUMN {quote} TO tampered')
+            assert 'registered result table layout changed' in rejected(command, fixture, 'drop', config)
+            assert inspect(command, fixture, 'status', config)['state'] == 'activated'
+            fixture.sql(f'ALTER TABLE {fixture.name}.groups RENAME COLUMN tampered TO {quote}')
         else:
             fixture.sql(f'ALTER TABLE {fixture.name}.groups RENAME TO held_groups; CREATE TABLE {fixture.name}.groups (LIKE {fixture.name}.held_groups INCLUDING ALL)')
             assert 'owned destination was removed or replaced' in rejected(command, fixture, 'drop', config)
@@ -181,7 +181,7 @@ if __name__ == '__main__':
         output = root/name
         output.mkdir()
         qualify(output, command)
-    for kind in ('dependent-view', 'altered-view', 'replaced-sink'):
+    for kind in ('dependent-view', 'altered-table', 'replaced-sink'):
         output = root/kind
         output.mkdir()
         guarded_drop(output, command, kind)
