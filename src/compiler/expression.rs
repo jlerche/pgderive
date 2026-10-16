@@ -3,29 +3,12 @@ use super::{
     parser::Name,
     syntax::{self, Compare},
 };
+use super::{typed::Typed as Scalar, value::Value};
 use crate::transaction::Row;
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use std::cmp::Ordering;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub(super) enum Value {
-    Boolean(bool),
-    Text(String),
-    Integer(i64),
-    Numeric(crate::numeric::Numeric),
-    Uuid([u8; 16]),
-    Timestamp(crate::temporal::Timestamp),
-    Interval(crate::temporal::Gap),
-}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub(super) enum Scalar {
-    Typed(Box<super::typed::Typed>),
-    Column(ColumnRef),
-    Remainder(ColumnRef, i64),
-    Difference(ColumnRef, ColumnRef),
-    Literal(Option<Value>),
-}
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) enum Expr {
     Value(Scalar),
@@ -37,43 +20,33 @@ pub(super) enum Expr {
 }
 type Resolve<'a> = dyn Fn(&Name) -> Result<ColumnRef> + 'a;
 pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
-    Scalar::Column(column.clone())
-        .evaluate((row, row))?
+    Scalar::column(column.clone())
+        .native_pair((row, row))?
         .map(|value| match value {
             Value::Numeric(value) => serde_json::to_string(&value.key()).map_err(Into::into),
             _ => serde_json::to_string(&value).map_err(Into::into),
         })
         .transpose()
 }
-pub(super) fn integral_remainder(
-    column: &ColumnRef,
-    divisor: i64,
-    row: &Row,
-) -> Result<Option<String>> {
-    Scalar::Remainder(column.clone(), divisor)
-        .evaluate((row, row))?
-        .map(|value| {
-            let Value::Integer(value) = value else { anyhow::bail!("nonintegral MOD result") };
-            Ok(value.to_string())
-        })
-        .transpose()
-}
 pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
     match expr {
-        syntax::Expr::Value(value) => Ok(Expr::Value(scalar(value, 16, resolve)?)),
+        syntax::Expr::Value(value) => Ok(Expr::Value(operand(value, resolve)?.coerce(16)?)),
         syntax::Expr::Null(value, not) => {
-            let value = match value {
-                syntax::Scalar::Column(name) => Scalar::Column(resolve(&name)?),
-                syntax::Scalar::Typed(value) => {
-                    Scalar::Typed(Box::new(super::typed::bind(&value, &|name| resolve(name), 0)?))
-                }
-                _ => anyhow::bail!("SQL type: NULL tests require a column or typed expression"),
+            ensure!(
+                matches!(value, syntax::Scalar::Column(_) | syntax::Scalar::Typed(_)),
+                "SQL type: NULL tests require a column or typed expression"
+            );
+            let Operand::Bound(value) = operand(value, resolve)? else {
+                anyhow::bail!("unresolved NULL test")
             };
             Ok(Expr::Null(value, not))
         }
         syntax::Expr::Compare(op, left, right) => {
-            let oid = column_type(&left, resolve)?
-                .or(column_type(&right, resolve)?)
+            let left = operand(left, resolve)?;
+            let right = operand(right, resolve)?;
+            let oid = left
+                .oid()
+                .or_else(|| right.oid())
                 .context("SQL type: comparison requires a native column")?;
             ensure!(
                 matches!(oid, 16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1114 | 1184 | 1186),
@@ -82,12 +55,11 @@ pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
             if matches!(oid, 25 | 1043) {
                 ensure!(
                     matches!(op, Compare::Eq | Compare::Ne)
-                        && (column_type(&left, resolve)?.is_some()
-                            != column_type(&right, resolve)?.is_some()),
+                        && left.oid().is_some() != right.oid().is_some(),
                     "text equality requires one native column and an unknown literal; text ordering and column collation resolution are unsupported"
                 );
             }
-            Ok(Expr::Compare(op, scalar(left, oid, resolve)?, scalar(right, oid, resolve)?))
+            Ok(Expr::Compare(op, left.coerce(oid)?, right.coerce(oid)?))
         }
         syntax::Expr::Not(expr) => Ok(Expr::Not(Box::new(bind(*expr, resolve)?))),
         syntax::Expr::And(args) => normalized(args, resolve, true),
@@ -110,187 +82,53 @@ fn normalized(args: Vec<syntax::Expr>, resolve: &Resolve<'_>, and: bool) -> Resu
     }
     Ok(if and { Expr::And(values) } else { Expr::Or(values) })
 }
-fn column_type(value: &syntax::Scalar, resolve: &Resolve<'_>) -> Result<Option<u32>> {
+fn operand(value: syntax::Scalar, resolve: &Resolve<'_>) -> Result<Operand> {
     match value {
-        syntax::Scalar::Column(name) | syntax::Scalar::Remainder(name, _) => {
-            Ok(Some(resolve(name)?.oid))
-        }
+        syntax::Scalar::Column(name) => Ok(Operand::Bound(Scalar::column(resolve(&name)?))),
         syntax::Scalar::Typed(value) => {
-            Ok(Some(super::typed::bind(value, &|name| resolve(name), 0)?.oid()))
-        }
-        syntax::Scalar::Difference(left, right) => {
-            let left = resolve(left)?;
-            let right = resolve(right)?;
-            Ok(Some(
-                if (integral(left.oid) || left.oid == 1700)
-                    && (integral(right.oid) || right.oid == 1700)
-                {
-                    super::typed::difference(left, right).oid()
-                } else {
-                    1186
-                },
-            ))
-        }
-        _ => Ok(None),
-    }
-}
-fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scalar> {
-    let value = match value {
-        syntax::Scalar::Typed(value) => {
-            let value = super::typed::bind(&value, &|name| resolve(name), 0)?;
-            ensure!(
-                value.oid() == oid
-                    || ((integral(oid) || oid == 1700)
-                        && (integral(value.oid()) || value.oid() == 1700)),
-                "typed operand has incompatible result type"
-            );
-            return Ok(Scalar::Typed(Box::new(value)));
-        }
-        syntax::Scalar::Column(name) => {
-            let column = resolve(&name)?;
-            ensure!(
-                column.oid == oid
-                    || ((integral(column.oid) || column.oid == 1700)
-                        && (integral(oid) || oid == 1700)),
-                "SQL type: incompatible comparison operands"
-            );
-            return Ok(Scalar::Column(column));
+            Ok(Operand::Bound(super::typed::bind(&value, &|name| resolve(name), 0)?))
         }
         syntax::Scalar::Remainder(name, divisor) => {
-            let column = resolve(&name)?;
-            ensure!(
-                integral(column.oid) && integral(oid),
-                "SQL type: MOD requires integral operands"
-            );
-            return Ok(Scalar::Remainder(column, divisor));
+            Ok(Operand::Bound(Scalar::remainder(resolve(&name)?, divisor)?))
         }
         syntax::Scalar::Difference(left, right) => {
-            let (left, right) = (resolve(&left)?, resolve(&right)?);
-            if (integral(left.oid) || left.oid == 1700)
-                && (integral(right.oid) || right.oid == 1700)
-                && (integral(oid) || oid == 1700)
-            {
-                return Ok(Scalar::Typed(Box::new(super::typed::difference(left, right))));
-            }
-            ensure!(
-                oid == 1186 && matches!(left.oid, 1114 | 1184) && left.oid == right.oid,
-                "timestamp subtraction requires same-type native timestamp operands"
-            );
-            return Ok(Scalar::Difference(left, right));
+            Ok(Operand::Bound(Scalar::difference(resolve(&left)?, resolve(&right)?)?))
         }
-        syntax::Scalar::Interval(value) if oid == 1186 => {
-            Some(Value::Interval(crate::temporal::Gap::Finite(value)))
-        }
-        syntax::Scalar::Integer(value) if oid == 1700 => {
-            Some(Value::Numeric(crate::numeric::Numeric::parse(&value.to_string())?))
-        }
-        syntax::Scalar::String(value) if oid == 1700 => {
-            Some(Value::Numeric(crate::numeric::Numeric::parse(&value)?))
-        }
-        syntax::Scalar::Null => None,
-        syntax::Scalar::Boolean(value) if oid == 16 => Some(Value::Boolean(value)),
-        syntax::Scalar::Integer(value) if integral(oid) => Some(Value::Integer(value)),
-        syntax::Scalar::String(value) if matches!(oid, 1114 | 1184) => {
-            Some(Value::Timestamp(crate::temporal::Timestamp::parse(&value, oid)?))
-        }
-        syntax::Scalar::String(value) if matches!(oid, 25 | 1043) => Some(Value::Text(value)),
-        syntax::Scalar::String(value) if oid == 2950 => Some(Value::Uuid(uuid(&value)?)),
-        _ => anyhow::bail!("SQL type: literal does not match native column"),
-    };
-    Ok(Scalar::Literal(value))
-}
-const fn integral(oid: u32) -> bool {
-    matches!(oid, 20 | 21 | 23)
-}
-fn typed_value(value: &super::typed::Typed, rows: (&Row, &Row)) -> Result<Option<Value>> {
-    if matches!(value.oid(), 20 | 21 | 23) {
-        return Ok(value.evaluate_pair(rows)?.map(Value::Integer));
+        literal => Ok(Operand::Literal(literal)),
     }
-    value
-        .text_pair(rows)?
-        .map(|text| match value.oid() {
-            1700 => Ok(Value::Numeric(crate::numeric::Numeric::parse(&text)?)),
-            25 | 1043 => Ok(Value::Text(text)),
-            16 => match text.as_str() {
-                "t" => Ok(Value::Boolean(true)),
-                "f" => Ok(Value::Boolean(false)),
-                _ => anyhow::bail!("invalid computed boolean"),
-            },
-            _ => anyhow::bail!("unsupported typed predicate result"),
-        })
-        .transpose()
 }
-impl Scalar {
-    fn evaluate(&self, rows: (&Row, &Row)) -> Result<Option<Value>> {
-        let column = match self {
-            Self::Column(column) => column,
-            Self::Literal(value) => return Ok(value.clone()),
-            Self::Typed(value) => return typed_value(value, rows),
-            Self::Difference(left, right) => {
-                let (Some(Value::Timestamp(left)), Some(Value::Timestamp(right))) = (
-                    Self::Column(left.clone()).evaluate(rows)?,
-                    Self::Column(right.clone()).evaluate(rows)?,
-                ) else {
-                    return Ok(None);
-                };
-                return Ok(Some(Value::Interval(left.difference(right)?)));
-            }
-            Self::Remainder(column, divisor) => {
-                let value = Self::Column(column.clone()).evaluate(rows)?;
-                return value
-                    .map(|value| {
-                        let Value::Integer(value) = value else {
-                            anyhow::bail!("nonintegral MOD input");
-                        };
-                        // PostgreSQL defines MIN % -1 as zero, without division overflow.
-                        Ok(Value::Integer(if *divisor == -1 {
-                            0
-                        } else {
-                            value.checked_rem(*divisor).context("invalid MOD divisor")?
-                        }))
-                    })
-                    .transpose();
-            }
-        };
-        let row = if column.right { rows.1 } else { rows.0 };
-        row.get(&column.name)
-            .context("compiled predicate column absent")?
-            .as_deref()
-            .map(|text| match column.oid {
-                16 => match text {
-                    "t" => Ok(Value::Boolean(true)),
-                    "f" => Ok(Value::Boolean(false)),
-                    _ => anyhow::bail!("invalid native boolean"),
-                },
-                20 | 21 | 23 => Ok(Value::Integer(text.parse()?)),
-                1700 => Ok(Value::Numeric(crate::numeric::Numeric::parse(text)?)),
-                25 | 1043 => Ok(Value::Text(text.to_owned())),
-                1114 | 1184 => {
-                    Ok(Value::Timestamp(crate::temporal::Timestamp::parse(text, column.oid)?))
-                }
-                2950 => Ok(Value::Uuid(uuid(text)?)),
-                _ => anyhow::bail!("unsupported scalar codec"),
-            })
-            .transpose()
-    }
-    fn is_null(&self, rows: (&Row, &Row)) -> Result<bool> {
+enum Operand {
+    Bound(Scalar),
+    Literal(syntax::Scalar),
+}
+impl Operand {
+    const fn oid(&self) -> Option<u32> {
         match self {
-            Self::Column(column) => Ok((if column.right { rows.1 } else { rows.0 })
-                .get(&column.name)
-                .context("compiled predicate column absent")?
-                .is_none()),
-            Self::Literal(value) => Ok(value.is_none()),
-            Self::Typed(_) | Self::Remainder(_, _) | Self::Difference(_, _) => {
-                Ok(self.evaluate(rows)?.is_none())
-            }
+            Self::Bound(value) => Some(value.oid()),
+            Self::Literal(_) => None,
         }
     }
+    fn coerce(self, oid: u32) -> Result<Scalar> {
+        match self {
+            Self::Bound(value) => {
+                ensure!(
+                    value.oid() == oid || (numeric(oid) && numeric(value.oid())),
+                    "SQL type: incompatible comparison operands"
+                );
+                Ok(value)
+            }
+            Self::Literal(value) => Scalar::predicate_literal(value, oid),
+        }
+    }
+}
+const fn numeric(oid: u32) -> bool {
+    matches!(oid, 20 | 21 | 23 | 1700)
 }
 impl Expr {
     pub(super) fn evaluate(&self, rows: (&Row, &Row)) -> Result<Option<bool>> {
         match self {
             Self::Value(value) => value
-                .evaluate(rows)?
+                .native_pair(rows)?
                 .map(|value| {
                     let Value::Boolean(value) = value else {
                         anyhow::bail!("nonboolean predicate");
@@ -300,7 +138,7 @@ impl Expr {
                 .transpose(),
             Self::Null(value, not) => Ok(Some(value.is_null(rows)? != *not)),
             Self::Compare(op, left, right) => {
-                let (Some(left), Some(right)) = (left.evaluate(rows)?, right.evaluate(rows)?)
+                let (Some(left), Some(right)) = (left.native_pair(rows)?, right.native_pair(rows)?)
                 else {
                     return Ok(None);
                 };
@@ -342,27 +180,6 @@ const fn compare(op: &Compare, ordering: Ordering) -> bool {
         Compare::Ge => !matches!(ordering, Ordering::Less),
     }
 }
-fn uuid(text: &str) -> Result<[u8; 16]> {
-    let text = text.strip_prefix('{').and_then(|text| text.strip_suffix('}')).unwrap_or(text);
-    let mut digits = String::new();
-    for byte in text.bytes() {
-        if byte == b'-' {
-            ensure!(!digits.is_empty() && digits.len().is_multiple_of(4), "invalid UUID separator");
-        } else {
-            ensure!(byte.is_ascii_hexdigit(), "invalid UUID digit");
-            digits.push(char::from(byte));
-        }
-    }
-    ensure!(
-        digits.len() == 32 && !text.ends_with('-') && !text.contains("--"),
-        "invalid UUID length"
-    );
-    let mut value = [0_u8; 16];
-    for (index, byte) in value.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&digits[index * 2..index * 2 + 2], 16)?;
-    }
-    Ok(value)
-}
 
 #[derive(Clone, Serialize)]
 #[serde(transparent)]
@@ -381,22 +198,22 @@ impl Predicate {
         let Expr::Compare(compare, left, right) = &self.0 else {
             return None;
         };
-        let (compare, column, limit) = match (left, right) {
-            (Scalar::Column(column), Scalar::Literal(Some(Value::Integer(limit)))) => {
-                (compare.clone(), column, *limit)
-            }
-            (Scalar::Literal(Some(Value::Integer(limit))), Scalar::Column(column)) => {
-                let reversed = match compare {
-                    Compare::Eq => Compare::Eq,
-                    Compare::Lt => Compare::Gt,
-                    Compare::Le => Compare::Ge,
-                    Compare::Gt => Compare::Lt,
-                    Compare::Ge => Compare::Le,
-                    Compare::Ne => Compare::Ne,
-                };
-                (reversed, column, *limit)
-            }
-            _ => return None,
+        let (compare, column, limit) = if let (Some(column), Some(limit)) =
+            (left.as_column(), right.as_integer_literal())
+        {
+            (compare.clone(), column, limit)
+        } else if let (Some(limit), Some(column)) = (left.as_integer_literal(), right.as_column()) {
+            let reversed = match compare {
+                Compare::Eq => Compare::Eq,
+                Compare::Lt => Compare::Gt,
+                Compare::Le => Compare::Ge,
+                Compare::Gt => Compare::Lt,
+                Compare::Ge => Compare::Le,
+                Compare::Ne => Compare::Ne,
+            };
+            (reversed, column, limit)
+        } else {
+            return None;
         };
         if column.name != field {
             return None;
@@ -411,15 +228,6 @@ impl Predicate {
     }
 }
 
-impl Scalar {
-    fn is_constant(&self) -> bool {
-        match self {
-            Self::Typed(value) => value.is_constant(),
-            Self::Literal(_) => true,
-            Self::Column(_) | Self::Remainder(_, _) | Self::Difference(_, _) => false,
-        }
-    }
-}
 impl Expr {
     pub(super) fn is_constant(&self) -> bool {
         match self {

@@ -101,31 +101,48 @@ inserts/deletes of duplicate and NULL rows; rollback exposes no partial output;
 cold restart, uncertain COMMIT, rebuild and drop preserve ownership/progress.
 Use separate schema/config, DML, lifecycle and replication-qualification slices.
 
-## M2 — Qualify the in-engine semantic runtime
+## M2 — Qualify the in-engine semantic runtime (complete baseline)
 
-All scalar operations and aggregate finalization execute in Rust. The former
-sink-deferral pass, placement/retention reports, terminal SQL renderer, connected
-function binding and mapped sink APIs have been removed. Supported native casts,
-checked arithmetic, CASE/COALESCE, predicates, date_bin and sufficient statistics
-remain in-engine. Integer AVG scale selection and rounding are finalized locally,
-qualified against PostgreSQL and the independent Decimal oracle. Unimplemented
-text, calendar, regex, formatting and extension functions fail compilation. The
-qualified local function batch below extends the initial text/integral subset.
+All scalar operations and aggregate finalization execute in Rust. Sink deferral,
+placement/retention reports, terminal SQL rendering, connected computation fallback
+and mapped sink APIs are removed. The supported domain includes qualified native
+casts, arithmetic, CASE/COALESCE, predicates, temporal kernels and sufficient
+statistics. Integer AVG finalization and the local function batch below have native
+PostgreSQL, independent memory and restart evidence. Unsupported operations fail
+explicitly. Semantic metadata is captured during initialization, never per row.
 
-Expand supported functions one small, independently tested implementation at a
-time. Bind exact types, coercion, NULL/strictness, lazy evaluation, collation,
-error and retraction behavior. Add memory and native-materialized-view fixtures
-covering source transactions and cold restart. Never substitute an approximate
-implementation or send operands to PostgreSQL for evaluation. Registration still
-captures the source semantic environment during initialization.
+M2 is complete for the supported domain. It does not promise arbitrary SQL support.
+Additional functions/types/overloads belong to the separate
+[SQL support backlog](sql-support-backlog.md), with independent qualification.
 
-## M3 — Improve engine scalar diagnostics and coverage
+## M3 — Consolidate scalar binding and diagnostics (complete baseline)
 
-Inventory missing functions and supported overloads. Give rejected calls a useful
-function/type/feature reason before slot creation. Generalize expression coverage
-only when implemented locally, with explicit budgets. Qualify constant-folding,
-errors in lazy branches, aggregate finalization, and shared evaluation/retraction
-behavior without an execution-placement system.
+Implementation: one bound `Typed` scalar representation is shared by predicate
+operands, projection maps and existing computed key/window-map paths. Predicate
+operands bind once; contextual literals are then checked against their resolved
+types. Shared native decoding preserves UUID/timestamp normalization, numeric
+representation and key identity. Boolean predicate structure remains explicit.
+
+The local capability registry owns supported function signatures, coercion rules,
+result types, strictness and resolved kernel identities. Function and arithmetic
+names resolve during binding; execution dispatches on resolved operations without
+catalog lookup, name resolution or per-row capability validation. Initialization's
+catalog-family list is derived from this registry. Diagnostics identify argument
+type names/OIDs and supported overloads.
+
+All computed maps use shared registration/interning. Date bins, time-component
+offsets and bounded remainder remain explicit kernels inside the same bound IR;
+their parser and context restrictions remain enforced. Scalar depth, argument,
+branch, numeric and output budgets remain in force. Constant-error rejection and
+strict constant-NULL folding retain their qualified behavior. Executable identity
+changes require explicit rebuild; old checkpoints are never silently reinterpreted.
+
+Acceptance: shared-IR and bind-once regression tests; consistent function errors in
+projection, WHERE, grouping keys and aggregate FILTER; native literal/alias identity;
+the common gate plus sequential temporal/hopping/lookup/session CDC and restart
+qualifications. No new function catalog entries or query compositions are required.
+Computed aggregate arguments, arbitrary computed join/window keys and broader
+relational lowering remain M4 work.
 
 ## M4 — Expand relational coverage and invalidation
 

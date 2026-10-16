@@ -17,7 +17,7 @@ pub(super) fn common(types: &[u32]) -> Result<u32> {
         types.iter().all(|oid| matches!(oid, 0 | 20 | 21 | 23 | 1700)),
         "mixed scalar result types are not available in-engine"
     );
-    Ok(super::numeric_common(types))
+    Ok(numeric_common(types))
 }
 
 pub(super) fn cast(
@@ -54,4 +54,8 @@ pub(super) fn cast(
     };
     ensure!(valid, "scalar cast from OID {} to OID {oid} is not available in-engine", input.oid);
     Ok(Typed { oid, value: Value::Cast(Box::new(input)) })
+}
+
+pub(super) fn numeric_common(types: &[u32]) -> u32 {
+    [1700, 20, 23, 21].into_iter().find(|oid| types.contains(oid)).unwrap_or(23)
 }

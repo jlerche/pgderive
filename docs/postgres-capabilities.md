@@ -2,7 +2,8 @@
 
 Baseline: scalar/relational code inspected at commit `867c2a2`; the binding
 checks below include the subsequent M0 implementation. Scope is the SQL compiler and continuous worker, not generic engine APIs.
-The exact closed signatures and parser guards linked below are authoritative;
+The exact closed signatures in `src/compiler/capabilities.rs` and parser guards
+linked below are authoritative;
 a family name is not permission to use all PostgreSQL overloads. Read with the
 [compatibility contract](postgres-compatibility.md) and
 [SQL subset](sql-compiler.md).
@@ -20,8 +21,15 @@ PostgreSQL computation fallback, or placement report.
 | Numeric arithmetic | Exact bounded coefficient/scale +, -, *; unsupported division/rounding reject |
 | Integer AVG | Local arbitrary-precision sum/count finalization with PostgreSQL scale selection and rounding; no SQL numeric_div call |
 | Fixed timestamp bins/offsets and integral MOD | Local qualified bounded implementations |
-| Pure integer/text functions | Checked integral ABS/to_hex; UTF8 length, trim, slice, replace, translate, reverse, split, repeat, code points and prefix checks; exact signatures in `src/compiler/typed/functions.rs`; expansion budgets and right/MIN boundary in the roadmap |
+| Pure integer/text functions | Checked integral ABS/to_hex; UTF8 length, trim, slice, replace, translate, reverse, split, repeat, code points and prefix checks; exact signatures in `src/compiler/capabilities.rs`; expansion budgets and right/MIN boundary in the roadmap |
 | lower, upper, regexp, array extraction, calendar formatting/extraction | Not available in-engine; compile-time errors, no fallback |
+
+The scalar architecture uses one bound IR in `src/compiler/typed.rs` for maps and
+predicate operands. `src/compiler/value.rs` owns native decoding and literal
+normalization. Function/operator dispatch resolves at binding time. Existing
+computed key/window maps use the same IR; specialized temporal/MOD kernels retain
+bounded parser/context guards. These structures do not enable computed aggregate
+arguments or arbitrary computed join/window keys.
 
 ## Relational capabilities
 

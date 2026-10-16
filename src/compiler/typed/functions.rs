@@ -1,5 +1,6 @@
 //! Explicit `pg_catalog` signatures for pure, UTF8, locally evaluated functions.
 use super::{ColumnRef, Name, Typed, Value};
+use crate::compiler::capabilities as registry;
 use anyhow::{Result, ensure};
 use pg_query::protobuf as pg;
 use serde::Serialize;
@@ -7,43 +8,10 @@ mod strings;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct Call {
-    pub(super) name: String,
+    pub(super) operation: crate::compiler::capabilities::Builtin,
+    pub(super) input_oid: u32,
     pub(super) arguments: Vec<Typed>,
 }
-type Signature = (&'static str, &'static [u32], u32);
-const SIGNATURES: &[Signature] = &[
-    ("length", &[25], 23),
-    ("char_length", &[25], 23),
-    ("character_length", &[25], 23),
-    ("octet_length", &[25], 23),
-    ("bit_length", &[25], 23),
-    ("ascii", &[25], 23),
-    ("chr", &[23], 25),
-    ("reverse", &[25], 25),
-    ("left", &[25, 23], 25),
-    ("right", &[25, 23], 25),
-    ("ltrim", &[25], 25),
-    ("ltrim", &[25, 25], 25),
-    ("rtrim", &[25], 25),
-    ("rtrim", &[25, 25], 25),
-    ("btrim", &[25], 25),
-    ("btrim", &[25, 25], 25),
-    ("replace", &[25, 25, 25], 25),
-    ("translate", &[25, 25, 25], 25),
-    ("strpos", &[25, 25], 23),
-    ("starts_with", &[25, 25], 16),
-    ("repeat", &[25, 23], 25),
-    ("split_part", &[25, 25, 23], 25),
-    ("substr", &[25, 23], 25),
-    ("substr", &[25, 23, 23], 25),
-    ("substring", &[25, 23], 25),
-    ("substring", &[25, 23, 23], 25),
-    ("to_hex", &[23], 25),
-    ("to_hex", &[20], 25),
-    ("abs", &[21], 21),
-    ("abs", &[23], 23),
-    ("abs", &[20], 20),
-];
 pub(super) fn bind(
     function: &pg::FuncCall,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
@@ -53,43 +21,26 @@ pub(super) fn bind(
     crate::compiler::parser::scalar::validate_call(function)?;
     let names = names(&function.funcname)?.0;
     let name = builtin_name(&names).unwrap_or("");
-    ensure!(
-        SIGNATURES.iter().any(|(candidate, _, _)| *candidate == name),
-        "function {} is not available in-engine",
-        names.join(".")
-    );
-    ensure!(function.args.len() <= 3, "function {name}: unsupported argument count");
+    ensure!(registry::contains(name), "function {} is not available in-engine", names.join("."));
+    registry::validate_arity(name, function.args.len())?;
     let arguments = function
         .args
         .iter()
         .map(|value| super::bind(value, resolve, depth + 1))
         .collect::<Result<Vec<_>>>()?;
     let types = arguments.iter().map(|value| value.oid).collect::<Vec<_>>();
-    ensure!(
-        !(name == "substring"
-            && types.get(1) == Some(&0)
-            && !types.get(2).is_some_and(|oid| matches!(oid, 21 | 23))),
-        "function substring: untyped NULL position selects an unsupported regex overload; cast the position to integer"
-    );
-    let signature = SIGNATURES.iter().find(|(candidate, inputs, _)| {
-        *candidate == name
-            && inputs.len() == types.len()
-            && inputs
-                .iter()
-                .zip(&types)
-                .all(|(expected, actual)| compatible(*expected, *actual, name))
-    });
-    let Some((_, _, oid)) = signature else {
-        anyhow::bail!(
-            "function {name}({types:?}) overload is not available in-engine (argument types are PostgreSQL OIDs)"
-        );
-    };
+    let signature = registry::resolve(name, &types)?;
+    ensure!(signature.strict, "local non-strict functions are not available in-engine");
     let value = if constant_null(&arguments)? {
         Value::Literal(None)
     } else {
-        Value::Call(Call { name: name.into(), arguments })
+        Value::Call(Call {
+            operation: signature.operation,
+            input_oid: signature.inputs[0],
+            arguments,
+        })
     };
-    Ok(Typed { oid: *oid, value })
+    Ok(Typed { oid: signature.result, value })
 }
 fn constant_null(arguments: &[Typed]) -> Result<bool> {
     // PostgreSQL folds strict calls with a constant NULL after simplifying their
@@ -100,16 +51,6 @@ fn constant_null(arguments: &[Typed]) -> Result<bool> {
         }
     }
     Ok(false)
-}
-fn compatible(expected: u32, actual: u32, name: &str) -> bool {
-    if matches!(name, "abs" | "to_hex") {
-        return expected == actual;
-    }
-    match expected {
-        25 => matches!(actual, 0 | 25 | 1043 | 705),
-        23 => matches!(actual, 0 | 21 | 23),
-        _ => expected == actual,
-    }
 }
 impl Call {
     pub(super) fn evaluate(
@@ -122,11 +63,6 @@ impl Call {
         let Some(arguments) = values.into_iter().collect::<Option<Vec<_>>>() else {
             return Ok(None);
         };
-        strings::evaluate(
-            &self.name,
-            &arguments,
-            self.arguments.first().map_or(0, |value| value.oid),
-        )
-        .map(Some)
+        strings::evaluate(self.operation, &arguments, self.input_oid).map(Some)
     }
 }

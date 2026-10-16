@@ -148,8 +148,8 @@ Formatting, collation-sensitive functions, regex and text-array extraction are
 currently unavailable. The typed runtime supports integral `abs`/`to_hex` and
 UTF8 text/varchar lengths, code points, reverse, trim, slicing, replacement,
 translation, position/prefix checks, repetition and split fields. The exact
-signatures are in `src/compiler/typed/functions.rs`; unsupported overloads fail
-with argument OIDs. Nested calls and text CASE/COALESCE share the local evaluator.
+signatures are in `src/compiler/capabilities.rs`; unsupported overloads fail
+with argument type names/OIDs and supported signatures. Nested calls and text CASE/COALESCE share the local evaluator.
 Expansion budgets and the rejected `right(text, -2147483648)` boundary are listed
 in the [fidelity roadmap](postgres-fidelity-roadmap.md#qualified-local-function-batch).
 Mapped sink APIs and expression placement reports have

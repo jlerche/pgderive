@@ -1,43 +1,50 @@
-//! Native integral remainder for typed lookup-key expressions.
+//! Bounded integral MOD kernel shared by predicates and lookup-key maps.
 use super::{ColumnRef, relational, scalar::Computed};
-use anyhow::{Result, ensure};
+use crate::transaction::Row;
+use anyhow::{Context, Result, ensure};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
-
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Remainder {
-    input: ColumnRef,
-    divisor: i64,
+    pub(super) input: ColumnRef,
+    pub(super) divisor: i64,
 }
 impl Remainder {
-    pub(super) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
-        super::expression::integral_remainder(&self.input, self.divisor, row)
+    pub(super) fn integer_pair(&self, rows: (&Row, &Row)) -> Result<Option<i64>> {
+        let row = if self.input.right { rows.1 } else { rows.0 };
+        row.get(&self.input.name)
+            .context("compiled MOD input absent")?
+            .as_deref()
+            .map(|text| {
+                let value = text.parse::<i64>()?;
+                // PostgreSQL MIN % -1 is zero, without division overflow.
+                let result = if self.divisor == -1 {
+                    0
+                } else {
+                    value.checked_rem(self.divisor).context("invalid MOD divisor")?
+                };
+                Ok(result)
+            })
+            .transpose()
     }
 }
 pub(super) fn bind(
-    input: ColumnRef,
+    mut input: ColumnRef,
     divisor: i64,
     computed: &mut Vec<Computed>,
 ) -> Result<ColumnRef> {
     ensure!(
-        !input.right && matches!(input.oid, 20 | 21 | 23) && divisor != 0,
+        !input.right,
         "lookup MOD requires a left integral column and nonzero integral literal"
     );
-    // An uncast integral literal is int4 or int8, so int2 input promotes to int4.
-    let oid = if input.oid == 20 || i32::try_from(divisor).is_err() { 20 } else { 23 };
-    let nullable = input.nullable;
-    let mut input = input;
     input.name = relational::field(0, &input.name);
-    let expression = Remainder { input, divisor };
-    let name = format!("@lookup_mod_{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
-    let column = ColumnRef { name, right: false, oid, nullable };
-    let mut target = column.clone();
-    target.name = relational::field(0, &column.name);
-    if !computed.iter().any(|prior| prior.column == target) {
-        computed.push(Computed {
-            column: target,
-            expression: super::scalar::Native::Remainder { remainder: expression },
-        });
+    let typed = super::typed::Typed::remainder(input, divisor)?;
+    // Lookups consume an unqualified descriptor but their Map stores scoped fields.
+    let mut local = Vec::new();
+    let column = super::scalar::register(typed, &mut local, "@lookup_mod_")?;
+    let mut entry = local.pop().context("lookup MOD map absent")?;
+    entry.column.name = relational::field(0, &column.name);
+    if !computed.iter().any(|prior| prior.column == entry.column) {
+        computed.push(entry);
     }
     Ok(column)
 }

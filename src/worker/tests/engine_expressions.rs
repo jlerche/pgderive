@@ -78,3 +78,19 @@ fn typed_text_and_boolean_functions_run_in_predicates() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn function_diagnostics_are_shared_across_existing_query_positions() {
+    for sql in [
+        "SELECT lower(category) AS value FROM source.auction",
+        "SELECT id FROM source.auction WHERE lower(category)='x'",
+        "SELECT id,COUNT(*) FROM source.auction GROUP BY id,lower(category)",
+        "SELECT id,COUNT(*) FILTER(WHERE lower(category)='x') FROM source.auction GROUP BY id",
+    ] {
+        let error = compile(sql, &contract()).err();
+        assert!(
+            format!("{error:?}").contains("function lower is not available in-engine"),
+            "{sql}: {error:?}"
+        );
+    }
+}

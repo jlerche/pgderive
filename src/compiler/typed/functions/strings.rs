@@ -1,43 +1,45 @@
 //! Character operations use Unicode scalar values, never bytes or grapheme clusters.
+use crate::compiler::capabilities::Builtin;
 use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
 const OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 
-pub(super) fn evaluate(name: &str, arguments: &[String], input_oid: u32) -> Result<String> {
+pub(super) fn evaluate(operation: Builtin, arguments: &[String], input_oid: u32) -> Result<String> {
     let first = arguments.first().context("function input absent")?;
     let second = || arguments.get(1).context("second function input absent");
     let third = || arguments.get(2).context("third function input absent");
-    match name {
-        "abs" => {
+    match operation {
+        Builtin::Abs => {
             let value = first.parse::<i64>()?.checked_abs().context("integral abs overflow")?;
             super::super::check_width(value, input_oid)?;
             Ok(value.to_string())
         }
-        "to_hex" => hexadecimal(first, input_oid),
-        "length" | "char_length" | "character_length" => count(first.chars().count()),
-        "octet_length" => count(first.len()),
-        "bit_length" => count(first.len().checked_mul(8).context("bit length overflow")?),
-        "ascii" => Ok(first.chars().next().map_or(0, u32::from).to_string()),
-        "chr" => character(first),
-        "reverse" => Ok(first.chars().rev().collect()),
-        "left" | "right" => edge(first, second()?.parse()?, name == "right"),
-        "ltrim" | "rtrim" | "btrim" => {
-            Ok(trim(first, arguments.get(1).map_or(" ", String::as_str), name))
+        Builtin::Hex => hexadecimal(first, input_oid),
+        Builtin::Length => count(first.chars().count()),
+        Builtin::OctetLength => count(first.len()),
+        Builtin::BitLength => count(first.len().checked_mul(8).context("bit length overflow")?),
+        Builtin::Ascii => Ok(first.chars().next().map_or(0, u32::from).to_string()),
+        Builtin::Chr => character(first),
+        Builtin::Reverse => Ok(first.chars().rev().collect()),
+        Builtin::Left | Builtin::Right => {
+            edge(first, second()?.parse()?, operation == Builtin::Right)
         }
-        "replace" => replace(first, second()?, third()?),
-        "translate" => Ok(translate(first, second()?, third()?)),
-        "strpos" => first
+        Builtin::Ltrim | Builtin::Rtrim | Builtin::Btrim => {
+            Ok(trim(first, arguments.get(1).map_or(" ", String::as_str), operation))
+        }
+        Builtin::Replace => replace(first, second()?, third()?),
+        Builtin::Translate => Ok(translate(first, second()?, third()?)),
+        Builtin::Strpos => first
             .find(second()?)
             .map_or_else(|| Ok("0".into()), |index| count(first[..index].chars().count() + 1)),
-        "starts_with" => Ok(if first.starts_with(second()?) { "t" } else { "f" }.into()),
-        "repeat" => repeat(first, second()?.parse()?),
-        "split_part" => split(first, second()?, third()?.parse()?),
-        "substr" | "substring" => substring(
+        Builtin::StartsWith => Ok(if first.starts_with(second()?) { "t" } else { "f" }.into()),
+        Builtin::Repeat => repeat(first, second()?.parse()?),
+        Builtin::SplitPart => split(first, second()?, third()?.parse()?),
+        Builtin::Substring => substring(
             first,
             second()?.parse()?,
             arguments.get(2).map(|value| value.parse()).transpose()?,
         ),
-        _ => anyhow::bail!("function {name} is not available in-engine"),
     }
 }
 fn count(value: usize) -> Result<String> {
@@ -65,12 +67,12 @@ fn edge(text: &str, number: i32, right: bool) -> Result<String> {
     let take = if number < 0 { length.saturating_sub(magnitude) } else { length.min(magnitude) };
     Ok(text.chars().skip(if right { length - take } else { 0 }).take(take).collect())
 }
-fn trim(text: &str, characters: &str, name: &str) -> String {
+fn trim(text: &str, characters: &str, operation: Builtin) -> String {
     let set = characters.chars().collect::<BTreeSet<_>>();
     let matches = |character| set.contains(&character);
-    match name {
-        "ltrim" => text.trim_start_matches(matches),
-        "rtrim" => text.trim_end_matches(matches),
+    match operation {
+        Builtin::Ltrim => text.trim_start_matches(matches),
+        Builtin::Rtrim => text.trim_end_matches(matches),
         _ => text.trim_matches(matches),
     }
     .into()

@@ -1,6 +1,7 @@
 //! Bounded `PostgreSQL` frontend for durable grouped joins and source projections.
 //! See `docs/sql-compiler.md` for the exact grammar and compatibility contract.
 mod bind;
+pub(crate) mod capabilities;
 mod expression;
 pub(crate) mod left_join;
 pub(crate) mod lookup;
@@ -20,6 +21,7 @@ pub(crate) mod scalar;
 mod syntax;
 pub(crate) mod topk;
 mod typed;
+mod value;
 use crate::{source::Contract, worker::Query};
 use anyhow::Result;
 pub(crate) use expression::Predicate;

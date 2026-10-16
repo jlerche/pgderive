@@ -9,10 +9,8 @@ WITH RECURSIVE native AS (
     SELECT p.oid FROM pg_catalog.pg_proc p
     WHERE p.pronamespace = 'pg_catalog'::regnamespace
       AND p.proname = ANY(ARRAY['date_bin','mod','count','sum','avg','min','max',
-          'row_number','rank','dense_rank','lag','lead','generate_series',
-          'abs','length','char_length','character_length','octet_length','bit_length',
-          'ascii','chr','reverse','left','right','ltrim','rtrim','btrim','replace',
-          'translate','strpos','starts_with','repeat','split_part','substr','substring','to_hex'])
+          'row_number','rank','dense_rank','lag','lead','generate_series'])
+      OR (p.pronamespace = 'pg_catalog'::regnamespace AND p.proname = ANY($2::text[]))
 ), aggregates AS (
     SELECT a.* FROM pg_catalog.pg_aggregate a
     WHERE a.aggfnoid IN (SELECT oid FROM families)

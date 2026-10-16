@@ -2,7 +2,7 @@
 use super::ColumnRef;
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct DateBin {
     pub(crate) input: ColumnRef,
     pub(crate) stride: i64,
@@ -13,34 +13,24 @@ pub struct DateBin {
 #[derive(Clone, Serialize)]
 pub struct Computed {
     pub(crate) column: ColumnRef,
-    pub(crate) expression: Native,
+    pub(crate) expression: super::typed::Typed,
 }
-#[derive(Clone, Serialize)]
-#[serde(untagged)]
-pub enum Native {
-    Typed { typed: super::typed::Typed },
-    Bin(DateBin),
-    Offset { offset: Offset },
-    Remainder { remainder: super::remainder::Remainder },
-}
-impl Native {
-    pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
-        match self {
-            Self::Typed { typed } => typed.evaluate(row),
-            Self::Bin(value) => value.evaluate(row),
-            Self::Offset { offset } => offset.evaluate(row),
-            Self::Remainder { remainder } => remainder.evaluate(row),
-        }
+/// Intern a fully bound scalar after its caller establishes the scope/row layout.
+pub(super) fn register(
+    typed: super::typed::Typed,
+    computed: &mut Vec<Computed>,
+    prefix: &str,
+) -> Result<ColumnRef> {
+    use sha2::{Digest, Sha256};
+    let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&typed)?));
+    let column = ColumnRef { name, right: false, oid: typed.oid(), nullable: typed.nullable() };
+    if !computed.iter().any(|prior| prior.column == column) {
+        computed.push(Computed { column: column.clone(), expression: typed });
     }
-    pub(super) const fn shift(&self) -> Option<&(ColumnRef, i64)> {
-        match self {
-            Self::Bin(value) => value.shift.as_ref(),
-            Self::Typed { .. } | Self::Offset { .. } | Self::Remainder { .. } => None,
-        }
-    }
+    Ok(column)
 }
 impl DateBin {
-    pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
+    pub(super) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         row.get(&self.input.name)
             .context("missing date_bin input")?
             .as_deref()
@@ -70,7 +60,6 @@ pub(super) fn bind(
     computed: &mut Vec<Computed>,
     scope: Option<usize>,
 ) -> Result<ColumnRef> {
-    use sha2::{Digest, Sha256};
     let input = resolve(&parsed.input)?;
     ensure!(input.oid == parsed.oid, "date_bin origin must match native timestamp type");
     let origin = crate::temporal::Timestamp::parse(&parsed.origin, parsed.oid)?;
@@ -90,23 +79,18 @@ pub(super) fn bind(
             Ok((index, *duration))
         })
         .transpose()?;
-    let expression = DateBin { input: input.clone(), stride: parsed.stride, origin, shift };
+    let expression = DateBin { input, stride: parsed.stride, origin, shift };
     let prefix = scope.map_or_else(|| "@scalar_".into(), |scope| format!("@scalar_stage_{scope}_"));
-    let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
-    let column = ColumnRef { name, right: false, oid: input.oid, nullable: input.nullable };
-    if !computed.iter().any(|prior| prior.column == column) {
-        computed.push(Computed { column: column.clone(), expression: Native::Bin(expression) });
-    }
-    Ok(column)
+    register(super::typed::Typed::bin(expression), computed, &prefix)
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Offset {
-    input: ColumnRef,
-    subtract: i64,
+    pub(super) input: ColumnRef,
+    pub(super) subtract: i64,
 }
 impl Offset {
-    fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
+    pub(super) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         row.get(&self.input.name)
             .context("missing timestamp offset input")?
             .as_deref()
@@ -124,20 +108,9 @@ pub(super) fn bind_offset(
     computed: &mut Vec<Computed>,
     scope: Option<usize>,
 ) -> Result<ColumnRef> {
-    use sha2::{Digest, Sha256};
     let input = resolve(&parsed.input)?;
     ensure!(matches!(input.oid, 1114 | 1184), "offset requires native timestamp input");
-    let expression =
-        Native::Offset { offset: Offset { input: input.clone(), subtract: parsed.subtract } };
+    let expression = Offset { input, subtract: parsed.subtract };
     let prefix = scope.map_or_else(|| "@offset_".into(), |scope| format!("@offset_stage_{scope}_"));
-    let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&expression)?));
-    let column = ColumnRef { name, right: false, oid: input.oid, nullable: input.nullable };
-    if !computed.iter().any(|prior| prior.column == column) {
-        computed.push(Computed { column: column.clone(), expression });
-    }
-    Ok(column)
-}
-
-pub(super) fn common(types: &[u32]) -> u32 {
-    [1700, 20, 23, 21].into_iter().find(|oid| types.contains(oid)).unwrap_or(23)
+    register(super::typed::Typed::offset(expression), computed, &prefix)
 }

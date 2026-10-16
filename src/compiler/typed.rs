@@ -1,10 +1,13 @@
 //! Checked native scalar expression trees executed before relational state.
-use super::{ColumnRef, parser::Name, scalar::common as numeric_common};
+use super::capabilities::Arithmetic;
+use super::{ColumnRef, parser::Name};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum};
 use serde::Serialize;
+use types::numeric_common;
 mod case;
 mod functions;
+mod predicate;
 mod text;
 mod types;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -18,17 +21,31 @@ enum Value {
     Literal(Option<i64>),
     Numeric(String),
     Text(String),
+    Encoded(Option<String>),
+    Interval(crate::temporal::Gap),
+    Difference(ColumnRef, ColumnRef),
+    Remainder(super::remainder::Remainder),
+    Bin(super::scalar::DateBin),
+    Offset(super::scalar::Offset),
     Call(functions::Call),
     Cast(Box<Typed>),
-    Binary { operation: String, left: Box<Typed>, right: Box<Typed> },
+    Binary { operation: Arithmetic, left: Box<Typed>, right: Box<Typed> },
     Coalesce(Vec<Typed>),
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
 }
 impl Typed {
-    pub(super) fn is_constant(&self) -> bool {
+    pub(in crate::compiler) fn is_constant(&self) -> bool {
         match &self.value {
-            Value::Column(_) => false,
-            Value::Literal(_) | Value::Numeric(_) | Value::Text(_) => true,
+            Value::Column(_)
+            | Value::Difference(..)
+            | Value::Remainder(_)
+            | Value::Bin(_)
+            | Value::Offset(_) => false,
+            Value::Literal(_)
+            | Value::Numeric(_)
+            | Value::Text(_)
+            | Value::Encoded(_)
+            | Value::Interval(_) => true,
             Value::Call(call) => call.arguments.iter().all(Self::is_constant),
             Value::Cast(value) => value.is_constant(),
             Value::Binary { left, right, .. } => left.is_constant() && right.is_constant(),
@@ -57,7 +74,14 @@ impl Typed {
                 .map(str::parse)
                 .transpose()?,
             Value::Literal(value) => *value,
-            Value::Numeric(_) | Value::Text(_) => anyhow::bail!("nonintegral scalar value"),
+            Value::Numeric(_)
+            | Value::Text(_)
+            | Value::Interval(_)
+            | Value::Difference(..)
+            | Value::Bin(_)
+            | Value::Offset(_) => anyhow::bail!("nonintegral scalar value"),
+            Value::Encoded(value) => value.as_deref().map(str::parse).transpose()?,
+            Value::Remainder(value) => value.integer_pair(rows)?,
             Value::Call(call) => call.evaluate(rows)?.map(|value| value.parse()).transpose()?,
             Value::Cast(input) => input.integer(rows)?,
             Value::Case { branches, otherwise } => {
@@ -85,13 +109,7 @@ impl Typed {
                 let right = right.integer(rows)?;
                 match (left, right) {
                     (Some(left), Some(right)) => Some(
-                        match operation.as_str() {
-                            "+" => left.checked_add(right),
-                            "-" => left.checked_sub(right),
-                            "*" => left.checked_mul(right),
-                            _ => anyhow::bail!("invalid typed scalar operation"),
-                        }
-                        .context("integral arithmetic overflow")?,
+                        operation.integer(left, right).context("integral arithmetic overflow")?,
                     ),
                     _ => None,
                 }
@@ -157,7 +175,7 @@ fn bind_inner(
             let [operation] = name.as_slice() else {
                 anyhow::bail!("qualified scalar operator unsupported");
             };
-            ensure!(matches!(operation.as_str(), "+" | "-" | "*"), "unsupported scalar operator");
+            let operation = Arithmetic::resolve(operation)?;
             let left = bind(optional(expression.lexpr.as_deref())?, resolve, depth + 1)?;
             let right = bind(optional(expression.rexpr.as_deref())?, resolve, depth + 1)?;
             ensure!(left.oid != 0 || right.oid != 0, "unresolved scalar operator types");
@@ -168,11 +186,7 @@ fn bind_inner(
             let oid = numeric_common(&[left.oid, right.oid]);
             Ok(Typed {
                 oid,
-                value: Value::Binary {
-                    operation: operation.clone(),
-                    left: Box::new(left),
-                    right: Box::new(right),
-                },
+                value: Value::Binary { operation, left: Box::new(left), right: Box::new(right) },
             })
         }
         NodeEnum::CoalesceExpr(expression) => {
@@ -202,7 +216,6 @@ pub(super) fn computed(
     computed: &mut Vec<super::scalar::Computed>,
     scope: Option<usize>,
 ) -> Result<ColumnRef> {
-    use sha2::{Digest, Sha256};
     let mut typed = bind(value, resolve, 0)?;
     if typed.oid == 705 {
         typed.oid = 25;
@@ -211,15 +224,7 @@ pub(super) fn computed(
         matches!(typed.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700),
         "computed scalar requires supported native type"
     );
-    let name = format!("@typed_{scope:?}_{:x}", Sha256::digest(serde_json::to_vec(&typed)?));
-    let column = ColumnRef { name, right: false, oid: typed.oid, nullable: typed.nullable() };
-    if !computed.iter().any(|value| value.column == column) {
-        computed.push(super::scalar::Computed {
-            column: column.clone(),
-            expression: super::scalar::Native::Typed { typed },
-        });
-    }
-    Ok(column)
+    super::scalar::register(typed, computed, &format!("@typed_{scope:?}_"))
 }
 
 #[cfg(test)]
@@ -252,11 +257,16 @@ fn literal(constant: &pg_query::protobuf::AConst) -> Result<Typed> {
 }
 
 impl Typed {
-    fn nullable(&self) -> bool {
+    pub(super) fn nullable(&self) -> bool {
         match &self.value {
             Value::Column(column) => column.nullable,
             Value::Literal(value) => value.is_none(),
-            Value::Numeric(_) | Value::Text(_) => false,
+            Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
+            Value::Encoded(value) => value.is_none(),
+            Value::Difference(left, right) => left.nullable || right.nullable,
+            Value::Remainder(value) => value.input.nullable,
+            Value::Bin(value) => value.input.nullable,
+            Value::Offset(value) => value.input.nullable,
             Value::Call(call) => call.arguments.iter().any(Self::nullable),
             Value::Cast(input) => input.nullable(),
             Value::Binary { left, right, .. } => left.nullable() || right.nullable(),
@@ -266,21 +276,15 @@ impl Typed {
             }
         }
     }
-    pub(super) const fn oid(&self) -> u32 {
+    pub(in crate::compiler) const fn oid(&self) -> u32 {
         self.oid
-    }
-    pub(super) fn evaluate_pair(
-        &self,
-        rows: (&crate::transaction::Row, &crate::transaction::Row),
-    ) -> Result<Option<i64>> {
-        self.integer(rows)
     }
 }
 pub(super) fn difference(left: ColumnRef, right: ColumnRef) -> Typed {
     Typed {
         oid: numeric_common(&[left.oid, right.oid]),
         value: Value::Binary {
-            operation: "-".into(),
+            operation: Arithmetic::Subtract,
             left: Box::new(Typed { oid: left.oid, value: Value::Column(left) }),
             right: Box::new(Typed { oid: right.oid, value: Value::Column(right) }),
         },
@@ -292,7 +296,13 @@ impl Typed {
         &self,
         rows: (&crate::transaction::Row, &crate::transaction::Row),
     ) -> Result<Option<String>> {
-        if matches!(self.oid, 16 | 25 | 1043 | 705) {
+        match &self.value {
+            Value::Encoded(value) => return Ok(value.clone()),
+            Value::Bin(value) => return value.evaluate(rows.0),
+            Value::Offset(value) => return value.evaluate(rows.0),
+            _ => {}
+        }
+        if matches!(self.oid, 16 | 25 | 1043 | 705 | 2950 | 1114 | 1184) {
             return self.string_pair(rows);
         }
         if self.oid != 1700 {
@@ -305,7 +315,14 @@ impl Typed {
                 .clone(),
             Value::Literal(value) => value.map(|v| v.to_string()),
             Value::Numeric(value) => Some(value.clone()),
-            Value::Text(_) | Value::Call(_) => anyhow::bail!("invalid numeric expression"),
+            Value::Text(_)
+            | Value::Call(_)
+            | Value::Encoded(_)
+            | Value::Interval(_)
+            | Value::Difference(..)
+            | Value::Remainder(_)
+            | Value::Bin(_)
+            | Value::Offset(_) => anyhow::bail!("invalid numeric expression"),
             Value::Cast(input) => input.text_pair(rows)?,
             Value::Binary { operation, left, right } => {
                 let (Some(left), Some(right)) = (left.text_pair(rows)?, right.text_pair(rows)?)
@@ -314,7 +331,7 @@ impl Typed {
                 };
                 Some(
                     crate::numeric::Numeric::parse(&left)?
-                        .binary(&crate::numeric::Numeric::parse(&right)?, operation)?
+                        .binary(&crate::numeric::Numeric::parse(&right)?, operation.symbol())?
                         .text(),
                 )
             }

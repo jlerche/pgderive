@@ -28,7 +28,10 @@ impl Environment {
         collations.sort_unstable();
         collations.dedup();
         collations.retain(|oid| *oid != 0);
-        let row = sql.query_one(include_str!("semantics/catalog.sql"), &[&collations]).await?;
+        let functions = crate::compiler::capabilities::names();
+        let row = sql
+            .query_one(include_str!("semantics/catalog.sql"), &[&collations, &functions])
+            .await?;
         let environment =
             Self { server: row.try_get(0)?, encoding: row.try_get(1)?, catalog: row.try_get(2)? };
         environment.validate()?;
