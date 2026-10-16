@@ -176,3 +176,13 @@ fn coalesce_preserves_order_and_rejects_unresolved_types() -> Result<()> {
     assert!(program(vec![Expression::Coalesce(vec![0])], None).validate(&[]).is_err());
     Ok(())
 }
+
+#[test]
+fn small_integer_casts_attest_postgres_implementation_names() -> anyhow::Result<()> {
+    assert_eq!(super::Function::Int4.signature(&[21])?, ("pg_catalog.int4(smallint)", "i2toi4"));
+    assert_eq!(super::Function::Int2.signature(&[23])?, ("pg_catalog.int2(integer)", "i4toi2"));
+    assert_eq!(super::implementation_types("i2toi4")?, ("21", "23", true));
+    assert_eq!(super::implementation_types("i4toi2")?, ("23", "21", true));
+    assert!(super::implementation_types("int24").is_err());
+    Ok(())
+}

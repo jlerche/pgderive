@@ -1,6 +1,7 @@
 //! Bounded `PostgreSQL` frontend for durable grouped joins and source projections.
 //! See `docs/sql-compiler.md` for the exact grammar and compatibility contract.
 mod bind;
+mod deferral;
 mod expression;
 pub(crate) mod left_join;
 pub(crate) mod lookup;
@@ -85,10 +86,11 @@ impl Compiled {
 pub fn compile(sql: &str, contract: &Contract) -> Result<Compiled> {
     contract.validate()?;
     let (parsed, fallback) = parser::parse(sql)?;
-    let compiled = bind::bind(parsed, contract).or_else(|prior| match fallback {
+    let mut compiled = bind::bind(parsed, contract).or_else(|prior| match fallback {
         Some(parsed) => bind::bind(parsed, contract).map_err(|_| prior),
         None => Err(prior),
     })?;
+    deferral::apply(&mut compiled)?;
     Ok(compiled)
 }
 

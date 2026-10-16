@@ -1495,7 +1495,7 @@ establish compatibility with PostgreSQL's unconstrained numeric semantics.
 
 ## Expression placement report
 
-`pgderive query validate` includes a `placement` object with revision 3 and
+`pgderive query validate` includes a `placement` object with revision 4 and
 `report_only: true`. It is advisory and read-only: no execution path changes,
 new supported SQL, registration, slot creation or per-publication checks arise
 from producing this report. Diagnostics are excluded from executable plan identity
@@ -1563,3 +1563,40 @@ runtime capability. This report inventories local Map roots and the terminal DAG
 not a unified field-level expression graph for every relational operator. Inline
 predicate/aggregate expressions retain their existing typed operator contracts;
 the report does not yet inventory every such expression as a separate node.
+
+
+## Qualified terminal-adjacent widening
+
+After the complete query is bound, a compiler pass may replace a direct local
+smallint→integer, smallint→bigint or integer→bigint column cast in the final Map
+immediately before Output with the existing bound terminal cast. The rule requires
+no existing terminal program and no sibling computation reading the cast result.
+It never moves a computation across a predicate, join, grouping/window operator,
+expansion or scope boundary. Narrowing, arithmetic, CASE/COALESCE trees and nested
+casts remain local. Standalone casts already accepted by terminal lowering keep
+that existing path; the new pass covers final casts alongside local computations.
+
+The proof is restricted to valid values of the captured native input type:
+widening is total, NULL-preserving, deterministic, injective, and has the same
+integer value and canonical output representation as PostgreSQL. Removing it from
+a final Map adds no error suppression opportunity. Fallible siblings retain their
+original placement and evaluation domains. Source/layout validation and bound
+built-in attestation remain prerequisites, performed during initialization.
+
+The executable output layout retains raw typed operands in the engine's weighted
+output arrangement, persisted in immutable objects. Repeated visible casts share
+one operand slot and DAG definition; PostgreSQL may evaluate that definition more
+than once while rendering outputs. Total pure casts make repeated evaluation safe.
+Positive and negative deltas run through the same bound program during the existing
+publication batch, with collision consolidation and exact occurrence retractions.
+No per-expression computation round trips are introduced. Maintenance-used casts
+retain their local evaluated value; there is no general cross-boundary reuse rule.
+
+Placement revision 4 adds `retention`: the output arrangement, ownership, weighted
+identity, raw operand slots/types/encodings and terminal-node references. This is a
+report of executable retained state, not another PostgreSQL metadata table.
+Advisory liveness still cannot authorize movement. Plans changed by the new pass
+have a new identity and require explicit rebuild for existing registrations; old
+arrangements are not silently reinterpreted. The lifecycle fixture qualifies all
+three casts against native materialized-view rows and metadata, independent memory,
+NULL updates, duplicates, deletion and cold restart.

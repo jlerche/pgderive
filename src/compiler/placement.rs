@@ -2,6 +2,7 @@
 mod fields;
 mod finalizers;
 mod graph;
+mod retention;
 mod terminal;
 use super::{Compiled, relational::Node};
 use anyhow::Result;
@@ -75,6 +76,7 @@ pub struct Report {
     stages: Vec<Stage>,
     expressions: Vec<Expression>,
     finalizers: Vec<finalizers::Finalizer>,
+    retention: retention::Retention,
 }
 
 pub(super) fn analyze(compiled: &Compiled) -> Result<Report> {
@@ -128,7 +130,8 @@ pub(super) fn analyze(compiled: &Compiled) -> Result<Report> {
     }
     terminal::append(compiled, &mut expressions)?;
     Ok(Report {
-        revision: 3,
+        revision: 4,
+        retention: retention::analyze(compiled)?,
         finalizers: finalizers::analyze(&compiled.relational.nodes)?,
         analysis_only: true,
         dependency_precision: "exact_scalar_operands_and_row_preserving_lineage_with_conservative_stateful_barriers",

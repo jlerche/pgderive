@@ -20,6 +20,16 @@ enum Value {
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
 }
 impl Typed {
+    pub(super) fn widening_input(&self) -> Option<&ColumnRef> {
+        let Value::Cast(input) = &self.value else {
+            return None;
+        };
+        let Value::Column(column) = &input.value else {
+            return None;
+        };
+        matches!((column.oid, self.oid), (21, 23 | 20) | (23, 20)).then_some(column)
+    }
+
     pub(super) fn columns(&self, columns: &mut Vec<ColumnRef>) {
         match &self.value {
             Value::Column(column) => columns.push(column.clone()),

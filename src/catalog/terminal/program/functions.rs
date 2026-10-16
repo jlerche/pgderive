@@ -127,9 +127,9 @@ impl Function {
 pub fn implementation_types(implementation: &str) -> Result<(&'static str, &'static str, bool)> {
     let (args, result) = match implementation {
         "int82" => ("20", "21"),
-        "int42" => ("23", "21"),
+        "i4toi2" => ("23", "21"),
         "int84" => ("20", "23"),
-        "int24" => ("21", "23"),
+        "i2toi4" => ("21", "23"),
         "int28" => ("21", "20"),
         "int48" => ("23", "20"),
         "int8_numeric" => ("20", "1700"),
@@ -150,9 +150,9 @@ pub fn implementation_types(implementation: &str) -> Result<(&'static str, &'sta
 fn integral_cast(function: Function, arguments: &[u32]) -> Result<Signature> {
     Ok(match (function, arguments) {
         (Function::Int2, [20]) => ("pg_catalog.int2(bigint)", "int82"),
-        (Function::Int2, [23]) => ("pg_catalog.int2(integer)", "int42"),
+        (Function::Int2, [23]) => ("pg_catalog.int2(integer)", "i4toi2"),
         (Function::Int4, [20]) => ("pg_catalog.int4(bigint)", "int84"),
-        (Function::Int4, [21]) => ("pg_catalog.int4(smallint)", "int24"),
+        (Function::Int4, [21]) => ("pg_catalog.int4(smallint)", "i2toi4"),
         (Function::Int8, [21]) => ("pg_catalog.int8(smallint)", "int28"),
         (Function::Int8, [23]) => ("pg_catalog.int8(integer)", "int48"),
         _ => anyhow::bail!("invalid integral cast signature"),

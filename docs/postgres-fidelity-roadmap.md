@@ -125,9 +125,14 @@ validation, SQL types separately from AVG ratio encoding, and lineage through
 statistics into local operands. Codec positions are shared with runtime. Tests
 cover shared grouping/aggregate operands, finalizer overflow/NULL/retraction checks,
 and live PostgreSQL CASE/COALESCE/cast error domains plus a filter-crossing
-counterexample. Other packed state remains conservative. Next: establish an
-explicit retained-operand/reuse plan and qualify a narrowly scoped movement rule;
-current diagnostics do not authorize new deferral.
+counterexample. Other packed state remains conservative. The executable output layout now provides the retained-operand/reuse contract,
+reported by placement revision 4. A first qualified compiler rule defers only
+direct lossless integral widening in a final Map immediately before Output, when
+no terminal program already exists. Raw typed operands remain object-backed;
+visible uses share slots/definitions, both delta signs use the bound publication
+program, and maintenance-used values remain local. No predicate/state boundary is
+crossed. Next: qualify further total operations or introduce explicit error-domain
+and retained-identity proofs before attempting fallible or cross-boundary movement.
 
 Introduce typed expression nodes and consumer dependencies in the executable plan.
 Mark maintenance consumers (predicates, join/group/distinct keys, aggregate

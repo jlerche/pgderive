@@ -67,8 +67,14 @@ def qualify(output, command, factory):
         validated = inspect(command, fixture, 'validate', config)
         labels = [column['name'] for column in validated['columns']]
         placement = validated['placement']
-        assert placement['report_only'] and placement['revision'] == 3
+        assert placement['report_only'] and placement['revision'] == 4
         assert placement['stages'] and placement['network_fallback_stages'] == []
+        if isinstance(fixture, WideningFixture):
+            assert [operand['column']['oid'] for operand in placement['retention']['operands']] == [23,21,23]
+            assert len(placement['retention']['operands']) == 3
+            casts = [expression for expression in placement['expressions'] if expression['definition'].get('Call',{}).get('function') in ('Int4','Int8')]
+            assert len(casts) == 3 and all(expression['current_execution']=='sink_deferred' for expression in casts)
+
         for expression in placement['expressions']:
             assert expression['type_oid'] > 0
             assert expression['current_execution'] in ('local','sink_deferred')
@@ -309,6 +315,19 @@ class ArrayFixture(ScalarFixture):
                 row['weight'] for row in actual} == dict(memory)
 
 
+class WideningFixture(SqlFixture):
+    def __init__(self, output):
+        super().__init__(output, False)
+        self.sql(f"ALTER TABLE {self.name}.bid ALTER COLUMN price TYPE integer; ALTER TABLE {self.name}.bid ADD COLUMN small_value smallint; UPDATE {self.name}.bid SET small_value=CASE WHEN id%4=0 THEN NULL WHEN id%4=1 THEN -32768 ELSE 32767 END; UPDATE {self.name}.bid SET price=2147483647 WHERE id IN(1,5); UPDATE {self.name}.bid SET price=-2147483648 WHERE id=2")
+        self.query = f"SELECT price::bigint AS wide,price::bigint AS again,small_value::integer AS medium,small_value::bigint AS big,CASE WHEN id>0 THEN 1 ELSE 0 END AS flag FROM {self.name}.bid WHERE id>0"
+
+    def verify(self):
+        raw = json.loads(self.sql(f"SELECT json_agg(b) FROM {self.name}.bid b WHERE id>0"))
+        memory = collections.Counter((row['price'],row['price'],row['small_value'],row['small_value'],1) for row in raw)
+        actual = json.loads(self.sql(f"SELECT json_agg(g) FROM {self.bag_relation()} g"))
+        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory)
+
+
 if __name__ == '__main__':
     output, command = harness_arguments()
     race = output/'namespace-race'
@@ -323,6 +342,7 @@ if __name__ == '__main__':
         ('native-range', lambda out: NativeFixture(out, 'projection')),
         ('native-scalars', ScalarFixture),
         ('native-array', ArrayFixture),
+        ('deferred-widening', WideningFixture),
     ]:
         directory = output/name
         directory.mkdir()
