@@ -106,6 +106,18 @@ Use separate schema/config, DML, lifecycle and replication-qualification slices.
 
 ## M2 — Prove expression placement
 
+First reporting slice: `query validate` now returns a versioned, report-only
+placement inventory. It follows maintenance consumers backward through operator
+edges and records exact typed dependencies/consumer reachability within existing
+terminal programs. Local Map expressions expose native types and definitions.
+Operator dependencies are conservative across fields and scopes; this is not a
+complete field-lineage or general movement proof. Candidates list outstanding
+liveness, evaluation-domain/error, lazy-branch, cardinality, context, retraction
+and runtime-equivalence obligations. Diagnostics do not affect executable plan
+identity or pending rebuild signatures. No new expressions move or become accepted.
+The next M2 slice must refine field-level lineage, including predicates, rebinds,
+aggregate finalizers and shared local computations, before enabling new deferral.
+
 Introduce typed expression nodes and consumer dependencies in the executable plan.
 Mark maintenance consumers (predicates, join/group/distinct keys, aggregate
 arguments/filters, ordering, windows and intermediate computations). Traverse

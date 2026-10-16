@@ -26,6 +26,10 @@ pub struct Terminal {
     program: program::Program,
 }
 impl Terminal {
+    pub(crate) fn placement_program(&self) -> Result<(&program::Program, Vec<u32>)> {
+        Ok((&self.program, self.program.validate(&self.types)?))
+    }
+
     pub(crate) fn native_rendering(&self) -> bool {
         self.program.predicate.is_none()
             && self.program.outputs.iter().all(|output| {

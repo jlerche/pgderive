@@ -90,10 +90,11 @@ pub async fn validate(config: &Config) -> Result<Value> {
         let collation = super::results::collation(&tx, &query_sql(&settings.query), column).await?;
         columns.push(json!({"name":column.name(),"type_oid":column.type_().oid(),"type":column.type_().name(),"type_modifier":column.type_modifier(),"collation":collation}));
     }
+    let placement = compiled.placement()?;
     tx.commit().await?;
     Ok(json!({"version":1,"query_id":settings.query_id,"valid":true,
         "identity_scope":"configured-slot-alias","plan_identity":plan.identity(),
-        "columns":columns,"source":source,"compiled":compiled}))
+        "columns":columns,"source":source,"compiled":compiled,"placement":placement}))
 }
 
 /// Inspect journaled query activation and source progress without changing state.

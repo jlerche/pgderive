@@ -10,7 +10,7 @@ impl Program {
             let visited = live.get_mut(index).context("terminal root node absent")?;
             if !*visited {
                 *visited = true;
-                pending.extend(references(&self.expressions[index]));
+                pending.extend(self.expressions[index].dependencies());
             }
         }
         let mut mapping = vec![None; self.expressions.len()];
@@ -27,27 +27,6 @@ impl Program {
         }
         self.predicate = self.predicate.map(|index| mapped(index, &mapping)).transpose()?;
         Ok(())
-    }
-}
-fn references(expression: &Expression) -> Vec<usize> {
-    match expression {
-        Expression::Input(_)
-        | Expression::Average(_)
-        | Expression::Null(_)
-        | Expression::Literal(_) => Vec::new(),
-        Expression::Call { arguments, .. }
-        | Expression::Coalesce(arguments)
-        | Expression::And(arguments)
-        | Expression::Or(arguments) => arguments.clone(),
-        Expression::Not(input)
-        | Expression::CollateC(input)
-        | Expression::ArrayElement { input, .. }
-        | Expression::IsNull { input, .. } => vec![*input],
-        Expression::Case { branches, otherwise } => branches
-            .iter()
-            .flat_map(|(condition, value)| [*condition, *value])
-            .chain([*otherwise])
-            .collect(),
     }
 }
 fn mapped(index: usize, mapping: &[Option<usize>]) -> Result<usize> {

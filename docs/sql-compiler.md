@@ -1492,3 +1492,45 @@ columns, even if the query does not consume numeric values. Published object byt
 `sqllib/src/decimal.rs` provides design evidence for typed decimal arithmetic;
 its fixed precision/scale result types and panic-based overflow paths do not
 establish compatibility with PostgreSQL's unconstrained numeric semantics.
+
+## Expression placement report
+
+`pgderive query validate` includes a `placement` object with revision 1 and
+`report_only: true`. It is advisory and read-only: no execution path changes,
+new supported SQL, registration, slot creation or per-publication checks arise
+from producing this report. Diagnostics are excluded from executable plan identity
+and pending rebuild semantic signatures.
+
+The report contains the executable relational stages, their input edges and
+maintenance consumers propagated backward through those edges. Predicates, joins,
+group/partition keys, aggregates/windows, ordering and set operations seed the
+closure. A local Map consumes its operands before executing; that input dependency
+propagates backward as an intermediate-computation consumer. Rebind/projection
+edges preserve reachability across scopes. A shared upstream stage records every
+reachable consumer. The report does not infer that unused columns are safe to move:
+its dependency precision is explicitly conservative at the operator boundary.
+
+Each local Map expression lists its current local execution path, native result
+OID, typed definition and input-stage dependency. `maintenance_required` means a
+maintenance consumer reaches that stage in this conservative graph. An expression
+outside that closure is `candidate_requires_proof`; outstanding obligations include
+column liveness, evaluation domains/errors, lazy branches, cardinality, contextual
+determinism, exact retractions and a qualified target runtime. Candidates continue
+executing locally. A different field in the same stage can conservatively keep a
+candidate marked as required; field-level lineage remains the next analysis step.
+
+Existing terminal expressions expose exact typed expression edges, native OIDs,
+source operand references, and all reachable output/predicate consumers. Their
+status is `qualified_existing_terminal` within the already accepted closed program;
+unreferenced nodes are labeled separately. Traversing CASE/COALESCE dependencies
+is static analysis and does not evaluate branches eagerly. Public output consumer
+names come from PostgreSQL's resolved column metadata, including legacy terminal
+maps whose internal output labels are positional.
+
+`network_fallback_stages` is currently empty. Unsupported functions or query shapes
+still fail compilation before activation; absence of a maintenance consumer does
+not establish volatility safety, hidden-read tracking, error equivalence or a new
+runtime capability. This first slice reports local Map roots and the terminal DAG,
+not a unified field-level expression graph for every relational operator. Inline
+predicate/aggregate expressions retain their existing typed operator contracts;
+the report does not yet inventory every such expression as a separate node.

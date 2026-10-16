@@ -43,11 +43,15 @@ pub(in crate::worker) async fn run_owned(
 }
 
 async fn signature(config: &Config) -> Result<String> {
-    let mut value = admin::validate(config).await?;
-    value.as_object_mut().context("invalid validation description")?.remove("query_id");
-    // Validation includes normalized IR, compiler/codec plan identity, native source
-    // layout and PostgreSQL's output labels/type modifiers. Pending state never
-    // uses the generation's randomized slot alias as its semantic signature.
+    semantic_description(admin::validate(config).await?)
+}
+
+fn semantic_description(mut value: Value) -> Result<String> {
+    let description = value.as_object_mut().context("invalid validation description")?;
+    description.remove("query_id");
+    // Placement is advisory and must not change a pending rebuild's semantic
+    // signature merely because diagnostics improve between engine versions.
+    description.remove("placement");
     Ok(serde_json::to_string(&value)?)
 }
 
@@ -226,3 +230,6 @@ async fn retire(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

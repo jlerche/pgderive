@@ -66,6 +66,18 @@ def qualify(output, command, factory):
         config = configured(fixture)
         validated = inspect(command, fixture, 'validate', config)
         labels = [column['name'] for column in validated['columns']]
+        placement = validated['placement']
+        assert placement['report_only'] and placement['revision'] == 1
+        assert placement['stages'] and placement['network_fallback_stages'] == []
+        for expression in placement['expressions']:
+            assert expression['type_oid'] > 0
+            assert expression['current_execution'] in ('local','sink_deferred')
+            if expression['status'] == 'candidate_requires_proof':
+                assert expression['obligations']
+            for consumer in expression['consumers']:
+                if consumer['kind'] == 'output':
+                    assert consumer['node'] in labels
+
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         assert inspect(command, fixture, 'status', config)['state'] == 'unregistered'

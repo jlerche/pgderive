@@ -24,6 +24,12 @@ target from implemented and qualified behavior.
 the configured query against the live PostgreSQL publication, binds terminal
 built-ins and reports its output names, type OIDs/modifiers and provisional plan
 identity. It runs read-only and creates no registration or replication slot.
+Its `placement` section inventories local computed expressions and the existing
+typed terminal DAG, with consumer dependencies and reasons for their current
+placement. Operator-level dependencies are conservative; a final-only local value
+is a candidate requiring further proof, not permission to move it. Analysis does
+not change execution or plan identity. See the
+[placement report contract](docs/sql-compiler.md#expression-placement-report).
 The provisional identity uses the configured slot alias; durable registration
 binds the independently journaled physical slot. `query status` reports whether
 the query is unregistered, registered or activated and its exact durable progress.

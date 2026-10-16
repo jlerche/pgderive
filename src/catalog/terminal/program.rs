@@ -230,3 +230,24 @@ fn case_type(branches: &[(usize, usize)], otherwise: usize, types: &[u32]) -> Re
 #[cfg(test)]
 #[path = "program/tests.rs"]
 mod tests;
+
+impl Expression {
+    pub(crate) fn dependencies(&self) -> Vec<usize> {
+        match self {
+            Self::Input(_) | Self::Average(_) | Self::Null(_) | Self::Literal(_) => Vec::new(),
+            Self::Call { arguments, .. }
+            | Self::Coalesce(arguments)
+            | Self::And(arguments)
+            | Self::Or(arguments) => arguments.clone(),
+            Self::Not(input)
+            | Self::CollateC(input)
+            | Self::ArrayElement { input, .. }
+            | Self::IsNull { input, .. } => vec![*input],
+            Self::Case { branches, otherwise } => branches
+                .iter()
+                .flat_map(|(condition, value)| [*condition, *value])
+                .chain([*otherwise])
+                .collect(),
+        }
+    }
+}

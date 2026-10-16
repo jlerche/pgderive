@@ -7,6 +7,7 @@ pub(crate) mod lookup;
 pub(crate) mod navigation;
 mod parser;
 pub(crate) mod partition;
+mod placement;
 mod projection;
 pub(crate) mod relational;
 #[cfg(test)]
@@ -39,6 +40,10 @@ pub struct Compiled {
     pub(crate) result_columns: Vec<crate::catalog::ResultColumn>,
 }
 impl Compiled {
+    pub(crate) fn placement(&self) -> Result<placement::Report> {
+        placement::analyze(self)
+    }
+
     pub(crate) const fn relational(&self) -> &relational::Relational {
         &self.relational
     }
