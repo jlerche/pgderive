@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 COUNTS = {'result-table': 2, 'query-binding': 18, 'transactions': 7, 'crashes': 5,
-          'compiler': 4, 'projection': 2, 'relational': 2, 'partition': 7,
+          'compiler': 4, 'projection': 2, 'functions': 1, 'relational': 2, 'partition': 7,
           'numeric': 4, 'native': 4, 'navigation': 5, 'case': 6,
           'query-lifecycle': 7}
 

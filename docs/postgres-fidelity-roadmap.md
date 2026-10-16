@@ -109,7 +109,8 @@ function binding and mapped sink APIs have been removed. Supported native casts,
 checked arithmetic, CASE/COALESCE, predicates, date_bin and sufficient statistics
 remain in-engine. Integer AVG scale selection and rounding are finalized locally,
 qualified against PostgreSQL and the independent Decimal oracle. Unimplemented
-text, calendar, regex, formatting and extension functions fail compilation.
+text, calendar, regex, formatting and extension functions fail compilation. The
+qualified local function batch below extends the initial text/integral subset.
 
 Expand supported functions one small, independently tested implementation at a
 time. Bind exact types, coercion, NULL/strictness, lazy evaluation, collation,
@@ -155,3 +156,42 @@ object-backed restart/durability fixtures. PostgreSQL is the reference oracle in
 tests, never the production evaluator. Changed executable identities require an
 explicit rebuild; old state must not be silently reinterpreted. Live delivery
 remains outside scope.
+
+### Qualified local function batch
+
+The typed runtime now supports `abs(int2/int4/int8)`, `to_hex(int4/int8)`,
+and the following UTF8 text/varchar functions:
+`length`, `char_length`, `character_length`, `octet_length`, `bit_length`,
+`ascii`, `chr(int4)`, `reverse`, `left`, `right`, `ltrim`, `rtrim`, `btrim`,
+`replace`, `translate`, `strpos`, `starts_with`, `repeat`, `split_part`,
+`substr` and the integral-position `substring` overloads. Text/varchar casts
+without modifiers, text CASE/COALESCE, nested calls and supported predicate
+positions use the same local evaluator. Unknown literals resolve only in the
+explicitly supported contexts; other overloads fail with argument type OIDs.
+`abs(numeric/float)` and locale-sensitive case conversion remain unsupported.
+Ambiguous `to_hex(smallint)`/`to_hex(NULL)` calls reject, matching PostgreSQL.
+An untyped NULL position in `substring` selects a regex overload unless an
+integral third argument disambiguates it; cast positions explicitly to use the
+supported positional overload. `substr` has no corresponding regex ambiguity.
+
+All calls in this batch are strict: NULL arguments produce NULL after argument
+evaluation. As in PostgreSQL, a constant NULL folds the whole strict call after
+constant subtrees are checked; row-dependent arguments then remain unevaluated.
+Character counts/slices operate on Unicode code points, retaining
+combining characters as separate characters. Trimming defaults to an ASCII space,
+not Unicode whitespace. Replacement and repetition reject outputs larger than
+16 MiB before allocation; other existing row/object/numeric budgets still apply.
+The engine's conservative constant-error rejection also applies inside calls.
+`right(text, -2147483648)` rejects explicitly because PostgreSQL minor releases
+differ at this overflow boundary; it never silently returns a different value.
+The installed PostgreSQL 17.11 result and the corrected
+[PostgreSQL 17 implementation](https://github.com/postgres/postgres/blob/REL_17_STABLE/src/backend/utils/adt/varlena.c)
+are preserved as the reason for this boundary.
+
+The live scalar oracle compares return types, values, NULLs and error domains
+against PostgreSQL. The worker qualification compares a regular result table
+against a refreshed native materialized view and independent Python recomputation
+through duplicate collisions, NULL transitions, signed updates, filtered rows and
+object-backed cold restart. Reference PostgreSQL computations occur only in tests.
+The initialization catalog fingerprint includes these function families; existing
+registrations with the previous fingerprint require the normal explicit rebuild.

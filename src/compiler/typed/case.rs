@@ -1,5 +1,5 @@
 //! Lazy searched `CASE`; result promotion happens after branch selection.
-use super::{ColumnRef, Name, Typed, Value, common};
+use super::{ColumnRef, Name, Typed, Value};
 use anyhow::{Context, Result, ensure};
 use pg_query::{NodeEnum, protobuf as pg};
 pub(super) fn bind(
@@ -32,7 +32,7 @@ pub(super) fn bind(
         branches.iter().map(|(_, value)| value.oid).chain([otherwise.oid]).collect::<Vec<_>>();
     ensure!(types.iter().any(|oid| *oid != 0), "circuit CASE needs resolved integral result");
     Ok(Typed {
-        oid: common(&types),
+        oid: super::types::common(&types)?,
         value: Value::Case { branches, otherwise: Box::new(otherwise) },
     })
 }

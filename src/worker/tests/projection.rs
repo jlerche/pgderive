@@ -213,7 +213,7 @@ fn unavailable_functions_reject_without_pg_computation() {
         "SELECT now() FROM source.auction",
         "SELECT random() FROM source.auction",
         "SELECT public.abs(id) FROM source.auction",
-        "SELECT abs(id) FROM source.auction WHERE abs(id)>0",
+        "SELECT abs(id::numeric) FROM source.auction WHERE abs(id)>0",
         "SELECT abs(DISTINCT id) FROM source.auction",
         "SELECT abs(id) FILTER (WHERE id>0) FROM source.auction",
         "SELECT length(category) OVER () FROM source.auction",
@@ -250,8 +250,8 @@ fn text_equality_revision_binds_each_expression_boundary() -> Result<()> {
 #[test]
 fn postgres_only_output_functions_are_unavailable() {
     for sql in [
-        "SELECT length(category) AS n FROM source.auction",
-        "SELECT abs(id) AS n FROM source.auction",
+        "SELECT lower(category) AS n FROM source.auction",
+        "SELECT abs(id::numeric) AS n FROM source.auction",
         "SELECT to_char(id,'999') AS n FROM source.auction",
     ] {
         assert!(compile(sql, &contract()).is_err(), "{sql}");

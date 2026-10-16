@@ -16,6 +16,7 @@ use tokio_postgres::{Client, NoTls};
 mod cases;
 mod count_oracle;
 mod evaluation;
+mod functions;
 mod join_oracle;
 mod mvp;
 pub mod object_oracle;

@@ -20,11 +20,12 @@ PostgreSQL computation fallback, or placement report.
 | Numeric arithmetic | Exact bounded coefficient/scale +, -, *; unsupported division/rounding reject |
 | Integer AVG | Local arbitrary-precision sum/count finalization with PostgreSQL scale selection and rounding; no SQL numeric_div call |
 | Fixed timestamp bins/offsets and integral MOD | Local qualified bounded implementations |
-| ABS, length, replace, lower, regexp, array extraction, calendar formatting/extraction | Not available in-engine; compile-time errors, no fallback |
+| Pure integer/text functions | Checked integral ABS/to_hex; UTF8 length, trim, slice, replace, translate, reverse, split, repeat, code points and prefix checks; exact signatures in `src/compiler/typed/functions.rs`; expansion budgets and right/MIN boundary in the roadmap |
+| lower, upper, regexp, array extraction, calendar formatting/extraction | Not available in-engine; compile-time errors, no fallback |
 
 ## Relational capabilities
 
-All maintenance below runs locally; numeric/formatting finalizers may run at S.
+All maintenance and finalization below run locally.
 Every operation preserves complete weighted identities; navigational keys do not
 establish uniqueness. See linked SQL-subset sections for exact syntax restrictions.
 

@@ -1,9 +1,12 @@
-//! Pure checked integral expression trees executed before relational state.
-use super::{ColumnRef, parser::Name, scalar::common};
+//! Checked native scalar expression trees executed before relational state.
+use super::{ColumnRef, parser::Name, scalar::common as numeric_common};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum};
 use serde::Serialize;
 mod case;
+mod functions;
+mod text;
+mod types;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Typed {
     oid: u32,
@@ -14,6 +17,8 @@ enum Value {
     Column(ColumnRef),
     Literal(Option<i64>),
     Numeric(String),
+    Text(String),
+    Call(functions::Call),
     Cast(Box<Typed>),
     Binary { operation: String, left: Box<Typed>, right: Box<Typed> },
     Coalesce(Vec<Typed>),
@@ -23,7 +28,8 @@ impl Typed {
     pub(super) fn is_constant(&self) -> bool {
         match &self.value {
             Value::Column(_) => false,
-            Value::Literal(_) | Value::Numeric(_) => true,
+            Value::Literal(_) | Value::Numeric(_) | Value::Text(_) => true,
+            Value::Call(call) => call.arguments.iter().all(Self::is_constant),
             Value::Cast(value) => value.is_constant(),
             Value::Binary { left, right, .. } => left.is_constant() && right.is_constant(),
             Value::Coalesce(values) => values.iter().all(Self::is_constant),
@@ -51,7 +57,8 @@ impl Typed {
                 .map(str::parse)
                 .transpose()?,
             Value::Literal(value) => *value,
-            Value::Numeric(_) => anyhow::bail!("numeric requires numeric evaluator"),
+            Value::Numeric(_) | Value::Text(_) => anyhow::bail!("nonintegral scalar value"),
+            Value::Call(call) => call.evaluate(rows)?.map(|value| value.parse()).transpose()?,
             Value::Cast(input) => input.integer(rows)?,
             Value::Case { branches, otherwise } => {
                 let mut selected = otherwise.as_ref();
@@ -134,8 +141,8 @@ fn bind_inner(
         NodeEnum::ColumnRef(_) => {
             let column = resolve(&column(value)?)?;
             ensure!(
-                matches!(column.oid, 20 | 21 | 23 | 1700),
-                "typed scalar requires integral column"
+                matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700),
+                "column type is not available in-engine typed expressions"
             );
             Ok(Typed { oid: column.oid, value: Value::Column(column) })
         }
@@ -154,7 +161,11 @@ fn bind_inner(
             let left = bind(optional(expression.lexpr.as_deref())?, resolve, depth + 1)?;
             let right = bind(optional(expression.rexpr.as_deref())?, resolve, depth + 1)?;
             ensure!(left.oid != 0 || right.oid != 0, "unresolved scalar operator types");
-            let oid = common(&[left.oid, right.oid]);
+            ensure!(
+                [left.oid, right.oid].iter().all(|oid| matches!(oid, 0 | 20 | 21 | 23 | 1700)),
+                "arithmetic requires integral or numeric operands"
+            );
+            let oid = numeric_common(&[left.oid, right.oid]);
             Ok(Typed {
                 oid,
                 value: Value::Binary {
@@ -178,13 +189,10 @@ fn bind_inner(
                 arguments.iter().any(|value| value.oid != 0),
                 "all-NULL circuit COALESCE requires an explicit integral cast"
             );
-            let oid = common(&arguments.iter().map(|value| value.oid).collect::<Vec<_>>());
+            let oid = types::common(&arguments.iter().map(|value| value.oid).collect::<Vec<_>>())?;
             Ok(Typed { oid, value: Value::Coalesce(arguments) })
         }
-        NodeEnum::FuncCall(function) => anyhow::bail!(
-            "function {} is not available in-engine",
-            names(&function.funcname)?.0.join(".")
-        ),
+        NodeEnum::FuncCall(function) => functions::bind(function, resolve, depth),
         _ => anyhow::bail!("expression is not available in-engine"),
     }
 }
@@ -195,10 +203,13 @@ pub(super) fn computed(
     scope: Option<usize>,
 ) -> Result<ColumnRef> {
     use sha2::{Digest, Sha256};
-    let typed = bind(value, resolve, 0)?;
+    let mut typed = bind(value, resolve, 0)?;
+    if typed.oid == 705 {
+        typed.oid = 25;
+    }
     ensure!(
-        matches!(typed.oid, 20 | 21 | 23 | 1700),
-        "computed scalar requires resolved integral type"
+        matches!(typed.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700),
+        "computed scalar requires supported native type"
     );
     let name = format!("@typed_{scope:?}_{:x}", Sha256::digest(serde_json::to_vec(&typed)?));
     let column = ColumnRef { name, right: false, oid: typed.oid, nullable: typed.nullable() };
@@ -223,10 +234,16 @@ fn literal(constant: &pg_query::protobuf::AConst) -> Result<Typed> {
         if !value.fval.contains(['.', 'e', 'E'])
             && let Ok(integer) = value.fval.parse::<i64>()
         {
-            return Ok(Typed { oid: 20, value: Value::Literal(Some(integer)) });
+            return Ok(Typed {
+                oid: if i32::try_from(integer).is_ok() { 23 } else { 20 },
+                value: Value::Literal(Some(integer)),
+            });
         }
         let numeric = crate::numeric::Numeric::parse(&value.fval)?;
         return Ok(Typed { oid: 1700, value: Value::Numeric(numeric.text()) });
+    }
+    if let Some(pg_query::protobuf::a_const::Val::Sval(value)) = &constant.val {
+        return Ok(Typed { oid: 705, value: Value::Text(value.sval.clone()) });
     }
     let Some(pg_query::protobuf::a_const::Val::Ival(value)) = &constant.val else {
         anyhow::bail!("typed scalar requires integer literal");
@@ -239,7 +256,8 @@ impl Typed {
         match &self.value {
             Value::Column(column) => column.nullable,
             Value::Literal(value) => value.is_none(),
-            Value::Numeric(_) => false,
+            Value::Numeric(_) | Value::Text(_) => false,
+            Value::Call(call) => call.arguments.iter().any(Self::nullable),
             Value::Cast(input) => input.nullable(),
             Value::Binary { left, right, .. } => left.nullable() || right.nullable(),
             Value::Coalesce(arguments) => arguments.iter().all(Self::nullable),
@@ -260,7 +278,7 @@ impl Typed {
 }
 pub(super) fn difference(left: ColumnRef, right: ColumnRef) -> Typed {
     Typed {
-        oid: common(&[left.oid, right.oid]),
+        oid: numeric_common(&[left.oid, right.oid]),
         value: Value::Binary {
             operation: "-".into(),
             left: Box::new(Typed { oid: left.oid, value: Value::Column(left) }),
@@ -274,6 +292,9 @@ impl Typed {
         &self,
         rows: (&crate::transaction::Row, &crate::transaction::Row),
     ) -> Result<Option<String>> {
+        if matches!(self.oid, 16 | 25 | 1043 | 705) {
+            return self.string_pair(rows);
+        }
         if self.oid != 1700 {
             return self.integer(rows).map(|v| v.map(|v| v.to_string()));
         }
@@ -284,6 +305,7 @@ impl Typed {
                 .clone(),
             Value::Literal(value) => value.map(|v| v.to_string()),
             Value::Numeric(value) => Some(value.clone()),
+            Value::Text(_) | Value::Call(_) => anyhow::bail!("invalid numeric expression"),
             Value::Cast(input) => input.text_pair(rows)?,
             Value::Binary { operation, left, right } => {
                 let (Some(left), Some(right)) = (left.text_pair(rows)?, right.text_pair(rows)?)
@@ -340,28 +362,5 @@ fn cast_expression(
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     depth: usize,
 ) -> Result<Typed> {
-    use super::parser::expressions::{names, optional};
-    let kind = cast.type_name.as_ref().context("missing scalar cast type")?;
-    ensure!(
-        crate::compiler::parser::expressions::unmodified_type(kind),
-        "unsupported scalar cast modifier"
-    );
-    let name = names(&kind.names)?.0;
-    let name = crate::compiler::parser::expressions::builtin_name(&name)
-        .context("unsupported scalar cast namespace")?;
-    let oid = match name {
-        "int2" => 21,
-        "int4" => 23,
-        "int8" => 20,
-        "numeric" => 1700,
-        _ => anyhow::bail!("unsupported scalar cast"),
-    };
-    let argument = optional(cast.arg.as_deref())?;
-    let input = if oid == 1700 {
-        numeric_cast_input(argument, resolve, depth + 1)?
-    } else {
-        bind(argument, resolve, depth + 1)?
-    };
-    ensure!(oid == 1700 || input.oid != 1700, "numeric to integral circuit cast unsupported");
-    Ok(Typed { oid, value: Value::Cast(Box::new(input)) })
+    types::cast(cast, resolve, depth)
 }

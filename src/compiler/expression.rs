@@ -139,8 +139,10 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
         syntax::Scalar::Typed(value) => {
             let value = super::typed::bind(&value, &|name| resolve(name), 0)?;
             ensure!(
-                (integral(oid) || oid == 1700) && (integral(value.oid()) || value.oid() == 1700),
-                "typed integral operand required"
+                value.oid() == oid
+                    || ((integral(oid) || oid == 1700)
+                        && (integral(value.oid()) || value.oid() == 1700)),
+                "typed operand has incompatible result type"
             );
             return Ok(Scalar::Typed(Box::new(value)));
         }
@@ -200,18 +202,30 @@ fn scalar(value: syntax::Scalar, oid: u32, resolve: &Resolve<'_>) -> Result<Scal
 const fn integral(oid: u32) -> bool {
     matches!(oid, 20 | 21 | 23)
 }
+fn typed_value(value: &super::typed::Typed, rows: (&Row, &Row)) -> Result<Option<Value>> {
+    if matches!(value.oid(), 20 | 21 | 23) {
+        return Ok(value.evaluate_pair(rows)?.map(Value::Integer));
+    }
+    value
+        .text_pair(rows)?
+        .map(|text| match value.oid() {
+            1700 => Ok(Value::Numeric(crate::numeric::Numeric::parse(&text)?)),
+            25 | 1043 => Ok(Value::Text(text)),
+            16 => match text.as_str() {
+                "t" => Ok(Value::Boolean(true)),
+                "f" => Ok(Value::Boolean(false)),
+                _ => anyhow::bail!("invalid computed boolean"),
+            },
+            _ => anyhow::bail!("unsupported typed predicate result"),
+        })
+        .transpose()
+}
 impl Scalar {
     fn evaluate(&self, rows: (&Row, &Row)) -> Result<Option<Value>> {
         let column = match self {
             Self::Column(column) => column,
             Self::Literal(value) => return Ok(value.clone()),
-            Self::Typed(value) if value.oid() == 1700 => {
-                return value
-                    .text_pair(rows)?
-                    .map(|v| Ok(Value::Numeric(crate::numeric::Numeric::parse(&v)?)))
-                    .transpose();
-            }
-            Self::Typed(value) => return Ok(value.evaluate_pair(rows)?.map(Value::Integer)),
+            Self::Typed(value) => return typed_value(value, rows),
             Self::Difference(left, right) => {
                 let (Some(Value::Timestamp(left)), Some(Value::Timestamp(right))) = (
                     Self::Column(left.clone()).evaluate(rows)?,

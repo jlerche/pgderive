@@ -5,7 +5,7 @@ use crate::compiler::{
 };
 use anyhow::{Context, Result};
 use pg_query::NodeEnum;
-fn expression(sql: &str) -> Result<Typed> {
+pub(super) fn expression(sql: &str) -> Result<Typed> {
     let parsed = pg_query::parse(&format!("SELECT {sql}"))?;
     let statement = parsed
         .protobuf
@@ -111,3 +111,6 @@ fn exact_numeric_computation_preserves_scale_and_special_values() -> Result<()> 
     }
     Ok(())
 }
+
+#[path = "tests/functions.rs"]
+mod functions;

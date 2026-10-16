@@ -145,7 +145,14 @@ rows; it performs native type decoding and ordinary result-table DML, not query
 expression evaluation. There is no connected PostgreSQL computation fallback.
 Unimplemented operations reject validation with the function/feature reason.
 Formatting, collation-sensitive functions, regex and text-array extraction are
-currently unavailable. Mapped sink APIs and expression placement reports have
+currently unavailable. The typed runtime supports integral `abs`/`to_hex` and
+UTF8 text/varchar lengths, code points, reverse, trim, slicing, replacement,
+translation, position/prefix checks, repetition and split fields. The exact
+signatures are in `src/compiler/typed/functions.rs`; unsupported overloads fail
+with argument OIDs. Nested calls and text CASE/COALESCE share the local evaluator.
+Expansion budgets and the rejected `right(text, -2147483648)` boundary are listed
+in the [fidelity roadmap](postgres-fidelity-roadmap.md#qualified-local-function-batch).
+Mapped sink APIs and expression placement reports have
 been removed. Existing registrations with changed plan/binding layouts require
 retirement with the prior binary and recreation with this binary when the old
 binding contains removed map fields. Old state is never silently reinterpreted.
@@ -356,7 +363,7 @@ binary search resolves the tuple; no primary-key or last-write-wins interpretati
 is introduced. Generic signed trace validation continues to permit negative weights. The circuit retains full-tuple input identity and the exact statistics arrangement,
 then projects SQL results from the changed statistics. Both are included in object
 membership/checkpoint/recovery/compaction alongside output state. Numeric SUM/AVG
-finalizers still use the bound PostgreSQL publication functions. Source LSN, logical time and PUT/atomic-publication/ACK remain separate boundaries.
+finalizers execute locally before publication. Source LSN, logical time and PUT/atomic-publication/ACK remain separate boundaries.
 
 Qualification includes PostgreSQL and independent full-bag oracles for NULLs,
 FILTER, weighted changes, deletion of the last row and cold restart. A memory-store
@@ -613,7 +620,7 @@ pushed onto one input when they reference both sources.
 Positional ROWS, ROW_NUMBER and navigation stages require explicit ordering by
 all fields of the proven logical occurrence identity. Hidden keys cannot satisfy
 that proof. Peer rank/frame stages preserve SQL ties without implicit keys.
-Terminal PostgreSQL expressions remain sink-only. Joined scopes compose through
+Every expression must be supported by the in-engine runtime. Joined scopes compose through
 explicit boundary maps in the shared graph.
 
 Three owned sequential fixtures compare derived join projection, grouped counts,

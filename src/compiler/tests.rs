@@ -119,7 +119,7 @@ fn normalization_and_fail_closed_types() -> Result<()> {
         "n IS DISTINCT FROM 1",
         "true IS NULL",
         "ROW(a) IS NULL",
-        "abs(n)>0",
+        "abs(n::numeric)>0",
         "a IS TRUE",
         "n OPERATOR(pg_catalog.=) 1",
     ] {

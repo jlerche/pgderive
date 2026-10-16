@@ -134,20 +134,20 @@ Source contracts now include a SHA-256 catalog fingerprint and exact server vers
 and encoding, for every accepted query. The closed dependency
 manifest in `src/semantics/catalog.sql` covers supported native type definitions and
 I/O functions, casts between those types, catalog comparison/index support,
-the local date_bin/mod, aggregate, ranking/navigation and series families, their
+the local integer/text, date_bin/mod, aggregate, ranking/navigation and series families, their
 aggregate transition/finalization and planner-support dependencies, and generated-SQL
 transport helpers. Interval/float8 codecs and casts cover implicit hopping-expression
 operations; this does not enable those types as source columns.
 It includes registered source collation definitions/provider versions and database
-locale metadata. Terminal bindings independently include the same shared baseline,
-in addition to their explicit expression-function and UTC/C checks. Explicit
-functions retain full pg_proc/language definitions in the binding and must remain
-scalar, non-variadic, security-invoker built-ins without default arguments.
+locale metadata. Qualified local function families retain full pg_proc/language
+definitions in this shared fingerprint. The compiler accepts only the closed
+signatures implemented by the engine; unsupported overloads and call modifiers
+fail validation. There is no terminal function-binding or sink evaluator.
 
 Source verification compares this fingerprint during initialization, restart and
 rebuild, including snapshot setup. Activation/publication retain layout-only
-source locking and verification. Terminal environment inspection and canonical
-session configuration happen during binding and sink initialization. Evaluation
+source locking and verification. Shared environment inspection and canonical
+session configuration happen during initialization. Evaluation
 uses the bound program without semantic catalog queries or repeated session SETs.
 Workers set pg_catalog search_path, UTC, ISO/MDY
 DateStyle, ISO intervals and extra_float_digits=3 during initialization; callers

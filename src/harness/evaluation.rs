@@ -19,6 +19,7 @@ pub(super) async fn check(sql: &Client, schema: &str, contract: &Contract) -> Re
     ] {
         compare(sql, schema, contract, expression, bidder).await?;
     }
+    super::functions::check(sql, schema, contract).await?;
     average(sql).await?;
     filter_boundary(sql, schema).await?;
     eprintln!(

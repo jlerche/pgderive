@@ -126,7 +126,8 @@ pub(super) fn scalar(value: &Node) -> Result<Scalar> {
         {
             typed(value)
         }
-        NodeEnum::FuncCall(_) | NodeEnum::AExpr(_) => remainder(value),
+        NodeEnum::FuncCall(_) => remainder(value).or_else(|_| typed(value)),
+        NodeEnum::AExpr(_) => remainder(value),
         _ => anyhow::bail!("unsupported scalar expression"),
     }
 }
