@@ -9,7 +9,7 @@ use tokio_postgres::{Column, GenericClient};
 
 pub(super) async fn validate(sql: &(impl GenericClient + Sync), settings: &Settings) -> Result<()> {
     let columns = columns(sql, &settings.query).await?;
-    crate::catalog::Sink::Rows { table: settings.sink_table.clone(), columns, map: None }.validate()
+    crate::catalog::Sink::Rows { table: settings.sink_table.clone(), columns }.validate()
 }
 
 pub(super) async fn columns(

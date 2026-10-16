@@ -28,20 +28,20 @@ LOCAL_FUNCTIONS = {
 class BindingFixture(Fixture):
     def __init__(self, output, mode, database):
         super().__init__(output, 'binding_'+mode.replace('-', '_'), rows=8, auctions=2, database=database)
-        self.terminal = mode in ('expression', 'hot-terminal')
+        self.computed = mode in ('expression', 'hot-computed')
         if mode == 'varchar':
             self.sql(f'ALTER TABLE {self.name}.bid ADD COLUMN note varchar(12)')
 
     def config(self, maximum=0):
         path = super().config(maximum)
-        expression = 'abs(price)' if self.terminal else 'price'
+        expression = 'price+1' if self.computed else 'price'
         text = path.read_text().split('[worker.query]')[0]
         text += f'[worker.query]\nsql="SELECT {expression} AS value FROM {self.name}.bid"\n'
         path.write_text(text.replace('retry_attempts=8', 'retry_attempts=1'))
         return path
 
     def verify(self):
-        expression = 'abs(price)' if self.terminal else 'price'
+        expression = 'price+1' if self.computed else 'price'
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({expression})) tuple,count(*) weight FROM {self.name}.bid GROUP BY {expression}'
         assert self.bag_difference(expected).strip() == '0'
         assert self.acknowledgement_ahead().strip() == '0'
@@ -81,7 +81,7 @@ def qualify(output, command, mode, database):
             change = "UPDATE pg_catalog.pg_operator SET oprcanmerge=NOT oprcanmerge WHERE oid=(SELECT aggsortop FROM pg_catalog.pg_aggregate WHERE aggfnoid='pg_catalog.min(anyarray)'::regprocedure)"
             restore = change
         elif mode == 'expression':
-            change = "UPDATE pg_catalog.pg_proc SET proleakproof=NOT proleakproof WHERE oid='pg_catalog.abs(bigint)'::regprocedure"
+            change = "UPDATE pg_catalog.pg_proc SET proleakproof=NOT proleakproof WHERE oid='pg_catalog.int8pl(bigint,bigint)'::regprocedure"
             restore = change
         elif mode == 'bootstrap-helper':
             change = "UPDATE pg_catalog.pg_proc SET proisstrict=NOT proisstrict WHERE oid='pg_catalog.octet_length(text)'::regprocedure"
@@ -161,7 +161,7 @@ def hot_path(output, command, mode, database):
             initial = inspections(log)
             assert 'catalog' in initial, 'initialization did not inspect catalog'
             assert 'session_configuration' in initial, 'initialization did not configure sessions'
-            assert ('terminal_functions' in initial) == fixture.terminal
+            assert 'terminal_functions' not in initial
             changes = [f'UPDATE {fixture.name}.bid SET price=-3 WHERE id=1',
                        f"UPDATE {fixture.name}.auction SET category='unused' WHERE id=1",
                        f'DELETE FROM {fixture.name}.bid WHERE id=2']
@@ -201,7 +201,7 @@ def main():
             directory = output/mode
             directory.mkdir()
             qualify(directory, command, mode, database)
-        for mode in ['hot-plain','hot-terminal']:
+        for mode in ['hot-plain','hot-computed']:
             directory = output/mode
             directory.mkdir()
             hot_path(directory, command, mode, database)

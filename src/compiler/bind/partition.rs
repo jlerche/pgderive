@@ -111,12 +111,12 @@ fn build(
         aggregates: state.aggregates,
     };
     let relation = context.relation;
-    let terminal = super::terminal(transforms, &columns)?;
+    let mapping = super::output_mapping(transforms, &columns)?;
     let output = crate::compiler::Projected {
         schema: relation.schema.clone(),
         table: relation.table.clone(),
         columns,
-        terminal,
+        mapping,
     };
     let mut nodes = if projection {
         vec![
@@ -154,7 +154,7 @@ fn source_predicate(
 }
 struct BoundTargets {
     columns: Vec<OutputColumn>,
-    transforms: Vec<crate::catalog::terminal::OutputMap>,
+    transforms: Vec<crate::compiler::output::OutputMap>,
 }
 #[derive(Clone, Copy)]
 struct TargetContext<'a> {
@@ -172,7 +172,7 @@ fn bind_targets(
     let mut columns = Vec::new();
     let mut transforms = Vec::new();
     for target in targets {
-        let mut transform = crate::catalog::terminal::OutputMap::Identity;
+        let mut transform = crate::compiler::output::OutputMap::Identity;
         let column = match target.value {
             syntax::Value::Column(name) => resolve(&name)?,
             syntax::Value::Typed(value) => {
@@ -279,8 +279,8 @@ fn aggregate(
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     context: (&[ColumnRef], &[String]),
     state: &mut Targets,
-) -> Result<(ColumnRef, crate::catalog::terminal::OutputMap)> {
-    use crate::catalog::terminal::OutputMap;
+) -> Result<(ColumnRef, crate::compiler::output::OutputMap)> {
+    use crate::compiler::output::OutputMap;
     if let Some(window) = value.window {
         ensure!(context.0.is_empty(), "grouped window composition requires subquery lowering");
         let (candidate, window_keys) =
@@ -313,7 +313,6 @@ fn aggregate(
         .map_or_else(|| result_type(&value.function, argument.as_ref()), |value| Ok(value.oid))?;
     let transform = match (&value.function, oid) {
         (Function::Average, _) => OutputMap::Average,
-        (Function::Sum | Function::Lag | Function::Lead, 1700) => OutputMap::Numeric,
         _ => OutputMap::Identity,
     };
     let name = format!("@aggregate_{}", state.base + state.aggregates.len());

@@ -1,4 +1,4 @@
-//! Lift native projections into typed scopes without executing a deferred sink map.
+//! Lift native projections into typed scopes using native engine values.
 use super::{Compiled, scope};
 use crate::{
     compiler::{
@@ -19,7 +19,7 @@ pub(super) fn bind(
     let resolve = |name: &crate::compiler::parser::Name| {
         Ok(super::relational::qualify(super::resolve(name, &scopes)?))
     };
-    let (columns, terminal) = super::relational::output(columns, &resolve)?;
+    let (columns, mapping) = super::relational::output(columns, &resolve)?;
     let mut nodes = vec![Node::Source { id: "source".into(), source: 0 }];
     let input = if let Some(predicate) = predicate {
         nodes.push(Node::Filter {
@@ -37,7 +37,7 @@ pub(super) fn bind(
         schema: relation.schema.clone(),
         table: relation.table.clone(),
         columns,
-        terminal,
+        mapping,
     };
     Ok(Compiled {
         result_columns: Vec::new(),

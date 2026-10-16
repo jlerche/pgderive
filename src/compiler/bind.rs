@@ -5,8 +5,8 @@ mod native_join;
 mod native_scope;
 mod partition;
 mod relational;
+mod scalar;
 mod scoped_join;
-mod terminal;
 mod topk;
 use super::{
     ColumnRef, Compiled,
@@ -29,8 +29,8 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         | Parsed::Projection { source, columns, predicate } => {
             native_scope::bind(source, columns, predicate, contract)
         }
-        Parsed::Terminal { source, targets, predicate } => {
-            terminal::bind(source, &targets, predicate.as_deref(), contract)
+        Parsed::Scalar { source, targets, predicate } => {
+            scalar::bind(source, &targets, predicate.as_deref(), contract)
         }
         Parsed::ScopedJoin(parsed) => scoped_join::bind(parsed, contract),
         Parsed::Derived(parsed) => derived::bind_derived(parsed, contract),
@@ -190,7 +190,7 @@ pub(super) fn legacy(selectors: Query, contract: &Contract) -> Result<Compiled> 
                 label: "sum".into(),
             },
         ],
-        terminal: None,
+        mapping: None,
     };
     let sources = [left, right]
         .map(|relation| Source { schema: relation.schema.clone(), table: relation.table.clone() })
@@ -271,21 +271,16 @@ fn resolve(name: &Name, scopes: &[Scope<'_>]) -> Result<ColumnRef> {
     matches.pop().with_context(|| format!("SQL resolve: unknown column {}", name.0.join(".")))
 }
 
-fn terminal(
-    mut transforms: Vec<crate::catalog::terminal::OutputMap>,
+fn output_mapping(
+    transforms: Vec<crate::compiler::output::OutputMap>,
     columns: &[crate::compiler::projection::OutputColumn],
-) -> Result<Option<crate::catalog::Terminal>> {
-    use crate::catalog::terminal::OutputMap;
-    for (transform, column) in transforms.iter_mut().zip(columns) {
-        if *transform == OutputMap::Identity && column.column.oid == 1700 {
-            *transform = OutputMap::Numeric;
-        }
-    }
+) -> Result<Option<crate::compiler::output::Output>> {
+    use crate::compiler::output::OutputMap;
     if transforms.iter().all(|transform| *transform == OutputMap::Identity) {
         return Ok(None);
     }
-    Ok(Some(crate::catalog::Terminal::new(
+    Ok(Some(crate::compiler::output::Output::new(
         transforms,
-        columns.iter().map(|output| output.column.oid).collect(),
+        &columns.iter().map(|output| output.column.oid).collect::<Vec<_>>(),
     )?))
 }

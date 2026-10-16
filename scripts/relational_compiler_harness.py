@@ -7,15 +7,16 @@ from sql_compiler_harness import SqlFixture
 
 
 class RelationalFixture(SqlFixture):
-    def __init__(self, output, terminal):
+    def __init__(self, output, filtered):
         super().__init__(output, False)
-        self.terminal = terminal
+        self.filtered = filtered
         self.sql(f"UPDATE {self.name}.auction SET group_id=NULL,category='same',enabled=true WHERE id IN (1,2); UPDATE {self.name}.bid SET price=-3 WHERE auction IN (1,2)")
         self.query = (f'SELECT a.group_id AS g,a.category AS c,b.price AS p,a.enabled AS e '
                       f'FROM {self.name}.auction a INNER JOIN {self.name}.bid b ON b.auction=a.id '
                       'WHERE a.enabled OR b.price IS NULL')
-        if terminal:
-            self.query = self.query.replace('a.category AS c,b.price AS p', 'length(a.category) AS c,abs(b.price) AS p')
+        if filtered:
+            self.query += ' AND (b.price<0 OR b.price IS NULL)'
+            self.query = self.query.replace('WHERE a.enabled OR b.price IS NULL', 'WHERE (a.enabled OR b.price IS NULL)')
 
     def verify(self):
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array(g,c,p,e)) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
@@ -31,9 +32,8 @@ class RelationalFixture(SqlFixture):
                 if a['enabled'] is not True and b['price'] is not None:
                     continue
                 category, price = a['category'], b['price']
-                if self.terminal:
-                    category = None if category is None else len(category)
-                    price = None if price is None else abs(price)
+                if self.filtered and price is not None and price>=0:
+                    continue
                 expected[(a['group_id'], category, price, a['enabled'])] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected)
@@ -41,8 +41,8 @@ class RelationalFixture(SqlFixture):
         assert beyond.strip() == '0'
 
 
-def qualify(output, command, terminal):
-    fixture = RelationalFixture(output, terminal)
+def qualify(output, command, filtered):
+    fixture = RelationalFixture(output, filtered)
     with fixture.managed():
         for label, query in [
             ('ambiguous', fixture.query.replace('a.enabled OR', 'id > 0 OR')),
@@ -68,12 +68,12 @@ def qualify(output, command, terminal):
             normalized=fixture.query.replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('INNER JOIN', 'JOIN'),
             rejected=[('changed', fixture.query.replace('a.group_id AS g', 'a.id AS g'))],
         ), initial=initial)
-        (output / 'result.json').write_text(json.dumps({'sql_oracle': 'exact weighted bag', 'memory_oracle': 'independent nested loop', 'simultaneous': 'insert/update/delete', 'nulls': 'keys/predicates/outputs', 'restart': 'cold same slot', 'changed': 'rejected without progress', 'terminal': terminal}) + '\n')
+        (output / 'result.json').write_text(json.dumps({'sql_oracle': 'exact weighted bag', 'memory_oracle': 'independent nested loop', 'simultaneous': 'insert/update/delete', 'nulls': 'keys/predicates/outputs', 'restart': 'cold same slot', 'changed': 'rejected without progress', 'filtered': filtered}) + '\n')
 
 
 if __name__ == '__main__':
     output, command = harness_arguments()
-    for mode in ('plain', 'terminal'):
+    for mode in ('plain', 'filtered'):
         directory = output / mode
         directory.mkdir()
-        qualify(directory, command, mode == 'terminal')
+        qualify(directory, command, mode == 'filtered')

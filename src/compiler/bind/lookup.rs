@@ -41,7 +41,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let order = order(parsed.order, &correlated, &right_bound, &scopes[1])?;
     let labels = labels(parsed.inner_columns, &correlated)?;
     let outer = |name: &Name| outer(name, &parsed.alias, &labels, &scopes[0]);
-    let (columns, terminal) = super::relational::output(parsed.columns, &outer)?;
+    let (columns, mapping) = super::relational::output(parsed.columns, &outer)?;
     let predicate = parsed
         .predicate
         .map(|value| {
@@ -76,7 +76,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         schema: scopes[0].relation.schema.clone(),
         table: scopes[0].relation.table.clone(),
         columns,
-        terminal,
+        mapping,
     };
     Ok(Compiled { result_columns: Vec::new(), relational: Relational { sources, nodes, output } })
 }
@@ -213,7 +213,7 @@ fn labels(
         .into_iter()
         .map(|(name, label, transform)| {
             ensure!(
-                transform == crate::catalog::terminal::OutputMap::Identity,
+                transform == crate::compiler::output::OutputMap::Identity,
                 "lookup inner expressions require native column projection"
             );
             let mut column = resolve(&name)?;

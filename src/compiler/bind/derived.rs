@@ -11,8 +11,12 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
     let mut compiled = bind(*parsed.inner, contract)?;
     let relational = &mut compiled.relational;
     ensure!(
-        relational.output.terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
-        "derived scope cannot consume sink-deferred expressions"
+        relational
+            .output
+            .mapping
+            .as_ref()
+            .is_none_or(crate::compiler::output::Output::native_rendering),
+        "derived scope cannot consume unfinalized aggregate encoding"
     );
     let resolve = |name: &crate::compiler::parser::Name| {
         resolve_output(name, &parsed.alias, &relational.output.columns)
@@ -31,7 +35,7 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
         })
         .collect::<Result<Vec<_>>>()?;
     let Some(Node::Output { id, input }) = relational.nodes.pop() else {
-        anyhow::bail!("derived query requires terminal output node");
+        anyhow::bail!("derived query requires final Output node");
     };
     let input = if let Some(predicate) = predicate {
         super::topk::specialize(relational, &input, &predicate);
@@ -44,7 +48,7 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
         input
     };
     relational.nodes.push(Node::Output { id, input });
-    relational.output.terminal = super::terminal(transforms, &columns)?;
+    relational.output.mapping = super::output_mapping(transforms, &columns)?;
     relational.output.columns = columns;
     Ok(compiled)
 }

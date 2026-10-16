@@ -1,3 +1,4 @@
+from engine_rejection import qualify_unavailable
 #!/usr/bin/env python3
 """Exact terminal decimal q1: independent Decimal bag and PostgreSQL, CDC/restart."""
 from worker_harness import harness_arguments, History
@@ -50,8 +51,11 @@ class Q1Fixture(SqlFixture):
 
 def qualify(output,command,mode):
     fixture = Q1Fixture(output,mode)
+    if mode == "join":
+        qualify_unavailable(fixture,command)
+        return
     with fixture.managed():
-        fixture.rejected(command,'unsupported-arithmetic',fixture.query.replace(fixture.factor+' *',fixture.factor+' +'))
+        fixture.rejected(command,'unsupported-arithmetic',fixture.query.replace(fixture.factor+' *',fixture.factor+' /'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
         changes = [
@@ -70,7 +74,7 @@ def qualify(output,command,mode):
             normalized=fixture.query.replace(fixture.factor, '0' + fixture.factor),
             rejected=[('changed-factor', fixture.query.replace(fixture.factor, '0.909')),('changed-scale', fixture.query.replace(fixture.factor, fixture.factor + '0'))],
         ), initial=initial)
-        (output/'result.json').write_text(json.dumps({'query':'q1','mode':mode,'postgres':'exact weighted numeric bag','memory':'independent Decimal multiplication','restart':'cold same slot','factor_change':'rejected before progress change','simultaneous':'both source changes','terminal':'PG numeric_mul, retained raw integral bag'})+'\n')
+        (output/'result.json').write_text(json.dumps({'query':'q1','mode':mode,'postgres':'exact weighted numeric bag','memory':'independent Decimal multiplication','restart':'cold same slot','factor_change':'rejected before progress change','simultaneous':'both source changes','execution':'engine exact numeric multiplication'})+'\n')
 
 if __name__=='__main__':
     output, command = harness_arguments()

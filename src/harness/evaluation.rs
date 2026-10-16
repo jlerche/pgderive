@@ -19,6 +19,7 @@ pub(super) async fn check(sql: &Client, schema: &str, contract: &Contract) -> Re
     ] {
         compare(sql, schema, contract, expression, bidder).await?;
     }
+    average(sql).await?;
     filter_boundary(sql, schema).await?;
     eprintln!(
         "MVP placement error domains: local CASE/COALESCE/casts matched PostgreSQL; filter-crossing counterexample retained"
@@ -91,5 +92,30 @@ async fn filter_boundary(sql: &Client, schema: &str) -> Result<()> {
         error.code() == Some(&SqlState::NUMERIC_VALUE_OUT_OF_RANGE),
         "unexpected filter counterexample error: {error}"
     );
+    Ok(())
+}
+
+async fn average(sql: &Client) -> Result<()> {
+    for values in [
+        vec![0],
+        vec![1, 2, 2],
+        vec![-1, -2, -2],
+        vec![i64::MAX, i64::MAX, -1],
+        vec![i64::MIN, i64::MAX],
+        vec![1, 0, 0],
+        vec![10000, 1],
+        vec![1; 10001],
+    ] {
+        let sum: num_bigint::BigInt =
+            values.iter().map(|value| num_bigint::BigInt::from(*value)).sum();
+        let ratio = format!("{sum}/{}", values.len());
+        let local = crate::numeric::Numeric::average(&ratio)?;
+        let expected: String = sql
+            .query_one("SELECT avg(value)::text FROM unnest($1::bigint[]) AS value", &[&values])
+            .await?
+            .try_get(0)?;
+        ensure!(local == expected, "engine AVG differs for {ratio}: {local} vs {expected}");
+    }
+    eprintln!("MVP engine AVG finalization matched PostgreSQL scale and rounding");
     Ok(())
 }

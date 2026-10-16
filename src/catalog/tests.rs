@@ -81,3 +81,14 @@ fn maintenance_keeps_singletons_and_requires_one_generation_for_replacements() -
     assert!(super::maintenance::validate(&prior, &next, &plan).is_err());
     Ok(())
 }
+
+#[test]
+fn sinks_reject_removed_expression_programs() {
+    assert!(
+        serde_json::from_value::<Sink>(json!({"MappedJson":{"table":"rows","map":{}}})).is_err()
+    );
+    assert!(
+        serde_json::from_value::<Sink>(json!({"Rows":{"table":"rows","columns":[],"map":null}}))
+            .is_err()
+    );
+}

@@ -13,7 +13,7 @@ pub struct Environment {
     catalog: String,
 }
 impl Environment {
-    /// Configure a worker or low-level terminal session during initialization.
+    /// Configure a worker session during initialization.
     pub(crate) async fn configure(sql: &(impl GenericClient + Sync)) -> Result<()> {
         sql.batch_execute("SET search_path=pg_catalog; SET TimeZone='UTC'; SET DateStyle='ISO,MDY'; SET IntervalStyle='iso_8601'; SET extra_float_digits=3").await?;
         Ok(())

@@ -12,8 +12,7 @@ slices must finish before declaring the release work complete.
 ## 1. Query lifecycle and application results
 
 Add a configuration-backed `pgderive query` CLI: validate, create/run, status,
-restart, rebuild and drop. Validation resolves the actual catalog and binds
-terminal functions without installing metadata or creating a slot. Report native
+restart, rebuild and drop. Validation resolves the actual catalog and checks in-engine support without installing metadata or creating a slot. Report native
 output names/types and the executable plan identity. Creation and restart reuse
 the existing journal and worker. Results expose correctly typed named PostgreSQL
 columns with physical query-produced occurrences; weighted state remains in the

@@ -56,9 +56,6 @@ impl Binding {
         if let Some(source) = self.registered_source()? {
             source.verify(sql).await?;
         }
-        if let Some(map) = self.sink.map() {
-            map.verify_environment(sql).await?;
-        }
         Ok(())
     }
     pub(super) async fn initialize(

@@ -19,7 +19,7 @@ pub(super) async fn check(
     catalog.checkpoint(sql, plan, empty, 0).await?;
     let columns =
         vec![ResultColumn { name: "number".into(), oid: 1700, modifier: -1, collation: None }];
-    let sink = Sink::Rows { table: "native_representations".into(), columns, map: None };
+    let sink = Sink::Rows { table: "native_representations".into(), columns };
     let mut writer = catalog
         .claim(
             sql,

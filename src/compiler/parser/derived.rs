@@ -48,14 +48,7 @@ pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, Strin
         anyhow::bail!("derived query requires SELECT");
     };
     let inner = match query(inner)? {
-        Parsed::Terminal { .. } => Parsed::Partition(super::partition::parse(inner)?),
-        Parsed::Projection { columns, .. }
-            if columns.iter().any(|(_, _, transform)| {
-                matches!(transform, crate::catalog::terminal::OutputMap::NumericMultiply { .. })
-            }) =>
-        {
-            Parsed::Partition(super::partition::parse(inner)?)
-        }
+        Parsed::Scalar { .. } => Parsed::Partition(super::partition::parse(inner)?),
         Parsed::Projection { source, columns, predicate } => {
             Parsed::NativeScope { source, columns, predicate }
         }

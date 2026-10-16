@@ -10,8 +10,6 @@ pub use recovery::{Durable, Resolution};
 mod storage;
 pub use storage::{Collection, GcLimits, Protection};
 mod sink;
-pub(crate) mod terminal;
-pub use terminal::Terminal;
 mod write;
 pub use position::{Lsn, Progress};
 pub use publication::{Binding, Publication, Writer};

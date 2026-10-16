@@ -13,7 +13,6 @@ import hashlib
 from sql_compiler_harness import SqlFixture
 from nexmark_projection_harness import ProjectionFixture
 from nexmark_q1_harness import Q1Fixture
-from nexmark_q14_harness import Q14Fixture
 from native_compiler_harness import NativeFixture
 from native_mv_oracle import expected as native_expected
 from worker_harness import Worker, harness_arguments
@@ -66,23 +65,8 @@ def qualify(output, command, factory):
         config = configured(fixture)
         validated = inspect(command, fixture, 'validate', config)
         labels = [column['name'] for column in validated['columns']]
-        placement = validated['placement']
-        assert placement['report_only'] and placement['revision'] == 4
-        assert placement['stages'] and placement['network_fallback_stages'] == []
-        if isinstance(fixture, WideningFixture):
-            assert [operand['column']['oid'] for operand in placement['retention']['operands']] == [23,21,23]
-            assert len(placement['retention']['operands']) == 3
-            casts = [expression for expression in placement['expressions'] if expression['definition'].get('Call',{}).get('function') in ('Int4','Int8')]
-            assert len(casts) == 3 and all(expression['current_execution']=='sink_deferred' for expression in casts)
-
-        for expression in placement['expressions']:
-            assert expression['type_oid'] > 0
-            assert expression['current_execution'] in ('local','sink_deferred')
-            if expression['status'] == 'candidate_requires_proof':
-                assert expression['obligations']
-            for consumer in expression['consumers']:
-                if consumer['kind'] == 'output':
-                    assert consumer['node'] in labels
+        assert 'placement' not in validated
+        assert 'terminal' not in validated['compiled']['relational']['output']
 
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
@@ -112,8 +96,6 @@ def qualify(output, command, factory):
             f"UPDATE {fixture.name}.bid SET price=123 WHERE id=2",
             f"DELETE FROM {fixture.name}.bid WHERE id=2",
         ]
-        if isinstance(fixture, ArrayFixture):
-            changes.append(f"UPDATE {fixture.name}.bid SET label='channel_id=updated' WHERE id=1")
         for index, change in enumerate(changes, 1):
             fixture.sql('BEGIN;'+change+';COMMIT')
             worker.event('published', minimum_time=ready['time']+index)
@@ -298,23 +280,6 @@ class ScalarFixture(SqlFixture):
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
 
 
-class ArrayFixture(ScalarFixture):
-    def __init__(self, output):
-        super().__init__(output)
-        self.sql(f"UPDATE {self.name}.bid SET label=CASE WHEN id%4=0 THEN NULL WHEN id%4=1 THEN 'channel_id=' WHEN id%4=2 THEN 'a&channel_id=é🙂' ELSE 'missing' END")
-        self.query = f'''SELECT pg_catalog.regexp_match(label COLLATE pg_catalog."C",'(&|^)channel_id=([^&]*)') AS captures FROM {self.name}.bid'''
-
-    def verify(self):
-        labels = json.loads(self.sql(f"SELECT json_agg(label) FROM {self.name}.bid"))
-        memory = collections.Counter()
-        for label in labels:
-            match = None if label is None else re.search('(&|^)channel_id=([^&]*)', label)
-            memory[None if match is None else match.groups()] += 1
-        actual = json.loads(self.sql(f"SELECT json_agg(g) FROM {self.bag_relation()} g"))
-        assert {(None if row['tuple'][1][0] is None else tuple(row['tuple'][1][0])):
-                row['weight'] for row in actual} == dict(memory)
-
-
 class WideningFixture(SqlFixture):
     def __init__(self, output):
         super().__init__(output, False)
@@ -338,10 +303,8 @@ if __name__ == '__main__':
         ('projection-local', lambda out: ProjectionFixture(out, 'q0', 'local')),
         ('projection-instant', lambda out: ProjectionFixture(out, 'q0', 'instant')),
         ('numeric', lambda out: Q1Fixture(out, 'int8')),
-        ('terminal-program', lambda out: Q14Fixture(out, 'instant')),
         ('native-range', lambda out: NativeFixture(out, 'projection')),
         ('native-scalars', ScalarFixture),
-        ('native-array', ArrayFixture),
         ('deferred-widening', WideningFixture),
     ]:
         directory = output/name

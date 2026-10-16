@@ -1,14 +1,14 @@
 //! Bounded `PostgreSQL` frontend for durable grouped joins and source projections.
 //! See `docs/sql-compiler.md` for the exact grammar and compatibility contract.
 mod bind;
-mod deferral;
 mod expression;
 pub(crate) mod left_join;
 pub(crate) mod lookup;
 pub(crate) mod navigation;
+pub(crate) mod output;
 mod parser;
 pub(crate) mod partition;
-mod placement;
+
 mod projection;
 pub(crate) mod relational;
 #[cfg(test)]
@@ -41,37 +41,20 @@ pub struct Compiled {
     pub(crate) result_columns: Vec<crate::catalog::ResultColumn>,
 }
 impl Compiled {
-    pub(crate) fn placement(&self) -> Result<placement::Report> {
-        placement::analyze(self)
-    }
-
     pub(crate) const fn relational(&self) -> &relational::Relational {
         &self.relational
     }
     pub(crate) const fn output(&self) -> &Projected {
         &self.relational.output
     }
-    pub(crate) async fn bind_terminal(
-        &mut self,
-        sql: &(impl tokio_postgres::GenericClient + Sync),
-    ) -> Result<()> {
-        if let Some(terminal) = &mut self.relational.output.terminal {
-            terminal.bind(sql).await?;
-        }
-        Ok(())
-    }
-    pub(crate) fn validate_bound(&self) -> Result<()> {
-        if let Some(terminal) = &self.output().terminal {
-            terminal.validate()?;
+    pub(crate) fn validate_execution(&self) -> Result<()> {
+        if let Some(mapping) = &self.output().mapping {
+            mapping.validate()?;
         }
         Ok(())
     }
     pub(crate) fn sink(&self, table: &str) -> crate::catalog::Sink {
-        crate::catalog::Sink::Rows {
-            table: table.into(),
-            columns: self.result_columns.clone(),
-            map: self.output().terminal.clone(),
-        }
+        crate::catalog::Sink::Rows { table: table.into(), columns: self.result_columns.clone() }
     }
 
     pub(crate) fn legacy(selectors: Query, contract: &Contract) -> Result<Self> {
@@ -86,11 +69,10 @@ impl Compiled {
 pub fn compile(sql: &str, contract: &Contract) -> Result<Compiled> {
     contract.validate()?;
     let (parsed, fallback) = parser::parse(sql)?;
-    let mut compiled = bind::bind(parsed, contract).or_else(|prior| match fallback {
+    let compiled = bind::bind(parsed, contract).or_else(|prior| match fallback {
         Some(parsed) => bind::bind(parsed, contract).map_err(|_| prior),
         None => Err(prior),
     })?;
-    deferral::apply(&mut compiled)?;
     Ok(compiled)
 }
 

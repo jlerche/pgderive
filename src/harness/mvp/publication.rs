@@ -1,5 +1,4 @@
 mod bags;
-mod bindings;
 mod cancellation;
 mod checks;
 mod recovery;
@@ -38,7 +37,6 @@ impl MvpFixture {
         catalog.install(sql).await?;
         bags::check(sql, schema, self.graph.plan(), &checkpoint).await?;
         representations::check(sql, schema, self.graph.plan(), &checkpoint).await?;
-        bindings::check(sql, schema, self.graph.plan(), &checkpoint, config).await?;
         catalog.checkpoint(sql, self.graph.plan(), &checkpoint, 0).await?;
         let binding = Binding { source: source.clone(), sink: Sink::Json("derived_groups".into()) };
         let initial: Lsn = initial.parse()?;

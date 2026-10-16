@@ -55,29 +55,14 @@ sequences and untracked session/role dependencies are outside the current domain
 A declared IMMUTABLE or STABLE attribute alone does not establish replay safety.
 Time-based windows over stored timestamps are not wall-clock expiration.
 
-## Execution placement
+## In-engine execution only
 
-There are three intended paths, in preference order:
-
-| Path | Required proof | Current status |
-| --- | --- | --- |
-| Sink-deferred | No pre-publication consumer needs the result; preserve cardinality, evaluation domain, context, errors and retractions | Closed terminal programs exist; no general graph placement proof |
-| Local | Qualified semantics for the exact type/signature/domain and context | Bounded Rust evaluators exist; no vendored PostgreSQL runtime |
-| Connected-PostgreSQL fallback | Same expression proof plus typed batching, source-boundary independence and durable retry/retraction behavior | Not implemented |
-
-Backward dependency traversal must include predicates, join/group/distinct keys,
-aggregate arguments/filters, ordering, frames and consumers in enclosing scopes.
-Being outside that closure identifies a candidate, not sufficient proof: moving
-CASE branches or filtering can change errors and evaluation. Constant-only output
-still retains source multiplicity. Set-returning functions need a cardinality-aware
-path, not a scalar renderer. Aggregate finalization requires exact sufficient
-statistics and no intermediate consumer of the finalized value.
-
-A fallback may evaluate explicit captured tuples without reading current sources.
-It cannot infer a historical snapshot from an LSN. Hidden table reads are rejected
-until their dependencies and boundary-consistent execution are implemented.
-Network failure, partial evaluation and downstream failure must not publish a
-partial result or advance source progress.
+Every accepted computation must have a qualified in-engine implementation.
+PostgreSQL supplies source CDC, schema/semantic metadata, durable progress and the
+ordinary typed result table. It never evaluates source operands on the engine's
+behalf: sink expression programs and batched network fallback are unavailable.
+Unknown functions and unsupported overloads/casts/features reject with a reason
+before activation. Test oracles deliberately execute native queries for comparison.
 
 ## Environment and invalidation
 
@@ -102,7 +87,7 @@ Minimum deployment contract until stronger fencing exists:
 These are operational preconditions beyond existing relation locks. Publication
 still takes ACCESS SHARE locks and verifies source layouts and publication scope
 inside the transaction, fencing conflicting relation DDL. Semantic catalog
-fingerprints and terminal function/context definitions are inspected only during
+fingerprints  are inspected only during
 initialization, restart and rebuild. Running workers assume those semantics remain
 stable: there is no live semantic-drift detection or per-publication catalog hash.
 Administrators must stop workers before semantic changes and revalidate before
@@ -146,7 +131,7 @@ explicit rebuild; unreleased IR refactors need not preserve historical formats.
 ## Implemented M0 binding validation
 
 Source contracts now include a SHA-256 catalog fingerprint and exact server version
-and encoding, including queries without terminal expressions. The closed dependency
+and encoding, for every accepted query. The closed dependency
 manifest in `src/semantics/catalog.sql` covers supported native type definitions and
 I/O functions, casts between those types, catalog comparison/index support,
 the local date_bin/mod, aggregate, ranking/navigation and series families, their
@@ -164,18 +149,11 @@ rebuild, including snapshot setup. Activation/publication retain layout-only
 source locking and verification. Terminal environment inspection and canonical
 session configuration happen during binding and sink initialization. Evaluation
 uses the bound program without semantic catalog queries or repeated session SETs.
-Workers and low-level terminal sessions set pg_catalog search_path, UTC, ISO/MDY
+Workers set pg_catalog search_path, UTC, ISO/MDY
 DateStyle, ISO intervals and extra_float_digits=3 during initialization; callers
 must keep that session context stable for the worker lifetime.
 
-These are conservative dependencies: a change to a supported built-in that an
-individual query does not use can require a rebuild. The catalog is hashed inside
-PostgreSQL, so each baseline check returns only version, encoding and a digest in
-one SQL request, not a full catalog transfer. Existing explicit terminal signature
-checks still inspect each distinct signature. This does not introduce
-intermediate network expression evaluation.
-
-An incompatible old serialized source/terminal binding is rejected; the unreleased
+An incompatible old serialized source binding is rejected; the unreleased
 format has no automatic migration. Registrations from before this shape change
 need retirement with a compatible older binary before upgrade, followed by fresh
 registration/bootstrap. New-format registrations with compatible structure but
@@ -185,19 +163,6 @@ metadata, not the contents of backend binaries, shared libraries or timezone fil
 They do not prevent concurrent administrative mutation. The quiescence policy above
 continues to apply. This slice establishes the baseline check schedule, not general
 function support or complete dependency invalidation.
-
-The owned-database `scripts/query_binding_harness.py` quiesces workers before
-changing codec, local-function, aggregate/planner-helper and interval/coercion
-metadata. It verifies restart rejection with unchanged results/progress/ACK, then
-restores the environment and verifies queued source replay. It also checks hostile
-database defaults. Protocol observers prove initialization/restart inspections
-occur and steady-state publications (including empty deltas and maintenance)
-execute zero semantic-inspection queries or repeated context SETs for plain and
-terminal plans. Prepared
-statement executions are counted even when their SQL was prepared earlier; SQL
-text and parameters are never logged. All fixtures run sequentially in the common
-gate; catalog changes never touch the shared test database, and failures preserve
-their database and logs.
 
 ## Result-table lifecycle and replication
 

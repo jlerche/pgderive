@@ -1,3 +1,4 @@
+from engine_rejection import qualify_unavailable
 #!/usr/bin/env python3
 """Native calendar terminal maps and text-grouped daily statistics, exact MV bags."""
 from worker_harness import harness_arguments
@@ -81,53 +82,8 @@ class CalendarFixture(NativeFixture):
 
 def qualify(output,command,query,mode):
     fixture = CalendarFixture(output,query,mode)
-    with fixture.managed():
-        fixture.rejected(command,'unsafe-format',fixture.query.replace('HH24:MI','Month'))
-        if fixture.instant:
-            invalid = fixture.query.replace(" AT TIME ZONE 'UTC'", " AT TIME ZONE 'America/New_York'")
-            fixture.rejected(command,'unsafe-zone',invalid)
-        assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
-        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
-        if query=='q10':
-            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}'))>1
-        changes = [
-          f"INSERT INTO {fixture.name}.bid(id,auction,price,date_time,bidder,extra,channel) VALUES(400,900,1000000,'2000-01-01 23:59:59.999999+00',500,'same','web'); UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=1",
-          f"DELETE FROM {fixture.name}.bid WHERE id IN(300,301,400); UPDATE {fixture.name}.bid SET price=999999,bidder=NULL,extra=NULL WHERE id=302",
-          f"UPDATE {fixture.name}.bid SET channel='Web',date_time='2000-01-02 00:00:59.999999+00',auction=NULL WHERE id=302; UPDATE {fixture.name}.auction SET group_id=3 WHERE id=1",
-          f"UPDATE {fixture.name}.bid SET date_time=NULL,channel=NULL,price=NULL WHERE id=303; UPDATE {fixture.name}.bid SET channel='web ' WHERE id=305",
-          f"UPDATE {fixture.name}.bid SET id=450,channel='web',date_time='2000-01-01 23:58:00+00',bidder=500 WHERE id=302",
-          f"SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; UPDATE {fixture.name}.bid SET date_time='03.11.2024 01:30:59.999999-04',channel='DST' WHERE id=304; UPDATE {fixture.name}.bid SET date_time='03.11.2024 01:30:00-05',channel='DST' WHERE id=306",
-          f"UPDATE {fixture.name}.bid SET channel='é' WHERE id=306; UPDATE {fixture.name}.bid SET channel='é' WHERE id=304; DELETE FROM {fixture.name}.bid WHERE id=450",
-          f"UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=2",
-        ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-format',fixture.query.replace('HH24:MI','YYYY-MM-DD'))
-        if query=='q16':
-            fixture.rejected(command,'changed-threshold',fixture.query.replace('10000','10001'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        if fixture.instant:
-            column = 'date_time' if query=='q10' else 'q.latest'
-            fixture.query = fixture.query.replace(column+" AT TIME ZONE 'UTC'",f"pg_catalog.timezone('UTC',{column})")
-        else:
-            fixture.query = fixture.query.replace('pg_catalog.to_char','to_char')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
-        (output/'result.json').write_text(json.dumps({'query':query,'mode':mode,'postgres':'native MV exact weighted bag','memory':'direct calendar fields and raw grouped value sets','restart':'cold same slot','format':'BC/max-year/infinities/NULL, exact minute fields','changes':'latest retractions text/day moves simultaneous sources rollback empty ticks','identity':'changed pattern/threshold rejected; timezone spelling normalizes'})+'\n')
+    qualify_unavailable(fixture,command)
+
 
 if __name__=='__main__':
     output, command = harness_arguments()

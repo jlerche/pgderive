@@ -13,40 +13,25 @@ use tokio_postgres::Transaction;
 pub enum Sink {
     /// Generic JSON result occurrences for the low-level publication API.
     Json(String),
-    /// Pure scalar map over engine operands, evaluated atomically at publication.
+    /// Fully computed native result occurrences.
     Rows {
         /// Owned ordinary typed result table.
         table: String,
         /// Native output metadata.
         columns: Vec<ResultColumn>,
-        /// Optional qualified sink-deferred expression program.
-        map: Option<super::Terminal>,
-    },
-    /// Generic JSON occurrences after a qualified terminal expression.
-    MappedJson {
-        /// Owned destination table.
-        table: String,
-        /// Bound built-in function signatures and environment.
-        map: super::Terminal,
     },
 }
 impl Sink {
-    pub(crate) const fn map(&self) -> Option<&super::Terminal> {
-        match self {
-            Self::MappedJson { map, .. } | Self::Rows { map: Some(map), .. } => Some(map),
-            _ => None,
-        }
-    }
     pub(crate) fn rename(&mut self, name: &str) {
         match self {
-            Self::Json(table) | Self::MappedJson { table, .. } | Self::Rows { table, .. } => {
+            Self::Json(table) | Self::Rows { table, .. } => {
                 name.clone_into(table);
             }
         }
     }
     pub(crate) fn table(&self) -> &str {
         match self {
-            Self::Json(table) | Self::MappedJson { table, .. } | Self::Rows { table, .. } => table,
+            Self::Json(table) | Self::Rows { table, .. } => table,
         }
     }
     pub(crate) fn validate(&self) -> Result<()> {
@@ -55,9 +40,6 @@ impl Sink {
                 && !self.table().starts_with("pgderive_"),
             "invalid or reserved sink table"
         );
-        if let Some(map) = self.map() {
-            map.validate()?;
-        }
         if let Self::Rows { columns, .. } = self {
             rows::validate(columns)?;
         }
@@ -69,7 +51,7 @@ impl Sink {
         }
         let columns = match self {
             Self::Rows { columns, .. } => rows::declaration(columns)?,
-            _ => "tuple jsonb NOT NULL".into(),
+            Self::Json(_) => "tuple jsonb NOT NULL".into(),
         };
         tx.batch_execute(&format!("CREATE TABLE {}.{} ({columns})", catalog.schema, self.table()))
             .await?;
@@ -132,13 +114,6 @@ impl Deltas {
         sink: &Sink,
     ) -> Result<()> {
         let table = format!("{}.{}", catalog.schema, sink.table());
-        let mapped;
-        let rows = if let Some(map) = sink.map() {
-            mapped = map.evaluate(tx, &self.rows).await?;
-            &mapped
-        } else {
-            &self.rows
-        };
-        rows::apply(tx, &table, sink, rows).await
+        rows::apply(tx, &table, sink, &self.rows).await
     }
 }

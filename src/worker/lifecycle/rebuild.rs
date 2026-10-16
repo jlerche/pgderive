@@ -51,7 +51,6 @@ fn semantic_description(mut value: Value) -> Result<String> {
     description.remove("query_id");
     // Placement is advisory and must not change a pending rebuild's semantic
     // signature merely because diagnostics improve between engine versions.
-    description.remove("placement");
     Ok(serde_json::to_string(&value)?)
 }
 

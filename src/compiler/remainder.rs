@@ -10,9 +10,6 @@ pub struct Remainder {
     divisor: i64,
 }
 impl Remainder {
-    pub(super) const fn column(&self) -> &ColumnRef {
-        &self.input
-    }
     pub(super) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         super::expression::integral_remainder(&self.input, self.divisor, row)
     }

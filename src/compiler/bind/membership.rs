@@ -8,7 +8,10 @@ use anyhow::{Result, ensure};
 pub(super) fn bind(parsed: Parsed, distinct: bool, contract: &Contract) -> Result<Compiled> {
     let mut compiled = native_join::bind(parsed, contract)?;
     let relational = &mut compiled.relational;
-    ensure!(relational.output.terminal.is_none(), "membership cannot consume deferred expressions");
+    ensure!(
+        relational.output.mapping.is_none(),
+        "membership cannot consume unfinalized aggregate encoding"
+    );
     if distinct {
         ensure!(
             relational.output.columns.iter().all(|column| matches!(

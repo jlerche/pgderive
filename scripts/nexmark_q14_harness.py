@@ -1,3 +1,4 @@
+from engine_rejection import qualify_unavailable
 #!/usr/bin/env python3
 """q14 native terminal DAG: exact MV, independent Decimal/Unicode oracle, CDC/restart."""
 from worker_harness import harness_arguments, History
@@ -62,35 +63,8 @@ class Q14Fixture(SqlFixture):
 
 def qualify(output,command,mode):
     fixture = Q14Fixture(output,mode)
-    name = fixture.name
-    with fixture.managed():
-        for label,query in [
-            ('clock',fixture.query.replace('length(extra)','length(now()::text)',1)),
-            ('user-function',fixture.query.replace('replace(extra','public.replace(extra')),
-            ('unsupported-division',fixture.query.replace('0.908 * price','2 / price')),
-            ('timezone',fixture.query.replace("'UTC'","'America/New_York'") if fixture.instant else fixture.query.replace('extract(hour','extract(julian')),
-            ('downstream',f'SELECT x.auction FROM ({fixture.query}) x WHERE x.price>1000000'),
-        ]:
-            fixture.rejected(command,label,query)
-        assert fixture.sql(f"SELECT to_regclass('{name}.pgderive_worker_registration') IS NULL").strip()=='t'
-        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{name}%' ").strip()=='0'
-        changes = [
-            f"INSERT INTO {name}.bid(id,auction,price,bidder,date_time,extra) VALUES(400,1,2000000,9,'2000-01-01 06:59:59','c🙂c'); UPDATE {name}.bid SET price=60000000 WHERE id=300",
-            f"UPDATE {name}.bid SET price=2000000,date_time='2024-03-10 01:30:00-08',extra='çcc' WHERE id IN(301,308)",
-            f"DELETE FROM {name}.bid WHERE id=301; UPDATE {name}.bid SET price=NULL WHERE id=400",
-            f"UPDATE {name}.bid SET price=2000000,date_time='2024-11-03 01:30:00-07',extra=NULL WHERE id=400; UPDATE {name}.bid SET id=501 WHERE id=308",
-            f"UPDATE {name}.auction SET group_id=NULL WHERE id=2",
-        ]
-        def initial():
-            assert fixture.sql(f'SELECT max(weight)>1 FROM {fixture.bag_relation()}').strip()=='t'
-            fixture.sql(f'BEGIN; DELETE FROM {name}.bid; ROLLBACK')
-        fixture.run_history(command, History(
-            changes=changes,
-            final=f'DELETE FROM {name}.bid',
-            normalized=fixture.query.replace('pg_catalog.', '').replace('SELECT auction,bidder', 'SELECT b.auction,b.bidder').replace(f'FROM {name}.bid', f'FROM {name}.bid b'),
-            rejected=[('changed-filter', fixture.query.replace('50000000', '40000000')),('changed-output', fixture.query.replace("'dayTime'", "'day'"))],
-        ), initial=initial)
-        (output/'result.json').write_text(json.dumps({'query':'q14','mode':mode,'postgres':'exact native materialized-view weighted bag','memory':'independent Decimal Unicode and hour classification','restart':'cold same slot','terminal':'typed tuple-local DAG with native CASE and IS TRUE'})+'\n')
+    qualify_unavailable(fixture,command)
+
 
 if __name__=='__main__':
     output, command = harness_arguments()

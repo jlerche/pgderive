@@ -10,25 +10,25 @@ from sql_compiler_harness import SqlFixture
 
 
 class ProjectionFixture(SqlFixture):
-    def __init__(self, output, terminal=False):
+    def __init__(self, output, local=False):
         super().__init__(output, False)
-        self.terminal = terminal
+        self.local = local
         self.sql(f"UPDATE {self.name}.auction SET category=NULL,group_id=NULL,enabled=NULL,token='00000000-0000-0000-0000-000000000000' WHERE id IN (1,2)")
         self.query = (f'SELECT a.group_id AS g, a.category AS category, a.enabled AS active, '
                       f'a.token AS token, a.group_id AS again FROM {self.name}.auction a '
                       'WHERE a.id > 0 AND (a.enabled OR a.group_id IS NULL)')
-        if terminal:
+        if local:
             self.sql(f"ALTER TABLE {self.name}.auction ADD COLUMN small_value smallint, ADD COLUMN large_value bigint, ADD COLUMN vartext varchar(64)")
             self.sql(f"UPDATE {self.name}.auction SET small_value=CASE WHEN id=1 THEN -2 ELSE 2 END,large_value=CASE WHEN id=1 THEN -3 ELSE 3 END,vartext=CASE WHEN id=1 THEN 'é🙂' ELSE '界x' END WHERE id IN (1,2)")
             self.sql(f"UPDATE {self.name}.auction SET category=CASE WHEN id=1 THEN 'é🙂' ELSE '界x' END,group_id=CASE WHEN id=1 THEN -2 ELSE 2 END,enabled=true WHERE id IN (1,2)")
-            self.query = self.query.replace('a.group_id AS', 'abs(a.group_id) AS').replace('a.category AS category', 'pg_catalog.length(a.category) AS category').replace(' FROM ', ',abs(a.small_value) AS sm,abs(a.large_value) AS lg,length(a.vartext) AS vl FROM ')
+            self.query = self.query.replace('a.group_id AS', '(0-a.group_id) AS').replace(' FROM ', ',(0-a.small_value) AS sm,(0::bigint-a.large_value) AS lg,a.vartext AS vl FROM ')
 
     def verify(self):
         self.sql(f'EXPLAIN {self.query}')
         expected = (f"SELECT jsonb_build_array(NULL,jsonb_build_array(a.group_id,a.category,a.enabled,a.token,a.group_id)) tuple, count(*)::bigint weight "
                     f"FROM {self.name}.auction a WHERE a.id > 0 AND (a.enabled OR a.group_id IS NULL) GROUP BY 1")
-        if self.terminal:
-            expected = expected.replace('jsonb_build_array(a.group_id,a.category,a.enabled,a.token,a.group_id)', 'jsonb_build_array(abs(a.group_id),length(a.category),a.enabled,a.token,abs(a.group_id),abs(a.small_value),abs(a.large_value),length(a.vartext))')
+        if self.local:
+            expected = expected.replace('jsonb_build_array(a.group_id,a.category,a.enabled,a.token,a.group_id)', 'jsonb_build_array((0-a.group_id),a.category,a.enabled,a.token,(0-a.group_id),(0-a.small_value),(0::bigint-a.large_value),a.vartext)')
         difference = self.bag_difference(expected)
         assert difference.strip() == '0', 'projection sink differs from PostgreSQL bag'
         # Independent raw-source recomputation with explicit true-only qualification.
@@ -37,13 +37,13 @@ class ProjectionFixture(SqlFixture):
         for row in rows:
             if row['id'] > 0 and (row['enabled'] is True or row['group_id'] is None):
                 values = tuple(row[key] for key in ('group_id', 'category', 'enabled', 'token', 'group_id'))
-                if self.terminal:
-                    group = None if row['group_id'] is None else abs(row['group_id'])
-                    length = None if row['category'] is None else len(row['category'])
+                if self.local:
+                    group = None if row['group_id'] is None else -row['group_id']
+                    length = row['category']
                     values = (group,length,row['enabled'],row['token'],group,
-                              None if row['small_value'] is None else abs(row['small_value']),
-                              None if row['large_value'] is None else abs(row['large_value']),
-                              None if row['vartext'] is None else len(row['vartext']))
+                              None if row['small_value'] is None else -row['small_value'],
+                              None if row['large_value'] is None else -row['large_value'],
+                              row['vartext'])
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
@@ -52,8 +52,8 @@ class ProjectionFixture(SqlFixture):
         assert beyond.strip() == '0', 'slot acknowledged beyond publication'
 
 
-def qualify(output, command, terminal=False):
-    fixture = ProjectionFixture(output, terminal)
+def qualify(output, command, local=False):
+    fixture = ProjectionFixture(output, local)
     proxy = None
     proxy_log = None
     try:
@@ -93,7 +93,7 @@ def qualify(output, command, terminal=False):
         faults = [json.loads(line) for line in (output / 'sql-fault.jsonl').read_text().splitlines()[1:]]
         assert len(faults) == 1 and faults[0]['server_committed'] is True, faults
         prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command, 'changed-order', fixture.query.replace('abs(a.group_id) AS g, pg_catalog.length(a.category) AS category', 'pg_catalog.length(a.category) AS category, abs(a.group_id) AS g') if terminal else fixture.query.replace('a.group_id AS g, a.category AS category', 'a.category AS category, a.group_id AS g'))
+        fixture.rejected(command, 'changed-order', fixture.query.replace('(0-a.group_id) AS g, a.category AS category', 'a.category AS category, (0-a.group_id) AS g') if local else fixture.query.replace('a.group_id AS g, a.category AS category', 'a.category AS category, a.group_id AS g'))
         fixture.rejected(command, 'changed-alias', fixture.query.replace('AS active', 'AS renamed'))
         assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
         fixture.query = fixture.query.replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('a.enabled', '"X".enabled')
@@ -104,23 +104,23 @@ def qualify(output, command, terminal=False):
         resumed.event('published')
         resumed.finish()
         fixture.verify()
-        if terminal:
+        if local:
             before = fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p")
             sink_before = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}")
             bad = fixture.start(command, 'overflow')
             bad.event('ready')
             fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(999,'overflow',-2147483648,true)")
             bad.process.wait(timeout=60)
-            assert bad.process.returncode != 0, 'terminal integer overflow was accepted'
+            assert bad.process.returncode != 0, 'local integer overflow was accepted'
             bad.abort()
             assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
             assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink_before
             beyond = fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{ready['slot']}' AND confirmed_flush_lsn > (SELECT end_lsn FROM {fixture.name}.pgderive_progress)")
-            assert beyond.strip() == '0', 'failed terminal map advanced slot ACK'
+            assert beyond.strip() == '0', 'failed local map advanced slot ACK'
         (output / 'result.json').write_text(json.dumps({'sql_oracle': 'exact native weighted bag',
             'memory_oracle': 'independent source recomputation', 'restart': 'normalized SQL same slot',
             'projection_collisions': 'weight two then exact retractions', 'empty_tick': 'other relation transaction',
-            'changed_layout': 'order and alias rejected without progress', 'lost_commit': 'authoritative recovery after committed response loss', 'process_restart': 'killed worker cold resumes', 'transactions': len(changes)+1, 'terminal': terminal, 'integer_overflow': 'sink/progress/ACK unchanged' if terminal else 'not applicable'}) + '\n')
+            'changed_layout': 'order and alias rejected without progress', 'lost_commit': 'authoritative recovery after committed response loss', 'process_restart': 'killed worker cold resumes', 'transactions': len(changes)+1, 'local': local, 'integer_overflow': 'sink/progress/ACK unchanged' if local else 'not applicable'}) + '\n')
         fixture.cleanup()
     except BaseException:
         fixture.preserve()
@@ -135,7 +135,7 @@ def qualify(output, command, terminal=False):
 
 if __name__ == '__main__':
     output, command = harness_arguments()
-    for mode in ('plain', 'terminal'):
+    for mode in ('plain', 'local'):
         directory = output / mode
         directory.mkdir()
-        qualify(directory, command, mode == 'terminal')
+        qualify(directory, command, mode == 'local')

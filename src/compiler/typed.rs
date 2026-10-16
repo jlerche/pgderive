@@ -20,39 +20,22 @@ enum Value {
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
 }
 impl Typed {
-    pub(super) fn widening_input(&self) -> Option<&ColumnRef> {
-        let Value::Cast(input) = &self.value else {
-            return None;
-        };
-        let Value::Column(column) = &input.value else {
-            return None;
-        };
-        matches!((column.oid, self.oid), (21, 23 | 20) | (23, 20)).then_some(column)
-    }
-
-    pub(super) fn columns(&self, columns: &mut Vec<ColumnRef>) {
+    pub(super) fn is_constant(&self) -> bool {
         match &self.value {
-            Value::Column(column) => columns.push(column.clone()),
-            Value::Literal(_) | Value::Numeric(_) => {}
-            Value::Cast(value) => value.columns(columns),
-            Value::Binary { left, right, .. } => {
-                left.columns(columns);
-                right.columns(columns);
-            }
-            Value::Coalesce(values) => {
-                for value in values {
-                    value.columns(columns);
-                }
-            }
+            Value::Column(_) => false,
+            Value::Literal(_) | Value::Numeric(_) => true,
+            Value::Cast(value) => value.is_constant(),
+            Value::Binary { left, right, .. } => left.is_constant() && right.is_constant(),
+            Value::Coalesce(values) => values.iter().all(Self::is_constant),
             Value::Case { branches, otherwise } => {
-                for (condition, value) in branches {
-                    condition.columns(columns);
-                    value.columns(columns);
-                }
-                otherwise.columns(columns);
+                otherwise.is_constant()
+                    && branches
+                        .iter()
+                        .all(|(condition, value)| condition.is_constant() && value.is_constant())
             }
         }
     }
+
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         self.text_pair((row, row))
     }
@@ -131,6 +114,19 @@ pub(super) fn bind(
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     depth: usize,
 ) -> Result<Typed> {
+    let result = bind_inner(value, resolve, depth)?;
+    if result.is_constant() {
+        result
+            .evaluate(&crate::transaction::Row::new())
+            .context("constant expression failed in-engine")?;
+    }
+    Ok(result)
+}
+fn bind_inner(
+    value: &Node,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    depth: usize,
+) -> Result<Typed> {
     use super::parser::expressions::{column, names, node, optional};
     ensure!(depth < 32, "typed scalar expression depth exceeded");
     match node(value)? {
@@ -185,7 +181,11 @@ pub(super) fn bind(
             let oid = common(&arguments.iter().map(|value| value.oid).collect::<Vec<_>>());
             Ok(Typed { oid, value: Value::Coalesce(arguments) })
         }
-        _ => anyhow::bail!("unsupported circuit scalar expression"),
+        NodeEnum::FuncCall(function) => anyhow::bail!(
+            "function {} is not available in-engine",
+            names(&function.funcname)?.0.join(".")
+        ),
+        _ => anyhow::bail!("expression is not available in-engine"),
     }
 }
 pub(super) fn computed(
@@ -225,8 +225,8 @@ fn literal(constant: &pg_query::protobuf::AConst) -> Result<Typed> {
         {
             return Ok(Typed { oid: 20, value: Value::Literal(Some(integer)) });
         }
-        crate::numeric::Numeric::parse(&value.fval)?;
-        return Ok(Typed { oid: 1700, value: Value::Numeric(value.fval.clone()) });
+        let numeric = crate::numeric::Numeric::parse(&value.fval)?;
+        return Ok(Typed { oid: 1700, value: Value::Numeric(numeric.text()) });
     }
     let Some(pg_query::protobuf::a_const::Val::Ival(value)) = &constant.val else {
         anyhow::bail!("typed scalar requires integer literal");

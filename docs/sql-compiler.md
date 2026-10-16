@@ -93,13 +93,6 @@ search_path or live SQL name interpolation.
 
 ## Single-source projection/filter subset
 
-A SELECT without GROUP BY supports 1..=64 column references in any order from one
-explicit schema.table, with optional table/output aliases and the same WHERE
-subset. Repeated columns and output labels are legal. Apart from the terminal built-ins
-described below, computed outputs are rejected. Wildcards,
-DISTINCT, ordering, limits and all
-other unsupported clauses fail before registration or slot creation.
-
 The same output and WHERE subset also supports two distinct source tables joined
 by one inner equijoin, with columns selected from either input. Join keys must
 have identical native bool, integral, UUID or timestamp contracts; NULL keys never match.
@@ -144,57 +137,20 @@ Unique output labels are required. Destinations use FULL replica identity and mu
 be excluded from source capture. Application writes and destination triggers,
 rules or RLS are unsupported; initialization verifies the owned table layout.
 
-## PostgreSQL terminal expression execution
+## In-engine expression execution
 
-Single-source outputs may also call `abs(integral_column)` or
-`length(text_or_varchar_column)`, unqualified or qualified with `pg_catalog`.
-Arguments must be column references; nesting, arbitrary functions, casts and
-other function calls in WHERE are rejected before durable registration or slot creation.
-The bounded integral remainder predicate described above executes in Rust.
-These strict built-ins preserve NULL. ABS uses the native argument width and fails
-on its minimum negative value, matching PostgreSQL rather than widening it.
-LENGTH counts Unicode characters under the required UTF8 server encoding.
-
-The engine persists and emits the raw operand bag. During the same PostgreSQL
-transaction that publishes memberships and source progress, a closed terminal
-map evaluates the built-ins on signed deltas, consolidates mapped tuple collisions
-with exact numeric weight sums, then checks final coefficients fit i64 before
-sink DML. This is a linear map on weighted tuples: insertion and retraction use
-identical semantics, including after cold restore. Any evaluation error rolls back
-publication and prevents ACK. The existing PUT → COMMIT → ACK order is preserved.
-
-Deferral is permitted only for deterministic tuple-local terminal operations.
-Expressions that determine join keys, grouping, qualification or ranking need
-execution at the corresponding Rust operator boundary. SQL volatility labels alone
-are insufficient: user-defined functions, relation reads, time-dependent functions
-and timezone-sensitive functions are outside this slice. It does not yet establish
-PostgreSQL expression coverage for the Nexmark portfolio.
-
-Registration binds concrete built-in signatures, catalog fingerprints, server
-version and encoding into normalized plan identity. Initialization, restart and rebuild verify
-that environment; publication uses the bound semantics without catalog inspection. Privileged
-changes to system catalogs or the server executable require quiesced workers; environment inspection does not lock administrative
-mutation. Functions never resolve through search_path.
+All accepted scalar functions, casts, predicates, arithmetic and aggregate
+finalization execute inside the engine. The PostgreSQL sink accepts fully computed
+rows; it performs native type decoding and ordinary result-table DML, not query
+expression evaluation. There is no connected PostgreSQL computation fallback.
+Unimplemented operations reject validation with the function/feature reason.
+Formatting, collation-sensitive functions, regex and text-array extraction are
+currently unavailable. Mapped sink APIs and expression placement reports have
+been removed. Existing registrations with changed plan/binding layouts require
+retirement with the prior binary and recreation with this binary when the old
+binding contains removed map fields. Old state is never silently reinterpreted.
 
 ## Compiler and runtime boundaries
-
-1. Scan and parse once with pinned pg_query 6.2.1 (embedded PostgreSQL 17.7).
-   Validate AST kinds, clauses, modifiers and recursion budgets. Preserve the parsed
-   SELECT for terminal lowering when native binding cannot handle its expressions;
-   no second parse or execution is required. Parsing does not resolve catalogs.
-2. Resolve table/column names and aliases against source::Contract. Unknown or
-   ambiguous names fail before durable registration.
-3. Type-check native comparisons, keys, aggregates and expression operands.
-   Deterministic circuit expressions execute in Rust; closed terminal expressions
-   become one typed PostgreSQL program with explicit native inputs and outputs.
-4. Lower every accepted SQL form and hand-authored selector configuration to the
-   same relational graph. Source, Filter, Map, EquijoinKey, Join, partition/statistics
-   and Output nodes express predicate placement and state dependencies directly.
-   Grouped joins and single-source projections have no separate compiled variants.
-5. One worker bridge binds that graph to one durable relational engine. Maintained
-   join parents, partitions, sufficient statistics and output arrangements use
-   the same prepare/checkpoint/restore/publication path. All results use the weighted
-   bag destination codec. Bootstrap and CDC execute the same compiled operators.
 
 The existing runtime retains complete full-tuple bag identity, assembles both
 inputs from a complete committed transaction, and includes the simultaneous-input
@@ -214,13 +170,6 @@ operator/result limits, not a claim of unrestricted PostgreSQL aggregate coverag
 Function/operator spelling and redundant logical syntax normalize where supported.
 The resolved expression tree, including constants such as remainder divisors,
 participates directly in graph identity.
-
-Plan identity hashes normalized resolved IR together with the entire native source
-contract: OIDs, attribute order, modifiers, nullability, collation, source identity,
-publication and slot. Bound terminal programs include their attested PostgreSQL
-environment. Engine declarations bind arrangement membership and object schemas.
-Native parser fingerprints are not used for durable identity. There are no
-feature-specific compiler revision suffixes or historical wire-format branches.
 
 Formatting, keyword case, comments, redundant identical conjuncts, conjunct order,
 source alias spelling and reversed equality operands normalize where supported.
@@ -292,12 +241,6 @@ also requires its finalized sum to fit bigint; exceeding this limit fails closed
 AVG non-NULL counts must fit bigint. SUM(int8) and AVG(int8) keep arbitrary-precision
 integer sums; PostgreSQL numeric output and division are finalized at publication.
 
-Partition identity includes typed functions, FILTER, grouping/ordering, NULL
-placement, frame bounds, source layouts, bound terminal programs and graph state.
-Qualification compares grouped and ROWS results with PostgreSQL and an independent
-source-partition oracle after inserts, updates, deletes, NULL groups, all-NULL
-frames, changed neighbors, empty query ticks and cold restart.
-
 The work budget counts materialized occurrences, frame-row visits and aggregate
 record visits across affected partitions in one operator tick. It bounds those
 operations; it does not measure total CPU instructions or sort comparisons.
@@ -306,25 +249,6 @@ operations; it does not measure total CPU instructions or sort comparisons.
 
 The next implementation sequence builds on the same typed circuit and durable
 publication boundary:
-
-1. Native temporal/numeric values and expression execution: keep timestamp and
-   timestamptz distinct, qualify PostgreSQL numeric result rules, and bind types,
-   function semantics and relevant session settings into plan identity. A function
-   may run at the PostgreSQL sink only when its result cannot affect filtering,
-   keys, ordering, grouping or retained operator state, and replay has stable
-   semantics. Otherwise use a qualified Rust implementation or reject it.
-2. Aggregate and fixed/hopping bucket execution: extend COUNT/SUM to optimized
-   sufficient statistics and add exact numeric AVG. Lower date_bin as a scalar
-   expression with the SQL's stride and origin. Hopping membership requires an
-   explicit bounded relational expansion. Preserve SQL NULL groups, negative
-   offsets, type distinctions and errors; timestamptz fixed-duration bins do not
-   implement timezone-dependent calendar days. There is no implicit watermark,
-   expiration, wall-clock tick or late-data exclusion.
-3. Ordered partitions: add PostgreSQL ranking/top-k and additional window frames,
-   then qualify temporal lookup and explicit session formulations. Distinguish
-   row occurrences from distinct weighted entries, PostgreSQL peer groups from
-   deterministic positional ordering, and ROWS from RANGE/GROUPS. Non-temporal
-   ORDER BY and PARTITION BY are first-class inputs to the same operator.
 
 Each step requires PostgreSQL and independent memory bag comparisons through
 complete insert/update/delete ticks and restart. Changed semantics cannot adopt
@@ -335,34 +259,19 @@ window or partition scales linearly. Object-local indexing, batched reads and
 compaction optimizations must preserve this result/delta contract.
 
 
-## Exact integer numeric output at publication
+## Exact integer numeric output in the engine
 
-Integral AVG is a terminal finalizer over exact Rust sum/non-NULL-count statistics,
-not an approximate Rust division. Rust persists a deterministic decimal
-`sum/count` statistic payload in the raw object-backed bag; SUM(int8) persists its
-exact decimal integer total. The typed SQL result is numeric, while this internal
-payload is explicitly interpreted by the terminal map and is never exposed as a
-numeric input to another operator. PostgreSQL's numeric input and numeric_div
-functions produce the destination value in the same atomic transaction as object
-membership and source progress. All-NULL/empty-frame inputs produce NULL without
-division. Filters run in Rust before statistics accumulation.
+Integral AVG uses arbitrary-precision sum and non-NULL count state. The engine
+selects PostgreSQL's numeric division scale using base-10000 leading digits,
+rounds ties away from zero with integer arithmetic, and emits the exact decimal
+text. No numeric_div query or float conversion occurs. SUM(int8) also emits exact
+decimal text. The ordinary typed sink decodes numeric values; internal ratios
+remain engine-owned. All-NULL groups produce NULL without division.
 
-The terminal binding fingerprints concrete built-in signatures and
-server version/encoding; changing that environment rejects restart. Workers must be quiesced before
-semantic changes; publication performs no semantic reinspection.
-The JSON codec preserves arbitrary-precision numbers through PostgreSQL responses,
-so large numeric results never pass through f64. The existing nonnumeric identities
-keep their serialized form. Numeric input aggregates/arithmetic, nested
-aggregate/window composition and AVG values used by downstream operators require
-further typed lowering and remain rejected. This is safe sink deferral for the
-currently compiled terminal aggregate plans, not permission to defer relational
-keys, predicates or ordering to PostgreSQL.
-
-The owned numeric harness checks int2/int4/int8 AVG and int8 SUM against PostgreSQL
-and an independent Decimal oracle, including display-scale rounding, values above
-floating-point precision, NULLs, FILTER, signed changes, ROWS neighbors, alias
-normalization and cold restart.
-
+The live harness compares AVG display scale and rounding with PostgreSQL and the
+independent Decimal oracle across extreme integers, negative values, NULLs,
+FILTER, source updates and restart. AVG operands cannot yet feed arbitrary derived
+operators; those unfinalized aggregate encodings reject rather than use fallback.
 
 ## Native timestamp and numeric source values
 
@@ -568,14 +477,6 @@ and can produce more than k occurrences. Projection collisions consolidate signe
 multiplicities. This uses bounded affected-partition computation; it is not yet a
 specialized asymptotically optimized top-k index.
 
-Inner sink-deferred expressions are rejected at this boundary. Their raw payload
-is not the PostgreSQL expression value, so treating it as a resolved subquery
-column could alter filtering or grouping semantics. A later expression-stage
-implementation may safely expand this boundary. Weighted unit histories and three sequential owned fixtures qualify tied top-k,
-occurrence top-k and post-group count filtering, including NULLs, output
-collisions, updates/deletes, empty query ticks and cold restart against PostgreSQL
-and independent memory bags.
-
 Nested scopes append separate Filter nodes in SQL scope order. Pure column
 projections retain internal fields until the final output: filtering by exposed
 values commutes with signed bag projection, including collisions. The binder
@@ -603,14 +504,6 @@ when the target occurrence is absent; a present NULL remains NULL. Valid support
 ROWS/RANGE/GROUPS frame syntax is checked and ignored for navigation, matching
 PostgreSQL. All functions in one SELECT still share one partition/order; mixing
 navigation and framed aggregates requires further composition.
-
-The binder resolves PostgreSQL-compatible common types for native integral/numeric
-families and text/varchar defaults. Integral widening and numeric promotion bind
-the result OID; mixed text/varchar retains the first argument's type. Same-type
-native temporal/UUID/boolean values copy exactly. Cross timestamp/timestamptz
-coercions and other unsupported type combinations fail before registration.
-Numeric navigation retains exact text state and uses the existing PostgreSQL
-numeric terminal codec inside atomic publication, never floating point.
 
 The explicit ordered evaluator revises complete affected partitions and emits
 old/new bag differences. There is no clock, expiry or late-data exclusion. Weighted unit histories and five
@@ -652,18 +545,8 @@ must be distinct. Quoted labels and ambiguous names are handled explicitly. Inne
 computed expressions, additional predicates, grouping, OFFSET, WITH TIES, alternate
 limits, join conditions other than ON true, self joins and other unsupported shapes
 fail before slot creation or durable registration. Pure derived projection/filter
-layers can consume native lookup results, subject to the existing terminal-value
+layers can consume native lookup results, subject to unfinalized aggregate-operand
 boundary.
-
-NULL keys and NULL bounds do not qualify a right row. An unmatched left occurrence
-is preserved with NULL right values. A selected right occurrence with a NULL value
-is still a match. LIMIT 1 selects one occurrence regardless of its positive bag
-weight; left multiplicity is preserved. This differs from the product-of-weights
-contract of Feldera's generic as-of operator. Outer WHERE executes after selection,
-so rejecting a selected right value never falls back to an older right value.
-Numeric output remains exact and uses the PostgreSQL terminal codec in publication.
-Native timestamp comparison includes BC values and infinities without calendar or
-timezone coercions.
 
 The explicit runtime bridge tags full source tuples, keys each input, and executes
 signed UNION ALL at one synchronized delta tick. The union arrangement retains both
@@ -709,12 +592,6 @@ partition/statistics operators consume synchronized signed delta ticks; affected
 partition results are differenced and delivered downstream in the same tick.
 Every retained stage participates in the existing checkpoint and atomic durable
 publication. Source LSN and circuit logical time remain separate.
-
-Positional derived windows require explicit ordering and a proven logical
-occurrence identity. Missing or hidden identity fields reject before registration;
-peer windows and grouping do not acquire implicit tie breakers. Sink-deferred
-expressions cannot feed downstream circuit operators. Every composed stage,
-field binding, source layout and typed expression is part of the same graph.
 
 Five sequential owned fixtures compare group/window, group/window/group,
 window/group navigation/running-window and repeated date_bin map execution against PostgreSQL and an
@@ -863,68 +740,6 @@ updates, deletes, empty query ticks and cold restart. Weighted unit histories
 separately verify last-occurrence transitions, full-tuple retraction rejection,
 checkpoint preservation and repeated cold restore.
 
-## Terminal C-collation array component extraction
-
-A final source or inner-join projection can select
-`(pg_catalog.string_to_array(column COLLATE pg_catalog."C", '/'))[4]`.
-The column must be text/varchar, the delimiter a nonempty literal of at most 64
-UTF-8 bytes, and the single index an integer literal in 1..=1024. The function may
-be unqualified or use pg_catalog; collation must be explicitly pg_catalog."C".
-Slices, multidimensional/dynamic/nonpositive indexes, alternate collations,
-third arguments, function modifiers and intermediate consumption are rejected
-before slot creation or durable registration.
-
-This is a tuple-local final transform, executed in the same PostgreSQL transaction
-as result membership and source-progress publication. The object-backed circuit
-retains the raw full output bag. Delimiters are JSON parameters, never SQL source;
-validated bounded indexes are rendered as integer constants. Empty input yields
-an empty array; absent components and NULL inputs yield NULL, while present empty
-components stay empty strings. PostgreSQL performs UTF-8 splitting under C
-collation; no Rust approximation of general PostgreSQL array or collation rules
-is introduced.
-
-Identity includes the delimiter, ordinal, native layout and typed program.
-The built-in string_to_array(text,text) implementation, argument/result types,
-immutable volatility and actual non-strict flag are attested together with C
-collation provider, encoding, locale and version metadata. Initialization and restart verify
-that environment; publication uses the already-bound semantics.
-
-The named q22 SQL and four sequential owned fixtures compare text/varchar, quoted
-backslash/Unicode delimiters and joined terminal output with PostgreSQL and an
-independent substring-split/component oracle. Duplicate projected outputs,
-NULL/empty/missing components, complete source updates/deletes, simultaneous join
-inputs, rollback, quoted-alias normalization, incompatible delimiter/index changes
-and cold same-slot restart are covered. The text fixture also witnesses a lost
-COMMIT response and authoritative recovery of finalized output. Full-tuple bag coefficients and the
-PUT -> atomic PG COMMIT -> ACK boundary remain unchanged.
-
-### Exact terminal decimal multiplication (Nexmark q1)
-
-A final projection may multiply one native smallint/integer/bigint column by a
-nonnegative decimal literal with 1..32 whole and fractional digits. Either operand
-order is accepted; omitted and redundant leading zeroes normalize. Fractional
-scale is retained, and changing the factor or scale invalidates state reuse.
-Exponent notation, integer-only factors, negative factors, nested arithmetic and
-intermediate consumption are rejected before registration. This deliberately
-bounded slice qualifies the exact `0.908 * price` q1 conversion.
-
-The engine retains the raw integral weighted bag. Publication parses its exact
-canonical integer text as PostgreSQL numeric (scale zero), parses the parameterized
-decimal factor, and executes immutable `pg_catalog.numeric_mul` inside the atomic
-result/membership/progress transaction. This matches PostgreSQL's integral-to-numeric
-coercion without binary floating point or integral multiplication overflow. NULLs
-propagate and equal mapped tuples consolidate by weight.
-
-`queries/nexmark/q1.sql` and five sequential owned fixtures compare PostgreSQL with
-an independent Python Decimal bag oracle across int2/int4/int8 and an inner join,
-including extreme inputs, inserts/updates/deletes, NULLs, duplicate projections,
-zero-factor consolidation of distinct prices,
-complete simultaneous input changes, rollback and cold same-slot restart. The
-supported factor bounds are compiler limits, not a claim to arbitrary numeric
-expressions. Arithmetic used in filtering/grouping/ordering still needs native
-execution; it cannot be moved to publication.
-
-
 ### Named Nexmark q0 and q2 qualification
 
 `queries/nexmark/q0.sql` projects the five native bid payload columns, preserving
@@ -1035,47 +850,6 @@ Text ordering, unresolved column collations and nondeterministic source collatio
 reject before slot creation or registration.
 
 
-## Deterministic text partitions and terminal calendar formatting
-
-Native relational GROUP BY and window partition keys accept text/varchar from
-the frozen deterministic source contract. PostgreSQL deterministic text equality
-uses bytes; canonical full strings (including case, spaces and Unicode
-normalization distinctions) and NULL form the same groups in Rust. Text ordering,
-text joins and nondeterministic source collations remain unsupported.
-
-Final projection supports `pg_catalog.to_char(column,'YYYY-MM-DD')` and
-`pg_catalog.to_char(column,'HH24:MI')` on native timestamp. Native timestamptz
-requires `column AT TIME ZONE 'UTC'` or the equivalent built-in
-`pg_catalog.timezone('UTC',column)` operand. Only these fixed numeric calendar
-fields are supported. Other patterns, dynamic formats, timezones and coercions
-reject before slot creation. NULL and infinite timestamps format to NULL, matching
-PostgreSQL; minute fields omit seconds without rounding.
-
-Formatting executes inside the existing atomic sink publication, consolidating
-projected collisions. The general PostgreSQL `timestamp_to_char` implementation
-is STABLE; these closed templates avoid locale text fields and clock reads.
-Attestation requires its exact signature, internal implementation and expected
-stability, and verifies immutable `timestamptz_zone` for UTC conversion. Calendar
-plans bind server version, UTF8 encoding, timezone-abbreviation configuration and
-a zero-offset non-DST UTC meaning, checked at initialization and restart. The compiler
-terminal program and attested environment are included in graph identity.
-
-A derived query can format an exposed native aggregate result at final output.
-The inner graph maintains MAX(timestamp) and other aggregates in Rust; PostgreSQL
-formats only the signed output delta. Derived inputs still reject intermediate
-sink-deferred expressions, so formatting cannot influence filtering, grouping,
-joining or ordering without native expression lowering.
-
-`queries/nexmark/q10.sql` retains bid payloads and adds UTC date/minute labels.
-`queries/nexmark/q16.sql` groups channel and the documented q15 UTC `day_start`
-key, computes filtered counts and integral distinct counts, and formats the
-retractable latest-event minute. Timestamp fixtures use local calendar fields;
-timestamptz fixtures use explicit UTC. Their owned harness compares exact native
-MVs and independent raw-source calendar/count/value-set bags across BC/max-year
-timestamps, infinities, NULLs, duplicates, boundaries, channel/day moves, latest
-retractions, simultaneous source changes, rollback and cold restart. C-collated
-varchar and deterministic ICU text grouping are qualified separately.
-
 ## Group-only membership
 
 A nonempty `GROUP BY` may project grouping columns without aggregate calls. Each
@@ -1095,11 +869,6 @@ identity for positional windows.
 
 ## Inner joins between derived scopes
 
-Native column projections with the typed WHERE subset can also serve as scoped
-inputs. Their source filters execute before the boundary projection. Hidden
-native columns remain available inside the scope but cannot resolve outside it;
-sink-deferred expressions cannot become circuit inputs.
-
 Two aliased relational scopes can use explicit `CROSS JOIN`. Each input maps to
 a constant navigation key and feeds the same durable weighted join as an
 equijoin, including the simultaneous-input cross term. NULL tuples participate
@@ -1117,15 +886,6 @@ NATURAL and outer joins remain unsupported by this original scoped inner path.
 The join-tree path described below adds LEFT and native/derived mixed joins.
 Root WHERE uses the existing typed predicate
 subset; grouped consumers can wrap the join in another derived query.
-
-Lowering prefixes graph IDs, assigns global source indices, adapts each raw
-source back to its inner field layout, then maps visible subquery outputs into
-distinct typed fields. These are executable projection operators. Canonical
-compound keys feed the existing maintained join, preserving full visible tuple
-multiplicity and all three simultaneous-input delta terms. Nested scopes and
-repeated physical sources receive the same complete committed source batch.
-Inner source predicates run before their aggregates; outer predicates run after
-the join. Intermediate sink-deferred expressions reject before registration.
 
 Scope boundaries, compound key expressions and complete native contracts belong
 to normalized graph identity. Equality operand direction, conjunction order and
@@ -1150,86 +910,6 @@ spelling, equality orientation and conjunct order normalize. The maintained look
 one right occurrence by the complete deterministic order, preserves the left
 full-tuple bag and revises matches when either source changes.
 
-## Typed terminal expression programs (Nexmark q14)
-
-A single native-source projection can compile a bounded tuple-local expression
-DAG when the older native projection/partition forms cannot represent it. Each
-node references only preceding nodes; input indices refer to a separate raw
-native layout, while visible outputs have explicit labels and inferred types.
-Computed outputs require explicit aliases. The program permits decimal numeric
-multiplication, numeric inequalities, length(text), replace(text,text,text),
-integer subtraction of int4 operands, searched CASE with matching result types
-and an explicit ELSE, and boolean AND/OR/NOT. Numeric inequalities coerce native
-integers exactly to numeric. Integral multiplication is rejected: it must not
-silently acquire numeric semantics in place of PostgreSQL overflow errors.
-Decimal constants use bounded nonnegative decimal syntax; exponent syntax and
-untyped NULL literals are rejected. Source NULLs retain PostgreSQL three-valued
-logic. Native int4 subtraction keeps PostgreSQL's overflow behavior.
-
-Hour extraction requires timestamp without time zone, or explicit conversion of
-native timestamptz via AT TIME ZONE 'UTC'/timezone('UTC',input). Direct hour
-extraction from timestamptz and other time zones are rejected. The selected
-extract_timestamp implementation is immutable; the UTC abbreviation context is
-attested for instant conversion. Text length and replacement run in PostgreSQL,
-including Unicode character semantics. No clocks, user functions, relation
-reads, set-returning functions, generic casts or downstream consumers of deferred
-results are permitted.
-
-The worker maintains the complete referenced raw operand bag in the shared
-durable relational circuit. Publication maps signed deltas and applies the terminal
-predicate with IS TRUE, consolidates collisions using PostgreSQL numeric SUM of
-weights, and narrows only finalized coefficients to i64. Literals are parameters,
-never interpolated SQL. All functions and casts come from closed concrete typed
-signatures, with implementation, volatility, strictness, schema, language,
-server version and UTF8 attested at initialization and restart.
-The existing PUT → atomic PG membership/result/progress COMMIT → slot ACK
-protocol is unchanged. Output errors abort publication and cannot advance progress.
-
-The typed DAG, output labels, raw input layout and attested environment participate
-in graph identity. Changed predicates or output expressions reject state reuse;
-equivalent source aliases permit cold restart. Every terminal map uses the same
-required program representation, including ABS, numeric transport, decimal
-multiplication, array extraction, calendar formatting and aggregate average
-finalization. Compiler validation bounds generated expression size before slot
-creation. q14 fixtures compare exact SQL with a native materialized view and an
-independent Decimal/Unicode/hour oracle through weighted duplicates, NULLs,
-infinities, ranges, signed integral limits, CDC changes, rollback and restart.
-
-## Explicit C terminal text programs (Nexmark q21)
-
-Terminal programs add lower(text), text equality and bounded text IN lists when
-the evaluated text expression explicitly declares COLLATE pg_catalog."C".
-Lower-case outputs retain that explicit context for equality. The compiler
-rejects other or implicit collations rather than substituting C for the original
-query. C's ASCII case behavior is an explicit PostgreSQL adaptation, not a
-Unicode case-folding approximation. Source text/varchar may use other collations;
-the declared C expression controls the terminal operation. Its native collation
-metadata is attested alongside lower(text), texteq(text,text) and the immutable
-non-set-returning regexp_match(text,text) implementation.
-
-The regex subset accepts only the parameterized literal
-`(&|^)channel_id=([^&]*)`, explicitly C-collated input, and no flags. Native array
-selection permits capture index 1 or 2, with scalar IS NULL/IS NOT NULL tests.
-Other patterns, dynamic patterns, slices, flags and regexp_matches are rejected
-before slot creation. Empty capture text differs from NULL: q21 qualifies an
-empty channel id, whereas a missing match or NULL URL does not qualify by itself.
-CASE branch ordering and laziness remain PostgreSQL's. URL is retained in the raw
-operand bag, but visible q21 output contains channel_id in its place; rows with
-different hidden URLs can collide and consolidate their signed multiplicities.
-
-For explicit C-collated programs, associative boolean nodes flatten and
-unreachable intermediary nodes are removed, giving q21 IN and equivalent OR
-forms the same typed identity. CASE labels, capture index, collation, functions
-and native layouts remain explicit. Execution stays inside atomic publication;
-deferred values cannot feed downstream circuit consumers.
-
-The named q21 harness compares exact native materialized views with an
-independent ASCII-C mapping and delimiter-scanner oracle in default, C-varchar
-and ICU-varchar source fixtures. It covers hidden-operand collisions, partial
-retractions, NULL channel/URL/price/bidder, all named brand branches, empty/first
-captures, nonmatching prefixes, Unicode and newline payloads, simultaneous
-changes, PK moves, rollback, empty input ticks and cold restart.
-
 ## Logical occurrence identity and grouped ranking
 
 Derived positional windows use typed graph lineage to prove complete row
@@ -1249,8 +929,7 @@ order, fields and graph are included directly in plan identity.
 
 The q6 circuit executes eligible auction/bid join, persisted-clock cross join
 and closure filter, grouped MAX, ROW_NUMBER per seller, latest-ten filter and
-grouped AVG. Only final numeric AVG rendering is deferred to atomic PostgreSQL
-publication. Clock updates drive ordinary synchronized input deltas, preserving
+grouped AVG. Numeric AVG finalization executes in the engine. Clock updates drive ordinary synchronized input deltas, preserving
 the join cross term and object PUT → PG publication COMMIT → slot ACK order.
 
 ## Retained affected-partition output
@@ -1311,25 +990,6 @@ changes, independent memory/native-MV agreement and cold restart.
 
 ## Checked expression execution progression
 
-Tuple-local terminal expressions execute inside the authoritative publication
-transaction when their results have no circuit consumers. The raw referenced
-operand bag remains durable; projection collisions consolidate complete output
-identities and signed weights before final narrowing. Circuit consumers require
-pure Rust scalar-map or predicate evaluation before joining, grouping or ordering.
-Publication still follows PUT, atomic membership/result/progress COMMIT, then ACK.
-
-Terminal programs now resolve integral addition, subtraction and multiplication
-at the PostgreSQL promoted width, plus explicit int2/int4/int8 and integral-to-numeric
-casts without modifiers. Narrowing and arithmetic errors abort publication. Before durable registration,
-EXPLAIN of the validated original SELECT invokes the PostgreSQL planner and
-rejects constant-folding errors, including failing constant alternatives under
-CASE or COALESCE. Row-dependent alternatives retain lazy runtime evaluation.
-COALESCE preserves operand order and lazy evaluation, promotes integral widths,
-and resolves bare NULLs from other operands; all-NULL terminal COALESCE resolves
-to text. Other type combinations require matching resolved types. Cast NULLs
-have explicit types. Constant-only projections retain one raw source operand to
-preserve source-row multiplicity even when no operand contributes to the output.
-
 The circuit scalar tree supports native integral/numeric operands, explicit
 integral casts, checked +/−/*, lazy COALESCE and searched CASE. Computed
 projections and GROUP BY keys use Map nodes; predicates evaluate typed operands
@@ -1345,18 +1005,6 @@ functions and arbitrary casts remain rejected. UTC is a bound execution context;
 source LSN and logical time remain distinct from temporal SQL values.
 
 ## Native and mixed derived join trees
-
-The compiler accepts bounded trees of native sources and non-LATERAL derived
-queries with INNER, CROSS and LEFT joins. Self joins have distinct source
-occurrences, each receiving the same complete physical-source delta. Trees
-are limited to 16 source occurrences and nesting depth 16. Equality ON clauses
-may contain conjunctions of native columns with matching types, modifiers and
-collations; supported keys are boolean, integral, UUID and timestamp types.
-Aliases hide original relation names, quoted identifiers retain case, and
-ambiguous references reject before registration. RIGHT/FULL/NATURAL/USING joins,
-join aliases, inequality or disjunctive ON clauses, implicit key coercions and
-text keys remain unsupported. Grouping over a tree uses an enclosing derived
-query; intermediate sink-deferred expressions reject.
 
 Inner joins execute the maintained incremental join, including simultaneous
 input cross terms. LEFT joins tag and union both complete input deltas, then
@@ -1426,7 +1074,7 @@ every complete source row until membership is tested. A nonempty partition emits
 one projected occurrence without narrowing its total occurrence count. Supported
 output types are boolean, integral, deterministic text/varchar, UUID and timestamp
 types. Repeated
-output columns remain legal. Computed/deferred outputs, DISTINCT ON, GROUP BY and
+output columns remain legal. Unsupported computed outputs, DISTINCT ON, GROUP BY and
 other relational source shapes reject before registration or slot creation.
 
 An outer ordinary source may use exactly `WHERE EXISTS (SELECT 1 FROM schema.table
@@ -1493,110 +1141,6 @@ columns, even if the query does not consume numeric values. Published object byt
 its fixed precision/scale result types and panic-based overflow paths do not
 establish compatibility with PostgreSQL's unconstrained numeric semantics.
 
-## Expression placement report
-
-`pgderive query validate` includes a `placement` object with revision 4 and
-`report_only: true`. It is advisory and read-only: no execution path changes,
-new supported SQL, registration, slot creation or per-publication checks arise
-from producing this report. Diagnostics are excluded from executable plan identity
-and pending rebuild semantic signatures.
-
-The report contains the executable relational stages, their input edges and
-maintenance consumers propagated backward through those edges. Predicates, joins,
-group/partition keys, aggregates/windows, ordering and set operations seed the
-closure. A local Map consumes its operands before executing; that input dependency
-propagates backward as an intermediate-computation consumer. Rebind/projection
-edges preserve reachability across scopes. A shared upstream stage records every
-reachable consumer. The report does not infer that unused columns are safe to move:
-its dependency precision is explicitly conservative at the operator boundary.
-
-Each local Map expression lists its current local execution path, native result
-OID, typed definition and exact typed input-field dependencies. `maintenance_required` means a
-maintenance consumer reaches that stage in this conservative graph. An expression
-outside that closure is `candidate_requires_proof`; outstanding obligations include
-column liveness, evaluation domains/errors, lazy branches, cardinality, contextual
-determinism, exact retractions and a qualified target runtime. Candidates continue
-executing locally. A different field in the same stage can conservatively keep a
-candidate marked as required. `field_consumers` separately records proven field
-uses: scalar operands (including all CASE conditions/results and COALESCE branches),
-predicates, join/group/distinct keys, aggregate arguments/filters, window order and
-navigation operands, and output operands. Lineage follows maps and rebind aliases
-through row-preserving nodes; additive statistics/finalizer fields have explicit codec lineage; other packed
-join/window/ordered/distinct-membership state remains opaque.
-An empty list is not proof that no consumer exists beyond an opaque boundary.
-The conservative `consumers` closure and status remain the movement gate. Required
-local expressions explicitly retain full-tuple-state and evaluation/error proof
-obligations. Terminal `field_consumers` equals its exact consumer list.
-
-`finalizers` inventories existing additive `Finalize` stages. Each entry names its
-input stage, grouping fields, arbitrary-precision decimal state encoding, every
-field decoded/validated, and each output's value fields, SQL result OID and current
-encoding. COUNT reads a count value; SUM and AVG read count plus sum. All outputs
-still depend on whole-row validation and group presence. AVG's `sum_count_ratio`
-is an internal operand encoding, not a PostgreSQL numeric datum: the existing
-terminal conversion remains required. Codec field names/positions are shared with
-the runtime. This does not qualify ordered extrema/window finalizers for movement.
-
-The live PostgreSQL harness compares local CASE/COALESCE/cast values and overflow
-presence with PostgreSQL using bound input values. These comparisons include PostgreSQL's
-planning behavior; they do not assert which phase raises an error. A separate
-counterexample uses a physical fixture row to avoid planner-constant folding:
-a row filtered before `price+1` can
-avoid overflow, while a materialized computation before that filter errors.
-Unit fixtures pin finalizer width checks, NULLs, AVG ratios, whole-row validation
-and identical validation on positive and negative weights. These are bounded
-qualification evidence, not a general proof of error equivalence or SQLSTATE
-compatibility for arbitrary local expressions.
-
-Existing terminal expressions expose exact typed expression edges, native OIDs,
-source operand references, and all reachable output/predicate consumers. Their
-status is `qualified_existing_terminal` within the already accepted closed program;
-unreferenced nodes are labeled separately. Traversing CASE/COALESCE dependencies
-is static analysis and does not evaluate branches eagerly. Public output consumer
-names come from PostgreSQL's resolved column metadata, including legacy terminal
-maps whose internal output labels are positional.
-
-`network_fallback_stages` is currently empty. Unsupported functions or query shapes
-still fail compilation before activation; absence of a maintenance consumer does
-not establish volatility safety, hidden-read tracking, error equivalence or a new
-runtime capability. This report inventories local Map roots and the terminal DAG,
-not a unified field-level expression graph for every relational operator. Inline
-predicate/aggregate expressions retain their existing typed operator contracts;
-the report does not yet inventory every such expression as a separate node.
-
-
-## Qualified terminal-adjacent widening
-
-After the complete query is bound, a compiler pass may replace a direct local
-smallint→integer, smallint→bigint or integer→bigint column cast in the final Map
-immediately before Output with the existing bound terminal cast. The rule requires
-no existing terminal program and no sibling computation reading the cast result.
-It never moves a computation across a predicate, join, grouping/window operator,
-expansion or scope boundary. Narrowing, arithmetic, CASE/COALESCE trees and nested
-casts remain local. Standalone casts already accepted by terminal lowering keep
-that existing path; the new pass covers final casts alongside local computations.
-
-The proof is restricted to valid values of the captured native input type:
-widening is total, NULL-preserving, deterministic, injective, and has the same
-integer value and canonical output representation as PostgreSQL. Removing it from
-a final Map adds no error suppression opportunity. Fallible siblings retain their
-original placement and evaluation domains. Source/layout validation and bound
-built-in attestation remain prerequisites, performed during initialization.
-
-The executable output layout retains raw typed operands in the engine's weighted
-output arrangement, persisted in immutable objects. Repeated visible casts share
-one operand slot and DAG definition; PostgreSQL may evaluate that definition more
-than once while rendering outputs. Total pure casts make repeated evaluation safe.
-Positive and negative deltas run through the same bound program during the existing
-publication batch, with collision consolidation and exact occurrence retractions.
-No per-expression computation round trips are introduced. Maintenance-used casts
-retain their local evaluated value; there is no general cross-boundary reuse rule.
-
-Placement revision 4 adds `retention`: the output arrangement, ownership, weighted
-identity, raw operand slots/types/encodings and terminal-node references. This is a
-report of executable retained state, not another PostgreSQL metadata table.
-Advisory liveness still cannot authorize movement. Plans changed by the new pass
-have a new identity and require explicit rebuild for existing registrations; old
-arrangements are not silently reinterpreted. The lifecycle fixture qualifies all
-three casts against native materialized-view rows and metadata, independent memory,
-NULL updates, duplicates, deletion and cold restart.
+Constant subexpressions are checked by the local typed binder, including inside
+row-dependent lazy expressions. An unqualified constant-error subtree rejects
+before activation; the engine does not ask PostgreSQL's planner to evaluate it.

@@ -172,7 +172,6 @@ mod ranking;
 
 mod peer_frames;
 
-mod array;
 mod case;
 mod composition;
 mod decimal;
@@ -193,9 +192,7 @@ mod native_cross;
 
 mod lookup_remainder;
 
-mod terminal_program;
-
-mod terminal_text;
+mod engine_expressions;
 
 mod incremental_distinct;
 

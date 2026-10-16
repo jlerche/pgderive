@@ -159,6 +159,38 @@ impl Ord for Numeric {
         rank(self).cmp(&rank(other))
     }
 }
+impl Numeric {
+    pub(crate) fn average(ratio: &str) -> Result<String> {
+        let (sum, count) = ratio.split_once('/').context("invalid engine AVG operand")?;
+        ensure!(sum.len() <= LIMIT, "AVG sum exceeds numeric digit budget");
+        let numerator: BigInt = sum.parse()?;
+        let denominator = BigInt::from(count.parse::<i64>()?);
+        ensure!(denominator > BigInt::from(0), "invalid engine AVG count");
+        let magnitude = if numerator < BigInt::from(0) { -&numerator } else { numerator.clone() };
+        let leading = |mut value: BigInt| {
+            let mut weight = 0_i32;
+            while value >= BigInt::from(10_000) {
+                value /= 10_000;
+                weight += 1;
+            }
+            (weight, value)
+        };
+        let (weight1, digit1) = leading(magnitude.clone());
+        let (weight2, digit2) = leading(denominator.clone());
+        let weight = weight1 - weight2 - i32::from(digit1 <= digit2);
+        let scale = u32::try_from((16 - 4 * weight).clamp(0, 1000))?;
+        let scaled = magnitude * power(scale);
+        let mut result = &scaled / &denominator;
+        if (&scaled % &denominator) * 2 >= denominator {
+            result += 1;
+        }
+        if numerator < BigInt::from(0) {
+            result = -result;
+        }
+        Ok(Self::finite(result, scale)?.text())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Numeric;

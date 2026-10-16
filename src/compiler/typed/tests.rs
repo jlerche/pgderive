@@ -49,7 +49,7 @@ fn typed_integral_widths_nulls_and_lazy_coalesce() -> Result<()> {
         assert_eq!(expression(sql)?.evaluate(&row)?.as_deref(), expected, "{sql}");
     }
     for sql in ["32768::smallint", "2147483647 + 1", "COALESCE(b,32768::smallint)"] {
-        assert!(expression(sql)?.evaluate(&row).is_err(), "{sql}");
+        assert!(expression(sql).and_then(|value| value.evaluate(&row)).is_err(), "{sql}");
     }
     for sql in ["COALESCE(NULL,NULL)", "random()", "a / 2", "NULL + NULL"] {
         assert!(expression(sql).is_err(), "{sql}");

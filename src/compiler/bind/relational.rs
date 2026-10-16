@@ -5,7 +5,8 @@ pub(super) fn qualify(mut column: ColumnRef) -> ColumnRef {
     column.right = false;
     column
 }
-type Output = (Vec<crate::compiler::projection::OutputColumn>, Option<crate::catalog::Terminal>);
+type Output =
+    (Vec<crate::compiler::projection::OutputColumn>, Option<crate::compiler::output::Output>);
 pub(super) fn output(
     columns: crate::compiler::parser::Columns,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
@@ -17,6 +18,6 @@ pub(super) fn output(
             Ok(crate::compiler::projection::OutputColumn { column: resolve(&name)?, label })
         })
         .collect::<Result<Vec<_>>>()?;
-    let terminal = super::terminal(transforms, &columns)?;
-    Ok((columns, terminal))
+    let mapping = super::output_mapping(transforms, &columns)?;
+    Ok((columns, mapping))
 }

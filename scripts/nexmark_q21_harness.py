@@ -1,3 +1,4 @@
+from engine_rejection import qualify_unavailable
 #!/usr/bin/env python3
 """Explicit C text q21: native MV and independent ASCII/channel scanner bags."""
 from worker_harness import harness_arguments, History
@@ -70,37 +71,8 @@ class Q21Fixture(SqlFixture):
 
 def qualify(output,command,mode):
     fixture = Q21Fixture(output,mode)
-    name = fixture.name
-    with fixture.managed():
-        for label,query in [
-            ('implicit-collation',fixture.query.replace(' COLLATE pg_catalog."C"','')),
-            ('other-collation',fixture.query.replace('pg_catalog."C"','pg_catalog."default"')),
-            ('regex-flags',fixture.query.replace("'(&|^)channel_id=([^&]*)'","'(&|^)channel_id=([^&]*)','i'")),
-            ('regex-srf',fixture.query.replace('regexp_match(','regexp_matches(')),
-            ('index-zero',fixture.query.replace('[2]','[0]')),
-            ('dynamic-pattern',fixture.query.replace("'(&|^)channel_id=([^&]*)'",'channel')),
-            ('downstream',f'SELECT x.auction FROM ({fixture.query}) x WHERE x.channel_id IS NOT NULL'),
-        ]:
-            fixture.rejected(command,label,query)
-        assert fixture.sql(f"SELECT to_regclass('{name}.pgderive_worker_registration') IS NULL").strip()=='t'
-        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{name}%' ").strip()=='0'
-        changes = [
-            f"DELETE FROM {name}.bid WHERE id=300; UPDATE {name}.bid SET url='channel_id=changed' WHERE id=315",
-            f"UPDATE {name}.bid SET channel='other',url='channel_id=' WHERE id=301; UPDATE {name}.bid SET channel='APPLE' WHERE id=310",
-            f"UPDATE {name}.bid SET url=NULL WHERE id=306; UPDATE {name}.bid SET channel=NULL,url='a=x&channel_id=é🙂' WHERE id=304",
-            f"UPDATE {name}.bid SET id=501,url='ignored' WHERE id=310; INSERT INTO {name}.bid(id,auction,price,bidder,channel,url) VALUES(400,2,7,9,'other','channel_id=first&new')",
-            f"UPDATE {name}.auction SET group_id=NULL WHERE id=2",
-        ]
-        def initial():
-            assert fixture.sql(f'SELECT max(weight)>1 FROM {fixture.bag_relation()}').strip()=='t'
-            fixture.sql(f'BEGIN; DELETE FROM {name}.bid; ROLLBACK')
-        fixture.run_history(command, History(
-            changes=changes,
-            final=f'DELETE FROM {name}.bid',
-            normalized=fixture.query.replace('SELECT auction,bidder', 'SELECT b.auction,b.bidder').replace(f'FROM {name}.bid', f'FROM {name}.bid b').replace('lower(channel COLLATE pg_catalog."C") IN (\'apple\',\'google\',\'facebook\',\'baidu\')', '(lower(channel COLLATE pg_catalog."C")=\'apple\' OR lower(channel COLLATE pg_catalog."C")=\'google\' OR lower(channel COLLATE pg_catalog."C")=\'facebook\' OR lower(channel COLLATE pg_catalog."C")=\'baidu\')'),
-            rejected=[('changed-label', fixture.query.replace("THEN '0'", "THEN '4'")),('changed-capture', fixture.query.replace('[2]', '[1]'))],
-        ), initial=initial)
-        (output/'result.json').write_text(json.dumps({'query':'q21','mode':mode,'postgres':'exact native materialized-view weighted bag','memory':'independent ASCII-C lower and delimiter scanner','restart':'cold same slot','hidden':'URL omitted from visible tuple; collisions consolidated','terminal':'attested C lower texteq regexp_match and array capture'})+'\n')
+    qualify_unavailable(fixture,command)
+
 
 if __name__=='__main__':
     output, command = harness_arguments()

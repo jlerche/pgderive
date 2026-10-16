@@ -1,8 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
-mod array;
-mod decimal;
 pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
@@ -14,7 +12,6 @@ pub(super) mod offset;
 pub(super) mod partition;
 pub(super) mod scalar;
 pub(super) mod scoped_join;
-mod timestamp_format;
 use expressions::{aggregate, column, node, optional, target};
 
 #[derive(Clone)]
@@ -23,7 +20,7 @@ pub(super) struct Table {
     pub(super) name: Name,
     pub(super) alias: Option<String>,
 }
-pub(super) type Columns = Vec<(Name, String, crate::catalog::terminal::OutputMap)>;
+pub(super) type Columns = Vec<(Name, String, crate::compiler::output::OutputMap)>;
 pub(super) enum Parsed {
     Membership { parsed: native_join::Parsed, distinct: bool },
     NativeJoin(native_join::Parsed),
@@ -32,7 +29,7 @@ pub(super) enum Parsed {
     Lookup(lookup::Parsed),
     Grouped(Grouped),
     Partition(partition::Parsed),
-    Terminal { source: Table, targets: Vec<Node>, predicate: Option<Box<Node>> },
+    Scalar { source: Table, targets: Vec<Node>, predicate: Option<Box<Node>> },
     NativeScope { source: Table, columns: Columns, predicate: Option<super::syntax::Expr> },
     Projection { source: Table, columns: Columns, predicate: Option<super::syntax::Expr> },
 }
@@ -59,7 +56,7 @@ pub(super) fn parse(sql: &str) -> Result<(Parsed, Option<Parsed>)> {
     else {
         anyhow::bail!("SQL requires SELECT");
     };
-    let fallback = validate_query(select).and_then(|()| terminal_query(select)).ok();
+    let fallback = validate_query(select).and_then(|()| scalar_query(select)).ok();
     Ok((query(select).context("SQL lower: unsupported SELECT")?, fallback))
 }
 
@@ -141,7 +138,7 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     if partition::eligible(select)? {
         return partition::parse(select)
             .map(Parsed::Partition)
-            .or_else(|prior| terminal_query(select).map_err(|_| prior));
+            .or_else(|prior| scalar_query(select).map_err(|_| prior));
     }
     if let Some(derived) = derived::parse(select)? {
         return Ok(Parsed::Derived(derived));
@@ -149,17 +146,17 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     let pg::SelectStmt { target_list, from_clause, where_clause, group_clause, .. } = select;
     if group_clause.is_empty() {
         return projection(target_list, from_clause, where_clause.as_deref())
-            .or_else(|prior| terminal_query(select).map_err(|_| prior));
+            .or_else(|prior| scalar_query(select).map_err(|_| prior));
     }
     grouped_query(select)
 }
-fn terminal_query(select: &pg::SelectStmt) -> Result<Parsed> {
-    ensure!(select.group_clause.is_empty(), "terminal programs cannot group");
+fn scalar_query(select: &pg::SelectStmt) -> Result<Parsed> {
+    ensure!(select.group_clause.is_empty(), "scalar projections cannot group");
     let [source] = select.from_clause.as_slice() else {
-        anyhow::bail!("terminal programs require one native input");
+        anyhow::bail!("scalar projections require one native input");
     };
-    ensure!((1..=64).contains(&select.target_list.len()), "invalid terminal output layout");
-    Ok(Parsed::Terminal {
+    ensure!((1..=64).contains(&select.target_list.len()), "invalid scalar output layout");
+    Ok(Parsed::Scalar {
         source: table(source)?,
         targets: select.target_list.clone(),
         predicate: select.where_clause.clone(),
@@ -291,36 +288,8 @@ fn projection_columns(targets: &[Node]) -> Result<Columns> {
         .collect()
 }
 
-fn projection_target(value: &Node) -> Result<(Name, crate::catalog::terminal::OutputMap, String)> {
-    use crate::catalog::terminal::OutputMap;
-    if matches!(node(value)?, NodeEnum::AIndirection(_)) {
-        return array::target(value);
-    }
-    if matches!(node(value)?, NodeEnum::AExpr(_)) {
-        return decimal::target(value);
-    }
-    if let NodeEnum::FuncCall(call) = node(value)? {
-        let name = expressions::names(&call.funcname)?.0;
-        let function =
-            expressions::builtin_name(&name).context("unsupported terminal function namespace")?;
-        if function == "to_char" {
-            return timestamp_format::target(call);
-        }
-        let transform = match function {
-            "abs" => OutputMap::Abs,
-            "length" => OutputMap::Length,
-            _ => anyhow::bail!("unsupported terminal function"),
-        };
-        // Reuse the exact aggregate-call modifier checks with one ordinary argument.
-        let mut plain = call.as_ref().clone();
-        plain.funcname = vec![pg_query::Node {
-            node: Some(NodeEnum::String(pg::String { sval: function.to_owned() })),
-        }];
-        let normalized = Node { node: Some(NodeEnum::FuncCall(Box::new(plain))) };
-        let operand =
-            aggregate(&normalized, function, false)?.context("missing function operand")?;
-        return Ok((column(operand)?, transform, function.to_owned()));
-    }
+fn projection_target(value: &Node) -> Result<(Name, crate::compiler::output::OutputMap, String)> {
+    use crate::compiler::output::OutputMap;
     let name = column(value)?;
     let label = name.0.last().context("missing column name")?.clone();
     Ok((name, OutputMap::Identity, label))

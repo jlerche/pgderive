@@ -177,7 +177,6 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
     );
     for sql in [
         "SELECT * FROM source.auction",
-        "SELECT id+1 FROM source.auction",
         "SELECT id FROM source.auction LIMIT 1",
         "SELECT id FROM source.auction ORDER BY id",
         "SELECT DISTINCT ON (category) category FROM source.auction",
@@ -206,15 +205,8 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
 }
 
 #[test]
-fn terminal_map_requires_binding_and_rejects_unsafe_positions() -> Result<()> {
+fn unavailable_functions_reject_without_pg_computation() {
     let native = contract();
-    let mapped = compile(
-        "SELECT pg_catalog.abs(id) AS positive, length(category) AS characters FROM source.auction",
-        &native,
-    )?;
-    assert!(!mapped.output().columns.is_empty());
-    assert!(program::plan(&native, &mapped).is_err());
-    assert!(mapped.sink("sink").validate().is_err());
     for sql in [
         "SELECT abs(category) FROM source.auction",
         "SELECT length(id) FROM source.auction",
@@ -228,7 +220,6 @@ fn terminal_map_requires_binding_and_rejects_unsafe_positions() -> Result<()> {
     ] {
         assert!(compile(sql, &native).is_err(), "accepted {sql}");
     }
-    Ok(())
 }
 
 #[test]
@@ -249,7 +240,7 @@ fn text_equality_revision_binds_each_expression_boundary() -> Result<()> {
     assert!(
         compile("SELECT id FROM source.auction WHERE category IS NULL", &native)?
             .output()
-            .terminal
+            .mapping
             .is_none()
     );
 
@@ -257,60 +248,14 @@ fn text_equality_revision_binds_each_expression_boundary() -> Result<()> {
 }
 
 #[test]
-fn timestamp_terminal_formats_normalize_context_and_reject_unsafe_shapes() -> Result<()> {
-    let mut native = contract();
-    let column = &mut native.relations[0].columns[2];
-    column.oid = 1184;
-    column.collation = 0;
-    let sql = "SELECT to_char(other AT TIME ZONE 'UTC','HH24:MI') AS minute FROM source.auction";
-    let compiled = compile(sql, &native)?;
-
-    assert_eq!(
-        serde_json::to_vec(&compiled)?,
-        serde_json::to_vec(&compile(
-            &sql.replace("other AT TIME ZONE 'UTC'", "pg_catalog.timezone('UTC',other)"),
-            &native
-        )?)?
-    );
-    for invalid in [
-        sql.replace("'UTC'", "'America/New_York'"),
-        sql.replace("'HH24:MI'", "'Month'"),
-        sql.replace("other AT TIME ZONE 'UTC'", "other"),
-        sql.replace("'HH24:MI'", "category"),
-    ] {
-        assert!(compile(&invalid, &native).is_err(), "{invalid}");
-    }
-    let derived = "SELECT q.id,to_char(q.latest AT TIME ZONE 'UTC','HH24:MI') AS minute FROM(SELECT id,MAX(other) AS latest FROM source.auction GROUP BY id) q";
-    assert!(!compile(derived, &native)?.relational().nodes.is_empty());
-    let consumed = format!("SELECT z.minute FROM({derived}) z");
-    assert!(compile(&consumed, &native).is_err());
-    native.relations[0].columns[2].oid = 1114;
-    assert!(compile(&sql.replace("other AT TIME ZONE 'UTC'", "other"), &native).is_ok());
-    assert!(compile(sql, &native).is_err());
-    Ok(())
-}
-
-#[test]
-fn named_calendar_queries_lower_text_groups_and_terminal_max() -> Result<()> {
-    let mut native = contract();
-    let template = native.relations[1].columns[2].clone();
-    for (name, oid) in [("date_time", 1184), ("channel", 25), ("bidder", 20), ("extra", 25)] {
-        let mut column = template.clone();
-        column.position = i16::try_from(native.relations[1].columns.len() + 1)?;
-        column.name = name.into();
-        column.oid = oid;
-        column.collation = if oid == 25 { 100 } else { 0 };
-        native.relations[1].columns.push(column);
-    }
+fn postgres_only_output_functions_are_unavailable() {
     for sql in [
-        include_str!("../../../queries/nexmark/q10.sql"),
-        include_str!("../../../queries/nexmark/q16.sql"),
+        "SELECT length(category) AS n FROM source.auction",
+        "SELECT abs(id) AS n FROM source.auction",
+        "SELECT to_char(id,'999') AS n FROM source.auction",
     ] {
-        let compiled = compile(&sql.replace("nexmark.", "source."), &native)?;
-
-        assert!(compiled.output().terminal.is_some());
+        assert!(compile(sql, &contract()).is_err(), "{sql}");
     }
-    Ok(())
 }
 
 #[test]

@@ -12,8 +12,8 @@ explicit revisable sessions, and bounded self/multiway/left join trees through d
 [the SQL subset and compiler boundaries](docs/sql-compiler.md).
 
 The [PostgreSQL fidelity roadmap](docs/postgres-fidelity-roadmap.md) defines the
-next milestones, including ordinary typed result tables and proven expression
-placement across sink, local execution and batched PostgreSQL fallback.
+next milestones for ordinary typed result tables and faithful in-engine execution.
+PostgreSQL computation, sink expression deferral and network fallback are disabled.
 The [compatibility contract](docs/postgres-compatibility.md) and
 [current capability inventory](docs/postgres-capabilities.md) distinguish that
 target from implemented and qualified behavior.
@@ -21,15 +21,10 @@ target from implemented and qualified behavior.
 ## Query inspection and typed results
 
 `cargo run --locked -- query validate worker.local.toml` resolves and type-checks
-the configured query against the live PostgreSQL publication, binds terminal
-built-ins and reports its output names, type OIDs/modifiers and provisional plan
-identity. It runs read-only and creates no registration or replication slot.
-Its `placement` section inventories local computed expressions and the existing
-typed terminal DAG, with consumer dependencies and reasons for their current
-placement. Operator-level dependencies are conservative; a final-only local value
-is a candidate requiring further proof, not permission to move it. Analysis does
-not change execution or plan identity. See the
-[placement report contract](docs/sql-compiler.md#expression-placement-report).
+the configured query against the live PostgreSQL publication and reports output
+names, type OIDs/modifiers and provisional plan identity. It runs read-only and
+creates no registration or replication slot. All query computations execute in the
+engine; unavailable functions or query shapes fail validation with a reason.
 The provisional identity uses the configured slot alias; durable registration
 binds the independently journaled physical slot. `query status` reports whether
 the query is unregistered, registered or activated and its exact durable progress.
@@ -119,7 +114,7 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 75 worker cases:
+profile runs the complete low-level live PostgreSQL harness and 73 worker cases:
 result-table decoding/representation, semantic bindings, transaction faults,
 witnessed process kills, representative query families, lifecycle and rebuild.
 It disables synthetic S3 latency but keeps real PostgreSQL/object storage and

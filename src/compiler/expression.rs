@@ -398,41 +398,21 @@ impl Predicate {
 }
 
 impl Scalar {
-    fn columns(&self, columns: &mut Vec<ColumnRef>) {
+    fn is_constant(&self) -> bool {
         match self {
-            Self::Typed(value) => value.columns(columns),
-            Self::Column(column) | Self::Remainder(column, _) => columns.push(column.clone()),
-            Self::Difference(left, right) => {
-                columns.push(left.clone());
-                columns.push(right.clone());
-            }
-            Self::Literal(_) => {}
+            Self::Typed(value) => value.is_constant(),
+            Self::Literal(_) => true,
+            Self::Column(_) | Self::Remainder(_, _) | Self::Difference(_, _) => false,
         }
     }
 }
 impl Expr {
-    pub(super) fn columns(&self, columns: &mut Vec<ColumnRef>) {
+    pub(super) fn is_constant(&self) -> bool {
         match self {
-            Self::Value(value) | Self::Null(value, _) => value.columns(columns),
-            Self::Compare(_, left, right) => {
-                left.columns(columns);
-                right.columns(columns);
-            }
-            Self::And(values) | Self::Or(values) => {
-                for value in values {
-                    value.columns(columns);
-                }
-            }
-            Self::Not(value) => value.columns(columns),
+            Self::Value(value) | Self::Null(value, _) => value.is_constant(),
+            Self::Compare(_, left, right) => left.is_constant() && right.is_constant(),
+            Self::And(values) | Self::Or(values) => values.iter().all(Self::is_constant),
+            Self::Not(value) => value.is_constant(),
         }
-    }
-}
-impl Predicate {
-    pub(super) fn columns(&self) -> Vec<ColumnRef> {
-        let mut columns = Vec::new();
-        self.0.columns(&mut columns);
-        columns.sort();
-        columns.dedup();
-        columns
     }
 }

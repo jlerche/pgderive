@@ -22,7 +22,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let scopes = [left, right];
     let keys = parsed.keys.map(|value| keys(value, &scopes)).transpose()?;
     let resolve = |name: &Name| Ok(resolve(name, &scopes)?.1);
-    let (columns, terminal) = super::relational::output(parsed.columns, &resolve)?;
+    let (columns, mapping) = super::relational::output(parsed.columns, &resolve)?;
     let predicate = parsed
         .predicate
         .map(|value| crate::compiler::expression::bind(value, &resolve).map(Predicate::new))
@@ -48,7 +48,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     };
     left.ir.nodes.push(Node::Output { id: "project".into(), input: input.into() });
     left.ir.output.columns = columns;
-    left.ir.output.terminal = terminal;
+    left.ir.output.mapping = mapping;
     Ok(Compiled { result_columns: Vec::new(), relational: left.ir })
 }
 fn join_keys(keys: Option<Vec<(ColumnRef, ColumnRef)>>) -> [Node; 2] {
@@ -80,11 +80,11 @@ pub(super) fn scope(
     let compiled = bind_inner(*parsed, contract)?;
     let mut ir = compiled.relational;
     ensure!(
-        ir.output.terminal.as_ref().is_none_or(crate::catalog::Terminal::native_rendering),
-        "scoped join cannot consume sink-deferred expressions"
+        ir.output.mapping.as_ref().is_none_or(crate::compiler::output::Output::native_rendering),
+        "scoped join cannot consume unfinalized aggregate encoding"
     );
     let Some(Node::Output { input, .. }) = ir.nodes.pop() else {
-        anyhow::bail!("scoped join requires terminal relational output");
+        anyhow::bail!("scoped join requires final relational Output");
     };
     for node in &mut ir.nodes {
         super::partition::composition::rewrite(node, &|id| format!("{prefix}{id}"), &|edge| {

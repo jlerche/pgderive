@@ -34,7 +34,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let mut builder = Builder { contract, sources: Vec::new(), nodes: Vec::new(), joins: 0 };
     let edge = builder.tree(parsed.tree)?;
     let resolve = |name: &Name| Ok(resolve(name, &edge.columns)?.value.clone());
-    let (columns, terminal) = super::relational::output(parsed.columns, &resolve)?;
+    let (columns, mapping) = super::relational::output(parsed.columns, &resolve)?;
     let input = if let Some(predicate) = parsed.predicate {
         builder.nodes.push(Node::Filter {
             id: "tree_filter".into(),
@@ -51,7 +51,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         schema: first.schema.clone(),
         table: first.table.clone(),
         columns,
-        terminal,
+        mapping,
     };
     Ok(Compiled {
         result_columns: Vec::new(),

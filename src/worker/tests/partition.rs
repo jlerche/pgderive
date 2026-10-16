@@ -217,7 +217,7 @@ async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()
         "SELECT b.auction,AVG(b.price),SUM(b.price) FROM source.bid b GROUP BY b.auction",
         &native,
     )?;
-    assert!(compiled.validate_bound().is_err());
+    assert!(compiled.validate_execution().is_ok());
     let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
@@ -281,7 +281,7 @@ fn native_timestamp_resolution_normalizes_offsets_and_rejects_cross_type_casts()
     let equivalent =
         compile(&sql.replace("2000-01-01 00:00:00+00", "1999-12-31 16:00:00-08"), &native)?;
     assert_eq!(serde_json::to_vec(&original)?, serde_json::to_vec(&equivalent)?);
-    assert!(original.validate_bound().is_err());
+    assert!(original.validate_execution().is_ok());
 
     for predicate in
         ["b.local=b.instant", "b.instant<'2000-01-01 00:00:00'", "b.local<'1900-02-29 00:00:00'"]

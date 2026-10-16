@@ -46,7 +46,7 @@ class ProjectionFixture(SqlFixture):
 def qualify(output,command,query,mode):
     fixture = ProjectionFixture(output,query,mode)
     with fixture.managed():
-        invalid = fixture.query.replace('pg_catalog.mod(auction,123)','pg_catalog.mod(auction,0)') if query=='q2' else fixture.query.replace('SELECT auction,','SELECT auction+1,')
+        invalid = fixture.query.replace('pg_catalog.mod(auction,123)','pg_catalog.mod(auction,0)') if query=='q2' else fixture.query.replace('SELECT auction,','SELECT auction/0,')
         fixture.rejected(command,'unsupported',invalid)
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'

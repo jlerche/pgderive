@@ -22,15 +22,24 @@ pub struct Projected {
     pub(crate) table: String,
     pub(crate) columns: Vec<OutputColumn>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) terminal: Option<crate::catalog::Terminal>,
+    pub(crate) mapping: Option<crate::compiler::output::Output>,
 }
 impl Projected {
     pub(crate) fn row(&self, row: &Row) -> Result<Vec<Option<Cell>>> {
         self.columns
             .iter()
-            .map(|output| {
+            .enumerate()
+            .map(|(index, output)| {
                 row.get(&output.column.name)
                     .context("compiled projection column absent")?
+                    .as_deref()
+                    .map(|value| {
+                        self.mapping.as_ref().map_or_else(
+                            || Ok(value.to_owned()),
+                            |mapping| mapping.value(index, value),
+                        )
+                    })
+                    .transpose()?
                     .as_deref()
                     .map(|value| match output.column.oid {
                         16 => match value {
