@@ -88,7 +88,7 @@ pub(super) async fn check(
     eprintln!("MVP full-tuple bag multiplicity, cancellation and overflow rollback passed");
     Ok(())
 }
-fn advance(checkpoint: &mut Checkpoint) {
+pub(super) fn advance(checkpoint: &mut Checkpoint) {
     checkpoint.time += 1;
     for member in &mut checkpoint.arrangements {
         member.trace.time = checkpoint.time;

@@ -88,6 +88,7 @@ impl Terminal {
         Ok(Environment { semantics, functions, collations, calendar })
     }
     pub(crate) async fn bind(&mut self, sql: &(impl GenericClient + Sync)) -> Result<()> {
+        crate::source::Environment::configure(sql).await?;
         let environment = self.inspect(sql).await?;
         if let Some(prior) = &self.environment {
             ensure!(prior.as_ref() == &environment, "terminal expression environment changed");
@@ -100,7 +101,8 @@ impl Terminal {
         ensure!(self.environment.is_some(), "terminal expression must bind before registration");
         Ok(())
     }
-    pub(crate) async fn verify(&self, sql: &(impl GenericClient + Sync)) -> Result<()> {
+    pub(crate) async fn verify_environment(&self, sql: &(impl GenericClient + Sync)) -> Result<()> {
+        crate::source::Environment::configure(sql).await?;
         self.validate()?;
         ensure!(
             self.environment.as_deref() == Some(&self.inspect(sql).await?),
@@ -113,8 +115,7 @@ impl Terminal {
         tx: &Transaction<'_>,
         rows: &[(Value, i64)],
     ) -> Result<Vec<(Value, i64)>> {
-        tx.batch_execute("SET LOCAL search_path=pg_catalog; SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO,MDY'; SET LOCAL IntervalStyle='iso_8601'; SET LOCAL extra_float_digits=3").await?;
-        self.verify(tx).await?;
+        self.validate()?;
         // Only closed tuple-local forms render here; calendar formats have fixed
         // fields and an attested UTC context. Relation reads, clocks and SRFs do not.
         let (columns, predicate) = self.program.render(&self.types)?;

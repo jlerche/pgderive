@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Binding drift and atomic failure tests in a separately owned database.
+"""Initialization binding drift and steady-state inspection tests in a separately owned database.
 
 Catalog mutation is confined to this database. Failures retain it and all logs;
 never alter shared pgderive_dev built-ins, even for a rollback-only test.
@@ -7,7 +7,9 @@ never alter shared pgderive_dev built-ins, even for a rollback-only test.
 import json
 import os
 import subprocess
-from worker_harness import Fixture, Worker, harness_arguments
+import sys
+import time
+from worker_harness import Fixture, harness_arguments
 
 
 LOCAL_FUNCTIONS = {
@@ -26,7 +28,7 @@ LOCAL_FUNCTIONS = {
 class BindingFixture(Fixture):
     def __init__(self, output, mode, database):
         super().__init__(output, 'binding_'+mode.replace('-', '_'), rows=8, auctions=2, database=database)
-        self.terminal = mode in ('terminal', 'expression')
+        self.terminal = mode in ('expression', 'hot-terminal')
         if mode == 'varchar':
             self.sql(f'ALTER TABLE {self.name}.bid ADD COLUMN note varchar(12)')
 
@@ -65,6 +67,7 @@ def qualify(output, command, mode, database):
         worker = fixture.start(command, 'first')
         ready = worker.event('ready')
         fixture.verify()
+        worker.abort()  # Quiesce before administrative semantic changes.
         before = fixture.boundary()
         acknowledged = fixture.sql(f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'")
         if mode in ('type', 'varchar'):
@@ -86,30 +89,19 @@ def qualify(output, command, mode, database):
         else:
             change = "UPDATE pg_catalog.pg_proc SET proisstrict=NOT proisstrict WHERE oid='pg_catalog.jsonb_array_elements(jsonb)'::regprocedure"
             restore = change
-        if mode == 'terminal':
-            fixture.sql(f'''CREATE FUNCTION {fixture.name}.change_helper() RETURNS trigger LANGUAGE plpgsql AS $$
-                BEGIN {change}; RETURN NEW; END $$;
-                CREATE TRIGGER change_helper BEFORE UPDATE ON {fixture.name}.pgderive_progress
-                FOR EACH ROW EXECUTE FUNCTION {fixture.name}.change_helper()''')
-        else:
-            fixture.sql(change)
+        fixture.sql(change)
         fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+10 WHERE id=1')
-        fixture.failed(worker, 'first')
-        assert fixture.boundary() == before, 'failed publication changed durable state'
+        rejected = fixture.start(command, 'incompatible-restart')
+        fixture.failed(rejected, 'incompatible-restart')
+        assert fixture.boundary() == before, 'rejected initialization changed durable state'
         assert fixture.sql(f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'") == acknowledged
-        if mode == 'terminal':
-            fixture.sql(f'DROP TRIGGER change_helper ON {fixture.name}.pgderive_progress; DROP FUNCTION {fixture.name}.change_helper()')
-            assert fixture.sql("SELECT proisstrict FROM pg_catalog.pg_proc WHERE oid='pg_catalog.jsonb_array_elements(jsonb)'::regprocedure").strip() == 't', 'helper mutation escaped rollback'
-        else:
-            rejected = fixture.start(command, 'incompatible-restart')
-            fixture.failed(rejected, 'incompatible-restart')
-            assert fixture.boundary() == before
-            fixture.sql(restore)
+        fixture.sql(restore)
         resumed = fixture.start(command, 'resumed', maximum=1)
-        resumed.event('published', minimum_time=ready['time']+1)
+        reopened = resumed.event('ready')
+        resumed.event('published', minimum_time=reopened['time']+1)
         resumed.finish()
         fixture.verify()
-        (output/'result.json').write_text(json.dumps({'mode':mode,'publication_rejected':True,
+        (output/'result.json').write_text(json.dumps({'mode':mode,'initialization_rejected':True,
             'unchanged_sink_membership_progress_ack':True,'restored_environment_replayed':True,
             'database':database})+'\n')
 
@@ -142,6 +134,60 @@ def context(output, command, database):
             'search_path_shadow_ignored':True,'controlled_publication_settings':True})+'\n')
 
 
+def inspections(path):
+    return [json.loads(line)['binding_inspection'] for line in path.read_text().splitlines()
+            if 'binding_inspection' in json.loads(line)]
+
+
+def hot_path(output, command, mode, database):
+    fixture = BindingFixture(output, mode, database)
+    log = output/'observed.jsonl'
+    with log.open('w') as stream:
+        proxy = subprocess.Popen([sys.executable, '-u', 'scripts/pg_commit_proxy.py',
+            '--mode', 'observe', '--upstream', fixture.port], stdout=stream, stderr=stream)
+    try:
+        with fixture.managed():
+            deadline = time.monotonic()+10
+            while time.monotonic() < deadline:
+                lines = log.read_text().splitlines()
+                if lines:
+                    fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(json.loads(lines[0])['port'])
+                    break
+                time.sleep(.05)
+            else:
+                raise RuntimeError('binding observer did not become ready')
+            worker = fixture.start(command, 'first', maximum=3)
+            ready = worker.event('ready')
+            initial = inspections(log)
+            assert 'catalog' in initial, 'initialization did not inspect catalog'
+            assert 'session_configuration' in initial, 'initialization did not configure sessions'
+            assert ('terminal_functions' in initial) == fixture.terminal
+            changes = [f'UPDATE {fixture.name}.bid SET price=-3 WHERE id=1',
+                       f"UPDATE {fixture.name}.auction SET category='unused' WHERE id=1",
+                       f'DELETE FROM {fixture.name}.bid WHERE id=2']
+            for tick, change in enumerate(changes, 1):
+                fixture.sql(change)
+                worker.event('published', minimum_time=ready['time']+tick)
+            worker.finish()
+            fixture.verify()
+            assert inspections(log) == initial, 'publication performed semantic inspection'
+            resumed = fixture.start(command, 'resumed', maximum=1)
+            resumed.event('ready')
+            reopened = inspections(log)
+            assert len(reopened) > len(initial), 'restart skipped semantic inspection'
+            fixture.sql(f'INSERT INTO {fixture.name}.bid VALUES(99,1,-7)')
+            resumed.event('published')
+            resumed.finish()
+            fixture.verify()
+            assert inspections(log) == reopened, 'resumed publication performed semantic inspection'
+            (output/'result.json').write_text(json.dumps({'mode':mode,
+                'initialization_and_restart_inspections':True,
+                'steady_state_semantic_inspections':0,'steady_state_session_configuration':0,'transactions':4})+'\n')
+    finally:
+        proxy.terminate()
+        proxy.wait(timeout=10)
+
+
 def main():
     output, command = harness_arguments()
     database = f'pgderive_binding_{os.getpid()}'
@@ -151,10 +197,14 @@ def main():
     subprocess.run(control+[f'CREATE DATABASE {database} TEMPLATE template0'], env=environment, check=True)
     (output/'database.json').write_text(json.dumps({'owned_database':database,'port':port})+'\n')
     try:
-        for mode in ['type','varchar','helper','bootstrap-helper','expression','terminal',*LOCAL_FUNCTIONS,'aggregate-sort']:
+        for mode in ['type','varchar','helper','bootstrap-helper','expression',*LOCAL_FUNCTIONS,'aggregate-sort']:
             directory = output/mode
             directory.mkdir()
             qualify(directory, command, mode, database)
+        for mode in ['hot-plain','hot-terminal']:
+            directory = output/mode
+            directory.mkdir()
+            hot_path(directory, command, mode, database)
         directory = output/'context'
         directory.mkdir()
         context(directory, command, database)

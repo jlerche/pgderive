@@ -5,6 +5,7 @@ Only dedicated harness SQL connections use this proxy. Never logs SQL or secrets
 The after mode waits for PostgreSQL's successful COMMIT CommandComplete, proving
 server completion before disconnecting the client without forwarding that reply.
 """
+from binding_observer import BindingObserver
 import argparse
 import json
 import os
@@ -83,6 +84,8 @@ class Handler(socketserver.BaseRequestHandler):
                 except OSError:
                     pass
 
+        observer = BindingObserver() if self.server.mode == "observe" else None
+
         def forward_client():
             try:
                 _, _, startup = frame(self.request, startup=True)
@@ -92,7 +95,11 @@ class Handler(socketserver.BaseRequestHandler):
                     kind, body, message = frame(self.request)
                     if kind in (b'Q', b'P') and self.server.arm_query and self.server.arm_query in body:
                         armed = True
-                    chosen = commit(kind, body) and armed and self.server.claim_fault()
+                    if observer:
+                        inspection = observer.observe(kind, body)
+                        if inspection:
+                            self.server.record({"binding_inspection": inspection})
+                    chosen = self.server.mode != "observe" and commit(kind, body) and armed and self.server.claim_fault()
                     if chosen:
                         committing.set()
                         if self.server.mode == "before":
@@ -147,7 +154,7 @@ class Handler(socketserver.BaseRequestHandler):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("before", "after", "hold"), required=True)
+    parser.add_argument("--mode", choices=("before", "after", "hold", "observe"), required=True)
     parser.add_argument("--upstream", type=int, default=os.environ.get("PGDERIVE_TEST_POSTGRES_PORT", "55434"))
     parser.add_argument("--gate", type=pathlib.Path)
     parser.add_argument("--once", action="store_true", help="inject one global COMMIT fault")

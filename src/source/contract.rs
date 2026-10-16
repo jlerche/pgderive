@@ -99,11 +99,15 @@ impl Contract {
         self.validate()?;
         Ok(serde_json::to_string(&(&self.identity.system, &self.identity.database, &self.slot))?)
     }
-    /// Hold source DDL exclusion through the caller's publication transaction.
+    /// Hold source DDL exclusion and verify layout through publication.
+    /// Semantic catalogs are verified during initialization, never in this path.
     ///
     /// # Errors
     /// Rejects schema drift or missing relations before destination/progress publication.
-    pub async fn lock_and_verify(&self, sql: &tokio_postgres::Transaction<'_>) -> Result<()> {
+    pub async fn lock_and_verify_layout(
+        &self,
+        sql: &tokio_postgres::Transaction<'_>,
+    ) -> Result<()> {
         self.validate()?;
         for relation in &self.relations {
             sql.batch_execute(&format!(
@@ -113,7 +117,9 @@ impl Contract {
             ))
             .await?;
         }
-        self.verify(sql).await
+        let current = inspect_layout(sql, &self.identity, &self.publication, &self.slot).await?;
+        ensure!(current == self.relations, "source schema/publication contract changed");
+        Ok(())
     }
     /// Inspect an explicit full-table publication in the caller's source snapshot.
     /// Requires primary keys and REPLICA IDENTITY FULL on ordinary persistent tables.
@@ -126,42 +132,8 @@ impl Contract {
         publication: &str,
         slot: &str,
     ) -> Result<Self> {
-        ensure!(
-            crate::configuration::identifier(publication) && crate::configuration::identifier(slot),
-            "invalid source publication/slot"
-        );
-        identity.verify_sql(sql).await?;
-        let row = sql.query_one("SELECT current_database(),puballtables,pubinsert,pubupdate,pubdelete,EXISTS(SELECT 1 FROM pg_publication_namespace pn WHERE pn.pnpubid=p.oid),pubtruncate FROM pg_publication p WHERE pubname=$1", &[&publication]).await?;
-        ensure!(
-            row.try_get::<_, String>(0)? == identity.database
-                && !row.try_get::<_, bool>(1)?
-                && row.try_get::<_, bool>(2)?
-                && row.try_get::<_, bool>(3)?
-                && row.try_get::<_, bool>(4)?
-                && !row.try_get::<_, bool>(5)?
-                && row.try_get::<_, bool>(6)?,
-            "unsupported source database/publication scope"
-        );
-        let rows = sql.query("SELECT c.oid,n.nspname,c.relname,c.relkind::text,c.relpersistence::text,c.relreplident::text,pr.prattrs IS NULL AND pr.prqual IS NULL,EXISTS(SELECT 1 FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid) FROM pg_publication_rel pr JOIN pg_publication p ON p.oid=pr.prpubid JOIN pg_class c ON c.oid=pr.prrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE p.pubname=$1 ORDER BY c.oid", &[&publication]).await?;
-        let mut relations = Vec::new();
-        for row in rows {
-            ensure!(
-                row.try_get::<_, String>(3)? == "r"
-                    && row.try_get::<_, String>(4)? == "p"
-                    && row.try_get::<_, String>(5)? == "f"
-                    && row.try_get::<_, bool>(6)?
-                    && !row.try_get::<_, bool>(7)?,
-                "unsupported source table or replica identity"
-            );
-            let oid = row.try_get(0)?;
-            relations.push(Relation {
-                oid,
-                schema: row.try_get(1)?,
-                table: row.try_get(2)?,
-                columns: columns(sql, oid).await?,
-            });
-        }
-        ensure!(!relations.is_empty(), "source publication is empty");
+        super::Environment::configure(sql).await?;
+        let relations = inspect_layout(sql, &identity, publication, slot).await?;
         let collations = relations
             .iter()
             .flat_map(|relation| relation.columns.iter().map(|column| column.collation))
@@ -205,7 +177,8 @@ impl Contract {
         }
         Ok(())
     }
-    /// Reinspect native metadata to catch changes absent from pgoutput row metadata.
+    /// Reinspect the complete source and semantic environment during initialization.
+    /// Use layout-only locking for steady-state publication.
     ///
     /// # Errors
     /// Rejects publication, PK, nullability, collation or other frozen contract changes.
@@ -224,6 +197,50 @@ impl Contract {
         use sha2::{Digest, Sha256};
         Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(self)?)))
     }
+}
+async fn inspect_layout(
+    sql: &(impl GenericClient + Sync),
+    identity: &Identity,
+    publication: &str,
+    slot: &str,
+) -> Result<Vec<Relation>> {
+    ensure!(
+        crate::configuration::identifier(publication) && crate::configuration::identifier(slot),
+        "invalid source publication/slot"
+    );
+    identity.verify_sql(sql).await?;
+    let row = sql.query_one("SELECT current_database(),puballtables,pubinsert,pubupdate,pubdelete,EXISTS(SELECT 1 FROM pg_publication_namespace pn WHERE pn.pnpubid=p.oid),pubtruncate FROM pg_publication p WHERE pubname=$1", &[&publication]).await?;
+    ensure!(
+        row.try_get::<_, String>(0)? == identity.database
+            && !row.try_get::<_, bool>(1)?
+            && row.try_get::<_, bool>(2)?
+            && row.try_get::<_, bool>(3)?
+            && row.try_get::<_, bool>(4)?
+            && !row.try_get::<_, bool>(5)?
+            && row.try_get::<_, bool>(6)?,
+        "unsupported source database/publication scope"
+    );
+    let rows = sql.query("SELECT c.oid,n.nspname,c.relname,c.relkind::text,c.relpersistence::text,c.relreplident::text,pr.prattrs IS NULL AND pr.prqual IS NULL,EXISTS(SELECT 1 FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid) FROM pg_publication_rel pr JOIN pg_publication p ON p.oid=pr.prpubid JOIN pg_class c ON c.oid=pr.prrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE p.pubname=$1 ORDER BY c.oid", &[&publication]).await?;
+    let mut relations = Vec::new();
+    for row in rows {
+        ensure!(
+            row.try_get::<_, String>(3)? == "r"
+                && row.try_get::<_, String>(4)? == "p"
+                && row.try_get::<_, String>(5)? == "f"
+                && row.try_get::<_, bool>(6)?
+                && !row.try_get::<_, bool>(7)?,
+            "unsupported source table or replica identity"
+        );
+        let oid = row.try_get(0)?;
+        relations.push(Relation {
+            oid,
+            schema: row.try_get(1)?,
+            table: row.try_get(2)?,
+            columns: columns(sql, oid).await?,
+        });
+    }
+    ensure!(!relations.is_empty(), "source publication is empty");
+    Ok(relations)
 }
 async fn columns(sql: &(impl GenericClient + Sync), oid: u32) -> Result<Vec<Column>> {
     let rows = sql.query("SELECT a.attnum,a.attname,a.atttypid,a.atttypmod,a.attnotnull,a.attcollation,a.attgenerated::text,EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=a.attrelid AND i.indisprimary AND a.attnum=ANY(i.indkey)),COALESCE(co.collisdeterministic,true) FROM pg_attribute a LEFT JOIN pg_collation co ON co.oid=a.attcollation WHERE a.attrelid=$1 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum", &[&oid]).await?;

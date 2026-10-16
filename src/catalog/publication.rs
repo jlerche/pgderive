@@ -52,12 +52,22 @@ impl Binding {
         }
         Ok(())
     }
+    async fn verify_environment(&self, sql: &Transaction<'_>) -> Result<()> {
+        if let Some(source) = self.registered_source()? {
+            source.verify(sql).await?;
+        }
+        if let Sink::MappedBag { map, .. } = &self.sink {
+            map.verify_environment(sql).await?;
+        }
+        Ok(())
+    }
     pub(super) async fn initialize(
         &self,
         tx: &Transaction<'_>,
         catalog: &Catalog,
         boundary: Lsn,
     ) -> Result<()> {
+        self.verify_environment(tx).await?;
         self.sink.install(tx, catalog).await?;
         let rows: i64 = tx
             .query_one(
@@ -154,6 +164,7 @@ impl Catalog {
                 row.try_get::<_, serde_json::Value>(0)? == encoded,
                 "source/destination binding mismatch"
             );
+            binding.verify_environment(&tx).await?;
             let fence =
                 row.try_get::<_, i64>(1)?.checked_add(1).context("worker fence overflow")?;
             let end = row.try_get::<_, String>(2)?.parse()?;
@@ -260,7 +271,7 @@ impl Writer {
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
         if let Some(source) = self.binding.registered_source()? {
-            source.lock_and_verify(&tx).await?;
+            source.lock_and_verify_layout(&tx).await?;
         }
         let epoch = write::stage(&tx, &self.catalog, plan, checkpoint, self.epoch).await?;
         let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn AND binding=$7", self.catalog.schema),

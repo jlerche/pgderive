@@ -59,10 +59,10 @@ establish uniqueness. See linked SQL-subset sections for exact syntax restrictio
 
 | Dependency | Existing enforcement | Remaining M0 work |
 | --- | --- | --- |
-| Sources/publication/slot | Frozen native contracts now include shared server/catalog fingerprints; registration/restart verification; activation/publication take ACCESS SHARE locks and re-verify | No general lock against publication/catalog/environment mutation |
-| Terminal built-ins | Bind and re-inspect concrete pg_proc attributes including implementation, language, volatility, strictness, argument/result types | Not an administrative mutation lock; implicit rendering/coercion helpers need dependency audit |
+| Sources/publication/slot | Frozen native contracts now include shared server/catalog fingerprints; registration/restart verification; activation/publication take ACCESS SHARE locks and re-verify layouts only | No general lock against publication/catalog/environment mutation |
+| Terminal built-ins | Bind and inspect at initialization/restart concrete pg_proc attributes including implementation, language, volatility, strictness, argument/result types | Not an administrative mutation lock; implicit rendering/coercion helpers need dependency audit |
 | Terminal environment | Shared native codec/helper/catalog fingerprint, exact server_version_num, UTF8, explicit C collation, UTC abbreviation context | Runtime libraries/timezone file contents and administrative races remain outside attestation |
-| Execution settings | SQL worker sessions and terminal evaluation set pg_catalog search_path, UTC, ISO/MDY and ISO intervals; source COPY/replication set canonical text formats | Consumers of the public SQL view still have their own presentation settings |
+| Execution settings | SQL worker and low-level terminal initialization set pg_catalog search_path, UTC, ISO/MDY and ISO intervals; source COPY/replication set canonical text formats | Consumers of the public SQL view still have their own presentation settings |
 | Durable semantics | Normalized resolved IR, full source contract and bound terminal environment participate in plan identity | No separate global engine-version attestation; incompatible IR changes require rebuild, not migration |
 | Public result representation | Typed expanding SQL view over JSONB weighted sink | Ordinary typed table, representation-preserving identity and logical decoding remain M1 |
 
@@ -70,17 +70,21 @@ No general execution-placement proof, automatic dependency invalidation, arbitra
 function execution, named-zone runtime, floating-point aggregate fidelity, or
 intermediate network fallback is established by this inventory.
 
-## Check schedule inspected for the next slice
+## Initialization and steady-state check schedule
 
 - `src/worker/spec.rs::compile_bound` binds terminal operations and plans the
   validated original SELECT with EXPLAIN before durable registration.
 - `src/worker/registration.rs` recompiles, compares destination/plan identity and
   verifies sources when reopening registered work.
-- `src/catalog/bootstrap.rs` locks and verifies sources in activation.
-- `src/catalog/publication.rs::publish` locks and verifies registered sources
+- `src/source/contract.rs::inspect` and `verify` inspect source layouts and semantic
+  environments during initialization, restart and snapshot setup.
+- `src/catalog/bootstrap.rs` locks and verifies source layouts in activation.
+- `src/catalog/publication.rs::publish` locks and verifies registered source layouts
   inside the result/progress transaction before applying destination deltas.
-- `src/catalog/terminal.rs::evaluate` verifies the bound environment in that
-  transaction before executing the mapped bag. Plain bags have no terminal check.
+- `src/catalog/publication.rs::claim` and binding initialization verify source and
+  terminal environments, including low-level cold reopen on a fresh SQL client.
+- `src/catalog/terminal.rs::evaluate` uses the bound program and initialized session
+  without catalog inspection or repeated SET commands.
 
 This list is a code-path inventory, not a completed audit of every lifecycle path.
 
@@ -92,8 +96,9 @@ planner helpers), generated-SQL helpers and source collation/provider metadata.
 Interval/float8 metadata covers implicit hopping operators/coercions without
 expanding the accepted source type set.
 Source inspection and terminal inspection each use that baseline. The owned-database
-`scripts/query_binding_harness.py` covers actual catalog drift and publication rollback,
-incompatible restart, restored replay and controlled connection settings.
+`scripts/query_binding_harness.py` covers quiesced catalog drift, incompatible restart without progress changes,
+restored replay and controlled connection settings. Protocol observation verifies
+zero semantic inspections during plain/terminal publication, including cold resume.
 
 The implementation is conservative rather than a minimal per-query dependency set.
 Remaining work includes stronger administrative fencing, binary/library/timezone-file

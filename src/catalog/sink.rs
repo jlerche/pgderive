@@ -39,9 +39,6 @@ impl Sink {
         Ok(())
     }
     pub(super) async fn install(&self, tx: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
-        if let Self::MappedBag { map, .. } = self {
-            map.verify(tx).await?;
-        }
         if self.owned(tx, catalog).await?.is_some() {
             return Ok(());
         }

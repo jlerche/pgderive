@@ -100,13 +100,14 @@ Minimum deployment contract until stronger fencing exists:
   validation. Arbitrary session defaults are not part of accepted query semantics.
 
 These are operational preconditions beyond existing relation locks. Publication
-already takes ACCESS SHARE locks on registered sources and re-verifies their
-contracts inside the transaction, fencing conflicting relation DDL. Catalog inspection
-before execution can detect drift but cannot prevent a concurrent administrative
-mutation between inspection and use. Existing source/terminal checks therefore do
-not establish unconditional fencing. The next M0 slice must document and test the
-check schedule, bind missing supported dependencies, and fail before affected
-publication when drift is detectable. M6 broadens supported invalidation behavior.
+still takes ACCESS SHARE locks and verifies source layouts and publication scope
+inside the transaction, fencing conflicting relation DDL. Semantic catalog
+fingerprints and terminal function/context definitions are inspected only during
+initialization, restart and rebuild. Running workers assume those semantics remain
+stable: there is no live semantic-drift detection or per-publication catalog hash.
+Administrators must stop workers before semantic changes and revalidate before
+resuming. M6 may broaden invalidation support without introducing routine catalog
+rescans on the publication path.
 
 ## Failures, retry and durability
 
@@ -158,12 +159,14 @@ in addition to their explicit expression-function and UTC/C checks. Explicit
 functions retain full pg_proc/language definitions in the binding and must remain
 scalar, non-variadic, security-invoker built-ins without default arguments.
 
-Source verification compares this fingerprint during registration/restart and under
-source relation locks before snapshot activation and transactional publication.
-Terminal evaluation rechecks its environment inside the publication transaction.
-Workers set search_path to pg_catalog, UTC, ISO/MDY DateStyle, ISO interval format
-and extra_float_digits=3 on their SQL connections. Terminal evaluation also sets
-those locally so low-level publication callers do not inherit arbitrary defaults.
+Source verification compares this fingerprint during initialization, restart and
+rebuild, including snapshot setup. Activation/publication retain layout-only
+source locking and verification. Terminal environment inspection and canonical
+session configuration happen during binding and sink initialization. Evaluation
+uses the bound program without semantic catalog queries or repeated session SETs.
+Workers and low-level terminal sessions set pg_catalog search_path, UTC, ISO/MDY
+DateStyle, ISO intervals and extra_float_digits=3 during initialization; callers
+must keep that session context stable for the worker lifetime.
 
 These are conservative dependencies: a change to a supported built-in that an
 individual query does not use can require a rebuild. The catalog is hashed inside
@@ -183,8 +186,15 @@ They do not prevent concurrent administrative mutation. The quiescence policy ab
 continues to apply. This slice establishes the baseline check schedule, not general
 function support or complete dependency invalidation.
 
-The owned-database `scripts/query_binding_harness.py` tests codec, local-function, aggregate/planner-helper and interval/coercion drift,
-incompatible restart, helper drift inside publication, unchanged durable state and
-ACK on failure, successful replay after restoration, and hostile database defaults.
-It is part of the sequential common gate; catalog changes never touch the shared
-test database, and failure databases/logs remain available for investigation.
+The owned-database `scripts/query_binding_harness.py` quiesces workers before
+changing codec, local-function, aggregate/planner-helper and interval/coercion
+metadata. It verifies restart rejection with unchanged results/progress/ACK, then
+restores the environment and verifies queued source replay. It also checks hostile
+database defaults. Protocol observers prove initialization/restart inspections
+occur and steady-state publications (including empty deltas and maintenance)
+execute zero semantic-inspection queries or repeated context SETs for plain and
+terminal plans. Prepared
+statement executions are counted even when their SQL was prepared earlier; SQL
+text and parameters are never logged. All fixtures run sequentially in the common
+gate; catalog changes never touch the shared test database, and failures preserve
+their database and logs.

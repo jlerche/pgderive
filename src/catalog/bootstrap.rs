@@ -42,7 +42,7 @@ impl Catalog {
         let tx = sql.transaction().await?;
         super::storage::shared(&tx, self).await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-        snapshot.source.lock_and_verify(&tx).await?;
+        snapshot.source.lock_and_verify_layout(&tx).await?;
         let source_key = snapshot.source.ownership_key()?;
         tx.execute(
             &format!(

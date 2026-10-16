@@ -162,9 +162,9 @@ and timezone-sensitive functions are outside this slice. It does not yet establi
 PostgreSQL expression coverage for the Nexmark portfolio.
 
 Registration binds concrete built-in signatures, catalog fingerprints, server
-version and encoding into normalized plan identity. Restart and publication verify
-that environment. Privileged concurrent changes to system catalogs or the server
-executable are unsupported; environment inspection does not lock administrative
+version and encoding into normalized plan identity. Initialization, restart and rebuild verify
+that environment; publication uses the bound semantics without catalog inspection. Privileged
+changes to system catalogs or the server executable require quiesced workers; environment inspection does not lock administrative
 mutation. Functions never resolve through search_path.
 
 ## Compiler and runtime boundaries
@@ -339,7 +339,8 @@ membership and source progress. All-NULL/empty-frame inputs produce NULL without
 division. Filters run in Rust before statistics accumulation.
 
 The terminal binding fingerprints concrete built-in signatures and
-server version/encoding; changing that environment rejects restart/publication.
+server version/encoding; changing that environment rejects restart. Workers must be quiesced before
+semantic changes; publication performs no semantic reinspection.
 The JSON codec preserves arbitrary-precision numbers through PostgreSQL responses,
 so large numeric results never pass through f64. The existing nonnumeric identities
 keep their serialized form. Numeric input aggregates/arithmetic, nested
@@ -876,8 +877,8 @@ is introduced.
 Identity includes the delimiter, ordinal, native layout and typed program.
 The built-in string_to_array(text,text) implementation, argument/result types,
 immutable volatility and actual non-strict flag are attested together with C
-collation provider, encoding, locale and version metadata. Publication verifies
-that environment again.
+collation provider, encoding, locale and version metadata. Initialization and restart verify
+that environment; publication uses the already-bound semantics.
 
 The named q22 SQL and four sequential owned fixtures compare text/varchar, quoted
 backslash/Unicode delimiters and joined terminal output with PostgreSQL and an
@@ -1047,7 +1048,7 @@ is STABLE; these closed templates avoid locale text fields and clock reads.
 Attestation requires its exact signature, internal implementation and expected
 stability, and verifies immutable `timestamptz_zone` for UTC conversion. Calendar
 plans bind server version, UTF8 encoding, timezone-abbreviation configuration and
-a zero-offset non-DST UTC meaning, checked again before publication. The compiler
+a zero-offset non-DST UTC meaning, checked at initialization and restart. The compiler
 terminal program and attested environment are included in graph identity.
 
 A derived query can format an exposed native aggregate result at final output.
@@ -1171,7 +1172,7 @@ predicate with IS TRUE, consolidates collisions using PostgreSQL numeric SUM of
 weights, and narrows only finalized coefficients to i64. Literals are parameters,
 never interpolated SQL. All functions and casts come from closed concrete typed
 signatures, with implementation, volatility, strictness, schema, language,
-server version and UTF8 attested before registration and again in publication.
+server version and UTF8 attested at initialization and restart.
 The existing PUT → atomic PG membership/result/progress COMMIT → slot ACK
 protocol is unchanged. Output errors abort publication and cannot advance progress.
 

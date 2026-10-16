@@ -54,9 +54,10 @@ collations, error cases, resource bounds, execution paths and evidence. Bind
 resolved catalog identities, relevant settings, PostgreSQL/runtime versions and
 semantic revisions into registration/restart validation. OIDs alone do not prove
 that a function definition or environment is unchanged. Establish the minimum
-supported-environment fencing and publication-time revalidation policy here,
-before M1–M5 ship; concurrent semantic mutation must either be prevented under
-an explicit deployment contract or detected safely before affected publication.
+supported-environment policy here before M1–M5 ship: validate semantics during
+initialization/restart/rebuild and require administrators to quiesce workers before
+semantic changes. Publication retains structural source checks but does not rescan
+semantic catalogs.
 
 Initially reject volatile/time-dependent expressions and hidden relation reads
 unless an existing qualified feature supplies an explicit equivalent contract.
@@ -119,8 +120,9 @@ finalizers retain semantics. Unsupported placements reject before slot creation.
 
 Extend the existing closed terminal program to qualified typed expression trees.
 Retain operands or evaluated outputs sufficient for exact retractions. Consolidate
-post-expression collisions and preserve occurrence multiplicity. Verify execution
-context before publication; changed semantics invalidate retained state.
+post-expression collisions and preserve occurrence multiplicity. Bind execution
+context during initialization and keep it stable for the worker lifetime; changed
+semantics require revalidation and may invalidate retained state.
 
 Allow aggregate finalizers only when their sufficient statistics are exact and no
 downstream maintenance needs the finalized value. Preserve cast errors, NULLs,

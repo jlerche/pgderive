@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::GenericClient;
 
-/// Bound server and catalog semantics, checked before result publication.
+/// Bound server and catalog semantics, checked during initialization.
 /// Catalog inspection detects drift; it does not lock administrative mutation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -13,6 +13,12 @@ pub struct Environment {
     catalog: String,
 }
 impl Environment {
+    /// Configure a worker or low-level terminal session during initialization.
+    pub(crate) async fn configure(sql: &(impl GenericClient + Sync)) -> Result<()> {
+        sql.batch_execute("SET search_path=pg_catalog; SET TimeZone='UTC'; SET DateStyle='ISO,MDY'; SET IntervalStyle='iso_8601'; SET extra_float_digits=3").await?;
+        Ok(())
+    }
+
     pub(crate) async fn inspect(
         sql: &(impl GenericClient + Sync),
         collations: &[u32],
