@@ -114,7 +114,7 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 93 worker cases:
+profile runs the complete low-level live PostgreSQL harness and 105 worker cases:
 result-table decoding/representation, semantic bindings, transaction faults,
 witnessed process kills, representative query families, lifecycle and rebuild.
 It disables synthetic S3 latency but keeps real PostgreSQL/object storage and
@@ -959,3 +959,12 @@ against an owned fixture PostgreSQL port to build isolated uninstrumented releas
 workers and collect the local baseline. This does not establish production capacity.
 Replay an artifact through a fresh proxy/output directory with
 `python3 scripts/run_with_s3_proxy.py OUTPUT python3 scripts/application_portfolio_harness.py OUTPUT --replay REPLAY.json -- WORKER_BINARY`.
+
+
+M6 adds [frame-aware expressions and finalized derived scopes](docs/m6-expression-composition.md):
+computed window aggregate arguments and partition/order keys, derived AVG values,
+and side-local computed integral left/existence join keys. The twelve-case live
+composition harness checks native materialized views, output metadata and an
+independent source model through retractions, rollback and cold restart. Positional
+windows still require a proven raw occurrence key; unsupported functions and
+coercions fail during initialization.

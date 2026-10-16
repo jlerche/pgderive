@@ -29,6 +29,7 @@ cooperative dependency fencing. Further joins/subqueries/windows are future
 relational expansion tasks. Supporting a function in the registry
 does not automatically enable every relational position. The first M4 slice
 qualifies [computed grouped aggregate inputs](m4-computed-aggregate-inputs.md);
-computed window inputs and additional automatic invalidation policies remain
+M6 qualifies [computed window inputs and selected scope composition](m6-expression-composition.md).
+Further relational positions and additional automatic invalidation policies remain
 separate follow-up work. Live-query delivery
 remains outside the project scope.

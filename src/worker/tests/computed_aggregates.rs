@@ -153,7 +153,6 @@ fn aggregate_maps_intern_by_scope_expression_and_filter() -> Result<()> {
         assert_eq!(fields, expected);
     }
     for sql in [
-        "SELECT auction,SUM(abs(price)) OVER(PARTITION BY auction) FROM source.bid",
         "SELECT auction,SUM(NULL) FROM source.bid GROUP BY auction",
         "SELECT auction,SUM(lower(price)) FROM source.bid GROUP BY auction",
         "SELECT auction,SUM(SUM(price)) FROM source.bid GROUP BY auction",

@@ -64,9 +64,9 @@ No production SLO or remote-provider durability follows from this local baseline
 | Running balance | Nullable partitions, unique occurrence order, bounded preceding/following and empty frames |
 
 The machine-readable [portfolio](../queries/application/portfolio.json) is the
-exact blocker matrix. Ungrouped COUNT and computed windows currently have misleading
-diagnostics; both gaps are recorded alongside the actual rejection. Derived AVG
-and computed outer predicates belong to M6. Numeric ABS and locale-sensitive LOWER
+blocker matrix. At M5 completion, ungrouped COUNT and computed windows had misleading
+diagnostics. M6 promotes computed windows, derived AVG and computed outer keys into
+`qualified_compositions`; ungrouped COUNT retains its documented diagnostic gap. Numeric ABS and locale-sensitive LOWER
 remain on the separate function/type backlog. This inventory is representative,
 not an enumeration of all unsupported PostgreSQL features.
 
@@ -141,4 +141,18 @@ and 97.39% production line coverage. Strict Clippy, formatting, file limits and
 dependency checks passed. Separately, all twelve release-baseline cases, the
 live independent-oracle fault/reduction test and standalone saved-trace replay
 passed. The full release qualification profile was not run for this slice;
-M6–M9 and the function/type backlog remain open.
+M6 completion is recorded below; M7–M9 and the function/type backlog remain open.
+
+
+## M6 expression composition
+
+The [M6 contract and qualification matrix](m6-expression-composition.md) extends
+expression placement using existing typed kernels. The M5 application recipes and
+versioned traces remain supported. M6's twelve additional composition cases run in
+both core and full gates; the core count becomes 105 plus rebuild. The historical
+release baseline above remains an M5 measurement, not a new M6 performance claim.
+
+M6 is complete for its documented scope: independent review and the common gate
+passed with 105 worker cases plus rebuild and 97.44% production line coverage.
+M7 is next: use measured work/read evidence to reduce selected stateful
+recomputation while preserving exact results and durable publication.

@@ -11,7 +11,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-use std::cmp::Ordering;
+use std::{borrow::Cow, cmp::Ordering};
 type Bag = Batch<(), Row>;
 pub(super) type Ordered = (Vec<Option<i64>>, Row);
 pub(super) fn evaluate(
@@ -81,18 +81,14 @@ fn ordinary_value(
         {
             continue;
         }
-        let value = aggregate
-            .argument
-            .as_ref()
-            .map(|argument| row.get(&argument.name).context("missing aggregate input"))
-            .transpose()?;
-        if value.is_some_and(Option::is_none) {
+        let value = argument_value(aggregate, row)?;
+        if aggregate.argument.is_some() && value.is_none() {
             continue;
         }
         count += *weight;
         if !matches!(aggregate.function, Function::Count) {
             let argument = aggregate.argument.as_ref().context("missing aggregate argument")?;
-            let text = value.and_then(|value| value.as_ref()).context("missing measure")?;
+            let text = value.as_deref().context("missing measure")?;
             let integer = if matches!(argument.oid, 1114 | 1184) {
                 crate::temporal::Timestamp::parse(text, argument.oid)?.sort_value()
             } else {
@@ -364,7 +360,6 @@ fn numeric_value(
 ) -> Result<Option<String>> {
     use crate::numeric::Numeric;
     work.charge(bag.iter().count())?;
-    let argument = aggregate.argument.as_ref().context("missing numeric argument")?;
     let mut sum = Numeric::parse("0")?;
     let mut count = BigInt::from(0);
     let mut extremum: Option<Numeric> = None;
@@ -372,12 +367,12 @@ fn numeric_value(
         if aggregate.filter.as_ref().map(|p| p.qualifies(row)).transpose()?.is_some_and(|v| !v) {
             continue;
         }
-        let Some(text) = row.get(&argument.name).context("missing numeric measure")? else {
+        let Some(text) = argument_value(aggregate, row)? else {
             continue;
         };
         ensure!(*weight > 0, "negative numeric aggregate occurrence");
         count += *weight;
-        let value = Numeric::parse(text)?;
+        let value = Numeric::parse(&text)?;
         match aggregate.function {
             Function::Count => {}
             Function::Sum => {
@@ -404,4 +399,13 @@ fn numeric_value(
         Function::Min | Function::Max => Ok(extremum.map(|v| v.text())),
         _ => anyhow::bail!("unsupported numeric aggregate"),
     }
+}
+
+fn argument_value<'a>(aggregate: &Aggregate, row: &'a Row) -> Result<Option<Cow<'a, str>>> {
+    if let Some(expression) = &aggregate.expression {
+        return Ok(expression.evaluate(row)?.map(Cow::Owned));
+    }
+    aggregate.argument.as_ref().map_or(Ok(None), |column| {
+        Ok(row.get(&column.name).context("missing aggregate input")?.as_deref().map(Cow::Borrowed))
+    })
 }

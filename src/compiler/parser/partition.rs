@@ -40,8 +40,8 @@ pub(in crate::compiler) enum Argument {
 }
 #[derive(Clone)]
 pub(in crate::compiler) struct Window {
-    pub keys: Vec<Name>,
-    pub order: Vec<(Name, bool, bool)>,
+    pub keys: Vec<super::scalar::Key>,
+    pub order: Vec<(super::scalar::Key, bool, bool)>,
     pub frame: crate::compiler::partition::Frame,
     pub ranking: bool,
     pub peers: Option<bool>,
@@ -56,7 +56,15 @@ pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
     if !matches!(node(source)?, NodeEnum::RangeVar(_) | NodeEnum::RangeSubselect(_)) {
         return Ok(false);
     }
+    let derived = matches!(node(source)?, NodeEnum::RangeSubselect(_));
     Ok(!select.group_clause.is_empty()
+        || derived
+            && select.target_list.iter().any(|value| {
+                target(value)
+                    .ok()
+                    .and_then(|value| node(value).ok())
+                    .is_some_and(|value| !matches!(value, NodeEnum::ColumnRef(_)))
+            })
         || select.target_list.iter().any(|target_node| {
             target(target_node).ok().is_some_and(|value| {
                 super::scalar::is_bin(value).unwrap_or(false)
@@ -77,11 +85,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
         let (table, expansion) = super::expansion::source(from)?;
         (Source::Native(table), expansion)
     };
-    let targets = select
-        .target_list
-        .iter()
-        .map(|value| parse_target(value, !select.group_clause.is_empty()))
-        .collect::<Result<_>>()?;
+    let targets = select.target_list.iter().map(parse_target).collect::<Result<_>>()?;
     let groups = select.group_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
     Ok(Parsed {
         source,
@@ -91,7 +95,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
         predicate: crate::compiler::syntax::predicate(select.where_clause.as_deref())?,
     })
 }
-fn parse_target(value: &Node, grouped: bool) -> Result<Target> {
+fn parse_target(value: &Node) -> Result<Target> {
     let NodeEnum::ResTarget(output) = node(value)? else {
         anyhow::bail!("unsupported target");
     };
@@ -124,7 +128,6 @@ fn parse_target(value: &Node, grouped: bool) -> Result<Target> {
         {
             (Value::Aggregate(Box::new(aggregate(call, function)?)), function.to_owned())
         } else {
-            ensure!(grouped, "scalar function targets in this relational scope require grouping");
             (
                 Value::Typed(Box::new(expression.clone())),
                 name.last().context("missing function name")?.clone(),
@@ -189,10 +192,6 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         if matches!(node(argument)?, NodeEnum::ColumnRef(_)) {
             Some(Argument::Column(column(argument)?))
         } else {
-            ensure!(
-                call.over.is_none(),
-                "computed window aggregate arguments require frame-aware evaluation and are not supported"
-            );
             Some(Argument::Expression(Box::new(argument.clone())))
         }
     };
@@ -219,8 +218,8 @@ pub(super) fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
     if ranking {
         ensure!(value.frame_options == 1058, "ranking currently requires the default frame");
         return Ok(Window {
-            keys: value.partition_clause.iter().map(column).collect::<Result<_>>()?,
-            order: value.order_clause.iter().map(sort).collect::<Result<_>>()?,
+            keys: value.partition_clause.iter().map(super::scalar::key).collect::<Result<_>>()?,
+            order: value.order_clause.iter().map(sort_key).collect::<Result<_>>()?,
             frame: crate::compiler::partition::Frame { start: None, end: Some(0) },
             ranking,
             peers: None,
@@ -240,8 +239,8 @@ pub(super) fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
         peers != Some(false) || value.frame_options & (2048 | 4096 | 8192 | 16384) == 0,
         "RANGE offsets require typed distance semantics"
     );
-    let keys = value.partition_clause.iter().map(column).collect::<Result<_>>()?;
-    let order: Vec<_> = value.order_clause.iter().map(sort).collect::<Result<_>>()?;
+    let keys = value.partition_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
+    let order: Vec<_> = value.order_clause.iter().map(sort_key).collect::<Result<_>>()?;
     ensure!(peers != Some(true) || !order.is_empty(), "GROUPS requires ORDER BY");
     let start = bound(value.frame_options, value.start_offset.as_deref(), true)?;
     let end = bound(value.frame_options, value.end_offset.as_deref(), false)?;
@@ -254,7 +253,7 @@ pub(super) fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
         peers,
     })
 }
-pub(super) fn sort(value: &Node) -> Result<(Name, bool, bool)> {
+fn sort_key(value: &Node) -> Result<(super::scalar::Key, bool, bool)> {
     let NodeEnum::SortBy(sort) = node(value)? else {
         anyhow::bail!("invalid window order");
     };
@@ -270,7 +269,7 @@ pub(super) fn sort(value: &Node) -> Result<(Name, bool, bool)> {
         pg::SortByNulls::SortbyNullsLast => false,
         pg::SortByNulls::Undefined => anyhow::bail!("unsupported NULL ordering"),
     };
-    Ok((column(optional(sort.node.as_deref())?)?, descending, nulls_first))
+    Ok((super::scalar::key(optional(sort.node.as_deref())?)?, descending, nulls_first))
 }
 fn bound(flags: i32, offset: Option<&Node>, start: bool) -> Result<Option<i64>> {
     if flags & if start { 32 } else { 256 } != 0 {
@@ -290,4 +289,12 @@ fn bound(flags: i32, offset: Option<&Node>, start: bool) -> Result<Option<i64>> 
     };
     ensure!(value.ival >= 0, "negative frame offset");
     Ok(Some(if preceding { -i64::from(value.ival) } else { i64::from(value.ival) }))
+}
+
+pub(super) fn sort(value: &Node) -> Result<(Name, bool, bool)> {
+    let (key, descending, nulls_first) = sort_key(value)?;
+    let super::scalar::Key::Column(name) = key else {
+        anyhow::bail!("lookup ordering requires native columns")
+    };
+    Ok((name, descending, nulls_first))
 }

@@ -58,6 +58,9 @@ class ApplicationFixture(SqlFixture):
         path.write_text(path.read_text().replace('retry_attempts=8','retry_attempts=1').replace('maintenance_ticks=4','maintenance_ticks=4\nphase_metrics=true'))
         return path
 
+    def memory(self):
+        return expected(self.trace['spec'],self.model)
+
     def verify(self):
         native = native_expected(self,self.labels)
         if self.bag_difference(native).strip() != '0':
@@ -73,7 +76,7 @@ class ApplicationFixture(SqlFixture):
                 raise DifferentialFailure('source_model',table)
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=decimal.Decimal)
         bag = {tuple(row['tuple'][1]):row['weight'] for row in actual}
-        if bag != dict(expected(self.trace['spec'],self.model)):
+        if bag != dict(self.memory()):
             raise DifferentialFailure('memory_oracle',self.query)
         assert self.acknowledgement_ahead().strip() == '0'
         return collections.Counter(bag)

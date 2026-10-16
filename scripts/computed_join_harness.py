@@ -67,8 +67,6 @@ def qualify(output, command, mode):
         if mode == 'inner':
             for label, condition in [('mixed', 'a.id+b.id=b.auction'), ('same-side','abs(a.id)=abs(a.group_id)'), ('constant','1=abs(b.auction)'), ('numeric','abs(a.id)::numeric=b.price::numeric')]:
                 fixture.rejected(command, label, fixture.query.split(' ON ')[0]+' ON '+condition)
-            fixture.rejected(command, 'outer', fixture.query.replace(' JOIN ', ' LEFT JOIN '))
-            fixture.rejected(command, 'window', f'SELECT id,SUM(abs(price)) OVER(PARTITION BY auction) FROM {fixture.name}.bid')
             assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         worker = fixture.start(command, 'first')
         ready = worker.event('ready')

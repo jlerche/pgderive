@@ -1,3 +1,4 @@
+mod boundary;
 mod derived;
 mod lookup;
 mod membership;
@@ -143,6 +144,7 @@ pub(super) fn legacy(selectors: Query, contract: &Contract) -> Result<Compiled> 
         mode: Mode::Grouped { keys: vec![group.clone()] },
         aggregates: vec![
             Aggregate {
+                expression: None,
                 function: Function::Count,
                 argument: None,
                 filter: None,
@@ -150,6 +152,7 @@ pub(super) fn legacy(selectors: Query, contract: &Contract) -> Result<Compiled> 
                 navigation: None,
             },
             Aggregate {
+                expression: None,
                 function: Function::Sum,
                 argument: Some(grouped_column(right, 1, &selectors.sum)?),
                 filter: None,

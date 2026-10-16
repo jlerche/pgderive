@@ -34,12 +34,8 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
             anyhow::bail!("EXISTS requires one native source")
         };
         let mut keys = Vec::new();
-        native_join::equalities(optional(query.where_clause.as_deref())?, &mut keys)?;
+        native_join::computed_equalities(optional(query.where_clause.as_deref())?, &mut keys, 0)?;
         ensure!((1..=16).contains(&keys.len()), "EXISTS correlation key budget exceeded");
-        ensure!(
-            keys.iter().all(|(a, b)| a.0.len() == 2 && b.0.len() == 2),
-            "EXISTS correlations require qualified columns"
-        );
         ensure!(query.target_list.len() == 1, "EXISTS requires SELECT 1");
         let NodeEnum::AConst(value) = node(super::target(&query.target_list[0])?)? else {
             anyhow::bail!("EXISTS requires SELECT 1")

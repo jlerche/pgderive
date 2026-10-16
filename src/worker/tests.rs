@@ -291,3 +291,5 @@ async fn grouped_output(
 mod computed_aggregates;
 
 mod computed_join;
+
+mod expression_composition;

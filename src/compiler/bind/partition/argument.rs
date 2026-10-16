@@ -11,10 +11,12 @@ use anyhow::{Result, ensure};
 pub(super) struct Context {
     pub scope: Option<usize>,
     pub count: bool,
+    pub framed: bool,
 }
 pub(super) struct Bound {
     pub column: Option<ColumnRef>,
     pub filter: Option<Predicate>,
+    pub expression: Option<Typed>,
 }
 pub(super) fn bind(
     argument: Option<Argument>,
@@ -29,7 +31,7 @@ pub(super) fn bind(
             Some(Argument::Column(name)) => Some(resolve(&name)?),
             _ => None,
         };
-        return Ok(Bound { column, filter: filter.map(Predicate::new) });
+        return Ok(Bound { column, filter: filter.map(Predicate::new), expression: None });
     };
     let mut expression = typed::bind(&ast, resolve, 0)?;
     if expression.oid() == 0 {
@@ -39,10 +41,23 @@ pub(super) fn bind(
     if expression.oid() == 705 {
         expression = expression.unknown_text();
     }
+    if context.framed {
+        let column = ColumnRef {
+            name: "@frame_argument".into(),
+            right: false,
+            oid: expression.oid(),
+            nullable: expression.nullable(),
+        };
+        return Ok(Bound {
+            column: Some(column),
+            filter: filter.map(Predicate::new),
+            expression: Some(expression),
+        });
+    }
     if let Some(filter) = filter {
         expression = expression.filtered(filter);
     }
     let column =
         scalar::register(expression, computed, &format!("@aggregate_input_{:?}_", context.scope))?;
-    Ok(Bound { column: Some(column), filter: None })
+    Ok(Bound { column: Some(column), filter: None, expression: None })
 }

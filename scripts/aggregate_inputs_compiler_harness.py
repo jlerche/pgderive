@@ -90,7 +90,6 @@ def qualify(output, command, mode):
     fixture = AggregateInputsFixture(output, mode)
     with fixture.managed():
         if mode == 'statistics':
-            fixture.rejected(command, 'window-expression', f'SELECT id,SUM(abs(price)) OVER(PARTITION BY auction) FROM {fixture.name}.bid')
             fixture.rejected(command, 'missing-function', fixture.query.replace('abs(price)', 'lower(price::text)'))
             assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         worker = fixture.start(command, 'first')

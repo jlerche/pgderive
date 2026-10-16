@@ -235,6 +235,6 @@ fn join_tree_aliases_keys_and_unsupported_shapes_bind_identity() -> Result<()> {
     let scoped = "SELECT l.auction,l.n,r.category FROM (SELECT auction,COUNT(*) AS n FROM source.bid GROUP BY auction) l LEFT JOIN source.auction r ON l.auction=r.id";
     assert!(!compile(scoped, &native)?.relational().nodes.is_empty());
     assert!(!compile("SELECT l.id,r.n FROM source.auction l LEFT JOIN (SELECT auction,COUNT(*) AS n FROM source.bid GROUP BY auction) r ON l.id=r.auction", &native)?.relational().nodes.is_empty());
-    assert!(compile("SELECT l.id,r.id FROM source.auction l LEFT JOIN (SELECT id,abs(price) AS value FROM source.bid) r ON l.id=r.id",&native).is_err());
+    compile("SELECT l.id,r.id FROM source.auction l LEFT JOIN (SELECT id,abs(price) AS value FROM source.bid) r ON l.id=r.id", &native)?.validate_execution()?;
     Ok(())
 }

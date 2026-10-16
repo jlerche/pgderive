@@ -126,7 +126,7 @@ fn join_keys_resolve_direction_and_reject_unproven_evaluation_domains() -> Resul
             "{condition}"
         );
     }
-    assert!(compile(&SQL.replace(" JOIN ", " LEFT JOIN "), &native).is_err());
+    compile(&SQL.replace(" JOIN ", " LEFT JOIN "), &native)?.validate_execution()?;
     let compiled = compile(&format!("{SQL} AND abs(a.id)=abs(b.auction)"), &native)?;
     let maps: usize = compiled
         .relational()
@@ -144,9 +144,8 @@ fn join_keys_resolve_direction_and_reject_unproven_evaluation_domains() -> Resul
 #[test]
 fn unproven_window_and_hidden_dependency_shapes_remain_rejected() {
     for sql in [
-        "SELECT id,SUM(price) OVER(PARTITION BY abs(auction)) FROM source.bid",
-        "SELECT id,SUM(abs(price)) OVER(PARTITION BY auction) FROM source.bid",
-        "SELECT id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE abs(a.id)=abs(b.auction))",
+        "SELECT id,SUM(abs(price)) OVER(PARTITION BY auction ORDER BY abs(id) ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM source.bid",
+        "SELECT id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE abs(a.id+b.id)=b.auction)",
         "SELECT now() FROM source.bid",
         "SELECT random() FROM source.bid",
     ] {

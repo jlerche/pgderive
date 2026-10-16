@@ -277,8 +277,9 @@ remain engine-owned. All-NULL groups produce NULL without division.
 
 The live harness compares AVG display scale and rounding with PostgreSQL and the
 independent Decimal oracle across extreme integers, negative values, NULLs,
-FILTER, source updates and restart. AVG operands cannot yet feed arbitrary derived
-operators; those unfinalized aggregate encodings reject rather than use fallback.
+FILTER, source updates and restart. Supported derived scopes now render AVG internally
+before consuming it; see the M6 composition boundary below. Arbitrary derived SQL
+and numeric-input AVG remain unsupported.
 
 ## Native timestamp and numeric source values
 
@@ -1163,8 +1164,8 @@ the argument. Empty/all-filtered groups remain present, and distinct values
 retain full source multiplicity. Repeated identical arguments and filters share
 a map within their stage. Scalar grouping calls can also be selected.
 
-Already supported derived sources retain these rules. Computed window arguments
-remain rejected until evaluation can respect frame membership. Ungrouped or
+Already supported derived sources retain these rules. M6 adds frame-aware
+computed window arguments as described below. Ungrouped or
 nested aggregates and unavailable scalar overloads continue to reject explicitly.
 COUNT(NULL) resolves the untyped NULL to text; other ambiguous NULL arguments
 require an explicit cast. This slice adds no PostgreSQL computation path.
@@ -1180,9 +1181,10 @@ keying. Repeated expressions share fields; complete source tuples remain the
 weighted identity. NULL keys never match, and simultaneous input changes retain
 the join cross term. Derived state and computed fields remain scope-local.
 
-Mixed-input operands, constants-only operands, computed numeric/text result keys,
-and computed outer/existence ON operands reject. Computed window arguments/keys,
-hidden relation reads and volatile/time-dependent expressions remain unsupported.
+Mixed-input operands, constants-only operands and computed numeric/text result keys
+reject. M6 extends these side-local integral keys to left/existence joins and adds
+bounded computed window arguments/keys. Hidden relation reads and
+volatile/time-dependent expressions remain unsupported.
 The finite accepted matrix and maintenance boundaries are in
 [M4 completion](m4-completion-matrix.md).
 
@@ -1192,3 +1194,29 @@ the row. This is the conservative error boundary already used by local maps;
 PostgreSQL optimizer-specific evaluation order is not promised. Use an explicit
 lazy CASE or an admitted derived-source filter to guard an operand. Errors retain
 the last sink/progress/ACK boundary.
+
+
+## M6 frame-aware and derived expressions
+
+[The M6 composition contract](m6-expression-composition.md) qualifies computed
+window aggregate arguments after FILTER and within frame membership. Computed
+partition keys use the existing deterministic scalar equality types; computed
+ordering results must be integral or timestamp. Positional windows still include
+the complete raw logical occurrence key in partition/order. Valid empty frames
+return the aggregate's empty value without evaluating their argument. Ranking,
+RANGE without offsets and GROUPS retain peer semantics with computed keys.
+
+Intermediate AVG values are rendered by an engine map before a derived filter,
+typed scalar projection, group, window or join uses them. Derived scalar arithmetic,
+CASE/COALESCE and already supported explicit integral widening/integral-to-numeric
+casts use the same typed kernels as native scopes. New function overloads, numeric
+AVG inputs, numeric-to-integral conversion and arbitrary subqueries are not added.
+Computed side-local integral equality keys now apply to left joins and qualified
+EXISTS/NOT EXISTS under the existing eager ON-map error contract.
+
+The twelve-case `expression_composition_harness.py` checks native-MV bags/output
+metadata and independent full-source recomputation through committed histories,
+rollback and cold restart. Rust tests additionally qualify frame/FILTER overflow
+guards, weighted outer/existence membership, independent AVG scopes and failed
+prepare checkpoint preservation. M5's blocker inventory retains the promoted
+queries under `qualified_compositions`.

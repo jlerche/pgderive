@@ -151,10 +151,6 @@ impl Builder<'_> {
         );
         let id = format!("tree_join_{}", self.joins);
         let keys::Bound { keys, computed } = keys::bind(names, &left.columns, &right.columns, &id)?;
-        ensure!(
-            !outer || computed.iter().all(Vec::is_empty),
-            "computed outer/existence ON operands are not supported"
-        );
         let [left_computed, right_computed] = computed;
         self.map(&mut left, left_computed, &format!("{id}_left_map"));
         self.map(&mut right, right_computed, &format!("{id}_right_map"));
@@ -203,19 +199,10 @@ impl Builder<'_> {
         &mut self,
         left: Edge,
         right: Edge,
-        names: Vec<(Name, Name)>,
+        names: Vec<(crate::compiler::parser::scalar::Key, crate::compiler::parser::scalar::Key)>,
         anti: bool,
     ) -> Result<Edge> {
         let columns = left.columns.clone();
-        let names = names
-            .into_iter()
-            .map(|(a, b)| {
-                (
-                    crate::compiler::parser::scalar::Key::Column(a),
-                    crate::compiler::parser::scalar::Key::Column(b),
-                )
-            })
-            .collect();
         let edge = self.join(left, right, names, true)?;
         let Some(Node::LeftJoin { id, input, .. }) = self.nodes.pop() else {
             anyhow::bail!("missing existence join")

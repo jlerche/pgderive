@@ -79,10 +79,7 @@ pub(super) fn scope(
 ) -> Result<Scope> {
     let compiled = bind_inner(*parsed, contract)?;
     let mut ir = compiled.relational;
-    ensure!(
-        ir.output.mapping.as_ref().is_none_or(crate::compiler::output::Output::native_rendering),
-        "scoped join cannot consume unfinalized aggregate encoding"
-    );
+    super::boundary::finalize(&mut ir)?;
     let Some(Node::Output { input, .. }) = ir.nodes.pop() else {
         anyhow::bail!("scoped join requires final relational Output");
     };

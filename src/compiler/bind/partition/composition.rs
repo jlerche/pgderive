@@ -17,14 +17,7 @@ pub(super) fn bind(
 ) -> Result<Compiled> {
     let mut compiled = crate::compiler::bind::bind(inner, contract)?;
     let relational = &mut compiled.relational;
-    ensure!(
-        relational
-            .output
-            .mapping
-            .as_ref()
-            .is_none_or(crate::compiler::output::Output::native_rendering),
-        "derived scope cannot consume unfinalized aggregate encoding"
-    );
+    crate::compiler::bind::boundary::finalize(relational)?;
     let source = relational.sources.first().context("missing native source")?;
     let relation = contract
         .relations

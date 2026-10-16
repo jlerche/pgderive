@@ -13,6 +13,7 @@ fn spec(function: Function, oid: u32) -> Partition {
     Partition {
         mode: Mode::Grouped { keys: vec![] },
         aggregates: vec![Aggregate {
+            expression: None,
             function,
             argument: Some(ColumnRef { name: "price".into(), right: false, oid, nullable: true }),
             filter: None,

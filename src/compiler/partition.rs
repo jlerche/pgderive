@@ -29,6 +29,8 @@ pub struct Aggregate {
     pub(crate) function: Function,
     pub(crate) argument: Option<ColumnRef>,
     pub(crate) filter: Option<Predicate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) expression: Option<super::typed::Typed>,
     pub(crate) field: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) navigation: Option<super::navigation::Navigation>,

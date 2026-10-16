@@ -1,5 +1,5 @@
 //! Native join trees, preserving source occurrences and outer-join association.
-use super::{Columns, Name, Table, node, optional};
+use super::{Columns, Table, node, optional};
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) enum Tree {
@@ -7,7 +7,7 @@ pub(in crate::compiler) enum Tree {
     Exists {
         left: Box<Self>,
         right: Table,
-        keys: Vec<(Name, Name)>,
+        keys: Vec<(super::scalar::Key, super::scalar::Key)>,
         anti: bool,
     },
     Derived {
@@ -84,30 +84,6 @@ fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tree> {
         _ => anyhow::bail!("native join tree requires ordinary native tables"),
     }
 }
-pub(super) fn equalities(value: &Node, keys: &mut Vec<(Name, Name)>) -> Result<()> {
-    match node(value)? {
-        NodeEnum::BoolExpr(value) if value.boolop == i32::from(pg::BoolExprType::AndExpr) => {
-            ensure!(value.xpr.is_none(), "invalid join conjunction");
-            for value in &value.args {
-                equalities(value, keys)?;
-            }
-        }
-        NodeEnum::AExpr(value) => {
-            ensure!(
-                value.kind == i32::from(pg::AExprKind::AexprOp)
-                    && super::expressions::names(&value.name)?.0 == ["="],
-                "ON requires column equality"
-            );
-            keys.push((
-                super::column(optional(value.lexpr.as_deref())?)?,
-                super::column(optional(value.rexpr.as_deref())?)?,
-            ));
-        }
-        _ => anyhow::bail!("ON requires an AND of ordinary column equalities"),
-    }
-    Ok(())
-}
-
 fn native_tree(value: &Node) -> Result<bool> {
     Ok(match node(value)? {
         NodeEnum::RangeVar(_) => true,
@@ -119,7 +95,7 @@ fn native_tree(value: &Node) -> Result<bool> {
         _ => false,
     })
 }
-fn computed_equalities(
+pub(super) fn computed_equalities(
     value: &Node,
     keys: &mut Vec<(super::scalar::Key, super::scalar::Key)>,
     depth: usize,

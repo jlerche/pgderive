@@ -9,15 +9,12 @@ pub enum OutputMap {
 }
 #[derive(Clone, Serialize)]
 pub struct Output {
-    maps: Vec<OutputMap>,
+    pub(super) maps: Vec<OutputMap>,
 }
 impl Output {
     pub(crate) fn new(maps: Vec<OutputMap>, types: &[u32]) -> Result<Self> {
         ensure!(maps.len() == types.len(), "engine output layout mismatch");
         Ok(Self { maps })
-    }
-    pub(crate) fn native_rendering(&self) -> bool {
-        !self.maps.contains(&OutputMap::Average)
     }
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(!self.maps.is_empty(), "empty engine output layout");

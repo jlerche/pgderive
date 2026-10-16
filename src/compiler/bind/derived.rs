@@ -10,14 +10,7 @@ use anyhow::{Context, Result, ensure};
 pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compiled> {
     let mut compiled = bind(*parsed.inner, contract)?;
     let relational = &mut compiled.relational;
-    ensure!(
-        relational
-            .output
-            .mapping
-            .as_ref()
-            .is_none_or(crate::compiler::output::Output::native_rendering),
-        "derived scope cannot consume unfinalized aggregate encoding"
-    );
+    crate::compiler::bind::boundary::finalize(relational)?;
     let resolve = |name: &crate::compiler::parser::Name| {
         resolve_output(name, &parsed.alias, &relational.output.columns)
     };

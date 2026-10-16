@@ -113,8 +113,9 @@ fn derived_scope_rejects_ambiguous_and_deferred_values() -> Result<()> {
         sql(false).replace("q.r<=3", "q.missing<=3"),
         sql(false).replace(") q WHERE", ") q(x) WHERE"),
         sql(false).replace("FROM(", "FROM LATERAL("),
-        "SELECT q.g FROM(SELECT b.auction AS g,AVG(b.price) AS a FROM source.bid b GROUP BY b.auction) q WHERE q.g IS NULL".into(),
-    ] { assert!(compile(&query, &native).is_err(), "{query}"); }
+    ] {
+        assert!(compile(&query, &native).is_err(), "{query}");
+    }
     assert!(
         !compile("SELECT q.id FROM(SELECT b.id FROM source.bid b) q WHERE q.id>0", &native)?
             .relational()

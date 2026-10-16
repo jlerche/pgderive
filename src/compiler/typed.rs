@@ -1,4 +1,4 @@
-//! Checked native scalar expression trees executed before relational state.
+//! Checked native scalar expressions executed at their bound relational scope.
 use super::capabilities::Arithmetic;
 use super::{ColumnRef, parser::Name};
 use anyhow::{Context, Result, ensure};
@@ -18,6 +18,7 @@ pub struct Typed {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 enum Value {
     Column(ColumnRef),
+    Average(ColumnRef),
     Literal(Option<i64>),
     Numeric(String),
     Text(String),
@@ -37,6 +38,7 @@ impl Typed {
     pub(in crate::compiler) fn is_constant(&self) -> bool {
         match &self.value {
             Value::Column(_)
+            | Value::Average(_)
             | Value::Difference(..)
             | Value::Remainder(_)
             | Value::Bin(_)
@@ -74,7 +76,8 @@ impl Typed {
                 .map(str::parse)
                 .transpose()?,
             Value::Literal(value) => *value,
-            Value::Numeric(_)
+            Value::Average(_)
+            | Value::Numeric(_)
             | Value::Text(_)
             | Value::Interval(_)
             | Value::Difference(..)
@@ -265,7 +268,7 @@ fn literal(constant: &pg_query::protobuf::AConst) -> Result<Typed> {
 impl Typed {
     pub(super) fn nullable(&self) -> bool {
         match &self.value {
-            Value::Column(column) => column.nullable,
+            Value::Column(column) | Value::Average(column) => column.nullable,
             Value::Literal(value) => value.is_none(),
             Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
             Value::Encoded(value) => value.is_none(),
@@ -303,6 +306,15 @@ impl Typed {
         rows: (&crate::transaction::Row, &crate::transaction::Row),
     ) -> Result<Option<String>> {
         match &self.value {
+            Value::Average(column) => {
+                return rows
+                    .0
+                    .get(&column.name)
+                    .context("missing intermediate average")?
+                    .as_deref()
+                    .map(crate::numeric::Numeric::average)
+                    .transpose();
+            }
             Value::Encoded(value) => return Ok(value.clone()),
             Value::Bin(value) => return value.evaluate(rows.0),
             Value::Offset(value) => return value.evaluate(rows.0),
@@ -321,7 +333,8 @@ impl Typed {
                 .clone(),
             Value::Literal(value) => value.map(|v| v.to_string()),
             Value::Numeric(value) => Some(value.clone()),
-            Value::Text(_)
+            Value::Average(_)
+            | Value::Text(_)
             | Value::Call(_)
             | Value::Encoded(_)
             | Value::Interval(_)
@@ -386,4 +399,10 @@ fn cast_expression(
     depth: usize,
 ) -> Result<Typed> {
     types::cast(cast, resolve, depth)
+}
+
+impl Typed {
+    pub(super) const fn average(column: ColumnRef) -> Self {
+        Self { oid: 1700, value: Value::Average(column) }
+    }
 }

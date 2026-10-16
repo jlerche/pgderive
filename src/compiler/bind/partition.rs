@@ -254,18 +254,23 @@ fn keys(
     computed: &mut Vec<crate::compiler::scalar::Computed>,
     scalar_scope: Option<usize>,
 ) -> Result<Vec<ColumnRef>> {
-    parsed
-        .into_iter()
-        .map(|key| match key {
-            crate::compiler::parser::scalar::Key::Column(name) => resolve(&name),
-            crate::compiler::parser::scalar::Key::Typed(value) => {
-                crate::compiler::typed::computed(&value, resolve, computed, scalar_scope)
-            }
-            crate::compiler::parser::scalar::Key::Bin(bin) => {
-                crate::compiler::scalar::bind(&bin, resolve, computed, scalar_scope)
-            }
-        })
-        .collect()
+    parsed.into_iter().map(|key| bind_key(key, resolve, computed, scalar_scope)).collect()
+}
+fn bind_key(
+    key: crate::compiler::parser::scalar::Key,
+    resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
+    computed: &mut Vec<crate::compiler::scalar::Computed>,
+    scope: Option<usize>,
+) -> Result<ColumnRef> {
+    match key {
+        crate::compiler::parser::scalar::Key::Column(name) => resolve(&name),
+        crate::compiler::parser::scalar::Key::Typed(value) => {
+            crate::compiler::typed::computed(&value, resolve, computed, scope)
+        }
+        crate::compiler::parser::scalar::Key::Bin(bin) => {
+            crate::compiler::scalar::bind(&bin, resolve, computed, scope)
+        }
+    }
 }
 
 struct Targets {
@@ -282,12 +287,15 @@ fn aggregate(
     computed: &mut Vec<crate::compiler::scalar::Computed>,
 ) -> Result<(ColumnRef, crate::compiler::output::OutputMap)> {
     use crate::compiler::output::OutputMap;
+    let framed = value.window.is_some();
     if let Some(window) = value.window {
         ensure!(context.groups.is_empty(), "grouped window composition requires subquery lowering");
         let (candidate, window_keys) = bind_window(
             window,
             resolve,
             (context.occurrence_keys, value.function.occurrence_order()),
+            computed,
+            context.scalar_scope,
         )?;
         if let Some(prior) = &state.mode {
             ensure!(
@@ -301,7 +309,7 @@ fn aggregate(
     } else {
         ensure!(!context.groups.is_empty(), "ungrouped aggregates unsupported");
     }
-    let argument::Bound { column: argument, filter } = argument::bind(
+    let argument::Bound { column: argument, filter, expression } = argument::bind(
         value.argument,
         value.filter,
         resolve,
@@ -309,6 +317,7 @@ fn aggregate(
         argument::Context {
             scope: context.scalar_scope,
             count: matches!(value.function, Function::Count),
+            framed,
         },
     )?;
     let navigation = value
@@ -332,6 +341,7 @@ fn aggregate(
     let nullable = !value.function.ranking();
     state.aggregates.push(Aggregate {
         function: value.function,
+        expression,
         argument,
         filter,
         field: name.clone(),
@@ -403,19 +413,21 @@ fn bind_window(
     window: syntax::Window,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     context: (&[String], bool),
+    computed: &mut Vec<crate::compiler::scalar::Computed>,
+    scope: Option<usize>,
 ) -> Result<(Mode, Vec<ColumnRef>)> {
-    let keys = window.keys.iter().map(resolve).collect::<Result<Vec<_>>>()?;
+    let window_keys = keys(window.keys, resolve, computed, scope)?;
     let order = window
         .order
         .into_iter()
         .map(|(name, descending, nulls_first)| {
-            Ok(Order { column: resolve(&name)?, descending, nulls_first })
+            Ok(Order { column: bind_key(name, resolve, computed, scope)?, descending, nulls_first })
         })
         .collect::<Result<Vec<_>>>()?;
     let remaining = context
         .0
         .iter()
-        .filter(|name| !keys.iter().any(|key| key.name == **name))
+        .filter(|name| !window_keys.iter().any(|key| key.name == **name))
         .cloned()
         .collect::<Vec<_>>();
     if window.ranking || window.peers.is_some() {
@@ -431,10 +443,10 @@ fn bind_window(
         } else {
             Mode::Ranking { order }
         };
-        Ok((mode, keys))
+        Ok((mode, window_keys))
     } else {
         validate_order(&order, &remaining)?;
-        Ok((Mode::Rows { order, frame: window.frame }, keys))
+        Ok((Mode::Rows { order, frame: window.frame }, window_keys))
     }
 }
 
