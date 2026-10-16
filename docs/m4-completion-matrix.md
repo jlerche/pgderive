@@ -1,0 +1,30 @@
+# M4 completion matrix
+
+M4 completes a bounded architecture baseline. Individual SQL functions and further
+query shapes remain the separate SQL support backlog. The existing computed
+aggregate matrix is the first slice. The remaining implementation is scoped here
+before changes.
+
+| Boundary | Implementation and acceptance evidence |
+| --- | --- |
+| Live semantic maintenance | Database-wide shared worker lease; exclusive maintenance begin refuses active workers. Durable pending state rejects startup/rebuild; finish releases the pending state and preserves a monotonically increasing revision. Existing bindings require explicit rebuild, even if catalog contents were restored. No semantic polling on the computation/publication path. |
+| DDL/function/type/extension/settings/collation/timezone changes | Stop all workers in the database, begin maintenance, change/attest the environment, finish, then rebuild. Source-layout DDL remains transactionally guarded. Catalog fingerprints are rechecked at initialization; external runtime files require operator attestation through the revision protocol. Uncoordinated privileged mutations remain outside the deployment contract. |
+| Maintenance durability | Owned-database tests: active-worker refusal, pending-state startup rejection, idempotent begin/finish, process restart, stale registration refusal with unchanged sink/progress/ACK, explicit rebuild, and native-MV equality after resume. |
+| Computed inner equijoin keys | Side-local typed integral expressions, exact matching result OIDs, at most 16 equalities. Preserve source tuple identity, NULL exclusion, collisions and simultaneous input cross terms. Native-MV and independent source oracle through retractions and restart. |
+| Derived compositions | Computed aggregate results and keys can participate in already supported derived joins; state and generated field identities remain scope-local. Qualify through CDC and recovery. |
+| Outer/existence computed ON expressions | Keep rejected until unmatched-row semantics and evaluation domains are separately qualified. Existing raw-column forms remain supported. |
+| Computed window arguments/keys and arbitrary subqueries | Remain rejected where frame-aware evaluation, occurrence identity or dependency tracking is unproven. Add explicit rejection evidence; no approximate execution. |
+| Wall clock, volatile operations, hidden relation reads | Rejected; no refresh-epoch or hidden dependency evaluator is introduced. |
+
+Maintenance does not rewrite old arrangement state. Rebuild takes a fresh source
+snapshot and uses the existing atomic compatible-table cutover. Incompatible
+layouts retain the documented consumer resnapshot boundary. PostgreSQL remains
+metadata/source/destination infrastructure, never a computation fallback.
+
+The lease and revision are database-local. For shared backend binaries, libraries,
+timezone/locale files or cluster-wide settings, quiesce workers and begin
+maintenance in **every affected database** before changing shared resources. Finish
+and rebuild each database afterward. A single database barrier cannot protect
+other databases or hosts. An interrupted rebuild from before maintenance can
+have an incompatible recorded signature; explicitly drop/recreate that pending
+query if ordinary rebuild cannot resume. Do not edit its journal to bypass this.

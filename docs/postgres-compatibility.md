@@ -74,11 +74,15 @@ only supported contexts, but do not assume an unrecorded dependency is harmless.
 OIDs alone do not prove implementation stability. Version strings do not attest
 external timezone, locale or shared-library contents.
 
-Minimum deployment contract until stronger fencing exists:
+Deployment contract:
 
 - Administrators must quiesce workers before changing participating schemas,
   built-ins, type definitions, relevant collations, timezone files or runtime
-  implementations. Revalidate and rebuild incompatible registrations before resume.
+  implementations. Run the database-wide `environment begin` barrier before the
+  change, then `environment finish` and explicitly rebuild old registrations.
+  Begin requires all worker/validator leases to be released. Pending maintenance
+  durably blocks startup and rebuild. A monotonic revision rejects old state even
+  when catalog contents are restored.
 - External writers must not modify owned sink/catalog relations, slot progress or
   object storage. Use documented least-privilege roles.
 - Worker-controlled settings apply to actual execution transactions, not merely
@@ -91,8 +95,10 @@ fingerprints  are inspected only during
 initialization, restart and rebuild. Running workers assume those semantics remain
 stable: there is no live semantic-drift detection or per-publication catalog hash.
 Administrators must stop workers before semantic changes and revalidate before
-resuming. M6 may broaden invalidation support without introducing routine catalog
-rescans on the publication path.
+resuming. M4 adds cooperative database-wide fencing without routine catalog rescans.
+The supported boundary is the maintenance protocol; privileged mutation outside
+that protocol remains unsupported. External file contents require operator
+attestation, not a claim that a version string proves their contents.
 
 ## Failures, retry and durability
 
@@ -160,8 +166,9 @@ registration/bootstrap. New-format registrations with compatible structure but
 changed attested semantics require explicit rebuild after restoring or qualifying
 the supported environment. Fingerprints attest catalog
 metadata, not the contents of backend binaries, shared libraries or timezone files.
-They do not prevent concurrent administrative mutation. The quiescence policy above
-continues to apply. This slice establishes the baseline check schedule, not general
+The maintenance barrier prevents coordinated changes from overlapping active
+workers and binds the revision at initialization. It does not intercept arbitrary
+privileged catalog writes; the deployment policy above continues to apply. This slice establishes the baseline check schedule, not general
 function support or complete dependency invalidation.
 
 ## Result-table lifecycle and replication
@@ -195,3 +202,11 @@ Old `result_view` configurations and weighted sink bindings require explicit
 migration using the prior binary to retire the old registration and a fresh owned
 namespace with this version. There is no silent adoption or conversion of existing
 relations. A replaced relation requires downstream publication setup and resnapshot.
+
+The lease and revision are database-local. For shared backend binaries, libraries,
+timezone/locale files or cluster-wide settings, quiesce workers and begin
+maintenance in **every affected database** before changing shared resources. Finish
+and rebuild each database afterward. A single database barrier cannot protect
+other databases or hosts. An interrupted rebuild from before maintenance can
+have an incompatible recorded signature; explicitly drop/recreate that pending
+query if ordinary rebuild cannot resume. Do not edit its journal to bypass this.

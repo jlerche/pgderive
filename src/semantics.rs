@@ -1,5 +1,7 @@
 //! Shared `PostgreSQL` codec and generated-SQL dependency attestation.
+mod maintenance;
 use anyhow::{Result, ensure};
+pub use maintenance::{change, lease};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::GenericClient;
 
@@ -11,6 +13,8 @@ pub struct Environment {
     server: String,
     encoding: String,
     catalog: String,
+    #[serde(default)]
+    revision: i64,
 }
 impl Environment {
     /// Configure a worker session during initialization.
@@ -32,13 +36,18 @@ impl Environment {
         let row = sql
             .query_one(include_str!("semantics/catalog.sql"), &[&collations, &functions])
             .await?;
-        let environment =
-            Self { server: row.try_get(0)?, encoding: row.try_get(1)?, catalog: row.try_get(2)? };
+        let environment = Self {
+            server: row.try_get(0)?,
+            encoding: row.try_get(1)?,
+            catalog: row.try_get(2)?,
+            revision: maintenance::revision(sql).await?,
+        };
         environment.validate()?;
         Ok(environment)
     }
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(self.server.parse::<u32>()? >= 170_000, "PostgreSQL 17 or newer required");
+        ensure!(self.revision >= 0, "invalid semantic environment revision");
         ensure!(self.encoding == "UTF8", "semantic codecs require UTF8");
         ensure!(
             self.catalog.len() == 64 && self.catalog.bytes().all(|byte| byte.is_ascii_hexdigit()),
@@ -48,7 +57,12 @@ impl Environment {
     }
     #[cfg(test)]
     pub(crate) fn fixture() -> Self {
-        Self { server: "170007".into(), encoding: "UTF8".into(), catalog: "0".repeat(64) }
+        Self {
+            server: "170007".into(),
+            encoding: "UTF8".into(),
+            catalog: "0".repeat(64),
+            revision: 0,
+        }
     }
 }
 
@@ -67,6 +81,9 @@ mod tests {
             let environment: Environment = serde_json::from_value(encoded)?;
             assert!(environment.validate().is_err());
         }
+        let mut negative = serde_json::to_value(Environment::fixture())?;
+        negative["revision"] = (-1).into();
+        assert!(serde_json::from_value::<Environment>(negative)?.validate().is_err());
         assert!(serde_json::from_str::<Environment>("{}").is_err());
         Ok(())
     }

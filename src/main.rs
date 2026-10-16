@@ -9,6 +9,16 @@ async fn main() -> Result<()> {
     match arguments.as_slice() {
         [] => listen(Config::load("config.local.toml")?).await,
         [path] => listen(Config::load(path)?).await,
+        [scope, command, path] if scope == "environment" => {
+            let config = Config::load(path)?;
+            let begin = match command.as_str() {
+                "begin" => true,
+                "finish" => false,
+                _ => bail!("unknown environment command: {command}"),
+            };
+            println!("{}", pgderive::worker::environment(&config, begin).await?);
+            Ok(())
+        }
         [scope, command, path] if scope == "query" => {
             let config = Config::load(path).context("loading query configuration")?;
             match command.as_str() {
@@ -32,7 +42,7 @@ async fn main() -> Result<()> {
             }
         }
         _ => bail!(
-            "usage: pgderive [CONFIG.toml] | query <validate|status|create|restart|rebuild|drop> CONFIG.toml"
+            "usage: pgderive environment <begin|finish> CONFIG.toml | [CONFIG.toml] | query <validate|status|create|restart|rebuild|drop> CONFIG.toml"
         ),
     }
 }

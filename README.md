@@ -114,7 +114,7 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 80 worker cases:
+profile runs the complete low-level live PostgreSQL harness and 81 worker cases:
 result-table decoding/representation, semantic bindings, transaction faults,
 witnessed process kills, representative query families, lifecycle and rebuild.
 It disables synthetic S3 latency but keeps real PostgreSQL/object storage and
@@ -929,3 +929,22 @@ A host-native package and container runtime guidance are described in
 artifacts. `scripts/build_container.py` builds the separately attested runtime
 image from that package; neither script deploys production workers or credentials.
 The actual container harness and longer soak are described in the deployment guide.
+
+Semantic environment changes use a database-wide maintenance barrier:
+stop workers, run `pgderive environment begin CONFIG.toml`, perform and attest
+the change, then run `pgderive environment finish CONFIG.toml` and explicitly
+rebuild every pre-maintenance query. Begin refuses active worker/validator leases.
+Pending maintenance survives process exits and blocks startup/rebuild. Even a
+restored catalog requires rebuild because the durable environment revision changed.
+The administration role owns `pgderive_environment.revision`; worker roles need
+USAGE on its schema and SELECT on the table. Protect this coordination metadata
+from external writes. The barrier does not intercept arbitrary superuser DDL
+or attest file contents; uncoordinated administrative changes are unsupported.
+
+The lease and revision are database-local. For shared backend binaries, libraries,
+timezone/locale files or cluster-wide settings, quiesce workers and begin
+maintenance in **every affected database** before changing shared resources. Finish
+and rebuild each database afterward. A single database barrier cannot protect
+other databases or hosts. An interrupted rebuild from before maintenance can
+have an incompatible recorded signature; explicitly drop/recreate that pending
+query if ordinary rebuild cannot resume. Do not edit its journal to bypass this.

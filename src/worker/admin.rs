@@ -68,6 +68,7 @@ pub async fn validate(config: &Config) -> Result<Value> {
     config.validate()?;
     let settings = config.worker.as_ref().context("configuration requires a worker section")?;
     let mut session = Session::connect(config).await?;
+    crate::semantics::lease(&session.client).await?;
     super::lifecycle::require_public(&session.client, settings).await?;
     let identity = Identity::inspect(config).await?;
     let tx = session
@@ -179,4 +180,14 @@ pub(super) fn query_sql(query: &QueryDefinition) -> String {
 
 pub(super) fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Begin or finish coordinated database-wide semantic maintenance.
+///
+/// # Errors
+/// Rejects active worker leases, invalid configuration or database failures.
+pub async fn environment(config: &Config, begin: bool) -> Result<Value> {
+    config.validate()?;
+    let mut session = Session::connect(config).await?;
+    crate::semantics::change(&mut session.client, begin).await
 }

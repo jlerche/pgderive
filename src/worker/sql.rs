@@ -44,6 +44,7 @@ impl Session {
         Ok(())
     }
     pub(super) async fn try_own(&self, schema: &str, query: &str) -> Result<bool> {
+        crate::semantics::lease(&self.client).await?;
         let scope = format!("pgderive-worker:{schema}:{query}");
         let row = timeout(
             Duration::from_secs(10),
