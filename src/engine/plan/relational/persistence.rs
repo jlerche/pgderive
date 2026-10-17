@@ -117,7 +117,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         let namespace = namespace.map(str::to_owned);
         let writers = self.execution.writers.clone();
         self.engine
-            .maintenance(move |state| async move {
+            .prepare_maintenance(move |state| async move {
                 let mut entries = std::collections::BTreeMap::new();
                 for (id, entry) in &state.entries {
                     let mut writer = writers.get(id).context("missing compaction writer")?.clone();

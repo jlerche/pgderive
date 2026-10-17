@@ -6,9 +6,9 @@ use pg_query::{Node, NodeEnum};
 use serde::Serialize;
 use types::numeric_common;
 mod case;
+mod evaluate;
 mod functions;
 mod predicate;
-mod text;
 mod types;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Typed {
@@ -64,66 +64,8 @@ impl Typed {
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         self.text_pair((row, row))
     }
-    fn integer(
-        &self,
-        rows: (&crate::transaction::Row, &crate::transaction::Row),
-    ) -> Result<Option<i64>> {
-        let value = match &self.value {
-            Value::Column(column) => (if column.right { rows.1 } else { rows.0 })
-                .get(&column.name)
-                .context("missing typed scalar input")?
-                .as_deref()
-                .map(str::parse)
-                .transpose()?,
-            Value::Literal(value) => *value,
-            Value::Average(_)
-            | Value::Numeric(_)
-            | Value::Text(_)
-            | Value::Interval(_)
-            | Value::Difference(..)
-            | Value::Bin(_)
-            | Value::Offset(_) => anyhow::bail!("nonintegral scalar value"),
-            Value::Encoded(value) => value.as_deref().map(str::parse).transpose()?,
-            Value::Remainder(value) => value.integer_pair(rows)?,
-            Value::Call(call) => call.evaluate(rows)?.map(|value| value.parse()).transpose()?,
-            Value::Cast(input) => input.integer(rows)?,
-            Value::Case { branches, otherwise } => {
-                let mut selected = otherwise.as_ref();
-                for (condition, result) in branches {
-                    if condition.evaluate(rows)? == Some(true) {
-                        selected = result;
-                        break;
-                    }
-                }
-                selected.integer(rows)?
-            }
-            Value::Coalesce(arguments) => {
-                let mut result = None;
-                for argument in arguments {
-                    result = argument.integer(rows)?;
-                    if result.is_some() {
-                        break;
-                    }
-                }
-                result
-            }
-            Value::Binary { operation, left, right } => {
-                let left = left.integer(rows)?;
-                let right = right.integer(rows)?;
-                match (left, right) {
-                    (Some(left), Some(right)) => Some(
-                        operation.integer(left, right).context("integral arithmetic overflow")?,
-                    ),
-                    _ => None,
-                }
-            }
-        };
-        if let Some(value) = value {
-            check_width(value, self.oid)?;
-        }
-        Ok(value)
-    }
 }
+
 fn check_width(value: i64, oid: u32) -> Result<()> {
     match oid {
         21 => {
@@ -266,6 +208,10 @@ fn literal(constant: &pg_query::protobuf::AConst) -> Result<Typed> {
 }
 
 impl Typed {
+    #[cfg(test)]
+    pub(crate) const fn as_average(&self) -> Option<&ColumnRef> {
+        if let Value::Average(column) = &self.value { Some(column) } else { None }
+    }
     pub(super) fn nullable(&self) -> bool {
         match &self.value {
             Value::Column(column) | Value::Average(column) => column.nullable,
@@ -300,84 +246,7 @@ pub(super) fn difference(left: ColumnRef, right: ColumnRef) -> Typed {
     }
 }
 
-impl Typed {
-    pub(super) fn text_pair(
-        &self,
-        rows: (&crate::transaction::Row, &crate::transaction::Row),
-    ) -> Result<Option<String>> {
-        match &self.value {
-            Value::Average(column) => {
-                return rows
-                    .0
-                    .get(&column.name)
-                    .context("missing intermediate average")?
-                    .as_deref()
-                    .map(crate::numeric::Numeric::average)
-                    .transpose();
-            }
-            Value::Encoded(value) => return Ok(value.clone()),
-            Value::Bin(value) => return value.evaluate(rows.0),
-            Value::Offset(value) => return value.evaluate(rows.0),
-            _ => {}
-        }
-        if matches!(self.oid, 16 | 25 | 1043 | 705 | 2950 | 1114 | 1184) {
-            return self.string_pair(rows);
-        }
-        if self.oid != 1700 {
-            return self.integer(rows).map(|v| v.map(|v| v.to_string()));
-        }
-        let value = match &self.value {
-            Value::Column(column) => (if column.right { rows.1 } else { rows.0 })
-                .get(&column.name)
-                .context("missing numeric input")?
-                .clone(),
-            Value::Literal(value) => value.map(|v| v.to_string()),
-            Value::Numeric(value) => Some(value.clone()),
-            Value::Average(_)
-            | Value::Text(_)
-            | Value::Call(_)
-            | Value::Encoded(_)
-            | Value::Interval(_)
-            | Value::Difference(..)
-            | Value::Remainder(_)
-            | Value::Bin(_)
-            | Value::Offset(_) => anyhow::bail!("invalid numeric expression"),
-            Value::Cast(input) => input.text_pair(rows)?,
-            Value::Binary { operation, left, right } => {
-                let (Some(left), Some(right)) = (left.text_pair(rows)?, right.text_pair(rows)?)
-                else {
-                    return Ok(None);
-                };
-                Some(
-                    crate::numeric::Numeric::parse(&left)?
-                        .binary(&crate::numeric::Numeric::parse(&right)?, operation.symbol())?
-                        .text(),
-                )
-            }
-            Value::Coalesce(arguments) => {
-                let mut value = None;
-                for argument in arguments {
-                    value = argument.text_pair(rows)?;
-                    if value.is_some() {
-                        break;
-                    }
-                }
-                value
-            }
-            Value::Case { branches, otherwise } => {
-                let mut selected = otherwise.as_ref();
-                for (condition, result) in branches {
-                    if condition.evaluate(rows)? == Some(true) {
-                        selected = result;
-                        break;
-                    }
-                }
-                selected.text_pair(rows)?
-            }
-        };
-        value.map(|v| Ok(crate::numeric::Numeric::parse(&v)?.text())).transpose()
-    }
-}
+impl Typed {}
 
 fn numeric_cast_input(
     value: &Node,

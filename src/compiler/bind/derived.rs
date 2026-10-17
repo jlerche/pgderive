@@ -10,22 +10,17 @@ use anyhow::{Context, Result, ensure};
 pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compiled> {
     let mut compiled = bind(*parsed.inner, contract)?;
     let relational = &mut compiled.relational;
-    crate::compiler::bind::boundary::finalize(relational)?;
     let resolve = |name: &crate::compiler::parser::Name| {
         resolve_output(name, &parsed.alias, &relational.output.columns)
     };
     let predicate = parsed
         .predicate
-        .map(|value| crate::compiler::expression::bind(value, &resolve).map(Predicate::new))
+        .map(|value| crate::compiler::expression::bind(&value, &resolve).map(Predicate::new))
         .transpose()?;
-    let mut transforms = Vec::new();
     let columns = parsed
         .columns
         .into_iter()
-        .map(|(name, label, transform)| {
-            transforms.push(transform);
-            Ok(OutputColumn { column: resolve(&name)?, label })
-        })
+        .map(|(name, label)| Ok(OutputColumn { column: resolve(&name)?, label }))
         .collect::<Result<Vec<_>>>()?;
     let Some(Node::Output { id, input }) = relational.nodes.pop() else {
         anyhow::bail!("derived query requires final Output node");
@@ -41,7 +36,6 @@ pub(super) fn bind_derived(parsed: Derived, contract: &Contract) -> Result<Compi
         input
     };
     relational.nodes.push(Node::Output { id, input });
-    relational.output.mapping = super::output_mapping(transforms, &columns)?;
     relational.output.columns = columns;
     Ok(compiled)
 }

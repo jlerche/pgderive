@@ -29,9 +29,9 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Derived>> {
                 anyhow::bail!("invalid derived output");
             };
             ensure!(output.indirection.is_empty(), "derived output indirection unsupported");
-            let (name, transform, default) = super::projection_target(target(value)?)?;
+            let (name, default) = super::projection_target(target(value)?)?;
             let label = if output.name.is_empty() { default } else { output.name.clone() };
-            Ok((name, label, transform))
+            Ok((name, label))
         })
         .collect::<Result<_>>()?;
     let predicate = crate::compiler::syntax::predicate(select.where_clause.as_deref())?;
@@ -47,17 +47,11 @@ pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, Strin
     else {
         anyhow::bail!("derived query requires SELECT");
     };
-    let inner = match query(inner)? {
-        Parsed::Scalar { .. } => Parsed::Partition(super::partition::parse(inner)?),
-        Parsed::Projection { source, columns, predicate } => {
-            Parsed::NativeScope { source, columns, predicate }
-        }
-        other => other,
-    };
+    let inner = query(inner)?;
     ensure!(
         matches!(
             inner,
-            Parsed::NativeScope { .. }
+            Parsed::Scalar { .. }
                 | Parsed::NativeJoin(_)
                 | Parsed::Partition(_)
                 | Parsed::ScopedJoin(_)

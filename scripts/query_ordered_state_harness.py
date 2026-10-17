@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Sequential owned PostgreSQL MV/memory/cold-restart ordered-extrema checks."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import datetime
 import json
@@ -77,9 +77,6 @@ def qualify(output, command, oid, joined):
     with fixture.managed():
         fixture.rejected(command, 'unsupported', fixture.query+' ORDER BY g')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f'INSERT INTO {fixture.name}.bid VALUES(100,NULL,NULL),(101,1,{fixture.value(-7)}),(102,1,{fixture.value(-7)})',
             f'UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=1; UPDATE {fixture.name}.bid SET price={fixture.value(103)} WHERE id=101',
@@ -89,22 +86,12 @@ def qualify(output, command, oid, joined):
             f'INSERT INTO {fixture.name}.bid VALUES(103,2,NULL),(104,2,NULL)',
             f'UPDATE {fixture.name}.bid SET price={fixture.value(3)} WHERE id=104; UPDATE {fixture.name}.auction SET group_id=9 WHERE id=2',
         ]
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published', minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        before = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command, 'changed-semantics', fixture.query.replace('MIN(b.price)', 'MAX(b.price)', 1))
-        assert before == fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.bid WHERE id=104')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.bid WHERE id=104',
+            normalized=fixture.query,
+            rejected=[('changed-semantics', fixture.query.replace('MIN(b.price)', 'MAX(b.price)', 1))],
+        ))
         (output/'result.json').write_text(json.dumps({'native_mv':'identical SQL exact bag','memory':'independent source-row extrema','restart':'cold','null_group':True,'all_null':True,'filter_empty':True,'ties':True,'simultaneous_inputs':joined,'type':oid,'transactions':len(changes)+1})+'\n')
 
 

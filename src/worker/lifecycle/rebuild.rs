@@ -39,6 +39,7 @@ pub(in crate::worker) async fn run_owned(
         session = opened.session;
     }
     retire(config, settings, &mut session, &mut state).await?;
+    super::control::collected(config, settings, &mut session).await?;
     Ok(session)
 }
 
@@ -79,9 +80,7 @@ async fn prepare(
         ensure!(state.phase != Phase::Dropping, "query removal is pending; resume drop");
         ensure!(!recreate || state.phase == Phase::Dropped, "create requires a dropped query");
     }
-    let dropped = super::super::retire::status(&session.client, settings).await? == Some("dropped");
-    if prior.is_none() && !dropped {
-        super::super::retire::require_active(&session.client, settings).await?;
+    if prior.is_none() {
         ensure!(
             registered(&session.client, settings, &settings.query_id).await?,
             "rebuild requires an existing registration"
@@ -97,15 +96,7 @@ async fn prepare(
         slot: format!("generation_{token}"),
         sink: format!("result_{token}"),
     };
-    let mut state = prior.unwrap_or_else(|| State {
-        version: 1,
-        base: Base::new(config, settings),
-        active: (!dropped).then(|| Generation::original(config, settings)),
-        pending: None,
-        signature: String::new(),
-        phase: Phase::Active,
-        retired: Vec::new(),
-    });
+    let mut state = prior.unwrap_or_else(|| State::original(config, settings));
     if state.phase == Phase::Dropped {
         state.active = None;
     }
@@ -114,7 +105,7 @@ async fn prepare(
     state.phase = Phase::Building;
     let tx = session.client.transaction().await?;
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-    save(&tx, settings, &state).await?;
+    save(&tx, settings, &state, "building").await?;
     tx.execute(
         &format!("INSERT INTO {}.pgderive_generations VALUES($1,$2)", settings.catalog_schema),
         &[&generation.query, &settings.query_id],
@@ -207,7 +198,7 @@ async fn cutover(
     state.active = Some(generation);
     state.pending = None;
     state.phase = Phase::Active;
-    save(&tx, settings, state).await?;
+    save(&tx, settings, state, "cutover").await?;
     tx.commit().await.context("rebuild cutover COMMIT uncertain; repeat rebuild to reconcile")?;
     Ok(())
 }
@@ -219,13 +210,8 @@ async fn retire(
     state: &mut State,
 ) -> Result<()> {
     while let Some(generation) = state.retired.first().cloned() {
-        let (native_config, native) = generation.apply(config, settings)?;
-        super::super::retire::execute(&native_config, &native, session).await?;
-        state.retired.remove(0);
-        let tx = session.client.transaction().await?;
-        tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-        save(&tx, settings, state).await?;
-        tx.commit().await.context("retirement bookkeeping COMMIT uncertain; repeat rebuild")?;
+        let (_, native) = generation.apply(config, settings)?;
+        super::super::retire::execute(&native, settings, session, state).await?;
     }
     Ok(())
 }

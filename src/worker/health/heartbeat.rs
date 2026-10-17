@@ -50,7 +50,7 @@ impl Monitor {
                 open.settings.catalog_schema, open.settings.query_id
             ),
             pid: open.session.client.query_one("SELECT pg_backend_pid()", &[]).await?.try_get(0)?,
-            fence: i64::try_from(durable.fence)?,
+            fence: durable.fence,
             token: open.nonce.clone(),
         };
         open.session.client.batch_execute(&format!("CREATE TABLE IF NOT EXISTS {}(query_id text PRIMARY KEY,owner_pid integer NOT NULL,fence bigint NOT NULL,token text NOT NULL,heartbeat_at timestamptz NOT NULL,diagnostics jsonb NOT NULL)",owner.table)).await?;

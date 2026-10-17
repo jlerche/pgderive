@@ -189,7 +189,7 @@ impl Writers {
 async fn three_sources_chained_joins_projection_count_sum_match_recomputation() -> Result<()> {
     let writers = Arc::new(Writers::new()?);
     let initial = writers.empty();
-    let mut engine = Engine::new(Plan::new(definition())?, initial, move |prior, input| {
+    let mut engine = Engine::registered(Plan::new(definition())?, initial, move |prior, input| {
         let writers = writers.clone();
         async move { writers.step(prior, input).await }
     })?;
@@ -260,8 +260,10 @@ async fn incomplete_or_mismatched_node_state_never_publishes() -> Result<()> {
             .map(|a| Binding { id: a.id.clone(), schema: a.schema.clone(), time: 0 })
             .collect(),
     );
-    let mut engine =
-        Engine::new(plan, initial, |prior: Arc<Report>, input: TimedBatch<u8>| async move {
+    let mut engine = Engine::registered(
+        plan,
+        initial,
+        |prior: Arc<Report>, input: TimedBatch<u8>| async move {
             let mut next = (*prior).clone();
             for binding in &mut next.0 {
                 binding.time = input.time;
@@ -276,7 +278,8 @@ async fn incomplete_or_mismatched_node_state_never_publishes() -> Result<()> {
                 _ => {}
             }
             Ok((next, ()))
-        })?;
+        },
+    )?;
     let pinned = engine.snapshot();
     for failure in 1..=4 {
         assert!(engine.prepare(TimedBatch { time: 1, batch: failure }).await.is_err());

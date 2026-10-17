@@ -1,11 +1,9 @@
+from harness_control import commit_proxy
 #!/usr/bin/env python3
 """Batched physical occurrences, observer counts and atomic failure/recovery."""
 import collections
 import contextlib
 import json
-import subprocess
-import sys
-import time
 from result_table_harness import NumericFixture
 from native_mv_oracle import expected as native_expected
 from worker_harness import harness_arguments
@@ -44,22 +42,16 @@ class SinkFixture(NumericFixture):
 @contextlib.contextmanager
 def observing(fixture):
     path=fixture.output/'sink-observer.jsonl'
-    with path.open('w') as log:
-        proxy=subprocess.Popen([sys.executable,'scripts/pg_commit_proxy.py','--mode','observe','--upstream',fixture.port],stdout=log,stderr=log)
-        prior=fixture.environment.get('PGDERIVE__POSTGRES__PORT')
-        try:
-            for _ in range(100):
-                lines=path.read_text().splitlines()
-                if lines and (ready:=json.loads(lines[0])).get('ready'): break
-                time.sleep(.05)
-            else: raise RuntimeError('sink observer did not start')
-            fixture.environment['PGDERIVE__POSTGRES__PORT']=str(ready['port'])
-            yield path
-        finally:
-            for worker in fixture.workers: worker.abort()
-            if prior is None: fixture.environment.pop('PGDERIVE__POSTGRES__PORT',None)
-            else: fixture.environment['PGDERIVE__POSTGRES__PORT']=prior
-            proxy.terminate(); proxy.wait(timeout=10)
+    proxy, port = commit_proxy(path, 'observe', upstream=fixture.port)
+    prior=fixture.environment.get('PGDERIVE__POSTGRES__PORT')
+    try:
+        fixture.environment['PGDERIVE__POSTGRES__PORT']=str(port)
+        yield path
+    finally:
+        for worker in fixture.workers: worker.abort()
+        if prior is None: fixture.environment.pop('PGDERIVE__POSTGRES__PORT',None)
+        else: fixture.environment['PGDERIVE__POSTGRES__PORT']=prior
+        proxy.terminate(); proxy.wait(timeout=10)
 
 
 def counts(path):

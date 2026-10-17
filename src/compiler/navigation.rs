@@ -64,10 +64,7 @@ fn default(
             );
             (Default::Constant(Some(value)), argument)
         }
-        Scalar::Typed(_)
-        | Scalar::Remainder(..)
-        | Scalar::Difference(..)
-        | Scalar::Interval(..) => {
+        Scalar::Remainder(..) | Scalar::Difference(..) | Scalar::Interval(..) => {
             anyhow::bail!("unsupported LAG/LEAD default")
         }
     };

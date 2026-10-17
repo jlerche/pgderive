@@ -234,7 +234,7 @@ impl Writer {
     /// Rejects uncertain/stale writers, tokens still recorded, or database failures.
     pub async fn protect_upload(&self, sql: &mut Client, token: &str) -> Result<Protection> {
         ensure!(!self.uncertain, "uncertain writer cannot reserve uploads");
-        insert(sql, &self.catalog, token, self.fence).await
+        insert(sql, &self.catalog, token, self.boundary.fence).await
     }
     // Private recovery pins may be invalidated by fencing. They never authorize
     // externally visible reads: the worker must re-confirm ownership/membership
@@ -246,7 +246,7 @@ impl Writer {
         token: &str,
     ) -> Result<Protection> {
         self.confirmed(sql, plan).await?;
-        self.catalog.pin_checkpoint(sql, plan, token, Some(self.fence)).await
+        self.catalog.pin_checkpoint(sql, plan, token, Some(self.boundary.fence)).await
     }
     pub(crate) async fn seal_fenced_recovery(&self, sql: &mut Client, plan: &Plan) -> Result<u64> {
         self.seal(sql, plan, true).await
@@ -275,10 +275,10 @@ impl Writer {
                 &[&self.catalog.query],
             )
             .await?;
-        ensure!(row.try_get::<_, i64>(0)? == self.fence, "upload recovery writer fenced");
+        ensure!(row.try_get::<_, i64>(0)? == self.boundary.fence, "upload recovery writer fenced");
         let sealed = tx.execute(
             &format!("UPDATE {}.pgderive_protections SET active=false WHERE query_id=$1 AND ((uploading AND NOT $3) OR (recovering AND $3)) AND active AND owner_fence<$2", self.catalog.schema),
-            &[&self.catalog.query, &self.fence, &recovery],
+            &[&self.catalog.query, &self.boundary.fence, &recovery],
         ).await?;
         tx.commit().await.context("upload recovery COMMIT outcome uncertain")?;
         Ok(sealed)

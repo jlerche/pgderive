@@ -152,10 +152,10 @@ fn mixed_oracle(
 #[tokio::test]
 async fn mixed_distinct_sum_average_filters_and_group_moves_restore() -> Result<()> {
     let native = contract();
-    let compiled = compile(
+    let compiled = super::raw_statistics_compiled(compile(
         "SELECT b.auction AS g,COUNT(*) AS n,SUM(b.price) AS s,AVG(b.price) AS a,COUNT(DISTINCT b.price) AS d,COUNT(DISTINCT b.price) FILTER(WHERE b.price<0) AS negative,COUNT(DISTINCT b.auction) AS keys FROM source.bid b GROUP BY b.auction",
         &native,
-    )?;
+    )?);
     let ir = compiled.relational();
     let options = settings();
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("2"))]);

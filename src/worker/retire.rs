@@ -1,96 +1,47 @@
 //! Journaled query removal; reader roots remain protected after membership retirement.
 use super::{spec::Settings, sql::Session};
 use crate::{
-    Config,
-    catalog::{Catalog, GcLimits, Sink},
+    catalog::{Catalog, Sink},
     source::Contract,
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tokio_postgres::{Client, GenericClient};
+use tokio_postgres::Client;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Removal {
-    version: u32,
+pub(super) struct Removal {
+    query: String,
     source: Contract,
     sink: Sink,
     sink_oid: Option<u32>,
     prefix: String,
-    finished: bool,
 }
 
-async fn read(sql: &(impl GenericClient + Sync), settings: &Settings) -> Result<Option<Removal>> {
-    let table = format!("{}.pgderive_removals", settings.catalog_schema);
-    let exists: bool = sql
-        .query_one("SELECT pg_catalog.to_regclass($1) IS NOT NULL", &[&table])
-        .await?
-        .try_get(0)?;
-    if !exists {
-        return Ok(None);
+impl Removal {
+    pub(super) fn validate(&self) -> Result<()> {
+        self.source.validate()?;
+        self.sink.validate()
     }
-    let Some(row) = sql
-        .query_opt(
-            &format!("SELECT state,octet_length(state::text) FROM {table} WHERE query_id=$1"),
-            &[&settings.query_id],
-        )
-        .await?
-    else {
-        return Ok(None);
-    };
-    ensure!(row.try_get::<_, i32>(1)? <= 131_072, "removal metadata limit exceeded");
-    let removal: Removal = serde_json::from_value(row.try_get(0)?)?;
-    ensure!(removal.version == 1, "unsupported removal journal version");
-    removal.source.validate()?;
-    removal.sink.validate()?;
-    Ok(Some(removal))
-}
-
-pub(super) async fn require_active(
-    sql: &(impl GenericClient + Sync),
-    settings: &Settings,
-) -> Result<()> {
-    ensure!(
-        read(sql, settings).await?.is_none(),
-        "query removal is pending or complete; ordinary startup cannot recreate it"
-    );
-    Ok(())
-}
-
-pub(super) async fn status(
-    sql: &(impl GenericClient + Sync),
-    settings: &Settings,
-) -> Result<Option<&'static str>> {
-    Ok(read(sql, settings)
-        .await?
-        .map(|removal| if removal.finished { "dropped" } else { "dropping" }))
 }
 
 pub(super) async fn execute(
-    config: &Config,
     settings: &Settings,
+    logical: &Settings,
     session: &mut Session,
-) -> Result<Value> {
+    state: &mut super::lifecycle::State,
+) -> Result<()> {
     session.own(&settings.catalog_schema, &settings.query_id).await?;
-    let removal = match read(&session.client, settings).await? {
-        Some(removal) => removal,
-        None => intent(&mut session.client, settings).await?,
-    };
+    if state.removal.is_none() {
+        intent(&mut session.client, settings, logical, state).await?;
+    }
+    let removal = state.removal.clone().context("missing generation removal intent")?;
+    ensure!(removal.query == settings.query_id, "generation removal order changed");
     ensure!(removal.prefix == settings.object_prefix, "removal object namespace changed");
     removal.source.identity.verify_sql(&session.client).await?;
-    slot(&session.client, &removal.source).await?;
-    finish(&mut session.client, settings, &removal).await?;
-    let store = config
-        .object_store
-        .as_ref()
-        .context("removal requires durable object storage")?
-        .build(&removal.prefix)?;
-    let catalog = Catalog::new(&settings.catalog_schema, &settings.query_id)?;
-    let collection = catalog.collect(&mut session.client, store, GcLimits::default()).await?;
-    Ok(
-        json!({"version":1,"query_id":settings.query_id,"state":"dropped","collection":format!("{collection:?}")}),
-    )
+    super::registration::drop_slot(&session.client, &removal.source).await?;
+    finish(&mut session.client, settings, logical, state, &removal).await?;
+    Ok(())
 }
 
 async fn load_removal(sql: &Client, settings: &Settings) -> Result<Removal> {
@@ -126,8 +77,13 @@ async fn load_removal(sql: &Client, settings: &Settings) -> Result<Removal> {
         "removal destination is a source table"
     );
     let sink_oid = owned_sink(sql, settings, &source, &sink).await?;
-    let removal =
-        Removal { version: 1, source, sink, sink_oid, prefix: row.try_get(3)?, finished: false };
+    let removal = Removal {
+        query: settings.query_id.clone(),
+        source,
+        sink,
+        sink_oid,
+        prefix: row.try_get(3)?,
+    };
     Ok(removal)
 }
 
@@ -162,7 +118,12 @@ async fn owned_sink(
     ))
 }
 
-async fn intent(sql: &mut Client, settings: &Settings) -> Result<Removal> {
+async fn intent(
+    sql: &mut Client,
+    settings: &Settings,
+    logical: &Settings,
+    state: &mut super::lifecycle::State,
+) -> Result<()> {
     let removal = load_removal(sql, settings).await?;
     ensure!(removal.prefix == settings.object_prefix, "removal object namespace changed");
     removal.source.identity.verify_sql(sql).await?;
@@ -178,14 +139,10 @@ async fn intent(sql: &mut Client, settings: &Settings) -> Result<Removal> {
     )
     .await?;
     tx.execute(&format!("UPDATE {}.pgderive_protections SET active=false WHERE query_id=$1 AND active AND (uploading OR recovering)",settings.catalog_schema), &[&settings.query_id]).await?;
-    tx.batch_execute(&format!("CREATE TABLE IF NOT EXISTS {}.pgderive_removals(query_id text PRIMARY KEY,state jsonb NOT NULL)",settings.catalog_schema)).await?;
-    tx.execute(
-        &format!("INSERT INTO {}.pgderive_removals VALUES($1,$2)", settings.catalog_schema),
-        &[&settings.query_id, &serde_json::to_value(&removal)?],
-    )
-    .await?;
+    state.removal = Some(removal);
+    super::lifecycle::save(&tx, logical, state, "removal-intent").await?;
     tx.commit().await.context("removal intent COMMIT uncertain; repeat drop to reconcile")?;
-    Ok(removal)
+    Ok(())
 }
 
 async fn barrier(sql: &tokio_postgres::Transaction<'_>, settings: &Settings) -> Result<()> {
@@ -198,23 +155,13 @@ async fn barrier(sql: &tokio_postgres::Transaction<'_>, settings: &Settings) -> 
     Ok(())
 }
 
-async fn slot(sql: &Client, source: &Contract) -> Result<()> {
-    let Some(row) = sql.query_opt("SELECT plugin,database,temporary,active FROM pg_catalog.pg_replication_slots WHERE slot_name=$1", &[&source.slot]).await? else { return Ok(()); };
-    ensure!(
-        row.try_get::<_, String>(0)? == "pgoutput"
-            && row.try_get::<_, String>(1)? == source.identity.database
-            && !row.try_get::<_, bool>(2)?
-            && !row.try_get::<_, bool>(3)?,
-        "journaled removal slot is incompatible or still active"
-    );
-    sql.query_one("SELECT pg_catalog.pg_drop_replication_slot($1)", &[&source.slot]).await?;
-    Ok(())
-}
-
-async fn finish(sql: &mut Client, settings: &Settings, removal: &Removal) -> Result<()> {
-    if removal.finished {
-        return Ok(());
-    }
+async fn finish(
+    sql: &mut Client,
+    settings: &Settings,
+    logical: &Settings,
+    state: &mut super::lifecycle::State,
+    removal: &Removal,
+) -> Result<()> {
     let tx = sql.transaction().await?;
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
     barrier(&tx, settings).await?;
@@ -242,18 +189,10 @@ async fn finish(sql: &mut Client, settings: &Settings, removal: &Removal) -> Res
         &[&settings.query_id],
     )
     .await?;
-    // Keep the ownership journal as a tombstone: it also binds this schema's
-    // object prefix while external reader pins outlive the retired membership.
-    let mut completed = removal.clone();
-    completed.finished = true;
-    tx.execute(
-        &format!(
-            "UPDATE {}.pgderive_removals SET state=$2 WHERE query_id=$1",
-            settings.catalog_schema
-        ),
-        &[&settings.query_id, &serde_json::to_value(completed)?],
-    )
-    .await?;
+    // Registration retains the object prefix while independent reader pins outlive
+    // membership. Resource retirement and generation progress share this COMMIT.
+    state.forget(&settings.query_id);
+    super::lifecycle::save(&tx, logical, state, "removal-complete").await?;
     tx.commit().await.context("removal completion COMMIT uncertain; repeat drop to reconcile")?;
     Ok(())
 }

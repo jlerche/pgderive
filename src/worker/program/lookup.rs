@@ -126,9 +126,6 @@ fn value(column: &ColumnRef, row: &Row) -> Result<Option<i64>> {
     row.get(&column.name)
         .context("missing lookup ordered value")?
         .as_deref()
-        .map(|value| match column.oid {
-            1114 | 1184 => Ok(crate::temporal::Timestamp::parse(value, column.oid)?.sort_value()),
-            _ => value.parse::<i64>().map_err(Into::into),
-        })
+        .map(|value| super::order::value(value, column.oid))
         .transpose()
 }

@@ -3,11 +3,12 @@ use super::{Compiled, Name, Scope, qualifier, relational::qualify, resolve, scop
 use crate::{
     compiler::{
         ColumnRef,
+        expression::Expr,
         lookup::{Input, Lookup},
         parser::lookup::Parsed,
         partition::Order,
         relational::{Node, Relational, Source, field},
-        syntax::{Compare, Expr, Scalar},
+        syntax::Compare,
     },
     source::Contract,
 };
@@ -24,7 +25,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     ensure!(qualifier(&scopes[0]) != parsed.alias, "duplicate outer lookup qualifier");
     let correlated = |name: &Name| correlated(name, &scopes);
     let mut conditions = Conditions { keys: Vec::new(), bound: None, computed: Vec::new() };
-    condition(parsed.condition, &correlated, &mut conditions)?;
+    condition(crate::compiler::expression::bind(&parsed.condition, &correlated)?, &mut conditions)?;
     ensure!((1..=8).contains(&conditions.keys.len()), "lookup requires 1..=8 equality keys");
     conditions.keys.sort();
     conditions.keys.dedup();
@@ -41,11 +42,11 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let order = order(parsed.order, &correlated, &right_bound, &scopes[1])?;
     let labels = labels(parsed.inner_columns, &correlated)?;
     let outer = |name: &Name| outer(name, &parsed.alias, &labels, &scopes[0]);
-    let (columns, mapping) = super::relational::output(parsed.columns, &outer)?;
+    let columns = super::relational::output(parsed.columns, &outer)?;
     let predicate = parsed
         .predicate
         .map(|value| {
-            crate::compiler::expression::bind(value, &outer).map(crate::compiler::Predicate::new)
+            crate::compiler::expression::bind(&value, &outer).map(crate::compiler::Predicate::new)
         })
         .transpose()?;
     let left_keys =
@@ -76,7 +77,6 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         schema: scopes[0].relation.schema.clone(),
         table: scopes[0].relation.table.clone(),
         columns,
-        mapping,
     };
     Ok(Compiled { result_columns: Vec::new(), relational: Relational { sources, nodes, output } })
 }
@@ -88,31 +88,34 @@ fn correlated(name: &Name, scopes: &[Scope<'_>; 2]) -> Result<ColumnRef> {
     }
     resolve(name, &scopes[..1])
 }
-fn condition(
-    value: Expr,
-    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
-    state: &mut Conditions,
-) -> Result<()> {
+fn condition(value: Expr, state: &mut Conditions) -> Result<()> {
     match value {
         Expr::And(values) => {
             for value in values {
-                condition(value, resolve, state)?;
+                condition(value, state)?;
             }
         }
-        Expr::Compare(Compare::Eq, Scalar::Remainder(input, divisor), Scalar::Column(key))
-        | Expr::Compare(Compare::Eq, Scalar::Column(key), Scalar::Remainder(input, divisor)) => {
-            let input = resolve(&input)?;
-            let key = resolve(&key)?;
+        Expr::Compare(Compare::Eq, left, right)
+            if left.as_remainder().is_some() || right.as_remainder().is_some() =>
+        {
+            let (input, divisor, key) = if let Some(value) = left.as_remainder() {
+                (&value.input, value.divisor, right.as_column())
+            } else {
+                let value = right.as_remainder().context("missing lookup MOD")?;
+                (&value.input, value.divisor, left.as_column())
+            };
+            let key = key.context("lookup MOD key requires native column")?;
             ensure!(
                 !input.right && key.right,
                 "lookup MOD key must correlate left input with right column"
             );
-            let column = crate::compiler::remainder::bind(input, divisor, &mut state.computed)?;
-            state.keys.push((column, key));
+            let column =
+                crate::compiler::remainder::bind(input.clone(), divisor, &mut state.computed)?;
+            state.keys.push((column, key.clone()));
         }
-        Expr::Compare(op, Scalar::Column(left), Scalar::Column(right)) => {
-            let left = resolve(&left)?;
-            let right = resolve(&right)?;
+        Expr::Compare(op, left, right) => {
+            let left = left.as_column().context("lookup requires native columns")?.clone();
+            let right = right.as_column().context("lookup requires native columns")?.clone();
             ensure!(left.right != right.right, "lookup condition must correlate both sources");
             if matches!(op, Compare::Eq) {
                 state.keys.push(if left.right { (right, left) } else { (left, right) });
@@ -211,11 +214,7 @@ fn labels(
 ) -> Result<Labels> {
     columns
         .into_iter()
-        .map(|(name, label, transform)| {
-            ensure!(
-                transform == crate::compiler::output::OutputMap::Identity,
-                "lookup inner expressions require native column projection"
-            );
+        .map(|(name, label)| {
             let mut column = resolve(&name)?;
             ensure!(column.right, "lookup inner projection requires right columns");
             column = qualify(column);

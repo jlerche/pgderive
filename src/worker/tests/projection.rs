@@ -1,7 +1,4 @@
-use super::super::{
-    program::{self, relational},
-    runtime,
-};
+use super::super::program::{self, relational};
 use super::{batch, contract, row, settings};
 use crate::{
     compiler::{Cell, compile},
@@ -129,7 +126,7 @@ async fn exact_layout_identity_ownership_and_failed_evaluation() -> Result<()> {
         n.relations[0].columns[1].collation = 0;
         n
     };
-    let grouped = runtime::Runtime::build(&n, &compiled, &settings())?;
+    let grouped = relational::build(&n, &compiled, &settings())?;
     let prepared =
         other.prepare(relational::inputs(&batch(vec![]), changed.relational(), 1)?).await?;
     assert!(grouped.checkpoint()?.plan_identity != other.checkpoint()?.plan_identity);
@@ -237,11 +234,13 @@ fn text_equality_revision_binds_each_expression_boundary() -> Result<()> {
         let changed = compile(&sql.replace("'OR'", "'ID'"), &native)?;
         assert_ne!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&changed)?, "{sql}");
     }
+    let compiled = compile("SELECT id FROM source.auction WHERE category IS NULL", &native)?;
     assert!(
-        compile("SELECT id FROM source.auction WHERE category IS NULL", &native)?
-            .output()
-            .mapping
-            .is_none()
+        compiled
+            .relational()
+            .nodes
+            .iter()
+            .any(|node| matches!(node, crate::compiler::relational::Node::Filter { .. }))
     );
 
     Ok(())
@@ -285,6 +284,44 @@ fn named_hot_auction_and_highest_bid_queries_lower() -> Result<()> {
             &native,
         )?;
         assert_ne!(serde_json::to_vec(&compiled)?, serde_json::to_vec(&changed)?);
+    }
+    Ok(())
+}
+
+#[test]
+fn calendar_extract_and_date_part_remain_explicitly_unavailable() -> Result<()> {
+    let mut native = contract();
+    let column = &mut native.relations[1].columns[2];
+    column.name = "date_time".into();
+    column.oid = 1184;
+    let fields = [
+        "year", "month", "day", "minute", "second", "epoch", "week", "isoyear", "isodow", "dow",
+        "doy", "quarter",
+    ];
+    let calendar = fields
+        .iter()
+        .map(|field| format!("extract({field} FROM date_time AT TIME ZONE 'UTC') AS {field}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for query in [
+        format!("SELECT {calendar} FROM source.bid"),
+        "SELECT date_part('year',date_time AT TIME ZONE 'UTC') FROM source.bid".into(),
+        "SELECT extract(timezone FROM date_time) FROM source.bid".into(),
+        "SELECT extract(year FROM date_time AT TIME ZONE 'America/Los_Angeles') FROM source.bid"
+            .into(),
+    ]
+    .into_iter()
+    .chain(fields.iter().map(|field| {
+        format!("SELECT extract({field} FROM date_time AT TIME ZONE 'UTC') FROM source.bid")
+    })) {
+        let error = match compile(&query, &native) {
+            Ok(_) => anyhow::bail!("calendar extraction must remain outside the engine allowlist"),
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(
+            error.contains("not available in-engine") || error.contains("unsupported"),
+            "{query}: {error}"
+        );
     }
     Ok(())
 }

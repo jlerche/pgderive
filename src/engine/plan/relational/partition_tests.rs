@@ -1,4 +1,4 @@
-use super::{Operators, Relational};
+use super::{Operator, Operators, Relational};
 use crate::engine::{
     Batch,
     dataflow::{Partition, Project, TimedBatch},
@@ -6,14 +6,12 @@ use crate::engine::{
 };
 use anyhow::Result;
 use object_store::memory::InMemory;
-use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
+type Projection = Arc<Project<i64, i64, i64, i64>>;
 fn plan() -> Result<Plan> {
     Plan::new(Definition {
         revision: "retained-partition-test-v1".into(),
@@ -41,7 +39,7 @@ fn plan() -> Result<Plan> {
 }
 fn operators(calls: &Arc<AtomicUsize>) -> Operators<i64, i64> {
     let calls = calls.clone();
-    let projects = [
+    let projects: std::collections::BTreeMap<_, Projection> = [
         ("input".into(), Arc::new(Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value)))))),
         ("output".into(), Arc::new(Project::new(|_: &i64, value: &i64| Ok(Some((0, *value)))))),
     ]
@@ -54,14 +52,10 @@ fn operators(calls: &Arc<AtomicUsize>) -> Operators<i64, i64> {
         let count = rows.iter().map(|(_, weight)| *weight).sum::<i64>();
         Batch::from_updates([(((), count), 1)])
     });
-    Operators {
-        projects,
-        partitions: BTreeMap::from([("partition".into(), Arc::new(partition))]),
-        joins: BTreeMap::new(),
-        statistics: BTreeMap::new(),
-        ordered: BTreeMap::new(),
-        expansions: BTreeMap::new(),
-    }
+    let mut operators: Operators<i64, i64> =
+        projects.into_iter().map(|(id, value)| (id, Operator::Project(value))).collect();
+    operators.insert("partition".into(), Operator::Partition(Arc::new(partition)));
+    operators
 }
 #[tokio::test]
 async fn retained_partition_circuit_restore_collisions_and_atomic_failure() -> Result<()> {

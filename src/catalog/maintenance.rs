@@ -18,7 +18,7 @@ impl Writer {
         checkpoint: &Checkpoint,
     ) -> Result<()> {
         ensure!(!self.uncertain, "uncertain COMMIT must be reconciled before maintenance");
-        validate(&self.checkpoint, checkpoint, plan)?;
+        validate(&self.boundary.stored.checkpoint, checkpoint, plan)?;
         let tx = sql.transaction().await?;
         super::storage::shared(&tx, &self.catalog).await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
@@ -34,23 +34,26 @@ impl Writer {
             .await?
             .context("maintenance query disappeared")?;
         ensure!(
-            prior.epoch == self.epoch && prior.checkpoint == self.checkpoint,
+            prior.epoch == self.boundary.stored.epoch
+                && prior.checkpoint == self.boundary.stored.checkpoint,
             "maintenance prior membership changed"
         );
         let row = tx.query_one(&format!("SELECT binding,fence,commit_lsn::text,end_lsn::text,xid FROM {}.pgderive_progress WHERE query_id=$1 FOR UPDATE",self.catalog.schema), &[&self.catalog.query]).await?;
         ensure!(
-            row.try_get::<_, serde_json::Value>(0)? == serde_json::to_value(&self.binding)?
-                && row.try_get::<_, i64>(1)? == self.fence
-                && row.try_get::<_, String>(2)? == self.last_commit.to_string()
-                && row.try_get::<_, String>(3)? == self.end.to_string()
-                && row.try_get::<_, Option<i64>>(4)? == self.last_xid.map(i64::from),
+            row.try_get::<_, serde_json::Value>(0)?
+                == serde_json::to_value(&self.boundary.binding)?
+                && row.try_get::<_, i64>(1)? == self.boundary.fence
+                && row.try_get::<_, String>(2)? == self.boundary.commit.to_string()
+                && row.try_get::<_, String>(3)? == self.boundary.end.to_string()
+                && row.try_get::<_, Option<i64>>(4)? == self.boundary.xid.map(i64::from),
             "maintenance ownership/source boundary changed"
         );
-        self.binding.verify_ownership(&tx, &self.catalog).await?;
-        let epoch = write::stage(&tx, &self.catalog, plan, checkpoint, self.epoch).await?;
+        self.boundary.binding.verify_ownership(&tx, &self.catalog).await?;
+        let epoch =
+            write::stage(&tx, &self.catalog, plan, checkpoint, self.boundary.stored.epoch).await?;
         self.commit(tx, "maintenance").await?;
-        self.epoch = epoch;
-        self.checkpoint = checkpoint.clone();
+        self.boundary.stored.epoch = epoch;
+        self.boundary.stored.checkpoint = checkpoint.clone();
         Ok(())
     }
 }

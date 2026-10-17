@@ -77,7 +77,7 @@ fn build(
         aggregates: Vec::new(),
         base: context.aggregate_base,
     };
-    let BoundTargets { columns, transforms } = bind_targets(
+    let columns = bind_targets(
         parsed.targets.clone(),
         resolve,
         &mut computed,
@@ -107,17 +107,21 @@ fn build(
             "output column must appear in GROUP BY"
         );
     }
+    let averages = state
+        .aggregates
+        .iter()
+        .filter(|value| matches!(value.function, Function::Average))
+        .map(|value| value.field.clone())
+        .collect::<Vec<_>>();
     let spec = Partition {
         mode: state.mode.unwrap_or(Mode::Grouped { keys: group_keys }),
         aggregates: state.aggregates,
     };
     let relation = context.relation;
-    let mapping = super::output_mapping(transforms, &columns)?;
     let output = crate::compiler::Projected {
         schema: relation.schema.clone(),
         table: relation.table.clone(),
         columns,
-        mapping,
     };
     let mut nodes = if projection {
         vec![
@@ -133,6 +137,7 @@ fn build(
     let sources = vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }];
     let mut relational = Relational { sources, nodes, output };
     composition::lower_source_filter(&mut relational, predicates)?;
+    super::boundary::finalize(&mut relational, &averages)?;
     Ok(Compiled { result_columns: Vec::new(), relational })
 }
 fn source_predicate(
@@ -141,7 +146,7 @@ fn source_predicate(
 ) -> Result<Option<crate::compiler::expression::Expr>> {
     let predicates = predicate
         .map(|expr| {
-            crate::compiler::expression::bind(expr, &|name| {
+            crate::compiler::expression::bind(&expr, &|name| {
                 let column = resolve(name)?;
                 ensure!(
                     column.name != crate::compiler::expansion::FIELD,
@@ -152,10 +157,6 @@ fn source_predicate(
         })
         .transpose()?;
     Ok(predicates)
-}
-struct BoundTargets {
-    columns: Vec<OutputColumn>,
-    transforms: Vec<crate::compiler::output::OutputMap>,
 }
 #[derive(Clone, Copy)]
 struct TargetContext<'a> {
@@ -169,11 +170,9 @@ fn bind_targets(
     computed: &mut Vec<crate::compiler::scalar::Computed>,
     context: TargetContext<'_>,
     state: &mut Targets,
-) -> Result<BoundTargets> {
+) -> Result<Vec<OutputColumn>> {
     let mut columns = Vec::new();
-    let mut transforms = Vec::new();
     for target in targets {
-        let mut transform = crate::compiler::output::OutputMap::Identity;
         let column = match target.value {
             syntax::Value::Column(name) => resolve(&name)?,
             syntax::Value::Typed(value) => {
@@ -189,15 +188,12 @@ fn bind_targets(
                 context.scalar_scope,
             )?,
             syntax::Value::Aggregate(value) => {
-                let result = aggregate(*value, resolve, context, state, computed)?;
-                transform = result.1;
-                result.0
+                aggregate(*value, resolve, context, state, computed)?
             }
         };
-        transforms.push(transform);
         columns.push(OutputColumn { column, label: target.label });
     }
-    Ok(BoundTargets { columns, transforms })
+    Ok(columns)
 }
 fn validate_occurrences(
     series: Option<&crate::compiler::parser::expansion::Series>,
@@ -285,8 +281,7 @@ fn aggregate(
     context: TargetContext<'_>,
     state: &mut Targets,
     computed: &mut Vec<crate::compiler::scalar::Computed>,
-) -> Result<(ColumnRef, crate::compiler::output::OutputMap)> {
-    use crate::compiler::output::OutputMap;
+) -> Result<ColumnRef> {
     let framed = value.window.is_some();
     if let Some(window) = value.window {
         ensure!(context.groups.is_empty(), "grouped window composition requires subquery lowering");
@@ -333,10 +328,6 @@ fn aggregate(
     let oid = navigation
         .as_ref()
         .map_or_else(|| result_type(&value.function, argument.as_ref()), |value| Ok(value.oid))?;
-    let transform = match (&value.function, oid) {
-        (Function::Average, _) => OutputMap::Average,
-        _ => OutputMap::Identity,
-    };
     let name = format!("@aggregate_{}", state.base + state.aggregates.len());
     let nullable = !value.function.ranking();
     state.aggregates.push(Aggregate {
@@ -347,7 +338,7 @@ fn aggregate(
         field: name.clone(),
         navigation,
     });
-    Ok((ColumnRef { name, right: false, oid, nullable }, transform))
+    Ok(ColumnRef { name, right: false, oid, nullable })
 }
 
 fn validate_keys(keys: &[ColumnRef]) -> Result<()> {

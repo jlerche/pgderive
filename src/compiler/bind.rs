@@ -3,7 +3,6 @@ mod derived;
 mod lookup;
 mod membership;
 mod native_join;
-mod native_scope;
 mod partition;
 mod relational;
 mod scalar;
@@ -26,10 +25,6 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
         Parsed::Membership { parsed, distinct } => membership::bind(parsed, distinct, contract),
         Parsed::NativeJoin(parsed) => native_join::bind(parsed, contract),
-        Parsed::NativeScope { source, columns, predicate }
-        | Parsed::Projection { source, columns, predicate } => {
-            native_scope::bind(source, columns, predicate, contract)
-        }
         Parsed::Scalar { source, targets, predicate } => {
             scalar::bind(source, &targets, predicate.as_deref(), contract)
         }
@@ -88,7 +83,7 @@ fn grouped(parsed: super::parser::Grouped, contract: &Contract) -> Result<Compil
     let predicates = parsed
         .predicates
         .map(|expr| {
-            super::expression::bind(expr, &|name| Ok(relational::qualify(resolve(name, &scopes)?)))
+            super::expression::bind(&expr, &|name| Ok(relational::qualify(resolve(name, &scopes)?)))
         })
         .transpose()?;
     let mut compiled = legacy(selectors, contract)?;
@@ -193,7 +188,6 @@ pub(super) fn legacy(selectors: Query, contract: &Contract) -> Result<Compiled> 
                 label: "sum".into(),
             },
         ],
-        mapping: None,
     };
     let sources = [left, right]
         .map(|relation| Source { schema: relation.schema.clone(), table: relation.table.clone() })
@@ -272,18 +266,4 @@ fn resolve(name: &Name, scopes: &[Scope<'_>]) -> Result<ColumnRef> {
     }
     ensure!(matches.len() <= 1, "SQL resolve: ambiguous column {}", name.0.join("."));
     matches.pop().with_context(|| format!("SQL resolve: unknown column {}", name.0.join(".")))
-}
-
-fn output_mapping(
-    transforms: Vec<crate::compiler::output::OutputMap>,
-    columns: &[crate::compiler::projection::OutputColumn],
-) -> Result<Option<crate::compiler::output::Output>> {
-    use crate::compiler::output::OutputMap;
-    if transforms.iter().all(|transform| *transform == OutputMap::Identity) {
-        return Ok(None);
-    }
-    Ok(Some(crate::compiler::output::Output::new(
-        transforms,
-        &columns.iter().map(|output| output.column.oid).collect::<Vec<_>>(),
-    )?))
 }

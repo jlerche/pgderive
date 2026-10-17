@@ -6,7 +6,7 @@ use crate::{
     engine::{
         Batch,
         dataflow::{Project, Statistics, TimedBatch},
-        plan::relational::{Operators, Relational},
+        plan::relational::{Operator, Operators, Relational},
     },
     transaction::Row,
     weighted,
@@ -164,14 +164,11 @@ pub(super) fn operators() -> Operators<Key, Row> {
         row.extend(pair.1.clone());
         Ok(Some((key.clone(), row)))
     });
-    Operators {
-        projects,
-        joins: BTreeMap::from([("join".into(), Arc::new(join))]),
-        statistics: BTreeMap::from([("sums".into(), Arc::new(statistics()))]),
-        expansions: BTreeMap::new(),
-        partitions: BTreeMap::new(),
-        ordered: BTreeMap::new(),
-    }
+    let mut operators: Operators<Key, Row> =
+        projects.into_iter().map(|(id, value)| (id, Operator::Project(value))).collect();
+    operators.insert("join".into(), Operator::Join(Arc::new(join)));
+    operators.insert("sums".into(), Operator::Statistics(Arc::new(statistics())));
+    operators
 }
 fn statistics() -> Statistics<Key, Row> {
     Statistics::new(

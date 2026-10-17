@@ -9,7 +9,7 @@ use crate::{
         dataflow::{Project, TimedBatch},
         plan::{
             self, Plan, Settings,
-            relational::{Operators, Relational as Circuit},
+            relational::{Operator, Operators, Relational as Circuit},
         },
     },
     source::Contract,
@@ -40,58 +40,46 @@ fn operators(ir: &Relational, settings: &Settings) -> Operators<Key, Row> {
             | Node::LeftJoinInput { .. }
             | Node::LeftJoin { .. } => bind_left_join(node, &mut operators, settings),
             Node::LookupInput { id, spec, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(super::lookup::input(spec)));
+                operators
+                    .insert(id.clone(), Operator::Project(Arc::new(super::lookup::input(spec))));
             }
             Node::Lookup { id, spec, .. } => {
-                operators.partitions.insert(id.clone(), lookup_operator(spec, settings));
+                operators.insert(id.clone(), Operator::Partition(lookup_operator(spec, settings)));
             }
             Node::Expand { id, series, .. } => {
-                operators.expansions.insert(id.clone(), Arc::new(expand(series)));
+                operators.insert(id.clone(), Operator::Expand(Arc::new(expand(series))));
             }
             Node::Filter { id, predicate, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(filter(predicate)));
+                operators.insert(id.clone(), Operator::Project(Arc::new(filter(predicate))));
             }
             Node::Map { id, computed, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(map(computed)));
+                operators.insert(id.clone(), Operator::Project(Arc::new(map(computed))));
             }
             Node::PartitionBy { id, keys, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(partition_by(keys)));
+                operators.insert(id.clone(), Operator::Project(Arc::new(partition_by(keys))));
             }
             Node::Rebind { id, fields, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(super::bindings::rebind(fields)));
+                operators.insert(
+                    id.clone(),
+                    Operator::Project(Arc::new(super::bindings::rebind(fields))),
+                );
             }
             Node::CrossKey { id, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(super::bindings::cross_key()));
+                operators
+                    .insert(id.clone(), Operator::Project(Arc::new(super::bindings::cross_key())));
             }
             Node::EquijoinKey { id, keys, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(super::bindings::key_by(keys)));
+                operators
+                    .insert(id.clone(), Operator::Project(Arc::new(super::bindings::key_by(keys))));
             }
             Node::Join { id, .. } => {
-                operators.joins.insert(id.clone(), Arc::new(join_map()));
+                operators.insert(id.clone(), Operator::Join(Arc::new(join_map())));
             }
-            Node::DistinctInput { id, spec, .. } => {
-                operators
-                    .expansions
-                    .insert(id.clone(), Arc::new(super::distinct_statistics::input(spec)));
-            }
-            Node::DistinctCounts { id, spec, .. } => {
-                operators
-                    .statistics
-                    .insert(id.clone(), Arc::new(super::distinct_statistics::counts(spec)));
-            }
-            Node::DistinctMembership { id, spec, .. } => {
-                operators
-                    .projects
-                    .insert(id.clone(), Arc::new(super::distinct_statistics::membership(spec)));
-            }
-            Node::Statistics { id, spec, .. } => {
-                operators
-                    .statistics
-                    .insert(id.clone(), Arc::new(super::statistics::operator(spec)));
-            }
-            Node::Finalize { id, spec, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(super::statistics::finalize(spec)));
-            }
+            Node::DistinctInput { .. }
+            | Node::DistinctCounts { .. }
+            | Node::DistinctMembership { .. }
+            | Node::Statistics { .. }
+            | Node::Finalize { .. } => bind_statistics(node, &mut operators),
             Node::TopKInput { .. }
             | Node::TopK { .. }
             | Node::OrderedInput { .. }
@@ -99,14 +87,48 @@ fn operators(ir: &Relational, settings: &Settings) -> Operators<Key, Row> {
             | Node::OrderedGroup { .. }
             | Node::OrderedFinalize { .. } => bind_ordered(node, &mut operators),
             Node::Partition { id, spec, .. } => {
-                operators.partitions.insert(id.clone(), partition_operator(spec, settings));
+                operators
+                    .insert(id.clone(), Operator::Partition(partition_operator(spec, settings)));
             }
             Node::Output { id, .. } => {
-                operators.projects.insert(id.clone(), Arc::new(output(&ir.output)));
+                operators.insert(id.clone(), Operator::Project(Arc::new(output(&ir.output))));
             }
         }
     }
     operators
+}
+fn bind_statistics(node: &Node, operators: &mut Operators<Key, Row>) {
+    match node {
+        Node::DistinctInput { id, spec, .. } => {
+            operators.insert(
+                id.clone(),
+                Operator::Expand(Arc::new(super::distinct_statistics::input(spec))),
+            );
+        }
+        Node::DistinctCounts { id, spec, .. } => {
+            operators.insert(
+                id.clone(),
+                Operator::Statistics(Arc::new(super::distinct_statistics::counts(spec))),
+            );
+        }
+        Node::DistinctMembership { id, spec, .. } => {
+            operators.insert(
+                id.clone(),
+                Operator::Project(Arc::new(super::distinct_statistics::membership(spec))),
+            );
+        }
+        Node::Statistics { id, spec, .. } => {
+            operators.insert(
+                id.clone(),
+                Operator::Statistics(Arc::new(super::statistics::operator(spec))),
+            );
+        }
+        Node::Finalize { id, spec, .. } => {
+            operators
+                .insert(id.clone(), Operator::Project(Arc::new(super::statistics::finalize(spec))));
+        }
+        _ => {}
+    }
 }
 fn partition_operator(
     spec: &crate::compiler::partition::Partition,
@@ -133,14 +155,7 @@ fn lookup_operator(
     ))
 }
 const fn empty_operators() -> Operators<Key, Row> {
-    Operators {
-        projects: BTreeMap::new(),
-        expansions: BTreeMap::new(),
-        joins: BTreeMap::new(),
-        partitions: BTreeMap::new(),
-        statistics: BTreeMap::new(),
-        ordered: BTreeMap::new(),
-    }
+    BTreeMap::new()
 }
 
 fn output(output: &Projected) -> Project<Key, Row, Key, Row> {
@@ -378,22 +393,23 @@ fn partition_by(keys: &[crate::compiler::ColumnRef]) -> Project<Key, Row, Key, R
 fn bind_ordered(node: &Node, operators: &mut Operators<Key, Row>) {
     match node {
         Node::TopKInput { id, spec, .. } => {
-            operators.projects.insert(id.clone(), Arc::new(super::topk::input(spec)));
+            operators.insert(id.clone(), Operator::Project(Arc::new(super::topk::input(spec))));
         }
         Node::TopK { id, spec, .. } => {
-            operators.ordered.insert(id.clone(), Arc::new(super::topk::operator(spec)));
+            operators.insert(id.clone(), Operator::Ordered(Arc::new(super::topk::operator(spec))));
         }
         Node::OrderedInput { id, spec, .. } => {
-            operators.expansions.insert(id.clone(), Arc::new(super::ordered::input(spec)));
+            operators.insert(id.clone(), Operator::Expand(Arc::new(super::ordered::input(spec))));
         }
         Node::OrderedFirst { id, spec, .. } => {
-            operators.ordered.insert(id.clone(), Arc::new(super::ordered::first(spec)));
+            operators.insert(id.clone(), Operator::Ordered(Arc::new(super::ordered::first(spec))));
         }
         Node::OrderedGroup { id, .. } => {
-            operators.projects.insert(id.clone(), Arc::new(super::ordered::group()));
+            operators.insert(id.clone(), Operator::Project(Arc::new(super::ordered::group())));
         }
         Node::OrderedFinalize { id, spec, .. } => {
-            operators.partitions.insert(id.clone(), Arc::new(super::ordered::finalize(spec)));
+            operators
+                .insert(id.clone(), Operator::Partition(Arc::new(super::ordered::finalize(spec))));
         }
         _ => {}
     }
@@ -402,20 +418,26 @@ fn bind_ordered(node: &Node, operators: &mut Operators<Key, Row>) {
 fn bind_left_join(node: &Node, operators: &mut Operators<Key, Row>, settings: &Settings) {
     match node {
         Node::SetDistinct { id, columns, .. } => {
-            operators.partitions.insert(id.clone(), Arc::new(super::membership::distinct(columns)));
+            operators.insert(
+                id.clone(),
+                Operator::Partition(Arc::new(super::membership::distinct(columns))),
+            );
         }
         Node::Existence { id, anti, .. } => {
-            operators
-                .partitions
-                .insert(id.clone(), Arc::new(super::membership::existence(*anti, settings.limits)));
+            operators.insert(
+                id.clone(),
+                Operator::Partition(Arc::new(super::membership::existence(*anti, settings.limits))),
+            );
         }
         Node::LeftJoinInput { id, spec, .. } => {
-            operators.projects.insert(id.clone(), Arc::new(super::left_join::input(spec)));
+            operators
+                .insert(id.clone(), Operator::Project(Arc::new(super::left_join::input(spec))));
         }
         Node::LeftJoin { id, spec, .. } => {
-            operators
-                .partitions
-                .insert(id.clone(), Arc::new(super::left_join::operator(spec, settings.limits)));
+            operators.insert(
+                id.clone(),
+                Operator::Partition(Arc::new(super::left_join::operator(spec, settings.limits))),
+            );
         }
         _ => {}
     }
@@ -433,12 +455,14 @@ pub(in crate::worker) fn build_scanned(
         if let Node::Partition { id, spec, .. } = node {
             let spec = spec.clone();
             let limits = settings.limits;
-            operators.partitions.insert(
+            operators.insert(
                 id.clone(),
-                Arc::new(crate::engine::dataflow::Partition::new_zero_preserving(
-                    move |_, rows, work| {
-                        super::partition::evaluate_scan(&spec, rows, (limits, work))
-                    },
+                Operator::Partition(Arc::new(
+                    crate::engine::dataflow::Partition::new_zero_preserving(
+                        move |_, rows, work| {
+                            super::partition::evaluate_scan(&spec, rows, (limits, work))
+                        },
+                    ),
                 )),
             );
         }

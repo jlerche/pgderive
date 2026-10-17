@@ -23,7 +23,7 @@ pub use expand::Expand;
 pub use join::Join;
 pub use partition::{Partition, PartitionWork};
 pub use project::Project;
-pub use runtime::{Graph, PreparedGraph, PreparedMaintenance};
+pub use runtime::{Graph, PreparedGraph, PreparedMaintenance, Unregistered};
 pub use statistics::Statistics;
 pub use stream::{CircuitInputs, Output, Stream};
 pub use sum::{GroupSum, SumDelta, SumState};

@@ -44,6 +44,7 @@ class HistoryTests(unittest.TestCase):
         from worker_harness import History
         events = []
         reopened = {'time': 12, 'slot': 'owned'}
+        progress = ['prior']
 
         class Process:
             def __init__(self, resumed):
@@ -56,8 +57,8 @@ class HistoryTests(unittest.TestCase):
             def abort(self):
                 events.append('abort')
 
-            def finish(self):
-                events.append('finish')
+            def finish(self, graceful=False):
+                events.append(('finish', True) if graceful else 'finish')
 
         class OwnedFixture(Fixture):
             name = 'owned'
@@ -72,13 +73,15 @@ class HistoryTests(unittest.TestCase):
 
             def sql(self, sql):
                 events.append(sql)
-                return 'progress'
+                return progress[0]
 
             def verify(self):
                 events.append('verify')
 
             def rejected(self, command, label, query):
                 events.append((label, query))
+                if label == 'tamper':
+                    progress[0] = 'changed'
 
         fixture = OwnedFixture()
         fixture.run_history([], History(['one', 'two'], 'final', 'normalized',
@@ -100,3 +103,33 @@ class HistoryTests(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     fixture.run_history([], History(['one', 'two'], 'final', 'normalized', []))
                 self.assertNotIn('final', events)
+
+        reopened.update(time=12, slot='owned')
+        events.clear()
+        fixture.run_history([], History(['one', 'two'], 'final', 'normalized', [], graceful=True),
+                            after=lambda: events.append('after'))
+        self.assertLess(events.index('after'), events.index(('finish', True)))
+        self.assertNotIn('abort', events)
+        events.clear()
+        with self.assertRaisesRegex(AssertionError, 'changed durable progress'):
+            fixture.run_history([], History(['one', 'two'], 'final', 'normalized', [('tamper', '')]))
+        self.assertFalse(any(isinstance(event, tuple) and event[0] == 'resumed' for event in events))
+
+
+class ProxyFixtureLifecycleTests(unittest.TestCase):
+    def test_proxy_readiness_failure_preserves_owned_fixture(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        import query_binding_harness
+        evidence = []
+        class OwnedFixture(Fixture):
+            port = '123'
+            def __init__(self, *args):
+                pass
+            def preserve(self):
+                evidence.append('preserved')
+        with patch.object(query_binding_harness, 'BindingFixture', OwnedFixture), \
+             patch.object(query_binding_harness, 'commit_proxy', side_effect=RuntimeError('not ready')):
+            with self.assertRaisesRegex(RuntimeError, 'not ready'):
+                query_binding_harness.hot_path(Path('/unused'), [], 'hot-plain', 'owned')
+        self.assertEqual(evidence, ['preserved'])

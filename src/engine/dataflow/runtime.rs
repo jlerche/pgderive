@@ -1,6 +1,31 @@
 use super::TimedBatch;
 use anyhow::{Result, ensure};
 use std::{future::Future, pin::Pin, sync::Arc};
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::Unregistered {}
+    impl Sealed for crate::engine::plan::Plan {}
+}
+/// Sealed state contract for local unregistered graphs and registered plans.
+pub trait Policy<S>: sealed::Sealed + Send + Sync + 'static {
+    /// Validate one complete state at its logical boundary.
+    ///
+    /// # Errors
+    /// Rejects a mismatched registered state layout, schema or clock.
+    fn validate(&self, state: &S, time: u64) -> Result<()>;
+}
+/// Unregistered local graphs leave state validation to their evaluator.
+pub struct Unregistered;
+impl<S> Policy<S> for Unregistered {
+    fn validate(&self, _state: &S, _time: u64) -> Result<()> {
+        Ok(())
+    }
+}
+impl<S: crate::engine::plan::State> Policy<S> for crate::engine::plan::Plan {
+    fn validate(&self, state: &S, time: u64) -> Result<()> {
+        self.validate_state(state, time)
+    }
+}
 type Evaluation<S, O> = Pin<Box<dyn Future<Output = Result<(S, O)>> + Send>>;
 type Evaluator<S, I, O> = dyn Fn(Arc<S>, TimedBatch<I>) -> Evaluation<S, O> + Send + Sync;
 struct Boundary<S> {
@@ -36,9 +61,10 @@ impl<S, O> PreparedGraph<S, O> {
 /// State must consist of immutable snapshots/owned values, never shared mutable
 /// state. Evaluation may upload immutable objects but must not publish external
 /// effects. This runtime provides local visibility, not durable publication.
-pub struct Graph<S, I, O> {
+pub struct Graph<S, I, O, P = Unregistered> {
     root: Arc<Boundary<S>>,
     evaluate: Arc<Evaluator<S, I, O>>,
+    pub(crate) policy: P,
 }
 impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
     /// Bind an explicit typed operator graph and its immutable initial state.
@@ -54,9 +80,20 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
         time: u64,
         evaluate: impl Fn(Arc<S>, TimedBatch<I>) -> F + Send + Sync + 'static,
     ) -> Self {
+        Self::with_policy(initial, time, Unregistered, evaluate)
+    }
+}
+impl<S: Send + Sync + 'static, I: 'static, O: 'static, P: Policy<S>> Graph<S, I, O, P> {
+    pub(crate) fn with_policy<F: Future<Output = Result<(S, O)>> + Send + 'static>(
+        initial: S,
+        time: u64,
+        policy: P,
+        evaluate: impl Fn(Arc<S>, TimedBatch<I>) -> F + Send + Sync + 'static,
+    ) -> Self {
         Self {
             root: Arc::new(Boundary { state: Arc::new(initial), time }),
             evaluate: Arc::new(move |state, input| Box::pin(evaluate(state, input))),
+            policy,
         }
     }
     /// Pin all graph state at one committed boundary.
@@ -84,6 +121,7 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
         ensure!(self.root.time.checked_add(1) == Some(input.time), "out-of-order graph tick");
         let time = input.time;
         let (state, output) = evaluate(self.snapshot(), input).await?;
+        self.policy.validate(&state, time)?;
         Ok(PreparedGraph {
             base: self.root.clone(),
             next: Arc::new(Boundary { state: Arc::new(state), time }),
@@ -122,7 +160,7 @@ impl<S> PreparedMaintenance<S> {
         self.next.state.clone()
     }
 }
-impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
+impl<S: Send + Sync + 'static, I: 'static, O: 'static, P: Policy<S>> Graph<S, I, O, P> {
     /// Check maintenance belongs to the current immutable boundary.
     ///
     /// # Errors
@@ -141,6 +179,7 @@ impl<S: Send + Sync + 'static, I: 'static, O: 'static> Graph<S, I, O> {
         maintain: impl FnOnce(Arc<S>) -> F,
     ) -> Result<PreparedMaintenance<S>> {
         let state = maintain(self.snapshot()).await?;
+        self.policy.validate(&state, self.time())?;
         Ok(PreparedMaintenance {
             base: self.root.clone(),
             next: Arc::new(Boundary { state: Arc::new(state), time: self.time() }),

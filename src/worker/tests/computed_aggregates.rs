@@ -37,7 +37,7 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Bag> {
 #[tokio::test]
 async fn computed_distinct_and_statistics_match_memory_with_collisions_and_restart() -> Result<()> {
     let native = contract();
-    let compiled = compile(SQL, &native)?;
+    let compiled = super::raw_statistics_compiled(compile(SQL, &native)?);
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-2"))]);
@@ -130,7 +130,7 @@ async fn included_error_does_not_change_durable_state() -> Result<()> {
 fn aggregate_maps_intern_by_scope_expression_and_filter() -> Result<()> {
     let native = contract();
     for (operands, expected) in [
-        ("SUM(abs(price)),COUNT(abs(price)),AVG(abs(price))", 1),
+        ("SUM(abs(price)),COUNT(abs(price)),AVG(abs(price))", 2),
         ("SUM(abs(price)) FILTER(WHERE price>0),COUNT(abs(price)) FILTER(WHERE price>0)", 1),
         (
             "SUM(abs(price)) FILTER(WHERE price>0),COUNT(abs(price)) FILTER(WHERE price<0),COUNT(abs(price))",
@@ -165,6 +165,43 @@ fn aggregate_maps_intern_by_scope_expression_and_filter() -> Result<()> {
         "SELECT g,SUM(abs(v)) FROM (SELECT auction AS g,MAX(price) AS v FROM source.bid GROUP BY auction) d GROUP BY g",
     ] {
         compile(sql, &native)?.validate_execution()?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn root_average_finalizes_nonterminating_nulls_retractions_and_cold_reopen() -> Result<()> {
+    use crate::compiler::Cell;
+    let native = contract();
+    let compiled =
+        compile("SELECT auction,AVG(price) AS value FROM source.bid GROUP BY auction", &native)?;
+    let options = settings();
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let one = row(&[("id", Some("1")), ("auction", None), ("price", Some("1"))]);
+    let zero = row(&[("id", Some("2")), ("auction", None), ("price", Some("0"))]);
+    let null = row(&[("id", Some("3")), ("auction", None), ("price", None)]);
+    let third = Some(Cell::Text("0.33333333333333333333".into()));
+    for (changes, expected) in [
+        (
+            vec![("bid", one.clone(), 1), ("bid", zero.clone(), 2), ("bid", null.clone(), 1)],
+            vec![(((), vec![None, third.clone()]), 1)],
+        ),
+        (
+            vec![("bid", one, -1), ("bid", zero, -2)],
+            vec![(((), vec![None, third]), -1), (((), vec![None, None]), 1)],
+        ),
+        (vec![("bid", null, -1)], vec![(((), vec![None, None]), -1)]),
+    ] {
+        let delta = batch(changes);
+        let prepared = query
+            .prepare(relational::inputs(&delta, compiled.relational(), query.time() + 1)?)
+            .await?;
+        assert_eq!(
+            super::projected_batch(&prepared.output().batch, &compiled)?,
+            Batch::from_updates(expected)?
+        );
+        query.commit(prepared)?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }
     Ok(())
 }

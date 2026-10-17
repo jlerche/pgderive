@@ -4,12 +4,11 @@ use crate::engine::{
     execution::Limits,
     plan::{
         Checkpoint, Definition, Kind, Node, Plan, Settings, Source,
-        relational::{Operators, Relational},
+        relational::{Operator, Relational},
     },
 };
 use anyhow::{Result, ensure};
 use object_store::{ObjectStore, memory::InMemory};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 fn limits() -> Limits {
@@ -82,30 +81,24 @@ fn query(settings: &Settings) -> Result<Query> {
     );
     Query::new(
         plan()?,
-        Operators {
-            projects: [
-                ("left".into(), identity()),
-                ("right".into(), identity()),
-                (
-                    "output".into(),
-                    Arc::new(Project::new(|key: &i64, value: &Vec<i64>| {
-                        Ok(Some((*key, vec![value[0], value[2]])))
-                    })),
-                ),
-            ]
-            .into(),
-            joins: [(
+        [
+            ("left".into(), Operator::Project(identity())),
+            ("right".into(), Operator::Project(identity())),
+            (
+                "output".into(),
+                Operator::Project(Arc::new(Project::new(|key: &i64, value: &Vec<i64>| {
+                    Ok(Some((*key, vec![value[0], value[2]])))
+                }))),
+            ),
+            (
                 "join".into(),
-                Arc::new(Project::new(|key: &i64, pair: &(Vec<i64>, Vec<i64>)| {
+                Operator::Join(Arc::new(Project::new(|key: &i64, pair: &(Vec<i64>, Vec<i64>)| {
                     Ok(Some((*key, vec![pair.0[0] + pair.1[0]])))
-                })),
-            )]
-            .into(),
-            statistics: [("aggregate".into(), Arc::new(statistics))].into(),
-            partitions: BTreeMap::new(),
-            expansions: BTreeMap::new(),
-            ordered: BTreeMap::new(),
-        },
+                }))),
+            ),
+            ("aggregate".into(), Operator::Statistics(Arc::new(statistics))),
+        ]
+        .into(),
         settings,
     )
 }

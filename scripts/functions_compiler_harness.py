@@ -3,7 +3,7 @@
 import collections
 import json
 from sql_compiler_harness import SqlFixture
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 
 EXPRESSIONS = [
     'abs(a.group_id)', 'abs(a.small_value)', 'abs(a.large_value)',
@@ -79,10 +79,6 @@ def qualify(output, command):
     with fixture.managed():
         fixture.rejected(command, 'overload', fixture.query.replace('abs(a.group_id)', 'abs(a.group_id::numeric)'))
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
-        assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
         changes = [
             f"UPDATE {fixture.name}.auction SET category='🙂é🙂',group_id=-1 WHERE id=2",
             f"DELETE FROM {fixture.name}.auction WHERE id=1; UPDATE {fixture.name}.auction SET category='é🙂',group_id=0 WHERE id=3",
@@ -90,19 +86,14 @@ def qualify(output, command):
             f"UPDATE {fixture.name}.auction SET category='skip now' WHERE id=2; UPDATE {fixture.name}.auction SET category='é🙂',group_id=2 WHERE id=5",
             f"DELETE FROM {fixture.name}.auction WHERE id=100; UPDATE {fixture.name}.auction SET category='',group_id=-2 WHERE id=101",
         ]
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;' + change + ';COMMIT')
-            worker.event('published', minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f"UPDATE {fixture.name}.auction SET category='é🙂',group_id=1 WHERE id=101")
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f"UPDATE {fixture.name}.auction SET category='é🙂',group_id=1 WHERE id=101",
+            normalized=fixture.query,
+            rejected=[],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'sql_oracle':'refreshed native materialized view',
             'memory_oracle':'independent Python Unicode/width semantics', 'projection_columns':len(EXPRESSIONS),
             'transactions':len(changes)+1,'restart':'same slot, durable object state',

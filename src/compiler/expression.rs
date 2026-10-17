@@ -28,48 +28,109 @@ pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
         })
         .transpose()
 }
-pub(super) fn bind(expr: syntax::Expr, resolve: &Resolve<'_>) -> Result<Expr> {
-    match expr {
-        syntax::Expr::Value(value) => Ok(Expr::Value(operand(value, resolve)?.coerce(16)?)),
-        syntax::Expr::Null(value, not) => {
+pub(super) fn bind(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Expr> {
+    bind_ast(value, resolve, &mut 0, 0)
+}
+fn bind_ast(
+    value: &pg_query::Node,
+    resolve: &Resolve<'_>,
+    visited: &mut usize,
+    depth: usize,
+) -> Result<Expr> {
+    use super::parser::expressions::{names, node, optional};
+    use pg_query::{NodeEnum, protobuf as pg};
+    *visited += 1;
+    ensure!(*visited <= 512 && depth <= 64, "WHERE exceeds AST/depth budget");
+    match node(value)? {
+        NodeEnum::BoolExpr(value) => boolean(value, resolve, visited, depth),
+        NodeEnum::NullTest(value) => {
+            ensure!(!value.argisrow && value.xpr.is_none(), "row NULL tests unsupported");
+            let not = match pg::NullTestType::try_from(value.nulltesttype)? {
+                pg::NullTestType::IsNull => false,
+                pg::NullTestType::IsNotNull => true,
+                pg::NullTestType::Undefined => anyhow::bail!("invalid NULL test"),
+            };
+            let value = optional(value.arg.as_deref())?;
             ensure!(
-                matches!(value, syntax::Scalar::Column(_) | syntax::Scalar::Typed(_)),
+                matches!(syntax::scalar(value), Ok(syntax::Scalar::Column(_)) | Err(_)),
                 "SQL type: NULL tests require a column or typed expression"
             );
             let Operand::Bound(value) = operand(value, resolve)? else {
-                anyhow::bail!("unresolved NULL test")
+                anyhow::bail!("unresolved NULL test");
             };
             Ok(Expr::Null(value, not))
         }
-        syntax::Expr::Compare(op, left, right) => {
-            let left = operand(left, resolve)?;
-            let right = operand(right, resolve)?;
-            let oid = left
-                .oid()
-                .or_else(|| right.oid())
-                .context("SQL type: comparison requires a native column")?;
-            ensure!(
-                matches!(oid, 16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1114 | 1184 | 1186),
-                "SQL type: unsupported comparison type"
-            );
-            if matches!(oid, 25 | 1043) {
-                ensure!(
-                    matches!(op, Compare::Eq | Compare::Ne)
-                        && left.oid().is_some() != right.oid().is_some(),
-                    "text equality requires one native column and an unknown literal; text ordering and column collation resolution are unsupported"
-                );
-            }
-            Ok(Expr::Compare(op, left.coerce(oid)?, right.coerce(oid)?))
+        NodeEnum::AExpr(value) => {
+            ensure!(value.kind == i32::from(pg::AExprKind::AexprOp), "unsupported comparison kind");
+            let name = names(&value.name)?;
+            let [name] = name.0.as_slice() else {
+                anyhow::bail!("qualified operators unsupported");
+            };
+            let op = match name.as_str() {
+                "=" => Compare::Eq,
+                "<>" => Compare::Ne,
+                "<" => Compare::Lt,
+                "<=" => Compare::Le,
+                ">" => Compare::Gt,
+                ">=" => Compare::Ge,
+                _ => anyhow::bail!("unsupported comparison operator"),
+            };
+            comparison(
+                op,
+                operand(optional(value.lexpr.as_deref())?, resolve)?,
+                operand(optional(value.rexpr.as_deref())?, resolve)?,
+            )
         }
-        syntax::Expr::Not(expr) => Ok(Expr::Not(Box::new(bind(*expr, resolve)?))),
-        syntax::Expr::And(args) => normalized(args, resolve, true),
-        syntax::Expr::Or(args) => normalized(args, resolve, false),
+        _ => Ok(Expr::Value(operand(value, resolve)?.coerce(16)?)),
     }
 }
-fn normalized(args: Vec<syntax::Expr>, resolve: &Resolve<'_>, and: bool) -> Result<Expr> {
+fn boolean(
+    value: &pg_query::protobuf::BoolExpr,
+    resolve: &Resolve<'_>,
+    visited: &mut usize,
+    depth: usize,
+) -> Result<Expr> {
+    use pg_query::protobuf as pg;
+    ensure!(value.xpr.is_none(), "invalid Boolean expression");
+    let mut args = value
+        .args
+        .iter()
+        .map(|value| bind_ast(value, resolve, visited, depth + 1))
+        .collect::<Result<Vec<_>>>()?;
+    match pg::BoolExprType::try_from(value.boolop)? {
+        pg::BoolExprType::AndExpr | pg::BoolExprType::OrExpr => {
+            ensure!(args.len() >= 2, "invalid Boolean arity");
+            normalized(args, value.boolop == i32::from(pg::BoolExprType::AndExpr))
+        }
+        pg::BoolExprType::NotExpr => {
+            ensure!(args.len() == 1, "invalid NOT arity");
+            Ok(Expr::Not(Box::new(args.remove(0))))
+        }
+        pg::BoolExprType::Undefined => anyhow::bail!("invalid Boolean operator"),
+    }
+}
+fn comparison(op: Compare, left: Operand, right: Operand) -> Result<Expr> {
+    let oid = left
+        .oid()
+        .or_else(|| right.oid())
+        .context("SQL type: comparison requires a native column")?;
+    ensure!(
+        matches!(oid, 16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1114 | 1184 | 1186),
+        "SQL type: unsupported comparison type"
+    );
+    if matches!(oid, 25 | 1043) {
+        ensure!(
+            matches!(op, Compare::Eq | Compare::Ne)
+                && left.oid().is_some() != right.oid().is_some(),
+            "text equality requires one native column and an unknown literal; text ordering and column collation resolution are unsupported"
+        );
+    }
+    Ok(Expr::Compare(op, left.coerce(oid)?, right.coerce(oid)?))
+}
+fn normalized(args: Vec<Expr>, and: bool) -> Result<Expr> {
     let mut values = Vec::new();
     for arg in args {
-        match bind(arg, resolve)? {
+        match arg {
             Expr::And(nested) if and => values.extend(nested),
             Expr::Or(nested) if !and => values.extend(nested),
             value => values.push(value),
@@ -82,19 +143,17 @@ fn normalized(args: Vec<syntax::Expr>, resolve: &Resolve<'_>, and: bool) -> Resu
     }
     Ok(if and { Expr::And(values) } else { Expr::Or(values) })
 }
-fn operand(value: syntax::Scalar, resolve: &Resolve<'_>) -> Result<Operand> {
-    match value {
-        syntax::Scalar::Column(name) => Ok(Operand::Bound(Scalar::column(resolve(&name)?))),
-        syntax::Scalar::Typed(value) => {
-            Ok(Operand::Bound(super::typed::bind(&value, &|name| resolve(name), 0)?))
-        }
-        syntax::Scalar::Remainder(name, divisor) => {
+fn operand(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Operand> {
+    match syntax::scalar(value) {
+        Ok(syntax::Scalar::Column(name)) => Ok(Operand::Bound(Scalar::column(resolve(&name)?))),
+        Err(_) => Ok(Operand::Bound(super::typed::bind(value, &|name| resolve(name), 0)?)),
+        Ok(syntax::Scalar::Remainder(name, divisor)) => {
             Ok(Operand::Bound(Scalar::remainder(resolve(&name)?, divisor)?))
         }
-        syntax::Scalar::Difference(left, right) => {
+        Ok(syntax::Scalar::Difference(left, right)) => {
             Ok(Operand::Bound(Scalar::difference(resolve(&left)?, resolve(&right)?)?))
         }
-        literal => Ok(Operand::Literal(literal)),
+        Ok(literal) => Ok(Operand::Literal(literal)),
     }
 }
 enum Operand {

@@ -29,7 +29,7 @@ struct Base {
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct State {
+pub(super) struct State {
     version: u32,
     base: Base,
     active: Option<Generation>,
@@ -37,6 +37,7 @@ struct State {
     signature: String,
     phase: Phase,
     retired: Vec<Generation>,
+    pub(super) removal: Option<super::retire::Removal>,
 }
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 enum Phase {
@@ -48,6 +49,30 @@ enum Phase {
 pub(super) struct Resolved {
     pub config: Config,
     pub settings: Settings,
+}
+impl State {
+    fn original(config: &Config, settings: &Settings) -> Self {
+        Self {
+            version: 1,
+            base: Base::new(config, settings),
+            active: Some(Generation::original(config, settings)),
+            pending: None,
+            signature: String::new(),
+            phase: Phase::Active,
+            retired: Vec::new(),
+            removal: None,
+        }
+    }
+    pub(super) fn forget(&mut self, query: &str) {
+        self.retired.retain(|generation| generation.query != query);
+        if self.active.as_ref().is_some_and(|generation| generation.query == query) {
+            self.active = None;
+        }
+        if self.pending.as_ref().is_some_and(|generation| generation.query == query) {
+            self.pending = None;
+        }
+        self.removal = None;
+    }
 }
 impl Base {
     fn new(config: &Config, settings: &Settings) -> Self {
@@ -117,28 +142,29 @@ async fn read(sql: &(impl GenericClient + Sync), settings: &Settings) -> Result<
     else {
         return Ok(None);
     };
-    ensure!(row.try_get::<_, i32>(1)? <= 65_536, "lifecycle metadata limit exceeded");
+    ensure!(row.try_get::<_, i32>(1)? <= 196_608, "lifecycle metadata limit exceeded");
     let state: State = serde_json::from_value(row.try_get(0)?)?;
     ensure!(
         state.version == 1 && state.retired.len() <= 128,
         "unsupported lifecycle version or generation count"
     );
+    if let Some(removal) = &state.removal {
+        removal.validate()?;
+    }
     Ok(Some(state))
 }
-async fn save(sql: &Transaction<'_>, settings: &Settings, state: &State) -> Result<()> {
+pub(super) async fn save(
+    sql: &Transaction<'_>,
+    settings: &Settings,
+    state: &State,
+    operation: &str,
+) -> Result<()> {
     ensure!(state.retired.len() <= 128, "retired generation limit exceeded");
     let serialized = serde_json::to_value(state)?;
     let bytes: i32 =
         sql.query_one("SELECT octet_length($1::jsonb::text)", &[&serialized]).await?.try_get(0)?;
-    ensure!(bytes <= 65_536, "lifecycle metadata limit exceeded");
+    ensure!(bytes <= 196_608, "lifecycle metadata limit exceeded");
     sql.batch_execute(&format!("CREATE TABLE IF NOT EXISTS {0}.pgderive_lifecycle(query_id text PRIMARY KEY,state jsonb NOT NULL); CREATE TABLE IF NOT EXISTS {0}.pgderive_generations(generation text PRIMARY KEY,logical_query text NOT NULL)",settings.catalog_schema)).await?;
-    let operation = match state.phase {
-        Phase::Building => "building",
-        Phase::Active if state.retired.is_empty() => "retired",
-        Phase::Active => "cutover",
-        Phase::Dropping => "dropping",
-        Phase::Dropped => "dropped",
-    };
     sql.execute(&format!("/* lifecycle:{operation} */ INSERT INTO {}.pgderive_lifecycle VALUES($1,$2) ON CONFLICT(query_id) DO UPDATE SET state=EXCLUDED.state",settings.catalog_schema), &[&settings.query_id,&serialized]).await?;
     Ok(())
 }
@@ -157,7 +183,7 @@ pub(super) async fn resolve(
     );
     ensure!(
         state.phase == Phase::Active,
-        "query lifecycle operation is pending or query is dropped; resume rebuild/drop explicitly"
+        "query removal is pending or complete, or a lifecycle operation is pending; resume rebuild/drop explicitly"
     );
     let generation = state.active.context("active lifecycle has no generation")?;
     let owner: String = sql
@@ -195,7 +221,7 @@ pub(super) async fn recreate(
         return Ok(state.phase == Phase::Dropped
             || (state.phase == Phase::Building && state.active.is_none()));
     }
-    Ok(super::retire::status(sql, settings).await? == Some("dropped"))
+    Ok(false)
 }
 async fn own(config: &Config) -> Result<(Session, Settings)> {
     config.validate()?;
@@ -205,3 +231,6 @@ async fn own(config: &Config) -> Result<(Session, Settings)> {
     require_public(&session.client, &settings).await?;
     Ok((session, settings))
 }
+
+#[cfg(test)]
+mod tests;

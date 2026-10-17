@@ -149,7 +149,9 @@ currently unavailable. The typed runtime supports integral `abs`/`to_hex` and
 UTF8 text/varchar lengths, code points, reverse, trim, slicing, replacement,
 translation, position/prefix checks, repetition and split fields. The exact
 signatures are in `src/compiler/capabilities.rs`; unsupported overloads fail
-with argument type names/OIDs and supported signatures. Nested calls and text CASE/COALESCE share the local evaluator.
+with argument type names/OIDs and supported signatures. Nested calls and text CASE/COALESCE share the local evaluator. The evaluator returns native values for predicates, keys and computed columns; text encoding happens at row boundaries. CASE and COALESCE select lazily, while strict calls evaluate all arguments before NULL propagation. Integral widths are checked at each expression node.
+
+Native and derived scalar projections use one AST-to-bound-expression path. There is no retry through a second projection binder. Aggregate AVG results are finalized by typed Map nodes before every SQL output boundary, including the root; output layouts carry columns rather than deferred computation.
 Expansion budgets and the rejected `right(text, -2147483648)` boundary are listed
 in the [fidelity roadmap](postgres-fidelity-roadmap.md#qualified-local-function-batch).
 Mapped sink APIs and expression placement reports have

@@ -1,3 +1,4 @@
+mod aggregate;
 mod bindings;
 mod distinct;
 mod distinct_statistics;
@@ -5,6 +6,7 @@ mod left_join;
 mod lookup;
 mod membership;
 mod navigation;
+mod order;
 mod ordered;
 mod partition;
 pub(super) mod relational;

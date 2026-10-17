@@ -1,10 +1,7 @@
 //! Contextual literal binding and native values for the shared scalar IR.
 use super::{ColumnRef, Typed, Value};
 use crate::{
-    compiler::{
-        syntax,
-        value::{self, Value as Native},
-    },
+    compiler::{syntax, value},
     transaction::Row,
 };
 use anyhow::{Context, Result, ensure};
@@ -62,31 +59,6 @@ impl Typed {
             value: Value::Remainder(super::super::remainder::Remainder { input, divisor }),
         })
     }
-    pub(in crate::compiler) fn native_pair(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
-        match &self.value {
-            Value::Column(column) => (if column.right { rows.1 } else { rows.0 })
-                .get(&column.name)
-                .context("compiled predicate column absent")?
-                .as_deref()
-                .map(|text| value::decode(column.oid, text))
-                .transpose(),
-            Value::Encoded(text) => {
-                text.as_deref().map(|text| value::decode(self.oid, text)).transpose()
-            }
-            Value::Interval(value) => Ok(Some(Native::Interval(*value))),
-            Value::Difference(left, right) => {
-                let (Some(Native::Timestamp(left)), Some(Native::Timestamp(right))) = (
-                    Self::column(left.clone()).native_pair(rows)?,
-                    Self::column(right.clone()).native_pair(rows)?,
-                ) else {
-                    return Ok(None);
-                };
-                Ok(Some(Native::Interval(left.difference(right)?)))
-            }
-            _ if matches!(self.oid, 20 | 21 | 23) => Ok(self.integer(rows)?.map(Native::Integer)),
-            _ => self.text_pair(rows)?.map(|text| value::decode(self.oid, &text)).transpose(),
-        }
-    }
     pub(in crate::compiler) fn is_null(&self, rows: (&Row, &Row)) -> Result<bool> {
         if let Value::Column(column) = &self.value {
             return Ok((if column.right { rows.1 } else { rows.0 })
@@ -95,6 +67,11 @@ impl Typed {
                 .is_none());
         }
         Ok(self.native_pair(rows)?.is_none())
+    }
+    pub(in crate::compiler) const fn as_remainder(
+        &self,
+    ) -> Option<&crate::compiler::remainder::Remainder> {
+        if let Value::Remainder(value) = &self.value { Some(value) } else { None }
     }
     pub(in crate::compiler) const fn as_column(&self) -> Option<&ColumnRef> {
         if let Value::Column(column) = &self.value { Some(column) } else { None }

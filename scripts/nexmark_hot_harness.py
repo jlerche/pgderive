@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exact native MV and independent bag oracles for hopping hot auctions/max bids."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import datetime
 import json
@@ -82,9 +82,6 @@ def qualify(output,command,query,instant):
         fixture.rejected(command,'unsupported',fixture.query+' ORDER BY '+fixture.labels[0])
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             ('ties',f"INSERT INTO {fixture.name}.bid(id,auction,price,bidder,date_time,extra) VALUES(312,900,100,900,'2000-01-01','tie'),(313,901,100,901,'2000-01-01','x'); UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=1"),
             ('winner-retraction',f"DELETE FROM {fixture.name}.bid WHERE id=305; UPDATE {fixture.name}.bid SET price=NULL WHERE id=303"),
@@ -95,25 +92,15 @@ def qualify(output,command,query,instant):
             ('infinity-retraction',f"DELETE FROM {fixture.name}.bid WHERE id=309; UPDATE {fixture.name}.bid SET date_time='infinity',auction=NULL,price=11 WHERE id=310"),
             ('empty-input',f"UPDATE {fixture.name}.auction SET group_id=3 WHERE id=2"),
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
-        for index,(_,change) in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        changed = fixture.query.replace('0,4','0,3') if query=='q5' else fixture.query.replace('10 seconds','11 seconds')
-        fixture.rejected(command,'changed-semantics',changed)
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        changed = fixture.query.replace('0,4', '0,3') if query == 'q5' else fixture.query.replace('10 seconds', '11 seconds')
+        def initial():
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=[change for _, change in changes],
+            final=f'DELETE FROM {fixture.name}.bid',
+            normalized=fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"'),
+            rejected=[('changed-semantics', changed)],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':query,'time':'timestamptz' if instant else 'timestamp','postgres':'exact native MV weighted bag','memory':'independent integer buckets / '+('five memberships / maximum count ties' if query=='q5' else 'single membership / maximum price ties'),'restart':'cold same slot','identity':'changed stride/membership rejected','nulls':'time excluded, auction retained, max ignores NULL price','infinities':'PostgreSQL date_bin preserves infinity; '+('fixed offsets preserve infinity and hopping memberships consolidate fivefold' if query=='q5' else 'one bucket per infinite timestamp')})+'\n')
 
 if __name__=='__main__':

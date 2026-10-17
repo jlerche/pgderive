@@ -15,7 +15,7 @@ fn expression(sql: &str) -> Result<Expr> {
         anyhow::bail!("SELECT absent");
     };
     expression::bind(
-        syntax::predicate(select.where_clause.as_deref())?.context("WHERE absent")?,
+        syntax::predicate(select.where_clause.as_deref())?.context("WHERE absent")?.as_ref(),
         &|name| {
             let name = name.0.last().context("column absent")?;
             let oid = match name.as_str() {

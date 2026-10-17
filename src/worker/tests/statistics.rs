@@ -39,7 +39,7 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Bag> {
 #[tokio::test]
 async fn linear_statistics_match_full_bag_oracle_through_retractions_and_restart() -> Result<()> {
     let native = contract();
-    let compiled = compile(SQL, &native)?;
+    let compiled = super::raw_statistics_compiled(compile(SQL, &native)?);
     let ir = compiled.relational();
 
     let options = settings();

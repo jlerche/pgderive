@@ -3,7 +3,7 @@
 import collections
 import json
 from sql_compiler_harness import SqlFixture
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 MODES = ('inner', 'swapped', 'composite', 'function', 'derived', 'scoped')
 
 
@@ -68,9 +68,6 @@ def qualify(output, command, mode):
             for label, condition in [('mixed', 'a.id+b.id=b.auction'), ('same-side','abs(a.id)=abs(a.group_id)'), ('constant','1=abs(b.auction)'), ('numeric','abs(a.id)::numeric=b.price::numeric')]:
                 fixture.rejected(command, label, fixture.query.split(' ON ')[0]+' ON '+condition)
             assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"UPDATE {fixture.name}.auction SET group_id=2,category='moved' WHERE id=1; UPDATE {fixture.name}.bid SET auction=2 WHERE id=2",
             f"INSERT INTO {fixture.name}.auction(id,category,group_id) VALUES(100,'collision',-1); INSERT INTO {fixture.name}.bid VALUES(100,-1,2),(101,NULL,NULL)",
@@ -78,19 +75,12 @@ def qualify(output, command, mode):
             f"DELETE FROM {fixture.name}.auction WHERE id=2; DELETE FROM {fixture.name}.bid WHERE id=100",
             f"UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=100; UPDATE {fixture.name}.bid SET auction=NULL WHERE id=2",
         ]
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published', minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f"UPDATE {fixture.name}.auction SET category='xx',group_id=-1 WHERE id=100; DELETE FROM {fixture.name}.bid WHERE id=101")
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f"UPDATE {fixture.name}.auction SET category='xx',group_id=-1 WHERE id=100; DELETE FROM {fixture.name}.bid WHERE id=101",
+            normalized=fixture.query,
+            rejected=[],
+        ))
         (output/'result.json').write_text(json.dumps({'mode':mode,'sql_oracle':'native MV exact bag',
             'memory_oracle':'independent raw-source nested loop/groups','simultaneous_changes':True,
             'identity':'duplicates, NULL keys, retractions, key moves','restart':'cold, same slot'})+'\n')

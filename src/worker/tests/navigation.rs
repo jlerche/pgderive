@@ -200,7 +200,6 @@ fn navigation_binds_postgres_common_types_and_native_defaults() -> Result<()> {
         let compiled = compile(&sql, &native)?;
         let ir = compiled.relational();
         assert_eq!(ir.output.columns[0].column.oid, expected);
-        assert!(ir.output.mapping.is_none());
     }
     Ok(())
 }

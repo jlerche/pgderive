@@ -5,19 +5,14 @@ pub(super) fn qualify(mut column: ColumnRef) -> ColumnRef {
     column.right = false;
     column
 }
-type Output =
-    (Vec<crate::compiler::projection::OutputColumn>, Option<crate::compiler::output::Output>);
 pub(super) fn output(
     columns: crate::compiler::parser::Columns,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
-) -> Result<Output> {
-    let transforms = columns.iter().map(|(_, _, transform)| transform.clone()).collect::<Vec<_>>();
-    let columns = columns
+) -> Result<Vec<crate::compiler::projection::OutputColumn>> {
+    columns
         .into_iter()
-        .map(|(name, label, _)| {
+        .map(|(name, label)| {
             Ok(crate::compiler::projection::OutputColumn { column: resolve(&name)?, label })
         })
-        .collect::<Result<Vec<_>>>()?;
-    let mapping = super::output_mapping(transforms, &columns)?;
-    Ok((columns, mapping))
+        .collect()
 }

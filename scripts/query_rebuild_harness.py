@@ -3,7 +3,6 @@
 import collections
 import json
 import pathlib
-import subprocess
 import sys
 import urllib.request
 import urllib.error
@@ -12,16 +11,11 @@ import hashlib
 from query_lifecycle_harness import configured, grouped, rejected
 from native_mv_oracle import expected as native_expected
 from worker_harness import Worker
+from harness_control import admin
 
 
 def command(fixture, binary, action, config):
-    result = subprocess.run(binary + ['query', action, str(config)],
-                            env=fixture.environment, text=True, capture_output=True, timeout=240)
-    with (fixture.output/'commands.jsonl').open('a') as evidence:
-        evidence.write(json.dumps({'action': action, 'code': result.returncode,
-                                   'stdout': result.stdout, 'stderr': result.stderr})+'\n')
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout.splitlines()[-1])
+    return admin(fixture, binary, action, config)
 
 
 def verify(fixture, labels):
@@ -155,7 +149,7 @@ def qualify(output, binary):
         labels[1] = 'new count'
         verify(fixture,labels)
         command(fixture,binary,'drop',config)
-        assert command(fixture,binary,'status',config)['state'] == 'Dropped'
+        assert command(fixture,binary,'status',config)['state'] == 'dropped'
         verify_pins(fixture,roots)
         fixture.sql(f"UPDATE {fixture.name}.pgderive_protections SET active=false WHERE token='rebuild-reader'")
         command(fixture,binary,'drop',config)

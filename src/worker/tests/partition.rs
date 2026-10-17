@@ -213,10 +213,10 @@ async fn window_resource_failure_preserves_root_and_time() -> Result<()> {
 #[tokio::test]
 async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()> {
     let native = contract();
-    let compiled = compile(
+    let compiled = super::raw_statistics_compiled(compile(
         "SELECT b.auction,AVG(b.price),SUM(b.price) FROM source.bid b GROUP BY b.auction",
         &native,
-    )?;
+    )?);
     assert!(compiled.validate_execution().is_ok());
     let ir = compiled.relational();
     let options = settings();

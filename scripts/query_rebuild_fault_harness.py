@@ -10,6 +10,7 @@ from query_removal_harness import setup, cleanup, wait_records
 from query_lifecycle_harness import rejected
 from query_rebuild_harness import command, verify
 from worker_harness import Worker
+from harness_control import commit_proxy
 
 
 def fault(output, binary, stage, mode):
@@ -23,17 +24,12 @@ def fault(output, binary, stage, mode):
         markers = {'intent':'pgderive_generations VALUES',
                    'activation':'pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn) VALUES',
                    'cutover':'/* lifecycle:cutover */',
-                   'retirement':'/* lifecycle:retired */'}
+                   'retirement':'/* lifecycle:removal-complete */'}
         evidence = output/'fault.jsonl'
         gate = output/'release'
-        with evidence.open('w') as log:
-            args = [sys.executable,'-u','scripts/pg_commit_proxy.py','--mode',mode,
-                    '--once','--arm-query',markers[stage]]
-            if mode == 'hold':
-                args += ['--gate',str(gate)]
-            proxy = subprocess.Popen(args,stdout=log,stderr=log)
-        records = wait_records(evidence,lambda rows: rows and rows[0].get('ready'))
-        fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(records[0]['port'])
+        proxy, port = commit_proxy(evidence, mode, once=True, marker=markers[stage],
+                                   gate=gate if mode == 'hold' else None)
+        fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
         if mode == 'hold':
             with (output/'rebuild.stdout').open('w') as stdout, (output/'rebuild.stderr').open('w') as stderr:
                 process = subprocess.Popen(binary+['query','rebuild',str(config)],env=fixture.environment,stdout=stdout,stderr=stderr)

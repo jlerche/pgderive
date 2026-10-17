@@ -1,4 +1,4 @@
-use super::{Operators, Relational};
+use super::{Operator, Operators, Relational};
 use crate::engine::{
     Batch,
     dataflow::{Project, TimedBatch},
@@ -9,6 +9,8 @@ use object_store::memory::InMemory;
 use std::{collections::BTreeMap, sync::Arc};
 type Rows = Batch<i64, Vec<i64>>;
 type Bag = BTreeMap<(i64, Vec<i64>), i64>;
+type Projection = Arc<Project<i64, Vec<i64>, i64, Vec<i64>>>;
+type Join = Arc<super::JoinProject<i64, Vec<i64>>>;
 fn plan() -> Result<Plan> {
     let nodes = [
         ("as", Kind::Source, vec!["a"]),
@@ -68,14 +70,13 @@ fn operators() -> Operators<i64, Vec<i64>> {
             )
         })
         .collect();
-    Operators {
-        projects,
-        joins,
-        partitions: BTreeMap::new(),
-        statistics: BTreeMap::new(),
-        ordered: BTreeMap::new(),
-        expansions: BTreeMap::new(),
-    }
+    let projects: BTreeMap<_, Projection> = projects;
+    let joins: BTreeMap<_, Join> = joins;
+    projects
+        .into_iter()
+        .map(|(id, value)| (id, Operator::Project(value)))
+        .chain(joins.into_iter().map(|(id, value)| (id, Operator::Join(value))))
+        .collect()
 }
 fn oracle(states: &[Bag; 3]) -> Result<Rows> {
     let mut updates = Vec::new();
@@ -152,7 +153,7 @@ async fn chained_join_complete_deltas_recovery_and_ownership() -> Result<()> {
     query.restore_checkpoint(checkpoint).await?;
     assert!(query.commit(work).is_err());
     let mut missing = operators();
-    missing.joins.remove("ab");
+    missing.remove("ab");
     assert!(Relational::new(plan()?, missing, &settings).is_err());
     Ok(())
 }

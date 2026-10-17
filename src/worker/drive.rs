@@ -1,4 +1,4 @@
-use super::{open::Open, runtime, spec::Settings, sql::Session};
+use super::{open::Open, program::relational, spec::Settings, sql::Session};
 use crate::{
     Config,
     catalog::{GcLimits, Progress, Publication},
@@ -225,12 +225,12 @@ async fn publish(open: &mut Open, transaction: &Transaction, decode_us: u128) ->
     let token = format!("worker:{}:transaction:{time}", open.nonce);
     let protection = open.writer.protect_upload(&mut open.session.client, &token).await?;
     phases.mark("upload_reservation");
-    let input = runtime::inputs(&transaction.batch, &open.compiled, time)?;
+    let input = relational::inputs(&transaction.batch, open.compiled.relational(), time)?;
     phases.mark("inputs");
     let prepared = open.query.prepare_protected(input, &protection).await?;
     phases.mark("prepare_including_object_io");
     let checkpoint = open.query.prepared_checkpoint(&prepared)?;
-    let deltas = prepared.deltas()?;
+    let deltas = relational::deltas(&prepared.output().batch, open.compiled.output())?;
     let progress = Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
     phases.mark("finalize");
     let publication = open

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PostgreSQL LATERAL LIMIT-one lookup against independent native source bags."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 from decimal import Decimal
 import json
@@ -82,9 +82,6 @@ def qualify(output, command, mode):
         fixture.rejected(command,'ties',fixture.query.replace(',r.id DESC',''))
         fixture.rejected(command,'hidden',fixture.query.replace('p.price','r.price'))
         assert fixture.sql(f"SELECT to_regclass('{name}.pgderive_worker_registration') IS NULL").strip() == 't'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {name}.bid(id,auction,price,event_at,event_time,amount) VALUES(100,1,NULL,'1999-12-31 23:59:59.999999','1999-12-31 15:59:59.999999-08','NaN'); UPDATE {name}.auction SET event_at='2000-01-01',event_time='2000-01-01+00' WHERE id=2",
             f"UPDATE {name}.bid SET event_at='1999-12-31 23:59:59.999999',event_time='1999-12-31 15:59:59.999999-08',price=-3 WHERE id=3",
@@ -95,26 +92,17 @@ def qualify(output, command, mode):
             f"DELETE FROM {name}.bid",
             f"INSERT INTO {name}.bid(id,auction,price,event_at,event_time,amount,enabled,token) VALUES(103,1,8,'2024-03-10 01:59:59.999999','2024-03-10 01:59:59.999999-08',0.000000000000000000000000000001,true,'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'); UPDATE {name}.auction SET lookup_key=1,event_at='2024-03-10 03:00:00',event_time='2024-03-10 03:00:00-07' WHERE id=2",
         ]
-        for index, change in enumerate(changes,1):
-            fixture.sql("SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; BEGIN;"+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        fixture.sql(f'BEGIN; DELETE FROM {name}.auction; ROLLBACK')
-        fixture.verify()
-        worker.abort()
-        progress = fixture.sql(f'SELECT row_to_json(p) FROM {name}.pgderive_progress p')
         operator = '<' if fixture.strict else '<='
-        fixture.rejected(command,'changed',fixture.query.replace(f'r.{fixture.field}{operator}l.',f'r.{fixture.field}{"<=" if fixture.strict else "<"}l.'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {name}.pgderive_progress p') == progress
-        fixture.query = quoted_left(fixture.query)
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f"BEGIN; UPDATE {name}.auction SET category='collision'; UPDATE {name}.bid SET price=NULL,amount='Infinity'; COMMIT")
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def after():
+            fixture.sql(f'BEGIN; DELETE FROM {name}.auction; ROLLBACK')
+            fixture.verify()
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f"BEGIN; UPDATE {name}.auction SET category='collision'; UPDATE {name}.bid SET price=NULL,amount='Infinity'; COMMIT",
+            normalized=quoted_left(fixture.query),
+            rejected=[('changed', fixture.query.replace(f'r.{fixture.field}{operator}l.', f'r.{fixture.field}{('<=' if fixture.strict else '<')}l.'))],
+            session="SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; ",
+        ), after=after)
         (output/'result.json').write_text(json.dumps({'sql_oracle':'exact bag','memory_oracle':'independent native correlated LIMIT-one selection','simultaneous_inputs':True,'late_right_changes':True,'nulls':True,'restart':'cold','mode':mode})+'\n')
 
 

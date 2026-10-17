@@ -1,9 +1,9 @@
+from harness_control import start_recorded
 #!/usr/bin/env python3
 """Deterministic sustained/skewed workload and supervised outage recovery."""
 import json
 import pathlib
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -87,13 +87,9 @@ def qualify(output,binary):
         text = text.replace('[worker.query]','[worker.health]\nheartbeat_secs=1\nstale_secs=4\noperation_timeout_secs=5\n[worker.query]')
         config.write_text(text)
         proxy_log = output/'owned-storage-proxy.jsonl'
-        with proxy_log.open('w') as log:
-            proxy = subprocess.Popen([sys.executable,'-u','scripts/s3_latency_proxy.py','--port','0','--scale','0'],stdout=log,stderr=log)
-        deadline = time.monotonic()+10
-        while not proxy_log.read_text().splitlines():
-            assert proxy.poll() is None and time.monotonic()<deadline
-            time.sleep(.05)
-        port = json.loads(proxy_log.read_text().splitlines()[0])['port']
+        proxy, ready = start_recorded([sys.executable, '-u', 'scripts/s3_latency_proxy.py',
+                                       '--port', '0', '--scale', '0'], proxy_log)
+        port = ready['port']
         fixture.environment['PGDERIVE__OBJECT_STORE__ENDPOINT']=f'http://127.0.0.1:{port}'
         labels = [column['name'] for column in command(fixture,binary,'validate',config)['columns']]
         def start(action,label):

@@ -30,7 +30,7 @@ fn projection_and_predicate_bind_the_same_scalar_once() -> Result<()> {
         })
     };
     let bound = crate::compiler::expression::bind(
-        syntax::predicate(select.where_clause.as_deref())?.context("WHERE absent")?,
+        syntax::predicate(select.where_clause.as_deref())?.context("WHERE absent")?.as_ref(),
         &resolve,
     )?;
     assert_eq!(visits.get(), 2, "each predicate operand must bind once");

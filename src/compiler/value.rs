@@ -63,3 +63,24 @@ pub(super) fn literal_text(oid: u32, text: &str) -> Result<String> {
         _ => text.into(),
     })
 }
+
+impl Value {
+    pub(super) fn text(self, oid: u32) -> Result<String> {
+        Ok(match self {
+            Self::Boolean(value) => if value { "t" } else { "f" }.into(),
+            Self::Integer(value) => value.to_string(),
+            Self::Numeric(value) => value.text(),
+            Self::Text(value) => value,
+            Self::Timestamp(value) => value.text(oid)?,
+            Self::Uuid(bytes) => {
+                use std::fmt::Write;
+                let mut text = String::with_capacity(32);
+                for byte in bytes {
+                    write!(text, "{byte:02x}")?;
+                }
+                text
+            }
+            Self::Interval(_) => anyhow::bail!("interval output is not available in-engine"),
+        })
+    }
+}

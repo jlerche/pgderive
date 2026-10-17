@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from query_binding_harness import BindingFixture
 from worker_harness import harness_arguments
+from harness_control import admin
 
 
 class EnvironmentFixture(BindingFixture):
@@ -20,13 +21,7 @@ class EnvironmentFixture(BindingFixture):
 
 
 def command(fixture, binary, scope, action, success=True):
-    result = subprocess.run([str(binary), scope, action, str(fixture.config())],
-                            env=fixture.environment, capture_output=True, text=True, timeout=180)
-    with (fixture.output/'commands.jsonl').open('a') as evidence:
-        evidence.write(json.dumps({'scope': scope, 'action': action, 'code': result.returncode,
-                                   'stdout': result.stdout, 'stderr': result.stderr})+'\n')
-    assert (result.returncode == 0) == success, result.stderr
-    return json.loads(result.stdout.splitlines()[-1]) if success else result.stderr
+    return admin(fixture, [str(binary)], action, scope=scope, success=success, timeout=180)
 
 
 def validator_exclusion(fixture, admin):

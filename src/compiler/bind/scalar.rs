@@ -34,7 +34,7 @@ pub(super) fn bind(
     let mut nodes = vec![Node::Source { id: "source".into(), source: 0 }];
     let mut input = "source";
     if let Some(predicate) = crate::compiler::syntax::predicate(predicate)? {
-        let predicate = crate::compiler::expression::bind(predicate, &native)?;
+        let predicate = crate::compiler::expression::bind(&predicate, &native)?;
         nodes.push(Node::Filter {
             id: "filter".into(),
             input: input.into(),
@@ -51,7 +51,6 @@ pub(super) fn bind(
         schema: scope.relation.schema.clone(),
         table: scope.relation.table.clone(),
         columns,
-        mapping: None,
     };
     Ok(Compiled {
         result_columns: Vec::new(),

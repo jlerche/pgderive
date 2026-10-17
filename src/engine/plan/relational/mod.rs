@@ -17,28 +17,38 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeMap, sync::Arc};
 
-type Expansion<K, V> = Arc<Expand<K, V, K, V>>;
-type Linear<K, V> = Arc<Statistics<K, V>>;
-type Ordered<K, V> = Arc<OrderedSelection<K, V>>;
-type Group<K, V> = Arc<Partition<K, V>>;
-type Unary<K, V> = Arc<Project<K, V, K, V>>;
-type Binary<K, V> = Arc<Project<K, (V, V), K, V>>;
-/// Pure callbacks implementing the exact declared project and join semantics.
-/// Callback changes require a new semantic plan revision.
-pub struct Operators<K: BatchData, V: BatchData> {
-    /// Unary filter/map callbacks, keyed by declared node identity.
-    pub projects: BTreeMap<String, Unary<K, V>>,
-    /// Pure relational expansions keyed by declared node identity.
-    pub expansions: BTreeMap<String, Expansion<K, V>>,
-    /// Projection of each complete joined tuple pair, keyed by join identity.
-    pub joins: BTreeMap<String, Binary<K, V>>,
-    /// Affected-partition callbacks keyed by declared aggregate node identity.
-    pub partitions: BTreeMap<String, Group<K, V>>,
-    /// Exact additive statistics callbacks, keyed by their retained state node.
-    pub statistics: BTreeMap<String, Linear<K, V>>,
-    /// Ordered selectors over retained full-identity inputs and exact prior outputs.
-    pub ordered: BTreeMap<String, Ordered<K, V>>,
+type JoinProject<K, V> = Project<K, (V, V), K, V>;
+
+/// One callback with an explicit executable operator family.
+#[derive(Clone)]
+pub enum Operator<K: BatchData, V: BatchData> {
+    /// Stateless unary projection/filter.
+    Project(Arc<Project<K, V, K, V>>),
+    /// Stateless expansion.
+    Expand(Arc<Expand<K, V, K, V>>),
+    /// Projection of the complete joined pair.
+    Join(Arc<JoinProject<K, V>>),
+    /// Affected-partition transformation.
+    Partition(Arc<Partition<K, V>>),
+    /// Exact retained linear statistics.
+    Statistics(Arc<Statistics<K, V>>),
+    /// Retained ordered selection.
+    Ordered(Arc<OrderedSelection<K, V>>),
 }
+impl<K: BatchData, V: BatchData> Operator<K, V> {
+    const fn kind(&self) -> super::Kind {
+        match self {
+            Self::Project(_) => super::Kind::Project,
+            Self::Expand(_) => super::Kind::Expand,
+            Self::Join(_) => super::Kind::Join,
+            Self::Partition(_) => super::Kind::Aggregate,
+            Self::Statistics(_) => super::Kind::Statistics,
+            Self::Ordered(_) => super::Kind::Ordered,
+        }
+    }
+}
+/// Exact callback registry keyed by the declared node identity.
+pub type Operators<K, V> = BTreeMap<String, Operator<K, V>>;
 #[derive(Clone)]
 struct Entry<K: BatchData, V: BatchData> {
     schema: String,
@@ -146,7 +156,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     }
     /// Exact declaration, native layout, callback and codec identity.
     #[must_use]
-    pub fn plan(&self) -> &Plan {
+    pub const fn plan(&self) -> &Plan {
         self.engine.plan()
     }
     /// Last committed logical tick, separate from source LSNs.

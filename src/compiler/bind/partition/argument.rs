@@ -25,7 +25,7 @@ pub(super) fn bind(
     computed: &mut Vec<Computed>,
     context: Context,
 ) -> Result<Bound> {
-    let filter = filter.map(|value| expression::bind(value, resolve)).transpose()?;
+    let filter = filter.map(|value| expression::bind(&value, resolve)).transpose()?;
     let Some(Argument::Expression(ast)) = argument else {
         let column = match argument {
             Some(Argument::Column(name)) => Some(resolve(&name)?),

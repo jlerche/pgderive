@@ -64,10 +64,7 @@ fn validate_join(
         "lookup requires LEFT JOIN LATERAL without grouping/join modifiers"
     );
     ensure!(
-        matches!(
-            syntax::predicate(join.quals.as_deref())?,
-            Some(Expr::Value(Scalar::Boolean(true)))
-        ),
+        matches!(syntax::scalar(optional(join.quals.as_deref())?)?, Scalar::Boolean(true)),
         "lookup requires ON true"
     );
     Ok(())

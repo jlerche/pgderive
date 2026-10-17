@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Explicit PostgreSQL session connectivity and temporal extrema; no expiry."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import datetime
 import json
@@ -100,9 +100,6 @@ def qualify(output, command, mode):
     with fixture.managed():
         fixture.rejected(command,'unsupported',fixture.query+' ORDER BY bidder')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {fixture.name}.bid(id,auction,price,event_at,event_time) VALUES(202,900,NULL,'2000-01-01 00:00:15','2000-01-01 00:00:15+00'),(205,NULL,NULL,NULL,NULL)",
             f"DELETE FROM {fixture.name}.bid WHERE id=202; UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=1",
@@ -111,26 +108,15 @@ def qualify(output, command, mode):
             f"UPDATE {fixture.name}.bid SET event_at=NULL,event_time=NULL WHERE id IN(203,204); DELETE FROM {fixture.name}.bid WHERE id IN(200,201)",
             f"UPDATE {fixture.name}.bid SET event_at='2024-03-10 01:59:59.999999',event_time='2024-03-10 01:59:59.999999-08' WHERE id=1; UPDATE {fixture.name}.bid SET event_at='2024-03-10 03:00:00',event_time='2024-03-10 03:00:00-07' WHERE id=2",
         ]
-        fixture.sql(f"BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK")
-        for index, change in enumerate(changes,1):
-            fixture.sql("SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; BEGIN;"+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed',fixture.query.replace(' AS bidder',' AS changed',1))
-        if mode.startswith('session'):
-            fixture.rejected(command,'changed-gap',fixture.query.replace('10 seconds','11 seconds'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        fixture.query = fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f"DELETE FROM {fixture.name}.bid")
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.bid',
+            normalized=fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"'),
+            rejected=[('changed', fixture.query.replace(' AS bidder', ' AS changed', 1))] + ([] + [('changed-gap', fixture.query.replace('10 seconds', '11 seconds'))] if mode.startswith('session') else []),
+            session="SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; ",
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'mode':mode,'sql_oracle':'exact bag','memory_oracle':'direct components/extrema','restart':'cold',**fixture.evidence})+'\n')
 
 

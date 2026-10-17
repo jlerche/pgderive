@@ -6,14 +6,14 @@ use tokio_postgres::{Client, IsolationLevel};
 mod tests;
 
 /// One consistent durable publication boundary, including its source contract.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Durable {
     /// Coarse arrangement membership and publication epoch.
     pub stored: Stored,
     /// Immutable source and destination registration.
     pub binding: Binding,
     /// Worker ownership counter observed in the same snapshot.
-    pub fence: u64,
+    pub fence: i64,
     /// Last source commit address; equal to end at an empty bootstrap boundary.
     pub commit: Lsn,
     /// Last durably published source end address.
@@ -106,7 +106,7 @@ async fn load(
         row.try_get::<_, String>(1)? == binding.sink.table(),
         "durable destination identity mismatch"
     );
-    let fence = u64::try_from(row.try_get::<_, i64>(2)?)?;
+    let fence: i64 = row.try_get(2)?;
     let commit = row.try_get::<_, String>(3)?.parse()?;
     let end = row.try_get::<_, String>(4)?.parse()?;
     let xid = row.try_get::<_, Option<i64>>(5)?.map(u32::try_from).transpose()?;
@@ -131,16 +131,7 @@ impl super::Writer {
             .load_durable(sql, plan)
             .await?
             .context("missing acknowledgement boundary")?;
-        ensure!(
-            durable.binding == self.binding
-                && durable.fence == u64::try_from(self.fence)?
-                && durable.stored.epoch == self.epoch
-                && durable.stored.checkpoint == self.checkpoint
-                && durable.end == self.end
-                && durable.commit == self.last_commit
-                && durable.xid == self.last_xid,
-            "acknowledgement capability is stale or incompatible"
-        );
+        ensure!(durable == self.boundary, "acknowledgement capability is stale or incompatible");
         Ok(durable)
     }
     /// Resolve physical maintenance without advancing logical/source progress.
@@ -153,32 +144,33 @@ impl super::Writer {
         plan: &Plan,
         candidate: &Checkpoint,
     ) -> Result<Resolution> {
-        super::maintenance::validate(&self.checkpoint, candidate, plan)?;
+        super::maintenance::validate(&self.boundary.stored.checkpoint, candidate, plan)?;
         let durable = load(&self.catalog, sql, plan, true)
             .await?
             .context("missing maintenance resolution boundary")?;
         ensure!(
-            durable.binding == self.binding
-                && durable.fence == u64::try_from(self.fence)?
-                && durable.end == self.end
-                && durable.commit == self.last_commit
-                && durable.xid == self.last_xid,
+            durable.binding == self.boundary.binding
+                && durable.fence == self.boundary.fence
+                && durable.end == self.boundary.end
+                && durable.commit == self.boundary.commit
+                && durable.xid == self.boundary.xid,
             "maintenance ownership/source progress changed"
         );
-        let resolution =
-            if durable.stored.epoch == self.epoch && durable.stored.checkpoint == self.checkpoint {
-                Resolution::NotCommitted
-            } else {
-                ensure!(
-                    self.epoch.checked_add(1) == Some(durable.stored.epoch)
-                        && durable.stored.checkpoint == *candidate,
-                    "maintenance has nonmatching authoritative outcome"
-                );
-                Resolution::Committed
-            };
+        let resolution = if durable.stored.epoch == self.boundary.stored.epoch
+            && durable.stored.checkpoint == self.boundary.stored.checkpoint
+        {
+            Resolution::NotCommitted
+        } else {
+            ensure!(
+                self.boundary.stored.epoch.checked_add(1) == Some(durable.stored.epoch)
+                    && durable.stored.checkpoint == *candidate,
+                "maintenance has nonmatching authoritative outcome"
+            );
+            Resolution::Committed
+        };
         if resolution == Resolution::Committed {
-            self.epoch = durable.stored.epoch;
-            self.checkpoint = durable.stored.checkpoint;
+            self.boundary.stored.epoch = durable.stored.epoch;
+            self.boundary.stored.checkpoint = durable.stored.checkpoint;
         }
         self.uncertain = false;
         Ok(resolution)
@@ -202,17 +194,12 @@ impl super::Writer {
             .await?
             .context("missing durable query during resolution")?;
         ensure!(
-            durable.binding == self.binding && durable.fence == u64::try_from(self.fence)?,
+            durable.binding == self.boundary.binding && durable.fence == self.boundary.fence,
             "publication worker replaced during resolution"
         );
         let resolution = resolve(self, &durable, attempt.checkpoint, attempt.progress)?;
         if resolution == Resolution::Committed {
-            self.epoch = durable.stored.epoch;
-            self.time = durable.stored.checkpoint.time;
-            self.end = durable.end;
-            self.checkpoint = durable.stored.checkpoint;
-            self.last_commit = durable.commit;
-            self.last_xid = durable.xid;
+            self.boundary = durable;
         }
         self.uncertain = false;
         Ok(resolution)
@@ -225,25 +212,19 @@ fn resolve(
     progress: &Progress,
 ) -> Result<Resolution> {
     ensure!(
-        writer.time.checked_add(1) == Some(checkpoint.time),
+        writer.boundary.stored.checkpoint.time.checked_add(1) == Some(checkpoint.time),
         "resolution attempt clock mismatch"
     );
     ensure!(
-        progress.end > writer.end && progress.end >= progress.commit,
+        progress.end > writer.boundary.end && progress.end >= progress.commit,
         "resolution attempt source position mismatch"
     );
-    ensure!(progress.commit >= writer.end, "resolution commit precedes prior end");
-    if durable.stored.epoch == writer.epoch
-        && durable.stored.checkpoint.time == writer.time
-        && durable.end == writer.end
-        && durable.commit == writer.last_commit
-        && durable.xid == writer.last_xid
-        && durable.stored.checkpoint == writer.checkpoint
-    {
+    ensure!(progress.commit >= writer.boundary.end, "resolution commit precedes prior end");
+    if durable == &writer.boundary {
         return Ok(Resolution::NotCommitted);
     }
     ensure!(
-        writer.epoch.checked_add(1) == Some(durable.stored.epoch)
+        writer.boundary.stored.epoch.checked_add(1) == Some(durable.stored.epoch)
             && durable.stored.checkpoint == *checkpoint
             && durable.commit == progress.commit
             && durable.end == progress.end

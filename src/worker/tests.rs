@@ -226,6 +226,35 @@ fn bag_delta<K: Ord + Clone, V: Ord + Clone>(
     )
 }
 
+/// Qualify raw sufficient-statistic kernels independently of SQL AVG rendering.
+fn raw_statistics_compiled(mut compiled: crate::compiler::Compiled) -> crate::compiler::Compiled {
+    use crate::compiler::relational::Node;
+    let ir = &mut compiled.relational;
+    if let Some(position) = ir
+        .nodes
+        .iter()
+        .position(|node| matches!(node, Node::Map { id, .. } if id.starts_with("boundary_")))
+    {
+        let Node::Map { id, input, computed } = ir.nodes.remove(position) else {
+            return compiled;
+        };
+        for output in &mut ir.output.columns {
+            if let Some(column) = computed
+                .iter()
+                .find(|value| value.column == output.column)
+                .and_then(|value| value.expression.as_average())
+            {
+                output.column = column.clone();
+            }
+        }
+        if let Some(Node::Output { input: output, .. }) = ir.nodes.last_mut() {
+            assert_eq!(*output, id);
+            *output = input;
+        }
+    }
+    compiled
+}
+
 async fn restart_relational(
     query: &mut program::relational::Query,
     native: &Contract,

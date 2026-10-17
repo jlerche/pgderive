@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named latest/top-ten bids: independent ordered occurrence bag, PG and restart."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import datetime
 import json
@@ -84,11 +84,6 @@ def qualify(output,command,query,instant):
         fixture.rejected(command,'unsupported-function',fixture.query.replace('row_number()','ntile(10)'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
-        if query=='q19':
-            assert fixture.sql(f"SELECT sum(weight) FROM {fixture.bag_relation()} WHERE tuple->1->>0='1'").strip()=='10'
         changes = [
             f"INSERT INTO {fixture.name}.bid(id,auction,price,bidder,channel,url,date_time,extra) VALUES(400,1,11,5,'new','', '2000-01-01 00:00:09','late arrival'),(401,1,10,5,'tie','', '2000-01-01 00:00:10','new tie'); UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=1",
             f"DELETE FROM {fixture.name}.bid WHERE id IN(340,341); UPDATE {fixture.name}.bid SET price=12,date_time='2000-01-01 00:00:11' WHERE id=339; UPDATE {fixture.name}.auction SET enabled=true WHERE id=1",
@@ -99,25 +94,16 @@ def qualify(output,command,query,instant):
             f"DELETE FROM {fixture.name}.bid WHERE auction=1; UPDATE {fixture.name}.bid SET auction=1,bidder=5,price=1,date_time='-infinity' WHERE id=349",
             f"UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=3",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-cutoff',fixture.query.replace('<=10','<=9') if query=='q19' else fixture.query.replace('<=1','<=2'))
-        fixture.rejected(command,'changed-null-order',fixture.query.replace('NULLS FIRST','NULLS LAST'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            if query == 'q19':
+                assert fixture.sql(f"SELECT sum(weight) FROM {fixture.bag_relation()} WHERE tuple->1->>0='1'").strip() == '10'
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'DELETE FROM {fixture.name}.bid',
+            normalized=fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"'),
+            rejected=[('changed-cutoff', fixture.query.replace('<=10', '<=9') if query == 'q19' else fixture.query.replace('<=1', '<=2'))] + [('changed-null-order', fixture.query.replace('NULLS FIRST', 'NULLS LAST'))],
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':query,'time':'timestamptz' if instant else 'timestamp','postgres':'exact occurrence-ranked bag','memory':'independent timestamp/integral tuple ordering','restart':'cold same slot','ties':'explicit stable bid PK, omitted from output','changes':'late inserts, deleting winners/backfill, PK and partition moves, NULLs, infinities, rollback, empty query-input tick','identity':'changed cutoff/null order rejected; quoted aliases normalize'})+'\n')
 
 if __name__=='__main__':

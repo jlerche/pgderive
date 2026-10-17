@@ -26,7 +26,6 @@ pub async fn start(config: Config, restart: bool) -> Result<()> {
     }
     let resolved = super::lifecycle::resolve(&session.client, &config, &settings).await?;
     let native = &resolved.settings;
-    super::retire::require_active(&session.client, native).await?;
     let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
     let exists: bool = session
         .client
@@ -82,15 +81,9 @@ pub async fn validate(config: &Config) -> Result<Value> {
     let source =
         Contract::inspect(&tx, identity, &config.replication.publication, &config.replication.slot)
             .await?;
-    let compiled = settings.query.compile_bound(&tx, &source).await?;
-    super::results::validate(&tx, settings).await?;
+    let (compiled, columns) = settings.query.describe(&tx, &source).await?;
+    compiled.sink(&settings.sink_table).validate()?;
     let plan = program::plan(&source, &compiled)?;
-    let statement = tx.prepare(&query_sql(&settings.query)).await?;
-    let mut columns = Vec::new();
-    for column in statement.columns() {
-        let collation = super::results::collation(&tx, &query_sql(&settings.query), column).await?;
-        columns.push(json!({"name":column.name(),"type_oid":column.type_().oid(),"type":column.type_().name(),"type_modifier":column.type_modifier(),"collation":collation}));
-    }
     tx.commit().await?;
     Ok(json!({"version":1,"query_id":settings.query_id,"valid":true,
         "identity_scope":"configured-slot-alias","plan_identity":plan.identity(),
@@ -146,13 +139,12 @@ pub async fn status(config: &Config) -> Result<Value> {
     };
     let mut native = settings.clone();
     native.query_id = query_id;
-    let state = super::retire::status(&tx, &native).await?.unwrap_or(state);
     let state = lifecycle
         .as_ref()
         .and_then(|value| value.get("phase"))
         .and_then(Value::as_str)
         .filter(|phase| *phase != "Active")
-        .unwrap_or(state);
+        .map_or(state, removal_state);
     let attempt = super::health::attempts::observed(&tx, settings).await?;
     let health =
         super::health::observe(&tx, &native, registration.as_ref(), progress.as_ref()).await?;
@@ -190,4 +182,24 @@ pub async fn environment(config: &Config, begin: bool) -> Result<Value> {
     config.validate()?;
     let mut session = Session::connect(config).await?;
     crate::semantics::change(&mut session.client, begin).await
+}
+
+// CLI removal states are independent of the journal enum's serialized spelling.
+fn removal_state(phase: &str) -> &str {
+    match phase {
+        "Dropping" => "dropping",
+        "Dropped" => "dropped",
+        phase => phase,
+    }
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn removal_status_does_not_expose_journal_enum_casing() {
+        for (journal, status) in
+            [("Dropping", "dropping"), ("Dropped", "dropped"), ("Building", "Building")]
+        {
+            assert_eq!(super::removal_state(journal), status);
+        }
+    }
 }

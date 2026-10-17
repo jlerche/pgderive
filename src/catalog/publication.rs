@@ -114,14 +114,7 @@ pub struct Publication<'a> {
 /// Do not retry an uncertain COMMIT blindly; reload the authoritative boundary.
 pub struct Writer {
     pub(super) catalog: Catalog,
-    pub(super) binding: Binding,
-    pub(super) fence: i64,
-    pub(super) epoch: u64,
-    pub(super) time: u64,
-    pub(super) end: Lsn,
-    pub(super) checkpoint: Checkpoint,
-    pub(super) last_commit: Lsn,
-    pub(super) last_xid: Option<u32>,
+    pub(super) boundary: super::Durable,
     pub(super) uncertain: bool,
 }
 impl Catalog {
@@ -191,14 +184,14 @@ impl Catalog {
             .context("worker claim COMMIT requires authoritative reload on failure")?;
         Ok(Writer {
             catalog: self.clone(),
-            binding,
-            fence,
-            epoch,
-            time,
-            end,
-            checkpoint,
-            last_commit,
-            last_xid,
+            boundary: super::Durable {
+                stored: super::Stored { epoch, checkpoint },
+                binding,
+                fence,
+                end,
+                commit: last_commit,
+                xid: last_xid,
+            },
             uncertain: false,
         })
     }
@@ -240,12 +233,12 @@ impl Writer {
     /// Last confirmed durable source end position; never advances on failed COMMIT.
     #[must_use]
     pub const fn end(&self) -> Lsn {
-        self.end
+        self.boundary.end
     }
     /// Current durable arrangement publication epoch.
     #[must_use]
     pub const fn epoch(&self) -> u64 {
-        self.epoch
+        self.boundary.stored.epoch
     }
     /// Publish memberships, destination DML and source position with one durable COMMIT.
     /// Caller holds exclusive runtime ownership, then commits local visibility on success.
@@ -274,32 +267,35 @@ impl Writer {
         let Publication { checkpoint, progress, deltas } = publication;
         checkpoint.validate(plan)?;
         ensure!(
-            self.time.checked_add(1) == Some(checkpoint.time),
+            self.boundary.stored.checkpoint.time.checked_add(1) == Some(checkpoint.time),
             "publication logical tick mismatch"
         );
-        ensure!(progress.commit >= self.end, "publication commit precedes durable source end");
-        ensure!(progress.end > self.end, "publication source end is stale");
+        ensure!(
+            progress.commit >= self.boundary.end,
+            "publication commit precedes durable source end"
+        );
+        ensure!(progress.end > self.boundary.end, "publication source end is stale");
         ensure!(progress.end >= progress.commit, "publication source end precedes commit");
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-        if let Some(source) = self.binding.registered_source()? {
+        if let Some(source) = self.boundary.binding.registered_source()? {
             source.lock_and_verify_layout(&tx).await?;
         }
-        let epoch = write::stage(&tx, &self.catalog, plan, checkpoint, self.epoch).await?;
+        let epoch =
+            write::stage(&tx, &self.catalog, plan, checkpoint, self.boundary.stored.epoch).await?;
         let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn AND binding=$7", self.catalog.schema),
-            &[&self.catalog.query, &self.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.end.to_string(), &serde_json::to_value(&self.binding)?]).await?;
+            &[&self.catalog.query, &self.boundary.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.boundary.end.to_string(), &serde_json::to_value(&self.boundary.binding)?]).await?;
         ensure!(affected == 1, "stale or incompatible publication worker");
         let membership = clock.lap();
-        deltas.apply(&tx, &self.catalog, &self.binding.sink).await?;
+        deltas.apply(&tx, &self.catalog, &self.boundary.binding.sink).await?;
         let sink = clock.lap();
         self.commit(tx, "publication").await?;
         let commit = clock.lap();
-        self.epoch = epoch;
-        self.time = checkpoint.time;
-        self.end = progress.end;
-        self.checkpoint = checkpoint.clone();
-        self.last_commit = progress.commit;
-        self.last_xid = Some(progress.xid);
+        self.boundary.stored.epoch = epoch;
+        self.boundary.end = progress.end;
+        self.boundary.stored.checkpoint = checkpoint.clone();
+        self.boundary.commit = progress.commit;
+        self.boundary.xid = Some(progress.xid);
         Ok(if measured {
             [("membership_layout_progress", membership), ("sink_dml", sink), ("commit", commit)]
                 .into()

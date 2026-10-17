@@ -3,7 +3,6 @@
 import json
 import collections
 import pathlib
-import re
 import subprocess
 import time
 import urllib.error
@@ -16,6 +15,7 @@ from nexmark_q1_harness import Q1Fixture
 from native_compiler_harness import NativeFixture
 from native_mv_oracle import expected as native_expected
 from worker_harness import Worker, harness_arguments
+from harness_control import admin
 
 
 def configured(fixture):
@@ -24,23 +24,11 @@ def configured(fixture):
 
 
 def inspect(command, fixture, action, config):
-    result = subprocess.run(command + ['query', action, str(config)],
-                            env=fixture.environment, text=True, capture_output=True)
-    with (fixture.output/'commands.jsonl').open('a') as evidence:
-        evidence.write(json.dumps({'action': action, 'code': result.returncode,
-                                   'stdout': result.stdout, 'stderr': result.stderr})+'\n')
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    return admin(fixture, command, action, config)
 
 
 def rejected(command, fixture, action, config):
-    result = subprocess.run(command+['query', action, str(config)],
-                            env=fixture.environment, text=True, capture_output=True, timeout=40)
-    with (fixture.output/'commands.jsonl').open('a') as evidence:
-        evidence.write(json.dumps({'action': action, 'expected': 'rejection',
-                                   'code': result.returncode, 'stderr': result.stderr})+'\n')
-    assert result.returncode != 0, 'invalid query/result interface was accepted'
-    return result.stderr
+    return admin(fixture, command, action, config, success=False, timeout=40)
 
 
 def verify_result(fixture, labels):

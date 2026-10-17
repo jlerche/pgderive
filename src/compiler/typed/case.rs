@@ -18,7 +18,7 @@ pub(super) fn bind(
         ensure!(arm.xpr.is_none(), "invalid CASE arm metadata");
         let condition = crate::compiler::syntax::predicate(arm.expr.as_deref())?
             .context("missing CASE condition")?;
-        let condition = crate::compiler::expression::bind(condition, resolve)?;
+        let condition = crate::compiler::expression::bind(&condition, resolve)?;
         let result = super::bind(optional(arm.result.as_deref())?, resolve, depth + 1)?;
         branches.push((condition, result));
     }

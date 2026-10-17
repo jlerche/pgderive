@@ -4,6 +4,7 @@ import json
 
 def qualify_unavailable(fixture, command):
     try:
+        fixture.sql('EXPLAIN '+fixture.query)
         fixture.rejected(command, 'engine-unavailable', fixture.query)
         error = (fixture.output/'engine-unavailable'/'stderr.log').read_text()
         assert 'not available in-engine' in error or 'unsupported' in error, error

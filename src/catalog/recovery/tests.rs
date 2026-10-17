@@ -14,32 +14,25 @@ fn writer() -> Result<Writer> {
     };
     Ok(Writer {
         catalog: Catalog::new("fixture", "query")?,
-        binding: Binding { source: "source".into(), sink: Sink::Json("sink".into()) },
-        fence: 1,
-        epoch: 1,
-        time: 0,
-        end: "0/0".parse()?,
-        checkpoint,
-        last_commit: "0/0".parse()?,
-        last_xid: None,
+        boundary: Durable {
+            stored: Stored { epoch: 1, checkpoint },
+            binding: Binding { source: "source".into(), sink: Sink::Json("sink".into()) },
+            fence: 1,
+            end: "0/0".parse()?,
+            commit: "0/0".parse()?,
+            xid: None,
+        },
         uncertain: true,
     })
 }
 fn boundary(writer: &Writer) -> Durable {
-    Durable {
-        stored: Stored { epoch: writer.epoch, checkpoint: writer.checkpoint.clone() },
-        binding: writer.binding.clone(),
-        fence: 1,
-        commit: writer.last_commit,
-        end: writer.end,
-        xid: writer.last_xid,
-    }
+    writer.boundary.clone()
 }
 #[test]
 fn resolution_requires_exact_prior_or_exact_committed_candidate() -> Result<()> {
     let writer = writer()?;
     let before = boundary(&writer);
-    let mut candidate = writer.checkpoint.clone();
+    let mut candidate = writer.boundary.stored.checkpoint.clone();
     candidate.time = 1;
     let progress = Progress::new(42, "0/10", "0/20")?;
     assert_eq!(resolve(&writer, &before, &candidate, &progress)?, Resolution::NotCommitted);
@@ -59,7 +52,7 @@ fn resolution_requires_exact_prior_or_exact_committed_candidate() -> Result<()> 
     let mut invalid = before;
     invalid.stored.checkpoint.plan_identity = "changed".into();
     assert!(resolve(&writer, &invalid, &candidate, &progress).is_err());
-    assert!(resolve(&writer, &after, &writer.checkpoint, &progress).is_err());
+    assert!(resolve(&writer, &after, &writer.boundary.stored.checkpoint, &progress).is_err());
     assert!(resolve(&writer, &after, &candidate, &Progress::new(42, "0/0", "0/0")?).is_err());
     Ok(())
 }

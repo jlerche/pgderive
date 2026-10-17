@@ -9,6 +9,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from harness_control import commit_proxy as start_commit_proxy, start_recorded
 
 
 def request(url, method="GET"):
@@ -17,27 +18,8 @@ def request(url, method="GET"):
 
 
 def commit_proxy(output, mode):
-    path = output / f"sql-commit-{mode}.jsonl"
-    with path.open("w") as log:
-        command = [sys.executable, "-u", "scripts/pg_commit_proxy.py", "--mode", mode]
-        if mode == "hold":
-            command += ["--gate", str(output / "sql-commit-hold.release")]
-        process = subprocess.Popen(command, stdout=log, stderr=log)
-    try:
-        for _ in range(100):
-            lines = path.read_text().splitlines()
-            if lines:
-                ready = json.loads(lines[0])
-                if ready.get("ready"):
-                    return process, ready["port"]
-            if process.poll() is not None:
-                raise RuntimeError(f"commit proxy failed: {path}")
-            time.sleep(.05)
-        raise RuntimeError(f"commit proxy did not become ready: {path}")
-    except BaseException:
-        process.terminate()
-        process.wait(timeout=10)
-        raise
+    return start_commit_proxy(output/f'sql-commit-{mode}.jsonl', mode,
+                              gate=output/'sql-commit-hold.release' if mode == 'hold' else None)
 
 
 def run(output, command):
@@ -73,46 +55,34 @@ def run(output, command):
                      "--scale", scale, "--seed", seed]
     if fail:
         proxy_command += ["--fail", fail]
-    with (output / "proxy.jsonl").open("w") as log:
-        proxy = subprocess.Popen(proxy_command, stdout=log, stderr=log)
-        commit_processes = []
-        try:
-            for _ in range(100):
-                lines = (output / "proxy.jsonl").read_text().splitlines()
-                if lines:
-                    ready = json.loads(lines[0])
-                    if ready.get("ready"):
-                        break
-                if proxy.poll() is not None:
-                    raise RuntimeError("latency proxy failed; see proxy.jsonl")
-                time.sleep(.05)
-            else:
-                raise RuntimeError("latency proxy did not become ready")
-            environment = os.environ.copy()
-            environment["PGDERIVE__OBJECT_STORE__ENDPOINT"] = f"http://127.0.0.1:{ready['port']}"
-            if fail:
-                environment["PGDERIVE_EXPECT_STORAGE_FAILURE"] = "1"
-            for mode in ("before", "after", "hold"):
-                process, port = commit_proxy(output, mode)
-                commit_processes.append(process)
-                environment[f"PGDERIVE_SQL_COMMIT_{mode.upper()}_PORT"] = str(port)
-                if mode == "hold":
-                    environment["PGDERIVE_SQL_COMMIT_HOLD_GATE"] = str(output / "sql-commit-hold.release")
+    proxy, ready = start_recorded(proxy_command, output/"proxy.jsonl")
+    commit_processes = []
+    try:
+        environment = os.environ.copy()
+        environment["PGDERIVE__OBJECT_STORE__ENDPOINT"] = f"http://127.0.0.1:{ready['port']}"
+        if fail:
+            environment["PGDERIVE_EXPECT_STORAGE_FAILURE"] = "1"
+        for mode in ("before", "after", "hold"):
+            process, port = commit_proxy(output, mode)
+            commit_processes.append(process)
+            environment[f"PGDERIVE_SQL_COMMIT_{mode.upper()}_PORT"] = str(port)
+            if mode == "hold":
+                environment["PGDERIVE_SQL_COMMIT_HOLD_GATE"] = str(output / "sql-commit-hold.release")
 
-            (output / "storage-profile.json").write_text(json.dumps({"upstream": upstream,
-                "bucket": bucket, "seed": seed, "scale": scale, "failure": fail,
-                "harness_timeout_seconds": timeout,
-                "anchors_ms": ready["anchors_ms"], "model": "linear inverse CDF, p0=0, p99-clamped",
-                "source": "https://topicpartition.io/misc/AWS-S3-PUT-latency-benchmark"}, indent=2))
-            with (output / "transactions.jsonl").open("w") as transactions, (output / "harness.log").open("w") as stderr:
-                result = subprocess.run(command, env=environment, stdout=transactions, stderr=stderr, timeout=timeout)
-            return result.returncode
-        finally:
-            for process in commit_processes:
-                process.terminate()
-                process.wait(timeout=10)
-            proxy.terminate()
-            proxy.wait(timeout=10)
+        (output / "storage-profile.json").write_text(json.dumps({"upstream": upstream,
+            "bucket": bucket, "seed": seed, "scale": scale, "failure": fail,
+            "harness_timeout_seconds": timeout,
+            "anchors_ms": ready["anchors_ms"], "model": "linear inverse CDF, p0=0, p99-clamped",
+            "source": "https://topicpartition.io/misc/AWS-S3-PUT-latency-benchmark"}, indent=2))
+        with (output / "transactions.jsonl").open("w") as transactions, (output / "harness.log").open("w") as stderr:
+            result = subprocess.run(command, env=environment, stdout=transactions, stderr=stderr, timeout=timeout)
+        return result.returncode
+    finally:
+        for process in commit_processes:
+            process.terminate()
+            process.wait(timeout=10)
+        proxy.terminate()
+        proxy.wait(timeout=10)
 
 
 def timed_run(output, command):

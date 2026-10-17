@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned partition aggregate and non-temporal ROWS CDC qualification."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import json
 from sql_compiler_harness import SqlFixture
@@ -63,9 +63,6 @@ def qualify(output, command, window, frame_spec=None, fixture_class=PartitionFix
             fixture.rejected(command, 'peer-order', fixture.query.replace(',b.id ROWS', ' ROWS'))
             fixture.rejected(command, 'range', fixture.query.replace('ROWS BETWEEN ' + fixture.frame_spec[0], 'RANGE 1 PRECEDING'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {fixture.name}.bid VALUES(100,NULL,NULL),(101,100,-3),(102,100,NULL)",
             f"UPDATE {fixture.name}.bid SET price=7,auction=1 WHERE id IN (100,101); UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=1",
@@ -74,24 +71,13 @@ def qualify(output, command, window, frame_spec=None, fixture_class=PartitionFix
             f"INSERT INTO {fixture.name}.bid VALUES(103,100,NULL),(104,100,NULL)",
             f"UPDATE {fixture.name}.auction SET group_id=3 WHERE id=2",  # complete empty query tick
         ]
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;' + change + ';COMMIT')
-            worker.event('published', minimum_time=ready['time'] + index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
         changed = fixture.query.replace('ROWS BETWEEN ' + fixture.frame_spec[0], 'ROWS BETWEEN 3 PRECEDING AND CURRENT ROW') if window else fixture.query.replace('b.price<0', 'b.price<1')
-        fixture.rejected(command, 'changed', changed)
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        fixture.query = fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"')
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time'] + len(changes)
-        fixture.verify()
-        fixture.sql(f'UPDATE {fixture.name}.bid SET price=-7 WHERE id=104')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'UPDATE {fixture.name}.bid SET price=-7 WHERE id=104',
+            normalized=fixture.query.replace('b.', '"B".').replace('bid b', 'bid AS "B"'),
+            rejected=[('changed', changed)],
+        ))
         (output/'result.json').write_text(json.dumps({'sql_oracle':'exact bag','memory_oracle':'independent partitions','null_group':True,'all_null':True,'retractions':True,'restart':'cold','window':window})+'\n')
 
 

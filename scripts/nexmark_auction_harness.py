@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named q4/q9 PG eligibility and winner histories with source recomputation."""
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 import collections
 import datetime
 from decimal import Decimal
@@ -94,9 +94,6 @@ def qualify(output,command,query,instant):
             fixture.rejected(command,'missing-bid-key',fixture.query.replace('j.bid_id,j.auction_id','j.auction_id'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {fixture.name}.auction(id,category,date_time,expires,item_name,extra) VALUES(300,3,'2000-01-01 00:00:00+00','2000-01-01 00:00:10+00','new/new','auction'); INSERT INTO {fixture.name}.bid(id,auction,price,date_time,bidder,extra) VALUES(300,300,-11,'2000-01-01 00:00:00+00',1,'new/new'),(301,300,NULL,'2000-01-01 00:00:10+00',2,'NULL first')",
             f"INSERT INTO {fixture.name}.bid(id,auction,price,date_time,bidder,extra) VALUES(212,200,9223372036854775807,'2000-01-01',1,'tie'),(213,200,NULL,'2000-01-01 00:00:02',2,'NULL first'); UPDATE {fixture.name}.auction SET category=2,item_name='updated' WHERE id=200",
@@ -106,26 +103,15 @@ def qualify(output,command,query,instant):
             f"DELETE FROM {fixture.name}.auction WHERE id=202; DELETE FROM {fixture.name}.bid WHERE id IN(208,209); UPDATE {fixture.name}.bid SET auction=NULL,date_time=NULL WHERE id=212",
             f"UPDATE {fixture.name}.auction SET expires=NULL WHERE id=200; UPDATE {fixture.name}.bid SET price=NULL WHERE id=210",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql("SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; BEGIN;"+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command,'changed-boundary',fixture.query.replace('b.date_time<=a.expires','b.date_time<a.expires'))
-        if query=='q9':
-            fixture.rejected(command,'changed-null-order',fixture.query.replace('DESC NULLS FIRST','DESC NULLS LAST'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('b.','"B".').replace('bid b ', 'bid AS "B" ')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.auction; DELETE FROM {fixture.name}.bid; COMMIT')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'BEGIN; DELETE FROM {fixture.name}.auction; DELETE FROM {fixture.name}.bid; COMMIT',
+            normalized=fixture.query.replace('b.', '"B".').replace('bid b ', 'bid AS "B" '),
+            rejected=[('changed-boundary', fixture.query.replace('b.date_time<=a.expires', 'b.date_time<a.expires'))] + ([] + [('changed-null-order', fixture.query.replace('DESC NULLS FIRST', 'DESC NULLS LAST'))] if query == 'q9' else []),
+            session="SET DateStyle='German,DMY'; SET TimeZone='America/New_York'; ",
+        ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':query,'native_time':'timestamptz' if instant else 'timestamp','eligibility':'inclusive both endpoints, no clock','postgres':'exact bag','memory':'independent eligibility/max/winner/Decimal average','nulls':'times/keys/prices/categories/payload','restart':'cold same slot','simultaneous':'both inputs'})+'\n')
 
 

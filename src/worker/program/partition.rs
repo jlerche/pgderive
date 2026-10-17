@@ -1,4 +1,5 @@
 mod sliding;
+use super::aggregate::{Linear, contribution};
 use crate::{
     compiler::{
         ColumnRef,
@@ -13,7 +14,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 use sliding::Frames;
-use std::{borrow::Cow, cmp::Ordering};
+use std::cmp::Ordering;
 type Bag = Batch<(), Row>;
 pub(super) type Ordered = (Vec<Option<i64>>, Row);
 pub(super) fn evaluate(
@@ -24,12 +25,9 @@ pub(super) fn evaluate(
     let (limits, work) = context;
     match &spec.mode {
         Mode::Grouped { keys } => grouped(spec, bag, keys, work),
-        Mode::Rows { order, frame } => {
-            rows(spec, bag, (order, frame), (limits, work), Frames::new(spec))
-        }
         Mode::Ranking { order } => ranks(spec, bag, order, (limits, work)),
-        Mode::Peers { order, frame, .. } => {
-            peers(spec, bag, (order, frame), (limits, work), Frames::new(spec))
+        Mode::Rows { order, frame } | Mode::Peers { order, frame, .. } => {
+            framed(spec, bag, (order, frame), (limits, work), Frames::new(spec))
         }
     }
 }
@@ -74,68 +72,31 @@ fn ordinary_value(
         return numeric_value(aggregate, bag, work);
     }
     work.charge(bag.iter().count())?;
-    let mut count = BigInt::from(0);
-    let mut sum = BigInt::from(0);
+    if matches!(aggregate.function, Function::Count | Function::Sum | Function::Average) {
+        let mut state = Linear::default();
+        for (((), row), weight) in bag.iter() {
+            state.observe(aggregate, row, *weight)?;
+        }
+        return state.result(aggregate);
+    }
     let mut extremum = None;
-    for (((), row), weight) in bag.iter() {
-        if aggregate
-            .filter
-            .as_ref()
-            .map(|predicate| predicate.qualifies(row))
-            .transpose()?
-            .is_some_and(|qualifies| !qualifies)
-        {
+    for (((), row), _) in bag.iter() {
+        let Some(super::aggregate::Contribution::Value(text)) = contribution(aggregate, row)?
+        else {
             continue;
-        }
-        let value = argument_value(aggregate, row)?;
-        if aggregate.argument.is_some() && value.is_none() {
-            continue;
-        }
-        count += *weight;
-        if !matches!(aggregate.function, Function::Count) {
-            let argument = aggregate.argument.as_ref().context("missing aggregate argument")?;
-            let text = value.as_deref().context("missing measure")?;
-            let integer = if matches!(argument.oid, 1114 | 1184) {
-                crate::temporal::Timestamp::parse(text, argument.oid)?.sort_value()
-            } else {
-                text.parse::<i64>()?
-            };
-            if matches!(aggregate.function, Function::Min | Function::Max) {
-                let canonical = if matches!(argument.oid, 1114 | 1184) {
-                    crate::temporal::Timestamp::parse(text, argument.oid)?.text(argument.oid)?
-                } else {
-                    integer.to_string()
-                };
-                update_extremum(&mut extremum, integer, &canonical, &aggregate.function);
-            } else {
-                sum += BigInt::from(integer) * weight;
-            }
-        }
+        };
+        let argument = aggregate.argument.as_ref().context("missing aggregate argument")?;
+        let temporal = matches!(argument.oid, 1114 | 1184);
+        let (value, canonical) = if temporal {
+            let timestamp = crate::temporal::Timestamp::parse(&text, argument.oid)?;
+            (timestamp.sort_value(), timestamp.text(argument.oid)?)
+        } else {
+            let value = text.parse::<i64>()?;
+            (value, value.to_string())
+        };
+        update_extremum(&mut extremum, value, &canonical, &aggregate.function);
     }
-    if matches!(aggregate.function, Function::Min | Function::Max) {
-        return Ok(extremum.map(|(_, text)| text));
-    }
-    integral_result(aggregate, &count, &sum)
-}
-fn integral_result(aggregate: &Aggregate, count: &BigInt, sum: &BigInt) -> Result<Option<String>> {
-    match aggregate.function {
-        Function::Count => Ok(Some(i64::try_from(count).context("COUNT overflow")?.to_string())),
-        Function::Sum | Function::Average if count == &BigInt::from(0) => Ok(None),
-        Function::Average => {
-            let count = i64::try_from(count).context("AVG non-NULL count overflow")?;
-            if aggregate.argument.as_ref().is_some_and(|arg| arg.oid != 20) {
-                i64::try_from(sum).context("AVG(int2/int4) sum overflow")?;
-            }
-            Ok(Some(format!("{sum}/{count}")))
-        }
-        Function::Sum if aggregate.argument.as_ref().is_some_and(|arg| arg.oid == 20) => {
-            Ok(Some(sum.to_string()))
-        }
-        Function::Sum => {
-            Ok(Some(i64::try_from(sum).context("SUM(int2/int4) overflow")?.to_string()))
-        }
-        _ => anyhow::bail!("aggregate requires specialized evaluator"),
-    }
+    Ok(extremum.map(|(_, text)| text))
 }
 
 fn update_extremum(
@@ -166,13 +127,7 @@ fn ordered(
                 row.get(&key.column.name)
                     .context("missing sort field")?
                     .as_ref()
-                    .map(|value| match key.column.oid {
-                        1114 | 1184 => {
-                            Ok(crate::temporal::Timestamp::parse(value, key.column.oid)?
-                                .sort_value())
-                        }
-                        _ => value.parse::<i64>().map_err(Into::into),
-                    })
+                    .map(|value| super::order::value(value, key.column.oid))
                     .transpose()
             })
             .collect::<Result<Vec<_>>>()?;
@@ -229,25 +184,6 @@ pub(super) fn compare(left: &[Option<i64>], right: &[Option<i64>], order: &[Orde
         }
     }
     Ordering::Equal
-}
-fn rows(
-    spec: &Partition,
-    bag: &Bag,
-    ordering: (&[Order], &Frame),
-    context: (Limits, &mut crate::engine::dataflow::PartitionWork),
-    mut frames: Frames,
-) -> Result<Bag> {
-    let (order, frame) = ordering;
-    let (limits, work) = context;
-    let ordered = ordered(bag, order, limits, work)?;
-    let mut updates = Consolidator::new(limits)?;
-    for (index, (_, row)) in ordered.iter().enumerate() {
-        let (start, end) = bounds(frame, index, ordered.len())?;
-        let mut output = row.clone();
-        output.extend(frames.fields(spec, &ordered, start.min(end)..end, (limits, work))?);
-        updates.add(((), output), 1)?;
-    }
-    updates.finish_batch()
 }
 fn bounds(frame: &Frame, index: usize, length: usize) -> Result<(usize, usize)> {
     let index = i64::try_from(index)?;
@@ -312,7 +248,7 @@ fn framed_fields(
     }
     Ok(output)
 }
-fn peers(
+fn framed(
     spec: &Partition,
     bag: &Bag,
     ordering: (&[Order], &Frame),
@@ -322,8 +258,13 @@ fn peers(
     let (order, frame) = ordering;
     let (limits, work) = context;
     let ordered = ordered(bag, order, limits, work)?;
+    let peers = matches!(spec.mode, Mode::Peers { .. });
     let mut groups: Vec<(usize, usize)> = Vec::new();
     for (index, (keys, _)) in ordered.iter().enumerate() {
+        if !peers {
+            groups.push((index, index + 1));
+            continue;
+        }
         work.charge(1)?;
         if index == 0 || compare(keys, &ordered[index - 1].0, order) != Ordering::Equal {
             groups.push((index, index + 1));
@@ -339,7 +280,9 @@ fn peers(
         // Every member of a peer group has the same RANGE/GROUPS frame.
         let fields = frames.fields(spec, &ordered, start_row..end_row, (limits, work))?;
         for (_, row) in &ordered[*first..*last] {
-            work.charge(fields.len())?;
+            if peers {
+                work.charge(fields.len())?;
+            }
             let mut output = row.clone();
             output.extend(fields.clone());
             updates.add(((), output), 1)?;
@@ -359,10 +302,8 @@ fn numeric_value(
     let mut count = BigInt::from(0);
     let mut extremum: Option<Numeric> = None;
     for (((), row), weight) in bag.iter() {
-        if aggregate.filter.as_ref().map(|p| p.qualifies(row)).transpose()?.is_some_and(|v| !v) {
-            continue;
-        }
-        let Some(text) = argument_value(aggregate, row)? else {
+        let Some(super::aggregate::Contribution::Value(text)) = contribution(aggregate, row)?
+        else {
             continue;
         };
         ensure!(*weight > 0, "negative numeric aggregate occurrence");
@@ -396,15 +337,6 @@ fn numeric_value(
     }
 }
 
-fn argument_value<'a>(aggregate: &Aggregate, row: &'a Row) -> Result<Option<Cow<'a, str>>> {
-    if let Some(expression) = &aggregate.expression {
-        return Ok(expression.evaluate(row)?.map(Cow::Owned));
-    }
-    aggregate.argument.as_ref().map_or(Ok(None), |column| {
-        Ok(row.get(&column.name).context("missing aggregate input")?.as_deref().map(Cow::Borrowed))
-    })
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -415,9 +347,8 @@ pub(in crate::worker) fn evaluate_scan(
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
 ) -> Result<Bag> {
     match &spec.mode {
-        Mode::Rows { order, frame } => rows(spec, bag, (order, frame), context, Frames::scan()),
-        Mode::Peers { order, frame, .. } => {
-            peers(spec, bag, (order, frame), context, Frames::scan())
+        Mode::Rows { order, frame } | Mode::Peers { order, frame, .. } => {
+            framed(spec, bag, (order, frame), context, Frames::scan())
         }
         _ => evaluate(spec, bag, context),
     }

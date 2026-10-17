@@ -1,5 +1,5 @@
 //! SQL sufficient statistics codec and terminal aggregate finalization.
-use super::relational::Key;
+use super::{aggregate::Linear, relational::Key};
 use crate::{
     compiler::partition::{
         Function, Mode, Partition,
@@ -31,30 +31,9 @@ fn measure(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
             values.extend([BigInt::from(0), BigInt::from(0)]);
             continue;
         }
-        let qualifies = aggregate
-            .filter
-            .as_ref()
-            .map(|filter| filter.qualifies(row))
-            .transpose()?
-            .unwrap_or(true);
-        let argument = aggregate
-            .argument
-            .as_ref()
-            .map(|column| row.get(&column.name).context("missing statistics input"))
-            .transpose()?;
-        let present = qualifies && argument.is_none_or(Option::is_some);
-        values.push(BigInt::from(u8::from(present)));
-        let sum = if present && !matches!(aggregate.function, Function::Count) {
-            BigInt::from(
-                argument
-                    .and_then(Option::as_deref)
-                    .context("missing statistics measure")?
-                    .parse::<i64>()?,
-            )
-        } else {
-            BigInt::from(0)
-        };
-        values.push(sum);
+        let mut state = Linear::default();
+        state.observe(aggregate, row, 1)?;
+        values.extend([state.count, state.sum]);
     }
     Ok(values)
 }
@@ -121,36 +100,7 @@ pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
         for (index, aggregate) in spec.aggregates.iter().enumerate() {
             let count = &values[count(index)];
             let sum = &values[sum(index)];
-            let value = match aggregate.function {
-                Function::Count | Function::CountDistinct => {
-                    Some(i64::try_from(count).context("COUNT overflow")?.to_string())
-                }
-                Function::Sum | Function::Average if count == &BigInt::from(0) => None,
-                Function::Sum
-                    if aggregate.argument.as_ref().is_some_and(|column| column.oid == 20) =>
-                {
-                    Some(sum.to_string())
-                }
-                Function::Sum => {
-                    Some(i64::try_from(sum).context("SUM(int2/int4) overflow")?.to_string())
-                }
-                Function::Average => {
-                    let count = i64::try_from(count).context("AVG non-NULL count overflow")?;
-                    if aggregate.argument.as_ref().is_some_and(|column| column.oid != 20) {
-                        i64::try_from(sum).context("AVG(int2/int4) sum overflow")?;
-                    }
-                    Some(format!("{sum}/{count}"))
-                }
-                Function::Min
-                | Function::Max
-                | Function::Rank
-                | Function::DenseRank
-                | Function::RowNumber
-                | Function::Lag
-                | Function::Lead => {
-                    anyhow::bail!("nonlinear aggregate requires partition evaluator")
-                }
-            };
+            let value = Linear { count: count.clone(), sum: sum.clone() }.result(aggregate)?;
             output.insert(aggregate.field.clone(), value);
         }
         Ok(Some((key.clone(), output)))

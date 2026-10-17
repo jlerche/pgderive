@@ -2,11 +2,11 @@
 """Sequential owned-fixture retirement faults and destructive-ownership checks."""
 import json
 import subprocess
-import sys
 import time
 
 from query_lifecycle_harness import configured, grouped, inspect, rejected, verify_result
 from worker_harness import Worker, harness_arguments
+from harness_control import commit_proxy, wait_records
 
 
 def setup(output, command, public=True):
@@ -32,14 +32,7 @@ def cleanup(fixture):
     fixture.sql(f'DROP PUBLICATION {fixture.name}; DROP SCHEMA {fixture.name} CASCADE')
 
 
-def wait_records(path, predicate):
-    deadline = time.monotonic()+20
-    while time.monotonic() < deadline:
-        records = [json.loads(line) for line in path.read_text().splitlines()]
-        if predicate(records):
-            return records
-        time.sleep(.05)
-    raise AssertionError(f'fault witness missing: {path}')
+
 
 
 def fault(output, command, stage, mode):
@@ -47,17 +40,12 @@ def fault(output, command, stage, mode):
     proxy = None
     source_before = [fixture.sql(f'SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM {fixture.name}.{table} t') for table in ('auction', 'bid')]
     try:
-        marker = 'pgderive_removals VALUES' if stage == 'intent' else 'pgderive_removals SET state'
+        marker = '/* lifecycle:removal-intent */' if stage == 'intent' else '/* lifecycle:removal-complete */'
         gate = output/'release'
         evidence = output/'fault.jsonl'
-        with evidence.open('w') as log:
-            args = [sys.executable, '-u', 'scripts/pg_commit_proxy.py', '--mode', mode,
-                    '--once', '--arm-query', marker]
-            if mode == 'hold':
-                args += ['--gate', str(gate)]
-            proxy = subprocess.Popen(args, stdout=log, stderr=log)
-        records = wait_records(evidence, lambda rows: rows and rows[0].get('ready'))
-        fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(records[0]['port'])
+        proxy, port = commit_proxy(evidence, mode, once=True, marker=marker,
+                                   gate=gate if mode == 'hold' else None)
+        fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
         if mode == 'hold':
             with (output/'drop.stdout').open('w') as stdout, (output/'drop.stderr').open('w') as stderr:
                 process = subprocess.Popen(command+['query', 'drop', str(config)],
@@ -81,10 +69,9 @@ def fault(output, command, stage, mode):
             wait_records(evidence, lambda rows: any(row.get('fault') == ('before_commit' if mode == 'before' else 'lost_commit_response') for row in rows))
         fixture.environment.pop('PGDERIVE__POSTGRES__PORT')
         state = inspect(command, fixture, 'status', config)['state']
-        expected = 'activated' if stage == 'intent' and mode == 'before' else (
-            'dropped' if stage == 'finish' and mode != 'before' else 'dropping')
-        assert state == expected, (stage, mode, state)
-        if state != 'dropped':
+        expected_state = 'activated' if stage == 'intent' and mode == 'before' else 'dropping'
+        assert state == expected_state, (stage, mode, state)
+        if fixture.sql(f"SELECT to_regclass('{fixture.name}.groups') IS NOT NULL").strip() == 't':
             fixture.verify()
         assert inspect(command, fixture, 'drop', config)['state'] == 'dropped'
         assert inspect(command, fixture, 'drop', config)['state'] == 'dropped'

@@ -1,5 +1,5 @@
 //! Exact scan reference remains the fallback for ineligible aggregate sets.
-use super::{Bag, Frames, Mode, Partition, evaluate, peers, rows};
+use super::{Bag, Frames, Mode, Partition, evaluate, framed};
 use crate::{
     compiler::{compile, relational::Node},
     engine::{dataflow::PartitionWork, execution::Limits},
@@ -49,11 +49,8 @@ fn run(spec: &Partition, bag: &Bag, sliding: bool) -> Result<(Bag, usize)> {
     let limits = Limits { contributions: BUDGET, ..Limits::default() };
     let frames = if sliding { Frames::new(spec) } else { Frames::scan() };
     let result = match &spec.mode {
-        Mode::Rows { order, frame } => {
-            rows(spec, bag, (order, frame), (limits, &mut work), frames)?
-        }
-        Mode::Peers { order, frame, .. } => {
-            peers(spec, bag, (order, frame), (limits, &mut work), frames)?
+        Mode::Rows { order, frame } | Mode::Peers { order, frame, .. } => {
+            framed(spec, bag, (order, frame), (limits, &mut work), frames)?
         }
         _ => anyhow::bail!("expected framed mode"),
     };
@@ -169,15 +166,21 @@ fn integral_output_width_checks_are_shared_by_scan_and_sliding() -> Result<()> {
         aggregate.function = function;
         for oid in [21, 23] {
             aggregate.argument.as_mut().context("missing input")?.oid = oid;
-            assert!(super::integral_result(&aggregate, &BigInt::from(2), &oversized).is_err());
-            assert!(
-                super::integral_result(&aggregate, &BigInt::from(2), &BigInt::from(i64::MAX))
-                    .is_ok()
-            );
+            assert!(integral_result(&aggregate, &BigInt::from(2), &oversized).is_err());
+            assert!(integral_result(&aggregate, &BigInt::from(2), &BigInt::from(i64::MAX)).is_ok());
         }
         aggregate.argument.as_mut().context("missing input")?.oid = 20;
-        assert!(super::integral_result(&aggregate, &BigInt::from(2), &oversized).is_ok());
+        assert!(integral_result(&aggregate, &BigInt::from(2), &oversized).is_ok());
     }
-    assert!(super::integral_result(&spec.aggregates[0], &oversized, &BigInt::from(0)).is_err());
+    assert!(integral_result(&spec.aggregates[0], &oversized, &BigInt::from(0)).is_err());
     Ok(())
+}
+
+fn integral_result(
+    aggregate: &crate::compiler::partition::Aggregate,
+    count: &num_bigint::BigInt,
+    sum: &num_bigint::BigInt,
+) -> Result<Option<String>> {
+    crate::worker::program::aggregate::Linear { count: count.clone(), sum: sum.clone() }
+        .result(aggregate)
 }

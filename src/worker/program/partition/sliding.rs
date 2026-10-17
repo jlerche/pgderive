@@ -1,22 +1,17 @@
 //! Transient exact statistics over monotone frame ranges; no persisted index.
-use super::{Ordered, argument_value, framed_fields, integral_result};
+use super::{Ordered, framed_fields};
+use crate::worker::program::aggregate::Linear;
 use crate::{
     compiler::partition::{Function, Partition},
     engine::{dataflow::PartitionWork, execution::Limits},
     transaction::Row,
 };
 use anyhow::{Result, ensure};
-use num_bigint::BigInt;
 use std::ops::Range;
-#[derive(Default)]
-struct State {
-    count: BigInt,
-    sum: BigInt,
-}
 #[derive(Default)]
 struct Sliding {
     range: Range<usize>,
-    states: Vec<State>,
+    states: Vec<Linear>,
 }
 pub(super) struct Frames(Option<Sliding>);
 impl Frames {
@@ -32,7 +27,7 @@ impl Frames {
             });
         Self(eligible.then(|| Sliding {
             range: 0..0,
-            states: spec.aggregates.iter().map(|_| State::default()).collect(),
+            states: spec.aggregates.iter().map(|_| Linear::default()).collect(),
         }))
     }
     #[cfg(test)]
@@ -53,10 +48,7 @@ impl Frames {
         let mut output = Row::new();
         for (aggregate, state) in spec.aggregates.iter().zip(&sliding.states) {
             context.1.charge(1)?;
-            output.insert(
-                aggregate.field.clone(),
-                integral_result(aggregate, &state.count, &state.sum)?,
-            );
+            output.insert(aggregate.field.clone(), state.result(aggregate)?);
         }
         Ok(output)
     }
@@ -94,27 +86,7 @@ impl Sliding {
     ) -> Result<()> {
         for (aggregate, state) in spec.aggregates.iter().zip(&mut self.states) {
             work.charge(1)?;
-            if aggregate
-                .filter
-                .as_ref()
-                .map(|filter| filter.qualifies(row))
-                .transpose()?
-                .is_some_and(|value| !value)
-            {
-                continue;
-            }
-            let value = argument_value(aggregate, row)?;
-            if aggregate.argument.is_some() && value.is_none() {
-                continue;
-            }
-            state.count += sign;
-            if !matches!(aggregate.function, Function::Count) {
-                let integer = value
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("missing sliding measure"))?
-                    .parse::<i64>()?;
-                state.sum += BigInt::from(integer) * sign;
-            }
+            state.observe(aggregate, row, sign)?;
         }
         Ok(())
     }

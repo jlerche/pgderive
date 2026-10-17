@@ -69,10 +69,9 @@ pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
             target(target_node).ok().is_some_and(|value| {
                 super::scalar::is_bin(value).unwrap_or(false)
                     || super::offset::eligible(value).unwrap_or(false)
-            }) || target(target_node).ok().and_then(|value| node(value).ok()).is_some_and(|value| {
-                matches!(value, NodeEnum::CaseExpr(_))
-                    || matches!(value, NodeEnum::FuncCall(call) if call.over.is_some())
-            })
+            }) || target(target_node).ok().and_then(|value| node(value).ok()).is_some_and(
+                |value| matches!(value, NodeEnum::FuncCall(call) if call.over.is_some()),
+            )
         }))
 }
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
@@ -113,7 +112,10 @@ fn parse_target(value: &Node) -> Result<Target> {
         (Value::Offset(super::offset::parse(expression)?), "?column?".into())
     } else if matches!(
         node(expression)?,
-        NodeEnum::TypeCast(_) | NodeEnum::CoalesceExpr(_) | NodeEnum::AExpr(_)
+        NodeEnum::AConst(_)
+            | NodeEnum::TypeCast(_)
+            | NodeEnum::CoalesceExpr(_)
+            | NodeEnum::AExpr(_)
     ) {
         (Value::Typed(Box::new(expression.clone())), "?column?".into())
     } else if matches!(node(expression)?, NodeEnum::CaseExpr(_)) {

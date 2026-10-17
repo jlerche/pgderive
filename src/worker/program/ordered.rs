@@ -18,9 +18,7 @@ fn width(spec: &Spec) -> Result<usize> {
     Ok(keys.len())
 }
 fn token(value: i64, descending: bool) -> String {
-    let sortable = u64::from_be_bytes(value.to_be_bytes()) ^ (1_u64 << 63);
-    let sortable = if descending { !sortable } else { sortable };
-    format!("0{sortable:016x}")
+    format!("0{:016x}", super::order::biased(value, descending))
 }
 fn measure(
     aggregate: &crate::compiler::partition::Aggregate,

@@ -4,7 +4,7 @@ import collections
 import decimal
 import json
 from sql_compiler_harness import SqlFixture
-from worker_harness import harness_arguments
+from worker_harness import harness_arguments, History
 
 MODES = ('statistics', 'distinct', 'ordered', 'mixed', 'computed-key', 'derived')
 GUARD = ' FILTER(WHERE price>0)'
@@ -92,9 +92,6 @@ def qualify(output, command, mode):
         if mode == 'statistics':
             fixture.rejected(command, 'missing-function', fixture.query.replace('abs(price)', 'lower(price::text)'))
             assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f'UPDATE {fixture.name}.bid SET price=-1 WHERE id=2; UPDATE {fixture.name}.bid SET auction=-1 WHERE id=1',
             f'UPDATE {fixture.name}.bid SET price=6 WHERE id=6; DELETE FROM {fixture.name}.bid WHERE id=3',
@@ -102,19 +99,12 @@ def qualify(output, command, mode):
             f'DELETE FROM {fixture.name}.bid WHERE auction=-1; INSERT INTO {fixture.name}.bid VALUES(100,4,NULL),(101,4,2)',
             f'UPDATE {fixture.name}.bid SET price=-9223372036854775808 WHERE id=101; DELETE FROM {fixture.name}.bid WHERE id=100',
         ]
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;' + change + ';COMMIT')
-            worker.event('published', minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'UPDATE {fixture.name}.bid SET price=8 WHERE id=101')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'UPDATE {fixture.name}.bid SET price=8 WHERE id=101',
+            normalized=fixture.query,
+            rejected=[],
+        ))
         if mode == 'statistics':
             before = fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p")
             sink_before = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}")

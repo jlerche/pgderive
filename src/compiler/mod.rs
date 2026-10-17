@@ -6,7 +6,6 @@ mod expression;
 pub(crate) mod left_join;
 pub(crate) mod lookup;
 pub(crate) mod navigation;
-pub(crate) mod output;
 mod parser;
 pub(crate) mod partition;
 
@@ -50,9 +49,7 @@ impl Compiled {
         &self.relational.output
     }
     pub(crate) fn validate_execution(&self) -> Result<()> {
-        if let Some(mapping) = &self.output().mapping {
-            mapping.validate()?;
-        }
+        anyhow::ensure!(!self.output().columns.is_empty(), "empty compiled output");
         Ok(())
     }
     pub(crate) fn sink(&self, table: &str) -> crate::catalog::Sink {
@@ -70,12 +67,7 @@ impl Compiled {
 /// Rejects invalid/unsupported SQL, unresolved/ambiguous names and incompatible types.
 pub fn compile(sql: &str, contract: &Contract) -> Result<Compiled> {
     contract.validate()?;
-    let (parsed, fallback) = parser::parse(sql)?;
-    let compiled = bind::bind(parsed, contract).or_else(|prior| match fallback {
-        Some(parsed) => bind::bind(parsed, contract).map_err(|_| prior),
-        None => Err(prior),
-    })?;
-    Ok(compiled)
+    bind::bind(parser::parse(sql)?, contract)
 }
 
 #[cfg(test)]

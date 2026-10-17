@@ -10,7 +10,6 @@ mod program;
 mod registration;
 mod results;
 mod retire;
-mod runtime;
 mod spec;
 mod sql;
 use crate::Config;

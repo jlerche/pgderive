@@ -45,7 +45,7 @@ fn expected(source: &BTreeMap<Row, i64>) -> Result<Batch<relational::Key, Row>> 
 #[tokio::test]
 async fn sliding_cold_ticks_match_source_oracle_and_scan_object_costs() -> Result<()> {
     let native = contract();
-    let compiled = compile(&sql(), &native)?;
+    let compiled = super::raw_statistics_compiled(compile(&sql(), &native)?);
     let source = (0..400)
         .map(|id| {
             row(&[
@@ -83,7 +83,6 @@ async fn sliding_cold_ticks_match_source_oracle_and_scan_object_costs() -> Resul
         let objects = options.store.list(None).try_collect::<Vec<_>>().await?;
         let prior = query.cache_stats()?.misses;
         let prepared = query.prepare(relational::inputs(&delta, compiled.relational(), 2)?).await?;
-        assert_eq!(prepared.output().batch, expected);
         let after = options.store.list(None).try_collect::<Vec<_>>().await?;
         let writes = after
             .iter()
@@ -94,6 +93,7 @@ async fn sliding_cold_ticks_match_source_oracle_and_scan_object_costs() -> Resul
             writes.len(),
             writes.iter().map(|object| object.size).sum::<u64>(),
         ));
+        assert_eq!(prepared.output().batch, expected);
         query.commit(prepared)?;
         super::restart_relational(&mut query, &native, &compiled, &options).await?;
     }

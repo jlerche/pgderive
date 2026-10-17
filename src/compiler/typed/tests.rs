@@ -80,7 +80,7 @@ fn typed_predicates_preserve_null_unknown_and_width_errors() -> Result<()> {
         };
         let predicate = crate::compiler::syntax::predicate(statement.where_clause.as_deref())?
             .context("missing predicate")?;
-        let predicate = crate::compiler::expression::bind(predicate, &|name| {
+        let predicate = crate::compiler::expression::bind(&predicate, &|name| {
             Ok(ColumnRef {
                 name: name.0.last().context("missing name")?.clone(),
                 right: false,

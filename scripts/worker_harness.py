@@ -7,6 +7,7 @@ command after -- is an instrumented or ordinary worker executable prefix.
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
+from harness_control import commit_proxy
 import json
 import os
 import pathlib
@@ -32,6 +33,7 @@ class History:
     rejected: list[tuple[str, str]]
     session: str = ''
     verify_reopen: bool = True
+    graceful: bool = False
 
 
 class Worker:
@@ -175,7 +177,7 @@ record_bytes=16384
         beyond = self.acknowledgement_ahead().strip()
         assert beyond == '0', 'slot acknowledged beyond durable publication'
 
-    def run_history(self, command, history, initial=None):
+    def run_history(self, command, history, initial=None, after=None):
         worker = self.start(command, 'first')
         ready = worker.event('ready')
         self.verify()
@@ -185,7 +187,12 @@ record_bytes=16384
             self.sql(history.session + 'BEGIN;' + change + ';COMMIT')
             worker.event('published', minimum_time=ready['time'] + index)
             self.verify()
-        worker.abort()
+        if after is not None:
+            after()
+        if history.graceful:
+            worker.finish(graceful=True)
+        else:
+            worker.abort()
         progress_sql = f'SELECT row_to_json(p) FROM {self.name}.pgderive_progress p'
         prior = self.sql(progress_sql)
         for label, query in history.rejected:
@@ -247,26 +254,13 @@ record_bytes=16384
 def qualify(output, command, ticks, index=0, mode=None, target=None, kill=False, burst=0, rows=256, auctions=32):
     fixture = Fixture(output, index, rows=rows, auctions=auctions)
     proxy = None
-    proxy_log = None
-    if mode:
-        proxy_log = (output / 'sql-fault.jsonl').open('w')
-        marker = {'journal': 'pgderive_worker_registration(query_id,',
-                  'activation': 'pgderive_progress(query_id,binding',
-                  'publication': 'pgderive_progress SET commit_lsn'}[target]
-        proxy = subprocess.Popen([sys.executable, '-u', 'scripts/pg_commit_proxy.py',
-                                  '--mode', mode, '--once', '--arm-query', marker],
-                                 stdout=proxy_log, stderr=proxy_log)
     try:
-        if proxy:
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
-                lines = (output / 'sql-fault.jsonl').read_text().splitlines()
-                if lines:
-                    fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(json.loads(lines[0])['port'])
-                    break
-                time.sleep(.05)
-            else:
-                raise RuntimeError('SQL fault proxy did not start')
+        if mode:
+            marker = {'journal': 'pgderive_worker_registration(query_id,',
+                      'activation': 'pgderive_progress(query_id,binding',
+                      'publication': 'pgderive_progress SET commit_lsn'}[target]
+            proxy, port = commit_proxy(output/'sql-fault.jsonl', mode, once=True, marker=marker)
+            fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
         worker = fixture.start(command, 'first')
         ready = worker.event('ready')
         fixture.verify()
@@ -315,7 +309,6 @@ def qualify(output, command, ticks, index=0, mode=None, target=None, kill=False,
         if proxy:
             proxy.terminate()
             proxy.wait(timeout=10)
-            proxy_log.close()
 
 
 if __name__ == '__main__':

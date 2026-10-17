@@ -1,74 +1,26 @@
-from engine_rejection import qualify_unavailable
 #!/usr/bin/env python3
-"""q14 native terminal DAG: exact MV, independent Decimal/Unicode oracle, CDC/restart."""
-from worker_harness import harness_arguments, History
-import collections
-import decimal
-import json
+"""Reject unsupported q14 compositions before registration or slot creation."""
 import pathlib
+from engine_rejection import qualify_unavailable
 from sql_compiler_harness import SqlFixture
-from native_mv_oracle import expected as native_expected
-from nexmark_temporal_harness import encode
+from worker_harness import harness_arguments
 
-decimal.getcontext().prec = 100
 SQL = pathlib.Path(__file__).resolve().parents[1]/'queries/nexmark/q14.sql'
-LABELS = ['auction','bidder','price','bidTimeType','date_time','extra','c_counts']
+
 
 class Q14Fixture(SqlFixture):
-    def __init__(self,output,mode):
-        super().__init__(output,False)
-        self.pg.insert(1,'-q')
-        self.instant = mode!='local'
-        temporal = 'timestamptz' if self.instant else 'timestamp'
-        self.sql(f'''ALTER TABLE {self.name}.bid ADD COLUMN bidder bigint,
-          ADD COLUMN date_time {temporal},ADD COLUMN extra text;
-          UPDATE {self.name}.bid SET bidder=9,date_time='2000-01-01 12:00:00',extra='é🙂ccc';
-          INSERT INTO {self.name}.bid(id,auction,price,bidder,date_time,extra) VALUES
-          (300,1,2000000,9,'2000-01-01 08:00:00','ccc🙂'),
-          (301,1,2000000,9,'2000-01-01 08:00:00','ccc🙂'),
-          (302,2,2000000,NULL,NULL,NULL),
-          (303,2,2000000,9,'2000-01-01 07:00:00',''),
-          (304,2,2000000,9,'2000-01-01 19:00:00','éçC'),
-          (305,2,2000000,9,'2000-01-01 20:00:00','c'),
-          (306,2,2000000,9,'infinity','cc'),(307,2,2000000,9,'-infinity',NULL),
-          (308,NULL,NULL,9,NULL,'cc'),(309,2,1101321,9,NULL,'boundary'),
-          (310,2,1101322,9,NULL,'boundary'),(311,2,55066079,9,NULL,'boundary'),
-          (312,2,55066080,9,NULL,'boundary'),
-          (313,2,9223372036854775807,9,NULL,'maximum'),
-          (314,2,-9223372036854775808,9,NULL,'minimum')''')
-        self.query = SQL.read_text().replace('nexmark.',self.name+'.').strip().removesuffix(';')
-        if not self.instant:
-            self.query = self.query.replace("date_time AT TIME ZONE 'UTC'",'date_time')
-
-    def verify(self):
-        context = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
-        expected = native_expected(self,LABELS)
-        difference = self.bag_difference(expected, context=context)
-        assert difference.strip()=='0','q14 differs from exact native MV'
-        source = json.loads(self.sql(context+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
-        memory = collections.Counter()
-        for row in source:
-            price = None if row['price'] is None else decimal.Decimal(row['price'])*decimal.Decimal('0.908')
-            if price is None or not decimal.Decimal(1000000)<price<decimal.Decimal(50000000):
-                continue
-            timestamp = row['date_time']
-            hour = None if timestamp is None or timestamp in ('infinity','-infinity') else int(timestamp[11:13])
-            label = 'dayTime' if hour is not None and 8<=hour<=18 else 'nightTime' if hour is not None and (hour<=6 or hour>=20) else 'otherTime'
-            count = None if row['extra'] is None else row['extra'].count('c')
-            memory[(row['auction'],row['bidder'],price,label,encode(timestamp,self.instant),row['extra'],count)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=decimal.Decimal)
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q14 differs from independent Decimal/Unicode/hour oracle'
-        assert self.acknowledgement_ahead().strip()=='0'
+    def __init__(self, output, mode):
+        super().__init__(output, False)
+        temporal = 'timestamp' if mode == 'local' else 'timestamptz'
+        self.sql(f'ALTER TABLE {self.name}.bid ADD COLUMN bidder bigint, ADD COLUMN date_time {temporal}, ADD COLUMN extra text')
+        self.query = SQL.read_text().replace('nexmark.', self.name+'.').strip().removesuffix(';')
+        if mode == 'local':
+            self.query = self.query.replace("date_time AT TIME ZONE 'UTC'", 'date_time')
 
 
-def qualify(output,command,mode):
-    fixture = Q14Fixture(output,mode)
-    qualify_unavailable(fixture,command)
-
-
-if __name__=='__main__':
+if __name__ == '__main__':
     output, command = harness_arguments()
-    for mode in ('local','instant'):
+    for mode in ('local', 'instant'):
         directory = output/mode
         directory.mkdir()
-        qualify(directory,command,mode)
+        qualify_unavailable(Q14Fixture(directory, mode), command)

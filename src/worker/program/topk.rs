@@ -17,13 +17,12 @@ fn encoding(spec: &Spec, row: &Row) -> Result<String> {
             continue;
         };
         token.push('1');
-        let value = match order.column.oid {
-            1114 | 1184 => crate::temporal::Timestamp::parse(value, order.column.oid)?.sort_value(),
-            20 | 21 | 23 => value.parse::<i64>()?,
-            _ => anyhow::bail!("unsupported top-k ordering type"),
-        };
-        let biased = u64::from_be_bytes(value.to_be_bytes()) ^ (1_u64 << 63);
-        let biased = if order.descending { !biased } else { biased };
+        ensure!(
+            matches!(order.column.oid, 20 | 21 | 23 | 1114 | 1184),
+            "unsupported top-k ordering type"
+        );
+        let value = super::order::value(value, order.column.oid)?;
+        let biased = super::order::biased(value, order.descending);
         write!(token, "{biased:016x}")?;
     }
     Ok(token)

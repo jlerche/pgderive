@@ -23,8 +23,8 @@ pub(super) async fn source(
         &config.replication.slot,
     )
     .await?;
-    settings.query.compile_bound(sql, &preliminary).await?;
-    super::results::validate(sql, settings).await?;
+    let compiled = settings.query.compile_bound(sql, &preliminary).await?;
+    compiled.sink(&settings.sink_table).validate()?;
     sql.batch_execute(&format!(
         "CREATE TABLE IF NOT EXISTS {}.pgderive_worker_registration(
         query_id text PRIMARY KEY, format_version integer NOT NULL CHECK(format_version=1),
@@ -53,17 +53,15 @@ pub(super) async fn source(
                 && source.publication == config.replication.publication,
             "worker registration source identity changed"
         );
+        let compiled = settings.query.compile_bound(sql, &source).await?;
         ensure!(
             row.try_get::<_, serde_json::Value>(4)?
-                == serde_json::to_value(
-                    settings.query.compile_bound(sql, &source).await?.sink(&settings.sink_table)
-                )?,
+                == serde_json::to_value(compiled.sink(&settings.sink_table))?,
             "worker registration destination changed"
         );
         source.verify(sql).await?;
         ensure!(
-            program::plan(&source, &settings.query.compile_bound(sql, &source).await?)?.identity()
-                == row.try_get::<_, String>(5)?,
+            program::plan(&source, &compiled)?.identity() == row.try_get::<_, String>(5)?,
             "worker registration query changed"
         );
         return Ok(source);
@@ -108,6 +106,10 @@ pub(super) async fn reset_unactivated(sql: &Client, source: &Contract) -> Result
     // Called only after the query is proven unactivated, under exclusive worker
     // ownership. This exact unpredictable name was recorded before CREATE SLOT.
     source.verify(sql).await?;
+    drop_slot(sql, source).await
+}
+
+pub(super) async fn drop_slot(sql: &Client, source: &Contract) -> Result<()> {
     if let Some(row)=sql.query_opt("SELECT plugin,database,temporary,active FROM pg_catalog.pg_replication_slots WHERE slot_name=$1",&[&source.slot]).await? {
         ensure!(row.try_get::<_,String>(0)?=="pgoutput" && row.try_get::<_,String>(1)?==source.identity.database && !row.try_get::<_,bool>(2)? && !row.try_get::<_,bool>(3)?,"unactivated owned slot is incompatible or still active");
         sql.query_one("SELECT pg_catalog.pg_drop_replication_slot($1)",&[&source.slot]).await?;

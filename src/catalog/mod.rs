@@ -28,7 +28,7 @@ pub struct Catalog {
     query: String,
 }
 /// One authoritative metadata checkpoint and its optimistic publication epoch.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stored {
     /// Catalog generation used to reject stale checkpoint writers.
     pub epoch: u64,

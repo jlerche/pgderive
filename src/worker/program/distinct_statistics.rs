@@ -38,17 +38,9 @@ pub(super) fn input(spec: &Partition) -> Expand<Key, Row, Key, Row> {
             if !matches!(aggregate.function, Function::CountDistinct) {
                 continue;
             }
-            if aggregate
-                .filter
-                .as_ref()
-                .map(|filter| filter.qualifies(row))
-                .transpose()?
-                .is_some_and(|value| !value)
-            {
-                continue;
-            }
-            let argument = aggregate.argument.as_ref().context("missing distinct argument")?;
-            let Some(value) = row.get(&argument.name).context("missing distinct input")? else {
+            let Some(super::aggregate::Contribution::Value(value)) =
+                super::aggregate::contribution(aggregate, row)?
+            else {
                 continue;
             };
             let value: i64 = value.parse()?;

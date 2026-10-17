@@ -48,9 +48,17 @@ impl QueryDefinition {
         sql: &(impl tokio_postgres::GenericClient + Sync),
         contract: &Contract,
     ) -> Result<crate::compiler::Compiled> {
+        self.describe(sql, contract).await.map(|(compiled, _)| compiled)
+    }
+    pub(crate) async fn describe(
+        &self,
+        sql: &(impl tokio_postgres::GenericClient + Sync),
+        contract: &Contract,
+    ) -> Result<(crate::compiler::Compiled, Vec<serde_json::Value>)> {
         let mut compiled = self.compile(contract)?;
-        compiled.result_columns = super::results::columns(sql, self).await?;
-        Ok(compiled)
+        let (columns, description) = super::results::columns(sql, self).await?;
+        compiled.result_columns = columns;
+        Ok((compiled, description))
     }
     pub(crate) fn compile(&self, contract: &Contract) -> Result<crate::compiler::Compiled> {
         match self {

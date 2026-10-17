@@ -20,7 +20,7 @@ pub(super) struct Table {
     pub(super) name: Name,
     pub(super) alias: Option<String>,
 }
-pub(super) type Columns = Vec<(Name, String, crate::compiler::output::OutputMap)>;
+pub(super) type Columns = Vec<(Name, String)>;
 pub(super) enum Parsed {
     Membership { parsed: native_join::Parsed, distinct: bool },
     NativeJoin(native_join::Parsed),
@@ -30,8 +30,6 @@ pub(super) enum Parsed {
     Grouped(Grouped),
     Partition(partition::Parsed),
     Scalar { source: Table, targets: Vec<Node>, predicate: Option<Box<Node>> },
-    NativeScope { source: Table, columns: Columns, predicate: Option<super::syntax::Expr> },
-    Projection { source: Table, columns: Columns, predicate: Option<super::syntax::Expr> },
 }
 pub(super) struct Grouped {
     pub(super) labels: Vec<String>,
@@ -44,7 +42,7 @@ pub(super) struct Grouped {
     pub(super) grouping: Name,
 }
 
-pub(super) fn parse(sql: &str) -> Result<(Parsed, Option<Parsed>)> {
+pub(super) fn parse(sql: &str) -> Result<Parsed> {
     ensure!(sql.len() <= 16_384 && !sql.contains('\0'), "SQL exceeds size limit or contains NUL");
     scan_budget(sql)?;
     let parsed = pg_query::parse(sql).context("SQL parse (PostgreSQL 17.7)")?;
@@ -56,8 +54,7 @@ pub(super) fn parse(sql: &str) -> Result<(Parsed, Option<Parsed>)> {
     else {
         anyhow::bail!("SQL requires SELECT");
     };
-    let fallback = validate_query(select).and_then(|()| scalar_query(select)).ok();
-    Ok((query(select).context("SQL lower: unsupported SELECT")?, fallback))
+    query(select).context("SQL lower: unsupported SELECT")
 }
 
 // Bound native parser recursion before parsing, using PostgreSQL's scanner so
@@ -136,17 +133,14 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
         return Ok(Parsed::NativeJoin(join));
     }
     if partition::eligible(select)? {
-        return partition::parse(select)
-            .map(Parsed::Partition)
-            .or_else(|prior| scalar_query(select).map_err(|_| prior));
+        return partition::parse(select).map(Parsed::Partition);
     }
     if let Some(derived) = derived::parse(select)? {
         return Ok(Parsed::Derived(derived));
     }
-    let pg::SelectStmt { target_list, from_clause, where_clause, group_clause, .. } = select;
+    let pg::SelectStmt { group_clause, .. } = select;
     if group_clause.is_empty() {
-        return projection(target_list, from_clause, where_clause.as_deref())
-            .or_else(|prior| scalar_query(select).map_err(|_| prior));
+        return scalar_query(select);
     }
     grouped_query(select)
 }
@@ -263,34 +257,23 @@ fn table(value: &Node) -> Result<Table> {
     Ok(Table { name: Name(vec![schemaname.clone(), relname.clone()]), alias })
 }
 
-fn projection(targets: &[Node], from: &[Node], predicate: Option<&Node>) -> Result<Parsed> {
-    ensure!(!targets.is_empty() && targets.len() <= 64, "projection requires 1..=64 columns");
-    let [source] = from else {
-        anyhow::bail!("projection requires one source table");
-    };
-    let columns = projection_columns(targets)?;
-    let predicate = super::syntax::predicate(predicate)?;
-    Ok(Parsed::Projection { source: table(source)?, columns, predicate })
-}
-
 fn projection_columns(targets: &[Node]) -> Result<Columns> {
     ensure!((1..=64).contains(&targets.len()), "projection requires 1..=64 columns");
     targets
         .iter()
         .map(|value| {
-            let (name, transform, default_label) = projection_target(target(value)?)?;
+            let (name, default_label) = projection_target(target(value)?)?;
             let NodeEnum::ResTarget(value) = node(value)? else {
                 anyhow::bail!("expected output target");
             };
             let label = if value.name.is_empty() { default_label } else { value.name.clone() };
-            Ok((name, label, transform))
+            Ok((name, label))
         })
         .collect()
 }
 
-fn projection_target(value: &Node) -> Result<(Name, crate::compiler::output::OutputMap, String)> {
-    use crate::compiler::output::OutputMap;
+fn projection_target(value: &Node) -> Result<(Name, String)> {
     let name = column(value)?;
     let label = name.0.last().context("missing column name")?.clone();
-    Ok((name, OutputMap::Identity, label))
+    Ok((name, label))
 }

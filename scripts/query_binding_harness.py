@@ -1,3 +1,4 @@
+from harness_control import commit_proxy
 #!/usr/bin/env python3
 """Initialization binding drift and steady-state inspection tests in a separately owned database.
 
@@ -7,8 +8,6 @@ never alter shared pgderive_dev built-ins, even for a rollback-only test.
 import json
 import os
 import subprocess
-import sys
-import time
 from worker_harness import Fixture, harness_arguments
 
 
@@ -142,20 +141,11 @@ def inspections(path):
 def hot_path(output, command, mode, database):
     fixture = BindingFixture(output, mode, database)
     log = output/'observed.jsonl'
-    with log.open('w') as stream:
-        proxy = subprocess.Popen([sys.executable, '-u', 'scripts/pg_commit_proxy.py',
-            '--mode', 'observe', '--upstream', fixture.port], stdout=stream, stderr=stream)
+    proxy = None
     try:
         with fixture.managed():
-            deadline = time.monotonic()+10
-            while time.monotonic() < deadline:
-                lines = log.read_text().splitlines()
-                if lines:
-                    fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(json.loads(lines[0])['port'])
-                    break
-                time.sleep(.05)
-            else:
-                raise RuntimeError('binding observer did not become ready')
+            proxy, port = commit_proxy(log, 'observe', upstream=fixture.port)
+            fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
             worker = fixture.start(command, 'first', maximum=3)
             ready = worker.event('ready')
             initial = inspections(log)
@@ -184,8 +174,9 @@ def hot_path(output, command, mode, database):
                 'initialization_and_restart_inspections':True,
                 'steady_state_semantic_inspections':0,'steady_state_session_configuration':0,'transactions':4})+'\n')
     finally:
-        proxy.terminate()
-        proxy.wait(timeout=10)
+        if proxy is not None:
+            proxy.terminate()
+            proxy.wait(timeout=10)
 
 
 def main():

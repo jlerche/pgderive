@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Owned sequential projection CDC, native bag codec and restart qualification."""
 from worker_harness import harness_arguments
+from harness_control import commit_proxy
 import collections
 import json
-import sys
-import subprocess
-import time
 from sql_compiler_harness import SqlFixture
 
 
@@ -55,24 +53,13 @@ class ProjectionFixture(SqlFixture):
 def qualify(output, command, local=False):
     fixture = ProjectionFixture(output, local)
     proxy = None
-    proxy_log = None
     try:
         fixture.rejected(command, 'unsupported', fixture.query.replace('a.enabled AS active', 'now() AS active'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
-        proxy_log = (output / 'sql-fault.jsonl').open('w')
-        proxy = subprocess.Popen([sys.executable, '-u', 'scripts/pg_commit_proxy.py',
-                                  '--mode', 'after', '--once', '--arm-query', 'pgderive_progress SET commit_lsn'],
-                                 stdout=proxy_log, stderr=proxy_log)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            lines = (output / 'sql-fault.jsonl').read_text().splitlines()
-            if lines:
-                fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(json.loads(lines[0])['port'])
-                break
-            time.sleep(.05)
-        else:
-            raise RuntimeError('projection SQL fault proxy did not start')
+        proxy, port = commit_proxy(output/'sql-fault.jsonl', 'after', once=True,
+                                   marker='pgderive_progress SET commit_lsn')
+        fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
         worker = fixture.start(command, 'first')
         ready = worker.event('ready')
         fixture.verify()
@@ -129,8 +116,6 @@ def qualify(output, command, local=False):
         if proxy:
             proxy.terminate()
             proxy.wait(timeout=10)
-        if proxy_log:
-            proxy_log.close()
 
 
 if __name__ == '__main__':

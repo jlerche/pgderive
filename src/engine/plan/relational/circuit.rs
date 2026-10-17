@@ -1,4 +1,4 @@
-use super::{Entry, Execution, Operators, RelationalState};
+use super::{Entry, Execution, Operator, Operators, RelationalState};
 use crate::{
     catalog::Protection,
     engine::{
@@ -40,12 +40,6 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
 ) -> Result<()> {
     let definition = plan.definition();
     ensure!(definition.outputs.len() == 1, "relational executor requires one output");
-    let mut projects = BTreeSet::new();
-    let mut expansions = BTreeSet::new();
-    let mut joins = BTreeSet::new();
-    let mut partitions = BTreeSet::new();
-    let mut statistics = BTreeSet::new();
-    let mut ordered = BTreeSet::new();
     let mut maintained = BTreeSet::new();
     for member in &definition.arrangements {
         ensure!(maintained.insert(&member.node), "multiple arrangements on one relational node");
@@ -57,40 +51,24 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
         ensure!(node.kind != Kind::Source, "source state requires a project node");
     }
     ensure!(maintained.contains(&definition.outputs[0]), "missing relational output state");
+    let mut callbacks = 0;
     for node in &definition.nodes {
-        match node.kind {
-            Kind::Source | Kind::Union => {}
-            Kind::Expand => {
-                expansions.insert(node.id.clone());
-            }
-            Kind::Project => {
-                projects.insert(node.id.clone());
-            }
-            Kind::Join => {
-                joins.insert(node.id.clone());
-                ensure!(
-                    node.inputs.iter().all(|id| maintained.contains(id)),
-                    "join inputs require maintained state"
-                );
-            }
-            Kind::Ordered => {
-                ordered.insert(node.id.clone());
-                ensure!(
-                    maintained.contains(&node.id) && maintained.contains(&node.inputs[0]),
-                    "ordered node requires retained input and output"
-                );
-            }
-            Kind::Statistics => {
-                statistics.insert(node.id.clone());
-                ensure!(
-                    maintained.contains(&node.id) && maintained.contains(&node.inputs[0]),
-                    "statistics node requires retained input and state"
-                );
-            }
-            Kind::Aggregate => {
-                partitions.insert(node.id.clone());
-                let operator =
-                    operators.partitions.get(&node.id).context("missing partition callback")?;
+        if matches!(node.kind, Kind::Source | Kind::Union) {
+            continue;
+        }
+        let operator = operators.get(&node.id).context("missing operator callback")?;
+        ensure!(operator.kind() == node.kind, "operator callback family differs from declaration");
+        callbacks += 1;
+        match operator {
+            Operator::Join(_) => ensure!(
+                node.inputs.iter().all(|id| maintained.contains(id)),
+                "join inputs require maintained state"
+            ),
+            Operator::Ordered(_) | Operator::Statistics(_) => ensure!(
+                maintained.contains(&node.id) && maintained.contains(&node.inputs[0]),
+                "operator requires retained input and state"
+            ),
+            Operator::Partition(operator) => {
                 ensure!(
                     !operator.supports_retained_output() || maintained.contains(&node.id),
                     "retained partition requires output state"
@@ -100,17 +78,10 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
                     "partition input requires maintained state"
                 );
             }
+            Operator::Project(_) | Operator::Expand(_) => {}
         }
     }
-    ensure!(
-        projects == operators.projects.keys().cloned().collect()
-            && expansions == operators.expansions.keys().cloned().collect()
-            && joins == operators.joins.keys().cloned().collect()
-            && partitions == operators.partitions.keys().cloned().collect()
-            && statistics == operators.statistics.keys().cloned().collect()
-            && ordered == operators.ordered.keys().cloned().collect(),
-        "relational callbacks differ from declarations"
-    );
+    ensure!(callbacks == operators.len(), "relational callbacks differ from declarations");
     Ok(())
 }
 impl<K: BatchData, V: BatchData> Execution<K, V> {
@@ -125,13 +96,9 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                     sources.push(edge.clone());
                     edge
                 }
-                Kind::Expand => self.expand(&mut builder, node, &edges, protection)?,
-                Kind::Project => self.project(&mut builder, node, &edges, protection)?,
                 Kind::Join => self.join(&mut builder, node, &edges, protection)?,
                 Kind::Union => self.union(&mut builder, node, &edges, protection)?,
-                Kind::Ordered => self.ordered(&mut builder, node, &edges, protection)?,
-                Kind::Statistics => self.statistics(&mut builder, node, &edges, protection)?,
-                Kind::Aggregate => self.partition(&mut builder, node, &edges, protection)?,
+                _ => self.unary(&mut builder, node, &edges, protection)?,
             };
             edges.insert(node.id.clone(), edge);
         }
@@ -159,165 +126,69 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             }
         })
     }
-    fn expand(
+    fn unary(
         &self,
         builder: &mut Builder<K, V>,
         node: &Node,
         edges: &BTreeMap<String, Edge<K, V>>,
         protection: Option<&Protection>,
     ) -> Result<Edge<K, V>> {
-        let operator =
-            self.operators.expansions.get(&node.id).context("missing expansion callback")?.clone();
         let execution = Arc::new(self.scoped(protection)?);
-        let id = node.id.clone();
-        builder.unary(
-            &node.id,
-            edges.get(&node.inputs[0]).context("missing expansion edge")?,
-            move |context, input| {
-                let operator = operator.clone();
-                let execution = execution.clone();
-                let id = id.clone();
-                async move {
-                    let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
-                    let delta = operator.evaluate(&input, execution.limits)?;
-                    execution.stage(&id, &context.prior, delta).await
-                }
-            },
-        )
+        let node = node.clone();
+        let parent = edges.get(&node.inputs[0]).context("missing unary input edge")?;
+        builder.unary(&node.id.clone(), parent, move |context, input| {
+            let execution = execution.clone();
+            let node = node.clone();
+            async move {
+                let delta = execution.evaluate_unary(&node, &context.prior, input).await?;
+                execution.stage(&node.id, &context.prior, delta).await
+            }
+        })
     }
-    fn ordered(
+    async fn evaluate_unary(
         &self,
-        builder: &mut Builder<K, V>,
         node: &Node,
-        edges: &BTreeMap<String, Edge<K, V>>,
-        protection: Option<&Protection>,
-    ) -> Result<Edge<K, V>> {
-        let operator =
-            self.operators.ordered.get(&node.id).context("missing ordered callback")?.clone();
-        let execution = Arc::new(self.scoped(protection)?);
-        let id = node.id.clone();
-        let parent = node.inputs[0].clone();
-        builder.unary(
-            &node.id,
-            edges.get(&parent).context("missing ordered edge")?,
-            move |context, input| {
-                let operator = operator.clone();
-                let execution = execution.clone();
-                let id = id.clone();
-                let parent = parent.clone();
-                async move {
-                    let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
-                    let delta = operator
-                        .evaluate(
-                            &input,
-                            execution.prior(&parent, &context.prior)?,
-                            execution.prior(&id, &context.prior)?,
-                            execution.limits,
-                        )
-                        .await?;
-                    execution.stage(&id, &context.prior, delta).await
-                }
-            },
-        )
-    }
-    fn statistics(
-        &self,
-        builder: &mut Builder<K, V>,
-        node: &Node,
-        edges: &BTreeMap<String, Edge<K, V>>,
-        protection: Option<&Protection>,
-    ) -> Result<Edge<K, V>> {
-        let operator =
-            self.operators.statistics.get(&node.id).context("missing statistics callback")?.clone();
-        let execution = Arc::new(self.scoped(protection)?);
-        let id = node.id.clone();
-        let parent = node.inputs[0].clone();
-        builder.unary(
-            &node.id,
-            edges.get(&node.inputs[0]).context("missing statistics edge")?,
-            move |context, input| {
-                let operator = operator.clone();
-                let execution = execution.clone();
-                let id = id.clone();
-                let parent = parent.clone();
-                async move {
-                    let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
-                    execution
-                        .prior(&parent, &context.prior)?
-                        .validate_bag_delta(&input.batch)
-                        .await?;
-                    let delta = operator
-                        .evaluate(&input, execution.prior(&id, &context.prior)?, execution.limits)
-                        .await?;
-                    execution.stage(&id, &context.prior, delta).await
-                }
-            },
-        )
-    }
-    fn partition(
-        &self,
-        builder: &mut Builder<K, V>,
-        node: &Node,
-        edges: &BTreeMap<String, Edge<K, V>>,
-        protection: Option<&Protection>,
-    ) -> Result<Edge<K, V>> {
-        let operator =
-            self.operators.partitions.get(&node.id).context("missing partition callback")?.clone();
-        let execution = Arc::new(self.scoped(protection)?);
-        let parent = node.inputs[0].clone();
-        let id = node.id.clone();
-        builder.unary(
-            &node.id,
-            edges.get(&parent).context("missing partition edge")?,
-            move |context, input| {
-                let operator = operator.clone();
-                let execution = execution.clone();
-                let parent = parent.clone();
-                let id = id.clone();
-                async move {
-                    let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
-                    let prior = execution.prior(&parent, &context.prior)?;
-                    let delta = if operator.supports_retained_output() {
-                        operator
-                            .evaluate_retained(
-                                &input,
-                                prior,
-                                execution.prior(&id, &context.prior)?,
-                                execution.limits,
-                            )
-                            .await?
-                    } else {
-                        operator.evaluate(&input, prior, execution.limits).await?
-                    };
-                    execution.stage(&id, &context.prior, delta).await
-                }
-            },
-        )
-    }
-    fn project(
-        &self,
-        builder: &mut Builder<K, V>,
-        node: &Node,
-        edges: &BTreeMap<String, Edge<K, V>>,
-        protection: Option<&Protection>,
-    ) -> Result<Edge<K, V>> {
-        let operator = self.operators.projects.get(&node.id).context("missing project")?.clone();
-        let execution = Arc::new(self.scoped(protection)?);
-        let id = node.id.clone();
-        let limits = self.limits;
-        builder.unary(
-            &node.id,
-            edges.get(&node.inputs[0]).context("missing input")?,
-            move |context, input| {
-                let operator = operator.clone();
-                let execution = execution.clone();
-                let id = id.clone();
-                async move {
-                    let delta = operator.evaluate_with_limits(&input, limits)?;
-                    execution.stage(&id, context.prior.as_ref(), delta).await
-                }
-            },
-        )
+        prior: &RelationalState<K, V>,
+        input: TimedBatch<Arc<Batch<K, V>>>,
+    ) -> Result<TimedBatch<Batch<K, V>>> {
+        let operator = self.operators.get(&node.id).context("missing unary callback")?;
+        if let Operator::Project(operator) = operator {
+            return operator.evaluate_with_limits(&input, self.limits);
+        }
+        let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
+        match operator {
+            Operator::Expand(operator) => operator.evaluate(&input, self.limits),
+            Operator::Ordered(operator) => {
+                operator
+                    .evaluate(
+                        &input,
+                        self.prior(&node.inputs[0], prior)?,
+                        self.prior(&node.id, prior)?,
+                        self.limits,
+                    )
+                    .await
+            }
+            Operator::Statistics(operator) => {
+                self.prior(&node.inputs[0], prior)?.validate_bag_delta(&input.batch).await?;
+                operator.evaluate(&input, self.prior(&node.id, prior)?, self.limits).await
+            }
+            Operator::Partition(operator) if operator.supports_retained_output() => {
+                operator
+                    .evaluate_retained(
+                        &input,
+                        self.prior(&node.inputs[0], prior)?,
+                        self.prior(&node.id, prior)?,
+                        self.limits,
+                    )
+                    .await
+            }
+            Operator::Partition(operator) => {
+                operator.evaluate(&input, self.prior(&node.inputs[0], prior)?, self.limits).await
+            }
+            Operator::Join(_) | Operator::Project(_) => {
+                anyhow::bail!("binary callback bound to unary node")
+            }
+        }
     }
     fn join(
         &self,
@@ -326,7 +197,10 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         edges: &BTreeMap<String, Edge<K, V>>,
         protection: Option<&Protection>,
     ) -> Result<Edge<K, V>> {
-        let operator = self.operators.joins.get(&node.id).context("missing join mapper")?.clone();
+        let Some(Operator::Join(operator)) = self.operators.get(&node.id) else {
+            anyhow::bail!("missing join mapper")
+        };
+        let operator = operator.clone();
         let execution = Arc::new(self.scoped(protection)?);
         let parents = node.inputs.clone();
         let id = node.id.clone();

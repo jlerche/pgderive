@@ -1,9 +1,4 @@
-use super::{
-    registration,
-    runtime::{self, Runtime},
-    spec::Settings,
-    sql::Session,
-};
+use super::{program::relational, registration, spec::Settings, sql::Session};
 use crate::{
     Config,
     catalog::{Catalog, Snapshot, Writer},
@@ -18,7 +13,7 @@ pub(super) struct Open {
     pub(super) settings: Settings,
     pub(super) session: Session,
     pub(super) catalog: Catalog,
-    pub(super) query: Runtime,
+    pub(super) query: relational::Query,
     pub(super) compiled: crate::compiler::Compiled,
     pub(super) writer: Writer,
     pub(super) store: Arc<dyn ObjectStore>,
@@ -54,7 +49,6 @@ impl Open {
             .preflight(store.as_ref())
             .await?;
         session.own(&settings.catalog_schema, &settings.query_id).await?;
-        super::retire::require_active(&session.client, settings).await?;
         let catalog = Catalog::new(&settings.catalog_schema, &settings.query_id)?;
         catalog.install(&session.client).await?;
         let contract = registration::source(&mut session.client, config, settings).await?;
@@ -71,7 +65,7 @@ impl Open {
             encoded_cache,
         };
         let compiled = settings.query.compile_bound(&session.client, &contract).await?;
-        let mut query = Runtime::build(&contract, &compiled, &options)?;
+        let mut query = relational::build(&contract, &compiled, &options)?;
         if catalog.load_durable(&mut session.client, query.plan()).await?.is_none() {
             registration::reset_unactivated(&session.client, &contract).await?;
             bootstrap(&replication, settings, &mut session, &catalog, &mut query).await?;
@@ -94,7 +88,7 @@ impl Open {
 async fn reopen(
     session: &mut Session,
     catalog: &Catalog,
-    query: &mut Runtime,
+    query: &mut relational::Query,
     binding: (&Contract, &Settings),
 ) -> Result<(Writer, String)> {
     let (contract, settings) = binding;
@@ -148,7 +142,7 @@ async fn bootstrap(
     settings: &Settings,
     session: &mut Session,
     catalog: &Catalog,
-    query: &mut Runtime,
+    query: &mut relational::Query,
 ) -> Result<()> {
     let export = Export::create(config, &config.replication.slot).await?;
     let boundary = export.consistent();
@@ -165,7 +159,7 @@ async fn bootstrap(
     export.close().await?;
     // The preliminary registration must match the exact imported source layout.
     let compiled = settings.query.compile_bound(&session.client, &contract).await?;
-    let exact = Runtime::build(
+    let exact = relational::build(
         &contract,
         &compiled,
         &EngineSettings {
@@ -193,10 +187,11 @@ async fn bootstrap(
     super::drive::emit(
         &serde_json::json!({"event":"bootstrap_upload","slot":contract.slot,"boundary":boundary.to_string()}),
     )?;
-    let prepared =
-        query.prepare_protected(runtime::inputs(&batch, &compiled, 1)?, &protection).await?;
+    let prepared = query
+        .prepare_protected(relational::inputs(&batch, compiled.relational(), 1)?, &protection)
+        .await?;
     let checkpoint = query.prepared_checkpoint(&prepared)?;
-    let deltas = prepared.deltas()?;
+    let deltas = relational::deltas(&prepared.output().batch, compiled.output())?;
     let sink = compiled.sink(&settings.sink_table);
     catalog
         .activate_snapshot(

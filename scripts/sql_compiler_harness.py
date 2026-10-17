@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sequential SQL-compiled worker oracle/restart tests in an owned fixture."""
 import json
-from worker_harness import Fixture, Worker, harness_arguments
+from worker_harness import Fixture, Worker, harness_arguments, History
 
 
 class SqlFixture(Fixture):
@@ -96,9 +96,6 @@ def qualify(output, command, null_only, typed=False, remainder=False):
             fixture.rejected(command, 'zero-divisor', fixture.query.replace('mod(b.price,3)', 'mod(b.price,0)'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {fixture.name}.bid VALUES(100,1,NULL),(101,1,7)",
             f"UPDATE {fixture.name}.auction SET category=NULL WHERE id=1; UPDATE {fixture.name}.bid SET price=9,auction=1 WHERE id=2",
@@ -107,30 +104,23 @@ def qualify(output, command, null_only, typed=False, remainder=False):
             f"DELETE FROM {fixture.name}.bid WHERE auction=1",
         ]
         if remainder:
-            changes[0] += f"; INSERT INTO {fixture.name}.bid VALUES(108,1,-6),(109,1,-7),(110,1,NULL)"
-            changes[3] += f"; UPDATE {fixture.name}.bid SET price=6 WHERE id=108"
+            changes[0] += f'; INSERT INTO {fixture.name}.bid VALUES(108,1,-6),(109,1,-7),(110,1,NULL)'
+            changes[3] += f'; UPDATE {fixture.name}.bid SET price=6 WHERE id=108'
         if typed:
             changes[1] += f"; UPDATE {fixture.name}.auction SET enabled=true,token='00000000-0000-0000-0000-000000000000' WHERE id=2; UPDATE {fixture.name}.bid SET price=-5 WHERE id=3"
-            changes[2] += f"; UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=2"
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;' + change + ';COMMIT')
-            worker.event('published', minimum_time=ready['time'] + index)
-            fixture.verify()
-        worker.finish(graceful=True)
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command, 'changed', fixture.query.replace('IS NOT NULL', 'IS NULL'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        fixture.query = fixture.query.replace('a.group_id', 'a.U&"group\\005fid"').replace('a.category IS NOT NULL', '((a.category) IS NOT NULL)').replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('JOIN', 'INNER JOIN')
-        if remainder:
-            fixture.query = fixture.query.replace('mod(b.price,3)', '(b.price % 3)')
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time'] + len(changes)
+            changes[2] += f'; UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=2'
         price = 'NULL' if null_only else '11'
-        fixture.sql(f'INSERT INTO {fixture.name}.bid VALUES(102,1,{price})')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        normalized = fixture.query.replace('a.group_id', 'a.U&"group\\005fid"').replace('a.category IS NOT NULL', '((a.category) IS NOT NULL)').replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('JOIN', 'INNER JOIN')
+        if remainder:
+            normalized = normalized.replace('mod(b.price,3)', '(b.price % 3)')
+        fixture.run_history(command, History(
+            changes=changes,
+            final=f'INSERT INTO {fixture.name}.bid VALUES(102,1,{price})',
+            normalized=normalized,
+            rejected=[('changed', fixture.query.replace('IS NOT NULL', 'IS NULL'))],
+            verify_reopen=False,
+            graceful=True,
+        ))
         (output / 'result.json').write_text(json.dumps({'sql_oracle': 'exact', 'memory_oracle': 'exact',
             'transactions': len(changes) + 1, 'restart': 'normalized SQL reuses durable slot',
             'unsupported': 'before registration/slot', 'changed': 'rejected with unchanged progress'}) + '\n')
