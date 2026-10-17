@@ -6,6 +6,7 @@ The after mode waits for PostgreSQL's successful COMMIT CommandComplete, proving
 server completion before disconnecting the client without forwarding that reply.
 """
 from binding_observer import BindingObserver
+from sink_observer import category as sink_category
 import argparse
 import json
 import os
@@ -85,6 +86,7 @@ class Handler(socketserver.BaseRequestHandler):
                     pass
 
         observer = BindingObserver() if self.server.mode == "observe" else None
+        sink_observer = BindingObserver(sink_category) if observer else None
 
         def forward_client():
             try:
@@ -99,6 +101,10 @@ class Handler(socketserver.BaseRequestHandler):
                         inspection = observer.observe(kind, body)
                         if inspection:
                             self.server.record({"binding_inspection": inspection})
+                    if sink_observer:
+                        mutation = sink_observer.observe(kind, body)
+                        if mutation:
+                            self.server.record({"sink_dml": mutation})
                     chosen = self.server.mode != "observe" and commit(kind, body) and armed and self.server.claim_fault()
                     if chosen:
                         committing.set()

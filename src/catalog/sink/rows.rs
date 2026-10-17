@@ -1,10 +1,9 @@
-//! Ordinary result rows. No coefficient, private occurrence index, or engine state lives in PG.
+//! Ordinary result rows; no coefficients or private occurrence columns live in PG.
 use super::Sink;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
-use tokio_postgres::Transaction;
 
 /// Native output column identity, fixed during initialization.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,7 +50,7 @@ pub(super) fn validate(columns: &[ResultColumn]) -> Result<()> {
 }
 
 impl ResultColumn {
-    fn type_spec(&self) -> Result<String> {
+    pub(super) fn type_spec(&self) -> Result<String> {
         let (name, _) = native(self.oid)?;
         let modifier = self.modifier;
         if modifier == -1 {
@@ -87,13 +86,13 @@ impl ResultColumn {
         });
         Ok(format!("{} pg_catalog.{}{collation}", quote(&self.name), self.type_spec()?))
     }
-    fn value(&self, index: usize) -> Result<String> {
+    pub(super) fn value(&self, tuple: &str, index: usize) -> Result<String> {
         Ok(if self.oid == 1009 {
             format!(
-                "CASE WHEN $1::jsonb->1->{index}='null'::jsonb THEN NULL ELSE ARRAY(SELECT pg_catalog.jsonb_array_elements_text($1::jsonb->1->{index})) END"
+                "CASE WHEN {tuple}->1->{index}='null'::jsonb THEN NULL ELSE ARRAY(SELECT pg_catalog.jsonb_array_elements_text({tuple}->1->{index})) END"
             )
         } else {
-            format!("($1::jsonb->1->>{index})::pg_catalog.{}", self.type_spec()?)
+            format!("({tuple}->1->>{index})::pg_catalog.{}", self.type_spec()?)
         })
     }
 }
@@ -103,7 +102,7 @@ pub(super) fn declaration(columns: &[ResultColumn]) -> Result<String> {
     Ok(columns.iter().map(ResultColumn::declaration).collect::<Result<Vec<_>>>()?.join(","))
 }
 
-fn native(oid: u32) -> Result<(&'static str, &'static str)> {
+pub(super) fn native(oid: u32) -> Result<(&'static str, &'static str)> {
     Ok(match oid {
         16 => ("bool", "boolsend"),
         20 => ("int8", "int8send"),
@@ -117,62 +116,6 @@ fn native(oid: u32) -> Result<(&'static str, &'static str)> {
         1009 => ("_text", "array_send"),
         _ => anyhow::bail!("unsupported public result type OID {oid}"),
     })
-}
-
-fn expressions(sink: &Sink) -> Result<(String, String)> {
-    let Sink::Rows { columns, .. } = sink else {
-        return Ok((
-            "$1::jsonb".into(),
-            "pg_catalog.jsonb_send(tuple)=pg_catalog.jsonb_send($1::jsonb)".into(),
-        ));
-    };
-    let mut values = Vec::new();
-    let mut predicates = Vec::new();
-    for (index, column) in columns.iter().enumerate() {
-        let value = column.value(index)?;
-        let (_, send) = native(column.oid)?;
-        // Binary comparison preserves numeric display scale and other representation
-        // distinctions which SQL equality or collation-aware comparison can erase.
-        predicates.push(format!(
-            "pg_catalog.{send}({}) IS NOT DISTINCT FROM pg_catalog.{send}({value})",
-            quote(&column.name)
-        ));
-        values.push(value);
-    }
-    Ok((values.join(","), predicates.join(" AND ")))
-}
-
-pub(super) async fn apply(
-    tx: &Transaction<'_>,
-    table: &str,
-    sink: &Sink,
-    rows: &[(Value, i64)],
-) -> Result<()> {
-    let (values, predicate) = expressions(sink)?;
-    // A bounded first implementation; never silently truncate a valid delta.
-    let work =
-        rows.iter().try_fold(0_u64, |total, (_, delta)| total.checked_add(delta.unsigned_abs()));
-    ensure!(
-        work.is_some_and(|count| count <= 1_000_000),
-        "result occurrence publication limit exceeded (1000000)"
-    );
-    for (tuple, delta) in rows {
-        let count =
-            delta.checked_abs().ok_or_else(|| anyhow::anyhow!("result occurrence overflow"))?;
-        if count == 0 {
-            continue;
-        }
-        let affected = if *delta > 0 {
-            tx.execute(&format!("INSERT INTO {table} SELECT {values} FROM pg_catalog.generate_series(1::bigint,$2::bigint)"), &[tuple,&count]).await?
-        } else {
-            tx.execute(&format!("WITH selected AS (SELECT ctid FROM {table} WHERE {predicate} LIMIT $2 FOR UPDATE) DELETE FROM {table} USING selected WHERE {table}.ctid=selected.ctid"), &[tuple,&count]).await?
-        };
-        ensure!(
-            affected == u64::try_from(count)?,
-            "result occurrence missing or destination DML suppressed"
-        );
-    }
-    Ok(())
 }
 
 pub(super) async fn verify(

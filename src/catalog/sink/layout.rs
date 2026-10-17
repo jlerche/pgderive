@@ -1,0 +1,69 @@
+//! Native storage decoding and exact representation keys for destination DML.
+use super::{
+    Sink,
+    rows::{native, quote},
+};
+use anyhow::Result;
+pub(super) struct Layout {
+    pub decoded: String,
+    pub values: String,
+    pub names: String,
+    pub identity: String,
+    pub bucket: String,
+    pub target_identity: String,
+    pub target_bucket: String,
+}
+pub(super) fn names(sink: &Sink) -> Vec<String> {
+    match sink {
+        Sink::Rows { columns, .. } => columns.iter().map(|column| column.name.clone()).collect(),
+        Sink::Json(_) => vec!["tuple".into()],
+    }
+}
+pub(super) fn hash(fields: &[String]) -> String {
+    format!("pg_catalog.hash_record_extended(ROW({}),0)", fields.join(","))
+}
+impl Layout {
+    pub(super) fn new(sink: &Sink) -> Result<Self> {
+        let names = names(sink).iter().map(|name| quote(name)).collect::<Vec<_>>();
+        let fields = (0..names.len()).map(|index| format!("c{index}")).collect::<Vec<_>>();
+        let target = names.iter().map(|name| format!("d.{name}")).collect::<Vec<_>>();
+        let decoded = match sink {
+            Sink::Json(_) => "entry.value->0 AS c0".into(),
+            Sink::Rows { columns, .. } => columns
+                .iter()
+                .enumerate()
+                .map(|(index, column)| {
+                    let mut value = column.value("(entry.value->0)", index)?;
+                    if let Some((schema, name)) = &column.collation {
+                        value = format!("({value}) COLLATE {}.{}", quote(schema), quote(name));
+                    }
+                    Ok(format!("{value} AS c{index}"))
+                })
+                .collect::<Result<Vec<_>>>()?
+                .join(","),
+        };
+        Ok(Self {
+            decoded: format!("{decoded},(entry.value->>1)::bigint AS n"),
+            values: fields.join(","),
+            names: names.join(","),
+            identity: identity(sink, &fields)?,
+            bucket: hash(&fields),
+            target_identity: identity(sink, &target)?,
+            target_bucket: hash(&target),
+        })
+    }
+}
+fn identity(sink: &Sink, fields: &[String]) -> Result<String> {
+    let Sink::Rows { columns, .. } = sink else {
+        return Ok(format!("pg_catalog.jsonb_send({})", fields[0]));
+    };
+    let values = columns
+        .iter()
+        .zip(fields)
+        .map(|(column, field)| {
+            let (_, send) = native(column.oid)?;
+            Ok(format!("pg_catalog.{send}({field})"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(format!("pg_catalog.array_send(ARRAY[{}])", values.join(",")))
+}

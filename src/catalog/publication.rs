@@ -58,6 +58,10 @@ impl Binding {
         }
         Ok(())
     }
+    async fn verify_destination(&self, tx: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
+        self.sink.owned(tx, catalog).await?.context("registered destination ownership missing")?;
+        self.sink.prepare_index(tx, catalog).await
+    }
     pub(super) async fn initialize(
         &self,
         tx: &Transaction<'_>,
@@ -162,11 +166,7 @@ impl Catalog {
                 "source/destination binding mismatch"
             );
             binding.verify_environment(&tx).await?;
-            binding
-                .sink
-                .owned(&tx, self)
-                .await?
-                .context("registered destination ownership missing")?;
+            binding.verify_destination(&tx, self).await?;
             let fence =
                 row.try_get::<_, i64>(1)?.checked_add(1).context("worker fence overflow")?;
             let end = row.try_get::<_, String>(2)?.parse()?;

@@ -169,3 +169,17 @@ atomicity, cold checkpoint compatibility and measured unchanged object costs are
 qualified. Independent review and the common core gate passed: 110 worker cases
 plus rebuild and 97.46% production line coverage. M8 is next; M9 and function/type
 expansion remain separate.
+
+
+## M8 completion
+
+M8's [batched/indexed occurrence publication](m8-sink-deltas.md) is complete for
+its documented scope. Bounded DML batches and an ordinary candidate index preserve
+exact binary identities, public query-only columns and publication/ACK ordering.
+Multi-chunk atomic failures, replay, cold restart and index backfill are qualified.
+The retained local release comparison measures statement counts, sink and complete
+publication timing, lookup plans and index storage without claiming capacity.
+Independent review and the common gate passed: 301 Rust tests (two ignored),
+33 Python tests, 112 core worker cases plus rebuild and 97.50% production line
+coverage. M9 controlled production qualification is next; function/type expansion
+remains separate. The complete release qualification profile was not run.

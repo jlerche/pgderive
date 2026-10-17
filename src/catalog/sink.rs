@@ -3,6 +3,9 @@ use crate::engine::{Batch, reader::BatchData};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+mod batching;
+mod layout;
+mod lookup;
 mod rows;
 pub use rows::ResultColumn;
 use tokio_postgres::Transaction;
@@ -47,7 +50,7 @@ impl Sink {
     }
     pub(super) async fn install(&self, tx: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
         if self.owned(tx, catalog).await?.is_some() {
-            return Ok(());
+            return self.prepare_index(tx, catalog).await;
         }
         let columns = match self {
             Self::Rows { columns, .. } => rows::declaration(columns)?,
@@ -69,7 +72,14 @@ impl Sink {
             &[&self.table(), &catalog.query, &oid],
         )
         .await?;
-        Ok(())
+        self.prepare_index(tx, catalog).await
+    }
+    pub(super) async fn prepare_index(
+        &self,
+        tx: &Transaction<'_>,
+        catalog: &Catalog,
+    ) -> Result<()> {
+        lookup::ensure(tx, catalog, self).await
     }
     pub(crate) async fn owned(
         &self,
@@ -114,6 +124,6 @@ impl Deltas {
         sink: &Sink,
     ) -> Result<()> {
         let table = format!("{}.{}", catalog.schema, sink.table());
-        rows::apply(tx, &table, sink, &self.rows).await
+        batching::apply(tx, &table, sink, &self.rows).await
     }
 }

@@ -114,7 +114,7 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 110 worker cases:
+profile runs the complete low-level live PostgreSQL harness and 112 worker cases:
 result-table decoding/representation, semantic bindings, transaction faults,
 witnessed process kills, representative query families, lifecycle and rebuild.
 It disables synthetic S3 latency but keeps real PostgreSQL/object storage and
@@ -976,3 +976,9 @@ without changing persisted state, full affected-partition reads or publication.
 Mixed/ineligible aggregate sets retain frame scanning. Five live cases cover
 bigint/integer/smallint, FILTER, empty frames and cold restart; measured work,
 release timing and unchanged cold-read/write costs are documented separately.
+
+
+M8 [batches exact occurrence publication](docs/m8-sink-deltas.md) into bounded
+INSERT/DELETE statements and installs an ordinary fixed-width candidate index.
+Binary residual comparisons retain NULLs, duplicates and representation details;
+all chunks share membership/progress commit and slot acknowledgement boundaries.

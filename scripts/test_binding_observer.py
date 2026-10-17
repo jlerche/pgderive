@@ -30,3 +30,14 @@ class BindingObserverTests(unittest.TestCase):
             (b'UPDATE private SET secret=123', None),
         ]:
             self.assertEqual(observer.observe(b'Q', query+b'\0'), expected)
+
+    def test_sink_observer_counts_executions_without_classifying_user_values(self):
+        from sink_observer import category
+        observer = BindingObserver(category)
+        marker = b'/* pgderive:sink-delete-v1 */ WITH decoded AS MATERIALIZED (...) DELETE FROM owned.results'
+        self.assertIsNone(observer.observe(b'P', b's\0'+marker+b'\0\0\0'))
+        self.assertIsNone(observer.observe(b'B', b'p\0s\0private payload'))
+        self.assertEqual(observer.observe(b'E', b'p\0'+struct.pack('!I',0)), 'delete')
+        self.assertEqual(observer.observe(b'E', b'p\0'+struct.pack('!I',0)), 'delete')
+        self.assertIsNone(category(b'SELECT 1 /* pgderive:sink-delete-v1 */'))
+        self.assertEqual(category(b'/* pgderive:sink-insert-v1 */ INSERT INTO owned.results'), 'insert')

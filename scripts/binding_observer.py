@@ -17,16 +17,17 @@ def category(query):
 
 
 class BindingObserver:
-    def __init__(self):
+    def __init__(self, classify=category):
+        self.classify = classify
         self.statements = {}
         self.portals = {}
 
     def observe(self, kind, body):
         if kind == b'Q':
-            return category(body)
+            return self.classify(body)
         if kind == b'P':
             statement, query, _ = body.split(b'\0', 2)
-            self.statements[statement] = category(query)
+            self.statements[statement] = self.classify(query)
         elif kind == b'B':
             portal, statement, _ = body.split(b'\0', 2)
             self.portals[portal] = self.statements.get(statement)

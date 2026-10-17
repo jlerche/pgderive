@@ -1230,3 +1230,12 @@ frame membership still guard argument evaluation, and output width checks remain
 at each requested frame. Mixed/ineligible aggregate sets retain scanning. The
 persisted graph, checkpoint layout and PUT/COMMIT/ACK order are unchanged; full
 affected-partition reads remain. See [M7 evidence and limits](m7-window-work.md).
+
+
+## M8 destination publication
+
+The engine computes all query expressions. Destination storage decodes bounded
+occurrence batches, retracts exact binary identities through a candidate hash
+index, then inserts positive multiplicities. Index installation and validation
+occur during initialization. No weights or occurrence identifiers become public
+columns. See [M8 publication details and evidence](m8-sink-deltas.md).
