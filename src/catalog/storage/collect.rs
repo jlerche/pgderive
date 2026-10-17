@@ -69,7 +69,7 @@ impl Catalog {
             tx.commit().await?;
             return Ok(Collection::UploadProtected);
         }
-        let metadata = tx.query_one(&format!("SELECT (SELECT COALESCE(SUM(octet_length(definition::text)),0) FROM {0}.pgderive_queries)+(SELECT COALESCE(SUM(octet_length(reference::text)),0) FROM {0}.pgderive_objects)+(SELECT COALESCE(SUM(octet_length(roots::text)),0) FROM {0}.pgderive_protections WHERE active),(SELECT COUNT(*) FROM {0}.pgderive_protections WHERE uploading AND NOT active)",self.schema),&[]).await?;
+        let metadata = tx.query_one(&format!("SELECT (SELECT COALESCE(SUM(octet_length(definition::text)+octet_length(checkpoint::text)),0) FROM {0}.pgderive_queries)+(SELECT COALESCE(SUM(octet_length(roots::text)),0) FROM {0}.pgderive_protections WHERE active),(SELECT COUNT(*) FROM {0}.pgderive_protections WHERE uploading AND NOT active)",self.schema),&[]).await?;
         ensure!(
             u64::try_from(metadata.try_get::<_, i64>(0)?)? <= limits.metadata_bytes
                 && usize::try_from(metadata.try_get::<_, i64>(1)?)? <= limits.objects,
@@ -91,7 +91,7 @@ impl Catalog {
 }
 async fn roots(tx: &Transaction<'_>, catalog: &Catalog, limit: usize) -> Result<Vec<ObjectRef>> {
     let bound = i64::try_from(limit)?;
-    let size = tx.query_one(&format!("SELECT (SELECT COUNT(*) FROM {0}.pgderive_objects)+(SELECT COALESCE(SUM(jsonb_array_length(roots)),0) FROM {0}.pgderive_protections WHERE active),(SELECT COUNT(*) FROM {0}.pgderive_queries),(SELECT COALESCE(MAX(octet_length(definition::text)),0) FROM {0}.pgderive_queries)",catalog.schema),&[]).await?;
+    let size = tx.query_one(&format!("SELECT (SELECT COUNT(*) FROM {0}.pgderive_roots)+(SELECT COALESCE(SUM(jsonb_array_length(roots)),0) FROM {0}.pgderive_protections WHERE active),(SELECT COUNT(*) FROM {0}.pgderive_queries),(SELECT COALESCE(MAX(octet_length(definition::text)),0) FROM {0}.pgderive_queries)",catalog.schema),&[]).await?;
     ensure!(
         size.try_get::<_, i64>(0)? <= bound
             && size.try_get::<_, i64>(1)? <= bound

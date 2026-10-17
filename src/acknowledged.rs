@@ -13,7 +13,7 @@ use tokio_postgres::Client;
 pub struct Stream {
     client: ReplicationClient,
     decoder: Decoder,
-    source: String,
+    source: crate::source::Contract,
     acknowledged: Lsn,
     received: Lsn,
     change_limit: usize,
@@ -25,27 +25,15 @@ impl Stream {
     /// Caller cold-restores the compatible engine before connecting.
     pub(crate) async fn connect(config: &Config, durable: &Durable) -> Result<Self> {
         config.validate()?;
-        let source = format!(
-            "{}:{}:{}",
-            config.postgres.database, config.replication.publication, config.replication.slot
-        );
-        let contract = durable.binding.registered_source()?;
-        if let Some(contract) = &contract {
-            contract.validate()?;
-            ensure!(
-                contract.publication == config.replication.publication
-                    && contract.slot == config.replication.slot
-                    && contract.identity.database == config.postgres.database,
-                "registered source identity changed"
-            );
-            contract.identity.validate_resume(config, durable.end).await?;
-        } else {
-            ensure!(
-                durable.binding.source == source,
-                "replication source does not match durable registration"
-            );
-        }
         let source = durable.binding.source.clone();
+        source.validate()?;
+        ensure!(
+            source.publication == config.replication.publication
+                && source.slot == config.replication.slot
+                && source.identity.database == config.postgres.database,
+            "registered source identity changed"
+        );
+        source.identity.validate_resume(config, durable.end).await?;
         let replication = config
             .replication_config()
             .with_start_lsn(durable.end.to_string().parse()?)
@@ -59,10 +47,7 @@ impl Stream {
             .context("connecting registered durable source")?;
         Ok(Self {
             client,
-            decoder: contract.map_or_else(
-                || Decoder::new(config.execution),
-                |contract| Decoder::registered(config.execution, contract),
-            ),
+            decoder: Decoder::registered(config.execution, source.clone()),
             source,
             acknowledged: durable.end,
             received: durable.end,

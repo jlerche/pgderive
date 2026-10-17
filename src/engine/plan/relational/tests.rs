@@ -9,8 +9,8 @@ use object_store::memory::InMemory;
 use std::{collections::BTreeMap, sync::Arc};
 type Rows = Batch<i64, Vec<i64>>;
 type Bag = BTreeMap<(i64, Vec<i64>), i64>;
-type Projection = Arc<Project<i64, Vec<i64>, i64, Vec<i64>>>;
-type Join = Arc<super::JoinProject<i64, Vec<i64>>>;
+type Projection = Project<i64, Vec<i64>, i64, Vec<i64>>;
+type Join = super::JoinProject<i64, Vec<i64>>;
 fn plan() -> Result<Plan> {
     let nodes = [
         ("as", Kind::Source, vec!["a"]),
@@ -52,10 +52,7 @@ fn operators() -> Operators<i64, Vec<i64>> {
     let projects = ["a", "b", "c"]
         .into_iter()
         .map(|id| {
-            (
-                id.into(),
-                Arc::new(Project::new(|key: &i64, row: &Vec<i64>| Ok(Some((*key, row.clone()))))),
-            )
+            (id.into(), Project::new(|key: &i64, row: &Vec<i64>| Ok(Some((*key, row.clone())))))
         })
         .collect();
     let joins = ["ab", "abc"]
@@ -63,10 +60,10 @@ fn operators() -> Operators<i64, Vec<i64>> {
         .map(|id| {
             (
                 id.into(),
-                Arc::new(Project::new(|key: &i64, pair: &(Vec<i64>, Vec<i64>)| {
+                Project::new(|key: &i64, pair: &(Vec<i64>, Vec<i64>)| {
                     let row = pair.0.iter().chain(&pair.1).copied().collect();
                     Ok(Some((*key, row)))
-                })),
+                }),
             )
         })
         .collect();

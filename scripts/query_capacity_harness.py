@@ -114,7 +114,7 @@ def qualify(output,binary):
                 verify(fixture,labels)
         elapsed = time.monotonic()-began
         observed = health(fixture,binary,config)
-        membership = json.loads(fixture.sql(f"SELECT json_build_object('objects',count(*),'bytes',coalesce(sum((reference->>'bytes')::bigint),0)) FROM {fixture.name}.pgderive_objects"))
+        membership = json.loads(fixture.sql(f"SELECT json_build_object('objects',count(*),'bytes',coalesce(sum((reference->>'bytes')::bigint),0)) FROM {fixture.name}.pgderive_roots"))
         worker.finish(graceful=True)
         peak = sampler.finish()
         worker,sampler = start('restart','cold')

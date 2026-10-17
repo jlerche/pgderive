@@ -75,10 +75,7 @@ class NavigationFixture(NativeFixture):
 
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
-        values = ','.join(self.labels)
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip() == '0', 'navigation differs from PostgreSQL'
+        self.verify_sql(context=prefix)
         source = json.loads(self.sql(prefix + f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"), parse_float=Decimal)
         # Temporal ordering uses native text rather than Python's bounded datetime.
         temporal = {row['id']:row['time'] for row in json.loads(self.sql(prefix + f"SELECT COALESCE(json_agg(q),'[]') FROM(SELECT id,event_time::text AS time FROM {self.name}.bid) q"))}
@@ -111,9 +108,7 @@ class NavigationFixture(NativeFixture):
                             value = default
                     outputs.append(value)
                 memory[(row['id'],)+tuple(outputs)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=Decimal)
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(memory), parse_float=Decimal)
 
 
 if __name__ == '__main__':

@@ -69,9 +69,7 @@ class JoinFixture(SqlFixture):
     def verify(self):
         native=expected(self,self.labels)
         assert self.bag_difference(native).strip()=='0','native MV mismatch'
-        actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(self.memory())
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(self.memory()))
 
 
 def qualify(output,command,mode):

@@ -38,8 +38,7 @@ class BinFixture(NativeFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         query = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1"
-        difference = self.bag_difference(query, context=prefix)
-        assert difference.strip()=='0','date_bin output differs from PostgreSQL'
+        self.verify_sql(query, context=prefix)
         source = json.loads(self.sql(prefix + f"SELECT json_agg(x) FROM (SELECT auction,price,event_at::text local,event_time::text instant FROM {self.name}.bid) x"))
         expected = collections.Counter()
         groups = collections.defaultdict(list)
@@ -52,9 +51,7 @@ class BinFixture(NativeFixture):
             else:
                 prices = [row['price'] for row in group if row['price'] is not None]
                 expected[key + (len(group),sum(prices) if prices else None,average(prices))] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(expected)
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(expected), parse_float=Decimal)
 
 
 if __name__=='__main__':

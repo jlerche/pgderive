@@ -40,16 +40,13 @@ class Q8Fixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,LABELS)
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip()=='0','q8 differs from exact native MV'
+        self.verify_sql(expected, context=prefix)
         people = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(p),'[]') FROM {self.name}.person p"))
         auctions = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         persons = {(p['id'],p['name'],encode(bucket(p['date_time'],10),self.instant)) for p in people}
         sellers = {(a['seller'],encode(bucket(a['date_time'],10),self.instant)) for a in auctions}
         memory = collections.Counter((identity,name,start) for identity,name,start in persons if start is not None and (identity,start) in sellers)
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q8 differs from independent membership set/join oracle'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output,command,mode):

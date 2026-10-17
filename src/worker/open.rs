@@ -97,7 +97,7 @@ async fn reopen(
         .await?
         .context("worker has no durable activation")?;
     ensure!(
-        prior.binding.registered_source()?.as_ref() == Some(contract),
+        prior.binding.source == *contract,
         "worker native source contract differs from activation"
     );
     ensure!(
@@ -109,7 +109,7 @@ async fn reopen(
                 .sink(&settings.sink_table),
         "configured worker destination differs from durable binding"
     );
-    let writer = catalog.claim(&mut session.client, query.plan(), prior.binding, prior.end).await?;
+    let writer = catalog.claim(&mut session.client, query.plan(), prior.binding).await?;
     let nonce: String = session
         .client
         .query_one("SELECT pg_catalog.gen_random_uuid()::text", &[])
@@ -213,7 +213,6 @@ async fn bootstrap(
         .load_durable(&mut session.client, query.plan())
         .await?
         .context("activation disappeared")?;
-    let writer =
-        catalog.claim(&mut session.client, query.plan(), durable.binding, durable.end).await?;
+    let writer = catalog.claim(&mut session.client, query.plan(), durable.binding).await?;
     protection.published(&mut session.client, &writer, query.plan(), &checkpoint).await
 }

@@ -10,5 +10,5 @@ pub mod trace;
 mod weights;
 mod zset;
 
-pub use batch::{Batch, BatchBuilder, IndexedZSet};
+pub use batch::{Batch, BatchBuilder};
 pub use zset::ZSet;

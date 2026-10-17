@@ -83,14 +83,6 @@ impl Contract {
         }
         Ok(())
     }
-    /// Canonical source binding covering cluster, slot and native row layout.
-    ///
-    /// # Errors
-    /// Rejects invalid contracts or serialization failure.
-    pub fn encode(&self) -> Result<String> {
-        self.validate()?;
-        Ok(format!("pgderive-source-v1:{}", serde_json::to_string(self)?))
-    }
     /// Slot ownership identity independent of schema or timeline changes.
     ///
     /// # Errors

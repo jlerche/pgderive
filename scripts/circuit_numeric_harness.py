@@ -33,8 +33,7 @@ class NumericFixture(PartitionFixture):
 
     def verify(self):
         native = expected(self, self.labels)
-        difference = self.bag_difference(native)
-        assert difference.strip() == '0', 'numeric differs from identical SQL materialized view'
+        self.verify_sql(native)
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"), parse_float=decimal.Decimal)
         if self.mode == 'join-key':
             expected_memory = self.join_memory(source)
@@ -42,9 +41,7 @@ class NumericFixture(PartitionFixture):
             expected_memory = self.group_key_memory(source)
         else:
             expected_memory = self.aggregate_memory(source)
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=decimal.Decimal)
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == expected_memory, 'numeric differs from independent Decimal raw-row oracle'
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(expected_memory, parse_float=decimal.Decimal)
 
     @staticmethod
     def key(value):

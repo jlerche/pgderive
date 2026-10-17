@@ -40,10 +40,7 @@ class CompositionFixture(RankingFixture):
         return self.query.replace('>0','>1')
 
     def verify(self):
-        values = ','.join(self.labels)
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'composed stages differ from PostgreSQL'
+        self.verify_sql()
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -85,9 +82,7 @@ class CompositionFixture(RankingFixture):
                     if previous is None or previous>0:
                         count += 1
                         memory[(row['id'],key,previous,count)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory), 'composed stages differ from memory oracle'
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(memory))
 
 
 if __name__ == '__main__':

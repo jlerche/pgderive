@@ -25,8 +25,7 @@ class StorageFixture(SqlFixture):
         return path
     def verify(self):
         native=expected(self,self.labels)
-        difference=self.bag_difference(native)
-        assert difference.strip()=='0','sustained sink differs from exact native MV'
+        self.verify_sql(native)
         bids=json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         auctions=json.loads(self.sql(f"SELECT json_agg(a) FROM {self.name}.auction a"))
         groups=collections.defaultdict(list)
@@ -38,14 +37,12 @@ class StorageFixture(SqlFixture):
         for key,group in groups.items():
             ordered=sorted(group,key=lambda row:(row['price'] is None,0 if row['price'] is None else -row['price'],row['id'],row['aid']))
             for row in ordered[:3]:oracle[(key,row['price'],row['category'])]+=1
-        actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(oracle),(actual,oracle)
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(oracle))
 
 def sample(fixture,worker,event,elapsed,ticks):
     status=pathlib.Path(f'/proc/{worker.process.pid}/status').read_text()
     rss=int(next(line.split()[1] for line in status.splitlines() if line.startswith('VmRSS:')))*1024
-    catalog=json.loads(fixture.sql(f"SELECT json_build_object('roots',(SELECT count(*) FROM {fixture.name}.pgderive_objects),'ledger_rows',(SELECT count(*) FROM {fixture.name}.pgderive_protections),'active_uploads',(SELECT count(*) FROM {fixture.name}.pgderive_protections WHERE uploading AND active),'catalog_bytes',(SELECT pg_total_relation_size('{fixture.name}.pgderive_protections')) )"))
+    catalog=json.loads(fixture.sql(f"SELECT json_build_object('roots',(SELECT count(*) FROM {fixture.name}.pgderive_roots),'ledger_rows',(SELECT count(*) FROM {fixture.name}.pgderive_protections),'active_uploads',(SELECT count(*) FROM {fixture.name}.pgderive_protections WHERE uploading AND active),'catalog_bytes',(SELECT pg_total_relation_size('{fixture.name}.pgderive_protections')) )"))
     return {'elapsed_seconds':elapsed,'source_transactions':ticks,'rss_bytes':rss,'cache':event.get('cache'),**catalog,'physical':inventory(fixture)}
 
 def qualify(output,command,duration,transactions,rows):

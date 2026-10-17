@@ -39,8 +39,7 @@ class LookupFixture(NativeFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array(category,price,amount,chosen)) tuple,count(*)::bigint weight FROM({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip() == '0', 'lookup differs from PostgreSQL'
+        self.verify_sql(expected, context=prefix)
         left = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(x),'[]') FROM(SELECT id,category,lookup_key,enabled,token,{self.field}::text AS time FROM {self.name}.auction) x"))
         right = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(x),'[]') FROM(SELECT id,auction,price,enabled,token,{self.field}::text AS time,amount::text AS amount FROM {self.name}.bid) x"))
         memory = collections.Counter()
@@ -65,9 +64,7 @@ class LookupFixture(NativeFixture):
             if amount is not None and amount not in ('NaN','Infinity','-Infinity'):
                 amount = Decimal(amount)
             memory[(probe['category'],price,amount,encoded(selected['time'],self.timezone) if selected else None)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory), 'lookup differs from independent memory oracle'
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(memory), parse_float=Decimal)
 
 
 def quoted_left(query):

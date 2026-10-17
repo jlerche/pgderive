@@ -28,8 +28,7 @@ class Q3Fixture(SqlFixture):
 
     def verify(self):
         expected = native_expected(self,LABELS)
-        difference = self.bag_difference(expected)
-        assert difference.strip()=='0','q3 differs from native PostgreSQL MV'
+        self.verify_sql(expected)
         people = json.loads(self.sql(f"SELECT COALESCE(json_agg(p),'[]') FROM {self.name}.person p"))
         auctions = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         memory = collections.Counter()
@@ -37,9 +36,7 @@ class Q3Fixture(SqlFixture):
             for p in people:
                 if a['seller'] is not None and a['seller']==p['id'] and a['category']==10 and p['state'] in ('OR','ID','CA'):
                     memory[(p['name'],p['city'],p['state'],a['id'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q3 differs from independent nested-loop memory bag'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output,command,mode):

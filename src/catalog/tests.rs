@@ -92,3 +92,28 @@ fn sinks_reject_removed_expression_programs() {
             .is_err()
     );
 }
+
+#[test]
+fn checkpoint_checksum_retains_run_order_multiplicity_and_numeric_limits() -> Result<()> {
+    use crate::engine::plan::Checkpoint;
+    let root = |hash: &str| json!({"path":format!("pgderive/batch/{hash}"),"bytes":1,"hash":hash,"schema":"rows"});
+    let first = root(&"a".repeat(64));
+    let second = root(&"b".repeat(64));
+    let encoded = json!({"version":1,"plan_identity":"plan","time":1,"arrangements":[{
+        "id":"rows","schema":"rows","trace":{"version":1,"time":1,"generation":1,
+        "objects":[first.clone(),second,first]}}]});
+    let checkpoint: Checkpoint = serde_json::from_value(encoded.clone())?;
+    let digest = super::checkpoint_digest(&checkpoint)?;
+    let round_trip: Checkpoint = serde_json::from_str(&serde_json::to_string_pretty(&encoded)?)?;
+    assert_eq!(super::checkpoint_digest(&round_trip)?, digest);
+    let mut changed = checkpoint.clone();
+    changed.arrangements[0].trace.objects.pop();
+    assert_ne!(super::checkpoint_digest(&changed)?, digest);
+    let mut changed = checkpoint.clone();
+    changed.arrangements[0].trace.objects.swap(0, 1);
+    assert_ne!(super::checkpoint_digest(&changed)?, digest);
+    let mut changed = checkpoint;
+    changed.arrangements[0].trace.generation = u64::MAX;
+    assert!(super::checkpoint_digest(&changed).is_err());
+    Ok(())
+}

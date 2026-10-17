@@ -58,8 +58,7 @@ class AuctionFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip()=='0',f'{self.kind} differs from PostgreSQL'
+        self.verify_sql(expected, context=prefix)
         auctions = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         bids = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
@@ -81,9 +80,7 @@ class AuctionFixture(SqlFixture):
             for rows in groups.values():
                 a,b = min(rows,key=lambda pair:(pair[1]['price'] is not None,-(pair[1]['price'] or 0),time_key(pair[1]['date_time']),pair[1]['id'],pair[0]['id']))
                 memory[(a['id'],a['item_name'],a['description'],a['initial_bid'],a['reserve'],a['date_time'],a['expires'],a['seller'],a['category'],a['extra'],b['auction'],b['bidder'],b['price'],b['date_time'],b['extra'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),f'{self.kind} differs from independent nested-loop eligibility/winner/average oracle'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory), parse_float=Decimal)
 
 
 def qualify(output,command,query,instant):

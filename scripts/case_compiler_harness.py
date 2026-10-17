@@ -34,10 +34,7 @@ class CaseFixture(NativeFixture):
 
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
-        values = ','.join(self.labels)
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip() == '0','CASE/gap output differs from PostgreSQL'
+        self.verify_sql(context=prefix)
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(q),'[]') FROM(SELECT id,auction,{self.temporal}::text AS time FROM {self.name}.bid) q"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -68,9 +65,7 @@ class CaseFixture(NativeFixture):
                 if self.running:
                     total += flag
                 memory[(row['id'],row['auction'],encoded(time,self.temporal=='event_time'),total if self.running else flag)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory),'CASE/gap output differs from memory oracle'
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(memory))
 
 
 if __name__ == '__main__':

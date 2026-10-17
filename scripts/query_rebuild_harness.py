@@ -47,9 +47,9 @@ def verify(fixture, labels):
 
 
 def pin_roots(fixture):
-    roots = json.loads(fixture.sql(f"SELECT jsonb_agg(reference) FROM {fixture.name}.pgderive_objects"))
+    roots = json.loads(fixture.sql(f"SELECT jsonb_agg(reference) FROM {fixture.name}.pgderive_roots"))
     assert roots
-    fixture.sql(f"INSERT INTO {fixture.name}.pgderive_protections(token,query_id,owner_fence,uploading,roots) SELECT 'rebuild-reader','grouped',0,false,jsonb_agg(reference) FROM {fixture.name}.pgderive_objects")
+    fixture.sql(f"INSERT INTO {fixture.name}.pgderive_protections(token,query_id,owner_fence,uploading,roots) SELECT 'rebuild-reader','grouped',0,false,jsonb_agg(reference) FROM {fixture.name}.pgderive_roots")
     return roots
 
 

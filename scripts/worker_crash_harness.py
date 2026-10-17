@@ -77,7 +77,7 @@ def object_kill(output, command, index, restoring, collecting=False):
             fixture.sql(f'''INSERT INTO {fixture.name}.pgderive_protections
               (token,query_id,owner_fence,uploading,roots)
               SELECT 'external-reader','grouped',p.fence,false,
-              (SELECT jsonb_agg(reference) FROM {fixture.name}.pgderive_objects)
+              (SELECT jsonb_agg(reference) FROM {fixture.name}.pgderive_roots)
               FROM {fixture.name}.pgderive_progress p''')
             arm(gate, 'GET')
         else:

@@ -136,11 +136,11 @@ def retire(command, fixture, config, validated):
             result.append(fixture.sql(f'SELECT coalesce(jsonb_agg(row ORDER BY row::text),\'[]\'::jsonb) FROM (SELECT to_jsonb(t) row FROM {table} t) rows'))
         return result
     before = source_rows()
-    roots = json.loads(fixture.sql(f"SELECT jsonb_agg(reference) FROM {fixture.name}.pgderive_objects"))
+    roots = json.loads(fixture.sql(f"SELECT jsonb_agg(reference) FROM {fixture.name}.pgderive_roots"))
     assert roots, 'retirement fixture has no immutable roots'
     fixture.sql(f"""INSERT INTO {fixture.name}.pgderive_protections(token,query_id,owner_fence,uploading,roots)
         SELECT 'external-reader','grouped',0,false,jsonb_agg(reference)
-        FROM {fixture.name}.pgderive_objects""")
+        FROM {fixture.name}.pgderive_roots""")
     endpoint = fixture.environment.get('PGDERIVE__OBJECT_STORE__ENDPOINT', 'http://127.0.0.1:8333')
     def get(path):
         with urllib.request.urlopen(f'{endpoint}/pgderive-mvp-tests/{fixture.name}/{path}', timeout=10) as response:

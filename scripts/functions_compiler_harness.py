@@ -69,9 +69,7 @@ class FunctionsFixture(SqlFixture):
         assert self.bag_difference(expected).strip() == '0', 'typed function sink differs from refreshed native MV'
         rows = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a')) or []
         expected_memory = collections.Counter(memory(row) for row in rows if not (row['category'] or '').startswith('skip'))
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(expected_memory))
 
 
 def qualify(output, command):

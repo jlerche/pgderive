@@ -58,21 +58,14 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
         SQL.replace("source.auction", "auction"),
         SQL.replace("a.id=b.auction", "a.id=a.category"),
         SQL.replace("a.id=b.auction", "a.id=b.id AND b.price IS NULL"),
-        SQL.replace("a.category", "b.auction"),
-        SQL.replace("SUM(b.price)", "SUM(a.id)"),
         SQL.replace("SUM(b.price)", "SUM(a.other)"),
-        SQL.replace("COUNT(*)", "COUNT(b.price)"),
-        SQL.replace("COUNT(*)", "COUNT(DISTINCT b.price)"),
-        SQL.replace("COUNT(*)", "COUNT(*) FILTER (WHERE b.price IS NULL)"),
         SQL.replace("COUNT(*)", "COUNT(*) OVER ()"),
         SQL.replace("SUM(b.price)", "SUM(VARIADIC b.price)"),
         SQL.replace("SUM(b.price)", "SUM(b.price ORDER BY b.id)"),
         SQL.replace("SUM(b.price)", "SUM(b.price) WITHIN GROUP (ORDER BY b.id)"),
-        SQL.replace("SUM(b.price)", "pg_catalog.SUM(b.price)"),
         SQL.replace("a.category", "a.*"),
         SQL.replace("a.other IS NOT NULL", "ROW(a.other) IS NULL"),
         SQL.replace("GROUP BY", "GROUP BY DISTINCT"),
-        SQL.replace("GROUP BY a.category", "GROUP BY a.category, a.id"),
         SQL.replace("SELECT", "SELECT DISTINCT"),
         SQL.replace("FROM source.auction", "INTO source.sink FROM source.auction"),
         SQL.replace("source.auction a", "ONLY source.auction a"),
@@ -94,7 +87,6 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
             &std::iter::repeat_n("a.other IS NULL", 512).collect::<Vec<_>>().join(" AND "),
         ),
         SQL.replace("IS NOT NULL", "> 1"),
-        SQL.replace("JOIN", "LEFT JOIN"),
         SQL.replace("source.bid b", "source.auction b"),
         SQL.replace("source.bid b", "source.bid a"),
         SQL.replace("a.other", "auction.other"),
@@ -118,7 +110,6 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
     for sql in unsupported {
         assert!(compile(&sql, &native()).is_err(), "accepted {sql}");
     }
-    assert!(compile(SQL, &contract()).is_err()); // text grouping
     let mut wrong = native();
     wrong.relations[1].columns[1].oid = 20;
     assert!(compile(SQL, &wrong).is_err());
@@ -129,6 +120,23 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
     wrong.relations[0].columns[0].oid = 25;
     wrong.relations[1].columns[1].oid = 25;
     assert!(compile(SQL, &wrong).is_err());
+}
+#[test]
+fn grouped_joins_use_the_general_aggregate_grammar() -> Result<()> {
+    for sql in [
+        SQL.replace("a.category", "b.auction"),
+        SQL.replace("SUM(b.price)", "SUM(a.id)"),
+        SQL.replace("COUNT(*)", "COUNT(b.price)"),
+        SQL.replace("COUNT(*)", "COUNT(DISTINCT b.price)"),
+        SQL.replace("COUNT(*)", "COUNT(*) FILTER (WHERE b.price IS NULL)"),
+        SQL.replace("SUM(b.price)", "pg_catalog.SUM(b.price)"),
+        SQL.replace("GROUP BY a.category", "GROUP BY a.category, a.id"),
+        SQL.replace("JOIN", "LEFT JOIN"),
+    ] {
+        compile(&sql, &native())?;
+    }
+    compile(SQL, &contract())?;
+    Ok(())
 }
 #[test]
 fn quoted_names_qualifiers_and_conjunctions() -> Result<()> {
@@ -298,7 +306,7 @@ async fn compiled_history_matches_independent_memory_oracle_and_cold_restart() -
 }
 
 #[tokio::test]
-async fn right_null_predicate_and_overflow_fail_without_advancing_state() -> Result<()> {
+async fn right_null_predicate_and_wide_sum_follow_sql_numeric_output() -> Result<()> {
     let compiled = compile(&SQL.replace("WHERE", "WHERE b.price IS NULL AND"), &native())?;
     let mut query = super::build(&native(), &compiled, &settings())?;
     let left = row(&[("id", Some("1")), ("category", None), ("other", Some("yes"))]);
@@ -331,10 +339,97 @@ async fn right_null_predicate_and_overflow_fail_without_advancing_state() -> Res
     let before = query.checkpoint()?;
     let prepared =
         query.prepare(program::relational::inputs(&source, compiled.relational(), 1)?).await?;
-    assert!(program::relational::deltas(&prepared.output().batch, compiled.output()).is_err());
+    program::relational::deltas(&prepared.output().batch, compiled.output())?;
+    assert_eq!(
+        super::projected_batch(&prepared.output().batch, &compiled)?,
+        Batch::from_updates([(
+            (
+                (),
+                vec![
+                    None,
+                    Some(crate::compiler::Cell::Integer(2)),
+                    Some(crate::compiler::Cell::Text("9223372036854775808".into()))
+                ]
+            ),
+            1
+        )])?
+    );
     assert_eq!(query.checkpoint()?, before);
     let alternate = compile(&SQL.replace("IS NOT NULL", "IS NULL"), &native())?;
     let mut other = super::build(&native(), &alternate, &settings())?;
     assert!(other.restore_checkpoint(before).await.is_err());
+    Ok(())
+}
+
+#[test]
+fn selector_text_equality_does_not_expand_the_sql_join_allowlist() -> Result<()> {
+    let mut native = native();
+    native.relations[1].columns[1].oid = 25;
+    native.relations[1].columns[1].collation = 100;
+    let mut selectors = super::spec();
+    selectors.left_key = "other".into();
+    selectors.group = "id".into();
+    Compiled::legacy(selectors, &native)?;
+    assert!(compile("SELECT a.id,COUNT(*),SUM(b.price) FROM source.auction a JOIN source.bid b ON a.other=b.auction GROUP BY a.id", &native).is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn direct_join_aggregates_match_derived_scope_and_independent_bags() -> Result<()> {
+    use crate::compiler::Cell;
+    let native = native();
+    let direct = "SELECT a.category,COUNT(DISTINCT abs(b.price)),SUM(a.id) FROM source.auction a LEFT JOIN source.bid b ON a.id=b.auction GROUP BY a.category";
+    let derived = "SELECT d.g,COUNT(DISTINCT d.p),SUM(d.a) FROM (SELECT a.category AS g,abs(b.price) AS p,a.id AS a FROM source.auction a LEFT JOIN source.bid b ON a.id=b.auction) d GROUP BY d.g";
+    let left = row(&[("id", Some("1")), ("category", Some("10")), ("other", Some("yes"))]);
+    let unmatched = row(&[("id", Some("2")), ("category", Some("20")), ("other", Some("yes"))]);
+    let a = row(&[("id", Some("10")), ("auction", Some("1")), ("price", Some("-7"))]);
+    let b = row(&[("id", Some("11")), ("auction", Some("1")), ("price", Some("7"))]);
+    let null = row(&[("id", Some("12")), ("auction", Some("1")), ("price", None)]);
+    for sql in [direct, derived] {
+        let compiled = compile(sql, &native)?;
+        let options = settings();
+        let mut query = super::build(&native, &compiled, &options)?;
+        for (changes, distinct, total) in [
+            (
+                vec![
+                    ("auction", left.clone(), 2),
+                    ("auction", unmatched.clone(), 1),
+                    ("bid", a.clone(), 3),
+                    ("bid", b.clone(), 1),
+                    ("bid", null.clone(), 1),
+                ],
+                1,
+                10,
+            ),
+            (vec![("bid", a.clone(), -3)], 1, 4),
+            (vec![("bid", b.clone(), -1)], 0, 2),
+            (vec![("bid", null.clone(), -1)], 0, 2),
+        ] {
+            let changes = batch(changes);
+            let prepared = query
+                .prepare(program::relational::inputs(
+                    &changes,
+                    compiled.relational(),
+                    query.time() + 1,
+                )?)
+                .await?;
+            query.commit(prepared)?;
+            let cells = |group, count, sum| {
+                vec![
+                    Some(Cell::Integer(group)),
+                    Some(Cell::Integer(count)),
+                    Some(Cell::Integer(sum)),
+                ]
+            };
+            assert_eq!(
+                super::projected_output(&query, &compiled).await?,
+                Batch::from_updates([
+                    (((), cells(10, distinct, total)), 1),
+                    (((), cells(20, 0, 2)), 1)
+                ])?
+            );
+            super::restart_relational(&mut query, &native, &compiled, &options).await?;
+        }
+    }
     Ok(())
 }

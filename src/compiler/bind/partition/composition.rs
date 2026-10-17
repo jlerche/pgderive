@@ -17,32 +17,34 @@ pub(super) fn bind(
 ) -> Result<Compiled> {
     let mut compiled = crate::compiler::bind::bind(inner, contract)?;
     let relational = &mut compiled.relational;
-    let source = relational.sources.first().context("missing native source")?;
-    let relation = contract
-        .relations
-        .iter()
-        .find(|relation| relation.schema == source.schema && relation.table == source.table)
-        .context("missing native source contract")?;
-    let occurrence = super::occurrence::keys(relational, contract)?;
-    let known_occurrence = occurrence.is_some();
-    let occurrence_keys = occurrence.unwrap_or_default().into_iter().collect::<Vec<_>>();
     let resolve = |name: &crate::compiler::parser::Name| {
         crate::compiler::bind::derived::resolve_output(name, alias, &relational.output.columns)
     };
-    let mut outer = build(
+    let mut outer = stage(relational, body, &resolve, contract)?;
+    compose(relational, &mut outer)?;
+    Ok(compiled)
+}
+pub(super) fn stage(
+    relational: &Relational,
+    body: &Body,
+    resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<crate::compiler::ColumnRef>,
+    contract: &Contract,
+) -> Result<Relational> {
+    let occurrence = super::occurrence::keys(relational, contract)?;
+    let known_occurrence = occurrence.is_some();
+    let occurrence_keys = occurrence.unwrap_or_default().into_iter().collect::<Vec<_>>();
+    let compiled = build(
         body,
-        &resolve,
+        resolve,
         Stage {
-            relation,
+            sources: Vec::new(),
             occurrence_keys: &occurrence_keys,
             aggregate_base: aggregate_base(relational)?,
             scalar_scope: Some(relational.nodes.len()),
         },
     )?;
-    let stage = &mut outer.relational;
-    validate_occurrences(known_occurrence, stage)?;
-    compose(relational, stage)?;
-    Ok(compiled)
+    validate_occurrences(known_occurrence, &compiled.relational)?;
+    Ok(compiled.relational)
 }
 fn aggregate_base(relational: &Relational) -> Result<usize> {
     let mut base = 0;
@@ -110,10 +112,17 @@ pub(in crate::compiler::bind) fn lower_source_filter(
     );
     Ok(())
 }
-fn compose(inner: &mut Relational, outer: &mut Relational) -> Result<()> {
+pub(super) fn compose(inner: &mut Relational, outer: &mut Relational) -> Result<()> {
     let Some(Node::Output { input, .. }) = inner.nodes.pop() else {
         anyhow::bail!("missing inner output");
     };
+    for node in &outer.nodes {
+        if let Node::Filter { input: source, predicate, .. } = node
+            && source == "source"
+        {
+            super::super::topk::specialize(inner, &input, predicate);
+        }
+    }
     let prefix = format!("stage_{}_", inner.nodes.len());
     for mut node in std::mem::take(&mut outer.nodes) {
         if matches!(node, Node::Source { .. }) {

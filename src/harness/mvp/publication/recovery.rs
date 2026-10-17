@@ -11,12 +11,12 @@ impl PublicationFixture {
         graph: &mut Query,
         attempt: Publication<'_>,
     ) -> Result<bool> {
-        if attempt.checkpoint.time == 4 {
+        if attempt.checkpoint.time == 5 {
             return self.held_commit(sql, graph, attempt).await;
         }
         let mode = match attempt.checkpoint.time {
-            2 => "BEFORE",
-            3 => "AFTER",
+            3 => "BEFORE",
+            4 => "AFTER",
             _ => return Ok(false),
         };
         let Ok(port) = std::env::var(format!("PGDERIVE_SQL_COMMIT_{mode}_PORT")) else {

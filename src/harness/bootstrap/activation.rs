@@ -30,12 +30,12 @@ pub(super) async fn check(
         ensure!(result.is_err(), "snapshot COMMIT fault did not disconnect");
         drop(fault);
         let _disconnected = task.await.context("snapshot fault SQL driver panicked")?;
-        let durable = catalog.load(sql, plan).await?;
+        let durable = catalog.load_durable(sql, plan).await?;
         if mode == "BEFORE" {
             ensure!(durable.is_none(), "snapshot before COMMIT failure activated partial state");
         } else {
             ensure!(
-                durable.context("snapshot after COMMIT missing state")?.checkpoint
+                durable.context("snapshot after COMMIT missing state")?.stored.checkpoint
                     == *snapshot.checkpoint,
                 "snapshot after COMMIT changed membership"
             );
@@ -47,7 +47,7 @@ pub(super) async fn check(
         .await?
         .context("snapshot activation missing durable progress")?;
     ensure!(
-        durable.binding.source == snapshot.source.encode()?
+        durable.binding.source == *snapshot.source
             && durable.end == snapshot.boundary
             && durable.xid.is_none(),
         "snapshot source boundary mismatch"

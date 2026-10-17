@@ -21,7 +21,6 @@ type Group = Option<String>;
 pub(super) type Query = Relational<Key, Row>;
 pub(super) struct MvpFixture {
     graph: Query,
-    epoch: u64,
     publication: Option<publication::PublicationFixture>,
 }
 impl MvpFixture {
@@ -37,7 +36,7 @@ impl MvpFixture {
             &crate::engine::plan::Settings { store, block_rows: 3, limits, encoded_cache: None },
         )?;
         eprintln!("registered engine query: {}", graph.plan().identity());
-        Ok(Self { graph, epoch: 0, publication: None })
+        Ok(Self { graph, publication: None })
     }
     pub(super) fn time(&self) -> u64 {
         self.graph.time()
@@ -57,10 +56,10 @@ impl MvpFixture {
         };
         let pinned = self.graph.snapshot();
         let prepared = self.graph.prepare(input.clone()).await;
-        let prepared = if time == 1 && std::env::var("PGDERIVE_EXPECT_STORAGE_FAILURE").is_ok() {
+        let prepared = if time == 2 && std::env::var("PGDERIVE_EXPECT_STORAGE_FAILURE").is_ok() {
             ensure!(prepared.is_err(), "expected injected S3 failure was not observed");
             ensure!(
-                self.graph.time() == 0 && Arc::ptr_eq(&pinned, &self.graph.snapshot()),
+                self.graph.time() == 1 && Arc::ptr_eq(&pinned, &self.graph.snapshot()),
                 "storage failure published partial graph state"
             );
             eprintln!("MVP injected storage failure preserved root; retrying same transaction");
@@ -89,19 +88,21 @@ impl MvpFixture {
             .into_iter()
             .map(|row| ((String::new(), visible_row(row.get(0), row.get(1), row.get(2))), 1));
         ensure!(visible == Batch::from_updates(rows)?, "MVP SUM output differs from SQL");
-        if time == 5 {
-            self.compact().await?;
+        if time == 6 {
+            self.compact(sql).await?;
         }
         ensure!(pinned.trace("output")?.time() == time - 1, "old reader moved to new tick");
         eprintln!("MVP project/join/group/sum passed SQL+memory at tick {time}");
         Ok(())
     }
-    async fn compact(&mut self) -> Result<()> {
+    async fn compact(&mut self, sql: &mut Client) -> Result<()> {
         let pinned = self.graph.snapshot();
         let expected = pinned.trace("output")?.materialize().await?;
         let time = self.graph.time();
         let work = self.graph.prepare_compaction().await?;
-        self.graph.commit_compaction(work)?;
+        let publication =
+            self.publication.as_mut().context("publication fixture not initialized")?;
+        self.graph.publish_compaction(sql, &mut publication.grouped, work).await?;
         ensure!(
             self.graph.time() == time
                 && pinned.trace("output")?.materialize().await? == expected
@@ -116,7 +117,7 @@ pub(super) fn operators() -> Operators<Key, Row> {
     let mut projects = BTreeMap::new();
     projects.insert(
         "left".into(),
-        Arc::new(Project::new(|key: &Key, row: &Row| {
+        Project::new(|key: &Key, row: &Row| {
             Ok(Some((
                 key.clone(),
                 Row::from([(
@@ -124,11 +125,11 @@ pub(super) fn operators() -> Operators<Key, Row> {
                     row.get("category").context("missing category")?.clone(),
                 )]),
             )))
-        })),
+        }),
     );
     projects.insert(
         "right".into(),
-        Arc::new(Project::new(|key: &Key, row: &Row| {
+        Project::new(|key: &Key, row: &Row| {
             Ok(Some((
                 key.clone(),
                 Row::from([
@@ -136,20 +137,20 @@ pub(super) fn operators() -> Operators<Key, Row> {
                     ("price".into(), row.get("price").context("missing price")?.clone()),
                 ]),
             )))
-        })),
+        }),
     );
     projects.insert(
         "group".into(),
-        Arc::new(Project::new(|_: &Key, row: &Row| {
+        Project::new(|_: &Key, row: &Row| {
             Ok(Some((
                 serde_json::to_string(row.get("category").context("missing grouping key")?)?,
                 row.clone(),
             )))
-        })),
+        }),
     );
     projects.insert(
         "output".into(),
-        Arc::new(Project::new(|key: &Key, row: &Row| {
+        Project::new(|key: &Key, row: &Row| {
             let rows = integer(row, "rows")?;
             let non_null = integer(row, "non_null")?;
             let sum = integer(row, "sum")?;
@@ -157,7 +158,7 @@ pub(super) fn operators() -> Operators<Key, Row> {
                 String::new(),
                 visible_row(serde_json::from_str(key)?, rows, (non_null != 0).then_some(sum)),
             )))
-        })),
+        }),
     );
     let join = Project::new(|key: &Key, pair: &(Row, Row)| {
         let mut row = pair.0.clone();
@@ -166,8 +167,8 @@ pub(super) fn operators() -> Operators<Key, Row> {
     });
     let mut operators: Operators<Key, Row> =
         projects.into_iter().map(|(id, value)| (id, Operator::Project(value))).collect();
-    operators.insert("join".into(), Operator::Join(Arc::new(join)));
-    operators.insert("sums".into(), Operator::Statistics(Arc::new(statistics())));
+    operators.insert("join".into(), Operator::Join(join));
+    operators.insert("sums".into(), Operator::Statistics(statistics()));
     operators
 }
 fn statistics() -> Statistics<Key, Row> {

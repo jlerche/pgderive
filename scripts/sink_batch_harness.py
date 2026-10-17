@@ -32,7 +32,7 @@ class SinkFixture(NumericFixture):
         assert self.acknowledgement_ahead().strip()=='0'
 
     def boundary(self):
-        return self.sql(f"SELECT jsonb_build_object('progress',(SELECT to_jsonb(p) FROM {self.name}.pgderive_progress p),'members',(SELECT jsonb_agg(to_jsonb(a) ORDER BY query_id,arrangement_id) FROM {self.name}.pgderive_arrangements a),'objects',(SELECT jsonb_agg(to_jsonb(o) ORDER BY query_id,arrangement_id,ordinal) FROM {self.name}.pgderive_objects o),'sink',(SELECT jsonb_agg(jsonb_build_array(key,number::text) ORDER BY key,number::text) FROM {self.name}.groups))")
+        return self.sql(f"SELECT jsonb_build_object('progress',(SELECT to_jsonb(p) FROM {self.name}.pgderive_progress p),'queries',(SELECT jsonb_agg(to_jsonb(q) ORDER BY query_id) FROM {self.name}.pgderive_queries q),'sink',(SELECT jsonb_agg(jsonb_build_array(key,number::text) ORDER BY key,number::text) FROM {self.name}.groups))")
 
     def index(self):
         oid=self.sql(f"SELECT '{self.name}.groups'::regclass::oid").strip()

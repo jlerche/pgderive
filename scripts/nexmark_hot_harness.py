@@ -40,8 +40,7 @@ class HotFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip()=='0',self.kind+' differs from exact native PostgreSQL MV'
+        self.verify_sql(expected, context=prefix)
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         memory = collections.Counter()
         if self.kind=='q5':
@@ -71,9 +70,7 @@ class HotFixture(SqlFixture):
                 for row in rows:
                     if row['price']==maximum:
                         memory[(row['auction'],row['price'],row['bidder'],encode(row['date_time'],self.instant),row['extra'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent bucket/max bag oracle'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output,command,query,instant):

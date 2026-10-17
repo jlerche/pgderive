@@ -37,8 +37,7 @@
       "id": "global_count",
       "sql": "SELECT COUNT(*) AS n FROM {schema}.entry",
       "blocker": "ungrouped aggregate seeding",
-      "diagnostic": "function count is not available in-engine",
-      "diagnostic_gap": "reports aggregate placement as function availability"
+      "diagnostic": "ungrouped aggregates unsupported"
     },
     {
       "id": "numeric_abs",

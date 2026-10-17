@@ -33,10 +33,7 @@ class DerivedFixture(RankingFixture):
         return self.query.replace('>=2', '>=3') if self.mode == 'grouped' else self.query.replace('<=3', '<=2')
 
     def verify(self):
-        values = ','.join(self.labels)
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'derived result differs from PostgreSQL'
+        self.verify_sql()
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -56,9 +53,7 @@ class DerivedFixture(RankingFixture):
                     rank = sum(other['price'] is None or (price is not None and other['price']>price) for other in group if other['price'] != price)+1
                 if rank<=3 and (price is None or price>0) and (not self.layered or price is None or price<5):
                     memory[(price,)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(memory))
 
 
 if __name__ == '__main__':

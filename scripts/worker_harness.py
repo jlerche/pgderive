@@ -222,11 +222,24 @@ record_bytes=16384
           SELECT count(*) FROM ((SELECT * FROM expected EXCEPT ALL SELECT * FROM actual)
           UNION ALL (SELECT * FROM actual EXCEPT ALL SELECT * FROM expected)) differences""")
 
+    def verify_sql(self, expected=None, context=''):
+        if expected is None:
+            values = ','.join(self.labels)
+            expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
+        assert self.bag_difference(expected, context=context).strip() == '0', self.query
+
     def acknowledgement_ahead(self):
         return self.sql(f"""SELECT count(*) FROM pg_replication_slots s
           JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name
           CROSS JOIN {self.name}.pgderive_progress p
           WHERE s.confirmed_flush_lsn>p.end_lsn""")
+
+    def verify_memory(self, expected, parse_float=float):
+        rows = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),
+                          parse_float=parse_float)
+        actual = {tuple(row['tuple'][1]): row['weight'] for row in rows}
+        assert actual == expected, {'query': self.query, 'expected': expected, 'actual': actual}
+        assert self.acknowledgement_ahead().strip() == '0', 'slot acknowledged beyond durable publication'
 
     @contextmanager
     def managed(self):

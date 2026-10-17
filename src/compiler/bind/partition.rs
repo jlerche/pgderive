@@ -20,9 +20,8 @@ struct Body {
     groups: Vec<crate::compiler::parser::scalar::Key>,
     predicate: Option<crate::compiler::syntax::Expr>,
 }
-#[derive(Clone, Copy)]
 struct Stage<'a> {
-    relation: &'a crate::source::Relation,
+    sources: Vec<Source>,
     occurrence_keys: &'a [String],
     aggregate_base: usize,
     scalar_scope: Option<usize>,
@@ -32,6 +31,14 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
     let body = Body { expansion, targets, groups, predicate };
     match source {
         syntax::Source::Native(table) => bind_native(table, &body, contract),
+        syntax::Source::Join { tree, validated } => {
+            let scope = super::native_join::scope(tree, contract, validated)?;
+            let mut outer =
+                composition::stage(&scope.ir, &body, &|name| scope.resolve(name), contract)?;
+            let mut relational = scope.ir;
+            composition::compose(&mut relational, &mut outer)?;
+            Ok(Compiled { result_columns: Vec::new(), relational })
+        }
         syntax::Source::Derived { inner, alias } => {
             composition::bind(*inner, &alias, &body, contract)
         }
@@ -57,7 +64,10 @@ fn bind_native(
         parsed,
         &resolve,
         Stage {
-            relation: scopes[0].relation,
+            sources: vec![Source {
+                schema: scopes[0].relation.schema.clone(),
+                table: scopes[0].relation.table.clone(),
+            }],
             occurrence_keys: &occurrence_keys,
             aggregate_base: 0,
             scalar_scope: None,
@@ -89,12 +99,6 @@ fn build(
         &mut state,
     )?;
     let projection = state.aggregates.is_empty() && group_keys.is_empty();
-    ensure!(
-        !state.aggregates.is_empty()
-            || !group_keys.is_empty()
-            || projection && (!computed.is_empty() || parsed.expansion.is_some()),
-        "partition requires an aggregate"
-    );
     validate_occurrences(parsed.expansion.as_ref(), &state)?;
     validate_keys(&state.keys)?;
     if state.mode.is_none() && !projection {
@@ -117,24 +121,23 @@ fn build(
         mode: state.mode.unwrap_or(Mode::Grouped { keys: group_keys }),
         aggregates: state.aggregates,
     };
-    let relation = context.relation;
-    let output = crate::compiler::Projected {
-        schema: relation.schema.clone(),
-        table: relation.table.clone(),
-        columns,
-    };
+    let output = crate::compiler::Projected { columns };
     let mut nodes = if projection {
-        vec![
-            Node::Source { id: "source".into(), source: 0 },
-            Node::Map { id: "mapped".into(), input: "source".into(), computed },
-            Node::Output { id: "project".into(), input: "mapped".into() },
-        ]
+        let mut nodes = vec![Node::Source { id: "source".into(), source: 0 }];
+        let input = if computed.is_empty() {
+            "source"
+        } else {
+            nodes.push(Node::Map { id: "mapped".into(), input: "source".into(), computed });
+            "mapped"
+        };
+        nodes.push(Node::Output { id: "project".into(), input: input.into() });
+        nodes
     } else {
         nodes(state.keys, spec, computed)
     };
     attach_expansion(&mut nodes, parsed.expansion.as_ref())?;
     let predicates = source_predicate(parsed.predicate.clone(), resolve)?;
-    let sources = vec![Source { schema: relation.schema.clone(), table: relation.table.clone() }];
+    let sources = context.sources;
     let mut relational = Relational { sources, nodes, output };
     composition::lower_source_filter(&mut relational, predicates)?;
     super::boundary::finalize(&mut relational, &averages)?;
@@ -178,15 +181,6 @@ fn bind_targets(
             syntax::Value::Typed(value) => {
                 crate::compiler::typed::computed(&value, resolve, computed, context.scalar_scope)?
             }
-            syntax::Value::Bin(bin) => {
-                crate::compiler::scalar::bind(&bin, resolve, computed, context.scalar_scope)?
-            }
-            syntax::Value::Offset(offset) => crate::compiler::scalar::bind_offset(
-                &offset,
-                resolve,
-                computed,
-                context.scalar_scope,
-            )?,
             syntax::Value::Aggregate(value) => {
                 aggregate(*value, resolve, context, state, computed)?
             }
@@ -261,10 +255,11 @@ fn bind_key(
     match key {
         crate::compiler::parser::scalar::Key::Column(name) => resolve(&name),
         crate::compiler::parser::scalar::Key::Typed(value) => {
+            ensure!(
+                !crate::compiler::parser::offset::eligible(&value)?,
+                "timestamp offsets in grouping/order keys are unsupported"
+            );
             crate::compiler::typed::computed(&value, resolve, computed, scope)
-        }
-        crate::compiler::parser::scalar::Key::Bin(bin) => {
-            crate::compiler::scalar::bind(&bin, resolve, computed, scope)
         }
     }
 }

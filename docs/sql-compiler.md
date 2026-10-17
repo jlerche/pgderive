@@ -169,8 +169,8 @@ COMMIT; only authoritative publication permits slot ACK. Source LSN never become
 DBSP time. The compiler adds no acknowledgement or publication capability.
 
 COUNT and final weights must fit signed i64. Sufficient statistics use exact
-intermediate arithmetic. General SUM(int8) emits PostgreSQL numeric; SUM(int2/int4)
-and the bounded two-source grouped selector output must fit i64. Output conversion
+intermediate arithmetic. SUM(int8) emits PostgreSQL numeric, including selector
+configurations; SUM(int2/int4) must fit i64. Output conversion
 and publication failures cannot advance progress or ACK. These are explicit
 operator/result limits, not a claim of unrestricted PostgreSQL aggregate coverage.
 

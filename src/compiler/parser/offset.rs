@@ -8,18 +8,20 @@ pub(in crate::compiler) struct Offset {
     // Signed microseconds to subtract; calendar months/days are not accepted.
     pub subtract: i64,
 }
-pub(super) fn eligible(value: &Node) -> Result<bool> {
+pub(in crate::compiler) fn eligible(value: &Node) -> Result<bool> {
     let NodeEnum::AExpr(expression) = node(value)? else { return Ok(false) };
-    Ok(expression
-        .lexpr
-        .as_deref()
-        .is_some_and(|value| matches!(node(value), Ok(NodeEnum::ColumnRef(_))))
-        && expression
-            .rexpr
-            .as_deref()
-            .is_some_and(|value| matches!(node(value), Ok(NodeEnum::TypeCast(_)))))
+    let Some(right) = expression.rexpr.as_deref() else {
+        return Ok(false);
+    };
+    let NodeEnum::TypeCast(cast) = node(right)? else {
+        return Ok(false);
+    };
+    let kind = cast.type_name.as_ref().context("missing timestamp offset type")?;
+    Ok(matches!(node(optional(expression.lexpr.as_deref())?)?, NodeEnum::ColumnRef(_))
+        && super::expressions::builtin_name(&super::expressions::names(&kind.names)?.0)
+            == Some("interval"))
 }
-pub(super) fn parse(value: &Node) -> Result<Offset> {
+pub(in crate::compiler) fn parse(value: &Node) -> Result<Offset> {
     let NodeEnum::AExpr(expression) = node(value)? else {
         anyhow::bail!("timestamp offset requires operator");
     };

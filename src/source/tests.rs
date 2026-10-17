@@ -2,7 +2,7 @@ use super::{Column, Contract, Identity, Relation};
 use anyhow::{Result, bail};
 use postgres_replication::protocol::LogicalReplicationMessage;
 
-fn contract() -> Contract {
+pub fn contract() -> Contract {
     Contract {
         environment: crate::source::Environment::fixture(),
         identity: Identity { system: "123".into(), timeline: 1, database: "test".into() },

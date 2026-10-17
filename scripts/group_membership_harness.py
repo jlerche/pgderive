@@ -31,14 +31,11 @@ class MembershipFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip()=='0','membership differs from exact native MV'
+        self.verify_sql(expected, context=prefix)
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         memberships = {(row['auction'],row['channel'],encode(bucket(row['date_time'],10),self.instant)) for row in source if row['price'] is None or row['price']>=0}
         memory = collections.Counter((auction,channel) for auction,channel,_ in memberships)
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'membership differs from independent set/projected bag'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output,command,mode):

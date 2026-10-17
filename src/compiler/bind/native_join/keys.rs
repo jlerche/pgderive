@@ -17,6 +17,7 @@ pub(super) fn bind(
     left: &[Column],
     right: &[Column],
     prefix: &str,
+    validated: bool,
 ) -> Result<Bound> {
     let mut all = left.to_vec();
     all.extend_from_slice(right);
@@ -30,7 +31,8 @@ pub(super) fn bind(
             a.value.oid == b.value.oid
                 && a.modifier == b.modifier
                 && a.collation == b.collation
-                && matches!(a.value.oid, 16 | 20 | 21 | 23 | 1700 | 2950 | 1114 | 1184),
+                && (validated
+                    || matches!(a.value.oid, 16 | 20 | 21 | 23 | 1700 | 2950 | 1114 | 1184)),
             "unsupported or incompatible join-tree key types"
         );
         bound.keys.push((a.value, b.value));

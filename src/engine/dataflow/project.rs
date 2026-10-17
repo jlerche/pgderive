@@ -10,6 +10,7 @@ use std::sync::Arc;
 type Mapper<K, V, A, B> = dyn Fn(&K, &V) -> Result<Option<(A, B)>> + Send + Sync;
 
 /// Lifetime-bound pure projection/filter over a typed weighted edge.
+#[derive(Clone)]
 pub struct Project<K: BatchData, V: BatchData, A: BatchData, B: BatchData> {
     map: Arc<Mapper<K, V, A, B>>,
 }

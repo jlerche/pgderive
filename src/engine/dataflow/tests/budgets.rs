@@ -64,8 +64,7 @@ fn plan() -> Result<Plan> {
 type Query = Relational<i64, Vec<i64>>;
 type SourceBatches = Vec<Batch<i64, Vec<i64>>>;
 fn query(settings: &Settings) -> Result<Query> {
-    let identity =
-        || Arc::new(Project::new(|key: &i64, value: &Vec<i64>| Ok(Some((*key, value.clone())))));
+    let identity = || Project::new(|key: &i64, value: &Vec<i64>| Ok(Some((*key, value.clone()))));
     let statistics = Statistics::new(
         3,
         |value: &Vec<i64>| Ok(vec![1.into(), 1.into(), value[0].into()]),
@@ -86,17 +85,17 @@ fn query(settings: &Settings) -> Result<Query> {
             ("right".into(), Operator::Project(identity())),
             (
                 "output".into(),
-                Operator::Project(Arc::new(Project::new(|key: &i64, value: &Vec<i64>| {
+                Operator::Project(Project::new(|key: &i64, value: &Vec<i64>| {
                     Ok(Some((*key, vec![value[0], value[2]])))
-                }))),
+                })),
             ),
             (
                 "join".into(),
-                Operator::Join(Arc::new(Project::new(|key: &i64, pair: &(Vec<i64>, Vec<i64>)| {
+                Operator::Join(Project::new(|key: &i64, pair: &(Vec<i64>, Vec<i64>)| {
                     Ok(Some((*key, vec![pair.0[0] + pair.1[0]])))
-                }))),
+                })),
             ),
-            ("aggregate".into(), Operator::Statistics(Arc::new(statistics))),
+            ("aggregate".into(), Operator::Statistics(statistics)),
         ]
         .into(),
         settings,

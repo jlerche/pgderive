@@ -150,12 +150,7 @@ async fn boundary(opened: &Open, settings: &Settings, state: &State) -> Result<(
     };
     let old_end: String = row.try_get(0)?;
     let binding: crate::catalog::Binding = serde_json::from_value(row.try_get(1)?)?;
-    binding
-        .registered_source()?
-        .context("old generation has no source identity")?
-        .identity
-        .verify_sql(&opened.session.client)
-        .await?;
+    binding.source.identity.verify_sql(&opened.session.client).await?;
     let new_end: String = opened
         .session
         .client

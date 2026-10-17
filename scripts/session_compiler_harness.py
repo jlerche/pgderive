@@ -43,8 +43,7 @@ class SessionFixture(NativeFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1"
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip() == '0','session/extrema output differs from PostgreSQL'
+        self.verify_sql(expected, context=prefix)
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(q),'[]') FROM(SELECT id,auction,{self.temporal}::text AS time FROM {self.name}.bid) q"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -90,9 +89,7 @@ class SessionFixture(NativeFixture):
                 finish = component[-1]
                 finish = offset(finish,10)
                 memory[(bidder,encoded(component[0],timezone),encoded(finish,timezone),len(component))] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory),'session/extrema output differs from connected-component oracle'
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output, command, mode):

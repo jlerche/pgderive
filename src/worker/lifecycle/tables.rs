@@ -77,7 +77,7 @@ pub(super) async fn cutover(
     let (Sink::Rows { columns: lhs, .. }, Sink::Rows { columns: rhs, .. }) =
         (&prior.sink, &next.sink)
     else {
-        anyhow::bail!("legacy weighted sinks require explicit migration before rebuild");
+        anyhow::bail!("rebuild requires native result columns");
     };
     ensure!(
         lhs == rhs,

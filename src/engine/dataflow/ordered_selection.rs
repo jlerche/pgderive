@@ -12,6 +12,7 @@ use std::{collections::BTreeMap, sync::Arc};
 type Selection<K, V> = dyn Fn(&K, &V, usize, Limits) -> Result<Option<(K, V)>> + Send + Sync;
 /// Retractable first K row occurrences per key in physical codec order.
 /// SQL callers bind explicit ordering and the codec to durable plan identity.
+#[derive(Clone)]
 pub struct OrderedSelection<K: BatchData, V: BatchData> {
     limit: usize,
     first: bool,

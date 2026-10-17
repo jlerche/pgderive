@@ -9,54 +9,40 @@ use tokio_postgres::{Client, Transaction};
 #[serde(deny_unknown_fields)]
 pub struct Binding {
     /// Stable source registration (database/publication/slot/schema contract).
-    pub source: String,
+    pub source: crate::source::Contract,
     /// Owned explicit destination table and encoding.
     pub sink: Sink,
 }
 impl Binding {
     pub(super) fn validate(&self) -> Result<()> {
         self.sink.validate()?;
-        ensure!(!self.source.is_empty() && self.source.len() <= 65536, "invalid source binding");
-        if let Some(source) = self.registered_source()? {
-            source.validate()?;
-        }
+        self.source.validate()?;
+        ensure!(serde_json::to_vec(&self.source)?.len() <= 65536, "invalid source binding");
         Ok(())
-    }
-    pub(crate) fn registered_source(&self) -> Result<Option<crate::source::Contract>> {
-        self.source
-            .strip_prefix("pgderive-source-v1:")
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(Into::into)
     }
     pub(super) async fn verify_ownership(
         &self,
         sql: &Transaction<'_>,
         catalog: &Catalog,
     ) -> Result<()> {
-        if let Some(source) = self.registered_source()? {
-            let row = sql
-                .query_opt(
-                    &format!(
-                        "SELECT query_id FROM {}.pgderive_source_slots WHERE source_key=$1",
-                        catalog.schema
-                    ),
-                    &[&source.ownership_key()?],
-                )
-                .await?
-                .context("registered source ownership missing")?;
-            ensure!(
-                row.try_get::<_, String>(0)? == catalog.query,
-                "registered source owned by another query"
-            );
-        }
+        let row = sql
+            .query_opt(
+                &format!(
+                    "SELECT query_id FROM {}.pgderive_source_slots WHERE source_key=$1",
+                    catalog.schema
+                ),
+                &[&self.source.ownership_key()?],
+            )
+            .await?
+            .context("registered source ownership missing")?;
+        ensure!(
+            row.try_get::<_, String>(0)? == catalog.query,
+            "registered source owned by another query"
+        );
         Ok(())
     }
     async fn verify_environment(&self, sql: &Transaction<'_>) -> Result<()> {
-        if let Some(source) = self.registered_source()? {
-            source.verify(sql).await?;
-        }
-        Ok(())
+        self.source.verify(sql).await
     }
     async fn verify_destination(&self, tx: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
         self.sink.owned(tx, catalog).await?.context("registered destination ownership missing")?;
@@ -82,20 +68,8 @@ impl Binding {
         tx.execute(&format!("INSERT INTO {}.pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn) VALUES($1,$2,$3,1,$4::text::pg_lsn,$4::text::pg_lsn)", catalog.schema), &[&catalog.query, &serde_json::to_value(self)?, &self.sink.table(), &boundary]).await?;
         Ok(())
     }
-    pub(super) fn valid_identity(
-        &self,
-        time: u64,
-        xid: Option<u32>,
-        commit: Lsn,
-        end: Lsn,
-    ) -> Result<bool> {
-        Ok(if time == 0 {
-            xid.is_none() && end == commit && self.registered_source()?.is_none()
-        } else if xid.is_some() {
-            true
-        } else {
-            time == 1 && end == commit && self.registered_source()?.is_some()
-        })
+    pub(super) fn valid_identity(time: u64, xid: Option<u32>, commit: Lsn, end: Lsn) -> bool {
+        (time == 1 && xid.is_none() && end == commit) || (time > 1 && xid.is_some())
     }
 }
 /// Complete prepared transaction, whose immutable objects must already exist.
@@ -118,42 +92,31 @@ pub struct Writer {
     pub(super) uncertain: bool,
 }
 impl Catalog {
-    /// Claim publication ownership, initializing progress only at an empty tick zero.
-    /// The caller must verify the source binding and supply its bootstrap position.
-    /// Destinations are owned engine tables; they must be empty on first registration.
+    /// Reclaim an atomically activated native source and owned destination.
+    /// Every claim validates its boundary and fences all earlier writers.
     ///
     /// # Errors
-    /// Rejects incompatible registration, nonempty bootstrap, or `PostgreSQL` failures.
-    pub async fn claim(
-        &self,
-        sql: &mut Client,
-        plan: &Plan,
-        binding: Binding,
-        initial: Lsn,
-    ) -> Result<Writer> {
+    /// Rejects missing or incompatible activation and `PostgreSQL` failures.
+    pub async fn claim(&self, sql: &mut Client, plan: &Plan, binding: Binding) -> Result<Writer> {
         binding.validate()?;
         let tx = sql.transaction().await?;
         super::storage::shared(&tx, self).await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-        let row = tx.query_one(&format!("SELECT plan_identity,definition,logical_time,epoch FROM {}.pgderive_queries WHERE query_id=$1 FOR UPDATE", self.schema), &[&self.query]).await?;
-        ensure!(
-            row.try_get::<_, String>(0)? == plan.identity()
-                && row.try_get::<_, serde_json::Value>(1)?
-                    == serde_json::to_value(plan.definition())?,
-            "publication registration mismatch"
-        );
-        let time = u64::try_from(row.try_get::<_, i64>(2)?)?;
-        let epoch = u64::try_from(row.try_get::<_, i64>(3)?)?;
-        let checkpoint = read::boundary(&tx, self, plan)
-            .await?
-            .context("missing claimed checkpoint")?
-            .checkpoint;
-        if binding.registered_source()?.is_some() {
-            binding.verify_ownership(&tx, self).await?;
-        }
+        tx.query_one(
+            &format!(
+                "SELECT query_id FROM {}.pgderive_queries WHERE query_id=$1 FOR UPDATE",
+                self.schema
+            ),
+            &[&self.query],
+        )
+        .await?;
+        let super::Stored { epoch, checkpoint } =
+            read::boundary(&tx, self, plan).await?.context("missing atomic source activation")?;
+        let time = checkpoint.time;
+        binding.verify_ownership(&tx, self).await?;
         let encoded = serde_json::to_value(&binding)?;
-        let row = tx.query_opt(&format!("SELECT binding,fence,end_lsn::text,commit_lsn::text,xid FROM {}.pgderive_progress WHERE query_id=$1 FOR UPDATE", self.schema), &[&self.query]).await?;
-        let (fence, end, last_commit, last_xid) = if let Some(row) = row {
+        let row = tx.query_one(&format!("SELECT binding,fence,end_lsn::text,commit_lsn::text,xid FROM {}.pgderive_progress WHERE query_id=$1 FOR UPDATE", self.schema), &[&self.query]).await?;
+        let (fence, end, last_commit, last_xid) = {
             ensure!(
                 row.try_get::<_, serde_json::Value>(0)? == encoded,
                 "source/destination binding mismatch"
@@ -166,7 +129,7 @@ impl Catalog {
             let commit = row.try_get::<_, String>(3)?.parse()?;
             let xid = row.try_get::<_, Option<i64>>(4)?.map(u32::try_from).transpose()?;
             ensure!(
-                end >= commit && binding.valid_identity(time, xid, commit, end)?,
+                end >= commit && Binding::valid_identity(time, xid, commit, end),
                 "invalid claimed source progress"
             );
             tx.execute(
@@ -175,9 +138,6 @@ impl Catalog {
             )
             .await?;
             (fence, end, commit, xid)
-        } else {
-            initialize(&tx, self, &binding, time, initial).await?;
-            (1, initial, initial, None)
         };
         tx.commit()
             .await
@@ -195,31 +155,6 @@ impl Catalog {
             uncertain: false,
         })
     }
-}
-async fn initialize(
-    tx: &Transaction<'_>,
-    catalog: &Catalog,
-    binding: &Binding,
-    time: u64,
-    initial: Lsn,
-) -> Result<()> {
-    ensure!(time == 0, "publication must initialize at logical tick zero");
-    ensure!(
-        binding.registered_source()?.is_none(),
-        "registered sources require atomic snapshot activation"
-    );
-    let roots = tx
-        .query_one(
-            &format!("SELECT COUNT(*) FROM {}.pgderive_objects WHERE query_id=$1", catalog.schema),
-            &[&catalog.query],
-        )
-        .await?;
-    ensure!(
-        roots.try_get::<_, i64>(0)? == 0,
-        "publication bootstrap has nonempty arrangement roots"
-    );
-    binding.initialize(tx, catalog, initial).await?;
-    Ok(())
 }
 impl Writer {
     pub(super) async fn commit(&mut self, tx: Transaction<'_>, operation: &str) -> Result<()> {
@@ -278,9 +213,7 @@ impl Writer {
         ensure!(progress.end >= progress.commit, "publication source end precedes commit");
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-        if let Some(source) = self.boundary.binding.registered_source()? {
-            source.lock_and_verify_layout(&tx).await?;
-        }
+        self.boundary.binding.source.lock_and_verify_layout(&tx).await?;
         let epoch =
             write::stage(&tx, &self.catalog, plan, checkpoint, self.boundary.stored.epoch).await?;
         let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn AND binding=$7", self.catalog.schema),

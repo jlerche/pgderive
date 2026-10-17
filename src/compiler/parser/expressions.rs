@@ -34,43 +34,6 @@ pub(in crate::compiler) fn target(value: &Node) -> Result<&Node> {
     ensure!(target.indirection.is_empty(), "output indirection unsupported");
     optional(target.val.as_deref())
 }
-pub(in crate::compiler) fn aggregate<'a>(
-    value: &'a Node,
-    name: &str,
-    star: bool,
-) -> Result<Option<&'a Node>> {
-    let NodeEnum::FuncCall(call) = node(value)? else {
-        anyhow::bail!("expected {name} aggregate");
-    };
-    let pg::FuncCall {
-        funcname,
-        args,
-        agg_order,
-        agg_filter,
-        over,
-        agg_within_group,
-        agg_star,
-        agg_distinct,
-        func_variadic,
-        funcformat,
-        location: _,
-    } = call.as_ref();
-    ensure!(
-        names(funcname)?.0 == [name]
-            && *agg_star == star
-            && args.len() == usize::from(!star)
-            && agg_order.is_empty()
-            && agg_filter.is_none()
-            && over.is_none()
-            && !agg_within_group
-            && !agg_distinct
-            && !func_variadic
-            && *funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall),
-        "unsupported {name} aggregate or modifier"
-    );
-    Ok(args.first())
-}
-
 pub(in crate::compiler) const fn unmodified_type(kind: &pg::TypeName) -> bool {
     kind.typmods.is_empty() && kind.array_bounds.is_empty() && !kind.setof && !kind.pct_type
 }

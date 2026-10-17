@@ -27,10 +27,7 @@ class PartitionFixture(SqlFixture):
             self.labels = ['auction', 'n', 'present', 'total', 'lo', 'hi', 'negative']
 
     def verify(self):
-        values = ','.join(self.labels)
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'partition result differs from PostgreSQL'
+        self.verify_sql()
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -49,10 +46,7 @@ class PartitionFixture(SqlFixture):
                          sum(price < 0 for price in prices))
                 prefix = (group[index]['id'], key, group[index]['price']) if self.window else (key,)
                 expected_memory[prefix + stats] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
-        beyond = self.acknowledgement_ahead()
-        assert beyond.strip() == '0'
+        self.verify_memory(dict(expected_memory))
 
 
 def qualify(output, command, window, frame_spec=None, fixture_class=PartitionFixture):

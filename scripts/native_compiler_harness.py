@@ -101,9 +101,7 @@ class NativeFixture(SqlFixture):
                     prices = [row['price'] for row in frame if row['price'] is not None]
                     values = (encoded(key),len(frame),sum(row['amount'] is not None for row in frame),average(prices)) if self.mode == 'grouped' else (group[index]['id'],encoded(group[index]['instant'],True),len(frame),average(prices))
                     expected[values] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=Decimal)
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(expected)
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(expected), parse_float=Decimal)
 
 
 def qualify(output, command, mode, fixture_class=NativeFixture):

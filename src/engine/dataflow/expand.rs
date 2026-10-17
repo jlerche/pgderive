@@ -11,6 +11,7 @@ type Emit<'a, A, B> = dyn FnMut((A, B)) -> Result<()> + 'a;
 type Mapper<K, V, A, B> = dyn for<'a> Fn(&K, &V, &mut Emit<'a, A, B>) -> Result<()> + Send + Sync;
 /// Linear flat-map: every emitted identity carries the complete input weight.
 /// Callbacks emit lazily; consolidation enforces per-tick fanout/spill budgets.
+#[derive(Clone)]
 pub struct Expand<K: BatchData, V: BatchData, A: BatchData, B: BatchData> {
     map: Arc<Mapper<K, V, A, B>>,
 }

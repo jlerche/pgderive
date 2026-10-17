@@ -23,17 +23,17 @@ type JoinProject<K, V> = Project<K, (V, V), K, V>;
 #[derive(Clone)]
 pub enum Operator<K: BatchData, V: BatchData> {
     /// Stateless unary projection/filter.
-    Project(Arc<Project<K, V, K, V>>),
+    Project(Project<K, V, K, V>),
     /// Stateless expansion.
-    Expand(Arc<Expand<K, V, K, V>>),
+    Expand(Expand<K, V, K, V>),
     /// Projection of the complete joined pair.
-    Join(Arc<JoinProject<K, V>>),
+    Join(JoinProject<K, V>),
     /// Affected-partition transformation.
-    Partition(Arc<Partition<K, V>>),
+    Partition(Partition<K, V>),
     /// Exact retained linear statistics.
-    Statistics(Arc<Statistics<K, V>>),
+    Statistics(Statistics<K, V>),
     /// Retained ordered selection.
-    Ordered(Arc<OrderedSelection<K, V>>),
+    Ordered(OrderedSelection<K, V>),
 }
 impl<K: BatchData, V: BatchData> Operator<K, V> {
     const fn kind(&self) -> super::Kind {

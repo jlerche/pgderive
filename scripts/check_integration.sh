@@ -44,9 +44,9 @@ requests=[json.loads(line) for line in (out/'proxy.jsonl').read_text().splitline
 assert any(row.get('method')=='PUT' for row in requests)
 assert any(row.get('range') for row in requests)
 harness_log=(out/'harness.log').read_text()
-assert 'MVP project/join/group/sum passed SQL+memory at tick 15' in harness_log
+assert 'MVP project/join/group/sum passed SQL+memory at tick 16' in harness_log
 assert 'MVP placement error domains: local CASE/COALESCE/casts matched PostgreSQL; filter-crossing counterexample retained' in harness_log
-for tick,epoch in [(5,1),(15,2)]:
+for tick,epoch in [(6,7),(16,17)]:
     assert f'MVP durable manifest recovered all registered arrangements at tick {tick} epoch {epoch}' in harness_log
 assert harness_log.count('expected cold-recovery failure for ')==2
 assert 'MVP incomplete and corrupt catalog membership rejected without epoch change' in harness_log
@@ -56,8 +56,8 @@ assert 'MVP suppressed destination DML rejected without progress change' in harn
 assert 'MVP batched sink native hash collisions, arrays, large values, decode aliases, underflow rollback and index backfill verified' in harness_log
 assert 'MVP uncertain BEFORE COMMIT resolved as NotCommitted; blind retry rejected' in harness_log
 assert 'MVP uncertain AFTER COMMIT resolved as Committed; blind retry rejected' in harness_log
-assert 'MVP resumed from durable tick 15; received rows remained unacknowledged until atomic tick 16 publication' in harness_log
-assert 'MVP fresh-process recovered atomic tick 16 with exact durable source position' in harness_log
+assert 'MVP resumed from durable tick 16; received rows remained unacknowledged until atomic tick 17 publication' in harness_log
+assert 'MVP fresh-process recovered atomic tick 17 with exact durable source position' in harness_log
 assert 'MVP cancelled pending COMMIT blocked acknowledgement; reconciliation waited for original transaction and recovered committed state' in harness_log
 held=[json.loads(line) for line in (out/'sql-commit-hold.jsonl').read_text().splitlines()][1:]
 assert [row['server_committed'] for row in held]==[False,True]

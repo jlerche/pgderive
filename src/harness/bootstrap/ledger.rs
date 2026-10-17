@@ -41,7 +41,7 @@ async fn stale_handle(
 ) -> Result<()> {
     let old = writer.protect_recovery(sql, graph.plan(), "gc-token-generation").await?;
     let prior = writer.confirmed(sql, graph.plan()).await?;
-    let next = catalog.claim(sql, graph.plan(), prior.binding, prior.end).await?;
+    let next = catalog.claim(sql, graph.plan(), prior.binding).await?;
     *writer = next;
     ensure!(
         writer.seal_fenced_recovery(sql, graph.plan()).await? == 1,

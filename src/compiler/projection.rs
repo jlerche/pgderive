@@ -18,8 +18,6 @@ pub struct OutputColumn {
 }
 #[derive(Clone, Serialize)]
 pub struct Projected {
-    pub(crate) schema: String,
-    pub(crate) table: String,
     pub(crate) columns: Vec<OutputColumn>,
 }
 impl Projected {

@@ -13,7 +13,6 @@ pub struct Environment {
     server: String,
     encoding: String,
     catalog: String,
-    #[serde(default)]
     revision: i64,
 }
 impl Environment {

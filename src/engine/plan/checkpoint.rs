@@ -15,16 +15,6 @@ pub struct Membership {
     /// Coarse immutable run references, logical time and physical generation.
     pub trace: Manifest,
 }
-impl Membership {
-    /// Checksum of this coarse membership, including ordered repeated references.
-    ///
-    /// # Errors
-    /// Returns a serialization failure.
-    pub fn digest(&self) -> Result<String> {
-        use sha2::{Digest, Sha256};
-        Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(self)?)))
-    }
-}
 /// Metadata checkpoint; source progress and sink publication are separate work.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

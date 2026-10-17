@@ -24,8 +24,7 @@ class ExpressionFixture(SqlFixture):
 
     def verify(self):
         native = expected(self, self.labels)
-        difference = self.bag_difference(native)
-        assert difference.strip() == '0', 'expression results differ from native MV'
+        self.verify_sql(native)
         rows = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         oracle = collections.Counter()
         groups = collections.defaultdict(int)
@@ -40,9 +39,7 @@ class ExpressionFixture(SqlFixture):
                 oracle[(None if row['auction'] is None else key*2+row['auction'],)] += 1
         if self.grouped:
             oracle = collections.Counter({(key,total):1 for key,total in groups.items()})
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(oracle), (actual,oracle)
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(oracle))
 
 
 def qualify(output, command, grouped):

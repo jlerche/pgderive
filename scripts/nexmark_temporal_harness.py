@@ -82,8 +82,7 @@ class TemporalFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip()=='0',self.kind+' differs from PostgreSQL'
+        self.verify_sql(expected, context=prefix)
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -117,9 +116,7 @@ class TemporalFixture(SqlFixture):
                 prices = [row['price'] for row in rows if row['price'] is not None]
                 bands = [sum(p<10000 for p in prices),sum(10000<=p<1000000 for p in prices),sum(p>=1000000 for p in prices)]
                 memory[(auction,encode(day,self.instant),len(rows),*bands,min(prices) if prices else None,max(prices) if prices else None,average(prices),sum(prices) if prices else None)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=Decimal)
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent temporal/statistics oracle'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory), parse_float=Decimal)
 
     def bag(self):
         return self.sql(f'SELECT jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple) FROM {self.bag_relation()}')

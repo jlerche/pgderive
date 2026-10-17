@@ -11,7 +11,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-type Projection = Arc<Project<i64, i64, i64, i64>>;
+type Projection = Project<i64, i64, i64, i64>;
 fn plan() -> Result<Plan> {
     Plan::new(Definition {
         revision: "retained-partition-test-v1".into(),
@@ -40,8 +40,8 @@ fn plan() -> Result<Plan> {
 fn operators(calls: &Arc<AtomicUsize>) -> Operators<i64, i64> {
     let calls = calls.clone();
     let projects: std::collections::BTreeMap<_, Projection> = [
-        ("input".into(), Arc::new(Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value)))))),
-        ("output".into(), Arc::new(Project::new(|_: &i64, value: &i64| Ok(Some((0, *value)))))),
+        ("input".into(), Project::new(|key: &i64, value: &i64| Ok(Some((*key, *value))))),
+        ("output".into(), Project::new(|_: &i64, value: &i64| Ok(Some((0, *value))))),
     ]
     .into_iter()
     .collect();
@@ -54,7 +54,7 @@ fn operators(calls: &Arc<AtomicUsize>) -> Operators<i64, i64> {
     });
     let mut operators: Operators<i64, i64> =
         projects.into_iter().map(|(id, value)| (id, Operator::Project(value))).collect();
-    operators.insert("partition".into(), Operator::Partition(Arc::new(partition)));
+    operators.insert("partition".into(), Operator::Partition(partition));
     operators
 }
 #[tokio::test]

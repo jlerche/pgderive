@@ -29,15 +29,17 @@ pub(super) async fn validate_additions(
     checkpoint: &crate::engine::plan::Checkpoint,
 ) -> Result<()> {
     use anyhow::ensure;
-    for member in &checkpoint.arrangements {
-        for root in &member.trace.objects {
-            let Some(namespace) = root.namespace() else { continue };
-            let row = sql.query_one(
-                &format!("SELECT EXISTS(SELECT 1 FROM {0}.pgderive_objects WHERE query_id=$1 AND reference=$2) OR EXISTS(SELECT 1 FROM {0}.pgderive_protections WHERE query_id=$1 AND uploading AND active AND namespace=$3 AND owner_fence=COALESCE((SELECT fence FROM {0}.pgderive_progress WHERE query_id=$1),0))", catalog.schema),
-                &[&catalog.query, &serde_json::to_value(root)?, &namespace],
-            ).await?;
-            ensure!(row.try_get::<_, bool>(0)?, "new object has no active upload reservation");
-        }
-    }
+    let candidates = checkpoint
+        .arrangements
+        .iter()
+        .flat_map(|member| &member.trace.objects)
+        .filter_map(|root| root.namespace().map(|namespace| (root, namespace)))
+        .collect::<Vec<_>>();
+    let row = sql.query_one(
+        &format!("WITH current_roots AS MATERIALIZED (SELECT reference FROM {0}.pgderive_roots WHERE query_id=$1), candidates AS (SELECT value->0 AS reference,value->>1 AS namespace FROM jsonb_array_elements($2::jsonb))
+            SELECT NOT EXISTS(SELECT 1 FROM candidates c WHERE NOT EXISTS(SELECT 1 FROM current_roots r WHERE r.reference=c.reference) AND NOT EXISTS(SELECT 1 FROM {0}.pgderive_protections p WHERE p.query_id=$1 AND p.uploading AND p.active AND p.namespace=c.namespace AND p.owner_fence=COALESCE((SELECT fence FROM {0}.pgderive_progress WHERE query_id=$1),0)))", catalog.schema),
+        &[&catalog.query, &serde_json::to_value(candidates)?],
+    ).await?;
+    ensure!(row.try_get::<_, bool>(0)?, "new object has no active upload reservation");
     Ok(())
 }

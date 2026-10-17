@@ -8,4 +8,4 @@ pub use contract::{Column, Contract, Relation};
 pub use control::{Export, Identity};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

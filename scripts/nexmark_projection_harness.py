@@ -26,8 +26,7 @@ class ProjectionFixture(SqlFixture):
 
     def verify(self):
         expected = native_expected(self,self.labels)
-        difference = self.bag_difference(expected)
-        assert difference.strip()=='0',self.query_name+' differs from PostgreSQL'
+        self.verify_sql(expected)
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         memory = collections.Counter()
         for row in source:
@@ -38,9 +37,7 @@ class ProjectionFixture(SqlFixture):
                 if auction is None or abs(auction)//123*123!=abs(auction):
                     continue
             memory[tuple(row[label] for label in self.labels)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.query_name+' differs from independent raw bag oracle'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output,command,query,mode):

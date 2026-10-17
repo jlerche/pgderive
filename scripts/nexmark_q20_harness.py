@@ -39,8 +39,7 @@ class Q20Fixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,LABELS)
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip()=='0','q20 differs from PostgreSQL'
+        self.verify_sql(expected, context=prefix)
         auctions = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         bids = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         memory = collections.Counter()
@@ -49,9 +48,7 @@ class Q20Fixture(SqlFixture):
                 if b['auction'] is None or b['auction']!=a['id'] or a['category']!=10:
                     continue
                 memory[(b['auction'],b['bidder'],b['price'],b['channel'],b['url'],b['date_time'],b['extra'],a['item_name'],a['description'],a['initial_bid'],a['reserve'],a['date_time'],a['expires'],a['seller'],a['category'],a['extra'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q20 differs from independent full-payload nested-loop oracle'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output,command,mode):

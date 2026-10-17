@@ -26,10 +26,7 @@ class RankingFixture(SqlFixture):
         return self.query.replace('PARTITION BY b.auction', 'PARTITION BY b.price')
 
     def verify(self):
-        values = ','.join(self.labels)
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'ranking differs from PostgreSQL'
+        self.verify_sql()
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -51,9 +48,7 @@ class RankingFixture(SqlFixture):
                     preceding = sum(other['price'] is None or (price is not None and other['price'] > price) for other in group if other['price'] != price)
                     ranks = (preceding + 1, len(distinct))
                 memory[prefix + ranks] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output, command, mode, fixture_class=RankingFixture):

@@ -37,6 +37,7 @@ type Transform<K, V> =
 ///
 /// The callback receives row occurrences as weighted full-tuple identities.
 /// Callback semantics and codecs must be included in the owning plan revision.
+#[derive(Clone)]
 pub struct Partition<K: BatchData, V: BatchData> {
     transform: Arc<Transform<K, V>>,
     zero_preserving: bool,

@@ -28,8 +28,7 @@ class Q6Fixture(AuctionFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self, ['seller','avg_price'])
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip() == '0', 'q6 differs from exact native MV'
+        self.verify_sql(expected, context=prefix)
         auctions = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         bids = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         clocks = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(c),'[]') FROM {self.name}.global_clock c WHERE id=0"))

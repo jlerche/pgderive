@@ -13,9 +13,8 @@ pub(in crate::compiler) struct Bin {
 pub(in crate::compiler) enum Key {
     Typed(Box<Node>),
     Column(Name),
-    Bin(Bin),
 }
-pub(super) fn is_bin(value: &Node) -> Result<bool> {
+pub(in crate::compiler) fn is_bin(value: &Node) -> Result<bool> {
     if let NodeEnum::AExpr(expression) = node(value)? {
         return is_bin(optional(expression.lexpr.as_deref())?);
     }
@@ -26,13 +25,13 @@ pub(super) fn is_bin(value: &Node) -> Result<bool> {
     Ok(super::expressions::builtin_name(&names) == Some("date_bin"))
 }
 pub(super) fn key(value: &Node) -> Result<Key> {
-    if !is_bin(value)? {
-        return if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
-            Ok(Key::Column(column(value)?))
-        } else {
-            Ok(Key::Typed(Box::new(value.clone())))
-        };
+    if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
+        Ok(Key::Column(column(value)?))
+    } else {
+        Ok(Key::Typed(Box::new(value.clone())))
     }
+}
+pub(in crate::compiler) fn bin(value: &Node) -> Result<Bin> {
     if let NodeEnum::AExpr(_) = node(value)? {
         return shifted(value);
     }
@@ -60,13 +59,13 @@ pub(super) fn key(value: &Node) -> Result<Key> {
         crate::compiler::parser::expressions::unmodified_type(typename),
         "origin type modifiers unsupported"
     );
-    Ok(Key::Bin(Bin {
+    Ok(Bin {
         input: column(input)?,
         stride,
         origin: string(optional(cast.arg.as_deref())?)?,
         oid,
         shift: None,
-    }))
+    })
 }
 pub(in crate::compiler) fn validate_call(call: &pg::FuncCall) -> Result<()> {
     ensure!(
@@ -93,11 +92,9 @@ fn operator<'a>(value: &'a Node, op: &str) -> Result<(&'a Node, &'a Node)> {
     );
     Ok((optional(expression.lexpr.as_deref())?, optional(expression.rexpr.as_deref())?))
 }
-fn shifted(value: &Node) -> Result<Key> {
-    let (bin, offset) = operator(value, "-")?;
-    let Key::Bin(mut bin) = key(bin)? else {
-        anyhow::bail!("hopping base requires date_bin");
-    };
+fn shifted(value: &Node) -> Result<Bin> {
+    let (base, offset) = operator(value, "-")?;
+    let mut bin = bin(base)?;
     ensure!(bin.shift.is_none(), "nested hopping offsets unsupported");
     let (index, duration) = operator(offset, "*")?;
     let NodeEnum::TypeCast(cast) = node(duration)? else {
@@ -112,7 +109,7 @@ fn shifted(value: &Node) -> Result<Key> {
         "hopping offsets require time durations, not calendar days"
     );
     bin.shift = Some((column(index)?, interval(duration)?));
-    Ok(Key::Bin(bin))
+    Ok(bin)
 }
 pub(in crate::compiler) fn string(value: &Node) -> Result<String> {
     let NodeEnum::AConst(value) = node(value)? else {

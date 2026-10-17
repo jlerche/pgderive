@@ -19,8 +19,7 @@ class CrossFixture(SqlFixture):
 
     def verify(self):
         expected = native_expected(self, ['auction', 'group_id'])
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'cross join differs from exact native MV'
+        self.verify_sql(expected)
         left = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         right = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         memory = collections.Counter((b['auction'], a['group_id']) for b in left for a in right

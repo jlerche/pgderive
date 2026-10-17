@@ -3,6 +3,42 @@ import unittest
 from worker_harness import Fixture
 
 
+class BagVerificationTests(unittest.TestCase):
+    def test_memory_bag_preserves_numeric_nulls_and_acknowledgement(self):
+        from decimal import Decimal
+        from unittest.mock import Mock
+        fixture = Fixture.__new__(Fixture)
+        fixture.query = 'independent oracle query'
+        fixture.bag_relation = Mock(return_value='destination')
+        fixture.sql = Mock(return_value='[{"tuple":[null,[null,0.1234567890123456789]],"weight":2}]')
+        fixture.acknowledgement_ahead = Mock(return_value='0\n')
+        expected = {(None, Decimal('0.1234567890123456789')): 2}
+        fixture.verify_memory(expected, parse_float=Decimal)
+        fixture.acknowledgement_ahead.assert_called_once()
+        with self.assertRaises(AssertionError):
+            fixture.verify_memory({})
+        fixture.acknowledgement_ahead.return_value = '1'
+        with self.assertRaisesRegex(AssertionError, 'acknowledged beyond'):
+            fixture.verify_memory(expected, parse_float=Decimal)
+
+    def test_sql_bag_uses_labels_or_explicit_oracle_and_context(self):
+        from unittest.mock import Mock
+        fixture = Fixture.__new__(Fixture)
+        fixture.query = 'SELECT x FROM source'
+        fixture.labels = ['x', '"Case Sensitive"']
+        fixture.bag_difference = Mock(return_value='0\n')
+        fixture.verify_sql(context='SET TimeZone=UTC;')
+        query, = fixture.bag_difference.call_args.args
+        self.assertIn('jsonb_build_array(x,"Case Sensitive")', query)
+        self.assertIn('FROM (SELECT x FROM source) q GROUP BY 1', query)
+        self.assertEqual(fixture.bag_difference.call_args.kwargs, {'context': 'SET TimeZone=UTC;'})
+        fixture.verify_sql('SELECT oracle')
+        fixture.bag_difference.assert_called_with('SELECT oracle', context='')
+        fixture.bag_difference.return_value = '1'
+        with self.assertRaises(AssertionError):
+            fixture.verify_sql()
+
+
 class ManagedFixtureTests(unittest.TestCase):
     def test_cleanup_and_failure_evidence_order(self):
         for failure in (None, 'body', 'cleanup'):

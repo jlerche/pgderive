@@ -56,9 +56,7 @@ class JoinKeysFixture(SqlFixture):
         self.sql(f'REFRESH MATERIALIZED VIEW {self.name}.oracle')
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array(c,p)) tuple,count(*)::bigint weight FROM {self.name}.oracle GROUP BY 1'
         assert self.bag_difference(expected).strip() == '0', 'computed join differs from native MV'
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(self.memory())
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(self.memory()))
 
 
 def qualify(output, command, mode):

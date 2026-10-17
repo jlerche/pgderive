@@ -1,5 +1,7 @@
 use crate::{catalog::Catalog, engine::plan::Plan};
 use anyhow::{Context, Result, ensure};
+use object_store::{ObjectStore, ObjectStoreExt as _, path::Path};
+use std::sync::Arc;
 use tokio_postgres::Client;
 
 pub(super) async fn corrupt_membership(
@@ -7,26 +9,60 @@ pub(super) async fn corrupt_membership(
     schema: &str,
     catalog: &Catalog,
     plan: &Plan,
+    store: Arc<dyn ObjectStore>,
 ) -> Result<()> {
     let query = super::super::recovery::QUERY;
-    let before =
-        catalog.load(sql, plan).await?.context("missing checkpoint before corruption checks")?;
-    let reference: serde_json::Value = sql.query_one(&format!("SELECT reference FROM {schema}.pgderive_objects WHERE query_id=$1 AND arrangement_id='output' AND ordinal=0"), &[&query]).await?.try_get(0)?;
-    let deleted = sql.execute(&format!("DELETE FROM {schema}.pgderive_objects WHERE query_id=$1 AND arrangement_id='output' AND ordinal=0"), &[&query]).await?;
-    ensure!(deleted == 1, "missing metadata corruption target");
-    expect_failure(catalog.load(sql, plan).await, "incomplete catalog object membership")?;
-    sql.execute(&format!("INSERT INTO {schema}.pgderive_objects(query_id,arrangement_id,ordinal,reference) VALUES($1,'output',0,$2)"), &[&query, &reference]).await?;
-    sql.execute(&format!("UPDATE {schema}.pgderive_objects SET reference=jsonb_set(reference,'{{bytes}}','0'::jsonb) WHERE query_id=$1 AND arrangement_id='output' AND ordinal=0"), &[&query]).await?;
-    expect_failure(catalog.load(sql, plan).await, "catalog membership checksum mismatch")?;
-    sql.execute(&format!("UPDATE {schema}.pgderive_objects SET reference=$2 WHERE query_id=$1 AND arrangement_id='output' AND ordinal=0"), &[&query, &reference]).await?;
+    let table = format!("{schema}.pgderive_queries");
+    let before = catalog
+        .load_durable(sql, plan)
+        .await?
+        .context("missing checkpoint before corruption checks")?;
+    let encoded = serde_json::to_value(&before.stored.checkpoint)?;
+    let index = before
+        .stored
+        .checkpoint
+        .arrangements
+        .iter()
+        .position(|member| member.id == "output")
+        .context("missing output corruption target")?;
+    for expression in [
+        format!("checkpoint #- '{{arrangements,{index},trace,objects,0}}'"),
+        format!(
+            "jsonb_set(checkpoint,'{{arrangements,{index},trace,objects,0,bytes}}','0'::jsonb)"
+        ),
+    ] {
+        let changed = sql
+            .execute(
+                &format!("UPDATE {table} SET checkpoint={expression} WHERE query_id=$1"),
+                &[&query],
+            )
+            .await?;
+        ensure!(changed == 1, "missing metadata corruption target");
+        expect_failure(
+            catalog.load_durable(sql, plan).await,
+            "catalog checkpoint checksum mismatch",
+        )?;
+        expect_failure(
+            catalog.collect(sql, store.clone(), crate::catalog::GcLimits::default()).await,
+            "catalog checkpoint checksum mismatch",
+        )?;
+        for member in &before.stored.checkpoint.arrangements {
+            for root in &member.trace.objects {
+                store.head(&Path::from(root.path())).await?;
+            }
+        }
+
+        sql.execute(
+            &format!("UPDATE {table} SET checkpoint=$2 WHERE query_id=$1"),
+            &[&query, &encoded],
+        )
+        .await?;
+    }
     let after = catalog
-        .load(sql, plan)
+        .load_durable(sql, plan)
         .await?
         .context("checkpoint missing after corruption restoration")?;
-    ensure!(
-        after.epoch == before.epoch && after.checkpoint == before.checkpoint,
-        "restored catalog differs from original checkpoint"
-    );
+    ensure!(after == before, "restored catalog differs from original checkpoint");
     eprintln!("MVP incomplete and corrupt catalog membership rejected without epoch change");
     Ok(())
 }

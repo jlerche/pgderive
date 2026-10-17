@@ -1,4 +1,3 @@
-from engine_rejection import qualify_unavailable
 #!/usr/bin/env python3
 """Exact terminal decimal q1: independent Decimal bag and PostgreSQL, CDC/restart."""
 from worker_harness import harness_arguments, History
@@ -32,8 +31,7 @@ class Q1Fixture(SqlFixture):
 
     def verify(self):
         expected = native_expected(self,self.labels)
-        difference = self.bag_difference(expected)
-        assert difference.strip()=='0','q1 differs from PostgreSQL'
+        self.verify_sql(expected)
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         auctions = {a['id']:a for a in json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))}
         memory = collections.Counter()
@@ -44,16 +42,11 @@ class Q1Fixture(SqlFixture):
                     continue
             price = None if row['price'] is None else decimal.Decimal(row['price'])*decimal.Decimal(self.factor)
             memory[(row['auction'],row['bidder'],price,row['date_time'],row['extra'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),parse_float=decimal.Decimal)
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q1 differs from exact Decimal oracle'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory), parse_float=decimal.Decimal)
 
 
 def qualify(output,command,mode):
     fixture = Q1Fixture(output,mode)
-    if mode == "join":
-        qualify_unavailable(fixture,command)
-        return
     with fixture.managed():
         fixture.rejected(command,'unsupported-arithmetic',fixture.query.replace(fixture.factor+' *',fixture.factor+' /'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'

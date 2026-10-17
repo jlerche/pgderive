@@ -1,6 +1,6 @@
 //! Isolated destination arithmetic checks; these synthetic positions never authorize ACK.
 use crate::{
-    catalog::{Binding, Catalog, Deltas, Progress, Publication, Sink, Writer},
+    catalog::{Catalog, Deltas, Progress, Publication, Sink, Writer},
     engine::{
         Batch,
         plan::{Checkpoint, Plan},
@@ -12,13 +12,12 @@ use tokio_postgres::Client;
 pub(super) async fn check(
     sql: &mut Client,
     schema: &str,
-    plan: &Plan,
-    empty: &Checkpoint,
+    initial: &super::initial::Initial<'_>,
 ) -> Result<()> {
     let catalog = Catalog::new(schema, "bag_coefficients")?;
-    catalog.checkpoint(sql, plan, empty, 0).await?;
-    let mut writer = writer(sql, &catalog, plan).await?;
-    let mut checkpoint = empty.clone();
+    let plan = initial.plan;
+    let (mut writer, mut checkpoint) =
+        initial.synthetic(sql, &catalog, Sink::Json("coefficient_bag".into())).await?;
     advance(&mut checkpoint);
     let batch = Batch::from_updates([
         ((1, "a".to_owned()), 2),
@@ -124,10 +123,15 @@ async fn underflow(
             .is_err(),
         "result sink accepted negative final multiplicity"
     );
-    let unchanged =
-        contract.catalog.load(sql, contract.plan).await?.context("missing coefficient catalog")?;
+    let unchanged = contract
+        .catalog
+        .load_durable(sql, contract.plan)
+        .await?
+        .context("missing coefficient catalog")?;
     ensure!(
-        unchanged.epoch == 2 && unchanged.checkpoint.time == 1 && writer.end().to_string() == "0/2",
+        unchanged.stored.epoch == 2
+            && unchanged.stored.checkpoint.time == 2
+            && writer.end().to_string() == "0/2",
         "underflow changed durable bag boundary"
     );
     let row = sql
@@ -141,19 +145,4 @@ async fn underflow(
         .await?;
     ensure!(row.try_get::<_, i64>(0)? == 4, "underflow changed sink coefficient");
     Ok(())
-}
-
-async fn writer(sql: &mut Client, catalog: &Catalog, plan: &Plan) -> Result<Writer> {
-    let writer = catalog
-        .claim(
-            sql,
-            plan,
-            Binding {
-                source: "isolated destination arithmetic".into(),
-                sink: Sink::Json("coefficient_bag".into()),
-            },
-            "0/0".parse()?,
-        )
-        .await?;
-    Ok(writer)
 }

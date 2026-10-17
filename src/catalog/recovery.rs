@@ -41,10 +41,7 @@ impl Durable {
             return Ok(true);
         }
         if progress.end == self.end {
-            if self.xid.is_none()
-                && self.stored.checkpoint.time == 1
-                && self.binding.registered_source()?.is_some()
-            {
+            if self.xid.is_none() && self.stored.checkpoint.time == 1 {
                 return Ok(true);
             }
             ensure!(
@@ -112,7 +109,7 @@ async fn load(
     let xid = row.try_get::<_, Option<i64>>(5)?.map(u32::try_from).transpose()?;
     ensure!(fence > 0 && end >= commit, "invalid durable fence/source position");
     ensure!(
-        binding.valid_identity(stored.checkpoint.time, xid, commit, end)?,
+        Binding::valid_identity(stored.checkpoint.time, xid, commit, end),
         "durable transaction identity/clock mismatch"
     );
     tx.commit().await?;

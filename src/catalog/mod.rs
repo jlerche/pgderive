@@ -17,7 +17,7 @@ pub use sink::{Deltas, ResultColumn, Sink};
 #[cfg(test)]
 mod tests;
 
-use crate::engine::plan::{Checkpoint, Plan};
+use crate::engine::plan::Checkpoint;
 use anyhow::{Result, ensure};
 use tokio_postgres::Client;
 
@@ -56,25 +56,17 @@ impl Catalog {
                 query_id text PRIMARY KEY, format_version integer NOT NULL CHECK(format_version=1),
                 plan_identity text NOT NULL, definition jsonb NOT NULL,
                 logical_time bigint NOT NULL CHECK(logical_time>=0),
-                epoch bigint NOT NULL CHECK(epoch>0));
-             CREATE TABLE IF NOT EXISTS {0}.pgderive_arrangements (
-                query_id text NOT NULL REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
-                arrangement_id text NOT NULL, schema_id text NOT NULL,
-                logical_time bigint NOT NULL CHECK(logical_time>=0),
-                generation bigint NOT NULL CHECK(generation>=logical_time),
-                object_count bigint NOT NULL CHECK(object_count>=0), membership_digest text NOT NULL,
-                PRIMARY KEY(query_id,arrangement_id));
-             CREATE TABLE IF NOT EXISTS {0}.pgderive_objects (
-                query_id text NOT NULL, arrangement_id text NOT NULL,
-                ordinal bigint NOT NULL CHECK(ordinal>=0), reference jsonb NOT NULL,
-                PRIMARY KEY(query_id,arrangement_id,ordinal),
-                FOREIGN KEY(query_id,arrangement_id) REFERENCES {0}.pgderive_arrangements(query_id,arrangement_id) ON DELETE CASCADE);
+                epoch bigint NOT NULL CHECK(epoch>0),
+                checkpoint jsonb NOT NULL,checkpoint_digest text NOT NULL);
+             CREATE OR REPLACE VIEW {0}.pgderive_roots AS
+                SELECT q.query_id,m.value->>'id' AS arrangement_id,r.ordinality-1 AS ordinal,r.value AS reference
+                FROM {0}.pgderive_queries q
+                CROSS JOIN LATERAL jsonb_array_elements(q.checkpoint->'arrangements') m
+                CROSS JOIN LATERAL jsonb_array_elements(m.value->'trace'->'objects') WITH ORDINALITY r(value,ordinality);
              CREATE TABLE IF NOT EXISTS {0}.pgderive_source_slots (
                 source_key text PRIMARY KEY, query_id text NOT NULL UNIQUE REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED);
              CREATE TABLE IF NOT EXISTS {0}.pgderive_protections (
-                token text PRIMARY KEY, id bigint GENERATED ALWAYS AS IDENTITY UNIQUE, namespace text UNIQUE, active boolean NOT NULL DEFAULT true, query_id text NOT NULL, owner_fence bigint NOT NULL CHECK(owner_fence>=0), uploading boolean NOT NULL, roots jsonb NOT NULL CHECK(jsonb_typeof(roots)='array'));
-             ALTER TABLE {0}.pgderive_protections ADD COLUMN IF NOT EXISTS recovering boolean NOT NULL DEFAULT false;
-             ALTER TABLE {0}.pgderive_protections ADD COLUMN IF NOT EXISTS quiescent boolean NOT NULL DEFAULT false;
+                token text PRIMARY KEY, id bigint GENERATED ALWAYS AS IDENTITY UNIQUE, namespace text UNIQUE, active boolean NOT NULL DEFAULT true, query_id text NOT NULL, owner_fence bigint NOT NULL CHECK(owner_fence>=0), uploading boolean NOT NULL, recovering boolean NOT NULL DEFAULT false, quiescent boolean NOT NULL DEFAULT false, roots jsonb NOT NULL CHECK(jsonb_typeof(roots)='array'));
              CREATE TABLE IF NOT EXISTS {0}.pgderive_progress (
                 query_id text PRIMARY KEY REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
                 binding jsonb NOT NULL, sink_table text NOT NULL UNIQUE,
@@ -89,28 +81,13 @@ impl Catalog {
         )).await?;
         Ok(())
     }
-    /// Atomically store a metadata-only snapshot with optimistic epoch fencing.
-    /// Epoch zero requires a new query; later epochs require exact current identity.
-    /// This does not apply destination DML, record source progress, or authorize ACK.
-    ///
-    /// # Errors
-    /// Returns incompatible state, stale writer, or `PostgreSQL` failures. An uncertain
-    /// COMMIT requires reloading the authoritative catalog before choosing a retry.
-    pub async fn checkpoint(
-        &self,
-        sql: &mut Client,
-        plan: &Plan,
-        checkpoint: &Checkpoint,
-        expected_epoch: u64,
-    ) -> Result<u64> {
-        checkpoint.validate(plan)?;
-        write::save(self, sql, plan, checkpoint, expected_epoch).await
+}
+
+fn checkpoint_digest(checkpoint: &Checkpoint) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    for member in &checkpoint.arrangements {
+        i64::try_from(member.trace.generation)?;
+        i64::try_from(member.trace.objects.len())?;
     }
-    /// Read one consistent checkpoint, checking complete plan/schema membership.
-    ///
-    /// # Errors
-    /// Returns incompatible/corrupt metadata or `PostgreSQL` read failures.
-    pub async fn load(&self, sql: &mut Client, plan: &Plan) -> Result<Option<Stored>> {
-        read::load(self, sql, plan).await
-    }
+    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(checkpoint)?)))
 }

@@ -27,7 +27,11 @@ pub(in crate::compiler) fn attach(
     let spec = Series { start: series.start, end: series.end };
     for node in nodes.iter_mut() {
         match node {
-            Node::Map { input, .. } | Node::PartitionBy { input, .. } if input == "source" => {
+            Node::Map { input, .. }
+            | Node::PartitionBy { input, .. }
+            | Node::Output { input, .. }
+                if input == "source" =>
+            {
                 *input = "expanded".into();
             }
             _ => {}

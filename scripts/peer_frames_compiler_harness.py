@@ -29,10 +29,7 @@ class PeerFramesFixture(RankingFixture):
         self.labels = ['id', 'auction', 'price', 'n', 'present', 'total', 'lo', 'hi', 'negative', 'mean']
 
     def verify(self):
-        values = ','.join(self.labels)
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'peer frame differs from PostgreSQL'
+        self.verify_sql()
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -58,9 +55,7 @@ class PeerFramesFixture(RankingFixture):
                          min(prices) if prices else None, max(prices) if prices else None,
                          sum(price < 0 for price in prices), average(prices))
                 memory[(row['id'], row['auction'], row['price']) + stats] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=Decimal)
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(memory), parse_float=Decimal)
 
 
 if __name__ == '__main__':

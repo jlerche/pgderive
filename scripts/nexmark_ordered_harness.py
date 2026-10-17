@@ -54,8 +54,7 @@ class OrderedFixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,self.labels)
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip()=='0',self.kind+' differs from PostgreSQL'
+        self.verify_sql(expected, context=prefix)
         source = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -72,9 +71,7 @@ class OrderedFixture(SqlFixture):
             for index,row in enumerate(selected,1):
                 payload = tuple(row[label] for label in PAYLOAD)
                 memory[payload+((index,) if self.kind=='q19' else ())] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),self.kind+' differs from independent occurrence ordering'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output,command,query,instant):

@@ -1,7 +1,7 @@
 use super::{Batch, Key, Model, MvpFixture, Query, operators};
 use crate::{
     catalog::{Catalog, Stored},
-    engine::{execution::Limits, plan::Checkpoint, plan::Settings, reader::ObjectBatch},
+    engine::{execution::Limits, plan::Settings, reader::ObjectBatch},
     harness::recovery::{QUERY, Recovery, RecoveryReport},
 };
 use anyhow::{Context, Result, ensure};
@@ -11,47 +11,41 @@ use tokio_postgres::Client;
 
 impl MvpFixture {
     pub(in crate::harness) async fn checkpoint_and_recover(
-        &mut self,
+        &self,
         sql: &mut Client,
         schema: &str,
         recovery: &Recovery,
     ) -> Result<()> {
         let catalog = Catalog::new(schema, QUERY)?;
-        catalog.install(sql).await?;
         let checkpoint = self.graph.checkpoint()?;
-        self.epoch = catalog.checkpoint(sql, self.graph.plan(), &checkpoint, self.epoch).await?;
-        ensure!(
-            catalog.checkpoint(sql, self.graph.plan(), &checkpoint, self.epoch - 1).await.is_err(),
-            "stale checkpoint writer succeeded"
-        );
-        let mut unrepresentable = checkpoint.clone();
-        unrepresentable.arrangements[0].trace.generation = u64::MAX;
-        ensure!(
-            catalog.checkpoint(sql, self.graph.plan(), &unrepresentable, self.epoch).await.is_err(),
-            "unrepresentable generation was committed"
-        );
-        let unchanged = catalog
-            .load(sql, self.graph.plan())
+        let durable = catalog
+            .load_durable(sql, self.graph.plan())
             .await?
-            .context("checkpoint disappeared after failed write")?;
+            .context("missing published recovery boundary")?;
         ensure!(
-            unchanged.epoch == self.epoch && unchanged.checkpoint == checkpoint,
-            "failed catalog write changed membership/epoch"
+            durable.stored.checkpoint == checkpoint,
+            "published checkpoint differs from local state"
         );
         let report = recovery.recover(sql, schema).await?;
         ensure!(
             report.time == self.graph.time()
-                && report.epoch == self.epoch
+                && report.epoch == durable.stored.epoch
                 && report.arrangements == self.graph.plan().definition().arrangements.len()
                 && report.plan_identity == self.graph.plan().identity(),
             "fresh process recovered wrong boundary"
         );
-        if checkpoint.time == 5 {
+        if checkpoint.time == 6 {
             incompatible_catalog(sql, &catalog, self.graph.plan()).await?;
-            super::catalog_checks::corrupt_membership(sql, schema, &catalog, self.graph.plan())
-                .await?;
+            super::catalog_checks::corrupt_membership(
+                sql,
+                schema,
+                &catalog,
+                self.graph.plan(),
+                recovery.store.clone(),
+            )
+            .await?;
             if recovery.prefix.is_some() && recovery.config.source_path.is_some() {
-                self.missing_objects(sql, schema, recovery, &checkpoint).await?;
+                self.missing_objects(sql, schema, recovery, &durable.stored).await?;
             }
         }
         eprintln!(
@@ -65,8 +59,9 @@ impl MvpFixture {
         sql: &mut Client,
         schema: &str,
         recovery: &Recovery,
-        checkpoint: &Checkpoint,
+        stored: &Stored,
     ) -> Result<()> {
+        let checkpoint = &stored.checkpoint;
         let member = checkpoint
             .arrangements
             .iter()
@@ -93,7 +88,7 @@ impl MvpFixture {
             recovery.store.put(&path, bytes.into()).await?;
         }
         ensure!(
-            recovery.recover(sql, schema).await?.epoch == self.epoch,
+            recovery.recover(sql, schema).await?.epoch == stored.epoch,
             "missing-object recovery changed catalog epoch"
         );
         Ok(())
@@ -107,17 +102,21 @@ async fn incompatible_catalog(
     let mut definition = plan.definition().clone();
     definition.revision.push_str("-incompatible");
     let incompatible = crate::engine::plan::Plan::new(definition)?;
-    ensure!(catalog.load(sql, &incompatible).await.is_err(), "incompatible plan was accepted");
+    ensure!(
+        catalog.load_durable(sql, &incompatible).await.is_err(),
+        "incompatible plan was accepted"
+    );
     Ok(())
 }
 
 pub(in crate::harness) async fn recover_plan(
     store: Arc<dyn ObjectStore>,
     limits: Limits,
-    stored: Stored,
+    durable: crate::catalog::Durable,
     model: &Model,
     plan: crate::engine::plan::Plan,
 ) -> Result<RecoveryReport> {
+    let stored = durable.stored;
     let checkpoint = stored.checkpoint;
     let report = RecoveryReport {
         time: checkpoint.time,
@@ -125,7 +124,7 @@ pub(in crate::harness) async fn recover_plan(
         arrangements: checkpoint.arrangements.len(),
         objects: checkpoint.arrangements.iter().map(|member| member.trace.objects.len()).sum(),
         plan_identity: checkpoint.plan_identity.clone(),
-        source_end: None,
+        source_end: durable.end.to_string(),
     };
     let mut graph = Query::new(
         plan,

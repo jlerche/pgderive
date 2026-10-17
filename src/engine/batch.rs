@@ -1,15 +1,8 @@
 use super::{ZSet, weights::Accumulator};
 use anyhow::Result;
 
-/// Full `(key, value)` identity arranged lexicographically; keys need not be unique.
-pub type IndexedZSet<K, V> = ZSet<(K, V)>;
-
-/// Immutable canonical logical batch: sorted full identities, nonzero i64 weights.
-/// This owns memory; object-backed representations follow the same logical contract.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Batch<K: Ord, V: Ord> {
-    collection: IndexedZSet<K, V>,
-}
+/// Canonical lexicographically ordered full identities and signed i64 weights.
+pub type Batch<K, V> = ZSet<(K, V)>;
 
 /// Exact, unfinished batch. Intermediate coefficients are not restricted to i64.
 /// Physical grouping/merge boundaries do not finalize the logical collection.
@@ -47,30 +40,7 @@ impl<K: Ord + Clone, V: Ord + Clone> BatchBuilder<K, V> {
     /// # Errors
     /// Returns an error if a final coefficient is outside the i64 domain.
     pub fn finish(self) -> Result<Batch<K, V>> {
-        Ok(Batch { collection: ZSet::from_accumulator(self.weights)? })
-    }
-}
-
-impl<K: Ord + Clone, V: Ord + Clone> Batch<K, V> {
-    /// Canonicalize a complete logical input batch.
-    ///
-    /// # Errors
-    /// Returns an error if a final coefficient is outside the i64 domain.
-    pub fn from_updates(updates: impl IntoIterator<Item = ((K, V), i64)>) -> Result<Self> {
-        let mut builder = BatchBuilder::default();
-        for ((key, value), weight) in updates {
-            builder.push(key, value, weight);
-        }
-        builder.finish()
-    }
-
-    pub(crate) fn weight(&self, tuple: &(K, V)) -> i64 {
-        self.collection.weight(tuple)
-    }
-
-    /// Read the canonical ordered full tuples and their multiplicities.
-    pub fn iter(&self) -> impl Iterator<Item = (&(K, V), &i64)> + Clone {
-        self.collection.iter()
+        ZSet::from_accumulator(self.weights)
     }
 }
 

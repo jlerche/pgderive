@@ -48,8 +48,7 @@ class OrderedFixture(SqlFixture):
 
     def verify(self):
         native = expected(self, self.labels)
-        difference = self.bag_difference(native)
-        assert difference.strip() == '0', 'ordered extrema differs from native MV'
+        self.verify_sql(native)
         bids = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         auctions = json.loads(self.sql(f"SELECT json_agg(a) FROM {self.name}.auction a"))
         groups = collections.defaultdict(list)
@@ -67,9 +66,7 @@ class OrderedFixture(SqlFixture):
             key = temporal_key if self.temporal else None
             normalize = lambda value: value.replace(' ', 'T') if self.temporal and value not in (None, 'infinity', '-infinity') else value
             oracle[(group, normalize(min(values, key=key)) if values else None, normalize(max(values, key=key)) if values else None, normalize(min(filtered, key=key)) if filtered else None)] = 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == oracle, (actual, oracle)
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(oracle)
 
 
 def qualify(output, command, oid, joined):

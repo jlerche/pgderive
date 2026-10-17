@@ -29,7 +29,7 @@ def metrics(fixture,worker,keeper):
     state=worker.inspect()['State']; pid=state['Pid']
     status=pathlib.Path(f'/proc/{pid}/status').read_text()
     rss=int(next(line.split()[1] for line in status.splitlines() if line.startswith('VmRSS:')))*1024
-    metadata=json.loads(fixture.sql(f"SELECT json_build_object('roots',count(*),'root_bytes',coalesce(sum((reference->>'bytes')::bigint),0)) FROM {fixture.name}.pgderive_objects"))
+    metadata=json.loads(fixture.sql(f"SELECT json_build_object('roots',count(*),'root_bytes',coalesce(sum((reference->>'bytes')::bigint),0)) FROM {fixture.name}.pgderive_roots"))
     wal=json.loads(fixture.sql("SELECT coalesce(json_agg(json_build_object('slot',slot_name,'backlog_bytes',pg_wal_lsn_diff(pg_current_wal_lsn(),restart_lsn),'wal_status',wal_status)),'[]') FROM pg_replication_slots"))
     ledger=int(fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_protections').strip())
     return {'cache':worker.latest_cache,'protection_ledger_rows':ledger,'rss_bytes':rss,'scratch_bytes':int(subprocess.check_output(['docker','exec',keeper,'du','-sb','/scratch'],text=True).split()[0]),'coarse_metadata':metadata,'slots':wal}

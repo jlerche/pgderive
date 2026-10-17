@@ -77,7 +77,7 @@ async fn finish_source(
     plan: &crate::engine::plan::Plan,
 ) -> Result<()> {
     let durable = catalog.load_durable(sql, plan).await?.context("missing source contract")?;
-    let contract = durable.binding.registered_source()?.context("missing native contract")?;
+    let contract = durable.binding.source;
     schema_drift(sql, &fixture.schema, &contract).await?;
     advanced_slot(sql, config, catalog, plan).await?;
     sql.query_one("SELECT pg_drop_replication_slot($1)", &[&config.replication.slot]).await?;
@@ -97,7 +97,7 @@ async fn restore(
         "snapshot fabricated a source transaction"
     );
     graph.restore_checkpoint(durable.stored.checkpoint).await?;
-    let writer = catalog.claim(sql, graph.plan(), durable.binding, boundary).await?;
+    let writer = catalog.claim(sql, graph.plan(), durable.binding).await?;
     Ok((graph, writer))
 }
 pub(super) fn plan(contract: &Contract) -> Result<crate::engine::plan::Plan> {

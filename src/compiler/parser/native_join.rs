@@ -1,5 +1,5 @@
 //! Native join trees, preserving source occurrences and outer-join association.
-use super::{Columns, Table, node, optional};
+use super::{Table, node, optional};
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) enum Tree {
@@ -21,28 +21,7 @@ pub(in crate::compiler) enum Tree {
         outer: bool,
     },
 }
-pub(in crate::compiler) struct Parsed {
-    pub tree: Tree,
-    pub columns: Columns,
-    pub predicate: Option<crate::compiler::syntax::Expr>,
-}
-pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
-    let [from] = select.from_clause.as_slice() else { return Ok(None) };
-    let NodeEnum::JoinExpr(_) = node(from)? else { return Ok(None) };
-    if !native_tree(from)? {
-        return Ok(None);
-    }
-    if !select.group_clause.is_empty() {
-        return Ok(None);
-    }
-    let mut sources = 0;
-    Ok(Some(Parsed {
-        tree: tree(from, &mut sources, 0)?,
-        columns: super::projection_columns(&select.target_list)?,
-        predicate: crate::compiler::syntax::predicate(select.where_clause.as_deref())?,
-    }))
-}
-fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tree> {
+pub(super) fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tree> {
     ensure!(depth < 16, "join tree depth exceeded");
     match node(value)? {
         NodeEnum::RangeSubselect(value) => {
@@ -83,17 +62,6 @@ fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tree> {
         }
         _ => anyhow::bail!("native join tree requires ordinary native tables"),
     }
-}
-fn native_tree(value: &Node) -> Result<bool> {
-    Ok(match node(value)? {
-        NodeEnum::RangeVar(_) => true,
-        NodeEnum::RangeSubselect(value) => !value.lateral,
-        NodeEnum::JoinExpr(join) => {
-            native_tree(optional(join.larg.as_deref())?)?
-                && native_tree(optional(join.rarg.as_deref())?)?
-        }
-        _ => false,
-    })
 }
 pub(super) fn computed_equalities(
     value: &Node,

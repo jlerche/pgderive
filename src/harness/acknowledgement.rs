@@ -27,11 +27,11 @@ pub(super) async fn check(
         durable.stored.checkpoint.clone(),
     )
     .await?;
-    let stale = catalog.claim(sql, graph.plan(), durable.binding.clone(), durable.end).await?;
-    let mut writer = catalog.claim(sql, graph.plan(), durable.binding, durable.end).await?;
+    let stale = catalog.claim(sql, graph.plan(), durable.binding.clone()).await?;
+    let mut writer = catalog.claim(sql, graph.plan(), durable.binding).await?;
     let verified = writer.confirmed(sql, graph.plan()).await?;
     let mut wrong = verified.clone();
-    wrong.binding.source.push_str(":different");
+    wrong.binding.source.slot.push_str("_different");
     ensure!(
         Stream::connect(config, &wrong).await.is_err(),
         "resume accepted a different source registration"
@@ -94,9 +94,9 @@ async fn exercise(
     })
     .await
     .context("waiting for durable replication acknowledgement")??;
-    ensure!(graph.time() == 16, "resume advanced wrong logical clock");
+    ensure!(graph.time() == 17, "resume advanced wrong logical clock");
     eprintln!(
-        "MVP resumed from durable tick 15; received rows remained unacknowledged until atomic tick 16 publication"
+        "MVP resumed from durable tick 16; received rows remained unacknowledged until atomic tick 17 publication"
     );
     Ok(progress.end)
 }

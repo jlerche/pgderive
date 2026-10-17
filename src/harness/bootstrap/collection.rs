@@ -181,7 +181,7 @@ async fn fence_abandoned(
     checkpoint: &crate::engine::plan::Checkpoint,
 ) -> Result<crate::catalog::Durable> {
     let before = writer.confirmed(sql, plan).await?;
-    let next = catalog.claim(sql, plan, before.binding.clone(), before.end).await?;
+    let next = catalog.claim(sql, plan, before.binding.clone()).await?;
     let stale = std::mem::replace(writer, next);
     ensure!(
         stale.protect_upload(sql, "gc-stale").await.is_err(),

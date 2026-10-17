@@ -9,15 +9,14 @@ pub(in crate::compiler) struct Parsed {
     pub predicate: Option<crate::compiler::syntax::Expr>,
 }
 pub(in crate::compiler) enum Source {
+    Join { tree: super::native_join::Tree, validated: bool },
     Native(Table),
     Derived { inner: Box<super::Parsed>, alias: String },
 }
 #[derive(Clone)]
 pub(in crate::compiler) enum Value {
-    Typed(Box<Node>),
     Column(Name),
-    Bin(super::scalar::Bin),
-    Offset(super::offset::Offset),
+    Typed(Box<Node>),
     Aggregate(Box<Aggregate>),
 }
 #[derive(Clone)]
@@ -46,40 +45,16 @@ pub(in crate::compiler) struct Window {
     pub ranking: bool,
     pub peers: Option<bool>,
 }
-pub(super) fn eligible(select: &pg::SelectStmt) -> Result<bool> {
-    let [source] = select.from_clause.as_slice() else {
-        return Ok(false);
-    };
-    if super::expansion::eligible(source)? {
-        return Ok(true);
-    }
-    if !matches!(node(source)?, NodeEnum::RangeVar(_) | NodeEnum::RangeSubselect(_)) {
-        return Ok(false);
-    }
-    let derived = matches!(node(source)?, NodeEnum::RangeSubselect(_));
-    Ok(!select.group_clause.is_empty()
-        || derived
-            && select.target_list.iter().any(|value| {
-                target(value)
-                    .ok()
-                    .and_then(|value| node(value).ok())
-                    .is_some_and(|value| !matches!(value, NodeEnum::ColumnRef(_)))
-            })
-        || select.target_list.iter().any(|target_node| {
-            target(target_node).ok().is_some_and(|value| {
-                super::scalar::is_bin(value).unwrap_or(false)
-                    || super::offset::eligible(value).unwrap_or(false)
-            }) || target(target_node).ok().and_then(|value| node(value).ok()).is_some_and(
-                |value| matches!(value, NodeEnum::FuncCall(call) if call.over.is_some()),
-            )
-        }))
-}
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
     ensure!((1..=64).contains(&select.target_list.len()), "partition output count unsupported");
-    let from = select.from_clause.first().context("missing source")?;
+    let [from] = select.from_clause.as_slice() else {
+        anyhow::bail!("SELECT requires one source");
+    };
     let (source, expansion) = if let NodeEnum::RangeSubselect(derived) = node(from)? {
         let (inner, alias) = super::derived::source_query(derived)?;
         (Source::Derived { inner: Box::new(inner), alias }, None)
+    } else if matches!(node(from)?, NodeEnum::JoinExpr(_)) && !super::expansion::eligible(from)? {
+        (Source::Join { tree: super::native_join::tree(from, &mut 0, 0)?, validated: false }, None)
     } else {
         let (table, expansion) = super::expansion::source(from)?;
         (Source::Native(table), expansion)
@@ -100,27 +75,7 @@ fn parse_target(value: &Node) -> Result<Target> {
     };
     ensure!(output.indirection.is_empty(), "output indirection unsupported");
     let expression = target(value)?;
-    let (value, label) = if super::scalar::is_bin(expression)? {
-        let super::scalar::Key::Bin(bin) = super::scalar::key(expression)? else {
-            anyhow::bail!("invalid date_bin target");
-        };
-        {
-            let label = if bin.shift.is_some() { "?column?" } else { "date_bin" };
-            (Value::Bin(bin), label.into())
-        }
-    } else if super::offset::eligible(expression)? {
-        (Value::Offset(super::offset::parse(expression)?), "?column?".into())
-    } else if matches!(
-        node(expression)?,
-        NodeEnum::AConst(_)
-            | NodeEnum::TypeCast(_)
-            | NodeEnum::CoalesceExpr(_)
-            | NodeEnum::AExpr(_)
-    ) {
-        (Value::Typed(Box::new(expression.clone())), "?column?".into())
-    } else if matches!(node(expression)?, NodeEnum::CaseExpr(_)) {
-        (Value::Typed(Box::new(expression.clone())), "case".into())
-    } else if let NodeEnum::FuncCall(call) = node(expression)? {
+    let (value, label) = if let NodeEnum::FuncCall(call) = node(expression)? {
         let name = super::expressions::names(&call.funcname)?.0;
         let function = crate::compiler::parser::expressions::builtin_name(&name);
         if let Some(
@@ -136,9 +91,14 @@ fn parse_target(value: &Node) -> Result<Target> {
             )
         }
     } else {
-        let name = column(expression)?;
-        let label = name.0.last().context("missing column")?.clone();
-        (Value::Column(name), label)
+        let label = match node(expression)? {
+            NodeEnum::ColumnRef(_) => {
+                column(expression)?.0.last().context("missing column")?.clone()
+            }
+            NodeEnum::CaseExpr(_) => "case".into(),
+            _ => "?column?".into(),
+        };
+        (Value::Typed(Box::new(expression.clone())), label)
     };
     Ok(Target { value, label: if output.name.is_empty() { label } else { output.name.clone() } })
 }

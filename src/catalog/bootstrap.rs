@@ -37,7 +37,7 @@ impl Catalog {
     ) -> Result<()> {
         snapshot.checkpoint.validate(plan)?;
         ensure!(snapshot.checkpoint.time == 1, "snapshot activation requires logical tick one");
-        let binding = Binding { source: snapshot.source.encode()?, sink: snapshot.sink };
+        let binding = Binding { source: snapshot.source.clone(), sink: snapshot.sink };
         binding.validate()?;
         let tx = sql.transaction().await?;
         super::storage::shared(&tx, self).await?;

@@ -161,6 +161,19 @@ pub(super) fn computed(
     computed: &mut Vec<super::scalar::Computed>,
     scope: Option<usize>,
 ) -> Result<ColumnRef> {
+    use super::parser::{
+        expressions::{column, node},
+        offset, scalar,
+    };
+    if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
+        return resolve(&column(value)?);
+    }
+    if scalar::is_bin(value)? {
+        return super::scalar::bind(&scalar::bin(value)?, resolve, computed, scope);
+    }
+    if offset::eligible(value)? {
+        return super::scalar::bind_offset(&offset::parse(value)?, resolve, computed, scope);
+    }
     let mut typed = bind(value, resolve, 0)?;
     if typed.oid == 705 {
         typed.oid = 25;

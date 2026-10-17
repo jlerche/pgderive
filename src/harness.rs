@@ -211,10 +211,10 @@ async fn execute(sql: &mut Client, fixture: &Fixture, mut config: Config) -> Res
     let end = acknowledgement::check(sql, fixture, &config, store.clone()).await?;
     let report = recovery.recover_query(sql, &fixture.schema, "atomic_grouped").await?;
     ensure!(
-        report.time == 16 && report.epoch == 17 && report.source_end == Some(end.to_string()),
+        report.time == 17 && report.epoch == 18 && report.source_end == end.to_string(),
         "fresh-process durable source/state recovery mismatch"
     );
-    eprintln!("MVP fresh-process recovered atomic tick 16 with exact durable source position");
+    eprintln!("MVP fresh-process recovered atomic tick 17 with exact durable source position");
     bootstrap::check(sql, fixture, &recovery).await?;
     Ok(())
 }
@@ -257,7 +257,7 @@ async fn drive(
         join.verify(sql, schema, &transaction.batch).await?;
         apply(&mut model, &transaction)?;
         mvp.verify(sql, schema, &transaction, &model).await?;
-        if matches!(mvp.time(), 5 | 15) {
+        if matches!(mvp.time(), 6 | 16) {
             mvp.checkpoint_and_recover(sql, schema, &recovery).await?;
         }
         ensure!(model == source, "reconstructed CDC state differs from PostgreSQL");

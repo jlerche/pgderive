@@ -325,3 +325,58 @@ fn calendar_extract_and_date_part_remain_explicitly_unavailable() -> Result<()> 
     }
     Ok(())
 }
+
+#[test]
+fn shared_temporal_target_binding_keeps_nested_and_on_allowlists() -> Result<()> {
+    use crate::compiler::relational::Node;
+    let mut native = contract();
+    native.relations[1].columns[2].name = "moment".into();
+    native.relations[1].columns[2].oid = 1184;
+    compile(
+        "SELECT price+1::bigint AS value,COUNT(*) FROM source.bid GROUP BY price+1::bigint",
+        &contract(),
+    )?;
+    let bucket = "date_bin(interval '1 hour',moment,timestamptz '2000-01-01 00:00:00+00')";
+    let source = row(&[("0:moment", Some("2000-01-01 12:34:56+00"))]);
+    for (expression, expected) in [
+        (bucket.to_owned(), "2000-01-01 12:00:00+00"),
+        ("moment+interval '1 hour'".to_owned(), "2000-01-01 13:34:56+00"),
+    ] {
+        let compiled = compile(&format!("SELECT {expression} AS v FROM source.bid"), &native)?;
+        assert_eq!(compiled.output().columns[0].column.oid, 1184);
+        let values = compiled
+            .relational()
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                Node::Map { computed, .. } => Some(computed),
+                _ => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].expression.evaluate(&source)?.as_deref(), Some(expected));
+        compile(
+            &format!(
+                "SELECT d.v FROM(SELECT {expression} AS v FROM source.bid) d WHERE d.v IS NOT NULL"
+            ),
+            &native,
+        )?;
+    }
+    for sql in [
+        format!("SELECT COALESCE({bucket},moment) FROM source.bid"),
+        format!(
+            "SELECT b.id FROM source.bid b JOIN source.bid c ON {}=c.moment",
+            bucket.replace("moment", "b.moment")
+        ),
+        "SELECT date_part('hour',moment) FROM source.bid".into(),
+        "SELECT moment+interval '1 day' FROM source.bid".into(),
+        "SELECT moment+interval '1 hour',COUNT(*) FROM source.bid GROUP BY moment+interval '1 hour'".into(),
+        format!("SELECT {bucket} OVER() FROM source.bid"),
+        "SELECT b.* FROM source.bid b".into(),
+        "SELECT COUNT(*) FROM source.bid".into(),
+    ] {
+        assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}

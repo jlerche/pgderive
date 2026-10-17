@@ -1,6 +1,6 @@
 //! Native representation identity must survive occurrence retraction and rollback.
 use crate::{
-    catalog::{Binding, Catalog, Deltas, Progress, Publication, ResultColumn, Sink},
+    catalog::{Catalog, Deltas, Progress, Publication, ResultColumn, Sink},
     engine::{
         Batch,
         plan::{Checkpoint, Plan},
@@ -12,23 +12,14 @@ use tokio_postgres::Client;
 pub(super) async fn check(
     sql: &mut Client,
     schema: &str,
-    plan: &Plan,
-    empty: &Checkpoint,
+    initial: &super::initial::Initial<'_>,
 ) -> Result<()> {
     let catalog = Catalog::new(schema, "native_representations")?;
-    catalog.checkpoint(sql, plan, empty, 0).await?;
     let columns =
         vec![ResultColumn { name: "number".into(), oid: 1700, modifier: -1, collation: None }];
     let sink = Sink::Rows { table: "native_representations".into(), columns };
-    let mut writer = catalog
-        .claim(
-            sql,
-            plan,
-            Binding { source: "synthetic representation test; never ACK".into(), sink },
-            "0/0".parse()?,
-        )
-        .await?;
-    let mut checkpoint = empty.clone();
+    let plan = initial.plan;
+    let (mut writer, mut checkpoint) = initial.synthetic(sql, &catalog, sink).await?;
     super::bags::advance(&mut checkpoint);
     let deltas = Deltas::bag(&Batch::from_updates([
         (((), vec!["1.0".to_owned()]), 2),

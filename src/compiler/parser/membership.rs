@@ -50,9 +50,17 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         crate::compiler::syntax::predicate(select.where_clause.as_deref())?
     };
     Ok(Some(Parsed::Membership {
-        parsed: native_join::Parsed {
-            tree,
-            columns: super::projection_columns(&select.target_list)?,
+        parsed: super::partition::Parsed {
+            source: super::partition::Source::Join { tree, validated: false },
+            targets: super::projection_columns(&select.target_list)?
+                .into_iter()
+                .map(|(name, label)| super::partition::Target {
+                    value: super::partition::Value::Column(name),
+                    label,
+                })
+                .collect(),
+            groups: Vec::new(),
+            expansion: None,
             predicate,
         },
         distinct,

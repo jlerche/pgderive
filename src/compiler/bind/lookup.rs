@@ -73,11 +73,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
             table: scope.relation.table.clone(),
         })
         .collect();
-    let output = crate::compiler::Projected {
-        schema: scopes[0].relation.schema.clone(),
-        table: scopes[0].relation.table.clone(),
-        columns,
-    };
+    let output = crate::compiler::Projected { columns };
     Ok(Compiled { result_columns: Vec::new(), relational: Relational { sources, nodes, output } })
 }
 fn correlated(name: &Name, scopes: &[Scope<'_>; 2]) -> Result<ColumnRef> {

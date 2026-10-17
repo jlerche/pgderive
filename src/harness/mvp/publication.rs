@@ -2,11 +2,12 @@ mod bags;
 mod bulk;
 mod cancellation;
 mod checks;
+mod initial;
 mod recovery;
 mod representations;
 use super::{MvpFixture, Query};
 use crate::{
-    catalog::{Binding, Catalog, Deltas, Lsn, Progress, Publication, Sink, Writer},
+    catalog::{Binding, Catalog, Deltas, Progress, Publication, Sink, Snapshot, Writer},
     engine::plan::relational::Prepared,
     transaction::Transaction,
 };
@@ -14,7 +15,7 @@ use anyhow::{Result, ensure};
 use tokio_postgres::Client;
 
 pub(super) struct PublicationFixture {
-    grouped: Writer,
+    pub(super) grouped: Writer,
     bag: Writer,
     stale: Writer,
     catalog: Catalog,
@@ -29,33 +30,54 @@ impl MvpFixture {
         config: &crate::Config,
         initial: &str,
     ) -> Result<()> {
-        let source = format!(
-            "{}:{}:{}",
-            config.postgres.database, config.replication.publication, config.replication.slot
+        let identity = crate::source::Identity::inspect(config).await?;
+        let source = crate::source::Contract::inspect(
+            sql,
+            identity,
+            &config.replication.publication,
+            &config.replication.slot,
+        )
+        .await?;
+        ensure!(
+            super::super::source_state(sql, schema).await?.is_empty(),
+            "MVP initial snapshot requires empty source tables"
         );
-        let checkpoint = self.graph.checkpoint()?;
+        let empty = self.graph.checkpoint()?;
         let catalog = Catalog::new(schema, "atomic_grouped")?;
         catalog.install(sql).await?;
-        bags::check(sql, schema, self.graph.plan(), &checkpoint).await?;
-        representations::check(sql, schema, self.graph.plan(), &checkpoint).await?;
-        bulk::check(sql, schema, self.graph.plan(), &checkpoint).await?;
-        catalog.checkpoint(sql, self.graph.plan(), &checkpoint, 0).await?;
-        let binding = Binding { source: source.clone(), sink: Sink::Json("derived_groups".into()) };
-        let initial: Lsn = initial.parse()?;
-        let stale = catalog.claim(sql, self.graph.plan(), binding.clone(), initial).await?;
-        let grouped = catalog.claim(sql, self.graph.plan(), binding, initial).await?;
-        checks::require_synchronous_commit(sql, schema).await?;
-
+        let setup = initial::Initial { plan: self.graph.plan(), empty: &empty, source: &source };
+        bags::check(sql, schema, &setup).await?;
+        representations::check(sql, schema, &setup).await?;
+        bulk::check(sql, schema, &setup).await?;
         let bag_catalog = Catalog::new(schema, "atomic_bag")?;
-        bag_catalog.checkpoint(sql, self.graph.plan(), &checkpoint, 0).await?;
-        let bag = bag_catalog
-            .claim(
+        let (bag, _) = setup.synthetic(sql, &bag_catalog, Sink::Json("derived_bag".into())).await?;
+        let prepared = self
+            .graph
+            .prepare(crate::engine::dataflow::TimedBatch {
+                time: 1,
+                batch: vec![super::Batch::default(), super::Batch::default()],
+            })
+            .await?;
+        let checkpoint = self.graph.prepared_checkpoint(&prepared)?;
+        let deltas = Deltas::bag(&prepared.output().batch)?;
+        let binding = Binding { source, sink: Sink::Json("derived_groups".into()) };
+        catalog
+            .activate_snapshot(
                 sql,
                 self.graph.plan(),
-                Binding { source, sink: Sink::Json("derived_bag".into()) },
-                initial,
+                Snapshot {
+                    checkpoint: &checkpoint,
+                    deltas: &deltas,
+                    source: &binding.source,
+                    boundary: initial.parse()?,
+                    sink: binding.sink.clone(),
+                },
             )
             .await?;
+        self.graph.commit(prepared)?;
+        let stale = catalog.claim(sql, self.graph.plan(), binding.clone()).await?;
+        let grouped = catalog.claim(sql, self.graph.plan(), binding).await?;
+        checks::require_synchronous_commit(sql, schema).await?;
         self.publication = Some(PublicationFixture {
             grouped,
             bag,
@@ -81,7 +103,7 @@ impl PublicationFixture {
         let deltas = Deltas::bag(&prepared.output().batch)?;
         let publication =
             || Publication { checkpoint: &checkpoint, progress: &progress, deltas: &deltas };
-        if checkpoint.time == 1 {
+        if checkpoint.time == 2 {
             self.failure_checks(sql, graph, publication()).await?;
         }
         if !self.uncertain_commit(sql, graph, publication()).await? {
@@ -102,11 +124,11 @@ impl PublicationFixture {
         );
         let stored = self
             .catalog
-            .load(sql, graph.plan())
+            .load_durable(sql, graph.plan())
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing durable publication"))?;
         ensure!(
-            stored.checkpoint == checkpoint && stored.epoch == self.grouped.epoch(),
+            stored.stored.checkpoint == checkpoint && stored.stored.epoch == self.grouped.epoch(),
             "published membership/epoch differs from candidate"
         );
         let matches = sql.query_one(&format!("SELECT COUNT(*) FROM {}.pgderive_progress p JOIN {}.pgderive_queries q USING(query_id) WHERE p.query_id IN ('atomic_grouped','atomic_bag') AND p.end_lsn=$1::text::pg_lsn AND p.commit_lsn=$2::text::pg_lsn AND p.xid=$3 AND q.logical_time=$4", self.schema, self.schema), &[&progress.end.to_string(), &progress.commit.to_string(), &i64::from(progress.xid), &i64::try_from(checkpoint.time)?]).await?.try_get::<_, i64>(0)?;

@@ -24,8 +24,7 @@ class DistinctFixture(PartitionFixture):
 
     def verify(self):
         expected = f"SELECT jsonb_build_array(NULL,jsonb_build_array({','.join(self.labels)})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1"
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0','distinct output differs from PostgreSQL'
+        self.verify_sql(expected)
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -38,9 +37,7 @@ class DistinctFixture(PartitionFixture):
             if self.mode == 'nested':
                 output += (maximum,)
             expected_memory[output] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(expected_memory),'distinct output differs from source-value-presence oracle'
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(expected_memory))
 
 
 if __name__ == '__main__':

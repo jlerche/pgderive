@@ -11,7 +11,7 @@ class JoinedFixture(SqlFixture):
         super().__init__(output, False)
         self.mode = mode
         self.sql(f"UPDATE {self.name}.auction SET group_id=NULL,enabled=true WHERE id IN (1,2); UPDATE {self.name}.bid SET price=-3 WHERE auction IN (1,2)")
-        inner = (f'SELECT a.id AS aid,b.id AS bid,a.group_id AS g,b.price AS p FROM '
+        inner = (f'SELECT a.id AS aid,b.id AS bid,a.group_id AS g,b.price+0 AS p FROM '
                  f'{self.name}.auction a JOIN {self.name}.bid b ON b.auction=a.id '
                  'WHERE a.enabled OR b.price IS NULL')
         if mode == 'group':
@@ -26,10 +26,7 @@ class JoinedFixture(SqlFixture):
             self.labels = ['g','p']
 
     def verify(self):
-        values = ','.join(self.labels)
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'join-fed scope differs from PostgreSQL'
+        self.verify_sql()
         auctions = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         bids = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
@@ -52,9 +49,7 @@ class JoinedFixture(SqlFixture):
                 memory[(a['group_id'],b['price'])] += 1
             else:
                 memory.update((a['group_id'],b['price']) for a,b in rows)
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual} == dict(memory), 'join-fed scope differs from memory oracle'
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(dict(memory))
 
 
 def qualify(output, command, mode):
@@ -62,7 +57,7 @@ def qualify(output, command, mode):
     with fixture.managed():
         fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY g')
         fixture.rejected(command, 'hidden', fixture.query.replace('q.g','q.enabled'))
-        fixture.rejected(command, 'terminal', fixture.query.replace('b.price AS p','abs(b.price) AS p'))
+        fixture.rejected(command, 'unsupported-scalar', fixture.query.replace('b.price+0 AS p','abs(b.price::numeric) AS p'))
         if mode == 'winner':
             fixture.rejected(command,'right-key',fixture.query.replace(',q.bid,q.aid)',',q.aid)'))
             # Auction identity is already fixed within each partition.

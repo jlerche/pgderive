@@ -27,8 +27,7 @@ class ProjectionFixture(SqlFixture):
                     f"FROM {self.name}.auction a WHERE a.id > 0 AND (a.enabled OR a.group_id IS NULL) GROUP BY 1")
         if self.local:
             expected = expected.replace('jsonb_build_array(a.group_id,a.category,a.enabled,a.token,a.group_id)', 'jsonb_build_array((0-a.group_id),a.category,a.enabled,a.token,(0-a.group_id),(0-a.small_value),(0::bigint-a.large_value),a.vartext)')
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'projection sink differs from PostgreSQL bag'
+        self.verify_sql(expected)
         # Independent raw-source recomputation with explicit true-only qualification.
         rows = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a')) or []
         expected_memory = collections.Counter()

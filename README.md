@@ -368,8 +368,8 @@ and declared i64 finalization boundaries.
 
 ## Canonical batch arithmetic
 
-`engine::Batch<K,V>` is an immutable sorted logical batch over complete `(key,
-value)` identities, and `IndexedZSet<K,V>` names the keyed reference collection.
+`engine::Batch<K,V>` names the canonical `ZSet<(K,V)>`, a sorted weighted
+collection over complete `(key,value)` identities.
 `BatchBuilder` accumulates exact arbitrary-precision coefficients; unfinished
 builders can merge without narrowing at arbitrary physical boundaries. `finish`
 removes zero coefficients and rejects only final weights outside i64.
@@ -634,21 +634,22 @@ must fit PostgreSQL's nonnegative signed bigint range.
 
 Reopening validates all referenced roots and blocks with a cold reader before
 attaching the shared cache. A warm cache cannot conceal missing or corrupt
-storage during recovery. The live harness checkpoints at ticks 5 and 15 and
+storage during recovery. The live harness reloads published checkpoints at ticks 6 and 16 and
 restores all five arrangements in a separate process, comparing their state
 with independent source recomputation. It also checks stale writes, rollback,
 metadata corruption, and missing roots and blocks.
 
-This checkpoint API persists arrangement metadata only. It does not apply sink
-DML, record source progress, or acknowledge the replication slot. Atomic
-publication of those effects uses the separate API described next.
+The catalog stores one checksummed checkpoint per query. Its ordered object
+membership also supplies the derived `pgderive_roots` view; no separate
+arrangement or object membership tables mirror that checkpoint. All checkpoint
+writes use the atomic publication path described next.
 
 ## Atomic destination publication
 
-`Catalog::claim` binds an owned destination and a stable source registration to
-an empty tick-zero checkpoint. PostgreSQL fences each claimed writer; reclaiming
-ownership invalidates older writers even when their publication epoch matches.
-Once bound, the metadata-only checkpoint API cannot overwrite that query.
+`Catalog::activate_snapshot` atomically binds the native source contract, destination,
+snapshot checkpoint at logical time one and source progress. `Catalog::claim`
+reclaims an activated query; its PostgreSQL fence invalidates older writers even
+when their publication epoch matches.
 
 `Relational::publish_prepared` holds exclusive runtime ownership while checking
 its preparation, encoding result deltas, and committing PostgreSQL membership,
@@ -669,7 +670,7 @@ Destinations are engine-owned tables; external writers are unsupported.
 
 The live harness compares both destination encodings with SQL after every source
 transaction, checks persisted membership and source positions, rejects replaced
-workers and metadata-only overwrites, and injects destination DML failure to
+workers and stale publication epochs, and injects destination DML failure to
 verify complete rollback. An isolated arithmetic fixture exercises same-key bag
 multiplicity, cancellation and final-coefficient overflow without acknowledging
 its synthetic source positions.
@@ -698,9 +699,9 @@ The local SQL fault proxy disconnects before forwarding COMMIT, or discards its
 response only after PostgreSQL confirms successful COMMIT. Evidence records which
 outcome occurred without recording SQL or credentials. The harness verifies both
 resolutions, cold recovery, replay rejection, and blocked blind retries. After
-its fifteen diagnostic transactions, it resumes from durable tick 15, proves that
-periodic feedback cannot acknowledge merely received tick 16, then publishes and
-acknowledges tick 16. A separate process reopens its state and exact source position.
+its fifteen diagnostic transactions, it resumes from durable tick 16, proves that
+periodic feedback cannot acknowledge merely received tick 17, then publishes and
+acknowledges tick 17. A separate process reopens its state and exact source position.
 
 A third proxy mode holds an issued COMMIT while its PostgreSQL transaction stays
 open. The harness cancels the publication future, verifies acknowledgement is

@@ -14,6 +14,7 @@ type Measure<K, V> = dyn Fn(&K, &V) -> Result<Vec<BigInt>> + Send + Sync;
 type Encode<K, V> = dyn Fn(&K, &[BigInt]) -> Result<Option<V>> + Send + Sync;
 /// A linear map into exact additive statistics, followed by group finalization.
 /// Callers maintain valid full-tuple source bags; counts do not prove tuple validity.
+#[derive(Clone)]
 pub struct Statistics<K: BatchData, V: BatchData, S: BatchData = V> {
     width: usize,
     measure: Arc<Measure<K, V>>,

@@ -81,9 +81,7 @@ class AggregateInputsFixture(SqlFixture):
         expected = ('SELECT jsonb_build_array(NULL,jsonb_build_array(' + ','.join(self.labels)
                     + f')) tuple,count(*)::bigint weight FROM {self.name}.oracle GROUP BY 1')
         assert self.bag_difference(expected).strip() == '0', 'computed aggregate differs from refreshed native MV'
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=decimal.Decimal)
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == self.memory(), actual
-        assert self.acknowledgement_ahead().strip() == '0'
+        self.verify_memory(self.memory(), parse_float=decimal.Decimal)
 
 
 def qualify(output, command, mode):

@@ -47,8 +47,7 @@ class Q13Fixture(SqlFixture):
     def verify(self):
         prefix = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
         expected = native_expected(self,LABELS)
-        difference = self.bag_difference(expected, context=prefix)
-        assert difference.strip()=='0','q13 differs from exact native MV'
+        self.verify_sql(expected, context=prefix)
         bids = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         sides = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(s),'[]') FROM {self.name}.side_input s"))
         memory = collections.Counter()
@@ -59,9 +58,7 @@ class Q13Fixture(SqlFixture):
               and ordered(side['date_time'])<=ordered(bid['processing_time'])]
             chosen = max(candidates,key=lambda side:(ordered(side['date_time']),side['id'])) if candidates else None
             memory[(bid['auction'],bid['bidder'],bid['price'],encode(bid['date_time'],self.instant),chosen['value'] if chosen else None)] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(memory),'q13 differs from independent modulo/predecessor oracle'
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(memory))
 
     def values(self):
         return self.sql(f"SELECT COALESCE(jsonb_agg(x ORDER BY x.auction,x.value),'[]') FROM(SELECT tuple->1->0 auction,tuple->1->4 value,sum(weight)::text count FROM {self.bag_relation()} GROUP BY 1,2) x")

@@ -20,8 +20,7 @@ class RelationalFixture(SqlFixture):
 
     def verify(self):
         expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array(g,c,p,e)) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'join projection differs from PostgreSQL'
+        self.verify_sql(expected)
         left = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         right = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         expected = collections.Counter()
@@ -35,10 +34,7 @@ class RelationalFixture(SqlFixture):
                 if self.filtered and price is not None and price>=0:
                     continue
                 expected[(a['group_id'], category, price, a['enabled'])] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected)
-        beyond = self.acknowledgement_ahead()
-        assert beyond.strip() == '0'
+        self.verify_memory(dict(expected))
 
 
 def qualify(output, command, filtered):

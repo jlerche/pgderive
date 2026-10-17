@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 type Bag = Batch<relational::Key, Row>;
 fn sql(numbered: bool) -> String {
@@ -147,11 +147,21 @@ fn nested_scopes_expose_only_inner_labels() -> Result<()> {
         .nodes
         .iter()
         .filter_map(|node| match node {
-            crate::compiler::relational::Node::Filter { id, .. } => Some(id.as_str()),
+            crate::compiler::relational::Node::Filter { id, input, .. } => {
+                Some((id.as_str(), input.as_str()))
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(filters, ["qualified", "qualified_1"]);
+    assert_eq!(filters.len(), 2);
+    assert_ne!(filters[0].0, filters[1].0);
+    assert_eq!(filters[1].1, filters[0].0);
+    let last = ir.nodes.last().context("missing outer output")?;
+    assert!(
+        matches!(last, crate::compiler::relational::Node::Output { input, .. } if input == filters[1].0)
+    );
+    let first_input = ir.nodes.iter().find(|node| matches!(node, crate::compiler::relational::Node::Partition { id, .. } if id == filters[0].1));
+    assert!(first_input.is_some(), "derived predicates must follow the ranked scope");
     assert_eq!(ir.output.columns[0].label, "Value");
     for invalid in [
         query.replace("final.\"Value\"", "final.id"),

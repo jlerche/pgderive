@@ -212,3 +212,56 @@ fn reusable_expansion_preserves_complete_tick_cancellation_and_spill_limits() ->
     assert_eq!(input.time, 7);
     Ok(())
 }
+
+#[tokio::test]
+async fn plain_series_projection_preserves_expansion_and_weights() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT w.n AS ordinal,b.auction AS auction FROM source.bid b CROSS JOIN pg_catalog.generate_series(0,4) w(n)",
+        &native,
+    )?;
+    let options = settings();
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let input = row(&[("id", Some("1")), ("auction", Some("17")), ("price", None)]);
+    for (time, weight) in [(1, 3), (2, -2)] {
+        let delta = batch(vec![("bid", input.clone(), weight)]);
+        let prepared =
+            query.prepare(relational::inputs(&delta, compiled.relational(), time)?).await?;
+        let expected = Batch::from_updates((0..=4).map(|ordinal| {
+            let output = [
+                (crate::compiler::expansion::FIELD.into(), Some(ordinal.to_string())),
+                ("0:auction".into(), Some("17".into())),
+            ]
+            .into();
+            ((Vec::new(), output), weight)
+        }))?;
+        assert_eq!(prepared.output().batch, expected);
+        query.commit(prepared)?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn plain_series_projection_filters_before_expansion() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT w.n AS ordinal,b.auction AS auction FROM source.bid b CROSS JOIN pg_catalog.generate_series(0,4) w(n) WHERE b.auction IS NOT NULL",
+        &native,
+    )?;
+    let query = relational::build(&native, &compiled, &settings())?;
+    let valid = row(&[("id", Some("1")), ("auction", Some("17")), ("price", None)]);
+    let null = row(&[("id", Some("2")), ("auction", None), ("price", None)]);
+    let delta = batch(vec![("bid", valid, 3), ("bid", null, 7)]);
+    let prepared = query.prepare(relational::inputs(&delta, compiled.relational(), 1)?).await?;
+    let expected = Batch::from_updates((0..=4).map(|ordinal| {
+        let output = [
+            (crate::compiler::expansion::FIELD.into(), Some(ordinal.to_string())),
+            ("0:auction".into(), Some("17".into())),
+        ]
+        .into();
+        ((Vec::new(), output), 3)
+    }))?;
+    assert_eq!(prepared.output().batch, expected);
+    Ok(())
+}

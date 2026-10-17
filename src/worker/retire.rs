@@ -108,7 +108,7 @@ async fn owned_sink(
     };
     let binding: crate::catalog::Binding = serde_json::from_value(progress.try_get(0)?)?;
     ensure!(
-        binding.sink == *sink && binding.registered_source()?.as_ref() == Some(source),
+        binding.sink == *sink && binding.source == *source,
         "removal journal differs from activated source/destination"
     );
     Ok(Some(

@@ -122,7 +122,6 @@ fn joined_scopes_reject_incomplete_order_hidden_and_terminal_columns() -> Result
     for invalid in [
         sql(true).replace(",q.bid,q.aid)", ",q.aid)"),
         sql(false).replace("MAX(q.p)", "MAX(q.auction)"),
-        sql(false).replace("b.price AS p", "abs(b.price) AS p"),
     ] {
         assert!(compile(&invalid, &native).is_err(), "{invalid}");
     }
@@ -132,6 +131,7 @@ fn joined_scopes_reject_incomplete_order_hidden_and_terminal_columns() -> Result
             .nodes
             .is_empty()
     );
+    compile(&sql(false).replace("b.price AS p", "abs(b.price) AS p"), &native)?;
     let original = compile(&sql(true), &native)?;
     let alias = sql(true).replace("a.", "\"A\".").replace("auction a ", "auction AS \"A\" ");
     assert_eq!(serde_json::to_vec(&original)?, serde_json::to_vec(&compile(&alias, &native)?)?);

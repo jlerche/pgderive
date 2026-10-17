@@ -9,14 +9,17 @@ fn writer() -> Result<Writer> {
     let checkpoint = Checkpoint {
         version: 1,
         plan_identity: "registered".into(),
-        time: 0,
+        time: 1,
         arrangements: vec![],
     };
     Ok(Writer {
         catalog: Catalog::new("fixture", "query")?,
         boundary: Durable {
             stored: Stored { epoch: 1, checkpoint },
-            binding: Binding { source: "source".into(), sink: Sink::Json("sink".into()) },
+            binding: Binding {
+                source: crate::source::tests::contract(),
+                sink: Sink::Json("sink".into()),
+            },
             fence: 1,
             end: "0/0".parse()?,
             commit: "0/0".parse()?,
@@ -33,7 +36,7 @@ fn resolution_requires_exact_prior_or_exact_committed_candidate() -> Result<()> 
     let writer = writer()?;
     let before = boundary(&writer);
     let mut candidate = writer.boundary.stored.checkpoint.clone();
-    candidate.time = 1;
+    candidate.time = 2;
     let progress = Progress::new(42, "0/10", "0/20")?;
     assert_eq!(resolve(&writer, &before, &candidate, &progress)?, Resolution::NotCommitted);
     let mut after = before.clone();
@@ -70,5 +73,17 @@ fn replay_uses_wal_order_and_checks_identity_at_exact_boundary() -> Result<()> {
     assert!(durable.covers(&Progress::new(43, "0/19", "0/21")?).is_err());
     let invalid = Progress { xid: 1, commit: "0/50".parse()?, end: "0/40".parse()? };
     assert!(durable.covers(&invalid).is_err());
+    Ok(())
+}
+#[test]
+fn native_progress_requires_snapshot_then_committed_transactions() -> Result<()> {
+    let start = "0/10".parse()?;
+    let end = "0/20".parse()?;
+    assert!(Binding::valid_identity(1, None, start, start));
+    assert!(!Binding::valid_identity(0, None, start, start));
+    assert!(!Binding::valid_identity(1, Some(42), start, end));
+    assert!(!Binding::valid_identity(1, None, start, end));
+    assert!(!Binding::valid_identity(2, None, start, start));
+    assert!(Binding::valid_identity(2, Some(42), start, end));
     Ok(())
 }

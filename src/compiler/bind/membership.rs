@@ -1,12 +1,12 @@
 //! Bind projected membership while retaining complete source identities.
-use super::{Compiled, native_join};
+use super::{Compiled, partition};
 use crate::{
-    compiler::{parser::native_join::Parsed, relational::Node},
+    compiler::{parser::partition::Parsed, relational::Node},
     source::Contract,
 };
 use anyhow::{Result, ensure};
 pub(super) fn bind(parsed: Parsed, distinct: bool, contract: &Contract) -> Result<Compiled> {
-    let mut compiled = native_join::bind(parsed, contract)?;
+    let mut compiled = partition::bind(parsed, contract)?;
     let relational = &mut compiled.relational;
     if distinct {
         ensure!(

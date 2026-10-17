@@ -30,8 +30,7 @@ class TopKFixture(SqlFixture):
         return f"'{text}'::{self.mode}"
     def verify(self):
         native=expected(self,self.labels)
-        difference=self.bag_difference(native)
-        assert difference.strip()=='0','top-k differs from native materialized view'
+        self.verify_sql(native)
         rows=json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         partitions=collections.defaultdict(list)
         for row in rows:partitions[row['auction']].append(row)
@@ -46,9 +45,7 @@ class TopKFixture(SqlFixture):
                 value=row['price']
                 if self.temporal and value is not None:value=value.replace(' ','T')
                 if position<=self.limit and (self.mode!='equality' or position==3):oracle[(key,value)]+=1
-        actual=json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
-        assert {tuple(row['tuple'][1]):row['weight'] for row in actual}==dict(oracle),(actual,oracle)
-        assert self.acknowledgement_ahead().strip()=='0'
+        self.verify_memory(dict(oracle))
 
 def qualify(output,command,mode):
     fixture=TopKFixture(output,mode)

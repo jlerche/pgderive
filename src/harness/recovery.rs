@@ -7,7 +7,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::process::Command;
 use tokio_postgres::Client;
 
-pub(super) const QUERY: &str = "auction_bid_count_sum";
+pub(super) const QUERY: &str = "atomic_grouped";
 #[derive(Clone)]
 pub(super) struct Recovery {
     pub(super) config: Config,
@@ -27,8 +27,8 @@ pub struct RecoveryReport {
     pub objects: usize,
     /// Exact registered plan identity.
     pub plan_identity: String,
-    /// Durable source end for a publication query; absent for metadata-only snapshots.
-    pub source_end: Option<String>,
+    /// Durable source end verified in the same snapshot as the recovered checkpoint.
+    pub source_end: String,
 }
 impl Recovery {
     pub(super) async fn recover(&self, sql: &mut Client, schema: &str) -> Result<RecoveryReport> {
@@ -43,17 +43,18 @@ impl Recovery {
         if self.config.object_store.is_none() || self.config.source_path.is_none() {
             let plan = recovery_plan(sql, schema, query).await?;
             let catalog = Catalog::new(schema, query)?;
-            let (stored, end) = stored(sql, &catalog, &plan, query).await?;
-            let mut report = mvp::recover_plan(
+            let durable = catalog
+                .load_durable(sql, &plan)
+                .await?
+                .context("missing durable recovery boundary")?;
+            return mvp::recover_plan(
                 self.store.clone(),
                 self.config.execution,
-                stored,
+                durable,
                 &source_state(sql, schema).await?,
                 plan,
             )
-            .await?;
-            report.source_end = end;
-            return Ok(report);
+            .await;
         }
         let output = self.child_query(schema, query).await?;
         ensure!(
@@ -96,8 +97,7 @@ pub async fn run_recovery(
     config.validate()?;
     ensure!(config.postgres.tls == "disable", "local recovery harness requires TLS disabled");
     ensure!(
-        prefix.starts_with(&format!("{schema}-"))
-            && matches!(query, QUERY | "atomic_grouped" | "snapshot_grouped"),
+        prefix.starts_with(&format!("{schema}-")) && matches!(query, QUERY | "snapshot_grouped"),
         "invalid recovery fixture scope"
     );
     let catalog = Catalog::new(schema, query)?;
@@ -109,36 +109,23 @@ pub async fn run_recovery(
     let (mut sql, connection) = super::connect(&config).await?;
     let result = async {
         let plan = recovery_plan(&sql, schema, query).await?;
-        let (stored, end) = stored(&mut sql, &catalog, &plan, query).await?;
-        let mut report = mvp::recover_plan(
+        let durable = catalog
+            .load_durable(&mut sql, &plan)
+            .await?
+            .context("missing durable recovery boundary")?;
+        mvp::recover_plan(
             store,
             config.execution,
-            stored,
+            durable,
             &source_state(&sql, schema).await?,
             plan,
         )
-        .await?;
-        report.source_end = end;
-        Ok(report)
+        .await
     }
     .await;
     drop(sql);
     let disconnected = connection.await.context("recovery SQL task failed")?.map_err(Into::into);
     crate::outcome::combine(result, disconnected, "recovery disconnect")
-}
-
-async fn stored(
-    sql: &mut Client,
-    catalog: &Catalog,
-    plan: &crate::engine::plan::Plan,
-    query: &str,
-) -> Result<(crate::catalog::Stored, Option<String>)> {
-    if matches!(query, "atomic_grouped" | "snapshot_grouped") {
-        let durable =
-            catalog.load_durable(sql, plan).await?.context("missing durable recovery boundary")?;
-        return Ok((durable.stored, Some(durable.end.to_string())));
-    }
-    Ok((catalog.load(sql, plan).await?.context("missing recovery checkpoint")?, None))
 }
 
 async fn recovery_plan(
@@ -157,7 +144,7 @@ async fn recovery_plan(
         .await?
         .try_get(0)?,
     )?;
-    let contract = binding.registered_source()?.context("missing registered bootstrap source")?;
+    let contract = binding.source;
     contract.verify(sql).await?;
     super::bootstrap::plan(&contract)
 }

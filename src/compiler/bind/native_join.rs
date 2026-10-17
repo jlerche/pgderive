@@ -1,13 +1,10 @@
 //! Resolve native source occurrences into an executable join tree.
 mod keys;
-use super::{Compiled, scope};
+use super::scope as native_source;
 use crate::{
     compiler::{
-        ColumnRef, Predicate,
-        parser::{
-            Name,
-            native_join::{Parsed, Tree},
-        },
+        ColumnRef,
+        parser::{Name, native_join::Tree},
         relational::{Node, Relational, Source, field},
     },
     source::Contract,
@@ -30,32 +27,37 @@ struct Builder<'a> {
     sources: Vec<Source>,
     nodes: Vec<Node>,
     joins: usize,
+    validated: bool,
 }
-pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
-    let mut builder = Builder { contract, sources: Vec::new(), nodes: Vec::new(), joins: 0 };
-    let edge = builder.tree(parsed.tree)?;
-    let resolve = |name: &Name| Ok(resolve(name, &edge.columns)?.value.clone());
-    let columns = super::relational::output(parsed.columns, &resolve)?;
-    let input = if let Some(predicate) = parsed.predicate {
-        builder.nodes.push(Node::Filter {
-            id: "tree_filter".into(),
-            input: edge.id.clone(),
-            predicate: Predicate::new(crate::compiler::expression::bind(&predicate, &resolve)?),
-        });
-        "tree_filter".into()
-    } else {
-        edge.id
-    };
-    builder.nodes.push(Node::Output { id: "project".into(), input });
-    let first = builder.sources.first().context("missing join source")?;
-    let output = crate::compiler::Projected {
-        schema: first.schema.clone(),
-        table: first.table.clone(),
-        columns,
-    };
-    Ok(Compiled {
-        result_columns: Vec::new(),
-        relational: Relational { sources: builder.sources, nodes: builder.nodes, output },
+pub(super) struct Scope {
+    pub(super) ir: Relational,
+    columns: Vec<Column>,
+}
+impl Scope {
+    pub(super) fn resolve(&self, name: &Name) -> Result<ColumnRef> {
+        Ok(resolve(name, &self.columns)?.value.clone())
+    }
+}
+pub(super) fn scope(tree: Tree, contract: &Contract, validated: bool) -> Result<Scope> {
+    let mut builder =
+        Builder { contract, sources: Vec::new(), nodes: Vec::new(), joins: 0, validated };
+    let edge = builder.tree(tree)?;
+    let columns = edge
+        .columns
+        .iter()
+        .map(|column| crate::compiler::projection::OutputColumn {
+            label: column.label.clone(),
+            column: column.value.clone(),
+        })
+        .collect();
+    builder.nodes.push(Node::Output { id: "project".into(), input: edge.id });
+    Ok(Scope {
+        ir: Relational {
+            sources: builder.sources,
+            nodes: builder.nodes,
+            output: crate::compiler::Projected { columns },
+        },
+        columns: edge.columns,
     })
 }
 impl Builder<'_> {
@@ -102,7 +104,7 @@ impl Builder<'_> {
         Ok(Edge { id: format!("{prefix}visible"), columns })
     }
     fn source(&mut self, table: crate::compiler::parser::Table) -> Result<Edge> {
-        let native = scope(table, self.contract)?;
+        let native = native_source(table, self.contract)?;
         let index = self.sources.len();
         ensure!(index < 16, "join source occurrence limit exceeded");
         let qualifiers = native.table.alias.as_ref().map_or_else(
@@ -149,7 +151,8 @@ impl Builder<'_> {
             "duplicate exposed table qualifier"
         );
         let id = format!("tree_join_{}", self.joins);
-        let keys::Bound { keys, computed } = keys::bind(names, &left.columns, &right.columns, &id)?;
+        let keys::Bound { keys, computed } =
+            keys::bind(names, &left.columns, &right.columns, &id, self.validated)?;
         let [left_computed, right_computed] = computed;
         self.map(&mut left, left_computed, &format!("{id}_left_map"));
         self.map(&mut right, right_computed, &format!("{id}_right_map"));

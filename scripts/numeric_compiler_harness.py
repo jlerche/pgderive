@@ -50,10 +50,7 @@ class NumericFixture(SqlFixture):
         self.query = f'SELECT {prefix}{functions} FROM {self.name}.bid b' + ('' if window else ' GROUP BY b.auction')
 
     def verify(self):
-        values = ','.join(self.labels)
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM ({self.query}) q GROUP BY 1'
-        difference = self.bag_difference(expected)
-        assert difference.strip() == '0', 'numeric result differs from PostgreSQL'
+        self.verify_sql()
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         groups = collections.defaultdict(list)
         for row in source:
@@ -66,10 +63,7 @@ class NumericFixture(SqlFixture):
                 prices = [row['price'] for row in frame if row['price'] is not None]
                 prefix = (group[index]['id'], key, group[index]['price']) if self.window else (key,)
                 memory[prefix + (len(frame),len(prices),sum(prices) if prices else None,average(prices),average([p for p in prices if p<0]))] += 1
-        actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"), parse_float=Decimal)
-        assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(memory)
-        beyond = self.acknowledgement_ahead()
-        assert beyond.strip() == '0'
+        self.verify_memory(dict(memory), parse_float=Decimal)
 
 
 if __name__ == '__main__':
