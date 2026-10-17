@@ -119,8 +119,8 @@ class CompositionFixture(ApplicationFixture):
         return result
 
 
-def qualify(output, command, mode):
-    fixture = CompositionFixture(output,mode)
+def qualify(output, command, mode, fixture_type=CompositionFixture):
+    fixture = fixture_type(output,mode)
     with fixture.managed():
         worker = fixture.start(command,'initial')
         ready = worker.event('ready')

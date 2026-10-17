@@ -10,7 +10,7 @@ is included.
 | --- | --- | --- |
 | M5 | Application portfolio, seeded compositional differential histories, replay/minimization and opt-in phase measurements | Checked-in coverage matrix; exact native-MV and independent bag checks, output metadata, rollback, duplicates/NULLs, retractions and cold restart; preserved reproducible failures; measured local release baseline with honest phase boundaries |
 | M6 | Additional expression placement/composition | Frame-aware computed window arguments/keys and selected derived finalization/coercion paths, independently qualified; no implied new function catalog |
-| M7 | Less stateful recomputation | Measured input work/read reduction for selected nonlinear operators, with exact output and explicit state/write tradeoffs |
+| M7 | Less stateful recomputation | Measured reduction in repeated frame work for selected nonlinear windows, with exact output and explicit unchanged read/write costs |
 | M8 | Scalable sink changes | Qualified batched/indexed occurrence DML without public bookkeeping or loss of representation distinctions; unchanged publication/ACK semantics |
 | M9 | Controlled production qualification | Actual deployment/storage-provider, workload capacity, WAL/slot-loss, restore, maintenance and recovery evidence; explicit supported envelope |
 
@@ -154,5 +154,18 @@ release baseline above remains an M5 measurement, not a new M6 performance claim
 
 M6 is complete for its documented scope: independent review and the common gate
 passed with 105 worker cases plus rebuild and 97.44% production line coverage.
-M7 is next: use measured work/read evidence to reduce selected stateful
-recomputation while preserving exact results and durable publication.
+M7 targets [sliding frame work](m7-window-work.md), reducing repeated computation
+while preserving exact results, durable publication and the existing full
+affected-partition read boundary. M8 and M9 remain subsequent milestones.
+
+
+## M7 completion
+
+M7's [sliding frame optimization and measured limits](m7-window-work.md) are
+complete for eligible COUNT/integral SUM/AVG ROWS and peer windows. It reduces
+repeated frame computation while retaining the existing persisted graph and full
+affected-partition reads. Exact scan/source/native-MV comparisons, failure
+atomicity, cold checkpoint compatibility and measured unchanged object costs are
+qualified. Independent review and the common core gate passed: 110 worker cases
+plus rebuild and 97.46% production line coverage. M8 is next; M9 and function/type
+expansion remain separate.

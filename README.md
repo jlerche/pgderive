@@ -114,7 +114,7 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 105 worker cases:
+profile runs the complete low-level live PostgreSQL harness and 110 worker cases:
 result-table decoding/representation, semantic bindings, transaction faults,
 witnessed process kills, representative query families, lifecycle and rebuild.
 It disables synthetic S3 latency but keeps real PostgreSQL/object storage and
@@ -968,3 +968,11 @@ composition harness checks native materialized views, output metadata and an
 independent source model through retractions, rollback and cold restart. Positional
 windows still require a proven raw occurrence key; unsupported functions and
 coercions fail during initialization.
+
+
+M7 [reuses exact sliding window statistics](docs/m7-window-work.md) for eligible
+COUNT/integral SUM/AVG frames. It reduces repeated ROWS and peer-frame evaluation
+without changing persisted state, full affected-partition reads or publication.
+Mixed/ineligible aggregate sets retain frame scanning. Five live cases cover
+bigint/integer/smallint, FILTER, empty frames and cold restart; measured work,
+release timing and unchanged cold-read/write costs are documented separately.

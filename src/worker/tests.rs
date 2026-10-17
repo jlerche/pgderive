@@ -293,3 +293,5 @@ mod computed_aggregates;
 mod computed_join;
 
 mod expression_composition;
+
+mod sliding_windows;

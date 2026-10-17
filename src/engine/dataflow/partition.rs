@@ -13,6 +13,14 @@ pub struct PartitionWork {
     remaining: usize,
 }
 impl PartitionWork {
+    #[cfg(test)]
+    pub(crate) const fn for_test(remaining: usize) -> Self {
+        Self { remaining }
+    }
+    #[cfg(test)]
+    pub(crate) const fn remaining_for_test(&self) -> usize {
+        self.remaining
+    }
     /// Charge record visits or scalar aggregate evaluations before doing the work.
     ///
     /// # Errors

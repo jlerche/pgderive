@@ -1,3 +1,4 @@
+mod sliding;
 use crate::{
     compiler::{
         ColumnRef,
@@ -11,6 +12,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
+use sliding::Frames;
 use std::{borrow::Cow, cmp::Ordering};
 type Bag = Batch<(), Row>;
 pub(super) type Ordered = (Vec<Option<i64>>, Row);
@@ -22,9 +24,13 @@ pub(super) fn evaluate(
     let (limits, work) = context;
     match &spec.mode {
         Mode::Grouped { keys } => grouped(spec, bag, keys, work),
-        Mode::Rows { order, frame } => rows(spec, bag, order, frame, (limits, work)),
+        Mode::Rows { order, frame } => {
+            rows(spec, bag, (order, frame), (limits, work), Frames::new(spec))
+        }
         Mode::Ranking { order } => ranks(spec, bag, order, (limits, work)),
-        Mode::Peers { order, frame, .. } => peers(spec, bag, order, frame, (limits, work)),
+        Mode::Peers { order, frame, .. } => {
+            peers(spec, bag, (order, frame), (limits, work), Frames::new(spec))
+        }
     }
 }
 fn grouped(
@@ -106,13 +112,19 @@ fn ordinary_value(
             }
         }
     }
+    if matches!(aggregate.function, Function::Min | Function::Max) {
+        return Ok(extremum.map(|(_, text)| text));
+    }
+    integral_result(aggregate, &count, &sum)
+}
+fn integral_result(aggregate: &Aggregate, count: &BigInt, sum: &BigInt) -> Result<Option<String>> {
     match aggregate.function {
         Function::Count => Ok(Some(i64::try_from(count).context("COUNT overflow")?.to_string())),
-        Function::Sum | Function::Average if count == BigInt::from(0) => Ok(None),
+        Function::Sum | Function::Average if count == &BigInt::from(0) => Ok(None),
         Function::Average => {
             let count = i64::try_from(count).context("AVG non-NULL count overflow")?;
             if aggregate.argument.as_ref().is_some_and(|arg| arg.oid != 20) {
-                i64::try_from(&sum).context("AVG(int2/int4) sum overflow")?;
+                i64::try_from(sum).context("AVG(int2/int4) sum overflow")?;
             }
             Ok(Some(format!("{sum}/{count}")))
         }
@@ -122,17 +134,10 @@ fn ordinary_value(
         Function::Sum => {
             Ok(Some(i64::try_from(sum).context("SUM(int2/int4) overflow")?.to_string()))
         }
-        Function::Min | Function::Max => Ok(extremum.map(|(_, text)| text)),
-        Function::CountDistinct
-        | Function::Rank
-        | Function::DenseRank
-        | Function::RowNumber
-        | Function::Lag
-        | Function::Lead => {
-            anyhow::bail!("aggregate requires specialized evaluator")
-        }
+        _ => anyhow::bail!("aggregate requires specialized evaluator"),
     }
 }
+
 fn update_extremum(
     extremum: &mut Option<(i64, String)>,
     value: i64,
@@ -228,16 +233,18 @@ pub(super) fn compare(left: &[Option<i64>], right: &[Option<i64>], order: &[Orde
 fn rows(
     spec: &Partition,
     bag: &Bag,
-    order: &[Order],
-    frame: &Frame,
+    ordering: (&[Order], &Frame),
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
+    mut frames: Frames,
 ) -> Result<Bag> {
+    let (order, frame) = ordering;
     let (limits, work) = context;
     let ordered = ordered(bag, order, limits, work)?;
     let mut updates = Consolidator::new(limits)?;
     for (index, (_, row)) in ordered.iter().enumerate() {
         let (start, end) = bounds(frame, index, ordered.len())?;
-        let output = framed_row(spec, row, &ordered[start.min(end)..end], (limits, work))?;
+        let mut output = row.clone();
+        output.extend(frames.fields(spec, &ordered, start.min(end)..end, (limits, work))?);
         updates.add(((), output), 1)?;
     }
     updates.finish_batch()
@@ -290,16 +297,6 @@ fn ranks(
     updates.finish_batch()
 }
 
-fn framed_row(
-    spec: &Partition,
-    row: &Row,
-    frame: &[Ordered],
-    context: (Limits, &mut crate::engine::dataflow::PartitionWork),
-) -> Result<Row> {
-    let mut output = row.clone();
-    output.extend(framed_fields(spec, frame, context)?);
-    Ok(output)
-}
 fn framed_fields(
     spec: &Partition,
     frame: &[Ordered],
@@ -318,10 +315,11 @@ fn framed_fields(
 fn peers(
     spec: &Partition,
     bag: &Bag,
-    order: &[Order],
-    frame: &Frame,
+    ordering: (&[Order], &Frame),
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
+    mut frames: Frames,
 ) -> Result<Bag> {
+    let (order, frame) = ordering;
     let (limits, work) = context;
     let ordered = ordered(bag, order, limits, work)?;
     let mut groups: Vec<(usize, usize)> = Vec::new();
@@ -336,13 +334,10 @@ fn peers(
     let mut updates = Consolidator::new(limits)?;
     for (index, (first, last)) in groups.iter().enumerate() {
         let (start, end) = bounds(frame, index, groups.len())?;
-        let rows = if start >= end {
-            &ordered[0..0]
-        } else {
-            &ordered[groups[start].0..groups[end - 1].1]
-        };
+        let end_row = if end == 0 { 0 } else { groups[end - 1].1 };
+        let start_row = if start >= end { end_row } else { groups[start].0 };
         // Every member of a peer group has the same RANGE/GROUPS frame.
-        let fields = framed_fields(spec, rows, (limits, work))?;
+        let fields = frames.fields(spec, &ordered, start_row..end_row, (limits, work))?;
         for (_, row) in &ordered[*first..*last] {
             work.charge(fields.len())?;
             let mut output = row.clone();
@@ -408,4 +403,22 @@ fn argument_value<'a>(aggregate: &Aggregate, row: &'a Row) -> Result<Option<Cow<
     aggregate.argument.as_ref().map_or(Ok(None), |column| {
         Ok(row.get(&column.name).context("missing aggregate input")?.as_deref().map(Cow::Borrowed))
     })
+}
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+pub(in crate::worker) fn evaluate_scan(
+    spec: &Partition,
+    bag: &Bag,
+    context: (Limits, &mut crate::engine::dataflow::PartitionWork),
+) -> Result<Bag> {
+    match &spec.mode {
+        Mode::Rows { order, frame } => rows(spec, bag, (order, frame), context, Frames::scan()),
+        Mode::Peers { order, frame, .. } => {
+            peers(spec, bag, (order, frame), context, Frames::scan())
+        }
+        _ => evaluate(spec, bag, context),
+    }
 }

@@ -126,3 +126,9 @@ group/topk.rs, row_number.rs and lag.rs; dynamic/time_series/rolling_aggregate.r
 and the SQL compiler's SessionRewriteRule.java. No insertion-only optimization,
 watermark eviction, recursive circuit or Feldera numeric behavior is implied by
 this audit.
+
+
+M7 now [reuses transient sliding COUNT/integral SUM/AVG state](m7-window-work.md)
+while recomputing an affected ROWS or peer partition. This removes repeated frame
+scans for eligible aggregates, but retains full partition reads and output
+retractions. It does not add a radix/range index or adopt watermark eviction.

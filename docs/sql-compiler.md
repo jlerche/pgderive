@@ -1220,3 +1220,13 @@ rollback and cold restart. Rust tests additionally qualify frame/FILTER overflow
 guards, weighted outer/existence membership, independent AVG scopes and failed
 prepare checkpoint preservation. M5's blocker inventory retains the promoted
 queries under `qualified_compositions`.
+
+
+## M7 sliding frame evaluation
+
+Eligible ROWS and RANGE/GROUPS partitions containing only COUNT and integral
+SUM/AVG reuse transient exact statistics as frame boundaries advance. FILTER and
+frame membership still guard argument evaluation, and output width checks remain
+at each requested frame. Mixed/ineligible aggregate sets retain scanning. The
+persisted graph, checkpoint layout and PUT/COMMIT/ACK order are unchanged; full
+affected-partition reads remain. See [M7 evidence and limits](m7-window-work.md).

@@ -420,3 +420,28 @@ fn bind_left_join(node: &Node, operators: &mut Operators<Key, Row>, settings: &S
         _ => {}
     }
 }
+
+#[cfg(test)]
+pub(in crate::worker) fn build_scanned(
+    contract: &Contract,
+    compiled: &Compiled,
+    settings: &Settings,
+) -> Result<Query> {
+    let ir = compiled.relational();
+    let mut operators = operators(ir, settings);
+    for node in &ir.nodes {
+        if let Node::Partition { id, spec, .. } = node {
+            let spec = spec.clone();
+            let limits = settings.limits;
+            operators.partitions.insert(
+                id.clone(),
+                Arc::new(crate::engine::dataflow::Partition::new_zero_preserving(
+                    move |_, rows, work| {
+                        super::partition::evaluate_scan(&spec, rows, (limits, work))
+                    },
+                )),
+            );
+        }
+    }
+    Query::new(plan(contract, compiled, ir)?, operators, settings)
+}
