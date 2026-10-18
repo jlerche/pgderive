@@ -108,6 +108,27 @@ pub(super) async fn rename(
     generation: &mut Generation,
 ) -> Result<()> {
     let mut next = binding(sql, settings, &generation.query).await?;
+    if next.sink.output == crate::catalog::SinkOutput::Stdout {
+        next.sink.table.clone_from(&settings.sink_table);
+        sql.execute(
+            &format!(
+                "UPDATE {}.pgderive_progress SET binding=$2,sink_table=$3 WHERE query_id=$1",
+                settings.catalog_schema
+            ),
+            &[&generation.query, &serde_json::to_value(&next)?, &settings.sink_table],
+        )
+        .await?;
+        sql.execute(
+            &format!(
+                "UPDATE {}.pgderive_worker_registration SET sink=$2 WHERE query_id=$1",
+                settings.catalog_schema
+            ),
+            &[&generation.query, &serde_json::to_value(&next.sink)?],
+        )
+        .await?;
+        generation.sink.clone_from(&settings.sink_table);
+        return Ok(());
+    }
     let catalog = crate::catalog::Catalog::new(&settings.catalog_schema, &generation.query)?;
     next.sink.owned(sql, &catalog).await?.context("new destination ownership missing")?;
     sql.batch_execute(&format!(

@@ -108,6 +108,9 @@ async fn owned_sink(
         binding.sink == *sink && binding.source == *source,
         "removal journal differs from activated source/destination"
     );
+    if sink.output == crate::catalog::SinkOutput::Stdout {
+        return Ok(None);
+    }
     Ok(Some(
         sink.owned(sql, &catalog)
             .await?

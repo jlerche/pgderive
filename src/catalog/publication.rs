@@ -45,6 +45,9 @@ impl Binding {
         self.source.verify(sql).await
     }
     async fn verify_destination(&self, tx: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
+        if self.sink.output == super::SinkOutput::Stdout {
+            return Ok(());
+        }
         self.sink.owned(tx, catalog).await?.context("registered destination ownership missing")?;
         self.sink.prepare_index(tx, catalog).await
     }
@@ -56,14 +59,20 @@ impl Binding {
     ) -> Result<()> {
         self.verify_environment(tx).await?;
         self.sink.install(tx, catalog).await?;
-        let rows: i64 = tx
-            .query_one(
-                &format!("SELECT COUNT(*) FROM {}.{}", catalog.schema, self.sink.table.as_str()),
-                &[],
-            )
-            .await?
-            .try_get(0)?;
-        ensure!(rows == 0, "publication destination must initially be empty");
+        if self.sink.output == super::SinkOutput::Postgres {
+            let rows: i64 = tx
+                .query_one(
+                    &format!(
+                        "SELECT COUNT(*) FROM {}.{}",
+                        catalog.schema,
+                        self.sink.table.as_str()
+                    ),
+                    &[],
+                )
+                .await?
+                .try_get(0)?;
+            ensure!(rows == 0, "publication destination must initially be empty");
+        }
         let boundary = boundary.to_string();
         tx.execute(&format!("INSERT INTO {}.pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn) VALUES($1,$2,$3,1,$4::text::pg_lsn,$4::text::pg_lsn)", catalog.schema), &[&catalog.query, &serde_json::to_value(self)?, &self.sink.table.as_str(), &boundary]).await?;
         Ok(())
@@ -192,7 +201,9 @@ impl Writer {
             &[&self.catalog.query, &self.boundary.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.boundary.end.to_string(), &serde_json::to_value(&self.boundary.binding)?]).await?;
         ensure!(affected == 1, "stale or incompatible publication worker");
         let membership = clock.lap();
-        deltas.apply(&tx, &self.catalog, &self.boundary.binding.sink).await?;
+        deltas
+            .apply(&tx, &self.catalog, &self.boundary.binding.sink, (checkpoint.time, progress.end))
+            .await?;
         let sink = clock.lap();
         self.commit(tx, "publication").await?;
         let commit = clock.lap();

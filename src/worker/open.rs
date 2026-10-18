@@ -106,7 +106,7 @@ async fn reopen(
                 .query
                 .compile_bound(&session.client, contract)
                 .await?
-                .sink(&settings.sink_table),
+                .sink(&settings.sink_table, settings.sink_output),
         "configured worker destination differs from durable binding"
     );
     let writer = catalog.claim(&mut session.client, query.plan(), prior.binding).await?;
@@ -192,7 +192,7 @@ async fn bootstrap(
         .await?;
     let checkpoint = query.prepared_checkpoint(&prepared)?;
     let deltas = relational::deltas(&prepared.output().batch, compiled.output())?;
-    let sink = compiled.sink(&settings.sink_table);
+    let sink = compiled.sink(&settings.sink_table, settings.sink_output);
     catalog
         .activate_snapshot(
             &mut session.client,

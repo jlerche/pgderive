@@ -43,6 +43,7 @@ output_entries = 250000
 catalog_schema = "pgderive_worker"
 query_id = "auction_totals"
 sink_table = "groups"
+sink_output = "postgres" # Or "stdout": print attempted SQL/parameters, no result table.
 object_prefix = "pgderive_worker" # Exclusively owned and stable across restarts.
 block_rows = 4096
 maintenance_ticks = 16

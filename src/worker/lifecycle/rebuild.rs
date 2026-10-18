@@ -12,6 +12,13 @@ use serde_json::Value;
 /// # Errors
 /// Rejects ownership, unsupported SQL, changed pending semantics or failed cutover/retirement.
 pub async fn rebuild(config: &Config) -> Result<Value> {
+    ensure!(
+        config
+            .worker
+            .as_ref()
+            .is_none_or(|s| s.sink_output == crate::catalog::SinkOutput::Postgres),
+        "stdout sink does not support rebuild; drop and create a fresh diagnostic stream"
+    );
     let (session, settings) = own(config).await?;
     let session = run_owned(config, &settings, session, false).await?;
     drop(session);
@@ -24,6 +31,9 @@ pub(in crate::worker) async fn run_owned(
     mut session: Session,
     recreate: bool,
 ) -> Result<Session> {
+    if !recreate {
+        require_table_sink(&session, settings).await?;
+    }
     let signature = signature(config).await?;
     let mut state = prepare(config, settings, &mut session, &signature, recreate).await?;
     if state.phase == Phase::Building {
@@ -41,6 +51,29 @@ pub(in crate::worker) async fn run_owned(
     retire(config, settings, &mut session, &mut state).await?;
     super::control::collected(config, settings, &mut session).await?;
     Ok(session)
+}
+
+async fn require_table_sink(session: &Session, settings: &Settings) -> Result<()> {
+    let (query, _) = super::current(&session.client, settings).await?;
+    let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
+    if super::exists(&session.client, &table).await? {
+        let row = session
+            .client
+            .query_opt(
+                &format!(
+                    "SELECT coalesce(sink->>'output','postgres') FROM {table} WHERE query_id=$1"
+                ),
+                &[&query],
+            )
+            .await?;
+        if let Some(row) = row {
+            ensure!(
+                row.try_get::<_, String>(0)? == "postgres",
+                "stdout sink does not support rebuild; drop and create a fresh diagnostic stream"
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn signature(config: &Config) -> Result<String> {

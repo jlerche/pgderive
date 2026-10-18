@@ -42,6 +42,11 @@ administrative changes while a worker runs are unsupported. Do not grant consume
 write access. The table uses `REPLICA IDENTITY FULL` and may be published separately
 for downstream logical replication; never include it in the source publication.
 
+For diagnostic output, set `worker.sink_output = "stdout"`. The worker prints
+attempted PostgreSQL DML and bind parameters as JSON lines without creating a
+result table. It still persists engine state/progress and acknowledges committed
+source transactions. See [stdout sink semantics and usage](docs/stdout-sink.md).
+
 The removed `worker.result_view` option and old weighted-sink bindings are rejected.
 This is a storage-format break, not an automatic migration. Quiesce the old worker,
 use its original binary/configuration to retire its owned resources, and register
@@ -114,7 +119,7 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 112 worker cases:
+profile runs the complete low-level live PostgreSQL harness and 113 worker cases:
 result-table decoding/representation, semantic bindings, transaction faults,
 witnessed process kills, representative query families, lifecycle and rebuild.
 It disables synthetic S3 latency but keeps real PostgreSQL/object storage and

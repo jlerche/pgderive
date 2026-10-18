@@ -6,6 +6,7 @@ use crate::{
 use anyhow::Result;
 pub fn sink(table: &str) -> Sink {
     Sink {
+        output: crate::catalog::SinkOutput::Postgres,
         table: table.into(),
         columns: vec![ResultColumn {
             name: "tuple".into(),

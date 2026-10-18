@@ -29,7 +29,7 @@ fn sink() -> Sink {
     .into_iter()
     .map(|(name, oid, collation)| ResultColumn { name: name.into(), oid, modifier: -1, collation })
     .collect();
-    Sink { table: "bulk_occurrences".into(), columns }
+    Sink { output: crate::catalog::SinkOutput::Postgres, table: "bulk_occurrences".into(), columns }
 }
 pub(super) async fn check(
     sql: &mut Client,

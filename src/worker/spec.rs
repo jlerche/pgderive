@@ -77,6 +77,9 @@ pub struct Settings {
     pub query_id: String,
     /// Owned ordinary typed result table inside the catalog schema.
     pub sink_table: String,
+    /// `PostgreSQL` result table (default) or diagnostic stdout SQL batches.
+    #[serde(default)]
+    pub sink_output: crate::catalog::SinkOutput,
     /// Exclusively owned durable object-store prefix, reused across resumes.
     pub object_prefix: String,
     /// Maximum rows in one immutable data block.

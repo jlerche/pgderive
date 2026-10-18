@@ -7,13 +7,18 @@ mod batching;
 mod layout;
 mod lookup;
 mod rows;
+mod stdout;
 pub use rows::ResultColumn;
+pub use stdout::SinkOutput;
 use tokio_postgres::Transaction;
 
 /// Owned destination containing physical result occurrences, never persisted weights.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sink {
+    /// Destination transport; omitted for backwards-compatible `PostgreSQL` bindings.
+    #[serde(default, skip_serializing_if = "SinkOutput::is_postgres")]
+    pub output: SinkOutput,
     /// Owned ordinary typed result table.
     pub table: String,
     /// Native output metadata.
@@ -29,6 +34,9 @@ impl Sink {
         rows::validate(&self.columns)
     }
     pub(super) async fn install(&self, tx: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
+        if self.output == SinkOutput::Stdout {
+            return Ok(());
+        }
         if self.owned(tx, catalog).await?.is_some() {
             return self.prepare_index(tx, catalog).await;
         }
@@ -103,8 +111,15 @@ impl Deltas {
         tx: &Transaction<'_>,
         catalog: &Catalog,
         sink: &Sink,
+        position: (u64, super::Lsn),
     ) -> Result<()> {
         let table = format!("{}.{}", catalog.schema, sink.table.as_str());
-        batching::apply(tx, &table, sink, &self.rows).await
+        let context = if sink.output == SinkOutput::Stdout {
+            serde_json::json!({"query_id":catalog.query,"schema":catalog.schema,
+                "table":sink.table,"columns":sink.columns,"time":position.0,"end_lsn":position.1.to_string()})
+        } else {
+            Value::Null
+        };
+        batching::apply(tx, &table, sink, &self.rows, &context).await
     }
 }

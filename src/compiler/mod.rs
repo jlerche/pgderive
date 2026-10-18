@@ -52,8 +52,12 @@ impl Compiled {
         anyhow::ensure!(!self.output().columns.is_empty(), "empty compiled output");
         Ok(())
     }
-    pub(crate) fn sink(&self, table: &str) -> crate::catalog::Sink {
-        crate::catalog::Sink { table: table.into(), columns: self.result_columns.clone() }
+    pub(crate) fn sink(
+        &self,
+        table: &str,
+        output: crate::catalog::SinkOutput,
+    ) -> crate::catalog::Sink {
+        crate::catalog::Sink { output, table: table.into(), columns: self.result_columns.clone() }
     }
 
     pub(crate) fn legacy(selectors: Query, contract: &Contract) -> Result<Self> {

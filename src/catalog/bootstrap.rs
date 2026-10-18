@@ -54,7 +54,10 @@ impl Catalog {
         .await?;
         write::stage(&tx, self, plan, snapshot.checkpoint, 0).await?;
         binding.initialize(&tx, self, snapshot.boundary).await?;
-        snapshot.deltas.apply(&tx, self, &binding.sink).await?;
+        snapshot
+            .deltas
+            .apply(&tx, self, &binding.sink, (snapshot.checkpoint.time, snapshot.boundary))
+            .await?;
         tx.commit()
             .await
             .context("snapshot activation COMMIT requires authoritative reload on failure")?;

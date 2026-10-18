@@ -13,7 +13,7 @@ mod sink;
 mod write;
 pub use position::{Lsn, Progress};
 pub use publication::{Binding, Publication, Writer};
-pub use sink::{Deltas, ResultColumn, Sink};
+pub use sink::{Deltas, ResultColumn, Sink, SinkOutput};
 #[cfg(test)]
 mod tests;
 

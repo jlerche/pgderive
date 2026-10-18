@@ -29,6 +29,7 @@ pub(super) async fn apply(
     table: &str,
     sink: &Sink,
     rows: &[(Value, i64)],
+    context: &Value,
 ) -> Result<()> {
     let work =
         rows.iter().try_fold(0_u64, |total, (_, delta)| total.checked_add(delta.unsigned_abs()));
@@ -49,18 +50,32 @@ pub(super) async fn apply(
             if !chunk.values.is_empty()
                 && (chunk.values.len() >= IDENTITIES || chunk.bytes.saturating_add(bytes) > BYTES)
             {
-                execute(tx, &statement, chunk).await?;
+                execute(tx, &statement, chunk, sink.output, context).await?;
                 chunk = Chunk::new();
             }
             chunk.push(tuple, count, bytes)?;
         }
         if !chunk.values.is_empty() {
-            execute(tx, &statement, chunk).await?;
+            execute(tx, &statement, chunk, sink.output, context).await?;
         }
     }
     Ok(())
 }
-async fn execute(tx: &Transaction<'_>, statement: &str, chunk: Chunk) -> Result<()> {
+async fn execute(
+    tx: &Transaction<'_>,
+    statement: &str,
+    chunk: Chunk,
+    output: super::SinkOutput,
+    context: &Value,
+) -> Result<()> {
+    if output == super::SinkOutput::Stdout {
+        return super::stdout::emit(
+            context,
+            statement,
+            &Value::Array(chunk.values),
+            chunk.occurrences,
+        );
+    }
     let affected = tx.execute(statement, &[&Value::Array(chunk.values)]).await?;
     ensure!(
         affected == chunk.occurrences,
@@ -93,6 +108,7 @@ mod tests {
     #[test]
     fn batches_keep_weights_out_of_public_layout_and_bound_candidate_identity() -> Result<()> {
         let sink = Sink {
+            output: crate::catalog::SinkOutput::Postgres,
             table: "results".into(),
             columns: vec![ResultColumn {
                 name: "x\" label".into(),
