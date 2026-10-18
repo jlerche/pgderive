@@ -26,10 +26,13 @@ fn sink_encodings_preserve_full_tuple_and_group_null_semantics() -> Result<()> {
         Deltas::bag(&grouped)?.rows,
         vec![(json!([null, [1, null]]), -1), (json!([null, [2, 0]]), 1)]
     );
-    for sink in [Sink::Json("bad;sql".into()), Sink::Json("pgderive_queries".into())] {
+    for sink in [
+        crate::harness::tuple_sink::sink("bad;sql"),
+        crate::harness::tuple_sink::sink("pgderive_queries"),
+    ] {
         assert!(sink.validate().is_err());
     }
-    Sink::Json("derived".into()).validate()?;
+    crate::harness::tuple_sink::sink("derived").validate()?;
     Ok(())
 }
 
@@ -115,5 +118,30 @@ fn checkpoint_checksum_retains_run_order_multiplicity_and_numeric_limits() -> Re
     let mut changed = checkpoint;
     changed.arrangements[0].trace.generation = u64::MAX;
     assert!(super::checkpoint_digest(&changed).is_err());
+    Ok(())
+}
+
+#[test]
+fn native_jsonb_rows_preserve_weighted_tuple_identity() -> Result<()> {
+    let batch = Batch::from_updates([
+        ((None::<i64>, ("quoted\"text".to_owned(), Some(0))), 2),
+        ((None, ("quoted\"text".to_owned(), None)), -3),
+    ])?;
+    let sink = crate::harness::tuple_sink::sink("json_rows");
+    sink.validate()?;
+    let rows = crate::harness::tuple_sink::deltas(&batch)?.rows;
+    let decoded = rows
+        .iter()
+        .map(|(row, weight)| {
+            let text = row[1][0].as_str().ok_or_else(|| anyhow::anyhow!("missing jsonb cell"))?;
+            Ok((serde_json::from_str::<serde_json::Value>(text)?, *weight))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let canonical = |rows: Vec<(serde_json::Value, i64)>| {
+        rows.into_iter()
+            .map(|(row, weight)| (row.to_string(), weight))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    assert_eq!(canonical(decoded), canonical(Deltas::bag(&batch)?.rows));
     Ok(())
 }

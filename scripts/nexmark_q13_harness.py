@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Recorded processing-time predecessor with native signed modulo key lowering."""
-from worker_harness import harness_arguments
+from worker_harness import run_modes
 import collections
 import json
 import pathlib
@@ -116,8 +116,4 @@ def qualify(output,command,mode):
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent signed modulo and deterministic predecessor','transactions':'complete simultaneous sources; late/tied right updates; NULLs/infinities; modulo collisions; source/key/time/PK changes; rollback; empty input tick','processing':'recorded source field; event-only update preserves selected values','restart':'cold same slot; MOD/% and aliases normalize','identity':'changed divisor or bound rejected'})+'\n')
 
 if __name__=='__main__':
-    output, command = harness_arguments()
-    for mode in ('local','instant','smallint','bigint'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('local', 'instant', 'smallint', 'bigint'), qualify)

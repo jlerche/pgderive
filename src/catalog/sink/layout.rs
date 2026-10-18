@@ -14,10 +14,7 @@ pub(super) struct Layout {
     pub target_bucket: String,
 }
 pub(super) fn names(sink: &Sink) -> Vec<String> {
-    match sink {
-        Sink::Rows { columns, .. } => columns.iter().map(|column| column.name.clone()).collect(),
-        Sink::Json(_) => vec!["tuple".into()],
-    }
+    sink.columns.iter().map(|column| column.name.clone()).collect()
 }
 pub(super) fn hash(fields: &[String]) -> String {
     format!("pg_catalog.hash_record_extended(ROW({}),0)", fields.join(","))
@@ -27,21 +24,19 @@ impl Layout {
         let names = names(sink).iter().map(|name| quote(name)).collect::<Vec<_>>();
         let fields = (0..names.len()).map(|index| format!("c{index}")).collect::<Vec<_>>();
         let target = names.iter().map(|name| format!("d.{name}")).collect::<Vec<_>>();
-        let decoded = match sink {
-            Sink::Json(_) => "entry.value->0 AS c0".into(),
-            Sink::Rows { columns, .. } => columns
-                .iter()
-                .enumerate()
-                .map(|(index, column)| {
-                    let mut value = column.value("(entry.value->0)", index)?;
-                    if let Some((schema, name)) = &column.collation {
-                        value = format!("({value}) COLLATE {}.{}", quote(schema), quote(name));
-                    }
-                    Ok(format!("{value} AS c{index}"))
-                })
-                .collect::<Result<Vec<_>>>()?
-                .join(","),
-        };
+        let decoded = sink
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(index, column)| {
+                let mut value = column.value("(entry.value->0)", index)?;
+                if let Some((schema, name)) = &column.collation {
+                    value = format!("({value}) COLLATE {}.{}", quote(schema), quote(name));
+                }
+                Ok(format!("{value} AS c{index}"))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .join(",");
         Ok(Self {
             decoded: format!("{decoded},(entry.value->>1)::bigint AS n"),
             values: fields.join(","),
@@ -54,10 +49,8 @@ impl Layout {
     }
 }
 fn identity(sink: &Sink, fields: &[String]) -> Result<String> {
-    let Sink::Rows { columns, .. } = sink else {
-        return Ok(format!("pg_catalog.jsonb_send({})", fields[0]));
-    };
-    let values = columns
+    let values = sink
+        .columns
         .iter()
         .zip(fields)
         .map(|(column, field)| {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Lazy native CASE/gap flags and running totals, without implicit session expiry."""
-from worker_harness import harness_arguments
+from worker_harness import run_modes
 import collections
 import datetime
 import json
@@ -69,8 +69,4 @@ class CaseFixture(NativeFixture):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('flags-local','flags-instant','running-local','running-instant','nullable','descending'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode,fixture_class=CaseFixture)
+    run_modes(('flags-local', 'flags-instant', 'running-local', 'running-instant', 'nullable', 'descending'), qualify, fixture_class=CaseFixture)

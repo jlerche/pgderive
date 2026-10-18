@@ -53,7 +53,7 @@ impl Compiled {
         Ok(())
     }
     pub(crate) fn sink(&self, table: &str) -> crate::catalog::Sink {
-        crate::catalog::Sink::Rows { table: table.into(), columns: self.result_columns.clone() }
+        crate::catalog::Sink { table: table.into(), columns: self.result_columns.clone() }
     }
 
     pub(crate) fn legacy(selectors: Query, contract: &Contract) -> Result<Self> {

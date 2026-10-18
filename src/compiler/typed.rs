@@ -26,8 +26,7 @@ enum Value {
     Interval(crate::temporal::Gap),
     Difference(ColumnRef, ColumnRef),
     Remainder(super::remainder::Remainder),
-    Bin(super::scalar::DateBin),
-    Offset(super::scalar::Offset),
+    Temporal(super::scalar::Temporal),
     Call(functions::Call),
     Cast(Box<Typed>),
     Binary { operation: Arithmetic, left: Box<Typed>, right: Box<Typed> },
@@ -41,8 +40,7 @@ impl Typed {
             | Value::Average(_)
             | Value::Difference(..)
             | Value::Remainder(_)
-            | Value::Bin(_)
-            | Value::Offset(_) => false,
+            | Value::Temporal(_) => false,
             Value::Literal(_)
             | Value::Numeric(_)
             | Value::Text(_)
@@ -168,18 +166,18 @@ pub(super) fn computed(
     if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
         return resolve(&column(value)?);
     }
-    if scalar::is_bin(value)? {
-        return super::scalar::bind(&scalar::bin(value)?, resolve, computed, scope);
-    }
-    if offset::eligible(value)? {
-        return super::scalar::bind_offset(&offset::parse(value)?, resolve, computed, scope);
-    }
-    let mut typed = bind(value, resolve, 0)?;
+    let mut typed = if scalar::is_bin(value)? {
+        Typed::temporal(scalar::bin(value, resolve)?)
+    } else if offset::eligible(value)? {
+        Typed::temporal(offset::parse(value, resolve)?)
+    } else {
+        bind(value, resolve, 0)?
+    };
     if typed.oid == 705 {
         typed.oid = 25;
     }
     ensure!(
-        matches!(typed.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700),
+        matches!(typed.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 1114 | 1184),
         "computed scalar requires supported native type"
     );
     super::scalar::register(typed, computed, &format!("@typed_{scope:?}_"))
@@ -233,8 +231,7 @@ impl Typed {
             Value::Encoded(value) => value.is_none(),
             Value::Difference(left, right) => left.nullable || right.nullable,
             Value::Remainder(value) => value.input.nullable,
-            Value::Bin(value) => value.input.nullable,
-            Value::Offset(value) => value.input.nullable,
+            Value::Temporal(value) => value.input.nullable,
             Value::Call(call) => call.arguments.iter().any(Self::nullable),
             Value::Cast(input) => input.nullable(),
             Value::Binary { left, right, .. } => left.nullable() || right.nullable(),

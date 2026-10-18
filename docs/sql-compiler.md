@@ -256,7 +256,7 @@ operations; it does not measure total CPU instructions or sort comparisons.
 
 ## PostgreSQL semantics progression
 
-The next implementation sequence builds on the same typed circuit and durable
+The next implementation sequence builds on the same relational executor and durable
 publication boundary:
 
 Each step requires PostgreSQL and independent memory bag comparisons through
@@ -664,7 +664,7 @@ A derived LAG stage can feed a lazy boundary CASE, whose int4 flags can feed SUM
 with ROWS UNBOUNDED PRECEDING in the next stage. Equality and NULL guards retain
 their SQL meaning, including whether subtraction reaches infinity values. The
 compiler invents neither guards nor expiration. All searched CASE expressions
-use the typed circuit evaluator; stage-specific fields prevent map collisions.
+use the typed expression evaluator; stage-specific fields prevent map collisions.
 
 Six sequential owned fixtures compare local/instant flags, local/instant running
 totals, nullable/promoted result arms and descending order against PostgreSQL and
@@ -843,7 +843,7 @@ and deletion splits, group moves, all-NULL/non-NULL transitions, extreme integra
 sums, source DateStyle/time-zone changes, rollback, empty query-input ticks,
 changed-gap/stride/threshold rejection, quoted aliases, cold same-slot restart
 and final retraction. q12 additionally asserts that an event-time-only update
-leaves its output bag unchanged. These use existing typed circuit operators and
+leaves its output bag unchanged. These use existing typed relational operators and
 checkpoint codecs; no expiration policy is introduced.
 
 

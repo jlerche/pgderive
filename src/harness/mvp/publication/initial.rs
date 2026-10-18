@@ -18,7 +18,8 @@ pub(super) struct Initial<'a> {
 impl Initial<'_> {
     pub(super) fn binding(&self, sink: Sink) -> Binding {
         let mut source = self.source.clone();
-        source.slot = format!("{}_{}", &source.slot[..source.slot.len().min(25)], sink.table());
+        source.slot =
+            format!("{}_{}", &source.slot[..source.slot.len().min(25)], sink.table.as_str());
         Binding { source, sink }
     }
     pub(super) async fn synthetic(

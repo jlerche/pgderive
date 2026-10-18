@@ -7,7 +7,7 @@ mod recovery;
 mod representations;
 use super::{MvpFixture, Query};
 use crate::{
-    catalog::{Binding, Catalog, Deltas, Progress, Publication, Sink, Snapshot, Writer},
+    catalog::{Binding, Catalog, Progress, Publication, Snapshot, Writer},
     engine::plan::relational::Prepared,
     transaction::Transaction,
 };
@@ -50,7 +50,9 @@ impl MvpFixture {
         representations::check(sql, schema, &setup).await?;
         bulk::check(sql, schema, &setup).await?;
         let bag_catalog = Catalog::new(schema, "atomic_bag")?;
-        let (bag, _) = setup.synthetic(sql, &bag_catalog, Sink::Json("derived_bag".into())).await?;
+        let (bag, _) = setup
+            .synthetic(sql, &bag_catalog, crate::harness::tuple_sink::sink("derived_bag"))
+            .await?;
         let prepared = self
             .graph
             .prepare(crate::engine::dataflow::TimedBatch {
@@ -59,8 +61,8 @@ impl MvpFixture {
             })
             .await?;
         let checkpoint = self.graph.prepared_checkpoint(&prepared)?;
-        let deltas = Deltas::bag(&prepared.output().batch)?;
-        let binding = Binding { source, sink: Sink::Json("derived_groups".into()) };
+        let deltas = crate::harness::tuple_sink::deltas(&prepared.output().batch)?;
+        let binding = Binding { source, sink: crate::harness::tuple_sink::sink("derived_groups") };
         catalog
             .activate_snapshot(
                 sql,
@@ -100,7 +102,7 @@ impl PublicationFixture {
         let checkpoint = graph.prepared_checkpoint(&prepared)?;
         let progress =
             Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
-        let deltas = Deltas::bag(&prepared.output().batch)?;
+        let deltas = crate::harness::tuple_sink::deltas(&prepared.output().batch)?;
         let publication =
             || Publication { checkpoint: &checkpoint, progress: &progress, deltas: &deltas };
         if checkpoint.time == 2 {

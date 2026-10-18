@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Composed retained SQL stages against PostgreSQL and raw-source recomputation."""
-from worker_harness import harness_arguments
+from worker_harness import run_modes
 import collections
 import json
 from ranking_compiler_harness import RankingFixture, qualify
@@ -86,8 +86,4 @@ class CompositionFixture(RankingFixture):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('group-window','three-stage','window-group','window-window','repeated-bin'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode,fixture_class=CompositionFixture)
+    run_modes(('group-window', 'three-stage', 'window-group', 'window-window', 'repeated-bin'), qualify, fixture_class=CompositionFixture)

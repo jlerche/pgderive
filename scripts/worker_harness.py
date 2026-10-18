@@ -25,6 +25,14 @@ def harness_arguments():
     return output, command[1:] if command and command[0] == '--' else command
 
 
+def run_modes(modes, qualify, **options):
+    output, command = harness_arguments()
+    for mode in modes:
+        directory = output / mode
+        directory.mkdir()
+        qualify(directory, command, mode, **options)
+
+
 @dataclass
 class History:
     changes: list[str]

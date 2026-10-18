@@ -3,6 +3,28 @@ import unittest
 from worker_harness import Fixture
 
 
+class ModeRunnerTests(unittest.TestCase):
+    def test_modes_keep_order_options_and_stop_at_failure(self):
+        import pathlib
+        import tempfile
+        from unittest.mock import patch
+        from worker_harness import run_modes
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory)
+            calls = []
+            def qualify(path, command, mode, **options):
+                self.assertTrue(path.is_dir())
+                calls.append((path.name, command, mode, options))
+                if mode == 'second':
+                    raise RuntimeError('preserve failed fixture')
+            with patch('worker_harness.harness_arguments', return_value=(output, ['worker'])):
+                with self.assertRaisesRegex(RuntimeError, 'preserve failed fixture'):
+                    run_modes(['first', 'second', 'third'], qualify, fixture_class='fixture')
+            self.assertEqual(calls, [(mode, ['worker'], mode, {'fixture_class': 'fixture'})
+                                     for mode in ['first', 'second']])
+            self.assertFalse((output/'third').exists())
+
+
 class BagVerificationTests(unittest.TestCase):
     def test_memory_bag_preserves_numeric_nulls_and_acknowledgement(self):
         from decimal import Decimal

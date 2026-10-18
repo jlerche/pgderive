@@ -411,8 +411,8 @@ retries, catalog recovery and fenced concurrency control.
 ## Operators over pinned object traces
 
 `TimedBatch<B>` carries one complete transaction delta and its logical time.
-`Project`, `Join`, `Statistics`, and `Arrangement` compose through typed circuit
-edges. Join evaluates `ΔL⋈R + L⋈ΔR + ΔL⋈ΔR` against the same pinned prior
+`Project`, `Join`, `Statistics`, and `Arrangement` compose through a validated
+relational plan. Join evaluates `ΔL⋈R + L⋈ΔR + ΔL⋈ΔR` against the same pinned prior
 boundary with exact intermediate products. Full `(key,value)` identity is
 preserved; navigation keys do not imply uniqueness.
 
@@ -433,16 +433,14 @@ and memory graph with SQL after every committed transaction. Missing objects,
 filesystem PUT failures, corrupt immutable-upload collisions, arithmetic failures, retries and compaction
 races are exercised. These are correctness checks, not performance benchmarks.
 
-## Composable typed MVP operators
+## Relational plan execution
 
-`Stream<T>` now represents a typed circuit edge; `TimedBatch<T>` represents one
-logical delta-tick value. `CircuitBuilder<S>` binds source, unary and binary
-callbacks to a validated plan, derives an executable topological schedule from
-typed dependencies, and supports fan-out, chained joins and multiple outputs.
-All nodes read the same immutable prior state. Deferred arrangement replacements
-form a candidate only after the whole tick succeeds; the existing Engine owns
-local prepare/commit publication. The production grouped SQL worker uses this
-scheduler.
+`TimedBatch<T>` represents one logical delta-tick value. The relational executor
+evaluates the validated plan directly in topological order, supporting fan-out
+and chained joins without constructing a second callback graph. Every stateful
+node reads the same pinned prior boundary; arrangement replacements accumulate
+in an unpublished candidate. The Engine validates and publishes that complete
+candidate through one local prepare/commit boundary.
 
 `Project` consolidates full-tuple filter/projection collisions, `Join` includes
 all simultaneous-input terms, and `Arrangement` stages immutable object state.
@@ -461,9 +459,9 @@ codecs. `GroupSum` binds its COUNT/non-NULL/SUM codec to this shared accumulator
 contains total row multiplicity, non-NULL multiplicity, and sum. Products and
 prior-state accumulation use arbitrary precision before final i64 checks. A
 present zero sum is retained, all-NULL groups emit NULL, and removing a group's
-last row retracts it. Internal statistic changes and visible result changes are
-separate typed edges; both can be staged in the same graph root. Identical visible
-rows cancel even when internal counts change.
+last row retracts it. Internal statistic changes and visible result changes
+remain separate; SQL execution stages sufficient statistics before finalizing
+visible rows. Identical visible rows cancel even when internal counts change.
 
 This MVP aggregate requires valid nonnegative SQL source bags, although deltas
 include retractions. Group totals are checked but do not prove per-tuple source
@@ -660,15 +658,14 @@ Logical ticks and WAL addresses remain separate. A failed or uncertain COMMIT
 returns an error; uncertain outcomes require authoritative recovery before retry.
 Replication acknowledgement remains disabled in the diagnostic harness.
 
-The initial explicit destination codecs use JSONB identity. Bag destinations
-store the complete `(key,value)` tuple and its nonzero signed coefficient;
-navigation keys do not overwrite other values. Grouped destinations store an
-encoded group, positive COUNT(*) and nullable SUM, checking the exact prior row
-before INSERT/UPDATE/DELETE. Registered codecs must preserve tuple identity under
-JSONB equality. Native SQL column mapping comes with the later SQL compiler.
-Destinations are engine-owned tables; external writers are unsupported.
+One `Sink { table, columns }` contract describes ordinary typed result rows.
+Low-level fixtures store complete `(key,value)` identities in a JSONB column;
+compiled queries use their native output columns. PostgreSQL stores physical
+occurrences, while coefficients remain engine-owned. Navigation keys never
+replace full tuple identity. Destinations are engine-owned; external writers are
+unsupported.
 
-The live harness compares both destination encodings with SQL after every source
+The live harness compares native and JSONB fixture layouts with SQL after every source
 transaction, checks persisted membership and source positions, rejects replaced
 workers and stale publication epochs, and injects destination DML failure to
 verify complete rollback. An isolated arithmetic fixture exercises same-key bag

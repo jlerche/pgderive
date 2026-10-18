@@ -114,6 +114,7 @@ pub(super) fn native(oid: u32) -> Result<(&'static str, &'static str)> {
         1184 => ("timestamptz", "timestamptz_send"),
         1700 => ("numeric", "numeric_send"),
         1009 => ("_text", "array_send"),
+        3802 => ("jsonb", "jsonb_send"),
         _ => anyhow::bail!("unsupported public result type OID {oid}"),
     })
 }
@@ -135,27 +136,23 @@ pub(super) async fn verify(
         "result table kind, persistence, replica identity, RLS, rules or triggers changed"
     );
     let actual: Value = sql.query_one("SELECT coalesce(jsonb_agg(jsonb_build_array(a.attname,a.atttypid::bigint,a.atttypmod,CASE WHEN a.attcollation=0 THEN NULL ELSE jsonb_build_array(n.nspname,c.collname) END,a.attnotnull,a.attgenerated,a.attidentity,a.atthasdef) ORDER BY a.attnum),'[]'::jsonb) FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_collation c ON c.oid=a.attcollation LEFT JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE a.attrelid=$1 AND a.attnum>0 AND NOT a.attisdropped", &[&oid]).await?.try_get(0)?;
-    let expected = if let Sink::Rows { columns, .. } = sink {
-        Value::Array(
-            columns
-                .iter()
-                .map(|column| {
-                    serde_json::json!([
-                        column.name,
-                        column.oid,
-                        column.modifier,
-                        column.collation,
-                        false,
-                        "",
-                        "",
-                        false
-                    ])
-                })
-                .collect(),
-        )
-    } else {
-        serde_json::json!([["tuple", 3802, -1, null, true, "", "", false]])
-    };
+    let expected = Value::Array(
+        sink.columns
+            .iter()
+            .map(|column| {
+                serde_json::json!([
+                    column.name,
+                    column.oid,
+                    column.modifier,
+                    column.collation,
+                    false,
+                    "",
+                    "",
+                    false
+                ])
+            })
+            .collect(),
+    );
     ensure!(
         actual == expected,
         "registered result table layout changed; rebuild or restore required"

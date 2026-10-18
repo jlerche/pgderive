@@ -4,7 +4,7 @@ import collections
 import decimal
 import json
 from sql_compiler_harness import SqlFixture
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 
 MODES = ('statistics', 'distinct', 'ordered', 'mixed', 'computed-key', 'derived')
 GUARD = ' FILTER(WHERE price>0)'
@@ -122,8 +122,4 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in MODES:
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory, command, mode)
+    run_modes(MODES, qualify)

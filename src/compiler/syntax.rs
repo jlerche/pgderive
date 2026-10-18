@@ -51,7 +51,7 @@ pub(super) fn scalar(value: &Node) -> Result<Scalar> {
                 _ => anyhow::bail!("not a native column difference"),
             }
         }
-        NodeEnum::TypeCast(_) => super::parser::scalar::interval(value).map(Scalar::Interval),
+        NodeEnum::TypeCast(_) => super::parser::scalar::interval(value, true).map(Scalar::Interval),
         NodeEnum::FuncCall(_) | NodeEnum::AExpr(_) => remainder(value),
         _ => anyhow::bail!("unsupported scalar expression"),
     }

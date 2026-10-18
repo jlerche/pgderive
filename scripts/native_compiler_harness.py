@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Native PostgreSQL timestamp/numeric source identity through snapshot/CDC/restart."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 from decimal import Decimal
 import json
@@ -129,8 +129,4 @@ def qualify(output, command, mode, fixture_class=NativeFixture):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('projection','grouped','rows','join'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('projection', 'grouped', 'rows', 'join'), qualify)

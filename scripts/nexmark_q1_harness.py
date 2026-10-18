@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exact terminal decimal q1: independent Decimal bag and PostgreSQL, CDC/restart."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import decimal
 import json
@@ -70,8 +70,4 @@ def qualify(output,command,mode):
         (output/'result.json').write_text(json.dumps({'query':'q1','mode':mode,'postgres':'exact weighted numeric bag','memory':'independent Decimal multiplication','restart':'cold same slot','factor_change':'rejected before progress change','simultaneous':'both source changes','execution':'engine exact numeric multiplication'})+'\n')
 
 if __name__=='__main__':
-    output, command = harness_arguments()
-    for mode in ('int2','int4','int8','join','zero'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('int2', 'int4', 'int8', 'join', 'zero'), qualify)

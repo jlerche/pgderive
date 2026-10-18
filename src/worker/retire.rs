@@ -69,11 +69,8 @@ async fn load_removal(sql: &Client, settings: &Settings) -> Result<Removal> {
         "removal journal slot differs from native contract"
     );
     ensure!(
-        !source
-            .relations
-            .iter()
-            .any(|relation| relation.schema == settings.catalog_schema
-                && relation.table == sink.table()),
+        !source.relations.iter().any(|relation| relation.schema == settings.catalog_schema
+            && relation.table == sink.table.as_str()),
         "removal destination is a source table"
     );
     let sink_oid = owned_sink(sql, settings, &source, &sink).await?;
@@ -170,7 +167,7 @@ async fn finish(
         tx.batch_execute(&format!(
             "LOCK TABLE {}.{} IN ACCESS EXCLUSIVE MODE",
             settings.catalog_schema,
-            removal.sink.table()
+            removal.sink.table.as_str()
         ))
         .await?;
         ensure!(
@@ -180,7 +177,7 @@ async fn finish(
         tx.batch_execute(&format!(
             "DROP TABLE {}.{} RESTRICT",
             settings.catalog_schema,
-            removal.sink.table()
+            removal.sink.table.as_str()
         ))
         .await?;
     }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Explicit PostgreSQL session connectivity and temporal extrema; no expiry."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import datetime
 import json
@@ -118,8 +118,4 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('session-local','session-instant','extrema-local','extrema-instant','frames-local','frames-instant','offsets-local','offsets-instant'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('session-local', 'session-instant', 'extrema-local', 'extrema-instant', 'frames-local', 'frames-instant', 'offsets-local', 'offsets-instant'), qualify)

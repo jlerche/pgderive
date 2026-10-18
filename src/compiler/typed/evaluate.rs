@@ -54,12 +54,7 @@ impl Typed {
                 })
                 .transpose()?,
             Value::Remainder(value) => value.integer_pair(rows)?.map(Native::Integer),
-            Value::Bin(value) => {
-                value.evaluate(rows.0)?.map(|text| value::decode(self.oid, &text)).transpose()?
-            }
-            Value::Offset(value) => {
-                value.evaluate(rows.0)?.map(|text| value::decode(self.oid, &text)).transpose()?
-            }
+            Value::Temporal(value) => value.evaluate(rows.0)?.map(Native::Timestamp),
             Value::Call(call) => {
                 call.evaluate(rows)?.map(|text| value::decode(self.oid, &text)).transpose()?
             }

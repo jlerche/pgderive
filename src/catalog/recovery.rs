@@ -100,7 +100,7 @@ async fn load(
     binding.validate()?;
     binding.verify_ownership(&tx, catalog).await?;
     ensure!(
-        row.try_get::<_, String>(1)? == binding.sink.table(),
+        row.try_get::<_, String>(1)? == binding.sink.table.as_str(),
         "durable destination identity mismatch"
     );
     let fence: i64 = row.try_get(2)?;

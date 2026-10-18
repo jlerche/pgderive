@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Native date_bin map/group semantics against PostgreSQL and datetime recomputation."""
-from worker_harness import harness_arguments
+from worker_harness import run_modes
 import collections
 import datetime as dt
 from decimal import Decimal
@@ -55,8 +55,4 @@ class BinFixture(NativeFixture):
 
 
 if __name__=='__main__':
-    output, command = harness_arguments()
-    for mode in ('local','instant','projection'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode,fixture_class=BinFixture)
+    run_modes(('local', 'instant', 'projection'), qualify, fixture_class=BinFixture)

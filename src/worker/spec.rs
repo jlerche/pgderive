@@ -110,7 +110,10 @@ impl Settings {
             !self.query_id.is_empty() && self.query_id.len() <= 200,
             "invalid worker query name"
         );
-        crate::catalog::Sink::Json(self.sink_table.clone()).validate()?;
+        ensure!(
+            identifier(&self.sink_table) && !self.sink_table.starts_with("pgderive_"),
+            "invalid or reserved sink table"
+        );
         ensure!(
             !self.object_prefix.is_empty()
                 && self.object_prefix.len() <= 200

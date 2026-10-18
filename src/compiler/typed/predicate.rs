@@ -81,14 +81,11 @@ impl Typed {
     }
 }
 impl Typed {
-    pub(in crate::compiler) const fn bin(value: super::super::scalar::DateBin) -> Self {
-        Self { oid: value.input.oid, value: Value::Bin(value) }
-    }
-    pub(in crate::compiler) const fn offset(value: super::super::scalar::Offset) -> Self {
-        Self { oid: value.input.oid, value: Value::Offset(value) }
+    pub(in crate::compiler) const fn temporal(value: super::super::scalar::Temporal) -> Self {
+        Self { oid: value.input.oid, value: Value::Temporal(value) }
     }
     pub(in crate::compiler) const fn shift(&self) -> Option<&(ColumnRef, i64)> {
-        if let Value::Bin(value) = &self.value { value.shift.as_ref() } else { None }
+        if let Value::Temporal(value) = &self.value { value.shift.as_ref() } else { None }
     }
 }
 impl Typed {

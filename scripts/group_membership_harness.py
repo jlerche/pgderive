@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Native GROUP BY without aggregates: distinct membership, projected bags."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import json
 from sql_compiler_harness import SqlFixture
@@ -63,8 +63,4 @@ def qualify(output,command,mode):
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent source membership set projected to a weighted bag','duplicates':'partial delete retains membership; last delete removes it; hidden bucket projection collisions retained','restart':'cold same slot','identity':'changed key rejected; alias normalized'})+'\n')
 
 if __name__=='__main__':
-    output, command = harness_arguments()
-    for mode in ('local','c','icu'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('local', 'c', 'icu'), qualify)

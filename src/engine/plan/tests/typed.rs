@@ -1,121 +1,106 @@
-use super::{Bag, Rows, Snapshot, Writers, definition, recompute};
+//! The former typed-adapter history now exercises the production relational executor.
+use super::{Bag, recompute};
 use crate::engine::{
     Batch,
-    dataflow::{
-        Arrangement, Circuit, CircuitBuilder, GroupSum, Join, NodeOutput, Project, StateUpdate,
-        Stream, SumState, TimedBatch,
+    dataflow::{Project, Statistics, TimedBatch},
+    plan::{
+        Arrangement, Definition, Kind, Node, Plan, Settings, Source,
+        relational::{Operator, Operators, Relational},
     },
-    execution::Limits,
-    plan::Plan,
-    trace::TraceSnapshot,
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
+use num_bigint::BigInt;
+use object_store::memory::InMemory;
 use std::{collections::BTreeMap, sync::Arc};
-
-type Read = fn(&Snapshot) -> &TraceSnapshot<i64, i64>;
-type Assign = fn(&mut Snapshot, TraceSnapshot<i64, i64>);
-type Streams = (Stream<Rows>, Stream<Rows>, Stream<Rows>);
-type Sums = Batch<i64, SumState>;
-type Built = (Circuit<Snapshot, Sums>, Streams);
-fn source(
-    builder: &mut CircuitBuilder<Snapshot>,
-    id: &str,
-    writer: Arrangement<i64, i64>,
-    read: Read,
-    assign: Assign,
-) -> Result<Stream<Rows>> {
-    builder.source_with(id, move |context, delta: Arc<Rows>| {
-        let writer = writer.clone();
-        async move {
-            let next = writer
-                .stage(read(&context.prior), &TimedBatch { time: context.time, batch: delta })
-                .await?;
-            Ok(StateUpdate::new(move |state| assign(state, next)))
-        }
+type Rows = Batch<i64, Vec<i64>>;
+fn plan() -> Result<Plan> {
+    let nodes = [
+        ("as", Kind::Source, vec!["a"]),
+        ("bs", Kind::Source, vec!["b"]),
+        ("cs", Kind::Source, vec!["c"]),
+        ("a", Kind::Project, vec!["as"]),
+        ("b", Kind::Project, vec!["bs"]),
+        ("c", Kind::Project, vec!["cs"]),
+        ("ab", Kind::Join, vec!["a", "b"]),
+        ("abc", Kind::Join, vec!["ab", "c"]),
+        ("sum", Kind::Statistics, vec!["abc"]),
+    ]
+    .into_iter()
+    .map(|(id, kind, inputs)| Node {
+        id: id.into(),
+        kind,
+        inputs: inputs.into_iter().map(Into::into).collect(),
+        schema: "vector-v1".into(),
+    })
+    .collect();
+    Plan::new(Definition {
+        revision: "chain-production-v1".into(),
+        sources: ["a", "b", "c"]
+            .into_iter()
+            .map(|id| Source { id: id.into(), schema: "vector-v1".into() })
+            .collect(),
+        nodes,
+        arrangements: ["a", "b", "c", "ab", "abc", "sum"]
+            .into_iter()
+            .map(|id| Arrangement { id: id.into(), node: id.into(), schema: "vector-v1".into() })
+            .collect(),
+        outputs: vec!["sum".into()],
     })
 }
-fn build(writers: &Writers) -> Result<Built> {
-    let mut builder = CircuitBuilder::<Snapshot>::new(Plan::new(definition())?);
-    let a = source(&mut builder, "a", writers.a.clone(), |s| &s.a, |s, next| s.a = next)?;
-    let b = source(&mut builder, "b", writers.b.clone(), |s| &s.b, |s, next| s.b = next)?;
-    let c = source(&mut builder, "c", writers.c.clone(), |s| &s.c, |s, next| s.c = next)?;
-    let writer = writers.ab.clone();
-    let ab = builder.binary("ab", (&a, &b), move |context, input| {
-        let writer = writer.clone();
-        async move {
-            let inputs = (
-                TimedBatch { time: input.time, batch: input.batch.0 },
-                TimedBatch { time: input.time, batch: input.batch.1 },
-            );
-            let delta = Join
-                .evaluate_with_limits(
-                    (&inputs.0, &inputs.1),
-                    (&context.prior.a, &context.prior.b),
-                    Limits::default(),
-                )
-                .await?;
-            let next = writer.stage(&context.prior.ab, &delta).await?;
-            Ok(NodeOutput::staged(delta.batch, move |state: &mut Snapshot| state.ab = next))
-        }
-    })?;
-    let abc = builder.binary("abc", (&ab, &c), |context, input| async move {
-        let inputs = (
-            TimedBatch { time: input.time, batch: input.batch.0 },
-            TimedBatch { time: input.time, batch: input.batch.1 },
-        );
-        Ok(NodeOutput::pure(
-            Join.evaluate_with_limits(
-                (&inputs.0, &inputs.1),
-                (&context.prior.ab, &context.prior.c),
-                Limits::default(),
+fn operators() -> Operators<i64, Vec<i64>> {
+    let mut operators: Operators<_, _> = ["a", "b", "c"]
+        .into_iter()
+        .map(|id| {
+            (
+                id.into(),
+                Operator::Project(Project::new(|key: &i64, row: &Vec<i64>| {
+                    Ok(Some((*key, row.clone())))
+                })),
             )
-            .await?
-            .batch,
-        ))
-    })?;
-    let projected = builder.unary("project", &abc, |_, input| async move {
-        Ok(NodeOutput::pure(
-            Project::new(|key: &i64, ((a, b), c): &((i64, i64), i64)| Ok(Some((*key, a + b + c))))
-                .evaluate_with_limits(&input, Limits::default())?
-                .batch,
-        ))
-    })?;
-    let writer = writers.sum.clone();
-    let sum = builder.unary("sum", &projected, move |context, input| {
-        let writer = writer.clone();
-        async move {
-            let delta = GroupSum::new(|_: &i64, value: &i64| Ok(Some(*value)))
-                .evaluate_with_limits(&input, &context.prior.sum, Limits::default())
-                .await?;
-            let next = writer.stage(&context.prior.sum, &delta.state).await?;
-            Ok(NodeOutput::staged(delta.state.batch, move |state: &mut Snapshot| state.sum = next))
-        }
-    })?;
-    Ok((builder.build(sum.output())?, (a, b, c)))
+        })
+        .collect();
+    for id in ["ab", "abc"] {
+        operators.insert(
+            id.into(),
+            Operator::Join(Project::new(|key: &i64, pair: &(Vec<i64>, Vec<i64>)| {
+                Ok(Some((*key, pair.0.iter().chain(&pair.1).copied().collect())))
+            })),
+        );
+    }
+    operators.insert(
+        "sum".into(),
+        Operator::Statistics(Statistics::new(
+            2,
+            |row: &Vec<i64>| {
+                Ok(vec![BigInt::from(1), row.iter().map(|value| BigInt::from(*value)).sum()])
+            },
+            |row: &Vec<i64>| Ok(row.iter().map(|value| BigInt::from(*value)).collect()),
+            |_: &i64, values: &[BigInt]| {
+                let rows = i64::try_from(values.first().context("missing row count")?)?;
+                let sum = i64::try_from(values.get(1).context("missing sum")?)?;
+                Ok((rows != 0).then_some(vec![rows, sum]))
+            },
+        )),
+    );
+    operators
 }
-fn expected(bags: &[Bag; 3]) -> Result<Sums> {
+fn expected(bags: &[Bag; 3]) -> Result<Rows> {
     Batch::from_updates(
         recompute(bags)
             .into_iter()
             .filter(|(_, (rows, _))| *rows != 0)
-            .map(|(key, (rows, sum))| ((key, SumState { rows, non_null: rows, sum }), 1)),
+            .map(|(key, (rows, sum))| ((key, vec![rows, sum]), 1)),
     )
 }
-async fn cold(writers: &Writers, prior: &Snapshot) -> Result<Snapshot> {
-    Ok(Snapshot {
-        a: writers.a.reopen(prior.a.manifest()?).await?,
-        b: writers.b.reopen(prior.b.manifest()?).await?,
-        c: writers.c.reopen(prior.c.manifest()?).await?,
-        ab: writers.ab.reopen(prior.ab.manifest()?).await?,
-        sum: writers.sum.reopen(prior.sum.manifest()?).await?,
-    })
-}
 #[tokio::test]
-async fn typed_chained_joins_emit_snapshot_differences_and_restore() -> Result<()> {
-    let writers = Writers::new()?;
-    let (circuit, sources) = build(&writers)?;
-    let circuit = Arc::new(circuit);
-    let mut engine = circuit.clone().engine(writers.empty())?;
+async fn chained_join_statistics_emit_snapshot_differences_and_restore() -> Result<()> {
+    let settings = Settings {
+        store: Arc::new(InMemory::new()),
+        block_rows: 1,
+        limits: crate::engine::execution::Limits::default(),
+        encoded_cache: None,
+    };
+    let mut query = Relational::new(plan()?, operators(), &settings)?;
     let mut bags = [BTreeMap::new(), BTreeMap::new(), BTreeMap::new()];
     for time in 1_i64..=12 {
         let before = expected(&bags)?;
@@ -125,10 +110,14 @@ async fn typed_chained_joins_emit_snapshot_differences_and_restore() -> Result<(
             vec![((row % 2, row % 4), weight)],
             vec![((row % 2, row % 5), weight)],
         ];
-        for (bag, changes) in bags.iter_mut().zip(&updates) {
-            for (row, weight) in changes {
-                *bag.entry(*row).or_default() += weight;
+        let mut inputs = Vec::new();
+        for (bag, changes) in bags.iter_mut().zip(updates) {
+            for (tuple, weight) in &changes {
+                *bag.entry(*tuple).or_default() += weight;
             }
+            inputs.push(Batch::from_updates(
+                changes.into_iter().map(|((key, value), weight)| ((key, vec![value]), weight)),
+            )?);
         }
         let after = expected(&bags)?;
         let delta = Batch::from_updates(
@@ -137,29 +126,24 @@ async fn typed_chained_joins_emit_snapshot_differences_and_restore() -> Result<(
                 .map(|(row, w)| (row.clone(), -w))
                 .chain(after.iter().map(|(row, w)| (row.clone(), *w))),
         )?;
-        let mut inputs = circuit.inputs();
-        for (source, changes) in [&sources.0, &sources.1, &sources.2].into_iter().zip(updates) {
-            inputs.insert(source, Batch::from_updates(changes)?)?;
-        }
         let prepared =
-            engine.prepare(TimedBatch { time: u64::try_from(time)?, batch: inputs }).await?;
+            query.prepare(TimedBatch { time: u64::try_from(time)?, batch: inputs }).await?;
         ensure!(prepared.output().batch == delta, "wrong relational aggregate delta");
-        engine.commit(prepared)?;
-        ensure!(engine.snapshot().sum.materialize().await? == after, "wrong integrated output");
+        query.commit(prepared)?;
+        ensure!(
+            query.snapshot().trace("sum")?.materialize().await? == after,
+            "wrong integrated output"
+        );
         if time == 6 {
-            engine = circuit
-                .clone()
-                .engine_at(cold(&writers, &engine.snapshot()).await?, engine.time())?;
+            query = Relational::reopen(plan()?, operators(), settings.clone(), query.checkpoint()?)
+                .await?;
         }
     }
-    let mut inputs = circuit.inputs();
-    for source in [&sources.0, &sources.1, &sources.2] {
-        inputs.insert(source, Batch::from_updates([((0, 99), 1), ((0, 99), -1)])?)?;
-    }
-    let empty = engine.prepare(TimedBatch { time: 13, batch: inputs }).await?;
+    let input = Batch::from_updates([((0, vec![99]), 1), ((0, vec![99]), -1)])?;
+    let empty = query.prepare(TimedBatch { time: 13, batch: vec![input; 3] }).await?;
     assert!(empty.output().batch.iter().next().is_none());
-    engine.commit(empty)?;
-    assert_eq!(engine.time(), 13);
-    assert!(engine.snapshot().sum.materialize().await?.iter().next().is_none());
+    query.commit(empty)?;
+    assert_eq!(query.time(), 13);
+    assert!(query.snapshot().trace("sum")?.materialize().await?.iter().next().is_none());
     Ok(())
 }

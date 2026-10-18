@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PostgreSQL native LAG/LEAD with signed offsets and independent occurrence bags."""
-from worker_harness import harness_arguments
+from worker_harness import run_modes
 import collections
 from decimal import Decimal
 import json
@@ -112,8 +112,4 @@ class NavigationFixture(NativeFixture):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('integral','temporal','numeric','opaque','filtered'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory, command, mode, fixture_class=NavigationFixture)
+    run_modes(('integral', 'temporal', 'numeric', 'opaque', 'filtered'), qualify, fixture_class=NavigationFixture)

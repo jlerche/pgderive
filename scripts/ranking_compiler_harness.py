@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PostgreSQL peer/occurrence ranking with an independent raw-source oracle."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import json
 from sql_compiler_harness import SqlFixture
@@ -76,8 +76,4 @@ def qualify(output, command, mode, fixture_class=RankingFixture):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('peers', 'number', 'unordered'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory, command, mode)
+    run_modes(('peers', 'number', 'unordered'), qualify)

@@ -6,7 +6,7 @@ mod maintenance;
 use super::{Fixture, apply, connect, source_state};
 use crate::{
     Config,
-    catalog::{Catalog, Deltas, Lsn, Snapshot, Writer},
+    catalog::{Catalog, Lsn, Snapshot, Writer},
     engine::{dataflow::TimedBatch as Tick, plan::Settings},
     source::{Contract, Export},
 };
@@ -141,13 +141,13 @@ async fn activate(
         )
         .await?;
     let checkpoint = graph.prepared_checkpoint(&prepared)?;
-    let deltas = Deltas::bag(&prepared.output().batch)?;
+    let deltas = crate::harness::tuple_sink::deltas(&prepared.output().batch)?;
     let snapshot = Snapshot {
         checkpoint: &checkpoint,
         deltas: &deltas,
         source: contract,
         boundary,
-        sink: crate::catalog::Sink::Json("snapshot_groups".into()),
+        sink: crate::harness::tuple_sink::sink("snapshot_groups"),
     };
     activation::check(sql, catalog, graph.plan(), snapshot, config).await?;
     graph.commit(prepared)?;
@@ -183,7 +183,7 @@ async fn catch_up(
         &transaction.end_lsn,
     )?;
     let checkpoint = graph.prepared_checkpoint(&prepared)?;
-    let deltas = Deltas::bag(&prepared.output().batch)?;
+    let deltas = crate::harness::tuple_sink::deltas(&prepared.output().batch)?;
     writer
         .publish(
             sql,
@@ -224,7 +224,7 @@ async fn reject_publication_drift(
         })
         .await?;
     let checkpoint = graph.prepared_checkpoint(&prepared)?;
-    let deltas = Deltas::bag(&prepared.output().batch)?;
+    let deltas = crate::harness::tuple_sink::deltas(&prepared.output().batch)?;
     sql.batch_execute(&format!("ALTER TABLE {schema}.person DROP CONSTRAINT person_pkey")).await?;
     let end: String = sql.query_one("SELECT pg_current_wal_lsn()::text", &[]).await?.try_get(0)?;
     let progress = crate::catalog::Progress::new(1, &end, &end)?;

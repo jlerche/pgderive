@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Join-fed scopes against PostgreSQL and independent weighted recomputation."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import json
 from sql_compiler_harness import SqlFixture
@@ -85,8 +85,4 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('projection','group','winner'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('projection', 'group', 'winner'), qualify)

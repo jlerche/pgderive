@@ -30,7 +30,6 @@ pub(super) fn bind(
         .collect::<Result<Vec<_>>>()?;
     let types = arguments.iter().map(|value| value.oid).collect::<Vec<_>>();
     let signature = registry::resolve(name, &types)?;
-    ensure!(signature.strict, "local non-strict functions are not available in-engine");
     let value = if constant_null(&arguments)? {
         Value::Literal(None)
     } else {

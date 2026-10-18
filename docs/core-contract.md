@@ -94,12 +94,11 @@ Evidence read without modification: the prior PoC's README.md, RESULTS.md,
 The existing local event fixture and oracle replay remain regression checks.
 Independent review and the common 80% coverage/quality gate remain required.
 
-## Executable typed circuit slice
+## Relational plan execution
 
-The production relational worker binds its operator nodes through typed
-`Stream<T>` handles and a topological circuit builder. `TimedBatch<T>` is a single
-stream element; source transactions select complete synchronized delta batches
-in the PostgreSQL adapter. Graph evaluation retains one immutable prior boundary
+The production worker executes validated relational nodes directly in topological
+order. `TimedBatch<T>` is a single logical delta batch; source transactions select
+complete synchronized inputs in the PostgreSQL adapter. Evaluation retains one immutable prior boundary
 and stages complete candidate state/output before publication. Arbitrary acyclic
 compositions of the existing operator families are
 executable; recursion, new SQL shapes and automatic generic state codecs remain

@@ -3,7 +3,7 @@ use super::{Catalog, Sink, layout, rows::quote};
 use anyhow::{Result, ensure};
 use tokio_postgres::Transaction;
 pub(super) async fn ensure(tx: &Transaction<'_>, catalog: &Catalog, sink: &Sink) -> Result<()> {
-    let table = format!("{}.{}", catalog.schema, sink.table());
+    let table = format!("{}.{}", catalog.schema, sink.table.as_str());
     let oid: u32 =
         tx.query_one("SELECT pg_catalog.to_regclass($1)::oid", &[&table]).await?.try_get(0)?;
     let name = format!("pgderive_sink_lookup_{oid}");

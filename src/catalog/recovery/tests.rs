@@ -1,6 +1,6 @@
 use super::{Durable, Resolution, resolve};
 use crate::{
-    catalog::{Binding, Catalog, Progress, Sink, Stored, Writer},
+    catalog::{Binding, Catalog, Progress, Stored, Writer},
     engine::plan::Checkpoint,
 };
 use anyhow::Result;
@@ -18,7 +18,7 @@ fn writer() -> Result<Writer> {
             stored: Stored { epoch: 1, checkpoint },
             binding: Binding {
                 source: crate::source::tests::contract(),
-                sink: Sink::Json("sink".into()),
+                sink: crate::harness::tuple_sink::sink("sink"),
             },
             fence: 1,
             end: "0/0".parse()?,

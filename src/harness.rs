@@ -23,6 +23,7 @@ pub mod object_oracle;
 mod projection_oracle;
 mod recovery;
 pub use recovery::{RecoveryReport, run_recovery};
+pub mod tuple_sink;
 mod weighted_oracle;
 
 type Model = BTreeMap<(String, String), Row>;

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned PostgreSQL default RANGE and explicit GROUPS frame qualification."""
-from worker_harness import harness_arguments
+from worker_harness import run_modes
 import collections
 import json
 from decimal import Decimal
@@ -59,8 +59,4 @@ class PeerFramesFixture(RankingFixture):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('default', 'groups', 'current', 'empty', 'full', 'unordered'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory, command, mode, fixture_class=PeerFramesFixture)
+    run_modes(('default', 'groups', 'current', 'empty', 'full', 'unordered'), qualify, fixture_class=PeerFramesFixture)

@@ -154,3 +154,116 @@ async fn chained_join_complete_deltas_recovery_and_ownership() -> Result<()> {
     assert!(Relational::new(plan()?, missing, &settings).is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn wrong_source_arity_rejects_before_any_staged_objects() -> Result<()> {
+    use futures_util::TryStreamExt;
+    use object_store::ObjectStore;
+    let store = Arc::new(InMemory::new());
+    let settings = Settings {
+        store: store.clone(),
+        block_rows: 1,
+        limits: crate::engine::execution::Limits::default(),
+        encoded_cache: None,
+    };
+    let query = Relational::new(plan()?, operators(), &settings)?;
+    let checkpoint = query.checkpoint()?;
+    for count in [2, 4] {
+        let batch = (0..count)
+            .map(|_| Batch::from_updates([((0, vec![1]), 1)]))
+            .collect::<Result<Vec<_>>>()?;
+        assert!(
+            query
+                .execution
+                .evaluate(query.snapshot(), TimedBatch { time: 1, batch }, None)
+                .await
+                .is_err()
+        );
+        assert_eq!(query.checkpoint()?, checkpoint);
+        assert!(store.list(None).try_collect::<Vec<_>>().await?.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn fanout_self_join_keeps_prior_isolation_and_retries_downstream_failure() -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let definition = Definition {
+        revision: "fanout-v1".into(),
+        sources: vec![Source { id: "rows".into(), schema: "vector-v1".into() }],
+        nodes: [
+            ("source", Kind::Source, vec!["rows"]),
+            ("input", Kind::Project, vec!["source"]),
+            ("join", Kind::Join, vec!["input", "input"]),
+            ("output", Kind::Project, vec!["join"]),
+        ]
+        .into_iter()
+        .map(|(id, kind, inputs)| Node {
+            id: id.into(),
+            kind,
+            inputs: inputs.into_iter().map(Into::into).collect(),
+            schema: "vector-v1".into(),
+        })
+        .collect(),
+        arrangements: ["input", "output"]
+            .into_iter()
+            .map(|id| Arrangement { id: id.into(), node: id.into(), schema: "vector-v1".into() })
+            .collect(),
+        outputs: vec!["output".into()],
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let operators = BTreeMap::from([
+        (
+            "input".into(),
+            Operator::Project(Project::new(move |key: &i64, row: &Vec<i64>| {
+                counter.fetch_add(1, Ordering::Relaxed);
+                Ok(Some((*key, row.clone())))
+            })),
+        ),
+        (
+            "join".into(),
+            Operator::Join(Project::new(|key: &i64, pair: &(Vec<i64>, Vec<i64>)| {
+                Ok(Some((*key, vec![pair.0[0] * pair.1[0]])))
+            })),
+        ),
+        (
+            "output".into(),
+            Operator::Project(Project::new(|key: &i64, row: &Vec<i64>| {
+                anyhow::ensure!(row[0] != 25, "downstream failure");
+                Ok(Some((*key, row.clone())))
+            })),
+        ),
+    ]);
+    let settings = Settings {
+        store: Arc::new(InMemory::new()),
+        block_rows: 1,
+        limits: crate::engine::execution::Limits::default(),
+        encoded_cache: None,
+    };
+    let mut query = Relational::new(Plan::new(definition)?, operators, &settings)?;
+    let tick = |time, value| -> Result<_> {
+        Ok(TimedBatch { time, batch: vec![Batch::from_updates([((0, vec![value]), 1)])?] })
+    };
+    let first = query.prepare(tick(1, 3)?).await?;
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(first.output().batch, Batch::from_updates([((0, vec![9]), 1)])?);
+    assert_eq!(query.time(), 0);
+    query.commit(first)?;
+    let pinned = query.snapshot();
+    let checkpoint = query.checkpoint()?;
+    assert!(query.prepare(tick(2, 5)?).await.is_err());
+    assert!(Arc::ptr_eq(&pinned, &query.snapshot()));
+    assert_eq!(query.checkpoint()?, checkpoint);
+    let retry = query.prepare(tick(2, 0)?).await?;
+    // Both prior/new cross terms plus the new/new term see the original prior.
+    assert_eq!(retry.output().batch, Batch::from_updates([((0, vec![0]), 3)])?);
+    query.commit(retry)?;
+    assert_eq!(query.time(), 2);
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
+    assert_eq!(
+        pinned.trace("input")?.materialize().await?,
+        Batch::from_updates([((0, vec![3]), 1)])?
+    );
+    Ok(())
+}

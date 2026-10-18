@@ -125,7 +125,7 @@ statistics and terminal numeric finalization, not arbitrary numeric SQL.
 Lower parsed PostgreSQL AST into typed reusable relational nodes, not query-number
 callbacks. Required nodes include scalar project/filter, join, grouped aggregates,
 distinct, ordered partition selection, temporal expansion and session partitioning.
-The existing typed circuit scheduler supplies synchronized delta ticks; every new
+The existing relational executor supplies synchronized delta ticks; every new
 stateful node needs explicit maintained state, checkpoint codecs and runtime lowering.
 
 Use weighted indexes for distinct/min/max and count/sum sufficient statistics for

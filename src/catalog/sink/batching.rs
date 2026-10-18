@@ -92,7 +92,7 @@ mod tests {
     use anyhow::Result;
     #[test]
     fn batches_keep_weights_out_of_public_layout_and_bound_candidate_identity() -> Result<()> {
-        let sink = Sink::Rows {
+        let sink = Sink {
             table: "results".into(),
             columns: vec![ResultColumn {
                 name: "x\" label".into(),

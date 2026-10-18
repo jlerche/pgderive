@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named local-item join: native deterministic text equality and complete deltas."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import json
 import pathlib
@@ -71,8 +71,4 @@ def qualify(output,command,mode):
         (output/'result.json').write_text(json.dumps({'query':'q3','mode':mode,'postgres':'native MV exact bag','memory':'raw nested-loop local suggestions','restart':'cold same slot','changes':'simultaneous inserts updates deletes and key moves','text':'case/trailing spaces/NULL; deterministic source collation','identity':'changed literal rejected; aliases normalize'})+'\n')
 
 if __name__=='__main__':
-    output, command = harness_arguments()
-    for mode in ('default','c','icu'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('default', 'c', 'icu'), qualify)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PostgreSQL LATERAL LIMIT-one lookup against independent native source bags."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 from decimal import Decimal
 import json
@@ -104,8 +104,4 @@ def qualify(output, command, mode):
 
 
 if __name__=='__main__':
-    output, command = harness_arguments()
-    for mode in ('local','instant','strict','filtered','composite'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('local', 'instant', 'strict', 'filtered', 'composite'), qualify)

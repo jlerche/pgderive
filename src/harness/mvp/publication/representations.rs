@@ -17,7 +17,7 @@ pub(super) async fn check(
     let catalog = Catalog::new(schema, "native_representations")?;
     let columns =
         vec![ResultColumn { name: "number".into(), oid: 1700, modifier: -1, collation: None }];
-    let sink = Sink::Rows { table: "native_representations".into(), columns };
+    let sink = Sink { table: "native_representations".into(), columns };
     let plan = initial.plan;
     let (mut writer, mut checkpoint) = initial.synthetic(sql, &catalog, sink).await?;
     super::bags::advance(&mut checkpoint);

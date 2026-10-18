@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Scoped grouped memberships with compound native identity/time join keys."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import json
 import pathlib
@@ -81,8 +81,4 @@ def qualify(output,command,mode):
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent grouped memberships and compound identity/bucket equality','transactions':'complete simultaneous sources; duplicate partial/last deletion; PK/key/bucket moves; NULLs/infinities; rollback; empty bid-only input tick','restart':'cold same slot; aliases/operand orientation/conjunction order normalized','identity':'changed stride and compound join key rejected'})+'\n')
 
 if __name__=='__main__':
-    output, command = harness_arguments()
-    for mode in ('local','instant','c','icu'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('local', 'instant', 'c', 'icu'), qualify)

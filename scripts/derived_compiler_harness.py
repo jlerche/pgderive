@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Derived post-window/group filtering and top-k bags against PostgreSQL."""
-from worker_harness import harness_arguments
+from worker_harness import run_modes
 import collections
 import json
 from ranking_compiler_harness import RankingFixture, qualify
@@ -57,8 +57,4 @@ class DerivedFixture(RankingFixture):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('peers', 'number', 'grouped', 'layered-peers', 'layered-number', 'layered-grouped'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory, command, mode, fixture_class=DerivedFixture)
+    run_modes(('peers', 'number', 'grouped', 'layered-peers', 'layered-number', 'layered-grouped'), qualify, fixture_class=DerivedFixture)

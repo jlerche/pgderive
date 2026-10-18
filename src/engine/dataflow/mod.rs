@@ -3,8 +3,6 @@
 //! Preparation uploads immutable objects; only local commit changes graph visibility.
 //! This is not a `PostgreSQL` durable publication or a recursive DBSP scheduler.
 mod arrangement;
-mod builder;
-mod circuit;
 mod compaction;
 pub use compaction::{CompactionJob, CompactionResult};
 mod expand;
@@ -13,19 +11,15 @@ mod partition;
 mod project;
 mod runtime;
 mod statistics;
-mod stream;
 mod sum;
 mod union;
 pub use arrangement::Arrangement;
-pub use builder::CircuitBuilder;
-pub use circuit::{Circuit, NodeContext, NodeOutput, StateUpdate};
 pub use expand::Expand;
 pub use join::Join;
 pub use partition::{Partition, PartitionWork};
 pub use project::Project;
 pub use runtime::{Graph, PreparedGraph, PreparedMaintenance, Unregistered};
 pub use statistics::Statistics;
-pub use stream::{CircuitInputs, Output, Stream};
 pub use sum::{GroupSum, SumDelta, SumState};
 pub use union::Union;
 
@@ -52,10 +46,6 @@ mod sum_tests;
 #[cfg(test)]
 #[path = "tests/budgets.rs"]
 mod budget_tests;
-
-#[cfg(test)]
-#[path = "tests/circuit.rs"]
-mod circuit_tests;
 
 #[cfg(test)]
 #[path = "tests/join_probes.rs"]

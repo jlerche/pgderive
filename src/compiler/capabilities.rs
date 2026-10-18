@@ -29,7 +29,6 @@ pub(in crate::compiler) struct Signature {
     pub inputs: &'static [u32],
     pub result: u32,
     pub operation: Builtin,
-    pub strict: bool,
 }
 impl Signature {
     const fn strict(
@@ -38,7 +37,7 @@ impl Signature {
         result: u32,
         operation: Builtin,
     ) -> Self {
-        Self { name, inputs, result, operation, strict: true }
+        Self { name, inputs, result, operation }
     }
 }
 const SIGNATURES: &[Signature] = &[

@@ -147,10 +147,10 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         state: RelationalState<K, V>,
         time: u64,
     ) -> Result<Self> {
-        let bound = Arc::new(execution.build_circuit(None)?);
+        let evaluator = execution.clone();
         let engine = Engine::restore(execution.plan.clone(), state, time, move |state, input| {
-            let bound = bound.clone();
-            async move { bound.evaluate(state, input).await }
+            let evaluator = evaluator.clone();
+            async move { evaluator.evaluate(state, input, None).await }
         })?;
         Ok(Self { engine, execution })
     }
@@ -215,12 +215,12 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         protection: &Protection,
     ) -> Result<Prepared<K, V>> {
         self.check_inputs(&input.batch)?;
-        let bound = self.execution.build_circuit(Some(protection))?;
+        let execution = self.execution.clone();
+        let namespace = protection.namespace()?;
         self.engine
-            .prepare_using(
-                input,
-                move |state, input| async move { bound.evaluate(state, input).await },
-            )
+            .prepare_using(input, move |state, input| async move {
+                execution.evaluate(state, input, Some(namespace)).await
+            })
             .await
     }
     /// Install a candidate after authoritative publication when used durably.

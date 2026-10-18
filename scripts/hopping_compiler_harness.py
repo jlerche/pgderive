@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Explicit series/date-bin hopping against PostgreSQL and datetime bag recomputation."""
-from worker_harness import harness_arguments
+from worker_harness import run_modes
 import collections
 import datetime as dt
 from decimal import Decimal
@@ -78,8 +78,4 @@ class HoppingFixture(BinFixture):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('local','instant','projection','series','empty','rows'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode,fixture_class=HoppingFixture)
+    run_modes(('local', 'instant', 'projection', 'series', 'empty', 'rows'), qualify, fixture_class=HoppingFixture)

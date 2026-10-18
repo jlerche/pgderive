@@ -2,14 +2,6 @@ use super::{Name, column, node, optional};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 #[derive(Clone)]
-pub(in crate::compiler) struct Bin {
-    pub input: Name,
-    pub stride: i64,
-    pub origin: String,
-    pub oid: u32,
-    pub shift: Option<(Name, i64)>,
-}
-#[derive(Clone)]
 pub(in crate::compiler) enum Key {
     Typed(Box<Node>),
     Column(Name),
@@ -31,9 +23,12 @@ pub(super) fn key(value: &Node) -> Result<Key> {
         Ok(Key::Typed(Box::new(value.clone())))
     }
 }
-pub(in crate::compiler) fn bin(value: &Node) -> Result<Bin> {
+pub(in crate::compiler) fn bin(
+    value: &Node,
+    resolve: &impl Fn(&Name) -> Result<crate::compiler::ColumnRef>,
+) -> Result<crate::compiler::scalar::Temporal> {
     if let NodeEnum::AExpr(_) = node(value)? {
-        return shifted(value);
+        return shifted(value, resolve);
     }
     let NodeEnum::FuncCall(call) = node(value)? else {
         anyhow::bail!("invalid date_bin call");
@@ -42,8 +37,18 @@ pub(in crate::compiler) fn bin(value: &Node) -> Result<Bin> {
     let [stride, input, origin] = call.args.as_slice() else {
         anyhow::bail!("date_bin requires stride, native column and typed origin");
     };
-    let stride = interval(stride)?;
-    let NodeEnum::TypeCast(cast) = node(origin)? else {
+    let stride = interval(stride, true)?;
+    let input = resolve(&column(input)?)?;
+    let origin = bin_origin(origin, input.oid)?;
+    Ok(crate::compiler::scalar::Temporal {
+        input,
+        bin: Some((stride, origin)),
+        shift: None,
+        subtract: 0,
+    })
+}
+fn bin_origin(value: &Node, input_oid: u32) -> Result<crate::temporal::Timestamp> {
+    let NodeEnum::TypeCast(cast) = node(value)? else {
         anyhow::bail!("date_bin origin requires explicit timestamp type");
     };
     let names =
@@ -59,13 +64,13 @@ pub(in crate::compiler) fn bin(value: &Node) -> Result<Bin> {
         crate::compiler::parser::expressions::unmodified_type(typename),
         "origin type modifiers unsupported"
     );
-    Ok(Bin {
-        input: column(input)?,
-        stride,
-        origin: string(optional(cast.arg.as_deref())?)?,
-        oid,
-        shift: None,
-    })
+    ensure!(input_oid == oid, "date_bin origin must match native timestamp type");
+    let origin = crate::temporal::Timestamp::parse(&string(optional(cast.arg.as_deref())?)?, oid)?;
+    ensure!(
+        origin.sort_value() != i64::MIN && origin.sort_value() != i64::MAX,
+        "date_bin origin must be finite"
+    );
+    Ok(origin)
 }
 pub(in crate::compiler) fn validate_call(call: &pg::FuncCall) -> Result<()> {
     ensure!(
@@ -92,23 +97,24 @@ fn operator<'a>(value: &'a Node, op: &str) -> Result<(&'a Node, &'a Node)> {
     );
     Ok((optional(expression.lexpr.as_deref())?, optional(expression.rexpr.as_deref())?))
 }
-fn shifted(value: &Node) -> Result<Bin> {
+fn shifted(
+    value: &Node,
+    resolve: &impl Fn(&Name) -> Result<crate::compiler::ColumnRef>,
+) -> Result<crate::compiler::scalar::Temporal> {
     let (base, offset) = operator(value, "-")?;
-    let mut bin = bin(base)?;
+    let mut bin = bin(base, resolve)?;
     ensure!(bin.shift.is_none(), "nested hopping offsets unsupported");
     let (index, duration) = operator(offset, "*")?;
-    let NodeEnum::TypeCast(cast) = node(duration)? else {
-        anyhow::bail!("hopping offset requires explicit interval");
-    };
-    let text = string(optional(cast.arg.as_deref())?)?;
     ensure!(
-        !text
-            .split_whitespace()
-            .last()
-            .is_some_and(|unit| matches!(unit.to_ascii_lowercase().as_str(), "day" | "days")),
-        "hopping offsets require time durations, not calendar days"
+        matches!(node(duration)?, NodeEnum::TypeCast(_)),
+        "hopping offset requires explicit interval"
     );
-    bin.shift = Some((column(index)?, interval(duration)?));
+    let index = resolve(&column(index)?)?;
+    ensure!(
+        index.name == crate::compiler::expansion::FIELD,
+        "hopping offset requires bounded generated ordinal"
+    );
+    bin.shift = Some((index, interval(duration, false)?));
     Ok(bin)
 }
 pub(in crate::compiler) fn string(value: &Node) -> Result<String> {
@@ -121,7 +127,7 @@ pub(in crate::compiler) fn string(value: &Node) -> Result<String> {
     ensure!(!value.sval.is_empty(), "empty scalar constant");
     Ok(value.sval.clone())
 }
-pub(in crate::compiler) fn interval(value: &Node) -> Result<i64> {
+pub(in crate::compiler) fn interval(value: &Node, calendar_days: bool) -> Result<i64> {
     let text = if let NodeEnum::TypeCast(cast) = node(value)? {
         let typename = cast.type_name.as_ref().context("missing interval type")?;
         let names = super::expressions::names(&typename.names)?.0;
@@ -147,7 +153,7 @@ pub(in crate::compiler) fn interval(value: &Node) -> Result<i64> {
         "second" | "seconds" => 1_000_000,
         "minute" | "minutes" => 60_000_000,
         "hour" | "hours" => 3_600_000_000_i64,
-        "day" | "days" => 86_400_000_000,
+        "day" | "days" if calendar_days => 86_400_000_000,
         _ => anyhow::bail!("date_bin stride must be fixed microseconds through days"),
     };
     let (whole, fraction) = quantity.split_once('.').unwrap_or((quantity, ""));

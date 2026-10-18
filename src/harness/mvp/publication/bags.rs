@@ -1,6 +1,6 @@
 //! Isolated destination arithmetic checks; these synthetic positions never authorize ACK.
 use crate::{
-    catalog::{Catalog, Deltas, Progress, Publication, Sink, Writer},
+    catalog::{Catalog, Progress, Publication, Writer},
     engine::{
         Batch,
         plan::{Checkpoint, Plan},
@@ -16,15 +16,16 @@ pub(super) async fn check(
 ) -> Result<()> {
     let catalog = Catalog::new(schema, "bag_coefficients")?;
     let plan = initial.plan;
-    let (mut writer, mut checkpoint) =
-        initial.synthetic(sql, &catalog, Sink::Json("coefficient_bag".into())).await?;
+    let (mut writer, mut checkpoint) = initial
+        .synthetic(sql, &catalog, crate::harness::tuple_sink::sink("coefficient_bag"))
+        .await?;
     advance(&mut checkpoint);
     let batch = Batch::from_updates([
         ((1, "a".to_owned()), 2),
         ((1, "b".to_owned()), 3),
         ((2, "c".to_owned()), 4),
     ])?;
-    let deltas = Deltas::bag(&batch)?;
+    let deltas = crate::harness::tuple_sink::deltas(&batch)?;
     writer
         .publish(
             sql,
@@ -38,7 +39,7 @@ pub(super) async fn check(
         .await?;
     advance(&mut checkpoint);
     underflow(sql, &mut writer, &checkpoint, Contract { catalog: &catalog, plan, schema }).await?;
-    let delta = Deltas::bag(&Batch::from_updates([
+    let delta = crate::harness::tuple_sink::deltas(&Batch::from_updates([
         ((1, "a".to_owned()), -1),
         ((1, "b".to_owned()), -1),
         ((2, "c".to_owned()), -4),
@@ -62,8 +63,10 @@ pub(super) async fn check(
         "bag sink lost same-key full identity/multiplicity"
     );
     advance(&mut checkpoint);
-    let delta =
-        Deltas::bag(&Batch::from_updates([((1, "a".to_owned()), -1), ((1, "b".to_owned()), -2)])?)?;
+    let delta = crate::harness::tuple_sink::deltas(&Batch::from_updates([
+        ((1, "a".to_owned()), -1),
+        ((1, "b".to_owned()), -2),
+    ])?)?;
     writer
         .publish(
             sql,
@@ -106,8 +109,10 @@ async fn underflow(
     checkpoint: &Checkpoint,
     contract: Contract<'_>,
 ) -> Result<()> {
-    let underflow =
-        Deltas::bag(&Batch::from_updates([((1, "a".to_owned()), 1), ((2, "c".to_owned()), -5)])?)?;
+    let underflow = crate::harness::tuple_sink::deltas(&Batch::from_updates([
+        ((1, "a".to_owned()), 1),
+        ((2, "c".to_owned()), -5),
+    ])?)?;
     ensure!(
         writer
             .publish(

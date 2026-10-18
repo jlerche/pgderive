@@ -1,7 +1,7 @@
 //! Atomic typed destination cutover. Compatible layouts preserve the public OID.
 use super::Generation;
 use crate::{
-    catalog::{Binding, Sink},
+    catalog::Binding,
     worker::{Settings, admin::quote},
 };
 use anyhow::{Context, Result, ensure};
@@ -28,7 +28,7 @@ async fn retarget(
     name: &str,
     binding: &mut Binding,
 ) -> Result<()> {
-    binding.sink.rename(name);
+    binding.sink.table = name.into();
     let catalog = crate::catalog::Catalog::new(&settings.catalog_schema, query)?;
     let relation = format!("{}.{}", settings.catalog_schema, quote(name));
     let oid: u32 =
@@ -74,13 +74,8 @@ pub(super) async fn cutover(
             .await?
             .context("cutover destination ownership missing")?;
     }
-    let (Sink::Rows { columns: lhs, .. }, Sink::Rows { columns: rhs, .. }) =
-        (&prior.sink, &next.sink)
-    else {
-        anyhow::bail!("rebuild requires native result columns");
-    };
     ensure!(
-        lhs == rhs,
+        prior.sink.columns == next.sink.columns,
         "result schema changed; drop and recreate explicitly, and resnapshot logical-replication consumers"
     );
     // Destination contents are user-visible results, not engine recovery state.

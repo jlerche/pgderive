@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named full-payload category join against PostgreSQL and raw nested-loop bag."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import json
 import pathlib
@@ -80,8 +80,4 @@ def qualify(output,command,mode):
         (output/'result.json').write_text(json.dumps({'query':'q20','mode':mode,'postgres':'exact full-payload weighted bag','memory':'independent raw nested-loop category join','restart':'cold same slot','changes':'both-input insert/update/delete and coordinated key moves','nulls':'join key/category/payload/temporal','identity':'changed filter/projection rejected; quoted aliases normalize','bag':'projected collisions retain distinct source occurrences'})+'\n')
 
 if __name__=='__main__':
-    output, command = harness_arguments()
-    for mode in ('local','instant','int2','int4'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('local', 'instant', 'int2', 'int4'), qualify)
