@@ -886,16 +886,15 @@ normally. Cartesian fan-out remains subject to existing work and storage limits.
 a persisted clock relation changes computation through ordinary source deltas. The owned native-cross fixture compares exact PostgreSQL materialized-view bags
 and a raw nested-loop memory oracle through simultaneous changes and cold restart.
 
-Two independently compiled, non-LATERAL relational subqueries can join with an
-AND of 1–16 ordinary column equalities. Both inputs need aliases; exposed output
-labels resolve within those scopes, and ambiguous unqualified names reject.
-Keys require identical native types: boolean, smallint, integer, bigint, UUID,
-timestamp or timestamptz. NULL in any key component excludes that tuple from the
-inner join. Text, numeric, coercions, OR/non-equality ON conditions, USING,
-NATURAL and outer joins remain unsupported by this original scoped inner path.
-The join-tree path described below adds LEFT and native/derived mixed joins.
-Root WHERE uses the existing typed predicate
-subset; grouped consumers can wrap the join in another derived query.
+Native tables and independently compiled non-LATERAL subqueries use one join
+tree and aggregate/projection builder. Derived inputs require aliases and expose
+only their selected labels; ambiguous unqualified names reject. INNER, CROSS,
+and LEFT joins share the same key binding, weighted execution, and source
+occurrence limits. ON accepts at most 16 ordinary equality operands, including
+the supported side-local integral computations. Key types must match; text
+collation resolution, OR/non-equality conditions, USING, and NATURAL remain
+unsupported. WHERE runs after the join, and the common builder handles outer
+projection, grouping, and windows under their existing semantic restrictions.
 
 Scope boundaries, compound key expressions and complete native contracts belong
 to normalized graph identity. Equality operand direction, conjunction order and

@@ -1,4 +1,4 @@
-//! Immutable trace generations and in-memory prepare/commit visibility.
+//! Immutable trace generations, weighted merging and pinned membership.
 mod manifest;
 mod merged;
 use super::{
@@ -172,94 +172,6 @@ impl<K: BatchData, V: BatchData> BatchReader for TraceSnapshot<K, V> {
     type Cursor = MergedCursor<K, V>;
     async fn cursor(&self) -> Result<Self::Cursor> {
         MergedCursor::open(&self.runs).await
-    }
-}
-
-/// Unpublished candidate trace; uploads referenced here have no commit authority.
-pub struct PreparedTrace<K: BatchData, V: BatchData> {
-    owner: Arc<()>,
-    base: u64,
-    next: TraceSnapshot<K, V>,
-}
-
-/// Mutable visibility pointer over immutable runs, with local generation checks.
-///
-/// This is an in-memory contract. `PostgreSQL` publication/recovery is not yet
-/// implemented. No objects are deleted; physical GC must respect pinned readers.
-#[derive(Debug)]
-pub struct Trace<K: BatchData, V: BatchData> {
-    owner: Arc<()>,
-    snapshot: TraceSnapshot<K, V>,
-}
-
-impl<K: BatchData, V: BatchData> Default for Trace<K, V> {
-    fn default() -> Self {
-        Self {
-            owner: Arc::new(()),
-            snapshot: TraceSnapshot { runs: Vec::new(), generation: 0, time: 0 },
-        }
-    }
-}
-
-impl<K: BatchData, V: BatchData> Trace<K, V> {
-    /// Pin the currently committed run membership.
-    #[must_use]
-    pub fn snapshot(&self) -> TraceSnapshot<K, V> {
-        self.snapshot.clone()
-    }
-    /// Prepare one next-tick delta and validate the resulting full weighted state.
-    ///
-    /// # Errors
-    /// Returns read/integrity/overflow errors or an out-of-order logical tick.
-    pub async fn prepare(&self, delta: Run<K, V>, time: u64) -> Result<PreparedTrace<K, V>> {
-        self.prepare_runs(vec![delta], time).await
-    }
-    /// Prepare one logical delta split into multiple physical runs atomically.
-    /// Both its consolidated coefficients and the resulting state must fit i64.
-    ///
-    /// # Errors
-    /// Returns read/integrity/overflow errors or an out-of-order logical tick.
-    pub async fn prepare_runs(
-        &self,
-        deltas: Vec<Run<K, V>>,
-        time: u64,
-    ) -> Result<PreparedTrace<K, V>> {
-        ensure!(self.snapshot.time.checked_add(1) == Some(time), "out-of-order trace tick");
-        TraceSnapshot { runs: deltas.clone(), generation: 0, time }.validate().await?;
-        let mut runs = self.snapshot.runs.clone();
-        runs.extend(deltas);
-        self.candidate(runs, time).await
-    }
-    /// Prepare a physically different but logically identical membership set.
-    ///
-    /// # Errors
-    /// Returns read/overflow errors or unequal replacement weighted state.
-    pub async fn prepare_compaction(&self, runs: Vec<Run<K, V>>) -> Result<PreparedTrace<K, V>> {
-        let candidate = self.candidate(runs, self.snapshot.time).await?;
-        ensure!(
-            candidate.next.equivalent(&self.snapshot).await?,
-            "compaction changed logical state"
-        );
-        Ok(candidate)
-    }
-    async fn candidate(&self, runs: Vec<Run<K, V>>, time: u64) -> Result<PreparedTrace<K, V>> {
-        let generation =
-            self.snapshot.generation.checked_add(1).context("trace generation overflow")?;
-        let next = TraceSnapshot { runs, generation, time };
-        next.validate().await?;
-        Ok(PreparedTrace { owner: self.owner.clone(), base: self.snapshot.generation, next })
-    }
-    /// Publish a locally prepared generation after validating its origin/base.
-    ///
-    /// # Errors
-    /// Returns foreign/stale preparation errors without changing visibility.
-    pub fn commit(&mut self, prepared: PreparedTrace<K, V>) -> Result<()> {
-        ensure!(
-            Arc::ptr_eq(&self.owner, &prepared.owner) && prepared.base == self.snapshot.generation,
-            "foreign or stale trace preparation"
-        );
-        self.snapshot = prepared.next;
-        Ok(())
     }
 }
 

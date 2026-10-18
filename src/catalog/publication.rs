@@ -110,50 +110,22 @@ impl Catalog {
             &[&self.query],
         )
         .await?;
-        let super::Stored { epoch, checkpoint } =
-            read::boundary(&tx, self, plan).await?.context("missing atomic source activation")?;
-        let time = checkpoint.time;
-        binding.verify_ownership(&tx, self).await?;
-        let encoded = serde_json::to_value(&binding)?;
-        let row = tx.query_one(&format!("SELECT binding,fence,end_lsn::text,commit_lsn::text,xid FROM {}.pgderive_progress WHERE query_id=$1 FOR UPDATE", self.schema), &[&self.query]).await?;
-        let (fence, end, last_commit, last_xid) = {
-            ensure!(
-                row.try_get::<_, serde_json::Value>(0)? == encoded,
-                "source/destination binding mismatch"
-            );
-            binding.verify_environment(&tx).await?;
-            binding.verify_destination(&tx, self).await?;
-            let fence =
-                row.try_get::<_, i64>(1)?.checked_add(1).context("worker fence overflow")?;
-            let end = row.try_get::<_, String>(2)?.parse()?;
-            let commit = row.try_get::<_, String>(3)?.parse()?;
-            let xid = row.try_get::<_, Option<i64>>(4)?.map(u32::try_from).transpose()?;
-            ensure!(
-                end >= commit && Binding::valid_identity(time, xid, commit, end),
-                "invalid claimed source progress"
-            );
-            tx.execute(
-                &format!("UPDATE {}.pgderive_progress SET fence=$2 WHERE query_id=$1", self.schema),
-                &[&self.query, &fence],
-            )
-            .await?;
-            (fence, end, commit, xid)
-        };
+        let mut boundary = read::durable(&tx, self, plan, true)
+            .await?
+            .context("missing atomic source activation")?;
+        ensure!(boundary.binding == binding, "source/destination binding mismatch");
+        binding.verify_environment(&tx).await?;
+        binding.verify_destination(&tx, self).await?;
+        boundary.fence = boundary.fence.checked_add(1).context("worker fence overflow")?;
+        tx.execute(
+            &format!("UPDATE {}.pgderive_progress SET fence=$2 WHERE query_id=$1", self.schema),
+            &[&self.query, &boundary.fence],
+        )
+        .await?;
         tx.commit()
             .await
             .context("worker claim COMMIT requires authoritative reload on failure")?;
-        Ok(Writer {
-            catalog: self.clone(),
-            boundary: super::Durable {
-                stored: super::Stored { epoch, checkpoint },
-                binding,
-                fence,
-                end,
-                commit: last_commit,
-                xid: last_xid,
-            },
-            uncertain: false,
-        })
+        Ok(Writer { catalog: self.clone(), boundary, uncertain: false })
     }
 }
 impl Writer {

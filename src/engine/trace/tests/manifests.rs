@@ -2,7 +2,7 @@ use crate::engine::{
     Batch,
     dataflow::{Arrangement, TimedBatch},
     reader::{BlockCache, ObjectBatch},
-    trace::{Manifest, Run, Trace, TraceSnapshot},
+    trace::{Manifest, Run, TraceSnapshot},
 };
 use anyhow::{Context, Result};
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
@@ -65,11 +65,10 @@ async fn cold_manifest_reopen_does_not_accept_warm_cached_missing_or_corrupt_obj
 }
 #[tokio::test]
 async fn memory_and_invalid_logical_membership_cannot_be_recovered() -> Result<()> {
-    let mut trace = Trace::<i64, i64>::default();
-    trace.commit(
-        trace.prepare(Run::Memory(Arc::new(Batch::from_updates([((1, 1), 1)])?)), 1).await?,
-    )?;
-    assert!(trace.snapshot().manifest().is_err());
+    let mut trace = TraceSnapshot::<i64, i64>::empty();
+    trace =
+        trace.append_validated(Run::Memory(Arc::new(Batch::from_updates([((1, 1), 1)])?)), 1)?;
+    assert!(trace.manifest().is_err());
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let reference = ObjectBatch::write(
         store.clone(),

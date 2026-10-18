@@ -1,4 +1,4 @@
-use super::{Run, Trace};
+use super::{Run, TraceSnapshot};
 use crate::engine::{
     Batch,
     reader::{BatchReader, ObjectBatch},
@@ -17,14 +17,14 @@ async fn snapshots_layouts_seeks_and_compaction_are_equivalent() -> Result<()> {
     let batch = Batch::from_updates((0..30).map(|n| ((n / 6, n), 1)))?;
     let reference = ObjectBatch::write(store.clone(), &batch, "i64-pair-v1", 3).await?;
     let object = ObjectBatch::open(store.clone(), reference.clone(), "i64-pair-v1").await?;
-    let mut trace = Trace::default();
-    trace.commit(trace.prepare(Run::Object(object.clone()), 1).await?)?;
-    let old = trace.snapshot();
+    let mut trace = TraceSnapshot::empty();
+    trace = trace.append_validated(Run::Object(object.clone()), 1)?;
+    let old = trace.clone();
     let change = memory([((1, 6), -1), ((1, 8), 3)])?;
-    trace.commit(trace.prepare(change, 2).await?)?;
-    let current = trace.snapshot().materialize().await?;
+    trace = trace.append_validated(change, 2)?;
+    let current = trace.materialize().await?;
     assert_eq!(old.materialize().await?, batch);
-    let mut cursor = trace.snapshot().cursor().await?;
+    let mut cursor = trace.cursor().await?;
     cursor.seek_key(&1).await?;
     assert_eq!(cursor.current(), Some((&1, &7, 1)));
     cursor.seek_key(&99).await?;
@@ -32,16 +32,14 @@ async fn snapshots_layouts_seeks_and_compaction_are_equivalent() -> Result<()> {
     cursor.seek_key(&-1).await?;
     assert_eq!(cursor.current(), Some((&0, &0, 1)));
     let replacement = ObjectBatch::write(store.clone(), &current, "i64-pair-v1", 7).await?;
-    trace.commit(
-        trace
-            .prepare_compaction(vec![Run::Object(
-                ObjectBatch::open(store.clone(), replacement, "i64-pair-v1").await?,
-            )])
-            .await?,
-    )?;
-    assert_eq!(trace.snapshot().time(), 2);
-    assert_eq!(trace.snapshot().generation(), 3);
-    assert_eq!(trace.snapshot().materialize().await?, current);
+    trace = trace
+        .replace_runs(vec![Run::Object(
+            ObjectBatch::open(store.clone(), replacement, "i64-pair-v1").await?,
+        )])
+        .await?;
+    assert_eq!(trace.time(), 2);
+    assert_eq!(trace.generation(), 3);
+    assert_eq!(trace.materialize().await?, current);
     assert_eq!(old.materialize().await?, batch);
     // Repeated PUTs are idempotent and verify existing immutable bytes.
     assert_eq!(
@@ -53,21 +51,21 @@ async fn snapshots_layouts_seeks_and_compaction_are_equivalent() -> Result<()> {
 }
 
 #[tokio::test]
-async fn stale_foreign_invalid_and_overflow_prepares_leave_state_unchanged() -> Result<()> {
-    let mut trace = Trace::default();
-    let first = trace.prepare(memory([((0, 0), i64::MAX)])?, 1).await?;
-    let stale = trace.prepare(memory([((0, 1), 1)])?, 1).await?;
-    trace.commit(first)?;
-    assert!(trace.commit(stale).is_err());
-    assert!(trace.prepare(memory([((0, 0), 1)])?, 2).await.is_err());
-    assert!(trace.prepare(memory([])?, 9).await.is_err());
-    assert!(trace.prepare_compaction(vec![memory([])?]).await.is_err());
-    let before = trace.snapshot().materialize().await?;
-    let foreign = Trace::default().prepare(memory([])?, 1).await?;
-    assert!(trace.commit(foreign).is_err());
-    assert_eq!(trace.snapshot().materialize().await?, before);
-    trace.commit(trace.prepare(memory([((0, 0), -i64::MAX)])?, 2).await?)?;
-    assert!(trace.snapshot().materialize().await?.iter().next().is_none());
+async fn invalid_and_overflow_staging_leave_snapshot_unchanged() -> Result<()> {
+    use crate::engine::dataflow::{Arrangement, TimedBatch};
+    let writer = Arrangement::new(Arc::new(InMemory::new()), "overflow".into(), 1)?;
+    let tick = |time, weight| -> Result<_> {
+        Ok(TimedBatch { time, batch: Batch::from_updates([((0, 0), weight)])? })
+    };
+    let prior = writer.stage(&writer.empty(), &tick(1, i64::MAX)?).await?;
+    let before = prior.materialize().await?;
+    assert!(writer.stage(&prior, &tick(2, 1)?).await.is_err());
+    assert!(writer.stage(&prior, &tick(9, 0)?).await.is_err());
+    assert!(prior.replace_runs(vec![memory([])?]).await.is_err());
+    assert_eq!(prior.materialize().await?, before);
+    let next = writer.stage(&prior, &tick(2, -i64::MAX)?).await?;
+    assert!(next.materialize().await?.iter().next().is_none());
+    assert_eq!(prior.materialize().await?, before);
     Ok(())
 }
 
@@ -140,9 +138,9 @@ async fn filesystem_reopen_preserves_full_weighted_state() -> Result<()> {
         Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&root)?);
     let reopened =
         ObjectBatch::<i64, i64>::open(fresh, serde_json::from_slice(&catalog)?, "disk-v1").await?;
-    let mut trace = Trace::default();
-    trace.commit(trace.prepare(Run::Object(reopened), 1).await?)?;
-    assert_eq!(trace.snapshot().materialize().await?, batch);
+    let mut trace = TraceSnapshot::empty();
+    trace = trace.append_validated(Run::Object(reopened), 1)?;
+    assert_eq!(trace.materialize().await?, batch);
     // Retain filesystem evidence automatically if a preceding check fails.
     std::fs::remove_dir_all(root)?;
     Ok(())
@@ -178,9 +176,8 @@ async fn split_runs_and_order_consolidate_only_at_logical_boundary() -> Result<(
         if seed % 2 == 0 {
             runs.reverse();
         }
-        let mut trace = Trace::default();
-        trace.commit(trace.prepare_runs(runs, 1).await?)?;
-        let actual = trace.snapshot().materialize().await?;
+        let trace = TraceSnapshot { runs, time: 1, generation: 1 };
+        let actual = trace.materialize().await?;
         assert_eq!(
             actual.iter().map(|(tuple, weight)| (*tuple, *weight)).collect::<Vec<_>>(),
             expected
@@ -242,10 +239,10 @@ async fn full_tuple_probes_match_merged_bags_and_reject_invalid_retractions() ->
     let batch = Batch::from_updates((0..64).map(|value| ((1, value * 2), 3)))?;
     let reference = ObjectBatch::write(store.clone(), &batch, "point-i64-v1", 4).await?;
     let object = ObjectBatch::open(store.clone(), reference.clone(), "point-i64-v1").await?;
-    let mut trace = Trace::default();
-    trace.commit(trace.prepare(Run::Object(object), 1).await?)?;
-    trace.commit(trace.prepare(memory([((1, 64), -3), ((1, 66), 4), ((2, 0), -1)])?, 2).await?)?;
-    let snapshot = trace.snapshot();
+    let mut trace = TraceSnapshot::empty();
+    trace = trace.append_validated(Run::Object(object), 1)?;
+    trace = trace.append_validated(memory([((1, 64), -3), ((1, 66), 4), ((2, 0), -1)])?, 2)?;
+    let snapshot = trace;
     for key in 0..4 {
         for value in -1..130 {
             let expected = if key == 1 && value % 2 == 0 && (0..128).contains(&value) {

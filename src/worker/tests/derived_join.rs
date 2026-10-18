@@ -208,3 +208,36 @@ fn scoped_join_normalizes_equalities_and_rejects_unsupported_shapes() -> Result<
     assert_ne!(serde_json::to_vec(&original)?, serde_json::to_vec(&changed)?);
     Ok(())
 }
+
+#[tokio::test]
+async fn derived_join_uses_common_computed_grouping() -> Result<()> {
+    let mut native = contract();
+    native.relations[0].columns[2].oid = 23;
+    native.relations[0].columns[2].collation = 0;
+    let compiled = compile(
+        "SELECT abs(l.k) AS k,SUM(r.v) AS total FROM(SELECT auction AS k FROM source.bid) l JOIN(SELECT id AS k,other AS v FROM source.auction) r ON l.k=r.k GROUP BY abs(l.k)",
+        &native,
+    )?;
+    let options = settings();
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let left = row(&[("id", Some("1")), ("auction", Some("-7")), ("price", None)]);
+    let right = row(&[("id", Some("-7")), ("category", None), ("other", Some("4"))]);
+    for (time, weight, total) in [(1, 3, 24), (2, -1, 16)] {
+        let mut changes = vec![("auction", right.clone(), weight)];
+        if time == 1 {
+            changes.push(("bid", left.clone(), 2));
+        }
+        let prepared = query
+            .prepare(relational::inputs(&batch(changes), compiled.relational(), time)?)
+            .await?;
+        query.commit(prepared)?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
+        let output = query.snapshot().trace("output")?.materialize().await?;
+        let rows = output
+            .iter()
+            .map(|((_, row), weight)| Ok((compiled.relational().output.row(row)?, *weight)))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(rows, vec![(vec![Some(Cell::Integer(7)), Some(Cell::Integer(total))], 1)]);
+    }
+    Ok(())
+}

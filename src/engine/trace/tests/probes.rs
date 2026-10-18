@@ -2,7 +2,7 @@ use crate::engine::{
     Batch,
     dataflow::{Arrangement, TimedBatch},
     reader::{BlockCache, ObjectBatch},
-    trace::{KeyCursor, Run, Trace},
+    trace::{KeyCursor, Run, TraceSnapshot},
 };
 use anyhow::{Context, Result};
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
@@ -38,25 +38,21 @@ async fn probes_skip_irrelevant_runs_and_stop_before_unrelated_blocks() -> Resul
     .await?;
     let unrelated =
         object(store.clone(), cache.clone(), &Batch::from_updates([((100, 0), 1)])?, 1).await?;
-    let mut trace = Trace::default();
-    trace.commit(
-        trace
-            .prepare_runs(
-                vec![
-                    Run::Object(wide.clone()),
-                    Run::Object(unrelated.clone()),
-                    Run::Memory(Arc::new(Batch::from_updates([((7, 1), -2), ((7, 2), 3)])?)),
-                ],
-                1,
-            )
-            .await?,
-    )?;
+    let trace = TraceSnapshot {
+        runs: vec![
+            Run::Object(wide.clone()),
+            Run::Object(unrelated.clone()),
+            Run::Memory(Arc::new(Batch::from_updates([((7, 1), -2), ((7, 2), 3)])?)),
+        ],
+        time: 1,
+        generation: 1,
+    };
     for (object, ordinal) in [(&wide, 0), (&wide, 4), (&unrelated, 0)] {
         store
             .delete(&Path::from(object.block_path(ordinal).context("missing fixture block")?))
             .await?;
     }
-    let snapshot = trace.snapshot();
+    let snapshot = trace;
     assert_eq!(
         rows(snapshot.key_cursor(&7).await?).await?,
         Batch::from_updates([((7, 2), 4), ((7, 3), 4)])?
@@ -73,9 +69,9 @@ async fn cached_cold_evicted_and_batched_probes_have_equal_results() -> Result<(
     let cache = Arc::new(BlockCache::new(256, 2));
     let batch = Batch::from_updates((0..20).map(|n| ((n, n + 1), 1)))?;
     let data = object(store.clone(), cache.clone(), &batch, 1).await?;
-    let mut trace = Trace::default();
-    trace.commit(trace.prepare(Run::Object(data), 1).await?)?;
-    let snapshot = trace.snapshot();
+    let mut trace = TraceSnapshot::empty();
+    trace = trace.append_validated(Run::Object(data), 1)?;
+    let snapshot = trace;
     let cold = rows(snapshot.key_cursor(&3).await?).await?;
     let before = cache.stats()?;
     assert_eq!(rows(snapshot.key_cursor(&3).await?).await?, cold);
@@ -96,9 +92,9 @@ async fn cached_cold_evicted_and_batched_probes_have_equal_results() -> Result<(
     assert!(cache.stats()?.misses > before);
     let disabled = Arc::new(BlockCache::new(1, 1));
     let data = object(store, disabled.clone(), &batch, 1).await?;
-    let mut trace = Trace::default();
-    trace.commit(trace.prepare(Run::Object(data), 1).await?)?;
-    assert_eq!(rows(trace.snapshot().key_cursor(&3).await?).await?, cold);
+    let mut trace = TraceSnapshot::empty();
+    trace = trace.append_validated(Run::Object(data), 1)?;
+    assert_eq!(rows(trace.key_cursor(&3).await?).await?, cold);
     assert_eq!(disabled.stats()?.bytes, 0);
     Ok(())
 }
@@ -112,9 +108,9 @@ async fn selected_block_failure_keeps_probe_position_and_can_retry() -> Result<(
         1,
     )
     .await?;
-    let mut trace = Trace::default();
-    trace.commit(trace.prepare(Run::Object(data.clone()), 1).await?)?;
-    let mut cursor = trace.snapshot().key_cursor(&7).await?;
+    let mut trace = TraceSnapshot::empty();
+    trace = trace.append_validated(Run::Object(data.clone()), 1)?;
+    let mut cursor = trace.key_cursor(&7).await?;
     let path = Path::from(data.block_path(1).context("missing fixture block")?);
     let bytes = store.get(&path).await?.bytes().await?;
     store.delete(&path).await?;
@@ -159,23 +155,17 @@ async fn different_run_layouts_and_cache_budgets_preserve_full_identity() -> Res
             let cache = Arc::new(BlockCache::new(budget, 8));
             let a = Batch::from_updates((0..20).map(|n| ((n / 4, n), 2)))?;
             let b = Batch::from_updates((0..20).map(|n| ((n / 4, n), -1)))?;
-            let mut trace = Trace::default();
-            trace.commit(
-                trace
-                    .prepare_runs(
-                        vec![
-                            Run::Object(
-                                object(store.clone(), cache.clone(), &a, block_rows).await?,
-                            ),
-                            Run::Object(object(store, cache.clone(), &b, block_rows).await?),
-                        ],
-                        1,
-                    )
-                    .await?,
-            )?;
+            let trace = TraceSnapshot {
+                runs: vec![
+                    Run::Object(object(store.clone(), cache.clone(), &a, block_rows).await?),
+                    Run::Object(object(store, cache.clone(), &b, block_rows).await?),
+                ],
+                time: 1,
+                generation: 1,
+            };
             for key in 0..5 {
                 let expected = Batch::from_updates((key * 4..key * 4 + 4).map(|n| ((key, n), 1)))?;
-                assert_eq!(rows(trace.snapshot().key_cursor(&key).await?).await?, expected);
+                assert_eq!(rows(trace.key_cursor(&key).await?).await?, expected);
             }
             assert!(cache.stats()?.bytes <= budget);
         }

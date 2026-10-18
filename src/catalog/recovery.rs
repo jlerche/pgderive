@@ -91,29 +91,9 @@ async fn load(
         )
         .await?;
     }
-    let Some(stored) = read::boundary(&tx, catalog, plan).await? else {
-        tx.commit().await?;
-        return Ok(None);
-    };
-    let row = tx.query_opt(&format!("SELECT binding,sink_table,fence,commit_lsn::text,end_lsn::text,xid FROM {}.pgderive_progress WHERE query_id=$1", catalog.schema), &[&catalog.query]).await?.context("query has no durable publication contract")?;
-    let binding: Binding = serde_json::from_value(row.try_get(0)?)?;
-    binding.validate()?;
-    binding.verify_ownership(&tx, catalog).await?;
-    ensure!(
-        row.try_get::<_, String>(1)? == binding.sink.table.as_str(),
-        "durable destination identity mismatch"
-    );
-    let fence: i64 = row.try_get(2)?;
-    let commit = row.try_get::<_, String>(3)?.parse()?;
-    let end = row.try_get::<_, String>(4)?.parse()?;
-    let xid = row.try_get::<_, Option<i64>>(5)?.map(u32::try_from).transpose()?;
-    ensure!(fence > 0 && end >= commit, "invalid durable fence/source position");
-    ensure!(
-        Binding::valid_identity(stored.checkpoint.time, xid, commit, end),
-        "durable transaction identity/clock mismatch"
-    );
+    let durable = read::durable(&tx, catalog, plan, false).await?;
     tx.commit().await?;
-    Ok(Some(Durable { stored, binding, fence, commit, end, xid }))
+    Ok(durable)
 }
 
 impl super::Writer {

@@ -2,7 +2,7 @@ use crate::engine::{
     Batch,
     dataflow::{Join, TimedBatch},
     reader::{BlockCache, ObjectBatch},
-    trace::{Run, Trace},
+    trace::{Run, TraceSnapshot},
 };
 use anyhow::Result;
 use object_store::{ObjectStore, memory::InMemory};
@@ -15,15 +15,15 @@ async fn repeated_delta_keys_read_prior_blocks_once_without_cache() -> Result<()
     let prior_rows = Batch::from_updates([((7_i64, 100_i64), 2), ((7, 101), 3), ((7, 102), 4)])?;
     let reference = ObjectBatch::write(store.clone(), &prior_rows, "ints", 1).await?;
     let object = ObjectBatch::open_with_cache(store, reference, "ints", cache.clone()).await?;
-    let mut right = Trace::default();
-    right.commit(right.prepare(Run::Object(object), 1).await?)?;
-    let mut left = Trace::default();
-    left.commit(left.prepare(Run::Memory(Arc::new(Batch::from_updates([])?)), 1).await?)?;
+    let mut right = TraceSnapshot::empty();
+    right = right.append_validated(Run::Object(object), 1)?;
+    let mut left = TraceSnapshot::empty();
+    left = left.append_validated(Run::Memory(Arc::new(Batch::from_updates([])?)), 1)?;
     let delta = Batch::from_updates((0..12_i64).map(|value| ((7, value), value % 3 - 1)))?;
     let before = cache.stats()?.misses;
     // Reproduce the former production scan to measure the physical baseline,
     // independently of the optimized join. KeyProbes only retain initial heads.
-    let mut probes = right.snapshot().probes();
+    let mut probes = right.probes();
     for ((key, _), _) in delta.iter() {
         let mut cursor = probes.cursor(key).await?;
         while cursor.current().is_some() {
@@ -36,8 +36,8 @@ async fn repeated_delta_keys_read_prior_blocks_once_without_cache() -> Result<()
         .evaluate(
             &TimedBatch { time: 2, batch: delta.clone() },
             &TimedBatch { time: 2, batch: Batch::from_updates([])? },
-            &left.snapshot(),
-            &right.snapshot(),
+            &left,
+            &right,
         )
         .await?;
     let reads = cache.stats()?.misses - before;

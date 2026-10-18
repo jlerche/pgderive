@@ -127,7 +127,7 @@ def object_kill(output, command, index, restoring, collecting=False):
 def commit_kill(output, command, index, maintaining):
     fixture = Fixture(output, index)
     gate = output / 'commit.release'
-    marker = 'binding,fence,commit_lsn::text,end_lsn::text,xid FROM' if maintaining else 'pgderive_progress SET commit_lsn'
+    marker = '/* pgderive:maintenance */' if maintaining else 'pgderive_progress SET commit_lsn'
     process, log, error, port = proxy(output, 'sql', gate, marker)
     fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
     try:

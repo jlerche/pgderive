@@ -84,7 +84,7 @@ impl Builder<'_> {
     ) -> Result<Edge> {
         let offset = self.sources.len();
         let prefix = format!("tree_scope_{offset}_");
-        let scope = super::scoped_join::scope((source, alias), &prefix, offset, self.contract)?;
+        let scope = super::derived::scope((source, alias), &prefix, offset, self.contract)?;
         let columns = scope
             .ir
             .output

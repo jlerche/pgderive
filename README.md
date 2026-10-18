@@ -393,19 +393,17 @@ not a generic SQL encoding or a compressed/binary format.
 
 `TraceSnapshot` pins immutable run membership. Merged cursors consolidate all
 full identities exactly, including signed cancellation across arbitrary physical
-run boundaries. `Trace::prepare_runs` checks the complete logical delta and next
-state, and `commit` rejects stale or foreign preparations. Compaction validates
-weighted equivalence, changes physical generation, and retains logical time.
-Old snapshots remain readable because objects are retained; GC is not implemented.
+run boundaries. `Arrangement::stage` validates changed complete identities and
+uploads an unpublished next snapshot; the graph runtime rejects stale or foreign
+preparations and publishes all arrangement replacements together. Compaction
+validates weighted equivalence, changes physical generation, and retains logical
+time. Old snapshots remain readable while their objects remain retained.
 
-This standalone API is a storage semantics baseline. The catalog publication
-path below composes it with durable PostgreSQL state.
 Index fences are resident/object-local. Object cursors retain one decoded block;
-merged reads open one cursor per run. Preparation currently scans/materializes
-complete candidate state for validation, and writers buffer full objects. No
-bounded-memory claim is made. Filesystem-store tests reopen real immutable bytes;
-cloud endpoint provisioning remains unsupported; the composed worker below adds
-retries, catalog recovery and fenced concurrency control.
+merged reads open one cursor per run. Cold restore validates complete membership,
+while normal staging validates affected tuple coefficients. Filesystem-store
+tests reopen real immutable bytes; the composed worker adds catalog recovery,
+fenced publication and reader-aware garbage collection.
 
 
 ## Operators over pinned object traces

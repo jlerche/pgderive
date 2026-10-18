@@ -51,7 +51,7 @@ establish uniqueness. See linked SQL-subset sections for exact syntax restrictio
 | ROWS/RANGE/GROUPS aggregate frames and LAG/LEAD | Bounded accepted frame/offset forms; peers distinct from occurrences; no generic SQL-window promise | `src/compiler/partition.rs`, `src/compiler/navigation.rs`; `scripts/peer_frames_compiler_harness.py`, `scripts/navigation_compiler_harness.py` |
 | Left predecessor lookup | Explicit typed partition/order and supported offset/key forms; retractable retained inputs | `src/compiler/lookup.rs`; `scripts/lookup_compiler_harness.py`, `src/worker/tests/lookup_remainder.rs` |
 | Bounded hopping expansion and revisable sessions | Explicit finite expansion; sessions revise historical boundaries; no watermark or wall-clock expiry | `src/compiler/expansion.rs`; `scripts/hopping_compiler_harness.py`, `scripts/session_compiler_harness.py` |
-| Derived scopes and composed windows/groups/joins | Only bound combinations; unfinalized AVG encodings cannot become intermediate operands | `src/compiler/bind/derived.rs`, `src/compiler/bind/scoped_join.rs`; `scripts/composition_compiler_harness.py`, `scripts/native_cross_harness.py` |
+| Derived scopes and composed windows/groups/joins | Only bound combinations; unfinalized AVG encodings cannot become intermediate operands | `src/compiler/bind/derived.rs`, `src/compiler/bind/native_join.rs`; `scripts/composition_compiler_harness.py`, `scripts/native_cross_harness.py` |
 
 ## Existing binding checks and gaps
 

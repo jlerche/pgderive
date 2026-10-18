@@ -11,7 +11,6 @@ pub(super) mod navigation;
 pub(super) mod offset;
 pub(super) mod partition;
 pub(super) mod scalar;
-pub(super) mod scoped_join;
 use expressions::{column, node, optional, target};
 
 #[derive(Clone)]
@@ -24,7 +23,6 @@ pub(super) struct Table {
 pub(super) type Columns = Vec<(Name, String)>;
 pub(super) enum Parsed {
     Membership { parsed: partition::Parsed, distinct: bool },
-    ScopedJoin(scoped_join::Parsed),
     Lookup(lookup::Parsed),
     Partition(partition::Parsed),
 }
@@ -110,9 +108,6 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
         return Ok(parsed);
     }
     validate_query(select)?;
-    if let Some(join) = scoped_join::parse(select)? {
-        return Ok(Parsed::ScopedJoin(join));
-    }
     if let Some(lookup) = lookup::parse(select)? {
         return Ok(Parsed::Lookup(lookup));
     }

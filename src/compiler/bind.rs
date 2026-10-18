@@ -5,7 +5,6 @@ mod membership;
 mod native_join;
 mod partition;
 mod relational;
-mod scoped_join;
 mod topk;
 use super::{
     ColumnRef, Compiled,
@@ -23,7 +22,6 @@ struct Scope<'a> {
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
         Parsed::Membership { parsed, distinct } => membership::bind(parsed, distinct, contract),
-        Parsed::ScopedJoin(parsed) => scoped_join::bind(parsed, contract),
         Parsed::Lookup(parsed) => lookup::bind(parsed, contract),
         Parsed::Partition(parsed) => partition::bind(parsed, contract),
     }
