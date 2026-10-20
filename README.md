@@ -983,3 +983,7 @@ M8 [batches exact occurrence publication](docs/m8-sink-deltas.md) into bounded
 INSERT/DELETE statements and installs an ordinary fixed-width candidate index.
 Binary residual comparisons retain NULLs, duplicates and representation details;
 all chunks share membership/progress commit and slot acknowledgement boundaries.
+
+
+Run the [isolated local maintained-query example](examples/local/README.md) with
+`python3 examples/local/run.py` for source SQL, native comparisons, restart and stdout.
