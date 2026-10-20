@@ -1242,3 +1242,10 @@ index, then inserts positive multiplicities. Index installation and validation
 occur during initialization. No weights or occurrence identifiers become public
 columns. See [M8 publication details and evidence](m8-sink-deltas.md).
 
+
+## Mixed integral window extrema
+
+Admitted integral MIN/MAX can now share sliding frame statistics with COUNT/SUM/AVG,
+including supported computed arguments and FILTER. Other aggregate sets retain
+scan evaluation. Full affected-partition reads remain. See
+[extrema evidence and limits](sliding-extrema.md).

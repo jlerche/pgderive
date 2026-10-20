@@ -87,8 +87,8 @@ full-tuple validation still apply. Frozen PoC artifacts remain unchanged; this
 slice introduces no new durable state representation or stateful operator.
 
 M7 does not make arbitrary window deltas cheap. Large affected partitions still
-read their full retained inputs and outputs. Numeric SUM, MIN/MAX, DISTINCT,
-navigation and mixed ineligible sets still scan frames; ranking, joins and
+read their full retained inputs and outputs. Numeric SUM, nonintegral MIN/MAX, DISTINCT,
+navigation and other ineligible sets still scan frames; ranking, joins and
 sessions have their prior behavior. Removing old contributions reevaluates their pure FILTER/argument; narrow or highly
 consolidated frames can have extra evaluator work. These measurements do not
 establish a universal speedup. More selective object reads require a separate
@@ -104,3 +104,6 @@ checks passed. Five targeted native live cases and the separate release evaluato
 measurements also passed. The full release profile was not run for this slice.
 M8 sink scalability, M9 deployment qualification and the function/type backlog
 remain open; further selective window indexes remain additional optimization work.
+
+E3 later extends sliding statistics to [mixed integral extrema](sliding-extrema.md);
+the M7 measurements above retain their original COUNT/SUM/AVG scope.

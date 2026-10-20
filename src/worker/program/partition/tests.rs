@@ -11,12 +11,12 @@ const BUDGET: usize = 100_000_000;
 fn spec(frame: &str, peer: bool) -> Result<Partition> {
     let order = if peer { "price" } else { "id" };
     let window = format!("OVER(ORDER BY {order} {frame})");
-    let compiled = compile(
-        &format!(
-            "SELECT id,COUNT(*) {window},SUM(price) {window},AVG(price) {window} FROM source.bid"
-        ),
-        &contract(),
-    )?;
+    bound(&format!(
+        "SELECT id,COUNT(*) {window},SUM(price) {window},AVG(price) {window} FROM source.bid"
+    ))
+}
+fn bound(sql: &str) -> Result<Partition> {
+    let compiled = compile(sql, &contract())?;
     compiled
         .relational
         .nodes
@@ -24,6 +24,14 @@ fn spec(frame: &str, peer: bool) -> Result<Partition> {
         .find_map(|node| if let Node::Partition { spec, .. } = node { Some(spec) } else { None })
         .context("missing window partition")
 }
+fn extrema_spec(frame: &str, peer: bool) -> Result<Partition> {
+    let order = if peer { "price" } else { "id" };
+    let window = format!("OVER(ORDER BY {order} {frame})");
+    let aggregates = ["MIN(price)", "MAX(price)", "SUM(price)", "COUNT(price)"]
+        .map(|value| format!("{value} FILTER(WHERE price>=0) {window}"));
+    bound(&format!("SELECT id,{} FROM source.bid", aggregates.join(",")))
+}
+
 fn input(length: usize, weighted: bool) -> Result<Bag> {
     let mut updates = Vec::new();
     for id in 0..length {
@@ -183,4 +191,99 @@ fn integral_result(
 ) -> Result<Option<String>> {
     crate::worker::program::aggregate::Linear { count: count.clone(), sum: sum.clone() }
         .result(aggregate)
+}
+
+#[test]
+fn extrema_departures_duplicates_nulls_and_mixed_sets_match_scan() -> Result<()> {
+    for peer in [false, true] {
+        let unit = if peer { "GROUPS" } else { "ROWS" };
+        for bounds in [
+            "UNBOUNDED PRECEDING AND CURRENT ROW",
+            "3 PRECEDING AND 2 FOLLOWING",
+            "2 FOLLOWING AND 1 FOLLOWING",
+            "CURRENT ROW AND UNBOUNDED FOLLOWING",
+        ] {
+            let spec = extrema_spec(&format!("{unit} BETWEEN {bounds}"), peer)?;
+            for length in [0, 1, 7, 31, 80] {
+                assert_eq!(
+                    run(&spec, &input(length, peer)?, true)?.0,
+                    run(&spec, &input(length, peer)?, false)?.0
+                );
+            }
+        }
+    }
+    Ok(())
+}
+#[test]
+fn extrema_large_frames_reduce_charged_recomputation() -> Result<()> {
+    for length in [64, 256, 1024] {
+        let spec = extrema_spec("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", false)?;
+        let bag = input(length, false)?;
+        let scan = run(&spec, &bag, false)?;
+        let optimized = run(&spec, &bag, true)?;
+        assert_eq!(scan.0, optimized.0);
+        assert!(optimized.1 < length * 12);
+        assert!(optimized.1 * 8 < scan.1, "{length}: {}/{}", scan.1, optimized.1);
+        eprintln!("EXTREMA_WORK rows={length} scan={} sliding={}", scan.1, optimized.1);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "manual release measurement; the gate asserts deterministic extrema work"]
+fn measure_extrema_release_frames() -> Result<()> {
+    let bag = input(1000, false)?;
+    for peer in [false, true] {
+        let unit = if peer { "GROUPS" } else { "ROWS" };
+        let spec =
+            extrema_spec(&format!("{unit} BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"), peer)?;
+        let mut measurements = Vec::new();
+        for optimized in [false, true] {
+            let started = Instant::now();
+            let (output, work) = run(&spec, &bag, optimized)?;
+            measurements.push((output, work, started.elapsed().as_micros()));
+        }
+        assert_eq!(measurements[0].0, measurements[1].0);
+        eprintln!(
+            "EXTREMA_MEASUREMENT {{\"unit\":\"{unit}\",\"rows\":1000,\"scan_work\":{},\"sliding_work\":{},\"scan_us\":{},\"sliding_us\":{}}}",
+            measurements[0].1, measurements[1].1, measurements[0].2, measurements[1].2
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn numeric_mixed_extrema_retain_scan_fallback() -> Result<()> {
+    let window = "OVER(ORDER BY id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)";
+    let spec = bound(&format!(
+        "SELECT id,MIN(price) {window},SUM(price::numeric) {window} FROM source.bid"
+    ))?;
+    let bag = input(31, false)?;
+    let scan = run(&spec, &bag, false)?;
+    let selected = run(&spec, &bag, true)?;
+    assert_eq!(scan, selected);
+    Ok(())
+}
+
+#[test]
+fn extrema_keep_signed_width_boundaries_until_final_duplicate_departs() -> Result<()> {
+    let window = "OVER(ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING)";
+    let spec =
+        bound(&format!("SELECT id,MIN(price) {window},MAX(price) {window} FROM source.bid"))?;
+    let values =
+        [Some(i64::MIN), Some(i64::MAX), Some(i64::MIN), None, Some(0), Some(-1), Some(i64::MAX)];
+    let bag = Bag::from_updates(values.into_iter().enumerate().map(|(id, value)| {
+        (
+            (
+                (),
+                row(&[
+                    ("0:id", Some(&id.to_string())),
+                    ("0:price", value.map(|v| v.to_string()).as_deref()),
+                ]),
+            ),
+            1,
+        )
+    }))?;
+    assert_eq!(run(&spec, &bag, true)?.0, run(&spec, &bag, false)?.0);
+    Ok(())
 }

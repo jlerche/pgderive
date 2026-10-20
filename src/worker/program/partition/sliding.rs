@@ -1,17 +1,18 @@
 //! Transient exact statistics over monotone frame ranges; no persisted index.
 use super::{Ordered, framed_fields};
-use crate::worker::program::aggregate::Linear;
+mod statistics;
 use crate::{
     compiler::partition::{Function, Partition},
     engine::{dataflow::PartitionWork, execution::Limits},
     transaction::Row,
 };
 use anyhow::{Result, ensure};
+use statistics::Statistics;
 use std::ops::Range;
 #[derive(Default)]
 struct Sliding {
     range: Range<usize>,
-    states: Vec<Linear>,
+    states: Vec<Statistics>,
 }
 pub(super) struct Frames(Option<Sliding>);
 impl Frames {
@@ -19,15 +20,17 @@ impl Frames {
         let eligible = !spec.aggregates.is_empty()
             && spec.aggregates.iter().all(|value| {
                 matches!(value.function, Function::Count)
-                    || matches!(value.function, Function::Sum | Function::Average)
-                        && value
-                            .argument
-                            .as_ref()
-                            .is_some_and(|column| matches!(column.oid, 20 | 21 | 23))
+                    || matches!(
+                        value.function,
+                        Function::Sum | Function::Average | Function::Min | Function::Max
+                    ) && value
+                        .argument
+                        .as_ref()
+                        .is_some_and(|column| matches!(column.oid, 20 | 21 | 23))
             });
         Self(eligible.then(|| Sliding {
             range: 0..0,
-            states: spec.aggregates.iter().map(|_| Linear::default()).collect(),
+            states: spec.aggregates.iter().map(Statistics::new).collect(),
         }))
     }
     #[cfg(test)]

@@ -6,7 +6,9 @@ use futures_util::TryStreamExt;
 use std::collections::BTreeMap;
 fn sql() -> String {
     let window = "OVER(ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)";
-    format!("SELECT id,COUNT(*) {window},SUM(price) {window},AVG(price) {window} FROM source.bid")
+    format!(
+        "SELECT id,COUNT(*) {window},SUM(price) {window},AVG(price) {window},MIN(price) {window},MAX(price) {window} FROM source.bid"
+    )
 }
 fn expected(source: &BTreeMap<Row, i64>) -> Result<Batch<relational::Key, Row>> {
     let mut rows = source
@@ -19,10 +21,15 @@ fn expected(source: &BTreeMap<Row, i64>) -> Result<Batch<relational::Key, Row>> 
     rows.sort_by_key(|(id, _)| *id);
     let mut sum = 0_i64;
     let mut present = 0;
+    let mut minimum = None;
+    let mut maximum = None;
     let mut output = Vec::new();
     for (index, (_, value)) in rows.into_iter().enumerate() {
         if let Some(price) = &value["price"] {
-            sum += price.parse::<i64>()?;
+            let value = price.parse::<i64>()?;
+            sum += value;
+            minimum = Some(minimum.map_or(value, |prior: i64| prior.min(value)));
+            maximum = Some(maximum.map_or(value, |prior: i64| prior.max(value)));
             present += 1;
         }
         let sum = (present > 0).then(|| sum.to_string());
@@ -35,6 +42,8 @@ fn expected(source: &BTreeMap<Row, i64>) -> Result<Batch<relational::Key, Row>> 
                     ("@aggregate_0", Some(&(index + 1).to_string())),
                     ("@aggregate_1", sum.as_deref()),
                     ("@aggregate_2", average.as_deref()),
+                    ("@aggregate_3", minimum.map(|v| v.to_string()).as_deref()),
+                    ("@aggregate_4", maximum.map(|v| v.to_string()).as_deref()),
                 ]),
             ),
             1,
