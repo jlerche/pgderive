@@ -25,6 +25,8 @@ pub enum Node {
     LeftJoinInput { id: String, input: String, spec: super::left_join::Input },
     SetDistinct { id: String, input: String, columns: Vec<ColumnRef> },
     Existence { id: String, input: String, anti: bool },
+    RightCounts { id: String, input: String },
+    RightPresence { id: String, input: String },
     LeftJoin { id: String, input: String, spec: super::left_join::Spec },
     LookupInput { id: String, input: String, spec: super::lookup::Input },
     Lookup { id: String, input: String, spec: super::lookup::Lookup },

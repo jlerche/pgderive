@@ -160,6 +160,8 @@ pub(in crate::compiler::bind) fn rewrite(
         | Node::LeftJoin { id, input, .. }
         | Node::SetDistinct { id, input, .. }
         | Node::Existence { id, input, .. }
+        | Node::RightCounts { id, input }
+        | Node::RightPresence { id, input }
         | Node::LookupInput { id, input, .. }
         | Node::Lookup { id, input, .. }
         | Node::Output { id, input }

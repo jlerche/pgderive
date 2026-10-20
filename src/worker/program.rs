@@ -2,10 +2,12 @@ mod aggregate;
 mod bindings;
 mod distinct;
 mod distinct_statistics;
-mod join_delta;
+mod group_cursor;
 mod left_join;
 mod lookup;
+#[cfg(test)]
 mod membership;
+mod membership_counts;
 mod navigation;
 mod order;
 mod ordered;

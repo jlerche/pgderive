@@ -81,6 +81,8 @@ fn infer<'a>(
         | Node::LeftJoin { id, .. }
         | Node::SetDistinct { id, .. }
         | Node::Existence { id, .. }
+        | Node::RightCounts { id, .. }
+        | Node::RightPresence { id, .. }
         | Node::Lookup { id, .. }
         | Node::OrderedInput { id, .. }
         | Node::OrderedFirst { id, .. }

@@ -7,8 +7,8 @@ use crate::{
     engine::{
         Batch,
         dataflow::{
-            Arrangement, Expand, OrderedSelection, Partition, PreparedGraph, PreparedMaintenance,
-            Project, Statistics, TimedBatch,
+            Arrangement, Expand, Group, OrderedSelection, Partition, PreparedGraph,
+            PreparedMaintenance, Project, Statistics, TimedBatch,
         },
         reader::{BatchData, BlockCache, CacheStats},
         trace::TraceSnapshot,
@@ -30,6 +30,8 @@ pub enum Operator<K: BatchData, V: BatchData> {
     Join(JoinProject<K, V>),
     /// Affected-partition transformation.
     Partition(Partition<K, V>),
+    /// Direct cursor-based affected-group differentiation.
+    Group(Group<K, V>),
     /// Exact retained linear statistics.
     Statistics(Statistics<K, V>),
     /// Retained ordered selection.
@@ -41,7 +43,7 @@ impl<K: BatchData, V: BatchData> Operator<K, V> {
             Self::Project(_) => super::Kind::Project,
             Self::Expand(_) => super::Kind::Expand,
             Self::Join(_) => super::Kind::Join,
-            Self::Partition(_) => super::Kind::Aggregate,
+            Self::Partition(_) | Self::Group(_) => super::Kind::Aggregate,
             Self::Statistics(_) => super::Kind::Statistics,
             Self::Ordered(_) => super::Kind::Ordered,
         }

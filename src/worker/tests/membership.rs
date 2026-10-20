@@ -257,3 +257,45 @@ fn computed_distinct_and_grouped_existence_share_partition_lowering() -> Result<
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn select_distinct_cursor_avoids_cold_hot_group_reads_and_rejects_tail_retraction()
+-> Result<()> {
+    let native = contract();
+    let compiled = compile("SELECT DISTINCT b.auction FROM source.bid b", &native)?;
+    let ir = compiled.relational();
+    let mut options = settings();
+    options.block_rows = 1;
+    options.limits.cache_entries = 0;
+    options.limits.cache_bytes = 0;
+    let rows = (0..256)
+        .map(|id| {
+            row(&[("id", Some(&id.to_string())), ("auction", Some("1")), ("price", Some("7"))])
+        })
+        .collect::<Vec<_>>();
+    let initial = batch(rows.iter().map(|row| ("bid", row.clone(), 1)).collect());
+    let delta = batch(vec![("bid", rows[255].clone(), -1)]);
+    let mut seed = relational::build(&native, &compiled, &options)?;
+    seed.commit(seed.prepare(relational::inputs(&initial, ir, 1)?).await?)?;
+    let checkpoint = seed.checkpoint()?;
+    let mut reads = Vec::new();
+    for scanned in [true, false] {
+        let mut query = if scanned {
+            relational::build_scanned(&native, &compiled, &options)?
+        } else {
+            relational::build(&native, &compiled, &options)?
+        };
+        query.restore_checkpoint(checkpoint.clone()).await?;
+        let before = query.cache_stats()?.misses;
+        let prepared = query.prepare(relational::inputs(&delta, ir, 2)?).await?;
+        assert_eq!(prepared.output().batch, Batch::from_updates([])?);
+        reads.push(query.cache_stats()?.misses - before);
+        query.commit(prepared)?;
+        let committed = query.checkpoint()?;
+        assert!(query.prepare(relational::inputs(&delta, ir, 3)?).await.is_err());
+        assert_eq!(query.checkpoint()?, committed);
+    }
+    assert!(reads[1] * 10 < reads[0], "full/cursor cold reads: {reads:?}");
+    eprintln!("SELECT DISTINCT full/cursor cold reads: {reads:?}");
+    Ok(())
+}

@@ -209,6 +209,15 @@ impl Builder<'_> {
         let Some(Node::LeftJoin { id, input, .. }) = self.nodes.pop() else {
             anyhow::bail!("missing existence join")
         };
+        let Some(Node::Union { id: union, left, right }) = self.nodes.pop() else {
+            anyhow::bail!("missing existence tagged union")
+        };
+        ensure!(union == input, "existence input differs from tagged union");
+        let counts = format!("{id}_right_counts");
+        let presence = format!("{id}_right_presence");
+        self.nodes.push(Node::RightCounts { id: counts.clone(), input: right });
+        self.nodes.push(Node::RightPresence { id: presence.clone(), input: counts });
+        self.nodes.push(Node::Union { id: union, left, right: presence });
         self.nodes.push(Node::Existence { id: id.clone(), input, anti });
         ensure!(edge.columns.len() > columns.len(), "missing existence source columns");
         Ok(Edge { id, columns })

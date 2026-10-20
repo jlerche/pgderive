@@ -4,7 +4,7 @@ use crate::{
     compiler::ColumnRef,
     engine::{
         Batch,
-        dataflow::{Partition, PartitionWork},
+        dataflow::Partition,
         execution::{Consolidator, Limits},
     },
     transaction::Row,
@@ -12,7 +12,6 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 const SIDE: &str = "\0left_join_side";
 pub(super) fn distinct(columns: &[ColumnRef]) -> Partition<Key, Row> {
-    let incremental = columns.to_vec();
     let columns = columns.to_vec();
     Partition::new_zero_preserving(move |_: &Key, rows: &Batch<(), Row>, work| {
         for (((), _), weight) in rows.iter() {
@@ -32,25 +31,6 @@ pub(super) fn distinct(columns: &[ColumnRef]) -> Partition<Key, Row> {
             })
             .collect::<Result<Row>>()?;
         Batch::from_updates([(((), projected), 1)])
-    })
-    .with_incremental(move |_, before, after, _, work| {
-        let mut changes = Vec::new();
-        for (bag, sign) in [(before, -1), (after, 1)] {
-            work.charge(1)?;
-            if let Some((((), row), _)) = bag.iter().next() {
-                let row = incremental
-                    .iter()
-                    .map(|column| {
-                        Ok((
-                            column.name.clone(),
-                            row.get(&column.name).context("missing DISTINCT output")?.clone(),
-                        ))
-                    })
-                    .collect::<Result<Row>>()?;
-                changes.push((((), row), sign));
-            }
-        }
-        Batch::from_updates(changes)
     })
 }
 pub(super) fn existence(anti: bool, limits: Limits) -> Partition<Key, Row> {
@@ -76,36 +56,4 @@ pub(super) fn existence(anti: bool, limits: Limits) -> Partition<Key, Row> {
         }
         output.finish_batch()
     })
-    .with_incremental(move |_, before, after, delta, work| {
-        let old = present(before, work)? != anti;
-        let new = present(after, work)? != anti;
-        let (bag, sign) = match (old, new) {
-            (true, true) => (delta, 1),
-            (true, false) => (before, -1),
-            (false, true) => (after, 1),
-            (false, false) => return Batch::from_updates([]),
-        };
-        let mut output = Consolidator::new(limits)?;
-        for (((), row), weight) in bag.iter() {
-            work.charge(1)?;
-            if row.get(SIDE).and_then(Option::as_deref) == Some("left") {
-                let mut row = row.clone();
-                row.remove(SIDE);
-                output.add(((), row), num_bigint::BigInt::from(*weight) * sign)?;
-            }
-        }
-        output.finish_batch()
-    })
-}
-
-fn present(bag: &Batch<(), Row>, work: &mut PartitionWork) -> Result<bool> {
-    for (((), row), _) in bag.iter() {
-        work.charge(1)?;
-        match row.get(SIDE).and_then(Option::as_deref) {
-            Some("right") => return Ok(true),
-            Some("left") => {}
-            _ => anyhow::bail!("invalid existence input tag"),
-        }
-    }
-    Ok(false)
 }

@@ -13,6 +13,9 @@ pub struct PartitionWork {
     remaining: usize,
 }
 impl PartitionWork {
+    pub(super) const fn new(remaining: usize) -> Self {
+        Self { remaining }
+    }
     #[cfg(test)]
     pub(crate) const fn for_test(remaining: usize) -> Self {
         Self { remaining }
@@ -31,9 +34,6 @@ impl PartitionWork {
         Ok(())
     }
 }
-type Incremental<K, V> = dyn Fn(&K, &Batch<(), V>, &Batch<(), V>, &Batch<(), V>, &mut PartitionWork) -> Result<Batch<(), V>>
-    + Send
-    + Sync;
 type Transform<K, V> =
     dyn Fn(&K, &Batch<(), V>, &mut PartitionWork) -> Result<Batch<(), V>> + Send + Sync;
 /// Pure group transformation, differentiated at each complete input boundary.
@@ -44,7 +44,6 @@ type Transform<K, V> =
 pub struct Partition<K: BatchData, V: BatchData> {
     transform: Arc<Transform<K, V>>,
     zero_preserving: bool,
-    incremental: Option<Arc<Incremental<K, V>>>,
 }
 impl<K: BatchData, V: BatchData> Partition<K, V> {
     /// Bind a deterministic partition evaluator; output must be a nonnegative bag.
@@ -54,7 +53,7 @@ impl<K: BatchData, V: BatchData> Partition<K, V> {
         + Sync
         + 'static,
     ) -> Self {
-        Self { transform: Arc::new(transform), zero_preserving: false, incremental: None }
+        Self { transform: Arc::new(transform), zero_preserving: false }
     }
     /// Bind a partition evaluator with empty input mapped to empty output.
     /// The supplied callback is never invoked for an empty bag. This contract
@@ -74,34 +73,7 @@ impl<K: BatchData, V: BatchData> Partition<K, V> {
                 }
             }),
             zero_preserving: true,
-            incremental: None,
         }
-    }
-    /// Differentiate affected groups directly while preserving the existing trace format.
-    /// The callback receives old input, new input and the complete signed tick delta.
-    /// It must emit exactly Q(new) - Q(old), including empty-group transitions.
-    /// Full affected input is still read; retained output is not read or recomputed.
-    #[must_use]
-    pub fn with_incremental(
-        mut self,
-        transform: impl Fn(
-            &K,
-            &Batch<(), V>,
-            &Batch<(), V>,
-            &Batch<(), V>,
-            &mut PartitionWork,
-        ) -> Result<Batch<(), V>>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self {
-        self.incremental = Some(Arc::new(transform));
-        self
-    }
-    #[cfg(test)]
-    pub(crate) fn without_incremental(mut self) -> Self {
-        self.incremental = None;
-        self
     }
     /// Whether this operator enforces the empty-input contract for retained output.
     #[must_use]
@@ -155,26 +127,14 @@ impl<K: BatchData, V: BatchData> Partition<K, V> {
         for (key, changes) in changes {
             let before = read(prior, &key, limits, &mut work).await?;
             work.charge(changes.len())?;
-            let delta = Batch::from_updates(changes)?;
             let after = Batch::from_updates(
-                before
-                    .iter()
-                    .map(|(tuple, weight)| (tuple.clone(), *weight))
-                    .chain(delta.iter().map(|(tuple, weight)| (tuple.clone(), *weight))),
+                before.iter().map(|(tuple, weight)| (tuple.clone(), *weight)).chain(changes),
             )?;
             limits.check_batch(&after)?;
             ensure!(
                 after.iter().all(|(_, weight)| *weight > 0),
                 "negative partition row multiplicity"
             );
-            if let Some(incremental) = &self.incremental {
-                let delta = incremental(&key, &before, &after, &delta, &mut work)?;
-                limits.check_batch(&delta)?;
-                for (((), value), weight) in delta.iter() {
-                    updates.add((key.clone(), value.clone()), *weight)?;
-                }
-                continue;
-            }
             let old_output = if let Some(retained) = retained {
                 let output = read(retained, &key, limits, &mut work).await?;
                 ensure!(

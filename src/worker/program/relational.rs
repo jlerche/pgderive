@@ -58,16 +58,22 @@ fn bind<'a>(node: &'a Node, projected: &Projected, settings: &Settings) -> Optio
         }
         Node::Output { id, .. } => (id, Operator::Project(output(projected))),
         Node::SetDistinct { id, columns, .. } => {
-            (id, Operator::Partition(super::membership::distinct(columns)))
+            (id, Operator::Group(super::group_cursor::distinct(columns)))
+        }
+        Node::RightCounts { id, .. } => {
+            (id, Operator::Statistics(super::membership_counts::counts()))
+        }
+        Node::RightPresence { id, .. } => {
+            (id, Operator::Project(super::membership_counts::presence()))
         }
         Node::Existence { id, anti, .. } => {
-            (id, Operator::Partition(super::membership::existence(*anti, settings.limits)))
+            (id, Operator::Group(super::group_cursor::existence(*anti)))
         }
         Node::LeftJoinInput { id, spec, .. } => {
             (id, Operator::Project(super::left_join::input(spec)))
         }
         Node::LeftJoin { id, spec, .. } => {
-            (id, Operator::Partition(super::left_join::operator(spec, settings.limits)))
+            (id, Operator::Group(super::group_cursor::left_join(spec)))
         }
         Node::DistinctInput { .. }
         | Node::DistinctCounts { .. }
@@ -222,18 +228,17 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         | Node::LeftJoinInput { id, input, .. }
         | Node::LookupInput { id, input, .. }
         | Node::OrderedGroup { id, input }
-        | Node::DistinctMembership { id, input, .. } => {
-            (id, plan::Kind::Project, vec![input.clone()])
-        }
+        | Node::DistinctMembership { id, input, .. }
+        | Node::RightPresence { id, input } => (id, plan::Kind::Project, vec![input.clone()]),
         Node::Union { id, left, right } => {
             (id, plan::Kind::Union, vec![left.clone(), right.clone()])
         }
         Node::Expand { id, input, .. }
         | Node::OrderedInput { id, input, .. }
         | Node::DistinctInput { id, input, .. } => (id, plan::Kind::Expand, vec![input.clone()]),
-        Node::Statistics { id, input, .. } | Node::DistinctCounts { id, input, .. } => {
-            (id, plan::Kind::Statistics, vec![input.clone()])
-        }
+        Node::Statistics { id, input, .. }
+        | Node::DistinctCounts { id, input, .. }
+        | Node::RightCounts { id, input } => (id, plan::Kind::Statistics, vec![input.clone()]),
         Node::OrderedFirst { id, input, .. } | Node::TopK { id, input, .. } => {
             (id, plan::Kind::Ordered, vec![input.clone()])
         }
@@ -385,11 +390,17 @@ pub(in crate::worker) fn build_scanned(
         }
     }
     for node in &ir.nodes {
-        if matches!(node, Node::SetDistinct { .. } | Node::Existence { .. } | Node::LeftJoin { .. })
-            && let Some((id, Operator::Partition(operator))) = bind(node, &ir.output, settings)
-        {
-            operators.insert(id.to_owned(), Operator::Partition(operator.without_incremental()));
-        }
+        let (id, operator) = match node {
+            Node::SetDistinct { id, columns, .. } => (id, super::membership::distinct(columns)),
+            Node::Existence { id, anti, .. } => {
+                (id, super::membership::existence(*anti, settings.limits))
+            }
+            Node::LeftJoin { id, spec, .. } => {
+                (id, super::left_join::operator(spec, settings.limits))
+            }
+            _ => continue,
+        };
+        operators.insert(id.clone(), Operator::Partition(operator));
     }
     Query::new(plan(contract, compiled, ir)?, operators, settings)
 }

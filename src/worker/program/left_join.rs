@@ -1,15 +1,17 @@
 //! Left equijoin differentiated over complete tagged input partitions.
 use super::relational::Key;
+use crate::{compiler::left_join::Input, engine::dataflow::Project, transaction::Row};
+#[cfg(test)]
 use crate::{
-    compiler::left_join::{Input, Spec},
+    compiler::left_join::Spec,
     engine::{
         Batch,
-        dataflow::{Partition, Project},
+        dataflow::Partition,
         execution::{Consolidator, Limits},
     },
-    transaction::Row,
 };
 use anyhow::{Context, Result, ensure};
+#[cfg(test)]
 use num_bigint::BigInt;
 const SIDE: &str = "\0left_join_side";
 pub(super) fn input(spec: &Input) -> Project<Key, Row, Key, Row> {
@@ -35,8 +37,8 @@ pub(super) fn input(spec: &Input) -> Project<Key, Row, Key, Row> {
         Ok(Some((key, tagged)))
     })
 }
+#[cfg(test)]
 pub(super) fn operator(spec: &Spec, limits: Limits) -> Partition<Key, Row> {
-    let incremental = spec.clone();
     let spec = spec.clone();
     Partition::new_zero_preserving(move |_: &Key, rows: &Batch<(), Row>, work| {
         let mut left = Vec::new();
@@ -74,9 +76,6 @@ pub(super) fn operator(spec: &Spec, limits: Limits) -> Partition<Key, Row> {
             }
         }
         output.finish_batch()
-    })
-    .with_incremental(move |_, before, after, delta, work| {
-        super::join_delta::evaluate((&incremental, limits), before, after, delta, work)
     })
 }
 pub(super) fn stripped(row: &Row) -> Row {

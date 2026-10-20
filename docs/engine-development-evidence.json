@@ -1,4 +1,6 @@
 {
+  "qualification_code_revision": "5d7ff97",
+  "historical_scope_note": "Frozen E1-E5 evidence for that revision. Subsequent persisted EXISTS counts change its plan identity and require explicit rebuild; old EXISTS acceptance evidence is not a current compatibility claim.",
   "qualification_date": "2026-10-20",
   "scope": "local E1-E5; finite SQL domain, no production/cloud qualification",
   "quality": {

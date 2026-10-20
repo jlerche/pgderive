@@ -83,14 +83,14 @@ development results accidentally inherited the base portfolio's query descriptio
 the original result and its SHA-256. It never changes test outcomes or SQL traces.
 Superseded query forms are reported separately rather than counted as current cases.
 
-## Completion
+## Completion at revision 5d7ff97
 
 Qualification completed on 2026-10-20. The final same-binary run passed all eighty
 cases and 2,400 committed boundaries; each case recorded 33 native oracle checks
 (snapshot, committed states, rollback and cold reopen). The final verifier checked
 the executable and current source/oracle fingerprints for every case. The live
 reducer test and standalone uninjected saved-trace replay passed. A worker built
-from f58e076 created column-only DISTINCT/EXISTS checkpoints; this version reopened
+from f58e076 created column-only DISTINCT/EXISTS checkpoints; revision 5d7ff97 reopened
 both with the same binding and slot, without rebuild, and continued exact results.
 
 Independent review passed. The common core gate passed 45 Python tests, 322 Rust
@@ -98,3 +98,12 @@ tests (three ignored), 127 worker cases plus rebuild and 97.38% production line
 coverage, including the core matrix and six extrema cases. The complete release
 qualification profile was not run. The [completion evidence](engine-development-evidence.json)
 records per-case trace/result hashes and the bounded qualification scope.
+
+
+Subsequent persisted existence counts intentionally change the EXISTS/NOT EXISTS
+plan layout. The old EXISTS compatibility result above is historical, not a
+current promise: those registrations now require explicit `query rebuild`.
+SELECT DISTINCT cursor execution keeps its existing layout. The historical
+`membership_checkpoint_harness.py` verifies the older acceptance behavior;
+current rejection/rebuild-boundary tests are in `worker/tests/membership_counts.rs`.
+See [the current adaptation](incremental-group-adaptation.md).

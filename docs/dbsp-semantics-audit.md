@@ -116,8 +116,8 @@ claim.
 
 The audit found no new weighted-bag correctness defect in the reviewed operator
 paths. Qualification exposed parser composition omissions, which E1/E2 corrected;
-the broadening also preserves legacy column-only membership graph identities,
-verified by actual prior-release checkpoint reopen. This is bounded evidence,
+at revision 5d7ff97 the broadening preserved legacy column-only membership graph
+identities, verified by actual prior-release checkpoint reopen. This is bounded evidence,
 not a proof of arbitrary query or physical execution equivalence.
 
 Incrementalness is mixed: map/filter/union are delta-local; joins probe matching
@@ -140,11 +140,15 @@ use this classification to target actual affected-key/partition costs; they are
 separate from the completed bounded audit.
 
 
-## Subsequent direct group differentiation
+## Subsequent specialized group execution
 
-The [incremental group adaptation](incremental-group-adaptation.md) adds direct
-LEFT JOIN, DISTINCT and EXISTS/NOT EXISTS delta evaluators without changing
-arrangement layouts. These paths still read full affected input groups, but no
-longer read retained output or rebuild its complete matching Cartesian product.
-The table above describes the audited baseline; the adaptation documents the
-new computation bounds and the remaining input-read limitation separately.
+The [incremental group adaptation](incremental-group-adaptation.md) supersedes
+materialized direct callbacks with cursor-based execution. LEFT JOIN streams its
+matching-pair deltas; SELECT DISTINCT stops after finding its representative.
+EXISTS/NOT EXISTS persist exact right-key counts and propagate only zero/positive
+membership transitions, avoiding left-group access on stable positive counts.
+The old EXISTS graph compatibility claim is intentionally superseded: its new
+count arrangements change plan identity and require explicit rebuild. DISTINCT
+and LEFT JOIN retain their arrangement layouts. The table above describes the
+audited baseline; the adaptation records current work/read bounds and remaining
+window work separately.

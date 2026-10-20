@@ -6,7 +6,9 @@ mod arrangement;
 mod compaction;
 pub use compaction::{CompactionJob, CompactionResult};
 mod expand;
+mod group;
 mod join;
+pub use group::{Group, GroupCursor, GroupFuture, GroupInput};
 mod partition;
 mod project;
 mod runtime;
@@ -91,3 +93,11 @@ mod linear_tests;
 #[cfg(test)]
 #[path = "tests/locality.rs"]
 mod locality_tests;
+
+#[cfg(test)]
+#[path = "tests/group.rs"]
+mod group_tests;
+
+#[cfg(test)]
+#[path = "tests/run_locality.rs"]
+mod run_locality_tests;

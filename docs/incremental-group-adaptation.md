@@ -1,74 +1,95 @@
 # Specialized incremental group operators
 
-This first adaptation uses the operator separation in Feldera DBSP as an
-architectural reference, with an independent implementation for Pgderive's
-weighted batches, immutable arrangements and PostgreSQL transaction boundaries.
-The inspected upstream revision is `fe76f6a012bfcdb1b9fe4e0455c5774bf6d6ae38`.
+This adaptation uses Feldera DBSP's separation of specialized incremental
+operators from generic affected-group recomputation as an architectural reference.
+Pgderive's implementation uses its own weighted batches, immutable object
+arrangements and PostgreSQL transaction/publication contracts. Upstream inspected:
+`fe76f6a012bfcdb1b9fe4e0455c5774bf6d6ae38`.
 
-## Direct group differentiation
+## Cursor group execution
 
-`Partition::with_incremental` supplies a callback with old input, new input and
-the complete signed input delta. The callback emits `Q(new) - Q(old)` directly.
-The generic complete-group evaluator remains available for other operators and
-as a test reference. All source inputs still advance at one committed boundary;
-invalid negative input bags fail before the callback, and prepared state remains
-unpublished until the existing durable publication protocol completes.
+`Group` callbacks receive `GroupInput`: the affected key, complete consolidated
+signed delta, limits, and access to pinned old state. `before()` and `after()`
+produce cursors; the latter overlays the bounded delta on retained full identities.
+They do not build complete old or new group bags. Cursors preserve position on
+failure. Every changed identity is validated before a callback may stop reading,
+so an invalid retraction in an unvisited tail still fails preparation.
 
-This preserves existing graph identifiers, input/output arrangements and codecs.
-A checkpoint written by the full evaluator can be reopened by the direct
-implementation. There is no new PostgreSQL state or computation fallback.
+Callbacks emit exactly `Q(new) - Q(old)`. Generic `Partition` recomputation remains
+for other operators and as the independent full-evaluator test reference. The
+materialized incremental callback introduced in `61d37b6` has been removed rather
+than retained as a second production API.
 
 ## Selected operators
 
-- LEFT JOIN computes `dL join R_new + L_old join dR`. This includes the cross term
-  exactly once. Its unmatched component is `L * [right is empty]`: when both old
-  and new right bags are empty, emit only the left delta; when presence changes,
-  retract old unmatched rows or insert new unmatched rows. Products and signed
-  retractions use exact intermediate coefficients before final narrowing.
-- EXISTS/NOT EXISTS emit only the left delta while qualification remains true;
-  when right presence changes they insert or retract the qualifying left bag.
-  If neither boundary qualifies, they emit nothing.
-- SELECT DISTINCT compares the old/new projected representatives and emits their
-  difference. It preserves the existing representative choice, including SQL
-  equality groups whose binary representations differ. It does not substitute
-  SQL equality for observable tuple identity.
+- LEFT JOIN streams `dL join R_new + L_old join dR`; the cross term occurs once.
+  Its unmatched component is `L * [right is empty]`: stable absence emits only
+  the left delta; presence transitions retract old unmatched rows or insert new
+  unmatched rows. Products and retractions use exact intermediate coefficients.
+  A one-right-row insertion into two n-identity bags uses `5*n + 2` charged
+  visits/products and emits n matching pairs. It still streams the hot key's old
+  and new input; it does not have a persistent ordered side index.
+- EXISTS/NOT EXISTS maintain exact `BigInt` counts per right key, then project
+  positive counts to a constant membership marker. Positive-to-positive count
+  changes consolidate to an empty membership delta, so they never open the left
+  group. Zero crossings produce the required qualifying/unqualifying left-row
+  deltas. The marker sorts before left rows, allowing constant-prefix presence
+  checks instead of scanning all left rows.
+- SELECT DISTINCT reads old/new first representatives and emits their difference.
+  This is ordered representative maintenance rather than a redundant total
+  occurrence counter. It preserves SQL equivalence classes and the existing
+  observable binary representative choice. Point validation covers all changed
+  source identities, including unselected ones. Unchanged tails are not scanned.
 
-The runtime no longer reads retained output for these direct paths. LEFT JOIN
-avoids reconstructing all existing matching pairs. The work test fixes a one-row
-right insertion and increases both old sides over 8, 32 and 128 identities:
-callback visits are exactly `5*n + 2`, with `n` newly matching output pairs.
-This counts visits and pair construction, not allocation, sorting or object I/O.
+The runtime does not read retained output for these direct paths. Their output
+arrangements remain durable and staging still validates accumulated coefficient
+overflow before publication. No work is delegated to PostgreSQL computation.
 
-## Bounds and follow-on work
+## Layout and recovery
 
-This is the computation slice. The runtime still reads, validates and materializes
-full affected input groups, then constructs their new bags. Right presence is
-found from those bags rather than a separately persisted count. This is not yet
-Feldera's trace-cursor/threshold access pattern, and there is no claim of update
-cost independent of hot-key size or run count.
+Cursor execution itself preserves graph/arrangement identities for DISTINCT and
+LEFT JOIN. Persisted existence counts add explicit `RightCounts` and
+`RightPresence` IR nodes and arrangements, changing the plan's content identity.
+An old existence checkpoint is rejected, not silently reused with missing counts.
+Use the existing explicit `query rebuild CONFIG.toml` route for such registrations.
+New count state reopens through ordinary object checkpoints. Counts may exceed
+i64 even though each full-tuple multiplicity remains in its bounded domain.
 
-Next adaptations are persisted membership summaries, cursor access for direct
-operators, and narrowly qualified persistent ordered aggregate summaries. Window
-and trace-merge behavior are unchanged by this slice. These require explicit
-state-layout/version decisions and independent read-cost evidence.
+## Cold-read evidence
+
+With one-row object blocks and caches disabled:
+
+| Probe | Baseline | Specialized/compacted | Boundary |
+| --- | --- | --- | --- |
+| SELECT DISTINCT, delete one unselected identity from a 256-identity group | 258 misses with the full evaluator | 6 misses with cursors | Complete query preparation; old full checkpoint restored before each measurement |
+| EXISTS, positive right count 2 to 1; left sizes 8/128/1,024 | Hot-left scan avoided | 4 misses at every size | Complete query preparation; source and count state reads remain |
+| First representative, 64 runs with eight matching identities | 320 misses | 5 after compaction | Operator reads; signed cancellation and unrelated keys included |
+| Inner join, same 64-run state | 512 misses | 8 after compaction | Eight matching identities; required fan-out remains |
+
+`run_locality.rs` separately varies 1/4/16/64 runs, 1/8 hot identities and 0/64
+unrelated keys per run. All cases compare exact weighted results and equivalent
+compacted state, with unchanged logical time. Compaction can produce multiple
+nonoverlapping object roots; only one contains this selected key. Its upload and
+full-state scan costs are separate from the measured subsequent query reads.
+
+These are cold-block/work measurements, not wall-clock, RSS or throughput claims.
+Join fan-out, affected-left output on threshold crossings, and overlapping-run
+reads remain real costs. Persistent window/range summaries remain a separate
+required item in [the full adaptation scope](feldera-adaptation-roadmap.md).
 
 ## Verification
 
-`./scripts/check.sh` is the required gate. Dedicated tests cover weighted empty,
-matched and unmatched transitions, simultaneous left/right changes, hot-key work,
-legacy-state reopen and invalid input failure atomicity. Existing source-model
-histories also run both direct and full evaluators, with cold restart of the
-direct implementation. Native core qualification covers outer joins, membership,
-computed keys and composed queries.
+The common gate is `./scripts/check.sh`. Dedicated tests cover cursor overlays,
+early-stop tail validation and retry, weighted source-model comparisons against
+full evaluators, cold restart, old membership layout rejection, exact large
+counters, hot-key work, cold reads and multi-run compaction equivalence.
+The common gate passed 329 Rust tests (three ignored), 45 Python tests, 127 worker
+cases plus rebuild and 97.39% production line coverage. Strict Clippy, formatting,
+file-size and dependency checks passed. Independent review found no actionable
+implementation findings. See the [qualification manifest](feldera-adaptation-evidence.json).
+The complete release profile was not run; durable window summaries remain pending.
 
 Upstream references:
 [distinct](https://github.com/feldera/feldera/blob/fe76f6a012bfcdb1b9fe4e0455c5774bf6d6ae38/crates/dbsp/src/operator/dynamic/distinct.rs),
 [group transformers](https://github.com/feldera/feldera/blob/fe76f6a012bfcdb1b9fe4e0455c5774bf6d6ae38/crates/dbsp/src/operator/dynamic/group.rs),
 [left joins](https://github.com/feldera/feldera/blob/fe76f6a012bfcdb1b9fe4e0455c5774bf6d6ae38/crates/dbsp/src/operator/dynamic/outer_join.rs).
-
-The common core gate passed on 2026-10-20: 325 Rust tests (three ignored),
-45 Python tests, 127 worker cases plus rebuild, and 97.39% production line
-coverage. Formatting, strict Clippy, source-size and dependency checks passed.
-Independent review found no actionable correctness or durability findings.
-Local evidence: `artifacts/coverage/run-ufOzQ9rp` and
-`artifacts/worker/run-jZx0h8Y0`. The complete release profile was not run.

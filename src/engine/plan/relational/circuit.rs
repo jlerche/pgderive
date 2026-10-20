@@ -42,7 +42,7 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
                 node.inputs.iter().all(|id| maintained.contains(id)),
                 "join inputs require maintained state"
             ),
-            Operator::Ordered(_) | Operator::Statistics(_) => ensure!(
+            Operator::Ordered(_) | Operator::Statistics(_) | Operator::Group(_) => ensure!(
                 maintained.contains(&node.id) && maintained.contains(&node.inputs[0]),
                 "operator requires retained input and state"
             ),
@@ -147,6 +147,11 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         if let Operator::Project(operator) = operator {
             return operator.evaluate_with_limits(&input, self.limits);
         }
+        if let Operator::Group(operator) = operator {
+            return operator
+                .evaluate(&input, self.prior(&node.inputs[0], prior)?, self.limits)
+                .await;
+        }
         let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
         match operator {
             Operator::Expand(operator) => operator.evaluate(&input, self.limits),
@@ -177,7 +182,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             Operator::Partition(operator) => {
                 operator.evaluate(&input, self.prior(&node.inputs[0], prior)?, self.limits).await
             }
-            Operator::Join(_) | Operator::Project(_) => {
+            Operator::Join(_) | Operator::Project(_) | Operator::Group(_) => {
                 anyhow::bail!("binary callback bound to unary node")
             }
         }

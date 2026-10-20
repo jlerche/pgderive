@@ -65,7 +65,7 @@ all correct output incremental. Preserve counterexamples and fix correctness
 issues. Document inherently affected-output work and remaining amplification;
 do not claim recursion/frontiers, constant update cost or arbitrary SQL support.
 
-## Completion ledger
+## Completion ledger at revision 5d7ff97
 
 The requested E1–E5 scope is complete as of 2026-10-20 within these explicit bounds.
 The [machine-readable evidence](engine-development-evidence.json) records the final
@@ -78,10 +78,16 @@ The complete deployment/release qualification profile was not run.
 | Item | Status | Evidence and remaining limits |
 | --- | --- | --- |
 | E1 | complete | [Eight-family matrix](composition-matrix.md): 80 final same-binary cases, 30 commits each, binary/native metadata and independent model checks, rollback/cold restart, real failure preservation/reduction/replay test; finite SQL forms, not exhaustive generation |
-| E2 | complete | Computed LEFT/EXISTS paths credited and extended with zero/one/multiple weighted-match checks; mixed-window scan path retained; actual parser gaps fixed for computed DISTINCT and grouping after EXISTS/NOT EXISTS; old f58e076 checkpoints reopen without rebuild |
+| E2 | complete | Computed LEFT/EXISTS paths credited and extended with zero/one/multiple weighted-match checks; mixed-window scan path retained; actual parser gaps fixed for computed DISTINCT and grouping after EXISTS/NOT EXISTS; old f58e076 checkpoints reopened without rebuild at that revision |
 | E3 | complete | [Sliding integral extrema](sliding-extrema.md): exact scan/native comparisons, measured reduced recomputation, explicit unchanged cold I/O, six native type/frame cases; hot partitions and ineligible frame scans remain |
 | E4 | complete | [Runnable local example](../examples/local/README.md): standalone source/configuration, native comparison, CDC, restart, stdout and owned tmpfs cleanup; default path smoke passed |
 | E5 | complete | [DBSP semantics and work audit](dbsp-semantics-audit.md): equations/source review, existing signed/PoC/recovery evidence and new two-axis locality tests; reports affected-key/partition amplification rather than claiming uniform delta-local work |
 
 Reproduction commands live beside each deliverable. Function/type expansion and
 actual deployment/provider/capacity/WAL qualification remain separate workstreams.
+
+
+The later [Feldera adaptation](feldera-adaptation-roadmap.md) supersedes the old
+EXISTS checkpoint-compatibility result: persisted right-key counts change its
+plan identity and require explicit rebuild. This ledger and its eighty-case
+fingerprint manifest record the completed earlier revision, not current hashes.
