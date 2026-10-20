@@ -105,8 +105,11 @@ async fn weighted_join(kind: &str) -> Result<()> {
     let a = row(&[("id", Some("1")), ("category", Some("same")), ("other", None)]);
     let b = row(&[("id", Some("1")), ("auction", Some("-1")), ("price", Some("7"))]);
     let cases = [
-        (vec![("auction", a, 2), ("bid", b.clone(), 3)], join_expected(kind, true)?),
-        (vec![("bid", b, -3)], join_expected(kind, false)?),
+        (vec![("auction", a, 2), ("bid", b.clone(), 3)], join_expected(kind, 3)?),
+        (vec![("bid", b.clone(), -2)], join_expected(kind, 1)?),
+        (vec![("bid", b.clone(), -1)], join_expected(kind, 0)?),
+        (vec![("bid", b.clone(), 1)], join_expected(kind, 1)?),
+        (vec![("bid", b, -1)], join_expected(kind, 0)?),
     ];
     let mut prior = crate::engine::Batch::from_updates([])?;
     for (updates, expected) in cases {
@@ -137,23 +140,23 @@ async fn weighted_join(kind: &str) -> Result<()> {
 }
 fn join_expected(
     kind: &str,
-    matched: bool,
+    matches: i64,
 ) -> Result<crate::engine::Batch<relational::Key, crate::transaction::Row>> {
     let mut output = row(&[("0:category", Some("same"))]);
     let weight = match kind {
         "outer" => {
-            output.insert("1:price".into(), matched.then(|| "7".into()));
-            if matched { 6 } else { 2 }
+            output.insert("1:price".into(), (matches > 0).then(|| "7".into()));
+            if matches > 0 { 2 * matches } else { 2 }
         }
         "exists" => {
-            if matched {
+            if matches > 0 {
                 2
             } else {
                 0
             }
         }
         _ => {
-            if matched {
+            if matches > 0 {
                 0
             } else {
                 2

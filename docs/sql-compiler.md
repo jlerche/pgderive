@@ -1076,15 +1076,16 @@ update. This measures that fixture, not worst-case fanout or end-to-end capacity
 
 ## Native DISTINCT and equality-correlated existence
 
-`SELECT DISTINCT` accepts native column projections from one ordinary source,
-optionally filtered by the existing predicate subset or the existence form below.
+`SELECT DISTINCT` accepts admitted native or computed projections, including
+derived scopes, filtered by the existing predicate subset or the existence form below.
 It partitions by complete projected values, including NULL groups, while retaining
 every complete source row until membership is tested. A nonempty partition emits
 one projected occurrence without narrowing its total occurrence count. Supported
 output types are boolean, integral, deterministic text/varchar, UUID and timestamp
 types. Repeated
-output columns remain legal. Unsupported computed outputs, DISTINCT ON, GROUP BY and
-other relational source shapes reject before registration or slot creation.
+output columns remain legal. DISTINCT ON and unsupported output domains still reject before registration or
+slot creation. Grouping after restricted EXISTS/NOT EXISTS now uses the same
+partition lowering as other grouped queries; see the [composition matrix](composition-matrix.md).
 
 An outer ordinary source may use exactly `WHERE EXISTS (SELECT 1 FROM schema.table
 alias WHERE inner.key = outer.key [AND ...])`, or `WHERE NOT EXISTS (...)`.
@@ -1240,3 +1241,4 @@ occurrence batches, retracts exact binary identities through a candidate hash
 index, then inserts positive multiplicities. Index installation and validation
 occur during initialization. No weights or occurrence identifiers become public
 columns. See [M8 publication details and evidence](m8-sink-deltas.md).
+

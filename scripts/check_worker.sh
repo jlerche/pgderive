@@ -45,15 +45,20 @@ PGDERIVE_S3_LATENCY_SCALE="$crash_scale" run_qualification crashes python3 scrip
 while read -r qualification script; do
     if [[ "$profile" == core ]]; then
         case "$qualification" in
-            compiler|application|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|computed-join|environment|aggregate-inputs|relational|partition|numeric|native|navigation|case) ;;
+            compiler|application|composition-matrix|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|computed-join|environment|aggregate-inputs|relational|partition|numeric|native|navigation|case) ;;
             *) continue ;;
         esac
     fi
-    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
+    harness_timeout=${PGDERIVE_HARNESS_TIMEOUT_SECONDS:-600}
+    if [[ "$qualification" == composition-matrix && "$profile" == full ]]; then
+        harness_timeout=${PGDERIVE_HARNESS_TIMEOUT_SECONDS:-1800}
+    fi
+    PGDERIVE_HARNESS_TIMEOUT_SECONDS="$harness_timeout" PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
         python3 "scripts/${script}_harness.py" "$output/$qualification" -- "${worker[@]}"
 done <<'QUALIFICATIONS'
 compiler sql_compiler
 application application_portfolio
+composition-matrix composition_matrix
 expression-composition expression_composition
 sliding-window sliding_window
 sink-batch sink_batch
@@ -137,7 +142,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==272,results
+assert len(results)==352,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))

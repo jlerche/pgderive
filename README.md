@@ -119,7 +119,7 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 113 worker cases:
+profile runs the complete low-level live PostgreSQL harness and 121 worker cases:
 result-table decoding/representation, semantic bindings, transaction faults,
 witnessed process kills, representative query families, lifecycle and rebuild.
 It disables synthetic S3 latency but keeps real PostgreSQL/object storage and
@@ -985,5 +985,7 @@ Binary residual comparisons retain NULLs, duplicates and representation details;
 all chunks share membership/progress commit and slot acknowledgement boundaries.
 
 
-Run the [isolated local maintained-query example](examples/local/README.md) with
-`python3 examples/local/run.py` for source SQL, native comparisons, restart and stdout.
+The [local engine development roadmap](docs/engine-development-roadmap.md) tracks
+composition qualification, stateful work reduction, a runnable local example and
+a DBSP semantics/incrementalness audit. Run the isolated
+[local example](examples/local/README.md) with `python3 examples/local/run.py`.

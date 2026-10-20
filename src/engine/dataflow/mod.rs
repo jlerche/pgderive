@@ -87,3 +87,7 @@ mod boundary_tests;
 #[cfg(test)]
 #[path = "tests/linear.rs"]
 mod linear_tests;
+
+#[cfg(test)]
+#[path = "tests/locality.rs"]
+mod locality_tests;

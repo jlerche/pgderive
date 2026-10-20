@@ -37,10 +37,17 @@ def requests(path, offset):
             for method in ('GET','PUT','POST','DELETE','HEAD')}
 
 
+def source_files():
+    return [pathlib.Path('Cargo.toml'),pathlib.Path('Cargo.lock'),pathlib.Path('rust-toolchain.toml'),
+            *sorted(pathlib.Path('queries').rglob('*.json')),
+            *sorted(pathlib.Path('queries').rglob('*.sql')),
+            *sorted(pathlib.Path('src').rglob('*.rs')),
+            *sorted(pathlib.Path('src').rglob('*.sql')),
+            *sorted(pathlib.Path('scripts').glob('*.py'))]
+
+
 def provenance(output, command, fixture):
-    files = [pathlib.Path('Cargo.lock'),pathlib.Path('queries/application/portfolio.json'),
-             *sorted(pathlib.Path('src').rglob('*.rs')), *sorted(pathlib.Path('src').rglob('*.sql')),
-             *sorted(pathlib.Path('scripts').glob('application*.py'))]
+    files = source_files()
     # Hash executables, never the configuration or inherited environment/secrets.
     binaries = {str(path):hashlib.sha256(path.read_bytes()).hexdigest() for item in command if (path:=pathlib.Path(item)).is_file()}
     value = {'version':1,'git_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),

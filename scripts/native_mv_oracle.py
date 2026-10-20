@@ -41,3 +41,14 @@ def expected(fixture,labels):
     with (fixture.output/'native-mv-oracle.jsonl').open('a') as evidence:
         evidence.write(json.dumps(record,ensure_ascii=False)+'\n')
     return query
+
+
+def binary_difference(fixture):
+    """Compare observable send representations and multiplicity, including NULL positions."""
+    if not hasattr(fixture,'binary_columns'):
+        columns = json.loads(sql(fixture,f"SELECT json_agg(json_build_array(a.attname,t.typsend::regproc::text) ORDER BY a.attnum) FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid WHERE a.attrelid='{fixture.name}.groups'::regclass AND a.attnum>0 AND NOT a.attisdropped"))
+        fixture.binary_columns = ','.join(function+'('+quote(name)+')' for name,function in columns)
+    def select(table):
+        return f'SELECT array_send(ARRAY[{fixture.binary_columns}]) FROM {fixture.name}.{table}'
+    native,result = select('pgderive_native_oracle'),select('groups')
+    return sql(fixture,f'SELECT count(*) FROM (({native} EXCEPT ALL {result}) UNION ALL ({result} EXCEPT ALL {native})) d').strip()

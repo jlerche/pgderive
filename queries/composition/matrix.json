@@ -1,0 +1,152 @@
+{
+  "version": 2,
+  "seeds": [
+    10000,
+    10001,
+    10002,
+    10003,
+    10004,
+    10005,
+    10006,
+    10007,
+    10008,
+    10009
+  ],
+  "committed_transactions": 30,
+  "accepted": [
+    {
+      "version": 2,
+      "family": "distinct",
+      "seed": 10000,
+      "parameter": 2,
+      "anti": false,
+      "sql": "SELECT DISTINCT d.label,d.bucket FROM (SELECT reverse(label) AS label,COALESCE(abs(cohort),0)+2 AS bucket FROM {schema}.account) d WHERE d.bucket>=3",
+      "labels": [
+        "label",
+        "bucket"
+      ]
+    },
+    {
+      "version": 2,
+      "family": "join-group",
+      "seed": 10000,
+      "parameter": 2,
+      "anti": false,
+      "sql": "SELECT a.cohort AS g,COUNT(*) AS n,SUM(abs(b.amount)) AS total,AVG(abs(b.amount)) AS mean FROM {schema}.account a JOIN {schema}.entry b ON abs(a.cohort)=abs(b.account_id) GROUP BY a.cohort",
+      "labels": [
+        "g",
+        "n",
+        "total",
+        "mean"
+      ]
+    },
+    {
+      "version": 2,
+      "family": "left-group",
+      "seed": 10000,
+      "parameter": 2,
+      "anti": false,
+      "sql": "SELECT a.cohort AS g,COUNT(*) AS n,COUNT(b.amount) AS present,SUM(b.amount) AS total FROM {schema}.account a LEFT JOIN {schema}.entry b ON a.cohort+2=b.account_id+2 WHERE b.amount IS NULL OR b.amount>=0 GROUP BY a.cohort",
+      "labels": [
+        "g",
+        "n",
+        "present",
+        "total"
+      ]
+    },
+    {
+      "version": 2,
+      "family": "membership-group",
+      "seed": 10000,
+      "parameter": 2,
+      "anti": false,
+      "sql": "SELECT a.cohort AS g,COUNT(*) AS n FROM {schema}.account a WHERE EXISTS(SELECT 1 FROM {schema}.entry b WHERE a.cohort+2=b.account_id+2) GROUP BY a.cohort",
+      "labels": [
+        "g",
+        "n"
+      ]
+    },
+    {
+      "version": 2,
+      "family": "regroup",
+      "seed": 10000,
+      "parameter": 2,
+      "anti": false,
+      "sql": "SELECT d.g,COUNT(*) AS n,MAX(d.v) AS v FROM (SELECT account_id AS g,AVG(amount) AS v FROM {schema}.entry GROUP BY account_id) d WHERE d.v>=0 GROUP BY d.g",
+      "labels": [
+        "g",
+        "n",
+        "v"
+      ]
+    },
+    {
+      "version": 2,
+      "family": "group-window",
+      "seed": 10000,
+      "parameter": 2,
+      "anti": false,
+      "sql": "SELECT d.g,SUM(d.v) OVER(ORDER BY d.g ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS v FROM (SELECT account_id AS g,AVG(amount) AS v FROM {schema}.entry GROUP BY account_id) d",
+      "labels": [
+        "g",
+        "v"
+      ]
+    },
+    {
+      "version": 2,
+      "family": "window-project",
+      "seed": 10000,
+      "parameter": 2,
+      "anti": false,
+      "sql": "SELECT d.id,COALESCE(d.v,0::numeric)+2 AS v FROM (SELECT id,SUM(amount) OVER(PARTITION BY account_id ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS v FROM {schema}.entry) d WHERE d.v>=0",
+      "labels": [
+        "id",
+        "v"
+      ]
+    },
+    {
+      "version": 2,
+      "family": "three-join",
+      "seed": 10000,
+      "parameter": 2,
+      "anti": false,
+      "sql": "SELECT a.cohort AS g,COUNT(*) AS n,SUM(abs(b.amount)+2) AS total FROM {schema}.account a JOIN {schema}.entry b ON abs(a.cohort)=abs(b.account_id) JOIN {schema}.region r ON a.id=r.id GROUP BY a.cohort",
+      "labels": [
+        "g",
+        "n",
+        "total"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "id": "distinct-on",
+      "sql": "SELECT DISTINCT ON(id) id FROM {schema}.account",
+      "diagnostic": "DISTINCT ON unsupported"
+    },
+    {
+      "id": "mixed-left-key",
+      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON a.id+b.id=b.account_id",
+      "diagnostic": "local to one input"
+    },
+    {
+      "id": "constant-left-key",
+      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON 1=b.account_id",
+      "diagnostic": "must reference its input"
+    },
+    {
+      "id": "numeric-left-key",
+      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON a.id::numeric=b.account_id::numeric",
+      "diagnostic": "integral result types"
+    },
+    {
+      "id": "mixed-exists-key",
+      "sql": "SELECT a.id FROM {schema}.account a WHERE EXISTS(SELECT 1 FROM {schema}.entry b WHERE a.id+b.id=b.account_id)",
+      "diagnostic": "local to one input"
+    },
+    {
+      "id": "inequality-correlation",
+      "sql": "SELECT a.id FROM {schema}.account a WHERE EXISTS(SELECT 1 FROM {schema}.entry b WHERE a.id<b.account_id)",
+      "diagnostic": "requires ordinary equality"
+    }
+  ]
+}

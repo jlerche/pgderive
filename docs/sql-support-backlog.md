@@ -33,3 +33,9 @@ M6 qualifies [computed window inputs and selected scope composition](m6-expressi
 Further relational positions and additional automatic invalidation policies remain
 separate follow-up work. Live-query delivery
 remains outside the project scope.
+
+
+The [local engine development roadmap](engine-development-roadmap.md) completed its
+finite composition matrix and DBSP audit. Computed DISTINCT projections and
+grouping after restricted EXISTS/NOT EXISTS now use the shared partition lowering;
+these are composition changes using existing kernels, not a new function catalog.

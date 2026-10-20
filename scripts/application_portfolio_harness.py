@@ -58,6 +58,10 @@ class ApplicationFixture(SqlFixture):
         path.write_text(path.read_text().replace('retry_attempts=8','retry_attempts=1').replace('maintenance_ticks=4','maintenance_ticks=4\nphase_metrics=true'))
         return path
 
+    @property
+    def query_specification(self):
+        return self.trace['spec']
+
     def memory(self):
         return expected(self.trace['spec'],self.model)
 
@@ -104,11 +108,11 @@ def inventory(fixture, command):
     assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
 
 
-def replay(output, command, trace, check_inventory=False):
-    validate(trace)
+def replay(output, command, trace, check_inventory=False, *, fixture_factory=ApplicationFixture, validator=validate):
+    validator(trace)
     output.mkdir(parents=True,exist_ok=False)
     (output/'replay.json').write_text(json.dumps(trace,ensure_ascii=False,indent=2)+'\n')
-    fixture = ApplicationFixture(output,trace)
+    fixture = fixture_factory(output,trace)
     with fixture.managed():
         if check_inventory:
             inventory(fixture,command)
@@ -169,7 +173,7 @@ def replay(output, command, trace, check_inventory=False):
         maintenance = [event for path in metric_files for line in path.read_text().splitlines()
                        if (event:=json.loads(line)).get('event')=='maintenance']
         assert all('elapsed_us' in event and event['elapsed_us']>=0 for event in maintenance)
-        summary = {'version':1,'id':trace['id'],'seed':trace['seed'],'query':trace['spec'],
+        summary = {'version':1,'id':trace['id'],'seed':trace['seed'],'query':fixture.query_specification,
                    'transactions':committed,'restart':restarted,'initial_open_recovery_us':ready['open_recovery_us'],
                    'initial_client_startup_ms':initial_startup_ms,'initial_ready_process':initial_process,'process_generations':processes,
                    'source_rows':{table:len(rows) for table,rows in trace['initial'].items()},
@@ -181,17 +185,17 @@ def replay(output, command, trace, check_inventory=False):
         return summary
 
 
-def run_case(root, command, trace, label, check_inventory=False):
+def run_case(root, command, trace, label, check_inventory=False, **replay_options):
     output = root/label
     try:
-        return replay(output,command,trace,check_inventory)
+        return replay(output,command,trace,check_inventory,**replay_options)
     except DifferentialFailure as original:
         (output/'failure.json').write_text(json.dumps({'kind':original.kind,'original':trace,'status':'reducing'},indent=2)+'\n')
         attempts = itertools.count()
         def fails(history):
             candidate = {**trace,'history':history}
             try:
-                replay(root/f'{label}-reduction-{next(attempts)}',command,candidate)
+                replay(root/f'{label}-reduction-{next(attempts)}',command,candidate,**replay_options)
             except DifferentialFailure as error:
                 return error.kind == original.kind
             except (AssertionError,RuntimeError,subprocess.SubprocessError,OSError):

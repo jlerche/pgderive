@@ -116,7 +116,6 @@ fn unsupported_membership_shapes_fail_during_compilation() {
     let native = contract();
     for sql in [
         "SELECT DISTINCT ON (id) id FROM source.auction",
-        "SELECT DISTINCT abs(id) FROM source.auction",
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction>a.id)",
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=a.id OR b.id=a.id)",
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=b.id)",
@@ -237,6 +236,19 @@ async fn distinct_threshold_retains_full_rows_without_narrowing_occurrence_total
             );
             assert_eq!(query.checkpoint()?, checkpoint);
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn computed_distinct_and_grouped_existence_share_partition_lowering() -> Result<()> {
+    for sql in [
+        "SELECT DISTINCT abs(id) AS k FROM source.auction WHERE id>0",
+        "SELECT a.category,COUNT(*) FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE abs(a.id)=abs(b.auction)) GROUP BY a.category",
+        "SELECT a.category,COUNT(*) FROM source.auction a WHERE NOT EXISTS(SELECT 1 FROM source.bid b WHERE a.id+1=b.auction+1) GROUP BY a.category",
+    ] {
+        let compiled = compile(sql, &contract())?;
+        assert!(!compiled.relational().nodes.is_empty());
     }
     Ok(())
 }
