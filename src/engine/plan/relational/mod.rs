@@ -7,8 +7,8 @@ use crate::{
     engine::{
         Batch,
         dataflow::{
-            Arrangement, Expand, Group, OrderedSelection, Partition, PreparedGraph,
-            PreparedMaintenance, Project, Statistics, TimedBatch,
+            Arrangement, Binary, Expand, Group, IndexedStatistics, OrderedSelection, Partition,
+            PreparedGraph, PreparedMaintenance, Project, Statistics, TimedBatch,
         },
         reader::{BatchData, BlockCache, CacheStats},
         trace::TraceSnapshot,
@@ -32,6 +32,10 @@ pub enum Operator<K: BatchData, V: BatchData> {
     Partition(Partition<K, V>),
     /// Direct cursor-based affected-group differentiation.
     Group(Group<K, V>),
+    /// Fused retained index summaries.
+    IndexedStatistics(IndexedStatistics<K, V>),
+    /// Direct indexed window differentiation.
+    Window(Binary<K, V>),
     /// Exact retained linear statistics.
     Statistics(Statistics<K, V>),
     /// Retained ordered selection.
@@ -44,7 +48,8 @@ impl<K: BatchData, V: BatchData> Operator<K, V> {
             Self::Expand(_) => super::Kind::Expand,
             Self::Join(_) => super::Kind::Join,
             Self::Partition(_) | Self::Group(_) => super::Kind::Aggregate,
-            Self::Statistics(_) => super::Kind::Statistics,
+            Self::Statistics(_) | Self::IndexedStatistics(_) => super::Kind::Statistics,
+            Self::Window(_) => super::Kind::Window,
             Self::Ordered(_) => super::Kind::Ordered,
         }
     }

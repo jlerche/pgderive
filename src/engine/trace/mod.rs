@@ -7,7 +7,7 @@ use super::{
 };
 use anyhow::{Context, Result, ensure};
 pub use manifest::Manifest;
-pub use merged::{KeyCursor, KeyProbes, MergedCursor};
+pub use merged::{KeyCursor, KeyProbes, MergedCursor, RangeCursor};
 use std::sync::Arc;
 
 /// One immutable run, in memory or in object storage.
@@ -26,7 +26,18 @@ impl<K: BatchData, V: BatchData> Run<K, V> {
             Self::Memory(batch) => {
                 let mut cursor = batch.cursor().await?;
                 cursor.seek_key(key).await?;
-                cursor.restrict_to_key(key);
+                cursor.restrict_to_upper(key);
+                Ok(cursor.current().is_some().then_some(cursor))
+            }
+        }
+    }
+    async fn cursor_for_range(&self, lower: &K, upper: &K) -> Result<Option<Cursor<K, V>>> {
+        match self {
+            Self::Object(batch) => Cursor::object_range(batch.clone(), lower, upper).await,
+            Self::Memory(batch) => {
+                let mut cursor = batch.cursor().await?;
+                cursor.seek_key(lower).await?;
+                cursor.restrict_to_upper(upper);
                 Ok(cursor.current().is_some().then_some(cursor))
             }
         }
@@ -98,6 +109,14 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         KeyCursor::open(&self.runs, key).await
     }
 
+    /// Open an inclusive navigation-key range, skipping disjoint immutable runs.
+    ///
+    /// # Errors
+    /// Rejects inverted bounds and selected-block integrity/read failures.
+    pub async fn range_cursor(&self, lower: &K, upper: &K) -> Result<RangeCursor<K, V>> {
+        ensure!(lower <= upper, "inverted trace range");
+        RangeCursor::open(&self.runs, lower, upper).await
+    }
     /// Batch affected-key probes against this immutable boundary.
     #[must_use]
     pub fn probes(&self) -> KeyProbes<K, V> {
@@ -185,3 +204,7 @@ mod probe_tests;
 #[cfg(test)]
 #[path = "tests/manifests.rs"]
 mod manifest_tests;
+
+#[cfg(test)]
+#[path = "tests/range.rs"]
+mod range_tests;

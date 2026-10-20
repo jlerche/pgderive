@@ -38,11 +38,14 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
         ensure!(operator.kind() == node.kind, "operator callback family differs from declaration");
         callbacks += 1;
         match operator {
-            Operator::Join(_) => ensure!(
+            Operator::Join(_) | Operator::Window(_) => ensure!(
                 node.inputs.iter().all(|id| maintained.contains(id)),
                 "join inputs require maintained state"
             ),
-            Operator::Ordered(_) | Operator::Statistics(_) | Operator::Group(_) => ensure!(
+            Operator::Ordered(_)
+            | Operator::Statistics(_)
+            | Operator::IndexedStatistics(_)
+            | Operator::Group(_) => ensure!(
                 maintained.contains(&node.id) && maintained.contains(&node.inputs[0]),
                 "operator requires retained input and state"
             ),
@@ -79,7 +82,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         for node in &self.plan.definition().nodes {
             let batch = match node.kind {
                 Kind::Source => sources.next().context("incomplete relational input")?,
-                Kind::Join | Kind::Union => {
+                Kind::Join | Kind::Union | Kind::Window => {
                     self.evaluate_binary(node, &prior, &values, input.time).await?
                 }
                 _ => {
@@ -122,6 +125,16 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         let input = TimedBatch { time, batch: (left, right) };
         if node.kind == Kind::Union {
             return Ok(Union.evaluate(&input, self.limits)?.batch);
+        }
+        if let Some(Operator::Window(operator)) = self.operators.get(&node.id) {
+            return Ok(operator
+                .evaluate(
+                    &TimedBatch { time, batch: (&*input.batch.0, &*input.batch.1) },
+                    (self.prior(&node.inputs[0], prior)?, self.prior(&node.inputs[1], prior)?),
+                    self.limits,
+                )
+                .await?
+                .batch);
         }
         let Some(Operator::Join(operator)) = self.operators.get(&node.id) else {
             anyhow::bail!("missing join mapper")
@@ -169,6 +182,10 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                 self.prior(&node.inputs[0], prior)?.validate_bag_delta(&input.batch).await?;
                 operator.evaluate(&input, self.prior(&node.id, prior)?, self.limits).await
             }
+            Operator::IndexedStatistics(operator) => {
+                self.prior(&node.inputs[0], prior)?.validate_bag_delta(&input.batch).await?;
+                operator.evaluate(&input, self.prior(&node.id, prior)?, self.limits).await
+            }
             Operator::Partition(operator) if operator.supports_retained_output() => {
                 operator
                     .evaluate_retained(
@@ -182,7 +199,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             Operator::Partition(operator) => {
                 operator.evaluate(&input, self.prior(&node.inputs[0], prior)?, self.limits).await
             }
-            Operator::Join(_) | Operator::Project(_) | Operator::Group(_) => {
+            Operator::Join(_) | Operator::Window(_) | Operator::Project(_) | Operator::Group(_) => {
                 anyhow::bail!("binary callback bound to unary node")
             }
         }

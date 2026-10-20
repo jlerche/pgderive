@@ -206,6 +206,7 @@ mod topk;
 
 mod membership;
 mod membership_counts;
+mod prefix_windows;
 
 /// Apply full-row signed updates to the independent source bag used by an oracle.
 fn apply_rows(state: &mut std::collections::BTreeMap<Row, i64>, changes: &weighted::Batch) {

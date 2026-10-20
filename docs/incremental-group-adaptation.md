@@ -74,8 +74,8 @@ full-state scan costs are separate from the measured subsequent query reads.
 
 These are cold-block/work measurements, not wall-clock, RSS or throughput claims.
 Join fan-out, affected-left output on threshold crossings, and overlapping-run
-reads remain real costs. Persistent window/range summaries remain a separate
-required item in [the full adaptation scope](feldera-adaptation-roadmap.md).
+reads remain real costs. The later [persistent prefix-window summaries](prefix-windows.md) address that
+separate item for a qualified RANGE family. See [the full adaptation scope](feldera-adaptation-roadmap.md).
 
 ## Verification
 
@@ -87,7 +87,7 @@ The common gate passed 329 Rust tests (three ignored), 45 Python tests, 127 work
 cases plus rebuild and 97.39% production line coverage. Strict Clippy, formatting,
 file-size and dependency checks passed. Independent review found no actionable
 implementation findings. See the [qualification manifest](feldera-adaptation-evidence.json).
-The complete release profile was not run; durable window summaries remain pending.
+The complete release profile was not run; those results predate the subsequent durable prefix-window qualification.
 
 Upstream references:
 [distinct](https://github.com/feldera/feldera/blob/fe76f6a012bfcdb1b9fe4e0455c5774bf6d6ae38/crates/dbsp/src/operator/dynamic/distinct.rs),

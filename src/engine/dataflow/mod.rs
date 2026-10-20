@@ -101,3 +101,8 @@ mod group_tests;
 #[cfg(test)]
 #[path = "tests/run_locality.rs"]
 mod run_locality_tests;
+
+mod indexed_statistics;
+pub use indexed_statistics::IndexedStatistics;
+mod binary;
+pub use binary::{Binary, BinaryFuture, BinaryInput};

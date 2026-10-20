@@ -41,6 +41,11 @@ fn operators(ir: &Relational, settings: &Settings) -> Operators<Key, Row> {
 fn bind<'a>(node: &'a Node, projected: &Projected, settings: &Settings) -> Option<Bound<'a>> {
     Some(match node {
         Node::Source { .. } | Node::Union { .. } => return None,
+        Node::PrefixInput { id, spec, .. } => (id, Operator::Project(super::prefix::input(spec))),
+        Node::PrefixStatistics { id, spec, .. } => {
+            (id, Operator::IndexedStatistics(super::prefix::statistics(spec)))
+        }
+        Node::PrefixWindow { id, spec, .. } => (id, Operator::Window(super::prefix::window(spec))),
         Node::LookupInput { id, spec, .. } => (id, Operator::Project(super::lookup::input(spec))),
         Node::Lookup { id, spec, .. } => (id, Operator::Partition(lookup_operator(spec, settings))),
         Node::Expand { id, series, .. } => (id, Operator::Expand(expand(series))),
@@ -229,6 +234,7 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         | Node::LookupInput { id, input, .. }
         | Node::OrderedGroup { id, input }
         | Node::DistinctMembership { id, input, .. }
+        | Node::PrefixInput { id, input, .. }
         | Node::RightPresence { id, input } => (id, plan::Kind::Project, vec![input.clone()]),
         Node::Union { id, left, right } => {
             (id, plan::Kind::Union, vec![left.clone(), right.clone()])
@@ -238,6 +244,7 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         | Node::DistinctInput { id, input, .. } => (id, plan::Kind::Expand, vec![input.clone()]),
         Node::Statistics { id, input, .. }
         | Node::DistinctCounts { id, input, .. }
+        | Node::PrefixStatistics { id, input, .. }
         | Node::RightCounts { id, input } => (id, plan::Kind::Statistics, vec![input.clone()]),
         Node::OrderedFirst { id, input, .. } | Node::TopK { id, input, .. } => {
             (id, plan::Kind::Ordered, vec![input.clone()])
@@ -249,6 +256,9 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
         | Node::Existence { id, input, .. }
         | Node::Lookup { id, input, .. } => (id, plan::Kind::Aggregate, vec![input.clone()]),
         Node::Join { id, left, right } => (id, plan::Kind::Join, vec![left.clone(), right.clone()]),
+        Node::PrefixWindow { id, left, right, .. } => {
+            (id, plan::Kind::Window, vec![left.clone(), right.clone()])
+        }
     };
     plan::Node { id: id.clone(), kind, inputs, schema: schema(id) }
 }
@@ -278,7 +288,7 @@ pub(in crate::worker) fn plan(
     let mut maintained = BTreeMap::new();
     for node in &nodes {
         let inputs = match node.kind {
-            plan::Kind::Join => node.inputs.as_slice(),
+            plan::Kind::Join | plan::Kind::Window => node.inputs.as_slice(),
             plan::Kind::Statistics | plan::Kind::Ordered | plan::Kind::Aggregate => {
                 maintained.insert(node.id.clone(), node.id.clone());
                 node.inputs.as_slice()
@@ -373,6 +383,9 @@ pub(in crate::worker) fn build_scanned(
     compiled: &Compiled,
     settings: &Settings,
 ) -> Result<Query> {
+    if compiled.relational.nodes.iter().any(|node| matches!(node, Node::PrefixWindow { .. })) {
+        return build_scanned(contract, &scan_prefix(compiled), settings);
+    }
     let ir = compiled.relational();
     let mut operators = operators(ir, settings);
     for node in &ir.nodes {
@@ -403,4 +416,36 @@ pub(in crate::worker) fn build_scanned(
         operators.insert(id.clone(), Operator::Partition(operator));
     }
     Query::new(plan(contract, compiled, ir)?, operators, settings)
+}
+
+#[cfg(test)]
+pub(in crate::worker) fn scan_prefix(compiled: &Compiled) -> Compiled {
+    let mut baseline = compiled.clone();
+    let inputs = baseline
+        .relational
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            if let Node::PrefixInput { id, input, .. } = node {
+                Some((id.clone(), input.clone()))
+            } else {
+                None
+            }
+        })
+        .collect::<BTreeMap<_, _>>();
+    baseline.relational.nodes = baseline
+        .relational
+        .nodes
+        .into_iter()
+        .filter_map(|node| match node {
+            Node::PrefixInput { .. } | Node::PrefixStatistics { .. } => None,
+            Node::PrefixWindow { id, left, spec, .. } => Some(Node::Partition {
+                id,
+                input: inputs.get(&left).cloned().unwrap_or(left),
+                spec,
+            }),
+            other => Some(other),
+        })
+        .collect();
+    baseline
 }

@@ -12,6 +12,7 @@ mod navigation;
 mod order;
 mod ordered;
 mod partition;
+mod prefix;
 pub(super) mod relational;
 mod statistics;
 mod topk;

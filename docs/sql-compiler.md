@@ -1249,3 +1249,13 @@ Admitted integral MIN/MAX can now share sliding frame statistics with COUNT/SUM/
 including supported computed arguments and FILTER. Other aggregate sets retain
 scan evaluation. Full affected-partition reads remain. See
 [extrema evidence and limits](sliding-extrema.md).
+
+
+## Durable prefix RANGE windows
+
+A single ascending nonnullable integral order column and prefix RANGE frame can
+use persistent COUNT/SUM/AVG summaries. The compiler registers ordered raw data
+and fused prefix statistics as explicit engine state. Other admitted frames keep
+the existing exact evaluator. This changes the plan identity of eligible old
+window registrations, requiring explicit rebuild. See [supported forms, evidence
+and read/write costs](prefix-windows.md).

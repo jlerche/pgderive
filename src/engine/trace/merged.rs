@@ -173,6 +173,37 @@ impl<K: BatchData, V: BatchData> KeyCursor<K, V> {
     }
 }
 
+/// Forward-only inclusive navigation range across all overlapping immutable runs.
+#[derive(Clone)]
+pub struct RangeCursor<K: BatchData, V: BatchData> {
+    cursor: MergedCursor<K, V>,
+}
+impl<K: BatchData, V: BatchData> RangeCursor<K, V> {
+    pub(super) async fn open(runs: &[Run<K, V>], lower: &K, upper: &K) -> Result<Self> {
+        let mut cursors = Vec::new();
+        for run in runs {
+            if let Some(cursor) = run.cursor_for_range(lower, upper).await? {
+                cursors.push(cursor);
+            }
+        }
+        let mut cursor = MergedCursor { cursors, row: None };
+        cursor.find().await?;
+        Ok(Self { cursor })
+    }
+    /// Current consolidated full identity and signed coefficient.
+    #[must_use]
+    pub fn current(&self) -> Option<(&K, &V, i64)> {
+        self.cursor.current()
+    }
+    /// Advance without loading blocks beyond the inclusive upper bound.
+    ///
+    /// # Errors
+    /// Read/integrity failures preserve the old position for retry.
+    pub async fn advance(&mut self) -> Result<()> {
+        self.cursor.advance().await
+    }
+}
+
 /// Batch of key probes sharing a pinned snapshot and the current key's run heads.
 /// Repeated identities under one key reuse decoded heads without another GET.
 pub struct KeyProbes<K: BatchData, V: BatchData> {

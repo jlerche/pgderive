@@ -152,3 +152,13 @@ count arrangements change plan identity and require explicit rebuild. DISTINCT
 and LEFT JOIN retain their arrangement layouts. The table above describes the
 audited baseline; the adaptation records current work/read bounds and remaining
 window work separately.
+
+
+## Persistent prefix window summaries
+
+The [durable prefix RANGE path](prefix-windows.md) adds an ordered raw-data trace
+and retained additive summaries for a qualified COUNT/SUM/AVG family. It scans
+only affected output ranges, differentiating synchronized data/summary changes
+against old snapshots. Other frames retain the baseline behavior above. This
+supersedes the baseline's full-partition-read classification for those selected
+prefix windows only; early changes can still revise an entire partition.

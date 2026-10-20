@@ -77,10 +77,12 @@ fn infer<'a>(
                 });
             (id, identity)
         }
+        Node::PrefixWindow { id, left, .. } => (id, prior(left, identities)?),
         Node::Union { id, .. }
         | Node::LeftJoin { id, .. }
         | Node::SetDistinct { id, .. }
         | Node::Existence { id, .. }
+        | Node::PrefixStatistics { id, .. }
         | Node::RightCounts { id, .. }
         | Node::RightPresence { id, .. }
         | Node::Lookup { id, .. }
@@ -94,6 +96,7 @@ fn infer<'a>(
         | Node::Map { id, input, .. }
         | Node::CrossKey { id, input }
         | Node::EquijoinKey { id, input, .. }
+        | Node::PrefixInput { id, input, .. }
         | Node::LeftJoinInput { id, input, .. }
         | Node::LookupInput { id, input, .. }
         | Node::Output { id, input }

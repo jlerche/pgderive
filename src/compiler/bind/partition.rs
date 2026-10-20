@@ -14,6 +14,7 @@ pub(in crate::compiler::bind) mod composition;
 mod distinct;
 mod occurrence;
 mod ordered;
+mod prefix;
 struct Body {
     expansion: Option<crate::compiler::parser::expansion::Series>,
     targets: Vec<syntax::Target>,
@@ -441,6 +442,9 @@ fn nodes(
     spec: Partition,
     computed: Vec<crate::compiler::scalar::Computed>,
 ) -> Vec<Node> {
+    if prefix::supports(&spec) {
+        return prefix::nodes(keys, spec, computed);
+    }
     if ordered::supports(&spec) {
         return ordered::nodes(keys, spec, computed);
     }

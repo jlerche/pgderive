@@ -60,6 +60,7 @@ fn aggregate_base(relational: &Relational) -> Result<usize> {
         if let Node::Partition { spec, .. }
         | Node::Statistics { spec, .. }
         | Node::OrderedFinalize { spec, .. }
+        | Node::PrefixWindow { spec, .. }
         | Node::Finalize { spec, .. } = node
         {
             for value in &spec.aggregates {
@@ -145,7 +146,9 @@ pub(in crate::compiler::bind) fn rewrite(
 ) {
     match node {
         Node::Source { id, .. } => *id = rename(id),
-        Node::Join { id, left, right } | Node::Union { id, left, right } => {
+        Node::Join { id, left, right }
+        | Node::Union { id, left, right }
+        | Node::PrefixWindow { id, left, right, .. } => {
             *id = rename(id);
             *left = edge(left);
             *right = edge(right);
@@ -160,6 +163,8 @@ pub(in crate::compiler::bind) fn rewrite(
         | Node::LeftJoin { id, input, .. }
         | Node::SetDistinct { id, input, .. }
         | Node::Existence { id, input, .. }
+        | Node::PrefixInput { id, input, .. }
+        | Node::PrefixStatistics { id, input, .. }
         | Node::RightCounts { id, input }
         | Node::RightPresence { id, input }
         | Node::LookupInput { id, input, .. }
