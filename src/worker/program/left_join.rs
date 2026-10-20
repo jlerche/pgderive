@@ -36,6 +36,7 @@ pub(super) fn input(spec: &Input) -> Project<Key, Row, Key, Row> {
     })
 }
 pub(super) fn operator(spec: &Spec, limits: Limits) -> Partition<Key, Row> {
+    let incremental = spec.clone();
     let spec = spec.clone();
     Partition::new_zero_preserving(move |_: &Key, rows: &Batch<(), Row>, work| {
         let mut left = Vec::new();
@@ -74,8 +75,11 @@ pub(super) fn operator(spec: &Spec, limits: Limits) -> Partition<Key, Row> {
         }
         output.finish_batch()
     })
+    .with_incremental(move |_, before, after, delta, work| {
+        super::join_delta::evaluate((&incremental, limits), before, after, delta, work)
+    })
 }
-fn stripped(row: &Row) -> Row {
+pub(super) fn stripped(row: &Row) -> Row {
     row.iter()
         .filter(|(field, _)| field.as_str() != SIDE)
         .map(|(field, value)| (field.clone(), value.clone()))

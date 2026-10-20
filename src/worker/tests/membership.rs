@@ -59,6 +59,7 @@ async fn history(anti: Option<bool>, distinct: bool) -> Result<()> {
     let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
+    let mut scanned = relational::build_scanned(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", Some("1"))]);
     let a2 = row(&[("id", Some("2")), ("category", None), ("other", Some("1"))]);
     let null = row(&[("id", Some("3")), ("category", Some("null")), ("other", None)]);
@@ -91,6 +92,10 @@ async fn history(anti: Option<bool>, distinct: bool) -> Result<()> {
         let expected = super::bag_delta(&before, &after)?;
         let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(work.output().batch, expected, "{sql}, tick {index}");
+        let reference =
+            scanned.prepare(relational::inputs(&changes, ir, scanned.time() + 1)?).await?;
+        assert_eq!(work.output().batch, reference.output().batch);
+        scanned.commit(reference)?;
         query.commit(work)?;
         if index == 2 {
             super::restart_relational(&mut query, &native, &compiled, &options).await?;

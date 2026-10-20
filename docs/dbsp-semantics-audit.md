@@ -138,3 +138,13 @@ See [completion evidence](engine-development-evidence.json) and
 [extrema limits and measurement](sliding-extrema.md). Future improvements should
 use this classification to target actual affected-key/partition costs; they are
 separate from the completed bounded audit.
+
+
+## Subsequent direct group differentiation
+
+The [incremental group adaptation](incremental-group-adaptation.md) adds direct
+LEFT JOIN, DISTINCT and EXISTS/NOT EXISTS delta evaluators without changing
+arrangement layouts. These paths still read full affected input groups, but no
+longer read retained output or rebuild its complete matching Cartesian product.
+The table above describes the audited baseline; the adaptation documents the
+new computation bounds and the remaining input-read limitation separately.

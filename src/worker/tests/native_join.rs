@@ -55,6 +55,7 @@ async fn native_left_join_signed_history_nulls_restart_and_atomic_rejection() ->
     let ir = compiled.relational();
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
+    let mut scanned = relational::build_scanned(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", Some("1"))]);
     let a2 = row(&[("id", Some("2")), ("category", Some("nullkey")), ("other", None)]);
     let b = row(&[("id", Some("1")), ("auction", Some("1")), ("price", Some("-2"))]);
@@ -95,6 +96,10 @@ async fn native_left_join_signed_history_nulls_restart_and_atomic_rejection() ->
         let expected = super::bag_delta(&before, &after)?;
         let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(work.output().batch, expected);
+        let reference =
+            scanned.prepare(relational::inputs(&changes, ir, scanned.time() + 1)?).await?;
+        assert_eq!(work.output().batch, reference.output().batch);
+        scanned.commit(reference)?;
         query.commit(work)?;
         if index == 2 {
             super::restart_relational(&mut query, &native, &compiled, &options).await?;

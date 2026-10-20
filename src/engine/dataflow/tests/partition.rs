@@ -194,3 +194,43 @@ async fn retained_output_reduces_callback_visits_against_legacy() -> Result<()> 
     assert_eq!(retained_visits.load(Ordering::Relaxed), 1001);
     Ok(())
 }
+
+#[tokio::test]
+async fn direct_group_delta_skips_recomputation_and_reopens_legacy_state() -> Result<()> {
+    let store = Arc::new(InMemory::new());
+    let inputs = Arrangement::<i64, i64>::new(store.clone(), "direct-input".into(), 1)?;
+    let outputs = Arrangement::<i64, i64>::new(store, "direct-output".into(), 1)?;
+    let fallback =
+        Partition::new_zero_preserving(|_: &i64, rows: &Batch<(), i64>, _| Ok(rows.clone()));
+    let initial = TimedBatch { time: 1, batch: Batch::from_updates([((0, 2), 3)])? };
+    let old = fallback
+        .evaluate_retained(&initial, &inputs.empty(), &outputs.empty(), Limits::default())
+        .await?;
+    let input = inputs.stage(&inputs.empty(), &initial).await?;
+    let output = outputs.stage(&outputs.empty(), &old).await?;
+    let input = inputs.reopen(input.manifest()?).await?;
+    let output = outputs.reopen(output.manifest()?).await?;
+    let visits = Arc::new(AtomicUsize::new(0));
+    let measured = visits.clone();
+    let direct = Partition::new_zero_preserving(|_: &i64, _: &Batch<(), i64>, _| {
+        anyhow::bail!("full callback must not run")
+    })
+    .with_incremental(move |_, before, after, delta, work| {
+        assert_eq!(before, &Batch::from_updates([(((), 2), 3)])?);
+        assert_eq!(after, &Batch::from_updates([(((), 2), 2), (((), 4), 1)])?);
+        work.charge(delta.iter().count())?;
+        measured.fetch_add(1, Ordering::Relaxed);
+        Ok(delta.clone())
+    });
+    let delta = TimedBatch { time: 2, batch: Batch::from_updates([((0, 2), -1), ((0, 4), 1)])? };
+    // Three input/delta visits and two callback visits: no old-output read charge.
+    let limits = Limits { contributions: 5, ..Limits::default() };
+    let next = direct.evaluate_retained(&delta, &input, &output, limits).await?;
+    assert_eq!(next.batch, delta.batch);
+    assert_eq!(visits.load(Ordering::Relaxed), 1);
+    let invalid = TimedBatch { time: 2, batch: Batch::from_updates([((0, 2), -4)])? };
+    assert!(direct.evaluate_retained(&invalid, &input, &output, limits).await.is_err());
+    assert_eq!(visits.load(Ordering::Relaxed), 1);
+    assert_eq!(input.materialize().await?, initial.batch);
+    Ok(())
+}

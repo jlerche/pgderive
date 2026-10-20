@@ -2,6 +2,7 @@ mod aggregate;
 mod bindings;
 mod distinct;
 mod distinct_statistics;
+mod join_delta;
 mod left_join;
 mod lookup;
 mod membership;

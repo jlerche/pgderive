@@ -384,5 +384,12 @@ pub(in crate::worker) fn build_scanned(
             );
         }
     }
+    for node in &ir.nodes {
+        if matches!(node, Node::SetDistinct { .. } | Node::Existence { .. } | Node::LeftJoin { .. })
+            && let Some((id, Operator::Partition(operator))) = bind(node, &ir.output, settings)
+        {
+            operators.insert(id.to_owned(), Operator::Partition(operator.without_incremental()));
+        }
+    }
     Query::new(plan(contract, compiled, ir)?, operators, settings)
 }
