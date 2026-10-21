@@ -12,7 +12,7 @@ pub(super) async fn boundary(
     let Some(row) = row else {
         return Ok(None);
     };
-    ensure!(row.try_get::<_, i32>(0)? == 1, "unsupported catalog query format");
+    ensure!(matches!(row.try_get::<_, i32>(0)?, 1 | 2), "unsupported catalog query format");
     let identity: String = row.try_get(1)?;
     let definition: serde_json::Value = row.try_get(2)?;
     let registered = Plan::new(serde_json::from_value(definition)?)?;
@@ -45,7 +45,7 @@ pub(super) async fn durable(
     let Some(stored) = boundary(tx, catalog, plan).await? else {
         return Ok(None);
     };
-    let row = tx.query_opt(&format!("SELECT binding,sink_table,fence,commit_lsn::text,end_lsn::text,xid FROM {}.pgderive_progress WHERE query_id=$1{suffix}", catalog.schema), &[&catalog.query]).await?.context("query has no durable publication contract")?;
+    let row = tx.query_opt(&format!("SELECT binding,sink_table,fence,commit_lsn::text,end_lsn::text,xid,checkpoint_lsn::text,published_time FROM {}.pgderive_progress WHERE query_id=$1{suffix}", catalog.schema), &[&catalog.query]).await?.context("query has no durable publication contract")?;
     let binding: Binding = serde_json::from_value(row.try_get(0)?)?;
     binding.validate()?;
     binding.verify_ownership(tx, catalog).await?;
@@ -57,10 +57,20 @@ pub(super) async fn durable(
     let commit = row.try_get::<_, String>(3)?.parse()?;
     let end = row.try_get::<_, String>(4)?.parse()?;
     let xid = row.try_get::<_, Option<i64>>(5)?.map(u32::try_from).transpose()?;
+    let checkpoint_end = row.try_get::<_, String>(6)?.parse()?;
+    let published_time = u64::try_from(row.try_get::<_, i64>(7)?)?;
+    ensure!(
+        checkpoint_end <= end && published_time >= stored.checkpoint.time,
+        "invalid checkpoint/publication boundary"
+    );
+    ensure!(
+        (checkpoint_end == end) == (published_time == stored.checkpoint.time),
+        "checkpoint LSN/clock disagreement"
+    );
     ensure!(fence > 0 && end >= commit, "invalid durable fence/source position");
     ensure!(
-        Binding::valid_identity(stored.checkpoint.time, xid, commit, end),
+        Binding::valid_identity(published_time, xid, commit, end),
         "durable transaction identity/clock mismatch"
     );
-    Ok(Some(Durable { stored, binding, fence, commit, end, xid }))
+    Ok(Some(Durable { stored, binding, fence, commit, end, checkpoint_end, published_time, xid }))
 }

@@ -49,7 +49,7 @@ class ToastFixture(Fixture):
         assert {tuple(row['tuple'][1]):row['weight'] for row in rows} == dict(memory)
         assert self.sql(f'''SELECT count(*) FROM pg_replication_slots s
             JOIN {self.name}.pgderive_worker_registration r ON s.slot_name=r.slot_name
-            CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.end_lsn''').strip() == '0'
+            CROSS JOIN {self.name}.pgderive_progress p WHERE s.confirmed_flush_lsn>p.checkpoint_lsn''').strip() == '0'
 
     def progress(self):
         return self.sql(f'SELECT json_build_array(q.logical_time,p.xid,p.commit_lsn,p.end_lsn) '

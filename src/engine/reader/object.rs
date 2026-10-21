@@ -89,7 +89,7 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) store: Arc<dyn ObjectStore>,
     pub(super) reference: ObjectRef,
     pub(super) blocks: Fences<K, V>,
-    cache: Arc<BlockCache>,
+    pub(super) cache: Arc<BlockCache>,
 }
 
 impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
@@ -121,34 +121,15 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         schema: &str,
         block_rows: usize,
     ) -> Result<ObjectRef> {
-        ensure!(!schema.is_empty() && block_rows > 0, "invalid batch schema or block size");
-        let mut blocks = Vec::new();
-        let mut fence_bytes = 0_usize;
-        let mut rows = batch.iter();
-        loop {
-            let chunk = rows.by_ref().take(block_rows.min(65_536)).collect::<Vec<_>>();
-            if chunk.is_empty() {
-                break;
-            }
-            let encoded = super::compression::encode(&chunk)?;
-            let digest = hash(&encoded);
-            let path = format!("pgderive/block/{digest}");
-            super::bounded::put(&store, &path, encoded.clone()).await?;
-            let block = Block {
-                path,
-                first: chunk.first().context("empty chunk")?.0.clone(),
-                last: chunk.last().context("empty chunk")?.0.clone(),
-                length: u64::try_from(encoded.len())?,
-                rows: chunk.len(),
-                hash: digest,
-            };
-            fence_bytes = fence_bytes
-                .checked_add(super::bounded::encode(&block)?.len())
-                .context("manifest size overflow")?;
-            ensure!(fence_bytes <= super::bounded::MAX_BYTES, "manifest exceeds byte limit");
-            blocks.push(block);
-        }
-        Self::upload_index(&store, schema, blocks).await
+        Ok(Self::write_resident(
+            store,
+            batch,
+            schema,
+            (None, block_rows),
+            Arc::new(BlockCache::new(0, 0)),
+        )
+        .await?
+        .reference)
     }
     pub(super) async fn upload_index(
         store: &Arc<dyn ObjectStore>,

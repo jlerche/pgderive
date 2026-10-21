@@ -54,7 +54,7 @@ target_directory=$(cargo metadata --locked --no-deps --format-version 1 | python
 install -m 755 "$target_directory/$package_host/release/pgderive" "$output/bin/pgderive"
 ldd "$output/bin/pgderive" > "$output/runtime-libraries.log"
 install -m 644 worker.example.toml "$output/examples/worker.toml"
-for document in storage-configuration postgres-security worker-health deployment backup-failover sql-compiler; do
+for document in storage-configuration postgres-security worker-health deployment backup-failover sql-compiler memtable-replay object-upload-path; do
     install -m 644 "docs/$document.md" "$output/docs/$document.md"
 done
 source_snapshot "$output/source-final.json"

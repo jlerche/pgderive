@@ -58,25 +58,12 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         TraceSnapshot::reopen(self.store.clone(), manifest, &self.schema, self.cache.clone()).await
     }
     async fn upload(&self, batch: &Batch<K, V>) -> Result<Run<K, V>> {
-        let reference = match &self.namespace {
-            Some(namespace) => {
-                ObjectBatch::write_namespaced(
-                    self.store.clone(),
-                    batch,
-                    &self.schema,
-                    (namespace, self.block_rows),
-                )
-                .await?
-            }
-            None => {
-                ObjectBatch::write(self.store.clone(), batch, &self.schema, self.block_rows).await?
-            }
-        };
         Ok(Run::Object(
-            ObjectBatch::open_with_cache(
+            ObjectBatch::write_resident(
                 self.store.clone(),
-                reference,
+                batch,
                 &self.schema,
+                (self.namespace.as_deref(), self.block_rows),
                 self.cache.clone(),
             )
             .await?,
@@ -104,38 +91,17 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         let mut cursor = prior.cursor().await?;
         let limits =
             WriteLimits { block_rows: self.block_rows.min(65_536), ..WriteLimits::default() };
-        let references = match &self.namespace {
-            Some(namespace) => {
-                ObjectBatch::<K, V>::write_stream_namespaced(
-                    self.store.clone(),
-                    &mut cursor,
-                    &self.schema,
-                    (namespace, limits),
-                )
-                .await?
-            }
-            None => {
-                ObjectBatch::<K, V>::write_stream(
-                    self.store.clone(),
-                    &mut cursor,
-                    &self.schema,
-                    limits,
-                )
-                .await?
-            }
-        };
-        let mut runs = Vec::new();
-        for reference in references {
-            runs.push(Run::Object(
-                ObjectBatch::open_with_cache(
-                    self.store.clone(),
-                    reference,
-                    &self.schema,
-                    self.cache.clone(),
-                )
-                .await?,
-            ));
-        }
+        let runs = ObjectBatch::<K, V>::write_stream_resident(
+            self.store.clone(),
+            &mut cursor,
+            &self.schema,
+            (self.namespace.as_deref(), limits),
+            self.cache.clone(),
+        )
+        .await?
+        .into_iter()
+        .map(Run::Object)
+        .collect();
         prior.replace_runs(runs).await
     }
 }

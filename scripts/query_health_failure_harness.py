@@ -32,6 +32,7 @@ def qualify(output, binary, kind):
             scratch.mkdir()
             fixture.environment['TMPDIR'] = str(scratch.resolve())
         if kind == 'storage_outage':
+            text = text.replace('[worker.health]', 'checkpoint_interval_ms=100\n[worker.health]')
             log_path = output/'storage-proxy.jsonl'
             with log_path.open('w') as log:
                 proxy = subprocess.Popen([sys.executable, '-u', 'scripts/s3_latency_proxy.py',
@@ -54,6 +55,12 @@ def qualify(output, binary, kind):
                 first = 1000+ordinal*100
                 fixture.sql(f'INSERT INTO {fixture.name}.bid SELECT i,2,i FROM generate_series({first},{first+99}) i')
                 worker.event('published', minimum_time=ready['time']+ordinal+1)
+        if kind == 'storage_outage':
+            # Warm the relevant base blocks, then finish a checkpoint. Cold reads
+            # legitimately require storage; this case tests resident WAL-backed work.
+            fixture.sql(f'UPDATE {fixture.name}.bid SET price=111 WHERE id=1')
+            worker.event('published', minimum_time=ready['time']+1)
+            worker.event('maintenance')
         before = command(fixture, binary, 'status', config)['progress']
         if kind == 'storage_outage':
             proxy.send_signal(signal.SIGSTOP)
@@ -84,10 +91,10 @@ def qualify(output, binary, kind):
             deadline = time.monotonic()+2
             while time.monotonic() < deadline:
                 busy = health(fixture, binary, config)
-                if busy['worker']['diagnostics']['phase'] == 'publishing':
+                if busy['worker']['diagnostics']['phase'] == 'maintenance':
                     break
                 time.sleep(.05)
-            assert busy['worker']['diagnostics']['phase'] == 'publishing', busy
+            assert busy['worker']['diagnostics']['phase'] == 'maintenance', busy
             assert busy['worker']['recent'] and not busy['ready'], busy
         worker.process.wait(timeout=30)
         assert worker.process.returncode != 0, 'failure was silently accepted'
@@ -95,8 +102,15 @@ def qualify(output, binary, kind):
         failed = health(fixture, binary, config)
         assert not failed['ready'], failed
         after = command(fixture, binary, 'status', config)['progress']
-        assert before == after, 'failed input changed authoritative progress'
-        ahead = fixture.sql(f"SELECT confirmed_flush_lsn > '{before['end_lsn']}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'")
+        if kind == 'storage_outage':
+            assert after['logical_time'] == before['logical_time']+1
+            assert after['checkpoint_lsn'] == before['checkpoint_lsn']
+            assert after['checkpoint_time'] == before['checkpoint_time']
+            assert after['epoch'] == before['epoch']
+            verify(fixture, labels)
+        else:
+            assert before == after, 'failed input changed authoritative progress'
+        ahead = fixture.sql(f"SELECT confirmed_flush_lsn > '{before['checkpoint_lsn']}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'")
         assert ahead.strip() == 'f', 'failed input was acknowledged'
         if kind not in ('diagnostic_connection','diagnostic_lock'):
             assert failed['worker']['diagnostics']['phase'] == 'failed', failed
@@ -119,7 +133,10 @@ def qualify(output, binary, kind):
         recovered = Worker(binary+['query', 'restart'], config, recovery_logs, fixture.environment)
         fixture.workers.append(recovered)
         recovered.event('ready')
-        if kind not in ('diagnostic_connection','diagnostic_lock'):
+        if kind == 'storage_outage':
+            fixture.sql(f'UPDATE {fixture.name}.bid SET price=987 WHERE id=1')
+            recovered.event('published', minimum_time=after['logical_time']+1)
+        elif kind not in ('diagnostic_connection','diagnostic_lock'):
             recovered.event('published', minimum_time=before['logical_time']+1)
         else:
             fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')

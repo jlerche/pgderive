@@ -7,6 +7,7 @@ use crate::{
     },
 };
 use anyhow::{Context, Result, ensure};
+use futures_util::{StreamExt as _, stream};
 use tokio_postgres::Client;
 impl<K: BatchData, V: BatchData> super::super::checkpoint::DurableState for RelationalState<K, V> {
     fn memberships(&self) -> Result<Vec<Membership>> {
@@ -118,14 +119,21 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         let writers = self.execution.writers.clone();
         self.engine
             .prepare_maintenance(move |state| async move {
-                let mut entries = std::collections::BTreeMap::new();
-                for (id, entry) in &state.entries {
-                    let mut writer = writers.get(id).context("missing compaction writer")?.clone();
-                    if let Some(namespace) = &namespace {
-                        writer = writer.with_namespace(namespace);
+                let uploads = state.entries.iter().map(|(id, entry)| {
+                    let writers = &writers;
+                    let namespace = namespace.as_deref();
+                    async move {
+                        let writer = writers.get(id).context("missing compaction writer")?.clone();
+                        let writer = namespace.map_or_else(
+                            || writer.clone(),
+                            |scope| writer.clone().with_namespace(scope),
+                        );
+                        Ok::<_, anyhow::Error>((id.clone(), compact_entry(entry, &writer).await?))
                     }
-                    entries.insert(id.clone(), compact_entry(entry, &writer).await?);
-                }
+                });
+                // Drain all uploads before returning any error; protection covers all of them.
+                let completed = stream::iter(uploads).buffer_unordered(8).collect::<Vec<_>>().await;
+                let entries = completed.into_iter().collect::<Result<_>>()?;
                 Ok(RelationalState { entries })
             })
             .await
@@ -162,7 +170,7 @@ async fn compact_entry<K: BatchData, V: BatchData>(
     entry: &Entry<K, V>,
     writer: &crate::engine::dataflow::Arrangement<K, V>,
 ) -> Result<Entry<K, V>> {
-    if entry.trace.run_count() <= 1 {
+    if entry.trace.run_count() <= 1 && !entry.trace.has_memory() {
         return Ok(entry.clone());
     }
     Ok(Entry { schema: entry.schema.clone(), trace: writer.compact(&entry.trace).await? })

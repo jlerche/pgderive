@@ -74,7 +74,7 @@ impl Binding {
             ensure!(rows == 0, "publication destination must initially be empty");
         }
         let boundary = boundary.to_string();
-        tx.execute(&format!("INSERT INTO {}.pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn) VALUES($1,$2,$3,1,$4::text::pg_lsn,$4::text::pg_lsn)", catalog.schema), &[&catalog.query, &serde_json::to_value(self)?, &self.sink.table.as_str(), &boundary]).await?;
+        tx.execute(&format!("INSERT INTO {}.pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn,checkpoint_lsn,published_time) VALUES($1,$2,$3,1,$4::text::pg_lsn,$4::text::pg_lsn,$4::text::pg_lsn,1)", catalog.schema), &[&catalog.query, &serde_json::to_value(self)?, &self.sink.table.as_str(), &boundary]).await?;
         Ok(())
     }
     pub(super) fn valid_identity(time: u64, xid: Option<u32>, commit: Lsn, end: Lsn) -> bool {
@@ -183,6 +183,10 @@ impl Writer {
         let Publication { checkpoint, progress, deltas } = publication;
         checkpoint.validate(plan)?;
         ensure!(
+            self.boundary.end == self.boundary.checkpoint_end,
+            "buffered progress requires memtable checkpoint publication"
+        );
+        ensure!(
             self.boundary.stored.checkpoint.time.checked_add(1) == Some(checkpoint.time),
             "publication logical tick mismatch"
         );
@@ -197,8 +201,8 @@ impl Writer {
         self.boundary.binding.source.lock_and_verify_layout(&tx).await?;
         let epoch =
             write::stage(&tx, &self.catalog, plan, checkpoint, self.boundary.stored.epoch).await?;
-        let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn AND binding=$7", self.catalog.schema),
-            &[&self.catalog.query, &self.boundary.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.boundary.end.to_string(), &serde_json::to_value(&self.boundary.binding)?]).await?;
+        let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,checkpoint_lsn=$4::text::pg_lsn,published_time=$8,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn AND binding=$7", self.catalog.schema),
+            &[&self.catalog.query, &self.boundary.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.boundary.end.to_string(), &serde_json::to_value(&self.boundary.binding)?, &i64::try_from(checkpoint.time)?]).await?;
         ensure!(affected == 1, "stale or incompatible publication worker");
         let membership = clock.lap();
         deltas
@@ -209,6 +213,8 @@ impl Writer {
         let commit = clock.lap();
         self.boundary.stored.epoch = epoch;
         self.boundary.end = progress.end;
+        self.boundary.checkpoint_end = progress.end;
+        self.boundary.published_time = checkpoint.time;
         self.boundary.stored.checkpoint = checkpoint.clone();
         self.boundary.commit = progress.commit;
         self.boundary.xid = Some(progress.xid);

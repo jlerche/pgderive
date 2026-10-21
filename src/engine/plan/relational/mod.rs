@@ -99,6 +99,14 @@ struct Execution<K: BatchData, V: BatchData> {
     limits: crate::engine::execution::Limits,
     cache: Arc<BlockCache>,
 }
+#[derive(Debug)]
+pub(crate) struct MemtableFull;
+impl std::fmt::Display for MemtableFull {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("memtable byte limit exceeded; checkpoint required")
+    }
+}
+impl std::error::Error for MemtableFull {}
 /// Reusable durable circuit; source deltas follow declared source-node order.
 /// Every source is supplied on every tick, including empty deltas.
 pub struct Relational<K: BatchData, V: BatchData> {
@@ -157,7 +165,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         let evaluator = execution.clone();
         let engine = Engine::restore(execution.plan.clone(), state, time, move |state, input| {
             let evaluator = evaluator.clone();
-            async move { evaluator.evaluate(state, input, None).await }
+            async move { evaluator.evaluate(state, input, circuit::Staging::Objects(None)).await }
         })?;
         Ok(Self { engine, execution })
     }
@@ -181,6 +189,11 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
             .map(|entry| entry.trace.run_count())
             .max()
             .unwrap_or(0)
+    }
+    pub(crate) fn memtable_bytes(&self) -> Result<usize> {
+        self.snapshot().entries.values().try_fold(0_usize, |bytes, entry| {
+            bytes.checked_add(entry.trace.memory_charge()?).context("memtable charge overflow")
+        })
     }
     /// Resident cache usage and physical read counters.
     ///
@@ -226,7 +239,33 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         let namespace = protection.namespace()?;
         self.engine
             .prepare_using(input, move |state, input| async move {
-                execution.evaluate(state, input, Some(namespace)).await
+                execution.evaluate(state, input, circuit::Staging::Objects(Some(namespace))).await
+            })
+            .await
+    }
+    /// Prepare a transaction in memory; retained source WAL supplies crash replay.
+    ///
+    /// # Errors
+    /// Returns input, operator or resource limit failures without changing visibility.
+    pub(crate) async fn prepare_memtable(
+        &self,
+        input: TimedBatch<Vec<Batch<K, V>>>,
+        byte_limit: usize,
+    ) -> Result<Prepared<K, V>> {
+        self.check_inputs(&input.batch)?;
+        let execution = self.execution.clone();
+        self.engine
+            .prepare_using(input, move |state, input| async move {
+                let (candidate, output) =
+                    execution.evaluate(state, input, circuit::Staging::Memory).await?;
+                let mut bytes = 0_usize;
+                for entry in candidate.entries.values() {
+                    bytes = bytes
+                        .checked_add(entry.trace.memory_charge()?)
+                        .context("memtable charge overflow")?;
+                    ensure!(bytes <= byte_limit, MemtableFull);
+                }
+                Ok((candidate, output))
             })
             .await
     }

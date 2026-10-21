@@ -101,6 +101,12 @@ pub struct Settings {
     /// Opt-in execution-boundary timing; disabled by default.
     #[serde(default)]
     pub phase_metrics: bool,
+    /// Maximum charged in-memory arrangement bytes between object checkpoints.
+    #[serde(default = "default_memtable_bytes")]
+    pub memtable_bytes: usize,
+    /// Maximum age of an uncheckpointed memtable in milliseconds.
+    #[serde(default = "default_checkpoint_interval")]
+    pub checkpoint_interval_ms: u64,
     /// Diagnostic observation and physical WAL alerts.
     #[serde(default)]
     pub health: super::HealthPolicy,
@@ -110,6 +116,8 @@ pub struct Settings {
 impl Settings {
     pub(crate) fn validate(&self) -> Result<()> {
         self.health.validate()?;
+        ensure!(self.memtable_bytes > 0, "invalid memtable byte limit");
+        ensure!((1..=60_000).contains(&self.checkpoint_interval_ms), "invalid checkpoint interval");
         ensure!((1..=3600).contains(&self.startup_timeout_secs), "invalid worker startup timeout");
         ensure!(identifier(&self.catalog_schema), "invalid worker catalog schema");
         ensure!(
@@ -180,4 +188,11 @@ fn column<'a>(relation: &'a Relation, name: &str) -> Result<&'a Column> {
 
 const fn default_startup_timeout() -> u64 {
     180
+}
+
+const fn default_memtable_bytes() -> usize {
+    64 * 1024 * 1024
+}
+const fn default_checkpoint_interval() -> u64 {
+    5000
 }

@@ -88,6 +88,26 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             }
         }
     }
+    pub(crate) fn memory_charge(&self) -> Result<usize> {
+        let mut bytes = 0_usize;
+        for batch in self.runs.iter().filter_map(|run| match run {
+            Run::Memory(batch) => Some(batch),
+            Run::Object(_) => None,
+        }) {
+            for row in batch.iter() {
+                let payload = crate::engine::execution::record_size(&row, usize::MAX)?;
+                let structure = std::mem::size_of::<((K, V), i64)>() + 64;
+                bytes = bytes
+                    .checked_add(payload)
+                    .and_then(|total| total.checked_add(structure))
+                    .context("memtable charge overflow")?;
+            }
+        }
+        Ok(bytes)
+    }
+    pub(crate) fn has_memory(&self) -> bool {
+        self.runs.iter().any(|run| matches!(run, Run::Memory(_)))
+    }
     /// Number of immutable runs whose decoded heads may be opened by a merge.
     #[must_use]
     pub const fn run_count(&self) -> usize {

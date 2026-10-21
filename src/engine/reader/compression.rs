@@ -1,11 +1,7 @@
 use super::bounded;
 use anyhow::{Result, ensure};
-use serde::Serialize;
 
 pub(super) const STORED_LIMIT: usize = bounded::MAX_BYTES + 65_536;
-pub(super) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
-    compress(&bounded::encode(value)?)
-}
 pub(super) fn compress(bytes: &[u8]) -> Result<Vec<u8>> {
     let encoded = zstd::bulk::compress(bytes, 3)?;
     ensure!(encoded.len() <= STORED_LIMIT, "compressed block exceeds stored byte limit");

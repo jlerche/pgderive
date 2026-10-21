@@ -51,7 +51,7 @@ class PortfolioTests(unittest.TestCase):
             reduce_history([],lambda _:True,budget=0)
 
     def test_phase_attribution_rejects_bad_or_overlapping_accounting(self):
-        phases = {key:1 for key in ('source_decode','upload_reservation','inputs','prepare_including_object_io','finalize','local_completion')}
+        phases = {key:1 for key in ('source_decode','inputs','prepare_including_object_io','finalize','local_completion')}
         phases['publication']=3
         event = {'phases_us':phases,'publication_us':{'membership_layout_progress':1,'sink_dml':1,'commit':1}}
         self.assertEqual(checked_phases(event),phases)

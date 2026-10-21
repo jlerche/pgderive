@@ -124,7 +124,7 @@ pub async fn status(config: &Config) -> Result<Value> {
     };
     let progress = if registration.is_some() {
         tx.query_opt(&format!(
-            "SELECT pg_catalog.jsonb_build_object('logical_time',q.logical_time,'epoch',q.epoch,'fence',p.fence,'commit_lsn',p.commit_lsn::text,'end_lsn',p.end_lsn::text,'xid',p.xid) FROM {}.pgderive_queries q JOIN {}.pgderive_progress p USING(query_id) WHERE q.query_id=$1",
+            "SELECT pg_catalog.jsonb_build_object('logical_time',COALESCE((to_jsonb(p)->>'published_time')::bigint,q.logical_time),'checkpoint_time',q.logical_time,'checkpoint_lsn',COALESCE(to_jsonb(p)->>'checkpoint_lsn',p.end_lsn::text),'epoch',q.epoch,'fence',p.fence,'commit_lsn',p.commit_lsn::text,'end_lsn',p.end_lsn::text,'xid',p.xid) FROM {}.pgderive_queries q JOIN {}.pgderive_progress p USING(query_id) WHERE q.query_id=$1",
             settings.catalog_schema, settings.catalog_schema,
         ), &[&query_id]).await?.map(|row| row.try_get::<_, Value>(0)).transpose()?
     } else {

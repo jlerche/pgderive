@@ -24,7 +24,7 @@ WAL byte distances are physical PostgreSQL WAL distances. They include unrelated
 transactions and Pgderive metadata writes; they are not source row counts or
 elapsed processing latency. Logical time counts engine ticks, not wall time.
 Missing observations remain null. `wal_status=unreserved` or `lost`, incompatible
-slot identity, invalidation and feedback beyond durable progress are explicit
+slot identity, invalidation and feedback beyond the object checkpoint LSN are explicit
 alerts and cannot establish readiness.
 
 Heartbeat and alert settings do not cap PostgreSQL disk consumption. Operators
@@ -34,6 +34,11 @@ Pgderive does not skip WAL or automatically drop a slot to recover. Inspect stat
 retain failure evidence, correct the operational cause, and use explicit query
 rebuild when source history is unavailable. Rebuild takes a new consistent
 snapshot and replaces the active generation through the lifecycle cutover.
+
+Status exposes published `logical_time`/`end_lsn` and separate
+`checkpoint_time`/`checkpoint_lsn`. Published progress may be ahead of immutable
+objects; WAL after the checkpoint remains required for replay. Diagnostics include
+charged memtable bytes and the configured memtable cap.
 
 Diagnostics report sampled logical time, run count and shared verified decoded
 block cache usage, together with configured execution and source transaction
@@ -49,9 +54,10 @@ does not copy arbitrary transport errors or credentials into the catalog.
 
 Owned-fixture qualification covers whole-process staleness, diagnostic connection
 termination, oversized source transactions, unavailable scratch directories and
-stalled object requests. Failure cases check unchanged authoritative progress and
-slot feedback, then native materialized-view and independent memory equality
-following restart. These checks do not establish every possible I/O or COMMIT
+stalled object requests. Failures before sink publication leave published progress
+unchanged. Checkpoint failures may leave published progress ahead of the object
+checkpoint, while feedback stays at that checkpoint. Recovery checks native
+materialized-view and independent memory equality. These checks do not establish every possible I/O or COMMIT
 failure window.
 
 Status also includes `worker_attempt`, keyed by the logical query and guarded by

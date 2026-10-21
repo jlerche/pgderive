@@ -33,10 +33,10 @@ impl Stream {
                 && source.identity.database == config.postgres.database,
             "registered source identity changed"
         );
-        source.identity.validate_resume(config, durable.end).await?;
+        source.identity.validate_resume(config, durable.checkpoint_end).await?;
         let replication = config
             .replication_config()
-            .with_start_lsn(durable.end.to_string().parse()?)
+            .with_start_lsn(durable.checkpoint_end.to_string().parse()?)
             // One queued event bounds read-ahead while object publication is slow.
             // Decoder byte budgets apply after upstream wire-frame allocation.
             .with_buffer_size(1)
@@ -49,8 +49,8 @@ impl Stream {
             client,
             decoder: Decoder::registered(config.execution, source.clone()),
             source,
-            acknowledged: durable.end,
-            received: durable.end,
+            acknowledged: durable.checkpoint_end,
+            received: durable.checkpoint_end,
             change_limit: config.listener.max_transaction_changes,
             durable: durable.clone(),
             measured: config.worker.as_ref().is_some_and(|worker| worker.phase_metrics),
@@ -88,7 +88,7 @@ impl Stream {
                     &transaction.commit_lsn,
                     &transaction.end_lsn,
                 )?;
-                if !self.durable.covers(&progress)? {
+                if progress.end > self.durable.checkpoint_end {
                     return Ok(Some(transaction));
                 }
             }
@@ -106,11 +106,11 @@ impl Stream {
         let durable = writer.confirmed(sql, plan).await?;
         ensure!(durable.binding.source == self.source, "acknowledgement source mismatch");
         ensure!(
-            durable.end >= self.acknowledged && durable.end <= self.received,
+            durable.checkpoint_end >= self.acknowledged && durable.checkpoint_end <= self.received,
             "acknowledgement outside received durable boundary"
         );
-        self.client.update_applied_lsn(durable.end.to_string().parse()?);
-        self.acknowledged = durable.end;
+        self.client.update_applied_lsn(durable.checkpoint_end.to_string().parse()?);
+        self.acknowledged = durable.checkpoint_end;
         self.durable = durable;
         Ok(())
     }

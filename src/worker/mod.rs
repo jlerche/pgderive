@@ -3,6 +3,7 @@ mod admin;
 mod drive;
 mod health;
 mod lifecycle;
+mod replay;
 pub use health::Policy as HealthPolicy;
 mod measurements;
 mod open;

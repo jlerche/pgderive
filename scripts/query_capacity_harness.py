@@ -119,23 +119,38 @@ def qualify(output,binary):
         peak = sampler.finish()
         worker,sampler = start('restart','cold')
         worker.event('ready'); verify(fixture,labels)
+        fixture.sql(f'UPDATE {fixture.name}.bid SET price=COALESCE(price,0)+1 WHERE id=1')
+        worker.event('published', minimum_time=ready['time']+101)
+        worker.event('maintenance')
         before = command(fixture,binary,'status',config)['progress']
+        sink_sql = f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}"
+        before_sink = fixture.sql(sink_sql)
         outage = time.monotonic(); proxy.send_signal(signal.SIGSTOP)
         fixture.sql(f'BEGIN; UPDATE {fixture.name}.auction SET group_id=19 WHERE id=1; UPDATE {fixture.name}.bid SET price=NULL WHERE id=2; COMMIT')
         worker.process.wait(timeout=30)
         assert worker.process.returncode != 0
         worker.abort(); peak=max(peak,sampler.finish())
         after = command(fixture,binary,'status',config)['progress']
-        assert before==after
-        assert fixture.sql(f"SELECT confirmed_flush_lsn > '{before['end_lsn']}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'").strip()=='f'
+        assert after['logical_time'] in (before['logical_time'],before['logical_time']+1)
+        assert after['checkpoint_lsn']==before['checkpoint_lsn']
+        assert after['checkpoint_time']==before['checkpoint_time']
+        assert after['epoch']==before['epoch']
+        if after['logical_time']==before['logical_time']:
+            # A missing cold block can prevent preparation during an outage.
+            assert after==before
+            assert fixture.sql(sink_sql)==before_sink
+        else:
+            # Resident work may publish, but its replay WAL must remain retained.
+            verify(fixture,labels)
+        assert fixture.sql(f"SELECT confirmed_flush_lsn > '{before['checkpoint_lsn']}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'").strip()=='f'
         bounded = text.replace('[worker.health]','startup_timeout_secs=5\n[worker.health]')
         config.write_text(bounded)
         retry,sampler = start('restart','supervisor-unavailable')
         retry.process.wait(timeout=20); assert retry.process.returncode != 0
         retry.abort(); peak=max(peak,sampler.finish())
         retried = command(fixture,binary,'status',config)['progress']
-        assert {key:value for key,value in before.items() if key!='fence'} == {key:value for key,value in retried.items() if key!='fence'}
-        assert fixture.sql(f"SELECT confirmed_flush_lsn > '{before['end_lsn']}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'").strip()=='f'
+        assert {key:value for key,value in after.items() if key!='fence'} == {key:value for key,value in retried.items() if key!='fence'}
+        assert fixture.sql(f"SELECT confirmed_flush_lsn > '{before['checkpoint_lsn']}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'").strip()=='f'
         for ordinal in range(5):
             fixture.sql(f'UPDATE {fixture.name}.bid SET price={ordinal} WHERE id={ordinal+3}')
         while time.monotonic()-outage<60:

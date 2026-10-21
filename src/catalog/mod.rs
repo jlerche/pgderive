@@ -2,6 +2,7 @@
 mod bootstrap;
 pub use bootstrap::Snapshot;
 mod maintenance;
+mod memtable;
 mod position;
 mod publication;
 mod read;
@@ -52,8 +53,9 @@ impl Catalog {
     /// Returns `PostgreSQL` DDL, permission, or schema compatibility failures.
     pub async fn install(&self, sql: &Client) -> Result<()> {
         sql.batch_execute(&format!(
-            "CREATE TABLE IF NOT EXISTS {0}.pgderive_queries (
-                query_id text PRIMARY KEY, format_version integer NOT NULL CHECK(format_version=1),
+            "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('pgderive-catalog-install:{0}',0));
+             CREATE TABLE IF NOT EXISTS {0}.pgderive_queries (
+                query_id text PRIMARY KEY, format_version integer NOT NULL CONSTRAINT pgderive_queries_memtable_format_check CHECK(format_version IN (1,2)),
                 plan_identity text NOT NULL, definition jsonb NOT NULL,
                 logical_time bigint NOT NULL CHECK(logical_time>=0),
                 epoch bigint NOT NULL CHECK(epoch>0),
@@ -72,11 +74,23 @@ impl Catalog {
                 binding jsonb NOT NULL, sink_table text NOT NULL UNIQUE,
                 fence bigint NOT NULL CHECK(fence>0), commit_lsn pg_lsn NOT NULL,
                 end_lsn pg_lsn NOT NULL CHECK(end_lsn>=commit_lsn),
-                xid bigint CHECK(xid>=0 AND xid<=4294967295));
+                xid bigint CHECK(xid>=0 AND xid<=4294967295),
+                checkpoint_lsn pg_lsn NOT NULL,published_time bigint NOT NULL);
              CREATE TABLE IF NOT EXISTS {0}.pgderive_sink_ownership (
                 sink_table text PRIMARY KEY,query_id text NOT NULL UNIQUE
                 REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
-                relation_oid oid NOT NULL);",
+                relation_oid oid NOT NULL);
+             DO $pgderive_memtable$ BEGIN
+             IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid='{0}.pgderive_queries'::regclass AND conname='pgderive_queries_memtable_format_check') THEN
+               ALTER TABLE {0}.pgderive_progress ADD COLUMN IF NOT EXISTS checkpoint_lsn pg_lsn;
+               ALTER TABLE {0}.pgderive_progress ADD COLUMN IF NOT EXISTS published_time bigint;
+               UPDATE {0}.pgderive_progress p SET checkpoint_lsn=COALESCE(p.checkpoint_lsn,p.end_lsn),published_time=COALESCE(p.published_time,q.logical_time) FROM {0}.pgderive_queries q WHERE p.query_id=q.query_id AND (p.checkpoint_lsn IS NULL OR p.published_time IS NULL);
+               ALTER TABLE {0}.pgderive_progress ALTER COLUMN checkpoint_lsn SET NOT NULL;
+               ALTER TABLE {0}.pgderive_progress ALTER COLUMN published_time SET NOT NULL;
+               ALTER TABLE {0}.pgderive_queries DROP CONSTRAINT IF EXISTS pgderive_queries_format_version_check;
+               ALTER TABLE {0}.pgderive_queries ADD CONSTRAINT pgderive_queries_memtable_format_check CHECK(format_version IN (1,2));
+               UPDATE {0}.pgderive_queries SET format_version=2 WHERE format_version=1;
+             END IF; END $pgderive_memtable$;",
             self.schema
         )).await?;
         Ok(())

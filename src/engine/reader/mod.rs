@@ -9,6 +9,7 @@ pub use hybrid::{CacheConfig, EncodedCache};
 mod object;
 mod reachability;
 mod streaming;
+mod upload;
 pub use streaming::WriteLimits;
 
 use super::Batch;

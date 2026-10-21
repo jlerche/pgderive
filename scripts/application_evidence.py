@@ -17,7 +17,7 @@ def process(worker):
 
 def checked_phases(event):
     values = event['phases_us']
-    required = {'source_decode','upload_reservation','inputs','prepare_including_object_io',
+    required = {'source_decode','inputs','prepare_including_object_io',
                 'finalize','publication','local_completion'}
     assert set(values) == required, values
     nested = event['publication_us']

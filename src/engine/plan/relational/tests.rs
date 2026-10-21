@@ -175,7 +175,11 @@ async fn wrong_source_arity_rejects_before_any_staged_objects() -> Result<()> {
         assert!(
             query
                 .execution
-                .evaluate(query.snapshot(), TimedBatch { time: 1, batch }, None)
+                .evaluate(
+                    query.snapshot(),
+                    TimedBatch { time: 1, batch },
+                    super::circuit::Staging::Objects(None)
+                )
                 .await
                 .is_err()
         );
@@ -265,5 +269,90 @@ async fn fanout_self_join_keeps_prior_isolation_and_retries_downstream_failure()
         pinned.trace("input")?.materialize().await?,
         Batch::from_updates([((0, vec![3]), 1)])?
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn independent_uploads_overlap_and_failures_drain_without_state_advance() -> Result<()> {
+    use crate::engine::tests::store::Store;
+    use std::sync::atomic::Ordering;
+    for fail_first in [false, true] {
+        let store = Arc::new(Store::new(fail_first));
+        let settings = Settings {
+            store: store.clone(),
+            block_rows: 2,
+            limits: crate::engine::execution::Limits::default(),
+            encoded_cache: None,
+        };
+        let mut query = Relational::new(plan()?, operators(), &settings)?;
+        let prior = serde_json::to_value(query.checkpoint()?)?;
+        let inputs =
+            (0..3).map(|n| Batch::from_updates([((1, vec![n]), 1)])).collect::<Result<Vec<_>>>()?;
+        let result = query.prepare(TimedBatch { time: 1, batch: inputs }).await;
+        assert!(store.peak.load(Ordering::SeqCst) > 1);
+        assert_eq!(store.active.load(Ordering::SeqCst), 0);
+        assert_eq!(query.time(), 0);
+        assert_eq!(serde_json::to_value(query.checkpoint()?)?, prior);
+        if fail_first {
+            assert!(result.is_err());
+            assert!(store.puts.load(Ordering::SeqCst) > 1);
+        } else {
+            let prepared = result?;
+            assert_eq!(store.reads.load(Ordering::SeqCst), 0);
+            query.commit(prepared)?;
+            assert_eq!(query.time(), 1);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn memtable_preserves_join_cross_terms_duplicates_and_flushes_to_reopenable_objects()
+-> Result<()> {
+    use crate::engine::tests::store::Store;
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(Store::default());
+    let settings = Settings {
+        store: store.clone(),
+        block_rows: 16,
+        limits: crate::engine::execution::Limits::default(),
+        encoded_cache: None,
+    };
+    let mut query = Relational::new(plan()?, operators(), &settings)?;
+    let input = |time, weight| -> Result<_> {
+        Ok(TimedBatch {
+            time,
+            batch: (1..=3)
+                .map(|value| Batch::from_updates([((0, vec![value]), weight)]))
+                .collect::<Result<Vec<_>>>()?,
+        })
+    };
+    assert!(
+        query
+            .prepare_memtable(input(1, 2)?, 1)
+            .await
+            .err()
+            .context("expected memory limit")?
+            .is::<super::MemtableFull>()
+    );
+    assert_eq!(query.time(), 0);
+    let work = query.prepare_memtable(input(1, 2)?, 1_000_000).await?;
+    assert_eq!(work.output().batch, Batch::from_updates([((0, vec![1, 2, 3]), 8)])?);
+    query.commit(work)?;
+    let work = query.prepare_memtable(input(2, -1)?, 1_000_000).await?;
+    assert_eq!(work.output().batch, Batch::from_updates([((0, vec![1, 2, 3]), -7)])?);
+    query.commit(work)?;
+    assert_eq!(store.puts.load(Ordering::SeqCst), 0);
+    assert!(query.checkpoint().is_err());
+    let compacted = query.prepare_compaction().await?;
+    let checkpoint = query.prepared_compaction_checkpoint(&compacted)?;
+    query.commit_compaction(compacted)?;
+    let restored = Relational::reopen(plan()?, operators(), settings, checkpoint).await?;
+    assert_eq!(restored.time(), 2);
+    assert_eq!(
+        restored.snapshot().trace("abc")?.materialize().await?,
+        Batch::from_updates([((0, vec![1, 2, 3]), 1)])?
+    );
+    assert!(store.puts.load(Ordering::SeqCst) > 0);
     Ok(())
 }

@@ -1,5 +1,5 @@
 use super::{
-    BatchCursor, BatchData, Entry, ObjectBatch, ObjectRef, bounded,
+    BatchCursor, BatchData, BlockCache, Entry, ObjectBatch, ObjectRef, bounded,
     format::{Block, Index, hash, validate},
 };
 use anyhow::{Context, Result, ensure};
@@ -59,6 +59,8 @@ struct Writer<K: BatchData, V: BatchData> {
     blocks: Vec<Block<(K, V)>>,
     fence_bytes: usize,
     references: Vec<ObjectRef>,
+    resident: Vec<ObjectBatch<K, V>>,
+    cache: Option<Arc<BlockCache>>,
     previous: Option<(K, V)>,
 }
 impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
@@ -95,10 +97,44 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         schema: &str,
         limits: WriteLimits,
     ) -> Result<Vec<ObjectRef>> {
+        Ok(Self::stream_upload(store, cursor, schema, (None, limits), None).await?.0)
+    }
+    pub(crate) async fn write_stream_resident(
+        store: Arc<dyn ObjectStore>,
+        cursor: &mut impl BatchCursor<Key = K, Val = V>,
+        schema: &str,
+        target: (Option<&str>, WriteLimits),
+        cache: Arc<BlockCache>,
+    ) -> Result<Vec<Self>> {
+        Ok(Self::stream_upload(store, cursor, schema, target, Some(cache)).await?.1)
+    }
+    async fn stream_upload(
+        store: Arc<dyn ObjectStore>,
+        cursor: &mut impl BatchCursor<Key = K, Val = V>,
+        schema: &str,
+        target: (Option<&str>, WriteLimits),
+        cache: Option<Arc<BlockCache>>,
+    ) -> Result<(Vec<ObjectRef>, Vec<Self>)> {
+        let (namespace, limits) = target;
+        if let Some(namespace) = namespace {
+            ensure!(
+                super::object::valid_namespace(namespace),
+                "invalid streaming upload namespace"
+            );
+        }
+        let scoped: Arc<dyn ObjectStore> = namespace.map_or_else(
+            || store.clone(),
+            |namespace| {
+                let scoped: Arc<dyn ObjectStore> =
+                    Arc::new(object_store::prefix::PrefixStore::new(store.clone(), namespace));
+                scoped
+            },
+        );
         ensure!(!schema.is_empty(), "empty streaming batch schema");
         let limits = limits.validate()?;
         let mut writer = Writer {
-            store,
+            store: scoped,
+            cache,
             schema: schema.into(),
             limits,
             rows: Vec::new(),
@@ -106,6 +142,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             blocks: Vec::new(),
             fence_bytes: 0,
             references: Vec::new(),
+            resident: Vec::new(),
             previous: None,
         };
         while cursor.current().is_some() {
@@ -122,7 +159,16 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         }
         writer.flush_block().await?;
         writer.flush_root().await?;
-        Ok(writer.references)
+        for batch in &mut writer.resident {
+            if let Some(namespace) = namespace {
+                batch.reference = batch.reference.clone().qualify(namespace)?;
+                for block in Arc::make_mut(&mut batch.blocks) {
+                    block.path = batch.reference.child_path(&block.path);
+                }
+                batch.store = store.clone();
+            }
+        }
+        Ok((writer.references, writer.resident))
     }
 }
 impl<K: BatchData, V: BatchData> Writer<K, V> {
@@ -161,6 +207,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         validate(&self.rows)?;
         let encoded = bounded::encode(&self.rows)?;
         ensure!(encoded.len() <= self.limits.block_bytes, "streaming block exceeds budget");
+        let encoded_bytes = encoded.len();
         let encoded = super::compression::compress(&encoded)?;
         let digest = hash(&encoded);
         let path = format!("pgderive/block/{digest}");
@@ -189,6 +236,14 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             self.flush_root().await?;
         }
         bounded::put(&self.store, &path, encoded).await?;
+        if let Some(cache) = &self.cache {
+            cache.insert(
+                &self.schema,
+                block.hash.clone(),
+                Arc::new(self.rows.clone()),
+                encoded_bytes,
+            )?;
+        }
         self.fence_bytes =
             self.fence_bytes.checked_add(bytes).context("streaming fence bytes overflow")?;
         self.blocks.push(block);
@@ -204,13 +259,18 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             self.references.len() < self.limits.output_roots,
             "streaming output root limit exceeded"
         );
-        let reference = ObjectBatch::<K, V>::upload_index(
-            &self.store,
-            &self.schema,
-            std::mem::take(&mut self.blocks),
-        )
-        .await?;
-        self.references.push(reference);
+        let blocks = std::mem::take(&mut self.blocks);
+        let reference =
+            ObjectBatch::<K, V>::upload_index(&self.store, &self.schema, blocks.clone()).await?;
+        self.references.push(reference.clone());
+        if let Some(cache) = &self.cache {
+            self.resident.push(ObjectBatch {
+                store: self.store.clone(),
+                reference,
+                blocks: Arc::new(blocks),
+                cache: cache.clone(),
+            });
+        }
         self.fence_bytes = 0;
         Ok(())
     }

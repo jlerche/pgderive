@@ -101,7 +101,7 @@ def qualify(output, command, local=False):
             bad.abort()
             assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
             assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink_before
-            beyond = fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{ready['slot']}' AND confirmed_flush_lsn > (SELECT end_lsn FROM {fixture.name}.pgderive_progress)")
+            beyond = fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{ready['slot']}' AND confirmed_flush_lsn > (SELECT checkpoint_lsn FROM {fixture.name}.pgderive_progress)")
             assert beyond.strip() == '0', 'failed local map advanced slot ACK'
         (output / 'result.json').write_text(json.dumps({'sql_oracle': 'exact native weighted bag',
             'memory_oracle': 'independent source recomputation', 'restart': 'normalized SQL same slot',

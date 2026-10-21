@@ -211,7 +211,7 @@ def namespace_race(output, command):
             fixture.workers.append(worker)
         deadline = time.monotonic()+8
         while True:
-            waiting = int(fixture.sql("SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory' AND query LIKE 'SELECT pg_catalog.pg_advisory_xact_lock%'"))
+            waiting = int(fixture.sql("SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory' AND query='SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1,0))'"))
             if waiting == 2:
                 break
             assert time.monotonic() < deadline, 'both registrations did not contend'

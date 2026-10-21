@@ -18,6 +18,10 @@ pub struct Durable {
     pub commit: Lsn,
     /// Last durably published source end address.
     pub end: Lsn,
+    /// Source end covered by immutable object membership; bounds replication feedback.
+    pub checkpoint_end: Lsn,
+    /// Logical time of the published sink, possibly ahead of object membership.
+    pub published_time: u64,
     /// Last committed transaction identity; absent only at bootstrap.
     pub xid: Option<u32>,
 }
@@ -41,7 +45,7 @@ impl Durable {
             return Ok(true);
         }
         if progress.end == self.end {
-            if self.xid.is_none() && self.stored.checkpoint.time == 1 {
+            if self.xid.is_none() && self.published_time == 1 {
                 return Ok(true);
             }
             ensure!(
@@ -130,7 +134,9 @@ impl super::Writer {
                 && durable.fence == self.boundary.fence
                 && durable.end == self.boundary.end
                 && durable.commit == self.boundary.commit
-                && durable.xid == self.boundary.xid,
+                && durable.xid == self.boundary.xid
+                && durable.checkpoint_end == self.boundary.checkpoint_end
+                && durable.published_time == self.boundary.published_time,
             "maintenance ownership/source progress changed"
         );
         let resolution = if durable.stored.epoch == self.boundary.stored.epoch
@@ -205,7 +211,9 @@ fn resolve(
             && durable.stored.checkpoint == *checkpoint
             && durable.commit == progress.commit
             && durable.end == progress.end
-            && durable.xid == Some(progress.xid),
+            && durable.xid == Some(progress.xid)
+            && durable.checkpoint_end == progress.end
+            && durable.published_time == checkpoint.time,
         "uncertain publication has a nonmatching authoritative outcome"
     );
     Ok(Resolution::Committed)

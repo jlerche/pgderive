@@ -6,11 +6,17 @@ use crate::engine::{
     reader::BatchData,
 };
 use anyhow::{Context, Result, ensure};
+use futures_util::{StreamExt as _, stream};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
 type Values<K, V> = BTreeMap<String, Arc<Batch<K, V>>>;
+#[derive(Clone, Copy)]
+pub(super) enum Staging<'a> {
+    Objects(Option<&'a str>),
+    Memory,
+}
 type Replacement<K, V> = (String, Entry<K, V>);
 pub(super) fn validate<K: BatchData, V: BatchData>(
     plan: &Plan,
@@ -70,7 +76,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         &self,
         prior: Arc<RelationalState<K, V>>,
         input: TimedBatch<Vec<Batch<K, V>>>,
-        namespace: Option<&str>,
+        staging: Staging<'_>,
     ) -> Result<(RelationalState<K, V>, Batch<K, V>)> {
         ensure!(
             input.batch.len() == self.plan.definition().sources.len(),
@@ -78,7 +84,6 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         );
         let mut sources = input.batch.into_iter();
         let mut values = BTreeMap::new();
-        let mut candidate = (*prior).clone();
         for node in &self.plan.definition().nodes {
             let batch = match node.kind {
                 Kind::Source => sources.next().context("incomplete relational input")?,
@@ -96,22 +101,42 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                     .batch
                 }
             };
-            if node.kind != Kind::Source
-                && let Some((id, entry)) = self
-                    .stage(
-                        &node.id,
-                        &prior,
-                        TimedBatch { time: input.time, batch: &batch },
-                        namespace,
-                    )
-                    .await?
-            {
-                candidate.entries.insert(id, entry);
-            }
             values.insert(node.id.clone(), Arc::new(batch));
         }
+        let candidate = self.stage_all(&prior, &values, input.time, staging).await?;
         let output = values.remove(&self.plan.definition().outputs[0]).context("missing output")?;
         Ok((candidate, Arc::unwrap_or_clone(output)))
+    }
+    async fn stage_all(
+        &self,
+        prior: &RelationalState<K, V>,
+        values: &Values<K, V>,
+        time: u64,
+        staging: Staging<'_>,
+    ) -> Result<RelationalState<K, V>> {
+        let mut uploads = Vec::new();
+        for node in &self.plan.definition().nodes {
+            if node.kind == Kind::Source {
+                continue;
+            }
+            let batch = values.get(&node.id).context("missing staged output")?;
+            uploads.push(self.stage(
+                &node.id,
+                prior,
+                TimedBatch { time, batch: batch.as_ref() },
+                staging,
+            ));
+        }
+        // Drain every in-flight upload even on failure before the caller can
+        // release its upload protection. No candidate becomes visible here.
+        let completed = stream::iter(uploads).buffer_unordered(8).collect::<Vec<_>>().await;
+        let mut candidate = prior.clone();
+        for result in completed {
+            if let Some((id, entry)) = result? {
+                candidate.entries.insert(id, entry);
+            }
+        }
+        Ok(candidate)
     }
     async fn evaluate_binary(
         &self,
@@ -223,7 +248,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         node: &str,
         prior: &RelationalState<K, V>,
         delta: TimedBatch<&Batch<K, V>>,
-        namespace: Option<&str>,
+        staging: Staging<'_>,
     ) -> Result<Option<Replacement<K, V>>> {
         let Some(member) =
             self.plan.definition().arrangements.iter().find(|member| member.node == node)
@@ -231,12 +256,21 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             return Ok(None);
         };
         let mut writer = self.writers.get(&member.id).context("missing writer")?.clone();
-        if let Some(namespace) = namespace {
+        if let Staging::Objects(Some(namespace)) = staging {
             writer = writer.with_namespace(namespace);
         }
-        let trace = writer
-            .stage(&prior.entries.get(&member.id).context("missing prior state")?.trace, &delta)
-            .await?;
+        let prior = &prior.entries.get(&member.id).context("missing prior state")?.trace;
+        let trace = match staging {
+            Staging::Objects(_) => writer.stage(prior, &delta).await?,
+            Staging::Memory => {
+                ensure!(prior.run_count() < 128, "memtable run limit requires checkpoint");
+                prior.validate_delta(delta.batch).await?;
+                prior.append_validated(
+                    crate::engine::trace::Run::Memory(Arc::new(delta.batch.clone())),
+                    delta.time,
+                )?
+            }
+        };
         Ok(Some((member.id.clone(), Entry { schema: member.schema.clone(), trace })))
     }
 }

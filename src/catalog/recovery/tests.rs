@@ -24,6 +24,8 @@ fn writer() -> Result<Writer> {
             end: "0/0".parse()?,
             commit: "0/0".parse()?,
             xid: None,
+            checkpoint_end: "0/0".parse()?,
+            published_time: 1,
         },
         uncertain: true,
     })
@@ -44,6 +46,8 @@ fn resolution_requires_exact_prior_or_exact_committed_candidate() -> Result<()> 
     after.stored.checkpoint = candidate.clone();
     after.commit = progress.commit;
     after.end = progress.end;
+    after.checkpoint_end = progress.end;
+    after.published_time = candidate.time;
     after.xid = Some(42);
     assert_eq!(resolve(&writer, &after, &candidate, &progress)?, Resolution::Committed);
     let mut invalid = after.clone();

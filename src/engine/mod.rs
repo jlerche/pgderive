@@ -12,3 +12,6 @@ mod zset;
 
 pub use batch::{Batch, BatchBuilder};
 pub use zset::ZSet;
+
+#[cfg(test)]
+pub(crate) mod tests;

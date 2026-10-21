@@ -45,7 +45,7 @@ def proxy(output, kind, gate, marker=None):
 
 
 def durable(fixture):
-    return fixture.sql(f'''SELECT q.logical_time,p.end_lsn::text,q.epoch FROM
+    return fixture.sql(f'''SELECT p.published_time,p.end_lsn::text,q.epoch FROM
       {fixture.name}.pgderive_queries q JOIN {fixture.name}.pgderive_progress p USING(query_id)''').strip()
 
 

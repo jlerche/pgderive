@@ -69,3 +69,7 @@ pgwire-replication = { path = "vendor/pgwire-replication" }
 
 # Namespace bundled xxHash to coexist with pg_query; see vendor/lz4-sys/README.pgderive.md.
 lz4-sys = { path = "vendor/lz4-sys" }
+
+[dev-dependencies]
+# Fault injection and request accounting for durable object-store scheduling tests.
+async-trait = "0.1"

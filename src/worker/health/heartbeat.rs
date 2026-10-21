@@ -154,7 +154,7 @@ fn snapshot(open: &Open, phase: &str) -> Result<Value> {
     let cache = open.query.cache_stats()?;
     let limits = open.replication.execution;
     Ok(
-        json!({"phase":phase,"logical_time":open.query.time(),"runs":open.query.run_count(),"cache":{"bytes":cache.bytes,"entries":cache.entries,"live_bytes":cache.live_bytes,"pins":cache.pins,"hits":cache.hits,"misses":cache.misses},
+        json!({"phase":phase,"logical_time":open.query.time(),"memtable_bytes":open.query.memtable_bytes()?,"memtable_limit":open.settings.memtable_bytes,"runs":open.query.run_count(),"cache":{"bytes":cache.bytes,"entries":cache.entries,"live_bytes":cache.live_bytes,"pins":cache.pins,"hits":cache.hits,"misses":cache.misses},
             "budgets":{"cache_bytes":limits.cache_bytes,"cache_entries":limits.cache_entries,
             "resident_bytes":limits.resident_bytes,"resident_entries":limits.resident_entries,
             "record_bytes":limits.record_bytes,"contributions":limits.contributions,

@@ -240,7 +240,7 @@ record_bytes=16384
         return self.sql(f"""SELECT count(*) FROM pg_replication_slots s
           JOIN {self.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name
           CROSS JOIN {self.name}.pgderive_progress p
-          WHERE s.confirmed_flush_lsn>p.end_lsn""")
+          WHERE s.confirmed_flush_lsn>p.checkpoint_lsn""")
 
     def verify_memory(self, expected, parse_float=float):
         rows = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"),

@@ -47,6 +47,9 @@ sink_output = "postgres" # Or "stdout": print attempted SQL/parameters, no resul
 object_prefix = "pgderive_worker" # Exclusively owned and stable across restarts.
 block_rows = 4096
 maintenance_ticks = 16
+# Retain source WAL until immutable arrangement checkpoints cover published results.
+memtable_bytes = 67108864 # Charged payload/structure budget; not an RSS limit.
+checkpoint_interval_ms = 5000
 phase_metrics = false # Opt-in execution boundary timings; see application qualification roadmap.
 retry_attempts = 8
 retry_delay_ms = 250
