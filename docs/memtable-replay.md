@@ -56,3 +56,22 @@ upgrade; retain the previous image for evidence, but do not treat restarting it
 as a rollback procedure. Roll forward on failure, or explicitly rebuild using a
 compatible engine and fresh source snapshot. Immutable trace codecs remain at
 version 1; all workers sharing a catalog schema must upgrade together. Catalog compatibility and trace serialization are separate versions.
+
+
+Steady-state publication compares the complete claimed query and progress boundary
+inside PostgreSQL, locking the query row before the progress row. The comparison
+includes the plan definition, checkpoint body and digest, binding, ownership,
+fence, clocks and source transaction identity. It avoids reconstructing and
+validating the same immutable metadata in Rust on every transaction. Claims,
+recovery and checkpoints still perform full decoding and validation. Publication
+retains source DDL exclusion and layout verification, lifecycle protection,
+synchronous COMMIT and one atomic sink/progress transaction. Slot feedback still
+uses only the immutable checkpoint boundary C.
+
+With `phase_metrics=true`, published events include `preparation_us`: sequential
+operator timings, arrangement staging, memory accounting and candidate validation.
+Repeated stages accumulate across a memory-pressure retry; `failed_preparation_tail`
+and `forced_maintenance` separate the failed attempt from its checkpoint. The
+`publication_us` fields `boundary_guard`, `source_layout` and `progress` subdivide
+`membership_layout_progress`, so do not add that aggregate to its children.
+Disabled preparation profiling does not sample clocks or allocate operator labels.

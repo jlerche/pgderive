@@ -78,6 +78,15 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         input: TimedBatch<Vec<Batch<K, V>>>,
         staging: Staging<'_>,
     ) -> Result<(RelationalState<K, V>, Batch<K, V>)> {
+        self.evaluate_profiled(prior, input, staging, &mut crate::timing::Profile::new(false)).await
+    }
+    pub(super) async fn evaluate_profiled(
+        &self,
+        prior: Arc<RelationalState<K, V>>,
+        input: TimedBatch<Vec<Batch<K, V>>>,
+        staging: Staging<'_>,
+        profile: &mut crate::timing::Profile,
+    ) -> Result<(RelationalState<K, V>, Batch<K, V>)> {
         ensure!(
             input.batch.len() == self.plan.definition().sources.len(),
             "incomplete relational input"
@@ -102,8 +111,10 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                 }
             };
             values.insert(node.id.clone(), Arc::new(batch));
+            profile.operator(&node.id);
         }
         let candidate = self.stage_all(&prior, &values, input.time, staging).await?;
+        profile.mark("stage_arrangements");
         let output = values.remove(&self.plan.definition().outputs[0]).context("missing output")?;
         Ok((candidate, Arc::unwrap_or_clone(output)))
     }

@@ -22,12 +22,15 @@ impl Writer {
         ensure!(!self.boundary.covers(progress)?, "memtable transaction already published");
         let tx = sql.transaction().await?;
         self.lock_memtable(&tx, plan, false).await?;
+        let boundary_guard = clock.lap();
         self.boundary.binding.source.lock_and_verify_layout(&tx).await?;
+        let source_layout = clock.lap();
         tx.execute(
             &format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,xid=$5,published_time=$2 WHERE query_id=$1", self.catalog.schema),
             &[&self.catalog.query, &i64::try_from(time)?, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid)],
         ).await?;
-        let membership = clock.lap();
+        let progress_time = clock.lap();
+        let membership = boundary_guard + source_layout + progress_time;
         deltas.apply(&tx, &self.catalog, &self.boundary.binding.sink, (time, progress.end)).await?;
         let sink = clock.lap();
         self.commit(tx, "memtable publication").await?;
@@ -37,8 +40,15 @@ impl Writer {
         self.boundary.end = progress.end;
         self.boundary.xid = Some(progress.xid);
         Ok(if measured {
-            [("membership_layout_progress", membership), ("sink_dml", sink), ("commit", commit)]
-                .into()
+            [
+                ("membership_layout_progress", membership),
+                ("boundary_guard", boundary_guard),
+                ("source_layout", source_layout),
+                ("progress", progress_time),
+                ("sink_dml", sink),
+                ("commit", commit),
+            ]
+            .into()
         } else {
             std::collections::BTreeMap::new()
         })
@@ -79,8 +89,10 @@ impl Writer {
         plan: &Plan,
         checkpoint: bool,
     ) -> Result<()> {
-        tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-        super::storage::shared(tx, &self.catalog).await?;
+        super::storage::publication_lock(tx, &self.catalog).await?;
+        if !checkpoint {
+            return self.guard_memtable(tx, plan).await;
+        }
         let marker = if checkpoint { "/* pgderive:maintenance */" } else { "" };
         tx.query_one(
             &format!(

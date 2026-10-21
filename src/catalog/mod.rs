@@ -3,6 +3,7 @@ mod bootstrap;
 pub use bootstrap::Snapshot;
 mod maintenance;
 mod memtable;
+mod memtable_guard;
 mod position;
 mod publication;
 mod read;

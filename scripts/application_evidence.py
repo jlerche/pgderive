@@ -21,9 +21,17 @@ def checked_phases(event):
                 'finalize','publication','local_completion'}
     assert set(values) == required, values
     nested = event['publication_us']
-    assert set(nested) == {'membership_layout_progress','sink_dml','commit'}
+    base = {'membership_layout_progress','sink_dml','commit'}
+    details = {'boundary_guard','source_layout','progress'}
+    assert set(nested) in (base, base | details), nested
     assert all(isinstance(value,int) and value>=0 for value in [*values.values(),*nested.values()])
-    assert sum(nested.values()) <= values['publication'], (nested,values)
+    assert sum(nested[key] for key in base) <= values['publication'], (nested,values)
+    if details <= nested.keys():
+        assert sum(nested[key] for key in details) == nested['membership_layout_progress'], nested
+    if 'preparation_us' in event:
+        preparation = event['preparation_us']
+        assert all(isinstance(value,int) and value>=0 for value in preparation.values()), preparation
+        assert sum(preparation.values()) <= values['prepare_including_object_io'], (preparation,values)
     return values
 
 

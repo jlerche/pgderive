@@ -16,3 +16,29 @@ impl Clock {
         elapsed
     }
 }
+
+/// Per-preparation attribution; disabled profiles never sample a clock.
+pub struct Profile {
+    clock: Clock,
+    values: Option<std::collections::BTreeMap<String, u128>>,
+}
+impl Profile {
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self { clock: Clock::new(enabled), values: enabled.then(std::collections::BTreeMap::new) }
+    }
+    pub(crate) fn mark(&mut self, name: impl Into<String>) {
+        if let Some(values) = &mut self.values {
+            let elapsed = self.clock.lap();
+            let total = values.entry(name.into()).or_default();
+            *total = total.saturating_add(elapsed);
+        }
+    }
+    pub(crate) fn operator(&mut self, node: &str) {
+        if self.values.is_some() {
+            self.mark(format!("operator:{node}"));
+        }
+    }
+    pub(crate) fn finish(self) -> Option<std::collections::BTreeMap<String, u128>> {
+        self.values
+    }
+}

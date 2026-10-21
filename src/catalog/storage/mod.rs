@@ -9,6 +9,15 @@ use tokio_postgres::Transaction;
 pub(super) async fn shared(sql: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
     lock(sql, catalog, false).await
 }
+// Configure durable publication and acquire lifecycle protection in one round trip.
+pub(super) async fn publication_lock(sql: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
+    let scope = format!("pgderive-object-lifecycle:{}", catalog.schema);
+    sql.query_typed_one(
+        "SELECT pg_catalog.set_config('synchronous_commit','on',true), pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtextextended($1,0))",
+        &[(&scope, tokio_postgres::types::Type::TEXT)],
+    ).await?;
+    Ok(())
+}
 async fn lock(sql: &Transaction<'_>, catalog: &Catalog, exclusive: bool) -> Result<()> {
     let function = if exclusive { "pg_advisory_xact_lock" } else { "pg_advisory_xact_lock_shared" };
     let scope = format!("pgderive-object-lifecycle:{}", catalog.schema);

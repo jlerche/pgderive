@@ -252,12 +252,23 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         input: TimedBatch<Vec<Batch<K, V>>>,
         byte_limit: usize,
     ) -> Result<Prepared<K, V>> {
+        self.prepare_memtable_profiled(input, byte_limit, &mut crate::timing::Profile::new(false))
+            .await
+    }
+    pub(crate) async fn prepare_memtable_profiled(
+        &self,
+        input: TimedBatch<Vec<Batch<K, V>>>,
+        byte_limit: usize,
+        profile: &mut crate::timing::Profile,
+    ) -> Result<Prepared<K, V>> {
         self.check_inputs(&input.batch)?;
         let execution = self.execution.clone();
+        profile.mark("input_validation");
         self.engine
             .prepare_using(input, move |state, input| async move {
-                let (candidate, output) =
-                    execution.evaluate(state, input, circuit::Staging::Memory).await?;
+                let (candidate, output) = execution
+                    .evaluate_profiled(state, input, circuit::Staging::Memory, profile)
+                    .await?;
                 let mut bytes = 0_usize;
                 for entry in candidate.entries.values() {
                     bytes = bytes
@@ -265,6 +276,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                         .context("memtable charge overflow")?;
                     ensure!(bytes <= byte_limit, MemtableFull);
                 }
+                profile.mark("memory_accounting");
                 Ok((candidate, output))
             })
             .await

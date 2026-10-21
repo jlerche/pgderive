@@ -59,6 +59,19 @@ class PortfolioTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             checked_phases(event)
 
+    def test_nested_publication_details_and_preparation_are_bounded(self):
+        phases = {key:1 for key in ('source_decode','inputs','finalize','local_completion')}
+        phases.update(publication=5,prepare_including_object_io=7)
+        publication = {'membership_layout_progress':3,'sink_dml':1,'commit':1,
+                       'boundary_guard':1,'source_layout':1,'progress':1}
+        event = {'phases_us':phases,'publication_us':publication,
+                 'preparation_us':{'operator:source':2,'stage_arrangements':3,'memory_accounting':2}}
+        self.assertEqual(checked_phases(event),phases)
+        for group, key in [('publication_us','boundary_guard'),('preparation_us','memory_accounting')]:
+            changed = copy.deepcopy(event)
+            changed[group][key] += 1
+            with self.assertRaises(AssertionError):checked_phases(changed)
+
     def test_replay_validation_precedes_any_sql_and_binds_generator_version(self):
         initial,history=generated(17)
         trace={'version':1,'seed':17,'spec':query('group',17),'initial':initial,'history':history}

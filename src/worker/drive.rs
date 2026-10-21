@@ -251,15 +251,24 @@ async fn publish(
     let time = open.query.time().checked_add(1).context("worker logical time overflow")?;
     let input = relational::inputs(&transaction.batch, open.compiled.relational(), time)?;
     phases.mark("inputs");
-    let prepared =
-        match open.query.prepare_memtable(input.clone(), open.settings.memtable_bytes).await {
-            Ok(work) => work,
-            Err(error) if error.is::<crate::engine::plan::relational::MemtableFull>() => {
-                maintain(open, metrics).await?;
-                open.query.prepare_memtable(input, open.settings.memtable_bytes).await?
-            }
-            Err(error) => return Err(error),
-        };
+    let mut preparation = crate::timing::Profile::new(measured);
+    let prepared = match open
+        .query
+        .prepare_memtable_profiled(input.clone(), open.settings.memtable_bytes, &mut preparation)
+        .await
+    {
+        Ok(work) => work,
+        Err(error) if error.is::<crate::engine::plan::relational::MemtableFull>() => {
+            preparation.mark("failed_preparation_tail");
+            maintain(open, metrics).await?;
+            preparation.mark("forced_maintenance");
+            open.query
+                .prepare_memtable_profiled(input, open.settings.memtable_bytes, &mut preparation)
+                .await?
+        }
+        Err(error) => return Err(error),
+    };
+    preparation.mark("candidate_validation");
     phases.mark("prepare_including_object_io");
     let deltas = relational::deltas(&prepared.output().batch, open.compiled.output())?;
     let progress = Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
@@ -281,6 +290,7 @@ async fn publish(
     if let Some(phases) = phases.finish(decode_us)? {
         event["phases_us"] = phases;
         event["publication_us"] = serde_json::to_value(publication)?;
+        event["preparation_us"] = serde_json::to_value(preparation.finish())?;
     }
     emit(&event)
 }
