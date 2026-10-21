@@ -54,7 +54,7 @@ impl<K: BatchData, V: BatchData> BatchReader for Batch<K, V> {
     type Val = V;
     type Cursor = Cursor<K, V>;
     async fn cursor(&self) -> Result<Cursor<K, V>> {
-        Cursor::memory(self.iter().map(|(tuple, weight)| (tuple.clone(), *weight)).collect())
+        Ok(Cursor::memory(self.shared_entries()))
     }
 }
 
@@ -111,3 +111,7 @@ impl<K: BatchData, V: BatchData> BatchCursor for Cursor<K, V> {
 #[cfg(test)]
 #[path = "tests/performance.rs"]
 mod performance;
+
+#[cfg(test)]
+#[path = "tests/memory.rs"]
+mod memory_tests;

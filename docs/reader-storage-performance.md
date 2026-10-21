@@ -186,3 +186,24 @@ output, collects uninstrumented GNU time data, and then adds the library-provide
 dhat allocator only inside the temporary snapshots. Production dependencies are
 unchanged. Raw compact measurements, summaries, tool availability and executable
 checksums are preserved in [CPU/allocator samples](reader-storage-profile-samples.json).
+
+## Shared immutable memory cursors
+
+Finalized memory batches store their canonical full-tuple weighted rows in a
+shared immutable array. Consolidation still sums exact intermediate coefficients,
+rejects final overflow and removes zero weights before publishing the array.
+Opening or cloning a memory cursor pins the same rows without copying or
+revalidating the run. Cursor positions and key bounds remain independent, and
+key/range navigation uses binary search. Existing cursors continue reading their
+original snapshot when a batch is replaced or its owner is dropped.
+
+Applying a delta builds a fresh sorted array by merging the two canonical inputs.
+Overflow leaves the old array and every reader unchanged. Full-tuple identity,
+signed multiplicities, object formats, checkpoint membership, source progress and
+acknowledgement rules are unchanged. The existing conservative memory accounting
+remains in force; shared rows are not charged less merely because cursors share them.
+
+Regression tests count tuple clones and comparisons across increasing run sizes:
+opening a cursor performs neither, and bounded seeks do not scan the whole run.
+They also check independent positions, pinned lifetimes, signed weights, atomic
+failed integration and matching memory/object cursor behavior.

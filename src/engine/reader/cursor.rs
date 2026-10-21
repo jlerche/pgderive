@@ -20,10 +20,10 @@ pub struct Cursor<K: BatchData, V: BatchData> {
 }
 
 impl<K: BatchData, V: BatchData> Cursor<K, V> {
-    pub(super) fn memory(rows: Vec<Entry<K, V>>) -> Result<Self> {
-        super::format::validate(&rows)?;
-        let rows = Arc::new(rows);
-        Ok(Self { source: Source::Memory(rows.clone()), rows, block: 0, position: 0, end: None })
+    // Finalized Batch storage is canonical by construction. Opening a cursor
+    // shares those verified rows; it never copies or rescans the run.
+    pub(super) fn memory(rows: Arc<Vec<Entry<K, V>>>) -> Self {
+        Self { source: Source::Memory(rows.clone()), rows, block: 0, position: 0, end: None }
     }
 
     pub(super) async fn object(batch: ObjectBatch<K, V>) -> Result<Self> {
@@ -81,9 +81,10 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
     #[must_use]
     pub fn current_span(&self) -> &[Entry<K, V>] {
         let remaining = &self.rows[self.position..];
-        let length = self.end.as_ref().map_or(remaining.len(), |key| {
-            remaining.iter().take_while(|row| &row.0.0 <= key).count()
-        });
+        let length = self
+            .end
+            .as_ref()
+            .map_or(remaining.len(), |key| remaining.partition_point(|row| &row.0.0 <= key));
         &remaining[..length]
     }
 

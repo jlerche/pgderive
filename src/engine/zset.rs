@@ -1,16 +1,16 @@
 use super::weights::Accumulator;
 use anyhow::{Context, Result};
-use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// A consolidated collection identified by complete tuples and signed weights.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZSet<T: Ord> {
-    entries: BTreeMap<T, i64>,
+    entries: Arc<Vec<(T, i64)>>,
 }
 
 impl<T: Ord> Default for ZSet<T> {
     fn default() -> Self {
-        Self { entries: BTreeMap::new() }
+        Self { entries: Arc::new(Vec::new()) }
     }
 }
 
@@ -29,11 +29,18 @@ impl<T: Ord + Clone> ZSet<T> {
 
     /// Iterate in deterministic tuple order.
     pub fn iter(&self) -> impl Iterator<Item = (&T, &i64)> + Clone {
-        self.entries.iter()
+        self.entries.iter().map(|(tuple, weight)| (tuple, weight))
+    }
+
+    // Only finalized, sorted, unique, nonzero entries can reach cursor storage.
+    pub(super) fn shared_entries(&self) -> Arc<Vec<(T, i64)>> {
+        Arc::clone(&self.entries)
     }
 
     pub(crate) fn weight(&self, tuple: &T) -> i64 {
-        self.entries.get(tuple).copied().unwrap_or(0)
+        self.entries
+            .binary_search_by(|entry| entry.0.cmp(tuple))
+            .map_or(0, |position| self.entries[position].1)
     }
 
     /// Integrate one delta atomically, retaining the original state on error.
@@ -41,26 +48,25 @@ impl<T: Ord + Clone> ZSet<T> {
     /// # Errors
     /// Returns an error on weight overflow.
     pub fn apply(&mut self, delta: &Self) -> Result<()> {
-        let mut next = self.clone();
+        let mut prior = self.entries.iter().peekable();
+        let mut next = Vec::with_capacity(self.entries.len());
         for (tuple, weight) in delta.iter() {
-            next.add(tuple.clone(), *weight)?;
+            while let Some(entry) = prior.next_if(|entry| &entry.0 < tuple) {
+                next.push(entry.clone());
+            }
+            let weight = prior.next_if(|entry| &entry.0 == tuple).map_or(Ok(*weight), |entry| {
+                entry.1.checked_add(*weight).context("Z-set weight overflow")
+            })?;
+            if weight != 0 {
+                next.push((tuple.clone(), weight));
+            }
         }
-        *self = next;
+        next.extend(prior.cloned());
+        self.entries = Arc::new(next);
         Ok(())
     }
 
     pub(super) fn from_accumulator(weights: Accumulator<T>) -> Result<Self> {
-        Ok(Self { entries: weights.finish()? })
-    }
-
-    pub(super) fn add(&mut self, tuple: T, weight: i64) -> Result<()> {
-        let previous = self.entries.get(&tuple).copied().unwrap_or_default();
-        let next = previous.checked_add(weight).context("Z-set weight overflow")?;
-        if next == 0 {
-            self.entries.remove(&tuple);
-        } else {
-            self.entries.insert(tuple, next);
-        }
-        Ok(())
+        Ok(Self { entries: Arc::new(weights.finish()?.into_iter().collect()) })
     }
 }
