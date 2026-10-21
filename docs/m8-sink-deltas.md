@@ -1,5 +1,9 @@
 # M8 batched occurrence publication
 
+This occurrence-based DELETE/INSERT path remains the default for unkeyed bags.
+[Proven keyed sinks](keyed-sinks.md) additionally pair same-key replacements into
+native UPDATEs, with the same exact old-tuple and affected-row checks.
+
 The bounded target is batched INSERT/DELETE and an ordinary result-table expression
 index for candidate occurrence lookup. Keep only query columns in the public table;
 no persisted weights, occurrence identifiers or engine arrangements are added.

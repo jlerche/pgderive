@@ -24,10 +24,16 @@ the proven constraint as a final safety check; there is no upsert or row collaps
 
 The key is persisted in the sink binding. Restart checks column nullability and
 the exact immediate, validated primary key. A changed or missing key is rejected.
-All result retractions precede insertions within the existing atomic publication
-transaction, including replacements whose keys overlap. Object publication,
+Within each complete result delta, a retraction and insertion with the same key
+become one native PostgreSQL UPDATE. The UPDATE verifies the entire old tuple
+using its binary representation; a missing or changed destination row aborts
+publication. Each key must have at most one unit retraction and one unit insertion.
+Unmatched retractions and insertions remain DELETE and INSERT operations,
+respectively. All operations share the existing atomic publication transaction. Object publication,
 source progress and slot acknowledgement retain the existing durability ordering.
-Result changes are DELETE/INSERT events; clients must not require UPDATE events.
+Consumers receive UPDATE events for replacements, INSERT events for new keys,
+and DELETE events for removed keys. Unkeyed bag sinks retain occurrence-based
+DELETE/INSERT publication.
 
 Existing unkeyed registrations retain their serialized binding. A key cannot be
 added through restart or a layout-preserving rebuild: use a new registration and
@@ -38,4 +44,5 @@ support keys. This feature creates no RLS policy or public grants.
 `scripts/keyed_sink_harness.py` runs in the common live gate and compares binary
 results against a refreshed native materialized view. It exercises initialization
 rejections, overlapping key replacement, rollback, missing-key detection,
-unchanged durable progress on rejection, restart and an empty result.
+unchanged durable progress on rejection, restart and an empty result. PostgreSQL
+table statistics also verify that replacements execute actual UPDATE statements.

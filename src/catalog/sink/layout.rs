@@ -24,19 +24,7 @@ impl Layout {
         let names = names(sink).iter().map(|name| quote(name)).collect::<Vec<_>>();
         let fields = (0..names.len()).map(|index| format!("c{index}")).collect::<Vec<_>>();
         let target = names.iter().map(|name| format!("d.{name}")).collect::<Vec<_>>();
-        let decoded = sink
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(index, column)| {
-                let mut value = column.value("(entry.value->0)", index)?;
-                if let Some((schema, name)) = &column.collation {
-                    value = format!("({value}) COLLATE {}.{}", quote(schema), quote(name));
-                }
-                Ok(format!("{value} AS c{index}"))
-            })
-            .collect::<Result<Vec<_>>>()?
-            .join(",");
+        let decoded = decode(sink, "(entry.value->0)")?;
         Ok(Self {
             decoded: format!("{decoded},(entry.value->>1)::bigint AS n"),
             values: fields.join(","),
@@ -59,4 +47,19 @@ fn identity(sink: &Sink, fields: &[String]) -> Result<String> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(format!("pg_catalog.array_send(ARRAY[{}])", values.join(",")))
+}
+
+pub(super) fn decode(sink: &Sink, tuple: &str) -> Result<String> {
+    sink.columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            let mut value = column.value(tuple, index)?;
+            if let Some((schema, name)) = &column.collation {
+                value = format!("({value}) COLLATE {}.{}", quote(schema), quote(name));
+            }
+            Ok(format!("{value} AS c{index}"))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|values| values.join(","))
 }

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 mod batching;
 mod key;
+mod keyed;
 mod layout;
 mod lookup;
 mod rows;

@@ -1238,7 +1238,8 @@ affected-partition reads remain. See [M7 evidence and limits](m7-window-work.md)
 
 The engine computes all query expressions. Destination storage decodes bounded
 occurrence batches, retracts exact binary identities through a candidate hash
-index, then inserts positive multiplicities. Index installation and validation
+index, then inserts positive multiplicities. Proven [keyed sinks](keyed-sinks.md) use
+native UPDATEs for same-key replacements. Index installation and validation
 occur during initialization. No weights or occurrence identifiers become public
 columns. See [M8 publication details and evidence](m8-sink-deltas.md).
 

@@ -5,16 +5,16 @@ use serde_json::{Value, json};
 use tokio_postgres::Transaction;
 const IDENTITIES: usize = 512;
 const BYTES: usize = 4 * 1024 * 1024;
-struct Chunk {
+pub(super) struct Chunk {
     values: Vec<Value>,
     bytes: usize,
     occurrences: u64,
 }
 impl Chunk {
-    const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self { values: Vec::new(), bytes: 0, occurrences: 0 }
     }
-    fn push(&mut self, tuple: &Value, count: i64, bytes: usize) -> Result<()> {
+    pub(super) fn push(&mut self, tuple: &Value, count: i64, bytes: usize) -> Result<()> {
         self.values.push(json!([tuple, count]));
         self.bytes = self
             .bytes
@@ -37,6 +37,18 @@ pub(super) async fn apply(
         work.is_some_and(|count| count <= 1_000_000),
         "result occurrence publication limit exceeded (1000000)"
     );
+    if !sink.primary_key.is_empty() {
+        return super::keyed::apply(tx, table, sink, rows).await;
+    }
+    apply_rows(tx, table, sink, rows, context).await
+}
+pub(super) async fn apply_rows(
+    tx: &Transaction<'_>,
+    table: &str,
+    sink: &Sink,
+    rows: &[(Value, i64)],
+    context: &Value,
+) -> Result<()> {
     let layout = Layout::new(sink)?;
     for positive in [false, true] {
         let statement = statement(table, &layout, positive);
@@ -61,7 +73,7 @@ pub(super) async fn apply(
     }
     Ok(())
 }
-async fn execute(
+pub(super) async fn execute(
     tx: &Transaction<'_>,
     statement: &str,
     chunk: Chunk,
