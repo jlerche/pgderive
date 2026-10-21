@@ -108,6 +108,7 @@ mod tests {
     #[test]
     fn batches_keep_weights_out_of_public_layout_and_bound_candidate_identity() -> Result<()> {
         let sink = Sink {
+            primary_key: vec![],
             output: crate::catalog::SinkOutput::Postgres,
             table: "results".into(),
             columns: vec![ResultColumn {

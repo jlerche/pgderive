@@ -145,7 +145,7 @@ pub(super) async fn verify(
                     column.oid,
                     column.modifier,
                     column.collation,
-                    false,
+                    sink.primary_key.contains(&column.name),
                     "",
                     "",
                     false
@@ -157,5 +157,5 @@ pub(super) async fn verify(
         actual == expected,
         "registered result table layout changed; rebuild or restore required"
     );
-    Ok(())
+    super::key::verify(sql, sink, oid).await
 }

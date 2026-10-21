@@ -18,6 +18,7 @@ pub(super) async fn check(
     let columns =
         vec![ResultColumn { name: "number".into(), oid: 1700, modifier: -1, collation: None }];
     let sink = Sink {
+        primary_key: vec![],
         output: crate::catalog::SinkOutput::Postgres,
         table: "native_representations".into(),
         columns,

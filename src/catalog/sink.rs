@@ -4,6 +4,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 mod batching;
+mod key;
 mod layout;
 mod lookup;
 mod rows;
@@ -21,6 +22,9 @@ pub struct Sink {
     pub output: SinkOutput,
     /// Owned ordinary typed result table.
     pub table: String,
+    /// Optional proven unique, non-NULL output columns for a physical primary key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primary_key: Vec<String>,
     /// Native output metadata.
     pub columns: Vec<ResultColumn>,
 }
@@ -31,7 +35,8 @@ impl Sink {
                 && !self.table.as_str().starts_with("pgderive_"),
             "invalid or reserved sink table"
         );
-        rows::validate(&self.columns)
+        rows::validate(&self.columns)?;
+        key::validate(self)
     }
     pub(super) async fn install(&self, tx: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
         if self.output == SinkOutput::Stdout {
@@ -40,7 +45,7 @@ impl Sink {
         if self.owned(tx, catalog).await?.is_some() {
             return self.prepare_index(tx, catalog).await;
         }
-        let columns = rows::declaration(&self.columns)?;
+        let columns = format!("{}{}", rows::declaration(&self.columns)?, key::declaration(self));
         tx.batch_execute(&format!(
             "CREATE TABLE {}.{} ({columns})",
             catalog.schema,

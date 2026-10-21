@@ -80,6 +80,9 @@ pub struct Settings {
     /// `PostgreSQL` result table (default) or diagnostic stdout SQL batches.
     #[serde(default)]
     pub sink_output: crate::catalog::SinkOutput,
+    /// Proven unique, non-NULL result column names; empty preserves arbitrary bags.
+    #[serde(default)]
+    pub sink_key: Vec<String>,
     /// Exclusively owned durable object-store prefix, reused across resumes.
     pub object_prefix: String,
     /// Maximum rows in one immutable data block.

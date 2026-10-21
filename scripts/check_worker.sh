@@ -45,7 +45,7 @@ PGDERIVE_S3_LATENCY_SCALE="$crash_scale" run_qualification crashes python3 scrip
 while read -r qualification script; do
     if [[ "$profile" == core ]]; then
         case "$qualification" in
-            compiler|application|composition-matrix|sliding-extrema|prefix-window|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|computed-join|environment|aggregate-inputs|relational|partition|numeric|native|navigation|case) ;;
+            keyed-sink|compiler|application|composition-matrix|sliding-extrema|prefix-window|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|computed-join|environment|aggregate-inputs|relational|partition|numeric|native|navigation|case) ;;
             *) continue ;;
         esac
     fi
@@ -63,6 +63,7 @@ sliding-extrema sliding_extrema
 prefix-window prefix_window
 expression-composition expression_composition
 sliding-window sliding_window
+keyed-sink keyed_sink
 sink-batch sink_batch
 stdout-sink stdout_sink
 projection projection_compiler

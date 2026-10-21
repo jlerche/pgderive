@@ -145,3 +145,21 @@ fn native_jsonb_rows_preserve_weighted_tuple_identity() -> Result<()> {
     assert_eq!(canonical(decoded), canonical(Deltas::bag(&batch)?.rows));
     Ok(())
 }
+
+#[test]
+fn keyed_sinks_validate_metadata_and_keep_legacy_bindings_unchanged() -> Result<()> {
+    let mut sink = crate::harness::tuple_sink::sink("result");
+    let legacy = serde_json::to_value(&sink)?;
+    assert!(legacy.get("primary_key").is_none());
+    assert_eq!(serde_json::from_value::<Sink>(legacy)?, sink);
+    sink.primary_key = vec!["tuple".into()];
+    sink.validate()?;
+    sink.primary_key.push("tuple".into());
+    assert!(sink.validate().is_err());
+    sink.primary_key = vec!["absent".into()];
+    assert!(sink.validate().is_err());
+    sink.primary_key = vec!["tuple".into()];
+    sink.output = crate::catalog::SinkOutput::Stdout;
+    assert!(sink.validate().is_err());
+    Ok(())
+}

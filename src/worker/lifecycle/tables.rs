@@ -75,7 +75,7 @@ pub(super) async fn cutover(
             .context("cutover destination ownership missing")?;
     }
     ensure!(
-        prior.sink.columns == next.sink.columns,
+        prior.sink.columns == next.sink.columns && prior.sink.primary_key == next.sink.primary_key,
         "result schema changed; drop and recreate explicitly, and resnapshot logical-replication consumers"
     );
     // Destination contents are user-visible results, not engine recovery state.

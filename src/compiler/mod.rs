@@ -8,6 +8,7 @@ pub(crate) mod lookup;
 pub(crate) mod navigation;
 mod parser;
 pub(crate) mod partition;
+mod sink_key;
 
 mod projection;
 pub(crate) mod relational;
@@ -56,8 +57,15 @@ impl Compiled {
         &self,
         table: &str,
         output: crate::catalog::SinkOutput,
-    ) -> crate::catalog::Sink {
-        crate::catalog::Sink { output, table: table.into(), columns: self.result_columns.clone() }
+        primary_key: &[String],
+    ) -> Result<crate::catalog::Sink> {
+        sink_key::prove(self, primary_key)?;
+        Ok(crate::catalog::Sink {
+            output,
+            table: table.into(),
+            primary_key: primary_key.to_vec(),
+            columns: self.result_columns.clone(),
+        })
     }
 
     pub(crate) fn legacy(selectors: Query, contract: &Contract) -> Result<Self> {
