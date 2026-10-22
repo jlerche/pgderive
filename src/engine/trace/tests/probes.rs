@@ -232,3 +232,23 @@ async fn batched_tuple_validation_reads_each_selected_block_once() -> Result<()>
     assert!(trace.validate_delta(&Batch::from_updates([((1, 1), 1)])?).await.is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn bag_proofs_are_bound_to_exact_immutable_roots_and_batches() -> Result<()> {
+    let first = TraceSnapshot::from_runs(
+        vec![Run::Memory(Arc::new(Batch::from_updates([((1, 2), 1)])?))],
+        1,
+        1,
+    )?;
+    let delta = Arc::new(Batch::from_updates([((1, 2), -1), ((1, 3), 1)])?);
+    let proof = first.validate_bag_batch(delta.clone()).await?;
+    assert!(proof.matches(&first, &delta));
+    let other = first.clone();
+    assert!(!proof.matches(&other, &delta));
+    assert!(!proof.matches(&first, &(*delta).clone()));
+    assert!(
+        first.validate_bag_batch(Arc::new(Batch::from_updates([((1, 9), -1)])?)).await.is_err()
+    );
+    assert_eq!(first.time(), 1);
+    Ok(())
+}

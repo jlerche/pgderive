@@ -15,3 +15,5 @@ pub use zset::ZSet;
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub(crate) mod search;

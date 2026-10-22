@@ -242,3 +242,31 @@ properties, and all column contracts from the same statement snapshot. All
 previous source restrictions remain; semantic catalog verification remains an
 initialization operation. Immutable object publication, WAL replay boundaries,
 synchronous PostgreSQL commit and checkpoint-only acknowledgement are unchanged.
+
+## Ordered aggregation and resident finalization
+
+Linear statistics consume sorted input groups directly when the bounded
+accumulator vector fits the resident byte and entry budgets. One accumulator is
+reused across groups; no intermediate per-column tree or grouped map is built.
+Contribution, record and finalized intermediate-output budgets still apply, and
+coefficients remain arbitrary precision until the existing SQL finalizer narrows
+them. The spillable implementation remains available for smaller resident budgets.
+
+A consolidator that has never spilled finalizes its canonical resident entries
+without a scratch write/read cycle. Zero coefficients are removed and the same
+final record, entry, byte and i64 checks apply. Once spilling starts, the existing
+checksummed scratch merge and failure retention remain in use. Scratch byte
+limits now apply only when scratch is actually written.
+
+Sorted full-tuple memory probes advance from their previous lower bound with
+exponential skipping. Reusable, unconsumed key-probe heads similarly retain their
+positions; public cursors retain their arbitrary reseek semantics. Full-tuple
+identity, backward probes and read failure atomicity remain intact.
+
+Statistics inputs can carry an internal successful bag-validation proof through
+one evaluation. It owns the exact immutable batch and borrows its immutable trace;
+staging checks both identities before reusing the stronger bag check in place of
+an additional signed-coefficient lookup. Other operators retain their checks.
+Proofs cannot cross evaluation lifetimes or authorize a different batch/root.
+Object publication, atomic PostgreSQL sink/progress commit, source replay and
+checkpoint-only WAL acknowledgement are unchanged.

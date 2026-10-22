@@ -46,6 +46,7 @@ fn cancellation_and_resource_failures_are_explicit() -> Result<()> {
     assert!(outputs.finish_batch().is_err());
     let mut disk = Consolidator::new(Limits { scratch_bytes: 1, ..limits(1) })?;
     disk.add((0, 0), 1)?;
+    assert!(disk.add((1, 0), 1).is_err());
     assert!(disk.finish_batch().is_err());
     let mut record = Consolidator::new(Limits { record_bytes: 32, ..limits(1) })?;
     assert!(record.add((0, "x".repeat(64)), 1).is_err());
@@ -85,5 +86,24 @@ fn byte_spills_and_output_byte_budget_are_enforced() -> Result<()> {
     assert!(outputs.finish_batch().is_err());
     let mut enormous = Consolidator::new(Limits { record_bytes: 10, ..limits })?;
     assert!(enormous.add((0, 0), BigInt::from(1) << 100).is_err());
+    Ok(())
+}
+
+#[test]
+fn resident_finalization_needs_no_scratch_bytes_and_keeps_final_limits() -> Result<()> {
+    let small = Limits { scratch_bytes: 1, ..Limits::default() };
+    let mut weights = Consolidator::new(small)?;
+    weights.add((0, 0), BigInt::from(i64::MAX) * 2)?;
+    weights.add((0, 0), -BigInt::from(i64::MAX))?;
+    weights.add((1, 0), 3)?;
+    weights.add((1, 0), -3)?;
+    assert_eq!(weights.finish_batch()?, crate::engine::Batch::from_updates([((0, 0), i64::MAX)])?);
+    let mut overflow = Consolidator::new(small)?;
+    overflow.add((0, 0), BigInt::from(i64::MAX) + 1)?;
+    assert!(overflow.finish_batch().is_err());
+    let mut limited = Consolidator::new(Limits { output_entries: 1, ..small })?;
+    limited.add((0, 0), 1)?;
+    limited.add((1, 0), 1)?;
+    assert!(limited.finish_batch().is_err());
     Ok(())
 }

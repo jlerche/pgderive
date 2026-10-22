@@ -95,6 +95,14 @@ pub(crate) fn record_size(value: &impl serde::Serialize, limit: usize) -> Result
     Ok(record::encode_value(value, limit)?.len())
 }
 
+pub(crate) fn weight_size(
+    tuple: &impl serde::Serialize,
+    weight: &BigInt,
+    limit: usize,
+) -> Result<usize> {
+    Ok(record::encode(tuple, weight, limit)?.len())
+}
+
 /// Exact, spillable full-identity consolidation for one logical batch.
 /// No i64 representability check occurs until the complete merged result exists.
 pub struct Consolidator<T: BatchData> {
@@ -196,25 +204,40 @@ impl<T: BatchData> Consolidator<T> {
             }),
         }
     }
-    fn finish_inner(&mut self, mut visit: impl FnMut(T, BigInt) -> Result<()>) -> Result<()> {
+    fn finish_inner(&mut self, visit: impl FnMut(T, BigInt) -> Result<()>) -> Result<()> {
         ensure!(!self.failed, "failed consolidator cannot be finalized");
+        if self.runs.is_empty() {
+            let rows = std::mem::take(&mut self.entries)
+                .into_iter()
+                .filter(|(_, (weight, _))| *weight != BigInt::default())
+                .map(|(tuple, (weight, _))| Ok((tuple, weight)));
+            return finish_rows(self.limits, rows, visit);
+        }
         self.spill()?;
         let mut merge = merge::Merge::open(&self.runs, self.limits.record_bytes)?;
-        let mut bytes = 0_u64;
-        let mut count = 0_usize;
-        while let Some((tuple, weight)) = merge.next()? {
-            count += 1;
-            ensure!(count <= self.limits.output_entries, "output entry limit exceeded");
-            bytes = bytes
-                .checked_add(u64::try_from(
-                    record::encode(&tuple, &weight, self.limits.record_bytes)?.len(),
-                )?)
-                .context("output byte count overflow")?;
-            ensure!(bytes <= self.limits.output_bytes, "output byte limit exceeded");
-            visit(tuple, weight)?;
-        }
-        Ok(())
+        finish_rows(self.limits, std::iter::from_fn(|| merge.next().transpose()), visit)
     }
+}
+fn finish_rows<T: BatchData>(
+    limits: Limits,
+    rows: impl Iterator<Item = Result<(T, BigInt)>>,
+    mut visit: impl FnMut(T, BigInt) -> Result<()>,
+) -> Result<()> {
+    let mut bytes = 0_u64;
+    let mut count = 0_usize;
+    for row in rows {
+        let (tuple, weight) = row?;
+        count += 1;
+        ensure!(count <= limits.output_entries, "output entry limit exceeded");
+        bytes = bytes
+            .checked_add(u64::try_from(
+                record::encode(&tuple, &weight, limits.record_bytes)?.len(),
+            )?)
+            .context("output byte count overflow")?;
+        ensure!(bytes <= limits.output_bytes, "output byte limit exceeded");
+        visit(tuple, weight)?;
+    }
+    Ok(())
 }
 impl<K: BatchData, V: BatchData> Consolidator<(K, V)> {
     /// Finalize coefficients into an explicitly bounded in-memory logical batch.

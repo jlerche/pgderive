@@ -2,6 +2,7 @@
 mod manifest;
 mod merged;
 mod probes;
+mod validation;
 use super::{
     Batch, BatchBuilder,
     reader::{BatchData, BatchReader, Cursor, ObjectBatch},
@@ -11,6 +12,7 @@ pub use manifest::Manifest;
 pub use merged::{KeyCursor, MergedCursor, RangeCursor};
 pub use probes::KeyProbes;
 use std::sync::Arc;
+pub(crate) use validation::ValidatedBag;
 
 /// One immutable run, in memory or in object storage.
 #[derive(Debug, Clone)]
@@ -164,11 +166,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let mut totals = vec![num_bigint::BigInt::from(0); delta.iter().count()];
         for run in &self.runs {
             match run {
-                Run::Memory(batch) => {
-                    for ((tuple, _), total) in delta.iter().zip(&mut totals) {
-                        *total += batch.weight(tuple);
-                    }
-                }
+                Run::Memory(batch) => batch.accumulate_weights(delta, &mut totals),
                 Run::Object(batch) => batch.accumulate_weights(delta, &mut totals).await?,
             }
         }

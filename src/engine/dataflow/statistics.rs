@@ -1,4 +1,5 @@
 //! Exact linear sufficient statistics over complete signed input ticks.
+mod ordered;
 use super::TimedBatch;
 use crate::engine::{
     Batch,
@@ -61,6 +62,14 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order statistics tick");
         ensure!((1..=129).contains(&self.width), "statistics width unsupported");
         limits.check_batch(input.batch.borrow())?;
+        if self.width <= limits.resident_entries
+            && self
+                .width
+                .checked_mul(limits.record_bytes)
+                .is_some_and(|bytes| bytes <= limits.resident_bytes)
+        {
+            return self.evaluate_ordered(input, prior, limits).await;
+        }
         let mut contributions = Consolidator::new(limits)?;
         for ((key, row), weight) in input.batch.borrow().iter() {
             let values = (self.measure)(key, row)?;
@@ -114,3 +123,6 @@ async fn read<K: BatchData, V: BatchData>(
     ensure!(cursor.current().is_none(), "multiple statistics states for group");
     Ok(Some(value))
 }
+
+#[cfg(test)]
+mod tests;

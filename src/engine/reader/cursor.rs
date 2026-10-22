@@ -32,6 +32,27 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
         Ok(Self { source: Source::Object(batch), rows, block: 0, position: 0, end: None })
     }
 
+    // Only reusable, unconsumed probe heads are passed as `previous`.
+    pub(crate) fn memory_key_reusing(
+        rows: Arc<Vec<Entry<K, V>>>,
+        key: &K,
+        previous: Option<&Self>,
+    ) -> Self {
+        let start = previous
+            .filter(|old| {
+                Arc::ptr_eq(&old.rows, &rows) && old.end.as_ref().is_some_and(|bound| bound < key)
+            })
+            .map_or(0, |old| old.position.min(rows.len()));
+        let position = crate::engine::search::advance(&rows, start, |row| row.0.0 < *key);
+        Self {
+            source: Source::Memory(rows.clone()),
+            rows,
+            block: 0,
+            position,
+            end: Some(key.clone()),
+        }
+    }
+
     pub(crate) async fn object_key(batch: ObjectBatch<K, V>, key: &K) -> Result<Option<Self>> {
         Self::object_key_reusing(batch, key, None).await
     }
@@ -52,7 +73,12 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
             }
             _ => batch.read(block).await?,
         };
-        let position = rows.partition_point(|row| row.0.0 < *key);
+        let start = previous
+            .filter(|old| {
+                Arc::ptr_eq(&old.rows, &rows) && old.end.as_ref().is_some_and(|bound| bound < key)
+            })
+            .map_or(0, |old| old.position.min(rows.len()));
+        let position = crate::engine::search::advance(&rows, start, |row| row.0.0 < *key);
         Ok(Some(Self {
             source: Source::Object(batch),
             rows,

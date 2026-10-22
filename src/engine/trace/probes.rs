@@ -1,6 +1,6 @@
 //! Bounded run-head reuse for affected-key probes at one immutable boundary.
 use super::{KeyCursor, MergedCursor, Run, TraceSnapshot};
-use crate::engine::reader::{BatchData, BatchReader, Cursor};
+use crate::engine::reader::{BatchData, Cursor};
 use anyhow::Result;
 
 /// Key probes retaining one reusable verified head per run across groups.
@@ -35,10 +35,7 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         for (run, head) in self.snapshot.runs.iter().zip(&mut heads) {
             let selected = match run {
                 Run::Memory(batch) => {
-                    let mut cursor = batch.cursor().await?;
-                    cursor.seek_key(key).await?;
-                    cursor.restrict_to_upper(key);
-                    Some(cursor)
+                    Some(Cursor::memory_key_reusing(batch.shared_entries(), key, head.as_ref()))
                 }
                 Run::Object(batch) => {
                     Cursor::object_key_reusing(batch.clone(), key, head.as_ref()).await?

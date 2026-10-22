@@ -12,10 +12,18 @@ use std::{
     sync::Arc,
 };
 type Values<K, V> = BTreeMap<String, Arc<Batch<K, V>>>;
+struct ValidatedValues<'a, K: BatchData, V: BatchData> {
+    batches: Values<K, V>,
+    bags: BTreeMap<String, crate::engine::trace::ValidatedBag<'a, K, V>>,
+}
 #[derive(Clone, Copy)]
 pub(super) enum Staging<'a> {
     Objects(Option<&'a str>),
     Memory,
+}
+struct StagePolicy<'a, 'b, K: BatchData, V: BatchData> {
+    staging: Staging<'a>,
+    proof: Option<&'a crate::engine::trace::ValidatedBag<'b, K, V>>,
 }
 type Replacement<K, V> = (String, Entry<K, V>);
 pub(super) fn validate<K: BatchData, V: BatchData>(
@@ -92,15 +100,29 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             "incomplete relational input"
         );
         let mut sources = input.batch.into_iter();
-        let mut values = BTreeMap::new();
+        let mut values = ValidatedValues { batches: BTreeMap::new(), bags: BTreeMap::new() };
         for node in &self.plan.definition().nodes {
+            if matches!(
+                self.operators.get(&node.id),
+                Some(Operator::Statistics(_) | Operator::IndexedStatistics(_))
+            ) && !values.bags.contains_key(&node.inputs[0])
+            {
+                let parent =
+                    values.batches.get(&node.inputs[0]).context("missing aggregate input")?;
+                let proof = self
+                    .prior(&node.inputs[0], &prior)?
+                    .validate_bag_batch(Arc::clone(parent))
+                    .await?;
+                values.bags.insert(node.inputs[0].clone(), proof);
+            }
             let batch = match node.kind {
                 Kind::Source => sources.next().context("incomplete relational input")?,
                 Kind::Join | Kind::Union | Kind::Window => {
-                    self.evaluate_binary(node, &prior, &values, input.time).await?
+                    self.evaluate_binary(node, &prior, &values.batches, input.time).await?
                 }
                 _ => {
-                    let parent = values.get(&node.inputs[0]).context("missing unary input")?;
+                    let parent =
+                        values.batches.get(&node.inputs[0]).context("missing unary input")?;
                     self.evaluate_unary(
                         node,
                         &prior,
@@ -110,18 +132,19 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                     .batch
                 }
             };
-            values.insert(node.id.clone(), Arc::new(batch));
+            values.batches.insert(node.id.clone(), Arc::new(batch));
             profile.operator(&node.id);
         }
         let candidate = self.stage_all(&prior, &values, input.time, staging).await?;
         profile.mark("stage_arrangements");
-        let output = values.remove(&self.plan.definition().outputs[0]).context("missing output")?;
+        let output =
+            values.batches.remove(&self.plan.definition().outputs[0]).context("missing output")?;
         Ok((candidate, Arc::unwrap_or_clone(output)))
     }
     async fn stage_all(
         &self,
         prior: &RelationalState<K, V>,
-        values: &Values<K, V>,
+        values: &ValidatedValues<'_, K, V>,
         time: u64,
         staging: Staging<'_>,
     ) -> Result<RelationalState<K, V>> {
@@ -130,12 +153,12 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             if node.kind == Kind::Source {
                 continue;
             }
-            let batch = values.get(&node.id).context("missing staged output")?;
+            let batch = values.batches.get(&node.id).context("missing staged output")?;
             uploads.push(self.stage(
                 &node.id,
                 prior,
                 TimedBatch { time, batch: batch.as_ref() },
-                staging,
+                StagePolicy { staging, proof: values.bags.get(&node.id) },
             ));
         }
         // Drain every in-flight upload even on failure before the caller can
@@ -215,11 +238,9 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                     .await
             }
             Operator::Statistics(operator) => {
-                self.prior(&node.inputs[0], prior)?.validate_bag_delta(&input.batch).await?;
                 operator.evaluate(&input, self.prior(&node.id, prior)?, self.limits).await
             }
             Operator::IndexedStatistics(operator) => {
-                self.prior(&node.inputs[0], prior)?.validate_bag_delta(&input.batch).await?;
                 operator.evaluate(&input, self.prior(&node.id, prior)?, self.limits).await
             }
             Operator::Partition(operator) if operator.supports_retained_output() => {
@@ -259,8 +280,9 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         node: &str,
         prior: &RelationalState<K, V>,
         delta: TimedBatch<&Batch<K, V>>,
-        staging: Staging<'_>,
+        policy: StagePolicy<'_, '_, K, V>,
     ) -> Result<Option<Replacement<K, V>>> {
+        let StagePolicy { staging, proof } = policy;
         let Some(member) =
             self.plan.definition().arrangements.iter().find(|member| member.node == node)
         else {
@@ -271,6 +293,18 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             writer = writer.with_namespace(namespace);
         }
         let prior = &prior.entries.get(&member.id).context("missing prior state")?.trace;
+        if let Some(proof) = proof {
+            ensure!(proof.matches(prior, delta.batch), "validated batch boundary mismatch");
+            ensure!(prior.run_count() < 128, "arrangement run limit requires checkpoint");
+            let trace = match staging {
+                Staging::Objects(_) => writer.stage_bag(proof, delta.time).await?,
+                Staging::Memory => prior.append_validated(
+                    crate::engine::trace::Run::Memory(Arc::clone(proof.batch())),
+                    delta.time,
+                )?,
+            };
+            return Ok(Some((member.id.clone(), Entry { schema: member.schema.clone(), trace })));
+        }
         let trace = match staging {
             Staging::Objects(_) => writer.stage(prior, &delta).await?,
             Staging::Memory => {

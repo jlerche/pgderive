@@ -43,6 +43,18 @@ impl<T: Ord + Clone> ZSet<T> {
             .map_or(0, |position| self.entries[position].1)
     }
 
+    pub(crate) fn accumulate_weights(&self, delta: &Self, totals: &mut [num_bigint::BigInt]) {
+        let mut position = 0;
+        for ((tuple, _), total) in delta.iter().zip(totals) {
+            position = super::search::advance(&self.entries, position, |row| row.0 < *tuple);
+            if let Some((found, weight)) = self.entries.get(position)
+                && found == tuple
+            {
+                *total += *weight;
+            }
+        }
+    }
+
     /// Integrate one delta atomically, retaining the original state on error.
     ///
     /// # Errors
