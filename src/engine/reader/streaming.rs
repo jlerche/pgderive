@@ -267,6 +267,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             self.resident.push(ObjectBatch {
                 store: self.store.clone(),
                 reference,
+                rows: super::format::row_count(&blocks)?,
                 blocks: Arc::new(blocks),
                 cache: cache.clone(),
             });

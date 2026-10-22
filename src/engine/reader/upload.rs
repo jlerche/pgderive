@@ -69,7 +69,8 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         for block in &mut blocks {
             block.path = reference.child_path(&block.path);
         }
-        Ok(Self { store, reference, blocks: Arc::new(blocks), cache })
+        let rows = super::format::row_count(&blocks)?;
+        Ok(Self { store, reference, blocks: Arc::new(blocks), rows, cache })
     }
 }
 

@@ -89,6 +89,7 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) store: Arc<dyn ObjectStore>,
     pub(super) reference: ObjectRef,
     pub(super) blocks: Fences<K, V>,
+    pub(super) rows: usize,
     pub(super) cache: Arc<BlockCache>,
 }
 
@@ -186,13 +187,17 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         for block in &mut index.blocks {
             block.path = reference.child_path(&block.path);
         }
-        Ok(Self { store, reference, blocks: Arc::new(index.blocks), cache })
+        let rows = super::format::row_count(&index.blocks)?;
+        Ok(Self { store, reference, blocks: Arc::new(index.blocks), rows, cache })
     }
 
     /// Coarse trusted catalog reference for this immutable run.
     #[must_use]
     pub const fn reference(&self) -> &ObjectRef {
         &self.reference
+    }
+    pub(crate) const fn row_count(&self) -> usize {
+        self.rows
     }
     pub(crate) fn share_cache(&mut self, cache: Arc<BlockCache>) {
         self.cache = cache;

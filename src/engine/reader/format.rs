@@ -1,5 +1,5 @@
 use super::{BatchData, Entry};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -54,4 +54,10 @@ impl<T> Block<T> {
         );
         Ok(())
     }
+}
+
+pub(super) fn row_count<T>(blocks: &[Block<T>]) -> Result<usize> {
+    blocks.iter().try_fold(0_usize, |total, block| {
+        total.checked_add(block.rows).context("object row count overflow")
+    })
 }

@@ -50,9 +50,12 @@ memberships retain their full-tuple additive meaning. If a memory-only sum canno
 fit the persisted coefficient type, full-trace compaction handles cancellation
 against object state before narrowing.
 
-Uploads use byte-aware blocks and bounded root metadata. Eight existing object
-runs trigger full compaction on the next flush; the complete candidate is bounded
-by the 128-run limit. A wide delta may produce multiple roots. Consolidating the
+Uploads use byte-aware blocks and bounded root metadata. A nonzero delta triggers full compaction at eight existing
+object runs or, for nonempty retained state, when its distinct entry count exceeds
+half the retained physical row count. Counts are cached from resident fences at upload/open, including every
+repeated membership; the decision needs no object reads or fence scans. Canceling
+memory deltas simply disappear without reading or rewriting retained objects,
+even at eight runs. The complete candidate is bounded by the 128-run limit. A wide delta may produce multiple roots. Consolidating the
 memory delta requires additional memory proportional to retained memory input;
 this is bounded by the worker memtable setting, not a fixed-memory streaming
 merge. Periodic full compaction still runs in the checkpoint path.

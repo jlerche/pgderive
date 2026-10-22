@@ -117,3 +117,55 @@ async fn wide_memory_delta_uses_byte_bounded_blocks_and_cold_reopens() -> Result
     assert_eq!(restored.materialize().await?, batch);
     Ok(())
 }
+
+#[tokio::test]
+async fn density_boundary_compacts_only_above_half_the_retained_rows() -> Result<()> {
+    let writer = Arrangement::<i64, i64>::new(Arc::new(InMemory::new()), "density-v1".into(), 2)?;
+    let base = writer
+        .stage(
+            &writer.empty(),
+            &TimedBatch { time: 1, batch: Batch::from_updates((0..4).map(|key| ((key, key), 2)))? },
+        )
+        .await?;
+    for entries in [2, 3] {
+        let delta = Batch::from_updates((0..entries).map(|key| ((key, key), -1)))?;
+        let pending = base.append_validated(Run::Memory(Arc::new(delta)), 2)?;
+        let flushed = writer.flush(&pending).await?;
+        assert_eq!(flushed.run_count(), if entries == 2 { 2 } else { 1 });
+        assert_eq!(flushed.materialize().await?, pending.materialize().await?);
+        assert_eq!(
+            writer.reopen(flushed.manifest()?).await?.materialize().await?,
+            pending.materialize().await?
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn canceling_memory_never_reads_eight_retained_runs() -> Result<()> {
+    use crate::engine::reader::ObjectBatch;
+    use anyhow::Context;
+    use object_store::{ObjectStoreExt, path::Path};
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let writer = Arrangement::<i64, i64>::new(store.clone(), "zero-v1".into(), 1)?;
+    let reference =
+        ObjectBatch::write(store.clone(), &Batch::from_updates([((1, 1), 2)])?, "zero-v1", 1)
+            .await?;
+    let object = ObjectBatch::open(store.clone(), reference, "zero-v1").await?;
+    let block = Path::from(object.block_path(0).context("missing block")?);
+    let bytes = store.get(&block).await?.bytes().await?;
+    let mut base = writer.empty();
+    for time in 1..=8 {
+        base = base.append_validated(Run::Object(object.clone()), time)?;
+    }
+    let pending = append(&append(&base, 9, 1)?, 10, -1)?;
+    store.delete(&block).await?;
+    let flushed = writer.flush(&pending).await?;
+    assert_eq!(flushed.manifest()?.objects, base.manifest()?.objects);
+    assert_eq!(flushed.time(), 10);
+    assert_eq!(flushed.generation(), pending.generation() + 1);
+    assert_eq!(flushed.memory_charge(), 0);
+    store.put(&block, bytes.into()).await?;
+    assert_eq!(flushed.materialize().await?, Batch::from_updates([((1, 1), 16)])?);
+    Ok(())
+}

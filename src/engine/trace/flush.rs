@@ -9,12 +9,6 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         if !self.has_memory() {
             return Ok(self.clone());
         }
-        // Bound merge fan-in independently of query topology and data values.
-        // A full compaction remains necessary periodically to consolidate runs.
-        let objects = self.runs.iter().filter(|run| matches!(run, Run::Object(_))).count();
-        if objects >= 8 {
-            return writer.compact(self).await;
-        }
         let mut memory = BatchBuilder::default();
         for run in &self.runs {
             if let Run::Memory(batch) = run {
@@ -35,7 +29,21 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
                 Run::Memory(_) => None,
             })
             .collect::<Vec<_>>();
-        if delta.iter().next().is_some() {
+        let entries = delta.iter().count();
+        if entries > 0 {
+            // Dense deltas otherwise add nearly a full run's worth of lookup
+            // work. Resident fences supply physical row counts without I/O;
+            // duplicate references count separately, just as they do in merges.
+            let rows = runs.iter().try_fold(0_usize, |total, run| {
+                let rows = match run {
+                    Run::Object(object) => object.row_count(),
+                    Run::Memory(_) => 0,
+                };
+                total.checked_add(rows).context("flush row count overflow")
+            })?;
+            if runs.len() >= 8 || (rows > 0 && entries > rows / 2) {
+                return writer.compact(self).await;
+            }
             runs.extend(writer.upload_flush(&delta).await?);
         }
         if runs.len() > 128 {
