@@ -207,3 +207,18 @@ Regression tests count tuple clones and comparisons across increasing run sizes:
 opening a cursor performs neither, and bounded seeks do not scan the whole run.
 They also check independent positions, pinned lifetimes, signed weights, atomic
 failed integration and matching memory/object cursor behavior.
+
+## Incremental resident-memory accounting
+
+Trace snapshots retain a checked total for the serialized payload and structural
+charge of memory runs. Appending a run serializes only that new run; unchanged
+rows are not revisited during a memtable limit check or metrics reporting.
+Cloned snapshots keep their original total. Physical run replacement recomputes
+the total for the replacement membership; object-only cold recovery starts at zero
+because immutable block caches have separate accounting and limits.
+
+The charge formula and configured cap are unchanged. Serialization or arithmetic
+failure rejects the unpublished candidate without changing its predecessor.
+Only new-row sizing moves into arrangement staging; the final accounting phase
+now adds cached arrangement totals. Checks for full-tuple identity, multiplicity,
+logical equivalence during compaction and durable publication remain independent.

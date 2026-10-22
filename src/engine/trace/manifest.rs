@@ -65,7 +65,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         for reference in manifest.objects {
             runs.push(Run::Object(ObjectBatch::open(store.clone(), reference, schema).await?));
         }
-        let mut snapshot = Self { runs, generation: manifest.generation, time: manifest.time };
+        let mut snapshot = Self::from_runs(runs, manifest.generation, manifest.time)?;
         snapshot.validate().await?;
         for run in &mut snapshot.runs {
             if let Run::Object(object) = run {

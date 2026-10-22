@@ -59,18 +59,19 @@ impl<K: BatchData, V: BatchData> BatchReader for Run<K, V> {
 /// Pinned immutable manifest. Clones retain every referenced run for the reader.
 #[derive(Debug, Clone)]
 pub struct TraceSnapshot<K: BatchData, V: BatchData> {
-    pub(super) runs: Vec<Run<K, V>>,
+    runs: Vec<Run<K, V>>,
+    memory_bytes: usize,
     generation: u64,
     time: u64,
 }
 
 impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     pub(super) const fn empty() -> Self {
-        Self { runs: Vec::new(), generation: 0, time: 0 }
+        Self { runs: Vec::new(), memory_bytes: 0, generation: 0, time: 0 }
     }
     pub(crate) async fn replace_runs(&self, runs: Vec<Run<K, V>>) -> Result<Self> {
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
-        let next = Self { runs, generation, time: self.time };
+        let next = Self::from_runs(runs, generation, self.time)?;
         ensure!(self.equivalent(&next).await?, "compaction changed logical state");
         Ok(next)
     }
@@ -88,22 +89,17 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             }
         }
     }
-    pub(crate) fn memory_charge(&self) -> Result<usize> {
-        let mut bytes = 0_usize;
-        for batch in self.runs.iter().filter_map(|run| match run {
-            Run::Memory(batch) => Some(batch),
-            Run::Object(_) => None,
-        }) {
-            for row in batch.iter() {
-                let payload = crate::engine::execution::record_size(&row, usize::MAX)?;
-                let structure = std::mem::size_of::<((K, V), i64)>() + 64;
-                bytes = bytes
-                    .checked_add(payload)
-                    .and_then(|total| total.checked_add(structure))
-                    .context("memtable charge overflow")?;
-            }
-        }
-        Ok(bytes)
+    fn from_runs(runs: Vec<Run<K, V>>, generation: u64, time: u64) -> Result<Self> {
+        let memory_bytes = runs.iter().try_fold(0_usize, |bytes, run| {
+            bytes.checked_add(memory_run_charge(run)?).context("memtable charge overflow")
+        })?;
+        Ok(Self { runs, memory_bytes, generation, time })
+    }
+    pub(crate) fn into_runs(self) -> Vec<Run<K, V>> {
+        self.runs
+    }
+    pub(crate) const fn memory_charge(&self) -> usize {
+        self.memory_bytes
     }
     pub(crate) fn has_memory(&self) -> bool {
         self.runs.iter().any(|run| matches!(run, Run::Memory(_)))
@@ -176,9 +172,13 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     pub(crate) fn append_validated(&self, run: Run<K, V>, time: u64) -> Result<Self> {
         ensure!(self.time.checked_add(1) == Some(time), "out-of-order trace tick");
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
+        let memory_bytes = self
+            .memory_bytes
+            .checked_add(memory_run_charge(&run)?)
+            .context("memtable charge overflow")?;
         let mut runs = self.runs.clone();
         runs.push(run);
-        Ok(Self { runs, generation, time })
+        Ok(Self { runs, memory_bytes, generation, time })
     }
     /// Physical membership generation; compaction may change it without a tick.
     #[must_use]
@@ -205,6 +205,22 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     }
 }
 
+// Charge only newly retained memory rows. Immutable object/cache bytes have their
+// own limits. Keep the serialized-payload-plus-structure formula unchanged.
+fn memory_run_charge<K: BatchData, V: BatchData>(run: &Run<K, V>) -> Result<usize> {
+    let Run::Memory(batch) = run else {
+        return Ok(0);
+    };
+    batch.iter().try_fold(0_usize, |bytes, row| {
+        let payload = crate::engine::execution::record_size(&row, usize::MAX)?;
+        let structure = std::mem::size_of::<((K, V), i64)>() + 64;
+        bytes
+            .checked_add(payload)
+            .and_then(|total| total.checked_add(structure))
+            .context("memtable charge overflow")
+    })
+}
+
 impl<K: BatchData, V: BatchData> BatchReader for TraceSnapshot<K, V> {
     type Key = K;
     type Val = V;
@@ -228,3 +244,7 @@ mod manifest_tests;
 #[cfg(test)]
 #[path = "tests/range.rs"]
 mod range_tests;
+
+#[cfg(test)]
+#[path = "tests/accounting.rs"]
+mod accounting_tests;

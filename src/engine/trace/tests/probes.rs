@@ -38,15 +38,15 @@ async fn probes_skip_irrelevant_runs_and_stop_before_unrelated_blocks() -> Resul
     .await?;
     let unrelated =
         object(store.clone(), cache.clone(), &Batch::from_updates([((100, 0), 1)])?, 1).await?;
-    let trace = TraceSnapshot {
-        runs: vec![
+    let trace = TraceSnapshot::from_runs(
+        vec![
             Run::Object(wide.clone()),
             Run::Object(unrelated.clone()),
             Run::Memory(Arc::new(Batch::from_updates([((7, 1), -2), ((7, 2), 3)])?)),
         ],
-        time: 1,
-        generation: 1,
-    };
+        1,
+        1,
+    )?;
     for (object, ordinal) in [(&wide, 0), (&wide, 4), (&unrelated, 0)] {
         store
             .delete(&Path::from(object.block_path(ordinal).context("missing fixture block")?))
@@ -155,14 +155,14 @@ async fn different_run_layouts_and_cache_budgets_preserve_full_identity() -> Res
             let cache = Arc::new(BlockCache::new(budget, 8));
             let a = Batch::from_updates((0..20).map(|n| ((n / 4, n), 2)))?;
             let b = Batch::from_updates((0..20).map(|n| ((n / 4, n), -1)))?;
-            let trace = TraceSnapshot {
-                runs: vec![
+            let trace = TraceSnapshot::from_runs(
+                vec![
                     Run::Object(object(store.clone(), cache.clone(), &a, block_rows).await?),
                     Run::Object(object(store, cache.clone(), &b, block_rows).await?),
                 ],
-                time: 1,
-                generation: 1,
-            };
+                1,
+                1,
+            )?;
             for key in 0..5 {
                 let expected = Batch::from_updates((key * 4..key * 4 + 4).map(|n| ((key, n), 1)))?;
                 assert_eq!(rows(trace.key_cursor(&key).await?).await?, expected);

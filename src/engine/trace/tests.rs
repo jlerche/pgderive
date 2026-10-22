@@ -176,7 +176,7 @@ async fn split_runs_and_order_consolidate_only_at_logical_boundary() -> Result<(
         if seed % 2 == 0 {
             runs.reverse();
         }
-        let trace = TraceSnapshot { runs, time: 1, generation: 1 };
+        let trace = TraceSnapshot::from_runs(runs, 1, 1)?;
         let actual = trace.materialize().await?;
         assert_eq!(
             actual.iter().map(|(tuple, weight)| (*tuple, *weight)).collect::<Vec<_>>(),
@@ -266,15 +266,15 @@ async fn full_tuple_probes_match_merged_bags_and_reject_invalid_retractions() ->
             .is_err()
     );
     assert!(snapshot.validate_bag_delta(&Batch::from_updates([((1, 66), -7)])?).await.is_ok());
-    let unbounded = super::TraceSnapshot {
-        runs: vec![
+    let unbounded = super::TraceSnapshot::from_runs(
+        vec![
             memory([((1, 1), i64::MAX)])?,
             memory([((1, 1), i64::MAX)])?,
             memory([((1, 1), -i64::MAX)])?,
         ],
-        generation: 0,
-        time: 0,
-    };
+        0,
+        0,
+    )?;
     assert_eq!(unbounded.tuple_weight(&(1, 1)).await?, i64::MAX);
     store.put(&Path::from(reference.path()), b"corrupt".to_vec().into()).await?;
     // Reopened index corruption is rejected before any point query is exposed.

@@ -127,7 +127,7 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
             Arc::new(BlockCache::new(0, 0)),
         )
         .await?;
-        prior.replace_runs(candidate.runs).await
+        prior.replace_runs(candidate.into_runs()).await
     }
 }
 #[cfg(test)]

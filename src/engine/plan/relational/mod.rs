@@ -192,7 +192,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     }
     pub(crate) fn memtable_bytes(&self) -> Result<usize> {
         self.snapshot().entries.values().try_fold(0_usize, |bytes, entry| {
-            bytes.checked_add(entry.trace.memory_charge()?).context("memtable charge overflow")
+            bytes.checked_add(entry.trace.memory_charge()).context("memtable charge overflow")
         })
     }
     /// Resident cache usage and physical read counters.
@@ -272,7 +272,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                 let mut bytes = 0_usize;
                 for entry in candidate.entries.values() {
                     bytes = bytes
-                        .checked_add(entry.trace.memory_charge()?)
+                        .checked_add(entry.trace.memory_charge())
                         .context("memtable charge overflow")?;
                     ensure!(bytes <= byte_limit, MemtableFull);
                 }
