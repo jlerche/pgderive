@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named q4/q9 PG eligibility and winner histories with source recomputation."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_cases, History
 import collections
 import datetime
 from decimal import Decimal
@@ -112,10 +112,6 @@ def qualify(output,command,query,instant):
         (output/'result.json').write_text(json.dumps({'query':query,'native_time':'timestamptz' if instant else 'timestamp','eligibility':'inclusive both endpoints, no clock','postgres':'exact bag','memory':'independent eligibility/max/winner/Decimal average','nulls':'times/keys/prices/categories/payload','restart':'cold same slot','simultaneous':'both inputs'})+'\n')
 
 
-if __name__=='__main__':
-    output, command = harness_arguments()
-    for query in ('q4','q9'):
-        for instant in (False,True):
-            directory = output/(query+('-instant' if instant else '-local'))
-            directory.mkdir()
-            qualify(directory,command,query,instant)
+if __name__ == '__main__':
+    run_cases(((query + ('-instant' if instant else '-local'), query, instant)
+               for query in ('q4','q9') for instant in (False,True)), qualify)

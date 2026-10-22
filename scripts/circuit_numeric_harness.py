@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exact PostgreSQL numeric circuit versus identical SQL MV and decimal row oracle."""
-from worker_harness import harness_arguments
+from worker_harness import run_cases
 import collections
 import decimal
 import json
@@ -98,8 +98,5 @@ class NumericFixture(PartitionFixture):
         return expected_memory
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('native', 'computed', 'group-key', 'join-key'):
-        directory = output / mode
-        directory.mkdir()
-        qualify(directory, command, False, mode, fixture_class=NumericFixture)
+    run_cases(((mode, False, mode) for mode in ('native', 'computed', 'group-key', 'join-key')),
+              qualify, fixture_class=NumericFixture)

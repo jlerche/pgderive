@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named sessions, recorded processing buckets and exact daily statistics."""
-from worker_harness import harness_arguments
+from worker_harness import run_cases
 import collections
 import datetime
 from decimal import Decimal
@@ -165,10 +165,6 @@ def qualify(output,command,query,instant):
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':query,'time':'timestamptz' if instant else 'timestamp','postgres':'exact weighted bag','memory':'independent adjacency components / integer buckets / exact price statistics','restart':'cold same slot','session':'gap >=10 starts new component; late bridges merge and deletion splits','processing':'recorded source column, event-only change does not affect q12','statistics':'exact integral extrema/sum and PG-scale Decimal average','nulls':'NULL bidder/auction, q11 excludes NULL time, q12/q17 keep NULL bucket','infinities':'retained with guarded equal-time sessions','identity':'changed gap/stride/threshold rejected'})+'\n')
 
-if __name__=='__main__':
-    output, command = harness_arguments()
-    for query in ('q11','q12','q17'):
-        for instant in (False,True):
-            directory = output/(query+('-instant' if instant else '-local'))
-            directory.mkdir()
-            qualify(directory,command,query,instant)
+if __name__ == '__main__':
+    run_cases(((query + ('-instant' if instant else '-local'), query, instant)
+               for query in ('q11','q12','q17') for instant in (False,True)), qualify)

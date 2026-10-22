@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned sequential projection CDC, native bag codec and restart qualification."""
-from worker_harness import harness_arguments
+from worker_harness import run_cases
 from harness_control import commit_proxy
 import collections
 import json
@@ -118,8 +118,4 @@ def qualify(output, command, local=False):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('plain', 'local'):
-        directory = output / mode
-        directory.mkdir()
-        qualify(directory, command, mode == 'local')
+    run_cases(((mode, mode == 'local') for mode in ('plain', 'local')), qualify)

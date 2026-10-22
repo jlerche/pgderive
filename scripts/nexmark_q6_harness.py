@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """q6 closed-auction ranking driven by a persisted PostgreSQL clock relation."""
-from worker_harness import History
+from worker_harness import run_cases, History
 import collections
 from decimal import Decimal
 import json
-import pathlib
-import sys
 from nexmark_auction_harness import AuctionFixture, ROOT, time_key
 from native_mv_oracle import expected as native_expected
 from numeric_compiler_harness import average
@@ -78,11 +76,5 @@ def qualify(output, command, instant):
         (output/'result.json').write_text(json.dumps({'query':'q6','instant':instant,'postgres':'exact native MV','memory':'independent eligibility/max/latest ten/exact average','clock':'ordinary revisable CDC; simultaneous three inputs; NULL/delete/reinsert/backward','restart':'cold same slot'})+'\n')
 
 
-if __name__=='__main__':
-    command = sys.argv[2:]
-    if command and command[0]=='--':
-        command = command[1:]
-    for instant in (False,True):
-        output = pathlib.Path(sys.argv[1])/('instant' if instant else 'local')
-        output.mkdir()
-        qualify(output,command,instant)
+if __name__ == '__main__':
+    run_cases((('instant' if instant else 'local', instant) for instant in (False,True)), qualify)

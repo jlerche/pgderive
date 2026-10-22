@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named q0/q2 exact weighted projection, remainder, CDC and cold restart."""
-from worker_harness import harness_arguments
+from worker_harness import run_cases
 import collections
 import json
 import pathlib
@@ -83,10 +83,7 @@ def qualify(output,command,query,mode):
         fixture.verify()
         (output/'result.json').write_text(json.dumps({'query':query,'mode':mode,'postgres':'exact weighted bag','memory':'independent raw projection and integer divisibility','restart':'cold same slot','changes':'inserts updates deletes NULLs PK moves complete transactions and rollback','identity':'alias/remainder syntax normalize; changed query rejected','empty_tick':'other published relation changes advance progress'})+'\n')
 
-if __name__=='__main__':
-    output, command = harness_arguments()
-    for query,modes in [('q0',('local','instant')),('q2',('int2','int4','int8'))]:
-        for mode in modes:
-            directory = output/(query+'-'+mode)
-            directory.mkdir()
-            qualify(directory,command,query,mode)
+if __name__ == '__main__':
+    run_cases(((query+'-'+mode, query, mode)
+               for query,modes in [('q0',('local','instant')),('q2',('int2','int4','int8'))]
+               for mode in modes), qualify)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned DISTINCT/existence identical-MV/raw-row oracle qualification; run sequentially."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import json
 from native_mv_oracle import expected
@@ -59,9 +59,5 @@ def qualify(output,command,mode):
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':'identical SQL exact bag','memory':'independent nested-loop raw-row oracle','cold_restart':True,'simultaneous_changes':True,'transactions':len(changes)+1})+'\n')
 
 
-if __name__=='__main__':
-    root, command = harness_arguments()
-    for mode in ['distinct', 'semi', 'anti', 'distinct-semi', 'distinct-anti']:
-        directory=root/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+if __name__ == '__main__':
+    run_modes(('distinct', 'semi', 'anti', 'distinct-semi', 'distinct-anti'), qualify)

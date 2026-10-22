@@ -5,7 +5,7 @@ import json
 from application_model import apply, generated, query, statements
 from application_portfolio_harness import ApplicationFixture
 from numeric_compiler_harness import average
-from worker_harness import harness_arguments
+from worker_harness import run_modes
 
 MODES = ('window-rows','window-peers','window-empty','window-rank',
          'avg-filter','avg-project','avg-regroup','avg-window','avg-join',
@@ -145,8 +145,5 @@ def qualify(output, command, mode, fixture_type=CompositionFixture):
             'history':'saved case.json; simultaneous changes, NULLs, duplicates, retractions and key moves'})+'\n')
 
 
-if __name__=='__main__':
-    output,command = harness_arguments()
-    for mode in MODES:
-        path = output/mode; path.mkdir()
-        qualify(path,command,mode)
+if __name__ == '__main__':
+    run_modes(MODES, qualify)

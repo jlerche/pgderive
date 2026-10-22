@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PostgreSQL integral COUNT DISTINCT with retractions, filters and composition."""
-from worker_harness import harness_arguments
+from worker_harness import run_cases
 import collections
 import json
 from partition_compiler_harness import PartitionFixture, qualify
@@ -41,8 +41,5 @@ class DistinctFixture(PartitionFixture):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('int2','int4','int8','nested'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,False,mode,fixture_class=DistinctFixture)
+    run_cases(((mode, False, mode) for mode in ('int2','int4','int8','nested')),
+              qualify, fixture_class=DistinctFixture)

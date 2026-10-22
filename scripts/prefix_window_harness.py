@@ -6,7 +6,7 @@ from application_model import apply, statements
 from expression_composition_harness import CompositionFixture
 from native_mv_oracle import binary_difference
 from numeric_compiler_harness import average
-from worker_harness import harness_arguments
+from worker_harness import run_cases
 
 class PrefixFixture(CompositionFixture):
     def __init__(self,output,native,peers):
@@ -70,9 +70,6 @@ def qualify(output,command,native,peers):
         worker.finish(graceful=True)
         (output/'result.json').write_text(json.dumps({'native':native,'peers':peers,'native_binary_and_metadata':True,'independent_prefix_frames':True,'cold_restart':True,'rollback':True,'prefix_statistics':True,'durable_arrangements':fixture.prefix_witness})+'\n')
 
-if __name__=='__main__':
-    root,command=harness_arguments()
-    for native in ('smallint','integer','bigint'):
-        for peers in (False,True):
-            output=root/(native+('-peers' if peers else '-ordered'));output.mkdir()
-            qualify(output,command,native,peers)
+if __name__ == '__main__':
+    run_cases(((native + ('-peers' if peers else '-ordered'), native, peers)
+               for native in ('smallint','integer','bigint') for peers in (False,True)), qualify)

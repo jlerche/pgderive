@@ -4,6 +4,23 @@ from worker_harness import Fixture
 
 
 class ModeRunnerTests(unittest.TestCase):
+    def test_cases_keep_directory_names_separate_from_arguments(self):
+        import pathlib
+        import tempfile
+        from unittest.mock import Mock, patch
+        from worker_harness import run_cases
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory)
+            qualify = Mock()
+            cases = [('rows', True, ('frame', -2, 1)), ('grouped', False, None)]
+            with patch('worker_harness.harness_arguments', return_value=(output, ['worker'])):
+                run_cases(cases, qualify, fixture_class='fixture')
+            self.assertEqual([call.args for call in qualify.call_args_list],
+                             [(output/name, ['worker'], *args) for name, *args in cases])
+            self.assertTrue(all((output/name).is_dir() for name, *_ in cases))
+            self.assertTrue(all(call.kwargs == {'fixture_class': 'fixture'}
+                                for call in qualify.call_args_list))
+
     def test_modes_keep_order_options_and_stop_at_failure(self):
         import pathlib
         import tempfile

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Sequential owned PostgreSQL MV/memory/cold-restart ordered-extrema checks."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_cases, History
 import collections
 import datetime
 import json
@@ -93,8 +93,5 @@ def qualify(output, command, oid, joined):
 
 
 if __name__ == '__main__':
-    root, command = harness_arguments()
-    for oid in ('smallint', 'integer', 'bigint', 'timestamp', 'timestamptz'):
-        directory = root/oid
-        directory.mkdir()
-        qualify(directory, command, oid, oid == 'bigint')
+    run_cases(((oid, oid, oid == 'bigint')
+               for oid in ('smallint', 'integer', 'bigint', 'timestamp', 'timestamptz')), qualify)

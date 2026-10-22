@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sequential SQL-compiled worker oracle/restart tests in an owned fixture."""
 import json
-from worker_harness import Fixture, Worker, harness_arguments, History
+from worker_harness import Fixture, Worker, run_cases, History
 
 
 class SqlFixture(Fixture):
@@ -126,8 +126,5 @@ def qualify(output, command, null_only, typed=False, remainder=False):
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
-    for mode in ('regular', 'null-only', 'typed', 'remainder'):
-        directory = output / mode
-        directory.mkdir()
-        qualify(directory, command, mode == 'null-only', mode == 'typed', mode == 'remainder')
+    run_cases(((mode, mode == 'null-only', mode == 'typed', mode == 'remainder')
+               for mode in ('regular', 'null-only', 'typed', 'remainder')), qualify)

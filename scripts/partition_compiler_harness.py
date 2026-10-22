@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned partition aggregate and non-temporal ROWS CDC qualification."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_cases, History
 import collections
 import json
 from sql_compiler_harness import SqlFixture
@@ -76,7 +76,6 @@ def qualify(output, command, window, frame_spec=None, fixture_class=PartitionFix
 
 
 if __name__ == '__main__':
-    output, command = harness_arguments()
     cases = [
         ('grouped', None), ('rows', ('2 PRECEDING AND 1 FOLLOWING', -2, 1, True)),
         ('unbounded', ('UNBOUNDED PRECEDING AND CURRENT ROW', None, 0, False)),
@@ -85,7 +84,4 @@ if __name__ == '__main__':
         ('preceding', ('2 PRECEDING AND 1 PRECEDING', -2, -1, False)),
         ('full', ('UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING', None, None, True)),
     ]
-    for mode, frame in cases:
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory, command, frame is not None, frame)
+    run_cases(((mode, frame is not None, frame) for mode, frame in cases), qualify)

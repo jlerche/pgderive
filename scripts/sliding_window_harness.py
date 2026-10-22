@@ -3,7 +3,7 @@
 import collections
 import json
 from expression_composition_harness import CompositionFixture, qualify
-from worker_harness import harness_arguments
+from worker_harness import run_cases
 
 
 class SlidingFixture(CompositionFixture):
@@ -29,8 +29,6 @@ class SlidingFixture(CompositionFixture):
         return result
 
 
-if __name__=='__main__':
-    output,command = harness_arguments()
-    for mode in ('window-rows','window-rows-i16','window-rows-i32','window-peers','window-empty'):
-        path = output/mode; path.mkdir()
-        qualify(path,command,mode,SlidingFixture)
+if __name__ == '__main__':
+    run_cases(((mode, mode, SlidingFixture) for mode in
+               ('window-rows','window-rows-i16','window-rows-i32','window-peers','window-empty')), qualify)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned PostgreSQL exact MV and raw occurrence oracle for retractable top-k."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_modes, History
 import collections
 import json
 from native_mv_oracle import expected
@@ -65,7 +65,5 @@ def qualify(output,command,mode):
         ))
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':'identical SQL exact bag','memory':'independent sorted raw source occurrences','duplicates':'cutoff and projection bag','restart':True,'transactions':len(changes)+1})+'\n')
 
-if __name__=='__main__':
-    root, command = harness_arguments()
-    for mode in ['descending','ascending','nulls-first','equality','strict','reversed','empty','timestamp','timestamptz','integral-extremes']:
-        directory=root/mode;directory.mkdir();qualify(directory,command,mode)
+if __name__ == '__main__':
+    run_modes(('descending','ascending','nulls-first','equality','strict','reversed','empty','timestamp','timestamptz','integral-extremes'), qualify)

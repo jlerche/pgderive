@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named latest/top-ten bids: independent ordered occurrence bag, PG and restart."""
-from worker_harness import harness_arguments, History
+from worker_harness import run_cases, History
 import collections
 import datetime
 import json
@@ -103,10 +103,6 @@ def qualify(output,command,query,instant):
         ), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':query,'time':'timestamptz' if instant else 'timestamp','postgres':'exact occurrence-ranked bag','memory':'independent timestamp/integral tuple ordering','restart':'cold same slot','ties':'explicit stable bid PK, omitted from output','changes':'late inserts, deleting winners/backfill, PK and partition moves, NULLs, infinities, rollback, empty query-input tick','identity':'changed cutoff/null order rejected; quoted aliases normalize'})+'\n')
 
-if __name__=='__main__':
-    output, command = harness_arguments()
-    for query in ('q18','q19'):
-        for instant in (False,True):
-            directory = output/(query+('-instant' if instant else '-local'))
-            directory.mkdir()
-            qualify(directory,command,query,instant)
+if __name__ == '__main__':
+    run_cases(((query + ('-instant' if instant else '-local'), query, instant)
+               for query in ('q18','q19') for instant in (False,True)), qualify)

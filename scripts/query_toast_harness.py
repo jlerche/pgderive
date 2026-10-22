@@ -5,11 +5,9 @@ Run sequentially against an owned PostgreSQL fixture. Failure preserves all evid
 """
 import collections
 import json
-import pathlib
 import struct
-import sys
 
-from worker_harness import Fixture, Worker
+from worker_harness import run_modes, Fixture, Worker
 from native_mv_oracle import expected as native_expected
 
 
@@ -158,11 +156,4 @@ def qualify(output,command,mode):
 
 
 if __name__ == '__main__':
-    output = pathlib.Path(sys.argv[1])
-    command = sys.argv[2:]
-    if command[:1] == ['--']:
-        command = command[1:]
-    for mode in ('history','budget'):
-        directory = output/mode
-        directory.mkdir()
-        qualify(directory,command,mode)
+    run_modes(('history','budget'), qualify)

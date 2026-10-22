@@ -26,11 +26,16 @@ def harness_arguments():
 
 
 def run_modes(modes, qualify, **options):
+    run_cases(((mode, mode) for mode in modes), qualify, **options)
+
+
+def run_cases(cases, qualify, **options):
+    """Run named argument tuples sequentially, retaining the first failed case."""
     output, command = harness_arguments()
-    for mode in modes:
-        directory = output / mode
+    for name, *arguments in cases:
+        directory = output / name
         directory.mkdir()
-        qualify(directory, command, mode, **options)
+        qualify(directory, command, *arguments, **options)
 
 
 @dataclass

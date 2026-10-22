@@ -6,7 +6,7 @@ from application_model import apply, statements
 from expression_composition_harness import CompositionFixture, absolute, sorting
 from native_mv_oracle import binary_difference
 from numeric_compiler_harness import average
-from worker_harness import harness_arguments
+from worker_harness import run_cases
 
 
 class ExtremaFixture(CompositionFixture):
@@ -71,9 +71,6 @@ def qualify(output, command, peers, native):
             'independent_frames':True,'cold_restart':True,'rollback':True,'computed_filtered_mixed_aggregates':True})+'\n')
 
 
-if __name__=='__main__':
-    root,command = harness_arguments()
-    for native in ('smallint','integer','bigint'):
-        for peers in (False,True):
-            output = root/(native+'-'+('groups' if peers else 'rows'));output.mkdir()
-            qualify(output,command,peers,native)
+if __name__ == '__main__':
+    run_cases(((native + ('-groups' if peers else '-rows'), peers, native)
+               for native in ('smallint','integer','bigint') for peers in (False,True)), qualify)
