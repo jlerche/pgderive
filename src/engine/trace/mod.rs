@@ -1,4 +1,5 @@
 //! Immutable trace generations, weighted merging and pinned membership.
+mod flush;
 mod manifest;
 mod merged;
 mod probes;
@@ -253,3 +254,7 @@ mod range_tests;
 #[cfg(test)]
 #[path = "tests/accounting.rs"]
 mod accounting_tests;
+
+#[cfg(test)]
+#[path = "tests/flush.rs"]
+mod flush_tests;

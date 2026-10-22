@@ -69,6 +69,22 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
             .await?,
         ))
     }
+    pub(crate) async fn upload_flush(&self, batch: &Batch<K, V>) -> Result<Vec<Run<K, V>>> {
+        let mut cursor = batch.cursor().await?;
+        let limits =
+            WriteLimits { block_rows: self.block_rows.min(65_536), ..WriteLimits::default() };
+        Ok(ObjectBatch::<K, V>::write_stream_resident(
+            self.store.clone(),
+            &mut cursor,
+            &self.schema,
+            (self.namespace.as_deref(), limits),
+            self.cache.clone(),
+        )
+        .await?
+        .into_iter()
+        .map(Run::Object)
+        .collect())
+    }
     /// Upload a complete delta and validate an unpublished next snapshot.
     ///
     /// # Errors
@@ -89,6 +105,14 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
     ) -> Result<TraceSnapshot<K, V>> {
         ensure!(proof.trace().run_count() < 128, "arrangement run limit requires compaction");
         proof.trace().append_validated(self.upload(proof.batch()).await?, time)
+    }
+    /// Persist memory deltas while retaining existing immutable object runs.
+    /// Periodically consolidate all state to bound merge fan-in.
+    ///
+    /// # Errors
+    /// Returns upload, compaction, arithmetic or run-limit failures.
+    pub async fn flush(&self, prior: &TraceSnapshot<K, V>) -> Result<TraceSnapshot<K, V>> {
+        prior.flush_memory(self).await
     }
     /// Upload equivalent consolidated state without advancing logical time.
     ///
