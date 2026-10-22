@@ -31,30 +31,25 @@ async fn distinct_retracts_only_the_last_occurrence_and_restores() -> Result<()>
     let ir = compiled.relational();
 
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-2"))]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", Some("-2"))]);
     let c = row(&[("id", Some("3")), ("auction", None), ("price", None)]);
     let moved = row(&[("id", Some("2")), ("auction", Some("9")), ("price", Some("7"))]);
-    let mut state = BTreeMap::new();
-    for changes in [
-        batch(vec![("bid", a.clone(), 2), ("bid", b.clone(), 1), ("bid", c.clone(), 1)]),
-        batch(vec![("bid", a.clone(), -1)]),
-        batch(vec![("bid", b.clone(), -1), ("bid", moved.clone(), 1)]),
-        batch(vec![("bid", a.clone(), -1)]),
-        batch(vec![("bid", moved.clone(), -1), ("bid", b.clone(), 1)]),
-        batch(vec![("bid", c.clone(), -1), ("bid", b.clone(), -1)]),
-        batch(vec![]),
-    ] {
-        let before = oracle(&state)?;
-        super::apply_rows(&mut state, &changes);
-        let after = oracle(&state)?;
-        let delta = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, delta);
-        query.commit(prepared)?;
-        super::restart_relational(&mut query, &native, &compiled, &options).await?;
-    }
+    let query = super::check_row_history(
+        (&native, &compiled, &options),
+        [
+            batch(vec![("bid", a.clone(), 2), ("bid", b.clone(), 1), ("bid", c.clone(), 1)]),
+            batch(vec![("bid", a.clone(), -1)]),
+            batch(vec![("bid", b.clone(), -1), ("bid", moved.clone(), 1)]),
+            batch(vec![("bid", a.clone(), -1)]),
+            batch(vec![("bid", moved.clone(), -1), ("bid", b.clone(), 1)]),
+            batch(vec![("bid", c.clone(), -1), ("bid", b.clone(), -1)]),
+            batch(vec![]),
+        ],
+        oracle,
+        |_| true,
+    )
+    .await?;
     let prior = serde_json::to_vec(&query.checkpoint()?)?;
     let changes = batch(vec![("bid", a, -1)]);
     assert!(query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await.is_err());

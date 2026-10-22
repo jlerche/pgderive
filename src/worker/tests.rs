@@ -327,3 +327,54 @@ mod computed_join;
 mod expression_composition;
 
 mod sliding_windows;
+
+/// Check single-source row histories without sharing the oracle's implementation.
+async fn check_row_history(
+    context: (&Contract, &crate::compiler::Compiled, &Settings),
+    changes: impl IntoIterator<Item = weighted::Batch>,
+    oracle: impl Fn(
+        &std::collections::BTreeMap<Row, i64>,
+    ) -> Result<Batch<program::relational::Key, Row>>,
+    restart: impl Fn(usize) -> bool,
+) -> Result<program::relational::Query> {
+    let (native, compiled, options) = context;
+    let mut query = build(native, compiled, options)?;
+    let mut state = std::collections::BTreeMap::new();
+    for (index, changes) in changes.into_iter().enumerate() {
+        let before = oracle(&state)?;
+        apply_rows(&mut state, &changes);
+        let expected = bag_delta(&before, &oracle(&state)?)?;
+        let prepared = query
+            .prepare(program::relational::inputs(
+                &changes,
+                compiled.relational(),
+                query.time() + 1,
+            )?)
+            .await?;
+        assert_eq!(prepared.output().batch, expected, "history step {index}");
+        query.commit(prepared)?;
+        if restart(index) {
+            restart_relational(&mut query, native, compiled, options).await?;
+        }
+    }
+    Ok(query)
+}
+
+fn peer_changes() -> [weighted::Batch; 4] {
+    let a = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
+    let b = row(&[("id", Some("2")), ("auction", None), ("price", Some("7"))]);
+    let c = row(&[("id", Some("3")), ("auction", None), ("price", Some("7"))]);
+    let d = row(&[("id", Some("4")), ("auction", None), ("price", Some("-2"))]);
+    let moved = row(&[("id", Some("2")), ("auction", Some("1")), ("price", None)]);
+    [
+        batch(vec![
+            ("bid", a.clone(), 2),
+            ("bid", b.clone(), 3),
+            ("bid", c.clone(), 1),
+            ("bid", d.clone(), 1),
+        ]),
+        batch(vec![("bid", b, -3), ("bid", moved.clone(), 3)]),
+        batch(vec![("bid", a.clone(), -1), ("bid", d, -1)]),
+        batch(vec![("bid", c, -1), ("bid", moved, -3), ("bid", a, -1)]),
+    ]
+}

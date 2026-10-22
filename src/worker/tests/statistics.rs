@@ -46,11 +46,9 @@ async fn linear_statistics_match_full_bag_oracle_through_retractions_and_restart
 async fn history(native_cache_bytes: usize) -> Result<()> {
     let native = contract();
     let compiled = super::raw_statistics_compiled(compile(SQL, &native)?);
-    let ir = compiled.relational();
 
     let mut options = settings();
     options.limits.native_cache_bytes = native_cache_bytes;
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-2"))]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", None)]);
     let c = row(&[("id", Some("3")), ("auction", Some("1")), ("price", Some("7"))]);
@@ -62,20 +60,13 @@ async fn history(native_cache_bytes: usize) -> Result<()> {
         vec![("bid", c, -1), ("bid", moved, -2)],
         vec![],
     ];
-    let mut state = BTreeMap::new();
-    for (index, updates) in histories.into_iter().enumerate() {
-        let before = oracle(&state)?;
-        let delta = batch(updates);
-        super::apply_rows(&mut state, &delta);
-        let after = oracle(&state)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&delta, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        if index == 1 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    let query = super::check_row_history(
+        (&native, &compiled, &options),
+        histories.into_iter().map(batch),
+        oracle,
+        |index| index == 1,
+    )
+    .await?;
     assert_eq!(query.time(), 5);
     Ok(())
 }

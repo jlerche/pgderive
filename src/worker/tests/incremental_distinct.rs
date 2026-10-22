@@ -180,21 +180,13 @@ async fn mixed_distinct_sum_average_filters_and_group_moves_restore() -> Result<
         vec![("bid", b, 1)],
         vec![],
     ];
-    let mut state = std::collections::BTreeMap::new();
-    let mut query = relational::build(&native, &compiled, &options)?;
-    for updates in histories {
-        let before = mixed_oracle(&state)?;
-        let input = batch(updates);
-        for update in &input.updates {
-            *state.entry(update.tuple.row.clone()).or_default() += update.weight;
-        }
-        let after = mixed_oracle(&state)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&input, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        super::restart_relational(&mut query, &native, &compiled, &options).await?;
-    }
+    let query = super::check_row_history(
+        (&native, &compiled, &options),
+        histories.into_iter().map(batch),
+        mixed_oracle,
+        |_| true,
+    )
+    .await?;
     let before = query.checkpoint()?;
     let absent = row(&[("id", Some("absent")), ("auction", None), ("price", Some("-7"))]);
     let added = row(&[("id", Some("added")), ("auction", None), ("price", Some("-7"))]);

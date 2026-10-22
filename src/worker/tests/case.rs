@@ -80,7 +80,6 @@ async fn history(running: bool) -> Result<()> {
     let field = &ir.output.columns[3].column.name;
 
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let null_time = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
     let negative = row(&[("id", Some("2")), ("auction", None), ("price", Some("-infinity"))]);
     let first =
@@ -90,38 +89,29 @@ async fn history(running: bool) -> Result<()> {
     let positive = row(&[("id", Some("5")), ("auction", None), ("price", Some("infinity"))]);
     let bridge =
         row(&[("id", Some("6")), ("auction", None), ("price", Some("2000-01-01 00:00:15"))]);
-    let mut state = BTreeMap::new();
-    for (index, changes) in [
-        batch(vec![
-            ("bid", null_time.clone(), 1),
-            ("bid", negative.clone(), 2),
-            ("bid", first.clone(), 1),
-            ("bid", later.clone(), 1),
-            ("bid", positive.clone(), 2),
-        ]),
-        batch(vec![("bid", bridge.clone(), 1), ("bid", null_time.clone(), -1)]),
-        batch(vec![("bid", bridge, -1), ("bid", negative.clone(), -1)]),
-        batch(vec![
-            ("bid", negative, -1),
-            ("bid", first, -1),
-            ("bid", later, -1),
-            ("bid", positive, -2),
-        ]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let before = oracle(&state, field, running)?;
-        super::apply_rows(&mut state, &changes);
-        let after = oracle(&state, field, running)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        if index == 1 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    super::check_row_history(
+        (&native, &compiled, &options),
+        [
+            batch(vec![
+                ("bid", null_time.clone(), 1),
+                ("bid", negative.clone(), 2),
+                ("bid", first.clone(), 1),
+                ("bid", later.clone(), 1),
+                ("bid", positive.clone(), 2),
+            ]),
+            batch(vec![("bid", bridge.clone(), 1), ("bid", null_time.clone(), -1)]),
+            batch(vec![("bid", bridge, -1), ("bid", negative.clone(), -1)]),
+            batch(vec![
+                ("bid", negative, -1),
+                ("bid", first, -1),
+                ("bid", later, -1),
+                ("bid", positive, -2),
+            ]),
+        ],
+        |state| oracle(state, field, running),
+        |index| index == 1,
+    )
+    .await?;
     Ok(())
 }
 #[tokio::test]

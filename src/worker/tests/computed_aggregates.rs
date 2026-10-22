@@ -39,7 +39,6 @@ async fn computed_distinct_and_statistics_match_memory_with_collisions_and_resta
     let native = contract();
     let compiled = super::raw_statistics_compiled(compile(SQL, &native)?);
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-2"))]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", Some("2"))]);
     let c = row(&[("id", Some("3")), ("auction", Some("1")), ("price", None)]);
@@ -57,19 +56,13 @@ async fn computed_distinct_and_statistics_match_memory_with_collisions_and_resta
         vec![("bid", a, -1)],
         vec![("bid", moved, -1), ("bid", c, -1), ("bid", excluded, -1)],
     ];
-    let mut state = BTreeMap::new();
-    for updates in histories {
-        let before = oracle(&state)?;
-        let delta = batch(updates);
-        super::apply_rows(&mut state, &delta);
-        let expected = super::bag_delta(&before, &oracle(&state)?)?;
-        let prepared = query
-            .prepare(relational::inputs(&delta, compiled.relational(), query.time() + 1)?)
-            .await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        super::restart_relational(&mut query, &native, &compiled, &options).await?;
-    }
+    super::check_row_history(
+        (&native, &compiled, &options),
+        histories.into_iter().map(batch),
+        oracle,
+        |_| true,
+    )
+    .await?;
     Ok(())
 }
 #[tokio::test]

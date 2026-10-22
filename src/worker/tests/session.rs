@@ -68,34 +68,33 @@ async fn complete_sessions_merge_split_move_and_restore_signed_bags() -> Result<
         ir.output.columns.iter().map(|value| value.column.name.clone()).collect::<Vec<_>>();
 
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let first = source(1, None, Some(10));
     let last = source(2, None, Some(20));
     let bridge = source(3, None, Some(15));
     let moved = source(3, Some("7"), Some(15));
     let null = source(4, None, None);
-    let mut state = BTreeMap::new();
-    for changes in [
-        batch(vec![("bid", first.clone(), 2), ("bid", last.clone(), 1), ("bid", null.clone(), 1)]),
-        batch(vec![("bid", bridge.clone(), 1)]),
-        batch(vec![("bid", bridge.clone(), -1), ("bid", moved.clone(), 1)]),
-        batch(vec![
-            ("bid", moved.clone(), -1),
-            ("bid", bridge.clone(), 1),
-            ("bid", first.clone(), -1),
-        ]),
-        batch(vec![("bid", bridge, -1)]),
-        batch(vec![("bid", first, -1), ("bid", last, -1), ("bid", null, -1)]),
-    ] {
-        let before = oracle(&state, &fields)?;
-        super::apply_rows(&mut state, &changes);
-        let after = oracle(&state, &fields)?;
-        let delta = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, delta);
-        query.commit(prepared)?;
-        super::restart_relational(&mut query, &native, &compiled, &options).await?;
-    }
+    super::check_row_history(
+        (&native, &compiled, &options),
+        [
+            batch(vec![
+                ("bid", first.clone(), 2),
+                ("bid", last.clone(), 1),
+                ("bid", null.clone(), 1),
+            ]),
+            batch(vec![("bid", bridge.clone(), 1)]),
+            batch(vec![("bid", bridge.clone(), -1), ("bid", moved.clone(), 1)]),
+            batch(vec![
+                ("bid", moved.clone(), -1),
+                ("bid", bridge.clone(), 1),
+                ("bid", first.clone(), -1),
+            ]),
+            batch(vec![("bid", bridge, -1)]),
+            batch(vec![("bid", first, -1), ("bid", last, -1), ("bid", null, -1)]),
+        ],
+        |state| oracle(state, &fields),
+        |_| true,
+    )
+    .await?;
     Ok(())
 }
 #[test]

@@ -27,34 +27,23 @@ async fn group_only_membership_preserves_duplicates_nulls_and_restart() -> Resul
     let native = contract();
     let sql = "SELECT b.auction FROM source.bid b GROUP BY b.auction,b.price";
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", None)]);
     let c = row(&[("id", Some("3")), ("auction", None), ("price", Some("7"))]);
     let moved = row(&[("id", Some("2")), ("auction", Some("9")), ("price", Some("7"))]);
-    let mut state = BTreeMap::new();
-    for (index, changes) in [
-        batch(vec![("bid", a.clone(), 2), ("bid", b.clone(), 3), ("bid", c.clone(), 1)]),
-        batch(vec![("bid", a.clone(), -1), ("bid", b.clone(), -2)]),
-        batch(vec![("bid", a.clone(), -1), ("bid", b, -1), ("bid", moved.clone(), 1)]),
-        batch(vec![("bid", c, -1), ("bid", moved, -1)]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let before = oracle(&state)?;
-        super::apply_rows(&mut state, &changes);
-        let after = oracle(&state)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        if index == 1 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    super::check_row_history(
+        (&native, &compiled, &options),
+        [
+            batch(vec![("bid", a.clone(), 2), ("bid", b.clone(), 3), ("bid", c.clone(), 1)]),
+            batch(vec![("bid", a.clone(), -1), ("bid", b.clone(), -2)]),
+            batch(vec![("bid", a.clone(), -1), ("bid", b, -1), ("bid", moved.clone(), 1)]),
+            batch(vec![("bid", c, -1), ("bid", moved, -1)]),
+        ],
+        oracle,
+        |index| index == 1,
+    )
+    .await?;
     Ok(())
 }
 

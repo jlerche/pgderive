@@ -1,4 +1,4 @@
-use super::{batch, contract, row, settings};
+use super::{contract, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -48,40 +48,14 @@ async fn history(numbered: bool) -> Result<()> {
     let native = contract();
     let sql = if numbered { NUMBER } else { PEERS };
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
-    let a = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
-    let b = row(&[("id", Some("2")), ("auction", None), ("price", Some("7"))]);
-    let c = row(&[("id", Some("3")), ("auction", None), ("price", Some("7"))]);
-    let d = row(&[("id", Some("4")), ("auction", None), ("price", Some("-2"))]);
-    let moved = row(&[("id", Some("2")), ("auction", Some("1")), ("price", None)]);
-    let mut state = BTreeMap::new();
-    for (index, changes) in [
-        batch(vec![
-            ("bid", a.clone(), 2),
-            ("bid", b.clone(), 3),
-            ("bid", c.clone(), 1),
-            ("bid", d.clone(), 1),
-        ]),
-        batch(vec![("bid", b, -3), ("bid", moved.clone(), 3)]),
-        batch(vec![("bid", a.clone(), -1), ("bid", d, -1)]),
-        batch(vec![("bid", c, -1), ("bid", moved, -3), ("bid", a, -1)]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let before = oracle(&state, numbered)?;
-        super::apply_rows(&mut state, &changes);
-        let after = oracle(&state, numbered)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        if index == 1 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    super::check_row_history(
+        (&native, &compiled, &options),
+        super::peer_changes(),
+        |state| oracle(state, numbered),
+        |index| index == 1,
+    )
+    .await?;
     Ok(())
 }
 #[tokio::test]

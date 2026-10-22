@@ -94,9 +94,7 @@ fn oracle(state: &BTreeMap<Row, i64>, derived: bool) -> Result<Bag> {
 async fn history(derived: bool) -> Result<()> {
     let native = native();
     let compiled = compile(&sql(derived), &native)?;
-    let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let input = |id, price, step| {
         row(&[("id", Some(id)), ("auction", None), ("price", price), ("step", step)])
     };
@@ -107,33 +105,24 @@ async fn history(derived: bool) -> Result<()> {
     let extreme = input("5", Some("9"), Some("-2147483648"));
     let mut moved = input("2", Some("-7"), Some("2"));
     moved.insert("auction".into(), Some("1".into()));
-    let mut state = BTreeMap::new();
-    for (index, changes) in [
-        batch(vec![
-            ("bid", a.clone(), 2),
-            ("bid", b.clone(), 3),
-            ("bid", c.clone(), 1),
-            ("bid", d.clone(), 1),
-            ("bid", extreme.clone(), 1),
-        ]),
-        batch(vec![("bid", b, -3), ("bid", moved.clone(), 3)]),
-        batch(vec![("bid", a.clone(), -1), ("bid", d, -1)]),
-        batch(vec![("bid", a, -1), ("bid", c, -1), ("bid", extreme, -1), ("bid", moved, -3)]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let before = oracle(&state, derived)?;
-        super::apply_rows(&mut state, &changes);
-        let after = oracle(&state, derived)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        if index == 1 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    super::check_row_history(
+        (&native, &compiled, &options),
+        [
+            batch(vec![
+                ("bid", a.clone(), 2),
+                ("bid", b.clone(), 3),
+                ("bid", c.clone(), 1),
+                ("bid", d.clone(), 1),
+                ("bid", extreme.clone(), 1),
+            ]),
+            batch(vec![("bid", b, -3), ("bid", moved.clone(), 3)]),
+            batch(vec![("bid", a.clone(), -1), ("bid", d, -1)]),
+            batch(vec![("bid", a, -1), ("bid", c, -1), ("bid", extreme, -1), ("bid", moved, -3)]),
+        ],
+        |state| oracle(state, derived),
+        |index| index == 1,
+    )
+    .await?;
     Ok(())
 }
 #[tokio::test]
