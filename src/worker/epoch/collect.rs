@@ -44,20 +44,15 @@ impl Collector {
         let mut epoch = Epoch::new(first.transaction, first.decode_us)?;
         loop {
             let decision = scheduler.decision(&epoch);
-            let reason = ceiling(&epoch, &bounds).or_else(|| {
-                matches!(decision.reason, "amortized" | "bounded_exploration")
-                    .then_some(decision.reason)
-            });
+            let reason = ceiling(&epoch, &bounds)
+                .or_else(|| (decision.reason == "bounded_exploration").then_some(decision.reason));
             if let Some(reason) = reason {
                 return Ok(Collected { epoch, reason, predicted: decision.predicted });
             }
-            if decision.predicted >= Duration::from_millis(bounds.policy.freshness_target_ms) {
-                return Ok(Collected {
-                    epoch,
-                    reason: "service_budget",
-                    predicted: decision.predicted,
-                });
-            }
+            // Missing a freshness objective forbids intentional waiting; it must
+            // not prevent coalescing work that is already queued. Otherwise fixed
+            // cost or prediction uncertainty can force single-transaction epochs
+            // and amplify publication/checkpoint stalls under backlog.
             let Some(input) = receive(stream, bounds.stop, decision).await? else {
                 return Ok(Collected {
                     epoch,

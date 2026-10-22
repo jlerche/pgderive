@@ -75,6 +75,11 @@ impl Epoch {
     pub(super) fn age(&self) -> Duration {
         self.source_age.saturating_add(self.opened.elapsed())
     }
+    /// Age of the oldest complete transaction received by the engine reader.
+    /// Keep its original receipt when combining later source transactions.
+    pub(super) fn received_age(&self) -> Duration {
+        self.transaction.received_at.unwrap_or(self.opened).elapsed()
+    }
     pub(super) fn progress(&self) -> Result<Progress> {
         Progress::new(self.transaction.xid, &self.transaction.commit_lsn, &self.transaction.end_lsn)
     }

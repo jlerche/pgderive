@@ -33,6 +33,8 @@ pub struct Transaction {
     pub(super) bytes: u64,
     #[serde(skip)]
     pub(super) commit_time_micros: Option<i64>,
+    #[serde(skip)]
+    pub(super) received_at: Option<std::time::Instant>,
 }
 
 struct Relation {
@@ -123,6 +125,7 @@ impl Decoder {
             batch,
             bytes: self.pending_bytes,
             commit_time_micros: None,
+            received_at: None,
         })
     }
 

@@ -84,6 +84,21 @@ epoch selection. Epoch events report closure reason, source transaction count,
 source bytes, predicted service time and observed source age. Source age uses the
 PostgreSQL commit timestamp and therefore depends on clock synchronization.
 
+Freshness pressure stops intentional waiting for future arrivals. It does not
+prevent combining already queued complete transactions: fixed cost or prediction
+uncertainty above the objective must not force singleton epochs and amplify
+checkpoint stalls. The learned exploration bound applies even when already late
+or arrival estimates are unavailable, in addition to the hard resource ceilings.
+
+`epoch.received_to_sink_ms` measures the oldest complete transaction in the epoch
+from the source reader's completion of transaction decoding through durable sink
+publication, including reader queueing and coalescing. Its monotonic receipt clock
+is runtime-only and never enters persisted transaction identity or replay metadata.
+This differs from source-commit age (which also includes upstream CDC/decode delay)
+and `published.elapsed_ms` (execution and publication after epoch collection).
+These are per-epoch samples; they are not per-row or per-source-transaction latency
+percentiles when multiple transactions share an epoch.
+
 
 Steady-state publication compares the complete claimed query and progress boundary
 inside PostgreSQL, locking the query row before the progress row. The comparison

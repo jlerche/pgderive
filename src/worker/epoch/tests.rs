@@ -13,6 +13,7 @@ fn transaction(xid: u32, changes: Vec<Change>) -> Result<Transaction> {
         batch,
         bytes: 16,
         commit_time_micros: None,
+        received_at: None,
     })
 }
 fn insert(table: &str, values: &[(&str, Option<&str>)]) -> Change {
@@ -208,5 +209,49 @@ fn epoch_union_keeps_full_tuple_identity_and_cancels_signed_rows() -> Result<()>
     )?;
     assert_eq!(input.batch[0].iter().count(), 1);
     assert_eq!(input.batch[0].iter().next().map(|(_, w)| *w), Some(1));
+    Ok(())
+}
+
+#[test]
+fn overdue_over_budget_epochs_still_obey_learned_exploration_ceiling() -> Result<()> {
+    let mut epoch = Epoch::new(transaction(1, vec![])?, 0)?;
+    let mut controller = Controller::new(Policy { freshness_target_ms: 1, ..Policy::default() });
+    controller.record(1.0, Duration::from_millis(50));
+    // The ceiling applies even without an arrival estimate and when source
+    // age already exceeds the objective. Such pressure forbids waiting, but
+    // must not remove the learned bound on ready work.
+    epoch.source_age = Duration::from_secs(1);
+    epoch.transaction.bytes = 512;
+    let bounded = controller.decision(&epoch);
+    assert_eq!(bounded.reason, "bounded_exploration");
+    assert!(bounded.wait.is_zero());
+    assert!(bounded.predicted >= Duration::from_millis(50));
+    controller.observe(Some(100));
+    controller.observe(Some(200));
+    assert_eq!(controller.decision(&epoch).reason, "bounded_exploration");
+    epoch.transaction.bytes = 16;
+    let overdue = controller.decision(&epoch);
+    assert_eq!(overdue.reason, "freshness_pressure");
+    assert!(overdue.wait.is_zero());
+    epoch.source_age = Duration::ZERO;
+    let over_budget = controller.decision(&epoch);
+    assert_eq!(over_budget.reason, "freshness_pressure");
+    assert!(over_budget.wait.is_zero());
+    Ok(())
+}
+
+#[test]
+fn epoch_receipt_age_keeps_first_complete_transaction_clock() -> Result<()> {
+    let mut first = transaction(1, vec![])?;
+    let received = Instant::now()
+        .checked_sub(Duration::from_secs(2))
+        .ok_or_else(|| anyhow::anyhow!("receipt clock underflow"))?;
+    first.received_at = Some(received);
+    let mut epoch = Epoch::new(first, 0)?;
+    let mut next = transaction(2, vec![])?;
+    next.received_at = Some(Instant::now());
+    epoch.push(next, 0, Limits::default())?;
+    assert_eq!(epoch.transaction().received_at, Some(received));
+    assert!(epoch.received_age() >= Duration::from_secs(2));
     Ok(())
 }

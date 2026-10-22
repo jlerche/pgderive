@@ -81,6 +81,12 @@ impl Controller {
         };
         let work = epoch.work();
         let predicted = Duration::from_secs_f64(model.seconds(work));
+        // Bound ready work even when source age already exceeds the objective
+        // or arrival estimates are unavailable. Freshness pressure below controls
+        // waiting, rather than bypassing this learned exploration ceiling.
+        if work >= model.largest * 2.0 {
+            return seal("bounded_exploration", predicted);
+        }
         let Some(arrival) = self.arrival else {
             return seal("unknown_arrival", predicted);
         };
@@ -91,9 +97,6 @@ impl Controller {
         }
         if arrival >= model.fixed || model.fixed <= 0.0 {
             return seal("sparse_input", predicted);
-        }
-        if work >= model.largest * 2.0 {
-            return seal("bounded_exploration", predicted);
         }
         if model.fixed / model.seconds(work).max(1e-9) <= 0.15 {
             return seal("amortized", predicted);

@@ -333,7 +333,7 @@ async fn publish_group(
     metrics.source.complete()?;
     metrics.failures = 0;
     emit(
-        &json!({"event":"epoch","time":open.query.time(),"transactions":grouped.epoch.transactions(),"source_bytes":grouped.epoch.bytes(),"oldest_source_age_ms":age.as_millis(),"publication_source_age_ms":grouped.epoch.age().as_millis(),"freshness_target_missed":grouped.epoch.age()>Duration::from_millis(settings.epoch.freshness_target_ms),"predicted_service_us":grouped.predicted.as_micros(),"reason":grouped.reason}),
+        &json!({"event":"epoch","time":open.query.time(),"transactions":grouped.epoch.transactions(),"source_bytes":grouped.epoch.bytes(),"oldest_source_age_ms":age.as_millis(),"publication_source_age_ms":grouped.epoch.age().as_millis(),"received_to_sink_ms":grouped.epoch.received_age().as_millis(),"freshness_target_missed":grouped.epoch.age()>Duration::from_millis(settings.epoch.freshness_target_ms),"predicted_service_us":grouped.predicted.as_micros(),"reason":grouped.reason}),
     )?;
     Ok(())
 }
