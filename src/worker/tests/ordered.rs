@@ -105,7 +105,7 @@ fn oracle(
         let positive = values.iter().filter(|value| **value > 0).min().map(ToString::to_string);
         (
             (
-                Vec::new(),
+                crate::worker::program::relational::Key::new(),
                 row(&[
                     ("0:auction", group.as_deref()),
                     ("@aggregate_0", lo.as_deref()),

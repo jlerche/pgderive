@@ -8,6 +8,7 @@ mod lookup;
 #[cfg(test)]
 mod membership;
 mod membership_counts;
+mod native;
 mod navigation;
 mod order;
 mod ordered;
@@ -22,3 +23,5 @@ pub(super) fn plan(contract: &Contract, compiled: &Compiled) -> Result<Plan> {
     compiled.validate_execution()?;
     relational::plan(contract, compiled, compiled.relational())
 }
+
+mod keys;

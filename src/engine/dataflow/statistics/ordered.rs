@@ -75,7 +75,7 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
             if let Some(before) = &before {
                 let values = (self.decode)(before)?;
                 ensure!(values.len() == self.width, "persisted statistics width mismatch");
-                for (total, value) in totals.iter_mut().zip(values) {
+                for (total, value) in totals.iter_mut().zip(values.iter()) {
                     *total += value;
                 }
             }

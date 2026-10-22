@@ -50,7 +50,7 @@ async fn numeric_grouped_history_uses_raw_scale_and_cold_restart() -> Result<()>
         } else {
             Batch::from_updates([(
                 (
-                    Vec::new(),
+                    crate::worker::program::relational::Key::new(),
                     [
                         ("0:auction".into(), Some("1".into())),
                         ("@aggregate_0".into(), Some(values.len().to_string())),

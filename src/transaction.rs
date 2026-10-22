@@ -3,7 +3,7 @@ use postgres_replication::protocol::{LogicalReplicationMessage, RelationBody, Tu
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
-pub type Row = BTreeMap<String, Option<String>>;
+pub type Row = crate::engine::value::Value<BTreeMap<String, Option<String>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

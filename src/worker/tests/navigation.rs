@@ -86,7 +86,7 @@ fn oracle(state: &BTreeMap<Row, i64>, derived: bool) -> Result<Bag> {
                     result.insert(format!("@aggregate_{}", field + 1), value);
                 }
             }
-            output.push(((Vec::new(), result), 1));
+            output.push(((crate::worker::program::relational::Key::new(), result), 1));
         }
     }
     Batch::from_updates(output)
@@ -256,7 +256,9 @@ async fn navigation_copies_native_values_and_never_replaces_present_nulls() -> R
         ];
         assert_eq!(
             prepared.output().batch,
-            Batch::from_updates(expected.map(|row| ((Vec::new(), row), 1)))?
+            Batch::from_updates(
+                expected.map(|row| ((crate::worker::program::relational::Key::new(), row), 1))
+            )?
         );
         query.commit(prepared)?;
     }
@@ -293,8 +295,8 @@ async fn expanded_navigation_counts_occurrences_before_output_collisions() -> Re
     assert_eq!(
         prepared.output().batch,
         Batch::from_updates([
-            ((Vec::new(), output(None)), 1),
-            ((Vec::new(), output(Some("7"))), 5)
+            ((crate::worker::program::relational::Key::new(), output(None)), 1),
+            ((crate::worker::program::relational::Key::new(), output(Some("7"))), 5)
         ])?
     );
     query.commit(prepared)?;
@@ -302,7 +304,10 @@ async fn expanded_navigation_counts_occurrences_before_output_collisions() -> Re
     let prepared = query.prepare(relational::inputs(&changes, ir, 2)?).await?;
     assert_eq!(
         prepared.output().batch,
-        Batch::from_updates([((Vec::new(), output(Some("7"))), -3)])?
+        Batch::from_updates([(
+            (crate::worker::program::relational::Key::new(), output(Some("7"))),
+            -3
+        )])?
     );
     query.commit(prepared)?;
     Ok(())

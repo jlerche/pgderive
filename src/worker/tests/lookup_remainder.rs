@@ -48,7 +48,10 @@ fn q13_modulo_keys_use_postgres_integer_promotion() -> Result<()> {
 }
 
 type State = std::collections::BTreeMap<(String, crate::transaction::Row), i64>;
-fn oracle(state: &State) -> Result<crate::engine::Batch<Vec<String>, crate::transaction::Row>> {
+fn oracle(
+    state: &State,
+) -> Result<crate::engine::Batch<crate::worker::program::relational::Key, crate::transaction::Row>>
+{
     let number = |row: &crate::transaction::Row, name: &str| {
         row[name].as_ref().map(|value| value.parse::<i128>()).transpose()
     };
@@ -82,7 +85,7 @@ fn oracle(state: &State) -> Result<crate::engine::Batch<Vec<String>, crate::tran
         let value = chosen.and_then(|(right, _)| right["value"].as_deref());
         output.push((
             (
-                Vec::new(),
+                crate::worker::program::relational::Key::new(),
                 super::row(&[("0:auction", left["auction"].as_deref()), ("1:value", value)]),
             ),
             *weight,

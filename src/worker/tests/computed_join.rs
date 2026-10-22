@@ -23,7 +23,7 @@ fn oracle(
             {
                 updates.push((
                     (
-                        Vec::new(),
+                        crate::worker::program::relational::Key::new(),
                         row(&[
                             ("0:category", a["category"].as_deref()),
                             ("1:price", b["price"].as_deref()),

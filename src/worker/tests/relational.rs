@@ -19,7 +19,7 @@ fn oracle(
                     ("1:price".into(), b["price"].clone()),
                 ]
                 .into();
-                updates.push(((Vec::new(), output), wa * wb));
+                updates.push(((crate::worker::program::relational::Key::new(), output), wa * wb));
             }
         }
     }

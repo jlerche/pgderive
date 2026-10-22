@@ -2,7 +2,7 @@ use super::{batch, contract, row, settings};
 use crate::{
     compiler::{compile, relational::Node},
     engine::{Batch, execution::Limits},
-    worker::program::relational,
+    worker::program::relational::{self, Key},
 };
 use anyhow::{Context, Result};
 fn native() -> crate::source::Contract {
@@ -77,8 +77,8 @@ async fn hopping_preserves_weighted_memberships_nulls_and_restart() -> Result<()
         Batch::from_updates(
             buckets
                 .iter()
-                .map(|bucket| ((Vec::new(), output(Some(bucket), 2, Some("14"))), 1))
-                .chain([((Vec::new(), output(None, 15, None)), 1)])
+                .map(|bucket| ((Key::new(), output(Some(bucket), 2, Some("14"))), 1))
+                .chain([((Key::new(), output(None, 15, None)), 1)])
         )?
     );
     query.commit(prepared)?;
@@ -90,9 +90,9 @@ async fn hopping_preserves_weighted_memberships_nulls_and_restart() -> Result<()
     assert_eq!(
         prepared.output().batch,
         Batch::from_updates([
-            ((Vec::new(), output(Some(buckets[4]), 2, Some("14"))), -1),
-            ((Vec::new(), output(Some("2000-01-01 00:00:02+00"), 2, Some("14"))), 1),
-            ((Vec::new(), output(None, 15, None)), -1)
+            ((Key::new(), output(Some(buckets[4]), 2, Some("14"))), -1),
+            ((Key::new(), output(Some("2000-01-01 00:00:02+00"), 2, Some("14"))), 1),
+            ((Key::new(), output(None, 15, None)), -1)
         ])?
     );
     query.commit(prepared)?;
@@ -176,7 +176,7 @@ async fn expanded_rows_require_explicit_composite_order_and_match_neighbors() ->
     let expected = (0..3).map(|ordinal| {
         (
             (
-                Vec::new(),
+                Key::new(),
                 [
                     ("0:id".into(), Some("1".into())),
                     ("@series_0".into(), Some(ordinal.to_string())),
@@ -233,7 +233,7 @@ async fn plain_series_projection_preserves_expansion_and_weights() -> Result<()>
                 ("0:auction".into(), Some("17".into())),
             ]
             .into();
-            ((Vec::new(), output), weight)
+            ((Key::new(), output), weight)
         }))?;
         assert_eq!(prepared.output().batch, expected);
         query.commit(prepared)?;
@@ -260,7 +260,7 @@ async fn plain_series_projection_filters_before_expansion() -> Result<()> {
             ("0:auction".into(), Some("17".into())),
         ]
         .into();
-        ((Vec::new(), output), 3)
+        ((Key::new(), output), 3)
     }))?;
     assert_eq!(prepared.output().batch, expected);
     Ok(())

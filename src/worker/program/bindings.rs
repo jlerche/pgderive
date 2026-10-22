@@ -18,7 +18,7 @@ pub(super) fn rebind(fields: &[Binding]) -> Project<Key, Row, Key, Row> {
                 "duplicate scoped output field"
             );
         }
-        Ok(Some((Vec::new(), output)))
+        Ok(Some((Key::new(), output)))
     })
 }
 pub(super) fn key_by(keys: &[ColumnRef]) -> Project<Key, Row, Key, Row> {
@@ -28,11 +28,11 @@ pub(super) fn key_by(keys: &[ColumnRef]) -> Project<Key, Row, Key, Row> {
             .iter()
             .map(|column| crate::compiler::native_key(column, row))
             .collect::<anyhow::Result<Option<Vec<_>>>>()?;
-        Ok(key.map(|key| (key, row.clone())))
+        Ok(key.map(|key| (key.into(), row.clone())))
     })
 }
 
 /// A Cartesian product uses one constant navigation key, including NULL tuples.
 pub(super) fn cross_key() -> Project<Key, Row, Key, Row> {
-    Project::new(|_: &Key, row: &Row| Ok(Some((Vec::new(), row.clone()))))
+    Project::new(|_: &Key, row: &Row| Ok(Some((Key::new(), row.clone()))))
 }

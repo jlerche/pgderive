@@ -22,7 +22,7 @@ fn oracle(
         if matches.is_empty() {
             updates.push((
                 (
-                    Vec::new(),
+                    crate::worker::program::relational::Key::new(),
                     [("0:category".into(), a["category"].clone()), ("1:price".into(), None)].into(),
                 ),
                 *weight,
@@ -32,7 +32,7 @@ fn oracle(
             if b["price"].as_ref().is_none_or(|value| value.starts_with('-')) {
                 updates.push((
                     (
-                        Vec::new(),
+                        crate::worker::program::relational::Key::new(),
                         [
                             ("0:category".into(), a["category"].clone()),
                             ("1:price".into(), b["price"].clone()),
@@ -196,7 +196,7 @@ fn repeated_oracle(
             let output: Row =
                 [("0:id".into(), a["id"].clone()), ("1:id".into(), b["id"].clone())].into();
             if !multiway {
-                updates.push(((Vec::new(), output), wa * wb));
+                updates.push(((crate::worker::program::relational::Key::new(), output), wa * wb));
                 continue;
             }
             for (c, wc) in auctions {
@@ -205,7 +205,8 @@ fn repeated_oracle(
                 }
                 let mut output = output.clone();
                 output.insert("2:category".into(), c["category"].clone());
-                updates.push(((Vec::new(), output), wa * wb * wc));
+                updates
+                    .push(((crate::worker::program::relational::Key::new(), output), wa * wb * wc));
             }
         }
     }

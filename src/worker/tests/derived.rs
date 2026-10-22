@@ -47,7 +47,13 @@ fn oracle(state: &BTreeMap<Row, i64>, numbered: bool, layered: bool) -> Result<B
                 && price(row).is_none_or(|value| value > 0)
                 && (!layered || price(row).is_none_or(|value| value < 5))
             {
-                outputs.push(((Vec::new(), [("0:price".into(), row["price"].clone())].into()), 1));
+                outputs.push((
+                    (
+                        crate::worker::program::relational::Key::new(),
+                        [("0:price".into(), row["price"].clone())].into(),
+                    ),
+                    1,
+                ));
             }
         }
     }

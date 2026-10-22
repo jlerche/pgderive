@@ -46,7 +46,7 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Batch<relational::Key, Row>> {
         let average = sum.as_ref().map(|sum| format!("{sum}/{count}"));
         updates.push((
             (
-                Vec::new(),
+                crate::worker::program::relational::Key::new(),
                 row(&[
                     ("0:id", Some(&id.to_string())),
                     ("@aggregate_0", Some(&rows.to_string())),
@@ -62,6 +62,12 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Batch<relational::Key, Row>> {
 }
 #[tokio::test]
 async fn prefix_signed_peer_histories_match_independent_scan_and_restore() -> Result<()> {
+    for bytes in [0, 1, 4 * 1024 * 1024] {
+        prefix_history(bytes).await?;
+    }
+    Ok(())
+}
+async fn prefix_history(native_cache_bytes: usize) -> Result<()> {
     let mut native = contract();
     native.relations[1].columns[1].oid = 20;
     native.relations[1].columns[1].nullable = false;
@@ -78,7 +84,8 @@ async fn prefix_signed_peer_histories_match_independent_scan_and_restore() -> Re
     assert!(
         compiled.relational().nodes.iter().any(|node| matches!(node, Node::PrefixWindow { .. }))
     );
-    let options = settings();
+    let mut options = settings();
+    options.limits.native_cache_bytes = native_cache_bytes;
     let mut query = relational::build(&native, &compiled, &options)?;
     let mut scan = relational::build_scanned(&native, &compiled, &options)?;
     let mut a =

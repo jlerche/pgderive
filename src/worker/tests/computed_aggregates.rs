@@ -31,7 +31,7 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Bag> {
             ("@aggregate_2", (count != 0).then(|| format!("{sum}/{count}")).as_deref()),
             ("@aggregate_3", Some(&distinct.len().to_string())),
         ]);
-        ((Vec::new(), output), 1)
+        ((crate::worker::program::relational::Key::new(), output), 1)
     }))
 }
 #[tokio::test]

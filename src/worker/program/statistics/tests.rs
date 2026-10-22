@@ -28,8 +28,11 @@ fn evaluate(spec: &Partition, values: &[&str]) -> Result<Option<String>> {
         .enumerate()
         .map(|(index, value)| (field(index), Some((*value).into())))
         .collect();
-    let output = finalize(spec)
-        .evaluate(&TimedBatch { time: 1, batch: Batch::from_updates([((vec![], row), 1)])? })?;
+    let output =
+        finalize(spec, crate::engine::value::NativeBudget::new(4096)).evaluate(&TimedBatch {
+            time: 1,
+            batch: Batch::from_updates([((vec![].into(), row), 1)])?,
+        })?;
     output
         .batch
         .iter()
@@ -75,9 +78,15 @@ fn finalizer_validates_other_slots_and_does_not_skip_errors_on_retractions() -> 
         .map(|(index, value)| (field(index), Some((*value).into())))
         .collect();
     for weight in [-1, 1] {
-        let input =
-            TimedBatch { time: 1, batch: Batch::from_updates([((vec![], row.clone()), weight)])? };
-        assert!(finalize(&spec).evaluate(&input).is_err());
+        let input = TimedBatch {
+            time: 1,
+            batch: Batch::from_updates([((vec![].into(), row.clone()), weight)])?,
+        };
+        assert!(
+            finalize(&spec, crate::engine::value::NativeBudget::new(4096))
+                .evaluate(&input)
+                .is_err()
+        );
     }
     Ok(())
 }

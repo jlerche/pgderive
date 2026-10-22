@@ -55,7 +55,7 @@ fn oracle(state: &BTreeMap<Row, i64>, case: usize) -> Result<Bag> {
                 ),
             ]
             .into();
-            updates.push(((Vec::new(), output), 1));
+            updates.push(((crate::worker::program::relational::Key::new(), output), 1));
         }
     }
     Batch::from_updates(updates)

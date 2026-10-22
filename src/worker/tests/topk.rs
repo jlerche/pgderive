@@ -62,7 +62,7 @@ fn oracle(
             if !equality || index + 1 == limit {
                 expected.push((
                     (
-                        Vec::new(),
+                        crate::worker::program::relational::Key::new(),
                         [
                             ("0:auction".into(), row["auction"].clone()),
                             ("0:price".into(), row["price"].clone()),

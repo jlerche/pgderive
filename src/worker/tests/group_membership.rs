@@ -11,11 +11,15 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Bag> {
         .filter(|(_, weight)| **weight > 0)
         .map(|(row, _)| (row["auction"].clone(), row["price"].clone()))
         .collect::<BTreeSet<_>>();
-    Batch::from_updates(
-        memberships
-            .into_iter()
-            .map(|(auction, _)| ((Vec::new(), [("0:auction".into(), auction)].into()), 1)),
-    )
+    Batch::from_updates(memberships.into_iter().map(|(auction, _)| {
+        (
+            (
+                crate::worker::program::relational::Key::new(),
+                [("0:auction".into(), auction)].into(),
+            ),
+            1,
+        )
+    }))
 }
 
 #[tokio::test]

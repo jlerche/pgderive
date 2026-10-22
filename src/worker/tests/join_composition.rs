@@ -61,7 +61,7 @@ fn oracle(left: &BTreeMap<Row, i64>, right: &BTreeMap<Row, i64>, winner: bool) -
             ]
             .into()
         };
-        outputs.push(((Vec::new(), output), 1));
+        outputs.push(((crate::worker::program::relational::Key::new(), output), 1));
     }
     Batch::from_updates(outputs)
 }

@@ -19,3 +19,5 @@ pub(crate) mod tests;
 pub(crate) mod search;
 
 mod batch_size;
+
+pub mod value;

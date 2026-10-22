@@ -36,7 +36,7 @@ fn expected(source: &BTreeMap<Row, i64>) -> Result<Batch<relational::Key, Row>> 
         let average = sum.as_ref().map(|sum| format!("{sum}/{present}"));
         output.push((
             (
-                Vec::new(),
+                crate::worker::program::relational::Key::new(),
                 row(&[
                     ("0:id", value["id"].as_deref()),
                     ("@aggregate_0", Some(&(index + 1).to_string())),

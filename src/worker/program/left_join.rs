@@ -34,7 +34,7 @@ pub(super) fn input(spec: &Input) -> Project<Key, Row, Key, Row> {
         };
         let mut tagged = row.clone();
         tagged.insert(SIDE.into(), Some(if spec.left { "left".into() } else { "right".into() }));
-        Ok(Some((key, tagged)))
+        Ok(Some((key.into(), tagged)))
     })
 }
 #[cfg(test)]

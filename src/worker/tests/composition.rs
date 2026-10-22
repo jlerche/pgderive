@@ -54,7 +54,11 @@ fn oracle(state: &BTreeMap<Row, i64>, layered: bool) -> Result<Bag> {
             })
             .collect()
     };
-    Batch::from_updates(outputs.into_iter().map(|(row, weight)| ((Vec::new(), row), weight)))
+    Batch::from_updates(
+        outputs
+            .into_iter()
+            .map(|(row, weight)| ((crate::worker::program::relational::Key::new(), row), weight)),
+    )
 }
 async fn history(layered: bool) -> Result<()> {
     let native = contract();
@@ -150,7 +154,7 @@ async fn repeated_date_bin_maps_keep_scope_fields_distinct() -> Result<()> {
     let prepared = query.prepare(relational::inputs(&changes, ir, 1)?).await?;
     let expected = Batch::from_updates([(
         (
-            Vec::new(),
+            crate::worker::program::relational::Key::new(),
             [
                 (names[1].into(), Some("2000-01-01 00:00:00".into())),
                 ("@aggregate_0".into(), Some("2".into())),

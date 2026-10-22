@@ -21,7 +21,7 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Batch<relational::Key, Row>> {
             ("@aggregate_1", Some(&values.len().to_string())),
             ("@aggregate_2", Some(&values.iter().filter(|value| **value < 0).count().to_string())),
         ]);
-        ((Vec::new(), output), 1)
+        ((crate::worker::program::relational::Key::new(), output), 1)
     }))
 }
 #[tokio::test]

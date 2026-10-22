@@ -39,7 +39,7 @@ fn oracle(state: &BTreeMap<Row, i64>, numbered: bool) -> Result<Bag> {
             if !numbered {
                 result.insert("@aggregate_1".into(), Some(distinct.len().to_string()));
             }
-            output.push(((Vec::new(), result), 1));
+            output.push(((crate::worker::program::relational::Key::new(), result), 1));
         }
     }
     Batch::from_updates(output)

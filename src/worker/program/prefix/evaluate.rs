@@ -37,6 +37,7 @@ async fn read(prior: &TraceSnapshot<Key, Row>, key: &Key) -> Result<Option<Row>>
     Ok(Some(row))
 }
 struct Summaries<'a> {
+    native: &'a crate::worker::program::native::Integers,
     prior: &'a TraceSnapshot<Key, Row>,
     changed: Replacements,
 }
@@ -59,8 +60,9 @@ impl Summaries<'_> {
                 read(self.prior, &key).await?
             };
             if let Some(row) = row {
-                for (total, value) in total.iter_mut().zip(codec::decode(&row, codec::width(spec))?)
-                {
+                let values =
+                    self.native.decode(&row, |row| codec::decode(row, codec::width(spec)))?;
+                for (total, value) in total.iter_mut().zip(values.iter()) {
                     *total += value;
                 }
             }
@@ -110,10 +112,11 @@ pub(super) async fn evaluate<'a>(
     spec: &'a Partition,
     input: BinaryInput<'a, Key, Row>,
     work: &mut PartitionWork,
+    native: &'a crate::worker::program::native::Integers,
 ) -> Result<Batch<Key, Row>> {
     let starts = changes(input.left, work)?;
     let summaries =
-        Summaries { prior: input.prior_right, changed: replacements(input.right, work)? };
+        Summaries { native, prior: input.prior_right, changed: replacements(input.right, work)? };
     let mut output = Consolidator::new(input.limits)?;
     let evaluator = Evaluation { spec, input, summaries };
     for change in starts.values() {
@@ -158,10 +161,9 @@ mod tests {
     #[test]
     fn partition_delta_is_routed_once_and_each_range_receives_only_its_own_rows() -> Result<()> {
         for count in [1, 8, 64, 1024] {
-            let input = Batch::from_updates(
-                (0..count)
-                    .map(|id| ((vec![id.to_string(), "8000000000000000".into()], Row::new()), 1)),
-            )?;
+            let input = Batch::from_updates((0..count).map(|id| {
+                ((vec![id.to_string(), "8000000000000000".into()].into(), Row::new()), 1)
+            }))?;
             let mut work = PartitionWork::for_test(usize::try_from(count)?);
             let groups = changes(&input, &mut work)?;
             assert_eq!(work.remaining_for_test(), 0);

@@ -64,14 +64,14 @@ fn ordered_identity_token_precedes_arbitrary_fields_and_rejects_reserved_collisi
         .context("missing spec")?;
     let source =
         row(&[("!quoted", Some("arbitrary")), ("0:auction", Some("1")), ("0:price", Some("-1"))]);
-    let batch = Batch::from_updates([((vec!["\"1\"".into()], source.clone()), 1)])?;
+    let batch = Batch::from_updates([((vec!["\"1\"".into()].into(), source.clone()), 1)])?;
     let expanded = input(spec).evaluate(&TimedBatch { time: 1, batch }, Limits::default())?;
     let value = &expanded.batch.iter().next().context("missing expansion")?.0.1;
     assert_eq!(value.keys().next().map(String::as_str), Some(ORDER));
     for reserved in [ORDER, VALUE, ""] {
         let mut source = source.clone();
         source.insert(reserved.into(), None);
-        let batch = Batch::from_updates([((vec!["\"1\"".into()], source), 1)])?;
+        let batch = Batch::from_updates([((vec!["\"1\"".into()].into(), source), 1)])?;
         assert!(input(spec).evaluate(&TimedBatch { time: 1, batch }, Limits::default()).is_err());
     }
     Ok(())

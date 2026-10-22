@@ -178,7 +178,10 @@ mod tests {
             ]);
             let input = TimedBatch {
                 time: 1,
-                batch: Batch::from_updates([((vec!["null".into(), suffix.into()], state), 1)])?,
+                batch: Batch::from_updates([(
+                    (vec!["null".into(), suffix.into()].into(), state),
+                    1,
+                )])?,
             };
             assert!(operator.evaluate(&input).is_err());
         }
@@ -197,7 +200,7 @@ mod tests {
                 (MEMBER.into(), Some("[0,1]".into())),
                 (COUNT.into(), Some(count.into())),
             ]);
-            let key = vec!["null".into(), "[0,1]".into()];
+            let key: super::Key = vec!["null".into(), "[0,1]".into()].into();
             let initial =
                 TimedBatch { time: 1, batch: Batch::from_updates([((key.clone(), state), 1)])? };
             let prior = writer.stage(&writer.empty(), &initial).await?;

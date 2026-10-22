@@ -32,17 +32,24 @@ fn oracle(state: &BTreeMap<Row, i64>) -> Result<Bag> {
                 ("@aggregate_4".into(), Some(negative.to_string())),
             ]
             .into();
-            ((Vec::new(), output), 1)
+            ((crate::worker::program::relational::Key::new(), output), 1)
         },
     ))
 }
 #[tokio::test]
 async fn linear_statistics_match_full_bag_oracle_through_retractions_and_restart() -> Result<()> {
+    for bytes in [0, 1, 4 * 1024 * 1024] {
+        history(bytes).await?;
+    }
+    Ok(())
+}
+async fn history(native_cache_bytes: usize) -> Result<()> {
     let native = contract();
     let compiled = super::raw_statistics_compiled(compile(SQL, &native)?);
     let ir = compiled.relational();
 
-    let options = settings();
+    let mut options = settings();
+    options.limits.native_cache_bytes = native_cache_bytes;
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-2"))]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", None)]);
@@ -113,7 +120,10 @@ async fn linear_statistics_update_large_group_under_delta_budget() -> Result<()>
     };
     assert_eq!(
         prepared.output().batch,
-        Batch::from_updates([((Vec::new(), output(32640)), -1), ((Vec::new(), output(33640)), 1)])?
+        Batch::from_updates([
+            ((crate::worker::program::relational::Key::new(), output(32640)), -1),
+            ((crate::worker::program::relational::Key::new(), output(33640)), 1)
+        ])?
     );
     query.commit(prepared)?;
     let checkpoint = query.checkpoint()?;

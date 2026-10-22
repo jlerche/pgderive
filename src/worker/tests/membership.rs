@@ -22,7 +22,8 @@ fn oracle(
             continue;
         }
         let row = [("0:category".into(), a["category"].clone())].into();
-        *output.entry((Vec::new(), row)).or_insert(0_i64) += weight;
+        *output.entry((crate::worker::program::relational::Key::new(), row)).or_insert(0_i64) +=
+            weight;
     }
     Batch::from_updates(
         output.into_iter().map(|(tuple, weight)| (tuple, if distinct { 1 } else { weight })),
@@ -170,7 +171,13 @@ async fn compound_self_existence_and_repeated_distinct_columns_preserve_null_sem
         });
         let expected = rows
             .map(|(row, _)| {
-                ((Vec::new(), [("0:auction".into(), row["auction"].clone())].into()), 1)
+                (
+                    (
+                        crate::worker::program::relational::Key::new(),
+                        [("0:auction".into(), row["auction"].clone())].into(),
+                    ),
+                    1,
+                )
             })
             .collect::<BTreeMap<_, _>>();
         let current = Batch::from_updates(expected)?;
@@ -226,7 +233,13 @@ async fn distinct_threshold_retains_full_rows_without_narrowing_occurrence_total
         let expected = if weight == 0 {
             Batch::from_updates([])?
         } else {
-            Batch::from_updates([((Vec::new(), [("0:category".into(), None)].into()), weight)])?
+            Batch::from_updates([(
+                (
+                    crate::worker::program::relational::Key::new(),
+                    [("0:category".into(), None)].into(),
+                ),
+                weight,
+            )])?
         };
         assert_eq!(work.output().batch, expected, "DISTINCT tick {index}");
         query.commit(work)?;

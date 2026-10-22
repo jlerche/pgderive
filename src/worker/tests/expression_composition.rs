@@ -55,7 +55,10 @@ async fn intermediate_average_is_rendered_once_before_numeric_arithmetic() -> Re
             query.prepare(relational::inputs(&delta, compiled.relational(), time)?).await?;
         let output = compiled.output().columns[1].column.name.clone();
         let expected = crate::engine::Batch::from_updates([(
-            (Vec::new(), row(&[("0:auction", None), (&output, Some(total))])),
+            (
+                crate::worker::program::relational::Key::new(),
+                row(&[("0:auction", None), (&output, Some(total))]),
+            ),
             weight,
         )])?;
         assert_eq!(prepared.output().batch, expected);
@@ -163,7 +166,10 @@ fn join_expected(
             }
         }
     };
-    crate::engine::Batch::from_updates([((Vec::new(), output), weight)])
+    crate::engine::Batch::from_updates([(
+        (crate::worker::program::relational::Key::new(), output),
+        weight,
+    )])
 }
 
 #[tokio::test]
@@ -199,7 +205,10 @@ async fn independent_scopes(inner: &str, expected: &str) -> Result<()> {
             .iter()
             .map(|column| (column.column.name.clone(), Some(expected.into())))
             .collect();
-        let expected = crate::engine::Batch::from_updates([((Vec::new(), output), weight)])?;
+        let expected = crate::engine::Batch::from_updates([(
+            (crate::worker::program::relational::Key::new(), output),
+            weight,
+        )])?;
         assert_eq!(prepared.output().batch, expected);
         query.commit(prepared)?;
         super::restart_relational(&mut query, &native, &compiled, &options).await?;

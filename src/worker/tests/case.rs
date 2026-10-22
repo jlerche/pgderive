@@ -67,7 +67,7 @@ fn oracle(
                 .map(|(name, value)| (format!("0:{name}"), value))
                 .collect();
             output.insert(field.into(), Some(if running { sum } else { flag }.to_string()));
-            outputs.push(((Vec::new(), output), 1));
+            outputs.push(((crate::worker::program::relational::Key::new(), output), 1));
         }
     }
     Batch::from_updates(outputs)

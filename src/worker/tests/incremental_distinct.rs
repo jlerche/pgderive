@@ -29,7 +29,10 @@ async fn distinct_occurrence_counts_exceed_i64_without_narrowing_membership() ->
         let prepared = query.prepare(relational::inputs(&input, ir, query.time() + 1)?).await?;
         assert_eq!(
             prepared.output().batch,
-            Batch::from_updates([((Vec::new(), expected.clone()), weight)])?
+            Batch::from_updates([(
+                (crate::worker::program::relational::Key::new(), expected.clone()),
+                weight
+            )])?
         );
         query.commit(prepared)?;
         super::restart_relational(&mut query, &native, &compiled, &options).await?;
@@ -146,7 +149,7 @@ fn mixed_oracle(
             ),
             ("@aggregate_5", Some(if key.is_some() { "1" } else { "0" })),
         ]);
-        ((Vec::new(), output), 1)
+        ((crate::worker::program::relational::Key::new(), output), 1)
     }))
 }
 #[tokio::test]

@@ -13,6 +13,9 @@ use tempfile::TempDir;
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
+    /// Separate cap for retained native values, including decoded handles.
+    /// Zero disables native retention; transient decoding is outside this cap.
+    pub native_cache_bytes: usize,
     /// Shared query cache cap for decoded structural-plus-payload charges.
     /// Active pins, indexes and allocator overhead are outside this cap; not RSS.
     pub cache_bytes: usize,
@@ -38,6 +41,7 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
+            native_cache_bytes: 4 * 1024 * 1024,
             cache_bytes: 16 * 1024 * 1024,
             cache_entries: 256,
             resident_bytes: 4 * 1024 * 1024,

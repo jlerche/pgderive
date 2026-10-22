@@ -23,8 +23,8 @@ async fn cursor_left_join_does_only_linear_visits_and_new_matching_pairs() -> Re
             time: 1,
             batch: Batch::from_updates((0..size).flat_map(|id| {
                 [
-                    ((vec!["key".into()], tagged(true, id)), 1),
-                    ((vec!["key".into()], tagged(false, id)), 1),
+                    ((vec!["key".into()].into(), tagged(true, id)), 1),
+                    ((vec!["key".into()].into(), tagged(false, id)), 1),
                 ]
             }))?,
         };
@@ -32,7 +32,7 @@ async fn cursor_left_join_does_only_linear_visits_and_new_matching_pairs() -> Re
         let prior = writer.reopen(prior.manifest()?).await?;
         let delta = TimedBatch {
             time: 2,
-            batch: Batch::from_updates([((vec!["key".into()], tagged(false, size)), 1)])?,
+            batch: Batch::from_updates([((vec!["key".into()].into(), tagged(false, size)), 1)])?,
         };
         let budget = usize::try_from(5 * size + 2)?;
         let output = left_join(&spec)
@@ -43,7 +43,7 @@ async fn cursor_left_join_does_only_linear_visits_and_new_matching_pairs() -> Re
             Batch::from_updates((0..size).map(|id| {
                 (
                     (
-                        vec!["key".into()],
+                        vec!["key".into()].into(),
                         [("l".into(), Some(id.to_string())), ("r".into(), Some(size.to_string()))]
                             .into(),
                     ),

@@ -5,20 +5,26 @@ use crate::{
         Function, Mode, Partition,
         statistics::{count, field, sum, width},
     },
-    engine::dataflow::{Project, Statistics},
+    engine::{
+        dataflow::{Project, Statistics},
+        value::{Decoded, NativeBudget},
+    },
     transaction::Row,
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-pub(super) fn operator(spec: &Partition) -> Statistics<Key, Row> {
+use std::{collections::BTreeMap, sync::Arc};
+pub(super) fn operator(spec: &Partition, budget: Arc<NativeBudget>) -> Statistics<Key, Row> {
     let width = width(spec.aggregates.len());
+    let codec = super::native::Integers::new("sql-linear-statistics-v1", width, budget.clone());
+    let encoded_codec = codec.clone();
     let measured = spec.clone();
     let encoded = spec.clone();
-    Statistics::new(
+    Statistics::with_shared_decode(
         width,
-        move |row| measure(&measured, row),
-        move |row| decode(row, width),
-        move |key, values| encode(&encoded, key, values),
+        move |_, row| measure(&measured, row),
+        move |row| decode(row, width, &codec),
+        move |key, values| encode(&encoded, key, values, (&encoded_codec, &budget)),
     )
 }
 fn measure(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
@@ -37,17 +43,25 @@ fn measure(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
     }
     Ok(values)
 }
-fn decode(row: &Row, width: usize) -> Result<Vec<BigInt>> {
-    (0..width)
-        .map(|index| {
-            row.get(&field(index))
-                .and_then(Option::as_deref)
-                .context("missing persisted statistic")?
-                .parse()
-                .map_err(Into::into)
-        })
-        .collect()
+fn decode(
+    row: &Row,
+    width: usize,
+    codec: &super::native::Integers,
+) -> Result<Decoded<Vec<BigInt>>> {
+    codec.decode(row, |fields| {
+        (0..width)
+            .map(|index| {
+                fields
+                    .get(&field(index))
+                    .and_then(Option::as_deref)
+                    .context("missing persisted statistic")?
+                    .parse()
+                    .map_err(Into::into)
+            })
+            .collect()
+    })
 }
+
 fn validate(values: &[BigInt]) -> Result<bool> {
     let rows = values.first().context("missing statistics row count")?;
     ensure!(rows >= &BigInt::from(0), "negative statistics group multiplicity");
@@ -62,7 +76,12 @@ fn validate(values: &[BigInt]) -> Result<bool> {
     }
     Ok(rows != &BigInt::from(0))
 }
-fn encode(spec: &Partition, key: &Key, values: &[BigInt]) -> Result<Option<Row>> {
+fn encode(
+    spec: &Partition,
+    key: &Key,
+    values: &[BigInt],
+    native: (&super::native::Integers, &Arc<NativeBudget>),
+) -> Result<Option<Row>> {
     if !validate(values)? {
         return Ok(None);
     }
@@ -70,20 +89,28 @@ fn encode(spec: &Partition, key: &Key, values: &[BigInt]) -> Result<Option<Row>>
         anyhow::bail!("statistics require grouped mode");
     };
     ensure!(keys.len() == key.len(), "statistics grouping key width mismatch");
-    let mut row = keys
+    let fields = super::keys::values(key, native.1)?;
+    let row = keys
         .iter()
-        .zip(key)
-        .map(|(column, value)| Ok((column.name.clone(), serde_json::from_str(value)?)))
-        .collect::<Result<Row>>()?;
+        .zip(fields.iter())
+        .map(|(column, value)| (column.name.clone(), value.clone()))
+        .collect::<BTreeMap<String, Option<String>>>();
+    let mut row: Row = row.into();
     for (index, value) in values.iter().enumerate() {
         row.insert(field(index), Some(value.to_string()));
     }
-    Ok(Some(row))
+    Ok(Some(native.0.retain(row, values)?))
 }
-pub(super) fn finalize(spec: &Partition) -> Project<Key, Row, Key, Row> {
+
+pub(super) fn finalize(spec: &Partition, budget: Arc<NativeBudget>) -> Project<Key, Row, Key, Row> {
     let spec = spec.clone();
+    let codec = super::native::Integers::new(
+        "sql-linear-statistics-v1",
+        width(spec.aggregates.len()),
+        budget,
+    );
     Project::new(move |key: &Key, row: &Row| {
-        let values = decode(row, width(spec.aggregates.len()))?;
+        let values = decode(row, width(spec.aggregates.len()), &codec)?;
         ensure!(validate(&values)?, "empty retained statistics");
         let Mode::Grouped { keys } = &spec.mode else {
             anyhow::bail!("statistics require grouped mode");

@@ -49,7 +49,7 @@ fn oracle(state: &BTreeMap<Row, i64>, window: bool) -> Result<Bag> {
                     Some(prices.iter().filter(|value| **value < 0).count().to_string()),
                 );
             }
-            outputs.push(((Vec::new(), output), 1));
+            outputs.push(((crate::worker::program::relational::Key::new(), output), 1));
         }
     }
     Batch::from_updates(outputs)
@@ -175,7 +175,7 @@ async fn accepted_frame_boundaries_match_independent_positions() -> Result<()> {
                 ("@aggregate_0".into(), Some((right - left).max(0).to_string())),
             ]
             .into();
-            ((Vec::new(), output), 1)
+            ((crate::worker::program::relational::Key::new(), output), 1)
         }))?;
         let prepared = query.prepare(relational::inputs(&changes, ir, 1)?).await?;
         assert_eq!(prepared.output().batch, expected, "{sql}");
@@ -240,7 +240,10 @@ async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()
     .into();
     assert_eq!(
         candidate.output().batch,
-        Batch::from_updates([((Vec::new(), expected.clone()), 1)])?
+        Batch::from_updates([(
+            (crate::worker::program::relational::Key::new(), expected.clone()),
+            1
+        )])?
     );
     relational::deltas(&candidate.output().batch, &ir.output)?;
     query.commit(candidate)?;
@@ -252,7 +255,10 @@ async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()
             .into();
     assert_eq!(
         candidate.output().batch,
-        Batch::from_updates([((Vec::new(), expected), -1), ((Vec::new(), empty), 1)])?
+        Batch::from_updates([
+            ((crate::worker::program::relational::Key::new(), expected), -1),
+            ((crate::worker::program::relational::Key::new(), empty), 1)
+        ])?
     );
     query.commit(candidate)?;
     let before = serde_json::to_vec(&query.checkpoint()?)?;
@@ -343,7 +349,10 @@ async fn compiled_date_bins_retract_groups_and_preserve_nulls_across_restart() -
     let null = output(None, 1);
     assert_eq!(
         candidate.output().batch,
-        Batch::from_updates([((Vec::new(), before.clone()), 1), ((Vec::new(), null.clone()), 1)])?
+        Batch::from_updates([
+            ((crate::worker::program::relational::Key::new(), before.clone()), 1),
+            ((crate::worker::program::relational::Key::new(), null.clone()), 1)
+        ])?
     );
     query.commit(candidate)?;
     super::restart_relational(&mut query, &native, &compiled, &options).await?;
@@ -352,9 +361,15 @@ async fn compiled_date_bins_retract_groups_and_preserve_nulls_across_restart() -
     assert_eq!(
         candidate.output().batch,
         Batch::from_updates([
-            ((Vec::new(), before), -1),
-            ((Vec::new(), null), -1),
-            ((Vec::new(), output(Some("2000-01-01 00:00:10+00"), 1)), 1)
+            ((crate::worker::program::relational::Key::new(), before), -1),
+            ((crate::worker::program::relational::Key::new(), null), -1),
+            (
+                (
+                    crate::worker::program::relational::Key::new(),
+                    output(Some("2000-01-01 00:00:10+00"), 1)
+                ),
+                1
+            )
         ])?
     );
     Ok(())

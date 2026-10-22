@@ -53,7 +53,7 @@ fn oracle(state: &BTreeMap<Row, i64>, fields: &[String]) -> Result<Batch<relatio
                 (&fields[2], Some(&format!("2000-01-01 00:00:{:02}", last + 10))),
                 (&fields[3], Some(&count.to_string())),
             ]);
-            outputs.push(((Vec::new(), output), 1));
+            outputs.push(((crate::worker::program::relational::Key::new(), output), 1));
         }
     }
     Batch::from_updates(outputs)

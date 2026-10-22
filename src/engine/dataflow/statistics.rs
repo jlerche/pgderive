@@ -6,11 +6,12 @@ use crate::engine::{
     execution::{Consolidator, Limits},
     reader::BatchData,
     trace::{KeyProbes, TraceSnapshot},
+    value::Decoded,
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 use std::{borrow::Borrow, collections::BTreeMap, sync::Arc};
-type Decode<V> = dyn Fn(&V) -> Result<Vec<BigInt>> + Send + Sync;
+type Decode<V> = dyn Fn(&V) -> Result<Decoded<Vec<BigInt>>> + Send + Sync;
 type Measure<K, V> = dyn Fn(&K, &V) -> Result<Vec<BigInt>> + Send + Sync;
 type Encode<K, V> = dyn Fn(&K, &[BigInt]) -> Result<Option<V>> + Send + Sync;
 /// A linear map into exact additive statistics, followed by group finalization.
@@ -40,6 +41,22 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         width: usize,
         measure: impl Fn(&K, &V) -> Result<Vec<BigInt>> + Send + Sync + 'static,
         decode: impl Fn(&S) -> Result<Vec<BigInt>> + Send + Sync + 'static,
+        encode: impl Fn(&K, &[BigInt]) -> Result<Option<S>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            width,
+            measure: Arc::new(measure),
+            decode: Arc::new(move |row| Ok(Decoded::transient(decode(row)?))),
+            encode: Arc::new(encode),
+        }
+    }
+    /// Bind an immutable shared decoded accumulator, avoiding repeated decoding.
+    ///
+    /// This is the same linear operator and durable state contract as `with_measure`.
+    pub fn with_shared_decode(
+        width: usize,
+        measure: impl Fn(&K, &V) -> Result<Vec<BigInt>> + Send + Sync + 'static,
+        decode: impl Fn(&S) -> Result<Decoded<Vec<BigInt>>> + Send + Sync + 'static,
         encode: impl Fn(&K, &[BigInt]) -> Result<Option<S>> + Send + Sync + 'static,
     ) -> Self {
         Self {
@@ -91,7 +108,7 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
             if let Some(before) = &before {
                 let values = (self.decode)(before)?;
                 ensure!(values.len() == self.width, "persisted statistics width mismatch");
-                for (total, value) in total.iter_mut().zip(values) {
+                for (total, value) in total.iter_mut().zip(values.iter()) {
                     *total += value;
                 }
             }

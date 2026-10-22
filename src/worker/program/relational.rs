@@ -19,7 +19,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-pub(in crate::worker) type Key = Vec<String>;
+pub(in crate::worker) type Key = crate::engine::value::Value<Vec<String>>;
 type Inputs = TimedBatch<Vec<Batch<Key, Row>>>;
 pub(in crate::worker) type Query = Circuit<Key, Row>;
 pub(in crate::worker) fn build(
@@ -32,26 +32,36 @@ pub(in crate::worker) fn build(
 }
 type Bound<'a> = (&'a str, Operator<Key, Row>);
 fn operators(ir: &Relational, settings: &Settings) -> Operators<Key, Row> {
+    let native = crate::engine::value::NativeBudget::new(settings.limits.native_cache_bytes);
     ir.nodes
         .iter()
-        .filter_map(|node| bind(node, &ir.output, settings))
+        .filter_map(|node| bind(node, &ir.output, settings, &native))
         .map(|(id, operator)| (id.to_owned(), operator))
         .collect()
 }
-fn bind<'a>(node: &'a Node, projected: &Projected, settings: &Settings) -> Option<Bound<'a>> {
+fn bind<'a>(
+    node: &'a Node,
+    projected: &Projected,
+    settings: &Settings,
+    native: &std::sync::Arc<crate::engine::value::NativeBudget>,
+) -> Option<Bound<'a>> {
     Some(match node {
         Node::Source { .. } | Node::Union { .. } => return None,
         Node::PrefixInput { id, spec, .. } => (id, Operator::Project(super::prefix::input(spec))),
         Node::PrefixStatistics { id, spec, .. } => {
-            (id, Operator::IndexedStatistics(super::prefix::statistics(spec)))
+            (id, Operator::IndexedStatistics(super::prefix::statistics(spec, native.clone())))
         }
-        Node::PrefixWindow { id, spec, .. } => (id, Operator::Window(super::prefix::window(spec))),
+        Node::PrefixWindow { id, spec, .. } => {
+            (id, Operator::Window(super::prefix::window(spec, native.clone())))
+        }
         Node::LookupInput { id, spec, .. } => (id, Operator::Project(super::lookup::input(spec))),
         Node::Lookup { id, spec, .. } => (id, Operator::Partition(lookup_operator(spec, settings))),
         Node::Expand { id, series, .. } => (id, Operator::Expand(expand(series))),
         Node::Filter { id, predicate, .. } => (id, Operator::Project(filter(predicate))),
         Node::Map { id, computed, .. } => (id, Operator::Project(map(computed))),
-        Node::PartitionBy { id, keys, .. } => (id, Operator::Project(partition_by(keys))),
+        Node::PartitionBy { id, keys, .. } => {
+            (id, Operator::Project(partition_by(keys, native.clone())))
+        }
         Node::Rebind { id, fields, .. } => (id, Operator::Project(super::bindings::rebind(fields))),
         Node::CrossKey { id, .. } => (id, Operator::Project(super::bindings::cross_key())),
         Node::EquijoinKey { id, keys, .. } => {
@@ -84,7 +94,7 @@ fn bind<'a>(node: &'a Node, projected: &Projected, settings: &Settings) -> Optio
         | Node::DistinctCounts { .. }
         | Node::DistinctMembership { .. }
         | Node::Statistics { .. }
-        | Node::Finalize { .. } => return bind_statistics(node),
+        | Node::Finalize { .. } => return bind_statistics(node, native),
         Node::TopKInput { .. }
         | Node::TopK { .. }
         | Node::OrderedInput { .. }
@@ -93,7 +103,10 @@ fn bind<'a>(node: &'a Node, projected: &Projected, settings: &Settings) -> Optio
         | Node::OrderedFinalize { .. } => return bind_ordered(node),
     })
 }
-fn bind_statistics(node: &Node) -> Option<Bound<'_>> {
+fn bind_statistics<'a>(
+    node: &'a Node,
+    native: &std::sync::Arc<crate::engine::value::NativeBudget>,
+) -> Option<Bound<'a>> {
     Some(match node {
         Node::DistinctInput { id, spec, .. } => {
             (id, Operator::Expand(super::distinct_statistics::input(spec)))
@@ -105,10 +118,10 @@ fn bind_statistics(node: &Node) -> Option<Bound<'_>> {
             (id, Operator::Project(super::distinct_statistics::membership(spec)))
         }
         Node::Statistics { id, spec, .. } => {
-            (id, Operator::Statistics(super::statistics::operator(spec)))
+            (id, Operator::Statistics(super::statistics::operator(spec, native.clone())))
         }
         Node::Finalize { id, spec, .. } => {
-            (id, Operator::Project(super::statistics::finalize(spec)))
+            (id, Operator::Project(super::statistics::finalize(spec, native.clone())))
         }
         _ => return None,
     })
@@ -162,7 +175,7 @@ fn output(output: &Projected) -> Project<Key, Row, Key, Row> {
                 Ok((name.clone(), row.get(name).context("missing output column")?.clone()))
             })
             .collect::<Result<Row>>()?;
-        Ok(Some((Vec::new(), selected)))
+        Ok(Some((Key::new(), selected)))
     })
 }
 
@@ -336,7 +349,7 @@ pub(in crate::worker) fn inputs(
                             .iter()
                             .map(|(name, value)| (field(*source, name), value.clone()))
                             .collect();
-                        ((Vec::new(), row), update.weight)
+                        ((Key::new(), row), update.weight)
                     }),
             )?);
         }
@@ -351,28 +364,30 @@ pub(in crate::worker) fn deltas(batch: &Batch<Key, Row>, output: &Projected) -> 
     Deltas::bag(&Batch::from_updates(updates)?)
 }
 
-fn partition_by(keys: &[crate::compiler::ColumnRef]) -> Project<Key, Row, Key, Row> {
+fn partition_by(
+    keys: &[crate::compiler::ColumnRef],
+    native: std::sync::Arc<crate::engine::value::NativeBudget>,
+) -> Project<Key, Row, Key, Row> {
     let keys = keys.to_vec();
+    let codec = super::keys::GroupCodec::new(native);
     Project::new(move |_: &Key, row: &Row| {
-        let key = keys
+        let values = keys
             .iter()
             .map(|key| {
-                serde_json::to_string(
-                    &row.get(&key.name)
-                        .context("missing partition key")?
-                        .as_deref()
-                        .map(|v| {
-                            if key.oid == 1700 {
-                                crate::numeric::Numeric::parse(v).map(|v| v.key())
-                            } else {
-                                Ok(v.to_owned())
-                            }
-                        })
-                        .transpose()?,
-                )
-                .map_err(Into::into)
+                row.get(&key.name)
+                    .context("missing partition key")?
+                    .as_deref()
+                    .map(|v| {
+                        if key.oid == 1700 {
+                            crate::numeric::Numeric::parse(v).map(|v| v.key())
+                        } else {
+                            Ok(v.to_owned())
+                        }
+                    })
+                    .transpose()
             })
-            .collect::<Result<_>>()?;
+            .collect::<Result<Vec<_>>>()?;
+        let key = codec.group(values)?;
         Ok(Some((key, row.clone())))
     })
 }

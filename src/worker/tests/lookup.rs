@@ -49,7 +49,7 @@ fn oracle(left: &State, right: &State, inclusive: bool) -> Result<Bag> {
         if number(&price).is_none_or(|value| value >= 0) {
             let output =
                 [("0:category".into(), left["category"].clone()), ("1:price".into(), price)].into();
-            outputs.push(((Vec::new(), output), *weight));
+            outputs.push(((crate::worker::program::relational::Key::new(), output), *weight));
         }
     }
     Batch::from_updates(outputs)
@@ -210,7 +210,10 @@ async fn lookup_work_failure_retains_prior_and_can_retry() -> Result<()> {
     assert_eq!(
         prepared.output().batch,
         Batch::from_updates([(
-            (Vec::new(), [("0:category".into(), None), ("1:price".into(), None)].into()),
+            (
+                crate::worker::program::relational::Key::new(),
+                [("0:category".into(), None), ("1:price".into(), None)].into()
+            ),
             1
         )])?
     );
@@ -245,7 +248,10 @@ async fn derived_lookup_filter_runs_after_match_selection() -> Result<()> {
     assert_eq!(
         prepared.output().batch,
         Batch::from_updates([(
-            (Vec::new(), [("0:category".into(), None), ("1:price".into(), None)].into()),
+            (
+                crate::worker::program::relational::Key::new(),
+                [("0:category".into(), None), ("1:price".into(), None)].into()
+            ),
             2
         )])?
     );
