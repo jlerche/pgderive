@@ -1,16 +1,23 @@
 use super::weights::Accumulator;
 use anyhow::{Context, Result};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// A consolidated collection identified by complete tuples and signed weights.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ZSet<T: Ord> {
     entries: Arc<Vec<(T, i64)>>,
+    pub(super) sizing: Arc<OnceLock<super::batch_size::BatchSize>>,
 }
 
+impl<T: Ord> PartialEq for ZSet<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+impl<T: Ord> Eq for ZSet<T> {}
 impl<T: Ord> Default for ZSet<T> {
     fn default() -> Self {
-        Self { entries: Arc::new(Vec::new()) }
+        Self { entries: Arc::new(Vec::new()), sizing: Arc::new(OnceLock::new()) }
     }
 }
 
@@ -75,10 +82,14 @@ impl<T: Ord + Clone> ZSet<T> {
         }
         next.extend(prior.cloned());
         self.entries = Arc::new(next);
+        self.sizing = Arc::new(OnceLock::new());
         Ok(())
     }
 
     pub(super) fn from_accumulator(weights: Accumulator<T>) -> Result<Self> {
-        Ok(Self { entries: Arc::new(weights.finish()?.into_iter().collect()) })
+        Ok(Self {
+            entries: Arc::new(weights.finish()?.into_iter().collect()),
+            sizing: Arc::new(OnceLock::new()),
+        })
     }
 }

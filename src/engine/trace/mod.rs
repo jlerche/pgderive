@@ -219,14 +219,11 @@ fn memory_run_charge<K: BatchData, V: BatchData>(run: &Run<K, V>) -> Result<usiz
     let Run::Memory(batch) = run else {
         return Ok(0);
     };
-    batch.iter().try_fold(0_usize, |bytes, row| {
-        let payload = crate::engine::execution::record_size(&row, usize::MAX)?;
-        let structure = std::mem::size_of::<((K, V), i64)>() + 64;
-        bytes
-            .checked_add(payload)
-            .and_then(|total| total.checked_add(structure))
-            .context("memtable charge overflow")
-    })
+    let size = batch.encoded_size(usize::MAX, u64::MAX)?;
+    let structure = std::mem::size_of::<((K, V), i64)>() + 64;
+    usize::try_from(size.bytes)?
+        .checked_add(size.entries.checked_mul(structure).context("memtable charge overflow")?)
+        .context("memtable charge overflow")
 }
 
 impl<K: BatchData, V: BatchData> BatchReader for TraceSnapshot<K, V> {

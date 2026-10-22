@@ -58,17 +58,12 @@ impl Limits {
     /// Rejects incoming records, entry counts, or byte sizes outside the budget.
     pub fn check_batch<K: BatchData, V: BatchData>(self, batch: &Batch<K, V>) -> Result<()> {
         self.validate()?;
-        let mut bytes = 0_u64;
-        for (ordinal, (tuple, weight)) in batch.iter().enumerate() {
-            ensure!(
-                ordinal < self.output_entries && ordinal < self.contributions,
-                "input entry limit exceeded"
-            );
-            bytes = bytes
-                .checked_add(u64::try_from(record_size(&(tuple, weight), self.record_bytes)?)?)
-                .context("input byte count overflow")?;
-            ensure!(bytes <= self.output_bytes, "input byte limit exceeded");
-        }
+        let entries = batch.iter().count();
+        ensure!(
+            entries <= self.output_entries && entries <= self.contributions,
+            "input entry limit exceeded"
+        );
+        batch.encoded_size(self.record_bytes, self.output_bytes)?;
         Ok(())
     }
     /// Validate limits before allocating scratch or evaluating callbacks.
@@ -92,7 +87,7 @@ impl Limits {
 }
 
 pub(crate) fn record_size(value: &impl serde::Serialize, limit: usize) -> Result<usize> {
-    Ok(record::encode_value(value, limit)?.len())
+    record::size_value(value, limit)
 }
 
 pub(crate) fn weight_size(

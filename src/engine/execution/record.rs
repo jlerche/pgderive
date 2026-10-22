@@ -21,6 +21,27 @@ impl Write for Buffer {
         Ok(())
     }
 }
+struct Counter {
+    bytes: usize,
+    limit: usize,
+}
+impl Write for Counter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes) {
+            return Err(io::Error::other("scratch record limit exceeded"));
+        }
+        self.bytes += bytes.len();
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+pub(super) fn size_value(value: &impl Serialize, limit: usize) -> Result<usize> {
+    let mut counter = Counter { bytes: 0, limit };
+    serde_json::to_writer(&mut counter, value)?;
+    Ok(counter.bytes)
+}
 pub(super) fn encode(tuple: &impl Serialize, weight: &BigInt, limit: usize) -> Result<Vec<u8>> {
     ensure!(
         weight.bits() <= u64::try_from(limit)?.saturating_mul(3),
