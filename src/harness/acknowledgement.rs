@@ -44,6 +44,7 @@ pub(super) async fn check(
 
     let result = exercise(sql, fixture, &mut graph, &mut writer, &mut stream).await;
     let shutdown = stream.shutdown().await;
+    drop(stream);
     crate::outcome::combine(result, shutdown, "acknowledged source shutdown")
 }
 async fn exercise(

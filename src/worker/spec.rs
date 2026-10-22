@@ -107,6 +107,9 @@ pub struct Settings {
     /// Maximum age of an uncheckpointed memtable in milliseconds.
     #[serde(default = "default_checkpoint_interval")]
     pub checkpoint_interval_ms: u64,
+    /// Adaptive committed-prefix publication policy.
+    #[serde(default)]
+    pub epoch: super::EpochPolicy,
     /// Diagnostic observation and physical WAL alerts.
     #[serde(default)]
     pub health: super::HealthPolicy,
@@ -116,6 +119,7 @@ pub struct Settings {
 impl Settings {
     pub(crate) fn validate(&self) -> Result<()> {
         self.health.validate()?;
+        self.epoch.validate()?;
         ensure!(self.memtable_bytes > 0, "invalid memtable byte limit");
         ensure!((1..=60_000).contains(&self.checkpoint_interval_ms), "invalid checkpoint interval");
         ensure!((1..=3600).contains(&self.startup_timeout_secs), "invalid worker startup timeout");

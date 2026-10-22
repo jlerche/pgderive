@@ -29,6 +29,10 @@ pub struct Transaction {
     pub(super) end_lsn: String,
     pub(super) changes: Vec<Change>,
     pub(super) batch: crate::weighted::Batch,
+    #[serde(skip)]
+    pub(super) bytes: u64,
+    #[serde(skip)]
+    pub(super) commit_time_micros: Option<i64>,
 }
 
 struct Relation {
@@ -111,7 +115,15 @@ impl Decoder {
         ensure!(!self.failed, "failed source transaction cannot commit");
         let (xid, changes) = self.pending.take().context("COMMIT without BEGIN")?;
         let batch = crate::weighted::Batch::from_changes_with_limits(&changes, self.limits)?;
-        Ok(Transaction { xid, commit_lsn, end_lsn, changes, batch })
+        Ok(Transaction {
+            xid,
+            commit_lsn,
+            end_lsn,
+            changes,
+            batch,
+            bytes: self.pending_bytes,
+            commit_time_micros: None,
+        })
     }
 
     fn relation(&mut self, message: &RelationBody) -> Result<()> {

@@ -285,6 +285,7 @@ def qualify(output, command, ticks, index=0, mode=None, target=None, kill=False,
         worker = fixture.start(command, 'first')
         ready = worker.event('ready')
         fixture.verify()
+        last_time = ready['time']
         for tick in range(ticks):
             # Skew toward one join key, NULL sums, and both inputs in one transaction.
             fixture.sql(f'''BEGIN;
@@ -292,14 +293,18 @@ def qualify(output, command, ticks, index=0, mode=None, target=None, kill=False,
               UPDATE {fixture.name}.bid SET auction=1,price=CASE WHEN id%5=0 THEN NULL ELSE price+1 END WHERE id BETWEEN 1 AND 16;
               INSERT INTO {fixture.name}.bid VALUES({1000000+tick},1,{tick});
               DELETE FROM {fixture.name}.bid WHERE id={1000000+tick}; COMMIT''')
-            worker.event('published', minimum_time=ready['time'] + tick + 1)
+            last_time = worker.event('published', minimum_time=ready['time'] + tick + 1)['time']
             fixture.verify()
         # Let the producer run ahead, then drain all committed ticks. SQL comparison
         # is meaningful only after the complete burst has reached durable output.
         for tick in range(burst):
             fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id BETWEEN 1 AND 64')
-        for tick in range(burst):
-            worker.event('published', minimum_time=ready['time'] + ticks + tick + 1)
+        published_sources = 0
+        while published_sources < burst:
+            event = worker.event('published')
+            published_sources += event.get('source_transactions', 1)
+            last_time = event['time']
+        assert published_sources == burst, 'epoch source count disagrees with burst'
         fixture.verify()
         ticks += burst
         if kill:
@@ -310,7 +315,7 @@ def qualify(output, command, ticks, index=0, mode=None, target=None, kill=False,
         resumed = fixture.start(command, 'resumed', maximum=1)
         reopened = resumed.event('ready')
         assert reopened['slot'] == ready['slot'], 'resume recreated physical slot'
-        assert reopened['time'] == ready['time'] + ticks, 'resume lost or duplicated a transaction'
+        assert reopened['time'] == last_time, 'resume lost or duplicated an epoch'
         fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')
         resumed.event('published')
         resumed.finish()

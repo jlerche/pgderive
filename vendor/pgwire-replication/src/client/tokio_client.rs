@@ -164,6 +164,16 @@ impl ReplicationClient {
         self.progress.update_applied(lsn);
     }
 
+    /// Clone a durable-feedback callback independently of receive ownership.
+    ///
+    /// The caller must verify durability before invoking this callback. Receiving
+    /// or buffering events never advances applied progress. The protocol worker
+    /// still controls feedback timing and monotonically clamps applied progress.
+    pub fn durable_feedback(&self) -> impl Fn(Lsn) + Send + Sync + 'static {
+        let progress = Arc::clone(&self.progress);
+        move |lsn| progress.update_applied(lsn)
+    }
+
     /// Returns a handle to the live replication metrics.
     ///
     /// The returned `Arc` shares the same counters the background worker

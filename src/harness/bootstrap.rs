@@ -51,6 +51,7 @@ pub(super) async fn check(
     let mut stream = crate::acknowledged::Stream::connect(&config, &verified).await?;
     let result = catch_up(sql, &fixture.schema, &mut graph, &mut writer, &mut stream).await;
     let shutdown = stream.shutdown().await;
+    drop(stream);
     let transaction = crate::outcome::combine(result, shutdown, "snapshot CDC shutdown")?;
     apply(&mut model, &transaction)?;
     ensure!(

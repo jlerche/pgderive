@@ -26,7 +26,7 @@ pub(super) async fn stage(
             &[&catalog.query, &plan.identity(), &definition, &time, &next, &encoded, &digest]).await?
     } else {
         tx.execute(&format!("UPDATE {}.pgderive_queries SET logical_time=$4,epoch=$5,checkpoint=$7,checkpoint_digest=$8
-            WHERE query_id=$1 AND plan_identity=$2 AND definition=$3 AND epoch=$6 AND logical_time<=$4 AND format_version IN (1,2)", catalog.schema),
+            WHERE query_id=$1 AND plan_identity=$2 AND definition=$3 AND epoch=$6 AND logical_time<=$4 AND format_version IN (1,2,3)", catalog.schema),
             &[&catalog.query, &plan.identity(), &definition, &time, &next, &expected, &encoded, &digest]).await?
     };
     ensure!(affected == 1, "stale or incompatible catalog checkpoint writer");

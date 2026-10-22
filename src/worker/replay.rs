@@ -28,6 +28,12 @@ pub(super) async fn monitored(
 }
 async fn recover(open: &mut Open, stream: &mut Stream, durable: &Durable) -> Result<()> {
     let mut replay = Replay::new(durable.clone());
+    let epochs = open.catalog.replay_epochs(&open.session.client, durable).await?;
+    if let Some(epochs) = epochs {
+        for epoch in epochs {
+            recover_epoch(open, stream, &mut replay, &epoch).await?;
+        }
+    }
     while !replay.complete() {
         let transaction = stream.recv().await?;
         let progress =
@@ -52,6 +58,49 @@ async fn recover(open: &mut Open, stream: &mut Stream, durable: &Durable) -> Res
     super::drive::emit(
         &serde_json::json!({"event":"replayed","time":open.query.time(),"checkpoint_lsn":durable.checkpoint_end.to_string(),"published_lsn":durable.end.to_string()}),
     )
+}
+async fn recover_epoch(
+    open: &mut Open,
+    stream: &mut Stream,
+    replay: &mut Replay,
+    boundary: &crate::catalog::epoch::ReplayEpoch,
+) -> Result<()> {
+    let mut epoch: Option<super::epoch::Epoch> = None;
+    let mut transactions = 0_u64;
+    while replay.applied < boundary.progress.end {
+        let transaction = stream.recv().await?;
+        let progress =
+            Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
+        ensure!(progress.end <= boundary.progress.end, "WAL replay skipped epoch boundary");
+        if !replay.accept(&progress)? {
+            continue;
+        }
+        transactions =
+            transactions.checked_add(1).context("epoch replay transaction count overflow")?;
+        ensure!(
+            transactions <= boundary.transactions,
+            "epoch replay has excess source transactions"
+        );
+        if let Some(epoch) = &mut epoch {
+            epoch.push(transaction, stream.decode_us(), open.replication.execution)?;
+        } else {
+            epoch = Some(super::epoch::Epoch::new(transaction, stream.decode_us())?);
+        }
+    }
+    ensure!(transactions == boundary.transactions, "epoch replay transaction count mismatch");
+    ensure!(
+        replay.last.as_ref() == Some(&boundary.progress),
+        "epoch replay final transaction mismatch"
+    );
+    let epoch = epoch.context("empty WAL replay epoch")?;
+    ensure!(
+        open.query.time().checked_add(1) == Some(boundary.time),
+        "epoch replay logical time mismatch"
+    );
+    let input =
+        relational::inputs(&epoch.transaction().batch, open.compiled.relational(), boundary.time)?;
+    let work = open.query.prepare_memtable(input, open.settings.memtable_bytes).await?;
+    open.query.commit(work).map(|_| ())
 }
 struct Replay {
     durable: Durable,

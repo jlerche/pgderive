@@ -32,16 +32,24 @@ def qualify(output, command):
             fixture.verify()
         boundary = json.loads(fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p'))
         assert boundary['published_time'] == 4
-        assert fixture.sql(f'SELECT format_version FROM {fixture.name}.pgderive_queries').strip() == '2'
+        assert fixture.sql(f'SELECT format_version FROM {fixture.name}.pgderive_queries').strip() == '3'
         assert fixture.sql(f'SELECT logical_time FROM {fixture.name}.pgderive_queries').strip() == '1'
         assert fixture.sql(f'SELECT checkpoint_lsn<end_lsn FROM {fixture.name}.pgderive_progress').strip() == 't'
         audit_sql = f'SELECT json_agg(json_build_array(g.ctid::text,g.xmin::text,to_jsonb(g)) ORDER BY g.ctid) FROM {fixture.name}.groups g'
         audit = fixture.sql(audit_sql)
         first.abort()
+        # This serialized fixture has one source transaction per tick. Recreate
+        # the previous format's legitimate uncheckpointed suffix, then require
+        # recovery to checkpoint it before enabling the epoch journal.
+        fixture.sql(f'''BEGIN;
+          DELETE FROM {fixture.name}.pgderive_epoch_boundaries;
+          UPDATE {fixture.name}.pgderive_queries SET format_version=2;
+          COMMIT''')
         for iteration in range(2):
             resumed = fixture.start(command, f'replay-{iteration}')
             reopened = resumed.event('ready')
             assert reopened['time'] == 4 and reopened['slot'] == ready['slot']
+            assert fixture.sql(f'SELECT format_version FROM {fixture.name}.pgderive_queries').strip() == '3'
             assert fixture.sql(audit_sql) == audit, 'replay repeated sink writes'
             fixture.verify()
             if iteration == 1:
@@ -179,3 +187,5 @@ if __name__ == '__main__':
     qualify(output, command)
     memory_pressure(output/'pressure', command)
     publication_guards(output/'guards', command)
+    from adaptive_epoch_harness import qualify as epochs
+    epochs(output/'epochs', command)

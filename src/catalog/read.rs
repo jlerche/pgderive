@@ -12,7 +12,7 @@ pub(super) async fn boundary(
     let Some(row) = row else {
         return Ok(None);
     };
-    ensure!(matches!(row.try_get::<_, i32>(0)?, 1 | 2), "unsupported catalog query format");
+    ensure!(matches!(row.try_get::<_, i32>(0)?, 1..=3), "unsupported catalog query format");
     let identity: String = row.try_get(1)?;
     let definition: serde_json::Value = row.try_get(2)?;
     let registered = Plan::new(serde_json::from_value(definition)?)?;

@@ -36,7 +36,7 @@ impl Writer {
             ), p AS MATERIALIZED (
                 SELECT p.* FROM {0}.pgderive_progress p CROSS JOIN q
                 WHERE p.query_id=q.query_id FOR UPDATE OF p
-            ) SELECT q.format_version IN (1,2)
+            ) SELECT q.format_version IN (1,2,3)
                 AND jsonb_build_array(q.plan_identity,q.definition,q.logical_time,q.epoch,q.checkpoint,q.checkpoint_digest)=$2
                 AND jsonb_build_array(p.binding,p.sink_table,p.fence,p.commit_lsn::text,p.end_lsn::text,p.xid,p.checkpoint_lsn::text,p.published_time)=$3
                 AND EXISTS(SELECT 1 FROM {0}.pgderive_source_slots WHERE source_key=$4 AND query_id=$1)

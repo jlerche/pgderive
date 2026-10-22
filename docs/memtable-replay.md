@@ -1,8 +1,8 @@
 # WAL-backed memtables and recovery
 
 The source database, sink and authoritative progress live in the same PostgreSQL
-instance. Each complete source transaction is evaluated against committed engine
-state. Its arrangement deltas remain as immutable memory runs; sink deltas and
+instance. Ordered groups of complete source transactions are evaluated against committed
+engine state. Each group is an epoch and advances DBSP logical time once. Its arrangement deltas remain as immutable memory runs; sink deltas and
 published source progress commit atomically with `synchronous_commit=on` before
 local engine visibility advances. No new object PUT is required for that commit.
 
@@ -50,12 +50,38 @@ row versions and physical tuple identities during replay, compares joined aggreg
 PostgreSQL, checks timer checkpointing, and rejects an externally advanced slot.
 Existing COMMIT, object upload, recovery and GC crash probes remain enabled.
 
-Installing this version migrates all registrations in the catalog schema to format 2, so older
-binaries reject them before claiming or publishing. This is a forward metadata
-upgrade; retain the previous image for evidence, but do not treat restarting it
-as a rollback procedure. Roll forward on failure, or explicitly rebuild using a
-compatible engine and fresh source snapshot. Immutable trace codecs remain at
-version 1; all workers sharing a catalog schema must upgrade together. Catalog compatibility and trace serialization are separate versions.
+Epoch publication also inserts a coarse boundary into `pgderive_epoch_boundaries`
+in the same PostgreSQL transaction as sink deltas and progress. Each entry records
+logical time, preceding end LSN, final transaction identity and source transaction
+count. Recovery reconstructs these exact groups from WAL, validates the complete
+boundary chain and fails closed if a boundary is missing or inconsistent. A
+checkpoint atomically removes the entries it covers. No tuple indexes live in
+this journal.
+
+New registrations start in format 2 and activate format 3 at a fully checkpointed
+boundary. Existing format 2 suffixes first replay with their original transaction
+boundaries, then checkpoint before activating epochs. Older binaries reject format
+3. This is a forward metadata upgrade, not a reversible configuration change;
+roll forward or explicitly rebuild from a fresh source snapshot. Immutable trace
+codecs remain version 1.
+
+The adaptive scheduler learns arrival intervals, fixed publication cost, marginal
+work cost and prediction error. It drains ready transactions or briefly waits for
+predicted arrivals when doing so can amortize publication within the configured
+freshness objective. Sparse inputs publish immediately. The objective is not a
+latency guarantee; storage, PostgreSQL and computation can exceed it. Byte,
+transaction and existing execution limits bound groups, and transactions are never
+split. Intermediate source transaction states may be skipped in the destination;
+every published state represents a complete ordered source prefix.
+
+`[worker.epoch]` defaults to `enabled=true`, `freshness_target_ms=50`,
+`max_bytes=8388608` and `max_transactions=4096`. Disabling grouping retains the
+format 3 journal and publishes one source transaction per epoch. Bounded read-ahead
+receives complete transactions while publication runs; receiving never acknowledges
+WAL. The checkpoint policy and its durability boundary remain independent of
+epoch selection. Epoch events report closure reason, source transaction count,
+source bytes, predicted service time and observed source age. Source age uses the
+PostgreSQL commit timestamp and therefore depends on clock synchronization.
 
 
 Steady-state publication compares the complete claimed query and progress boundary

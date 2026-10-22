@@ -13,3 +13,10 @@ remain unacknowledged; increasing operator budgets does not increase this cap.
 Upstream modules over 1,000 lines have an exact file-local directive to preserve
 upstream structure. Do not refactor vendored code as part of engine work. Replace
 this patch with upstream configurable pre-allocation limits when available.
+
+The client also exposes a cloned `durable_feedback` callback so the registered
+source can decode into a bounded queue while publication runs. The callback
+uses the existing monotone applied-LSN implementation; it does not acknowledge
+received data automatically. Pgderive invokes it only after verifying the
+PostgreSQL checkpoint boundary and source identity. This separates receive
+ownership from durable feedback without exposing internal protocol state.

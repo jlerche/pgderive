@@ -1,6 +1,7 @@
 //! `PostgreSQL` coarse checkpoint catalog and atomic sink/progress publication.
 mod bootstrap;
 pub use bootstrap::Snapshot;
+pub(crate) mod epoch;
 mod maintenance;
 mod memtable;
 mod memtable_guard;
@@ -91,7 +92,17 @@ impl Catalog {
                ALTER TABLE {0}.pgderive_queries DROP CONSTRAINT IF EXISTS pgderive_queries_format_version_check;
                ALTER TABLE {0}.pgderive_queries ADD CONSTRAINT pgderive_queries_memtable_format_check CHECK(format_version IN (1,2));
                UPDATE {0}.pgderive_queries SET format_version=2 WHERE format_version=1;
-             END IF; END $pgderive_memtable$;",
+             END IF; END $pgderive_memtable$;
+             ALTER TABLE {0}.pgderive_queries DROP CONSTRAINT IF EXISTS pgderive_queries_memtable_format_check;
+             ALTER TABLE {0}.pgderive_queries ADD CONSTRAINT pgderive_queries_memtable_format_check CHECK(format_version IN (1,2,3));
+             CREATE TABLE IF NOT EXISTS {0}.pgderive_epoch_boundaries (
+                query_id text NOT NULL REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
+                logical_time bigint NOT NULL CHECK(logical_time>1),
+                previous_end_lsn pg_lsn NOT NULL, commit_lsn pg_lsn NOT NULL,
+                end_lsn pg_lsn NOT NULL CHECK(end_lsn>=commit_lsn AND commit_lsn>=previous_end_lsn),
+                xid bigint NOT NULL CHECK(xid>=0 AND xid<=4294967295),
+                transactions bigint NOT NULL CHECK(transactions>0),
+                PRIMARY KEY(query_id,logical_time));",
             self.schema
         )).await?;
         Ok(())

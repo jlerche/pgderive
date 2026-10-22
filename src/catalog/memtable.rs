@@ -5,15 +5,15 @@ use anyhow::{Context, Result, ensure};
 use tokio_postgres::{Client, Transaction};
 
 impl Writer {
-    pub(crate) async fn publish_memtable(
+    pub(crate) async fn publish_epoch(
         &mut self,
         sql: &mut Client,
         plan: &Plan,
-        publication: (u64, &Progress, &Deltas),
+        publication: (u64, &Progress, &Deltas, u64),
         measured: bool,
     ) -> Result<std::collections::BTreeMap<&'static str, u128>> {
         let mut clock = crate::timing::Clock::new(measured);
-        let (time, progress, deltas) = publication;
+        let (time, progress, deltas, transactions) = publication;
         ensure!(!self.uncertain, "uncertain publication requires recovery");
         ensure!(
             self.boundary.published_time.checked_add(1) == Some(time),
@@ -29,6 +29,7 @@ impl Writer {
             &format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,xid=$5,published_time=$2 WHERE query_id=$1", self.catalog.schema),
             &[&self.catalog.query, &i64::try_from(time)?, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid)],
         ).await?;
+        self.journal_epoch(&tx, (time, progress, transactions)).await?;
         let progress_time = clock.lap();
         let membership = boundary_guard + source_layout + progress_time;
         deltas.apply(&tx, &self.catalog, &self.boundary.binding.sink, (time, progress.end)).await?;
@@ -75,6 +76,14 @@ impl Writer {
                 self.catalog.schema
             ),
             &[&self.catalog.query],
+        )
+        .await?;
+        tx.execute(
+            &format!(
+                "DELETE FROM {}.pgderive_epoch_boundaries WHERE query_id=$1 AND logical_time<=$2",
+                self.catalog.schema
+            ),
+            &[&self.catalog.query, &i64::try_from(candidate.time)?],
         )
         .await?;
         self.commit(tx, "memtable checkpoint").await?;

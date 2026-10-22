@@ -2,6 +2,8 @@
 mod admin;
 mod collection;
 mod drive;
+mod epoch;
+pub use epoch::Policy as EpochPolicy;
 mod health;
 mod lifecycle;
 mod replay;
