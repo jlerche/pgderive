@@ -19,17 +19,8 @@ pub(super) fn supports(spec: &Partition) -> bool {
         })
 }
 pub(super) fn nodes(keys: Vec<ColumnRef>, spec: Partition, computed: Vec<Computed>) -> Vec<Node> {
-    let mapped = !computed.is_empty();
-    let mut nodes = vec![Node::Source { id: "source".into(), source: 0 }];
-    if mapped {
-        nodes.push(Node::Map { id: "mapped".into(), input: "source".into(), computed });
-    }
+    let mut nodes = super::input_nodes(keys, computed);
     nodes.extend([
-        Node::PartitionBy {
-            id: "partition_input".into(),
-            input: if mapped { "mapped" } else { "source" }.into(),
-            keys,
-        },
         Node::DistinctInput {
             id: "distinct_input".into(),
             input: "partition_input".into(),

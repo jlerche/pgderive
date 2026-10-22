@@ -451,7 +451,6 @@ fn nodes(
     if distinct::supports(&spec) {
         return distinct::nodes(keys, spec, computed);
     }
-    let mapped = !computed.is_empty();
     let linear = matches!(spec.mode, Mode::Grouped { .. })
         && spec.aggregates.iter().all(|aggregate| {
             aggregate.argument.as_ref().is_none_or(|arg| arg.oid != 1700)
@@ -470,23 +469,29 @@ fn nodes(
             spec: spec.clone(),
         }
     };
-    let mut nodes = vec![
-        Node::Source { id: "source".into(), source: 0 },
-        Node::PartitionBy {
-            id: "partition_input".into(),
-            input: if mapped { "mapped" } else { "source" }.into(),
-            keys,
-        },
-        aggregate,
-        Node::Output { id: "project".into(), input: "partition".into() },
-    ];
+    let mut nodes = input_nodes(keys, computed);
+    nodes.push(aggregate);
     if linear {
-        nodes
-            .insert(3, Node::Finalize { id: "partition".into(), input: "statistics".into(), spec });
+        nodes.push(Node::Finalize { id: "partition".into(), input: "statistics".into(), spec });
     }
+    nodes.push(Node::Output { id: "project".into(), input: "partition".into() });
+    nodes
+}
+
+fn input_nodes(
+    keys: Vec<ColumnRef>,
+    computed: Vec<crate::compiler::scalar::Computed>,
+) -> Vec<Node> {
+    let mapped = !computed.is_empty();
+    let mut nodes = vec![Node::Source { id: "source".into(), source: 0 }];
     if mapped {
-        nodes.insert(1, Node::Map { id: "mapped".into(), input: "source".into(), computed });
+        nodes.push(Node::Map { id: "mapped".into(), input: "source".into(), computed });
     }
+    nodes.push(Node::PartitionBy {
+        id: "partition_input".into(),
+        input: if mapped { "mapped" } else { "source" }.into(),
+        keys,
+    });
     nodes
 }
 
