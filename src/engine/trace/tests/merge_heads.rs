@@ -35,7 +35,7 @@ fn previous_selection_clones(cursors: &[Cursor<i64, Counted>]) -> Result<usize> 
                 weights.add(tuple.clone(), weight);
             }
         }
-        assert_eq!(weights.finish()?.get(&tuple), Some(&1));
+        assert!(weights.finish()?.iter().any(|(found, weight)| found == &tuple && *weight == 1));
     }
     Ok(CLONES.load(Ordering::Relaxed))
 }

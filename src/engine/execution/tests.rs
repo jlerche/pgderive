@@ -107,3 +107,147 @@ fn resident_finalization_needs_no_scratch_bytes_and_keeps_final_limits() -> Resu
     assert!(limited.finish_batch().is_err());
     Ok(())
 }
+
+#[test]
+fn weighted_sizes_match_wire_encoding_at_exact_boundaries() -> Result<()> {
+    let tuple = ("quoted\"\\\nλ", [None, Some("value")]);
+    for weight in [
+        BigInt::from(i64::MIN),
+        BigInt::from(i64::MAX),
+        BigInt::from(0),
+        BigInt::from(1) << 256_usize,
+        -(BigInt::from(1) << 256_usize),
+    ] {
+        let expected = super::record::encode(&tuple, &weight, 4096)?.len();
+        assert_eq!(super::record::size(&tuple, &weight, expected)?, expected);
+        assert!(super::record::size(&tuple, &weight, expected - 1).is_err());
+        assert!(super::record::encode(&tuple, &weight, expected - 1).is_err());
+    }
+    assert!(super::record::weighted_size(usize::MAX, &BigInt::from(1), usize::MAX).is_err());
+    Ok(())
+}
+
+#[test]
+fn canonical_handoff_rejects_invalid_order_and_zero_weights() -> Result<()> {
+    use crate::engine::Batch;
+    assert!(Batch::from_canonical(vec![((1, 1), 0)]).is_err());
+    assert!(Batch::from_canonical(vec![((1, 1), 1), ((1, 1), -1)]).is_err());
+    assert!(Batch::from_canonical(vec![((2, 1), 1), ((1, 1), 1)]).is_err());
+    assert_eq!(
+        Batch::from_canonical(vec![((1, 1), -1), ((2, 1), 1)])?,
+        Batch::from_updates([((2, 1), 1), ((1, 1), -1)])?
+    );
+    Ok(())
+}
+
+#[test]
+fn resident_handoff_reuses_tuple_sizes_without_reserializing_rows() -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+    struct Counted(String);
+    impl serde::Serialize for Counted {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            CALLS.fetch_add(1, Ordering::Relaxed);
+            serializer.serialize_str(&self.0)
+        }
+    }
+    let mut weights = Consolidator::new(Limits::default())?;
+    for key in ["quoted\"λ", "second"] {
+        weights.add((Counted(key.into()), ()), i64::MAX)?;
+        weights.add((Counted(key.into()), ()), -1)?;
+    }
+    assert_eq!(CALLS.load(Ordering::Relaxed), 2);
+    let batch = weights.finish_batch()?;
+    Limits::default().check_batch(&batch)?;
+    assert_eq!(CALLS.load(Ordering::Relaxed), 2);
+    let size = batch.encoded_size(4096, u64::MAX)?;
+    let expected = batch
+        .iter()
+        .map(|row| serde_json::to_vec(&row))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        size.bytes,
+        expected
+            .iter()
+            .map(|row| u64::try_from(row.len()))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .sum::<u64>()
+    );
+    assert_eq!(size.largest, expected.iter().map(Vec::len).max().unwrap_or(0));
+    assert!(batch.encoded_size(size.largest - 1, u64::MAX).is_err());
+    assert!(batch.encoded_size(4096, size.bytes - 1).is_err());
+    Ok(())
+}
+
+#[test]
+fn canonical_sizes_match_after_cross_run_cancellation() -> Result<()> {
+    for entries in [1, 3, 4096] {
+        let mut weights = Consolidator::new(limits(entries))?;
+        for key in 0..12 {
+            weights.add((key, format!("\\\"λ{key}")), BigInt::from(i64::MAX) * 2)?;
+        }
+        for key in (0..12).rev() {
+            weights.add((key, format!("\\\"λ{key}")), -BigInt::from(i64::MAX))?;
+        }
+        let batch = weights.finish_batch()?;
+        let size = batch.encoded_size(4096, u64::MAX)?;
+        assert_eq!(size.entries, 12);
+        let expected = batch
+            .iter()
+            .map(|row| Ok(u64::try_from(serde_json::to_vec(&row)?.len())?))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .sum::<u64>();
+        assert_eq!(size.bytes, expected);
+        assert!(batch.iter().all(|(_, weight)| *weight == i64::MAX));
+    }
+    Ok(())
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Representative {
+    id: u64,
+    payload: String,
+}
+impl PartialEq for Representative {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for Representative {}
+impl PartialOrd for Representative {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Representative {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+#[test]
+fn occupied_spill_rechecks_the_new_representative_size() -> Result<()> {
+    let a = Representative { id: 0, payload: "a".into() };
+    let b = Representative { id: 1, payload: "b".into() };
+    let bound = super::record::encode(&(a.clone(), ()), &BigInt::from(9), 4096)?.len()
+        + super::record::encode(&(b.clone(), ()), &BigInt::from(9), 4096)?.len();
+    let mut weights = Consolidator::new(Limits {
+        resident_bytes: bound,
+        record_bytes: bound,
+        ..Limits::default()
+    })?;
+    weights.add((a, ()), 9)?;
+    weights.add((b, ()), 9)?;
+    assert_eq!(weights.bytes, bound);
+    assert!(
+        weights.add((Representative { id: 0, payload: "large".repeat(bound) }, ()), 1).is_err()
+    );
+    assert!(weights.bytes <= bound);
+    assert!(weights.finish_batch().is_err());
+    Ok(())
+}

@@ -99,7 +99,13 @@ pub(crate) fn weight_size(
     weight: &BigInt,
     limit: usize,
 ) -> Result<usize> {
-    Ok(record::encode(tuple, weight, limit)?.len())
+    record::size(tuple, weight, limit)
+}
+
+struct Resident {
+    weight: BigInt,
+    tuple_bytes: usize,
+    bytes: usize,
 }
 
 /// Exact, spillable full-identity consolidation for one logical batch.
@@ -107,7 +113,7 @@ pub(crate) fn weight_size(
 pub struct Consolidator<T: BatchData> {
     limits: Limits,
     directory: TempDir,
-    entries: BTreeMap<T, (BigInt, usize)>,
+    entries: BTreeMap<T, Resident>,
     bytes: usize,
     contributions: usize,
     runs: Vec<PathBuf>,
@@ -150,9 +156,13 @@ impl<T: BatchData> Consolidator<T> {
         ensure!(self.contributions < self.limits.contributions, "contribution limit exceeded");
         self.contributions += 1;
         let previous = self.entries.get(&tuple);
-        let next = previous.map_or_else(|| weight.clone(), |(old, _)| old + &weight);
-        let bytes = record::encode(&tuple, &next, self.limits.record_bytes)?.len();
-        let old_bytes = previous.map_or(0, |(_, bytes)| *bytes);
+        let next = previous.map_or_else(|| weight.clone(), |old| &old.weight + &weight);
+        let tuple_bytes = previous.map_or_else(
+            || record::size_value(&tuple, self.limits.record_bytes),
+            |old| Ok(old.tuple_bytes),
+        )?;
+        let bytes = record::weighted_size(tuple_bytes, &next, self.limits.record_bytes)?;
+        let old_bytes = previous.map_or(0, |old| old.bytes);
         let required = self
             .bytes
             .checked_sub(old_bytes)
@@ -162,12 +172,16 @@ impl<T: BatchData> Consolidator<T> {
             || (previous.is_none() && self.entries.len() == self.limits.resident_entries)
         {
             self.spill()?;
-            let bytes = record::encode(&tuple, &weight, self.limits.record_bytes)?.len();
+            // BTreeMap keeps its original key on an occupied insert. After a
+            // spill this incoming representative becomes the retained key, so
+            // charge its own serialization even if ordering compares equal.
+            let tuple_bytes = record::size_value(&tuple, self.limits.record_bytes)?;
+            let bytes = record::weighted_size(tuple_bytes, &weight, self.limits.record_bytes)?;
             self.bytes += bytes;
-            self.entries.insert(tuple, (weight, bytes));
+            self.entries.insert(tuple, Resident { weight, tuple_bytes, bytes });
         } else {
             self.bytes = required;
-            self.entries.insert(tuple, (next, bytes));
+            self.entries.insert(tuple, Resident { weight: next, tuple_bytes, bytes });
         }
         Ok(())
     }
@@ -178,8 +192,8 @@ impl<T: BatchData> Consolidator<T> {
         ensure!(self.runs.len() < self.limits.spill_runs, "spill run limit exceeded");
         let path = self.directory.path().join(format!("run-{}", self.runs.len()));
         let mut writer = BufWriter::new(File::create_new(&path)?);
-        for (tuple, (weight, _)) in &self.entries {
-            let bytes = record::encode(tuple, weight, self.limits.record_bytes)?;
+        for (tuple, resident) in &self.entries {
+            let bytes = record::encode(tuple, &resident.weight, self.limits.record_bytes)?;
             self.written =
                 record::write(&mut writer, &bytes, self.written, self.limits.scratch_bytes)?;
         }
@@ -194,7 +208,10 @@ impl<T: BatchData> Consolidator<T> {
     /// # Errors
     /// Returns scratch, integrity, budget, or consumer failures. The consumer must
     /// stage unpublished work; earlier visits do not authorize publication.
-    pub fn finish(mut self, visit: impl FnMut(T, BigInt) -> Result<()>) -> Result<()> {
+    pub fn finish(self, mut visit: impl FnMut(T, BigInt) -> Result<()>) -> Result<()> {
+        self.finish_sized(|tuple, weight, _| visit(tuple, weight))
+    }
+    fn finish_sized(mut self, visit: impl FnMut(T, BigInt, usize) -> Result<()>) -> Result<()> {
         let result = self.finish_inner(visit);
         match result {
             Ok(()) => self.directory.close().context("removing successful operator scratch"),
@@ -203,38 +220,41 @@ impl<T: BatchData> Consolidator<T> {
             }),
         }
     }
-    fn finish_inner(&mut self, visit: impl FnMut(T, BigInt) -> Result<()>) -> Result<()> {
+    fn finish_inner(&mut self, visit: impl FnMut(T, BigInt, usize) -> Result<()>) -> Result<()> {
         ensure!(!self.failed, "failed consolidator cannot be finalized");
         if self.runs.is_empty() {
             let rows = std::mem::take(&mut self.entries)
                 .into_iter()
-                .filter(|(_, (weight, _))| *weight != BigInt::default())
-                .map(|(tuple, (weight, _))| Ok((tuple, weight)));
+                .filter(|(_, resident)| resident.weight != BigInt::default())
+                .map(|(tuple, resident)| Ok((tuple, resident.weight, resident.bytes)));
             return finish_rows(self.limits, rows, visit);
         }
         self.spill()?;
         let mut merge = merge::Merge::open(&self.runs, self.limits.record_bytes)?;
-        finish_rows(self.limits, std::iter::from_fn(|| merge.next().transpose()), visit)
+        let rows = std::iter::from_fn(|| merge.next().transpose()).map(|row| {
+            let (tuple, weight) = row?;
+            let bytes = record::size(&tuple, &weight, self.limits.record_bytes)?;
+            Ok((tuple, weight, bytes))
+        });
+        finish_rows(self.limits, rows, visit)
     }
 }
 fn finish_rows<T: BatchData>(
     limits: Limits,
-    rows: impl Iterator<Item = Result<(T, BigInt)>>,
-    mut visit: impl FnMut(T, BigInt) -> Result<()>,
+    rows: impl Iterator<Item = Result<(T, BigInt, usize)>>,
+    mut visit: impl FnMut(T, BigInt, usize) -> Result<()>,
 ) -> Result<()> {
     let mut bytes = 0_u64;
     let mut count = 0_usize;
     for row in rows {
-        let (tuple, weight) = row?;
+        let (tuple, weight, record_bytes) = row?;
         count += 1;
         ensure!(count <= limits.output_entries, "output entry limit exceeded");
         bytes = bytes
-            .checked_add(u64::try_from(
-                record::encode(&tuple, &weight, limits.record_bytes)?.len(),
-            )?)
+            .checked_add(u64::try_from(record_bytes)?)
             .context("output byte count overflow")?;
         ensure!(bytes <= limits.output_bytes, "output byte limit exceeded");
-        visit(tuple, weight)?;
+        visit(tuple, weight, record_bytes)?;
     }
     Ok(())
 }
@@ -245,14 +265,24 @@ impl<K: BatchData, V: BatchData> Consolidator<(K, V)> {
     /// Returns merge/resource errors or final i64 coefficient overflow.
     pub fn finish_batch(self) -> Result<Batch<K, V>> {
         let mut rows = Vec::new();
-        self.finish(|tuple, weight| {
+        let mut size = super::batch_size::BatchSize { entries: 0, bytes: 0, largest: 0 };
+        self.finish_sized(|tuple, weight, bytes| {
+            // Scratch weights are quoted decimal strings; canonical i64 JSON
+            // has exactly the same digits without the two quote characters.
+            let bytes = bytes.checked_sub(2).context("invalid weighted record size")?;
+            size.entries += 1;
+            size.bytes =
+                size.bytes.checked_add(u64::try_from(bytes)?).context("batch size overflow")?;
+            size.largest = size.largest.max(bytes);
             rows.push((
                 tuple,
                 i64::try_from(weight).context("finalized weight exceeds i64 domain")?,
             ));
             Ok(())
         })?;
-        Batch::from_updates(rows)
+        let batch = Batch::from_canonical(rows)?;
+        let _ = batch.sizing.set(size);
+        Ok(batch)
     }
 }
 

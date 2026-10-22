@@ -25,7 +25,7 @@ impl<T: Ord> Accumulator<T> {
         }
     }
 
-    pub(super) fn finish(self) -> Result<BTreeMap<T, i64>> {
+    pub(super) fn finish(self) -> Result<Vec<(T, i64)>> {
         self.entries
             .into_iter()
             .filter(|(_, weight)| *weight != BigInt::default())

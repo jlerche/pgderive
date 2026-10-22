@@ -42,11 +42,28 @@ pub(super) fn size_value(value: &impl Serialize, limit: usize) -> Result<usize> 
     serde_json::to_writer(&mut counter, value)?;
     Ok(counter.bytes)
 }
-pub(super) fn encode(tuple: &impl Serialize, weight: &BigInt, limit: usize) -> Result<Vec<u8>> {
+pub(super) fn weighted_size(tuple_bytes: usize, weight: &BigInt, limit: usize) -> Result<usize> {
+    check_weight(weight, limit)?;
+    let bytes = tuple_bytes
+        .checked_add(weight.to_string().len())
+        .and_then(|bytes| bytes.checked_add(5))
+        .context("scratch record size overflow")?;
+    ensure!(bytes <= limit, "scratch record limit exceeded");
+    Ok(bytes)
+}
+pub(super) fn size(tuple: &impl Serialize, weight: &BigInt, limit: usize) -> Result<usize> {
+    check_weight(weight, limit)?;
+    weighted_size(size_value(tuple, limit)?, weight, limit)
+}
+fn check_weight(weight: &BigInt, limit: usize) -> Result<()> {
     ensure!(
         weight.bits() <= u64::try_from(limit)?.saturating_mul(3),
         "scratch coefficient limit exceeded"
     );
+    Ok(())
+}
+pub(super) fn encode(tuple: &impl Serialize, weight: &BigInt, limit: usize) -> Result<Vec<u8>> {
+    check_weight(weight, limit)?;
     encode_value(&(tuple, weight.to_string()), limit)
 }
 pub(super) fn encode_value(value: &impl Serialize, limit: usize) -> Result<Vec<u8>> {

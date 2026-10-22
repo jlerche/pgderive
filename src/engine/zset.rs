@@ -1,5 +1,5 @@
 use super::weights::Accumulator;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use std::sync::{Arc, OnceLock};
 
 /// A consolidated collection identified by complete tuples and signed weights.
@@ -32,6 +32,14 @@ impl<T: Ord + Clone> ZSet<T> {
             weights.add(tuple, weight);
         }
         Self::from_accumulator(weights)
+    }
+
+    /// Adopt already consolidated rows without rebuilding an exact accumulator.
+    /// This boundary checks ordering and nonzero coefficients, never infers them.
+    pub(crate) fn from_canonical(entries: Vec<(T, i64)>) -> Result<Self> {
+        ensure!(entries.iter().all(|(_, weight)| *weight != 0), "zero canonical weight");
+        ensure!(entries.windows(2).all(|pair| pair[0].0 < pair[1].0), "noncanonical batch order");
+        Ok(Self { entries: Arc::new(entries), sizing: Arc::new(OnceLock::new()) })
     }
 
     /// Iterate in deterministic tuple order.
@@ -87,9 +95,6 @@ impl<T: Ord + Clone> ZSet<T> {
     }
 
     pub(super) fn from_accumulator(weights: Accumulator<T>) -> Result<Self> {
-        Ok(Self {
-            entries: Arc::new(weights.finish()?.into_iter().collect()),
-            sizing: Arc::new(OnceLock::new()),
-        })
+        Ok(Self { entries: Arc::new(weights.finish()?), sizing: Arc::new(OnceLock::new()) })
     }
 }
