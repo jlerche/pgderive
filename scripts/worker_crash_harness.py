@@ -63,9 +63,15 @@ def object_kill(output, command, index, restoring, collecting=False):
             arm(gate, 'POST') # object_store batches GC via S3 DeleteObjects
             victim = fixture.start(command, 'victim')
             victim.event('ready')
-            for tick in range(3):
-                fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id={tick+1}')
+            # Delta flushing retains old objects. Drive enough checkpoints to
+            # witness a real obsolete-object sweep rather than assuming every
+            # checkpoint rewrites all state. Publication must continue while the
+            # DELETE request is held outside the lifecycle barrier.
+            for tick in range(64):
+                fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id={1 + tick % 3}')
                 victim.event('published', minimum_time=tick+2)
+                if pathlib.Path(str(gate) + '.pending').exists():
+                    break
             phase = {}
         elif restoring:
             first = fixture.start(command, 'initial')
@@ -88,7 +94,12 @@ def object_kill(output, command, index, restoring, collecting=False):
         wait_for(lambda: pathlib.Path(str(gate) + '.pending').exists(), 'held object request')
         slot = fixture.sql(f'SELECT slot_name FROM {fixture.name}.pgderive_worker_registration').strip()
         if collecting:
-            assert durable(fixture).split('|')[0] == '4'
+            before = int(durable(fixture).split('|')[0])
+            fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')
+            victim.event('published', seconds=10, minimum_time=before + 1)
+        expected_time = int(durable(fixture).split('|')[0]) if collecting else 1
+        if collecting:
+            assert expected_time >= 2
         elif restoring:
             assert fixture.sql(f"SELECT active FROM {fixture.name}.pgderive_protections WHERE token='{phase['pin']}'").strip() == 't'
             assert durable(fixture) == prior
@@ -100,11 +111,11 @@ def object_kill(output, command, index, restoring, collecting=False):
         survivor = fixture.start(command, 'survivor', maximum=3 if collecting else 1)
         ready = survivor.event('ready')
         assert ready['slot'] == slot
-        assert ready['time'] == (4 if collecting else 1)
+        assert ready['time'] == expected_time
         fixture.verify()
         assert fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_protections WHERE recovering AND active').strip() == '0'
         if collecting:
-            assert durable(fixture).split('|')[0] == '4'
+            assert int(durable(fixture).split('|')[0]) == expected_time
         elif restoring:
             assert fixture.sql(f"SELECT active FROM {fixture.name}.pgderive_protections WHERE token='external-reader'").strip() == 't'
         for tick in range(3 if collecting else 1):

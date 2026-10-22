@@ -10,6 +10,7 @@ use object_store::ObjectStore;
 use std::sync::Arc;
 
 pub(super) struct Open {
+    pub(super) collector: super::collection::Collector,
     pub(super) settings: Settings,
     pub(super) session: Session,
     pub(super) catalog: Catalog,
@@ -73,6 +74,7 @@ impl Open {
         let (writer, nonce) =
             reopen(&mut session, &catalog, &mut query, (&contract, settings)).await?;
         Ok(Self {
+            collector: super::collection::Collector::connect(config).await?,
             settings: settings.clone(),
             session,
             catalog,

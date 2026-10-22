@@ -36,6 +36,8 @@ pub enum Collection {
 }
 impl Catalog {
     /// Collect exclusively within a store namespace owned by this catalog schema.
+    /// A bounded SQL snapshot captures live roots and sealed namespaces; mark,
+    /// list and DELETE run without holding the publication lifecycle lock.
     /// Every concurrent uploader must reserve before PUT; readers must pin before
     /// opening roots. All publications use the same lifecycle barrier. Unknown
     /// object names are retained. Never run against a shared unmanaged namespace.
@@ -53,35 +55,15 @@ impl Catalog {
             limits.roots > 0 && limits.objects > 0 && limits.metadata_bytes > 0,
             "invalid GC limits"
         );
-        let tx = sql.transaction().await?;
-        lock(&tx, self, true).await?;
-        let uploading: bool = tx
-            .query_one(
-                &format!(
-                    "SELECT EXISTS(SELECT 1 FROM {}.pgderive_protections WHERE uploading AND active)",
-                    self.schema
-                ),
-                &[],
-            )
-            .await?
-            .try_get(0)?;
-        if uploading {
-            tx.commit().await?;
+        let Some(Snapshot { roots, sealed }) = snapshot(sql, self, limits).await? else {
             return Ok(Collection::UploadProtected);
-        }
-        let metadata = tx.query_one(&format!("SELECT (SELECT COALESCE(SUM(octet_length(definition::text)+octet_length(checkpoint::text)),0) FROM {0}.pgderive_queries)+(SELECT COALESCE(SUM(octet_length(roots::text)),0) FROM {0}.pgderive_protections WHERE active),(SELECT COUNT(*) FROM {0}.pgderive_protections WHERE uploading AND NOT active)",self.schema),&[]).await?;
-        ensure!(
-            u64::try_from(metadata.try_get::<_, i64>(0)?)? <= limits.metadata_bytes
-                && usize::try_from(metadata.try_get::<_, i64>(1)?)? <= limits.objects,
-            "GC catalog metadata budget exceeded"
-        );
-        let roots = roots(&tx, self, limits.roots).await?;
+        };
         let retained = mark(&store, roots, limits.objects).await?;
-        let sealed = tx.query(&format!("SELECT namespace FROM {}.pgderive_protections WHERE uploading AND NOT active AND namespace IS NOT NULL",self.schema),&[]).await?.into_iter().map(|row|row.try_get::<_,String>(0)).collect::<std::result::Result<BTreeSet<_>,_>>()?;
-        ensure!(sealed.len() <= limits.objects, "GC namespace metadata limit exceeded");
         let sweep = candidates(&store, &retained, &sealed, limits.objects).await?;
         let deleted = sweep.candidates.len();
         delete_candidates(&store, sweep.candidates).await?;
+        let tx = sql.transaction().await?;
+        lock(&tx, self, true).await?;
         retire(&tx, self, &sealed, &sweep.surviving).await?;
         tx.commit()
             .await
@@ -89,6 +71,48 @@ impl Catalog {
         Ok(Collection::Collected { retained: retained.len(), deleted })
     }
 }
+struct Snapshot {
+    roots: Vec<ObjectRef>,
+    sealed: BTreeSet<String>,
+}
+async fn snapshot(
+    sql: &mut Client,
+    catalog: &Catalog,
+    limits: GcLimits,
+) -> Result<Option<Snapshot>> {
+    let tx = sql.transaction().await?;
+    lock(&tx, catalog, true).await?;
+    let uploading: bool = tx
+        .query_one(
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM {}.pgderive_protections WHERE uploading AND active)",
+                catalog.schema
+            ),
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    if uploading {
+        tx.commit().await?;
+        return Ok(None);
+    }
+    let metadata = tx.query_one(&format!("SELECT (SELECT COALESCE(SUM(octet_length(definition::text)+octet_length(checkpoint::text)),0) FROM {0}.pgderive_queries)+(SELECT COALESCE(SUM(octet_length(roots::text)),0) FROM {0}.pgderive_protections WHERE active),(SELECT COUNT(*) FROM {0}.pgderive_protections WHERE uploading AND NOT active)",catalog.schema),&[]).await?;
+    ensure!(
+        u64::try_from(metadata.try_get::<_, i64>(0)?)? <= limits.metadata_bytes
+            && usize::try_from(metadata.try_get::<_, i64>(1)?)? <= limits.objects,
+        "GC catalog metadata budget exceeded"
+    );
+    let roots = roots(&tx, catalog, limits.roots).await?;
+    let sealed = tx.query(&format!("SELECT namespace FROM {}.pgderive_protections WHERE uploading AND NOT active AND namespace IS NOT NULL",catalog.schema),&[]).await?.into_iter().map(|row|row.try_get::<_,String>(0)).collect::<std::result::Result<BTreeSet<_>,_>>()?;
+    ensure!(sealed.len() <= limits.objects, "GC namespace metadata limit exceeded");
+    // The snapshot's sealed namespaces cannot acquire new live roots:
+    // write::stage accepts exact current roots or active fresh uploads only.
+    // New read protections pin current membership under the same barrier.
+    // Release the lifecycle lock before all object-store I/O.
+    tx.commit().await.context("GC snapshot transaction failed")?;
+    Ok(Some(Snapshot { roots, sealed }))
+}
+
 async fn roots(tx: &Transaction<'_>, catalog: &Catalog, limit: usize) -> Result<Vec<ObjectRef>> {
     let bound = i64::try_from(limit)?;
     let size = tx.query_one(&format!("SELECT (SELECT COUNT(*) FROM {0}.pgderive_roots)+(SELECT COALESCE(SUM(jsonb_array_length(roots)),0) FROM {0}.pgderive_protections WHERE active),(SELECT COUNT(*) FROM {0}.pgderive_queries),(SELECT COALESCE(MAX(octet_length(definition::text)),0) FROM {0}.pgderive_queries)",catalog.schema),&[]).await?;

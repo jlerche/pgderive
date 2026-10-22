@@ -1,3 +1,5 @@
+mod concurrency;
+mod paused;
 use super::super::{mvp::Query, recovery::Recovery};
 use crate::catalog::{Catalog, Collection, GcLimits, Writer};
 use anyhow::{Result, ensure};
@@ -209,6 +211,7 @@ async fn abandoned_and_ledger(
     writer: &mut Writer,
     recovery: &Recovery,
 ) -> Result<()> {
+    concurrency::check(sql, catalog, graph, writer, recovery).await?;
     abandoned(sql, catalog, graph, writer, recovery).await?;
     super::ledger::check(sql, catalog, graph, writer, recovery).await
 }

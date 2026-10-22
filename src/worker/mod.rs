@@ -1,5 +1,6 @@
 //! Continuous operation of the explicit, native-bound grouped inner-join MVP.
 mod admin;
+mod collection;
 mod drive;
 mod health;
 mod lifecycle;

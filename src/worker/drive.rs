@@ -1,9 +1,5 @@
 use super::{open::Open, program::relational, spec::Settings, sql::Session};
-use crate::{
-    Config,
-    catalog::{GcLimits, Progress},
-    transaction::Transaction,
-};
+use crate::{Config, catalog::Progress, transaction::Transaction};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -155,6 +151,8 @@ async fn attempt(
         .context("worker replication shutdown timed out")
         .and_then(std::convert::identity);
     let result = crate::outcome::combine(result, shutdown, "worker replication shutdown");
+    let collection = open.collector.drain().await;
+    let result = crate::outcome::combine(result, collection, "worker physical collection shutdown");
     let attempts = if result.is_err() {
         metrics.failures.checked_add(1).context("worker retry counter overflow")?
     } else {
@@ -217,6 +215,7 @@ async fn consume(
         let transaction = tokio::select! {
             signal=stop.changed() => {signal.context("worker stop monitor closed")?;continue;}
             ()=tokio::time::sleep_until(deadline), if pending => {continue;}
+            collection=open.collector.completed() => {collection?; continue;}
             transaction=stream.recv() => transaction?,
         };
         let progress =
@@ -304,7 +303,7 @@ async fn maintain(open: &mut Open, metrics: &mut Metrics) -> Result<()> {
             &format!("worker:{}:maintenance:{}", open.nonce, open.writer.epoch()),
         )
         .await?;
-    let prepared = open.query.prepare_compaction_protected(&protection).await?;
+    let prepared = open.query.prepare_flush_protected(&protection).await?;
     let checkpoint = open.query.prepared_compaction_checkpoint(&prepared)?;
     open.writer
         .checkpoint_memtable(&mut open.session.client, open.query.plan(), &checkpoint)
@@ -313,14 +312,15 @@ async fn maintain(open: &mut Open, metrics: &mut Metrics) -> Result<()> {
     protection
         .published(&mut open.session.client, &open.writer, open.query.plan(), &checkpoint)
         .await?;
-    let collection = open
-        .catalog
-        .collect(&mut open.session.client, open.store.clone(), GcLimits::default())
-        .await?;
+    open.collector.start(
+        open.catalog.clone(),
+        open.store.clone(),
+        open.settings.health.operation_timeout_secs,
+    )?;
     metrics.maintenance =
         metrics.maintenance.checked_add(1).context("worker maintenance metric overflow")?;
     ensure!(open.query.time() == checkpoint.time, "worker maintenance advanced time");
-    let mut event = json!({"event":"maintenance","time":open.query.time(),"epoch":open.writer.epoch(),"previous_runs":runs,"collection":format!("{collection:?}")});
+    let mut event = json!({"event":"maintenance","time":open.query.time(),"epoch":open.writer.epoch(),"previous_runs":runs,"collection":"background"});
     if open.settings.phase_metrics {
         event["elapsed_us"] = serde_json::to_value(clock.lap())?;
     }

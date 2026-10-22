@@ -6,6 +6,7 @@ rust-version = "1.95"
 publish = false
 
 [dependencies]
+async-trait = "0.1"
 anyhow = "1"
 futures-util = "0.3"
 config = { version = "0.15", default-features = false, features = ["toml"] }
@@ -72,4 +73,3 @@ lz4-sys = { path = "vendor/lz4-sys" }
 
 [dev-dependencies]
 # Fault injection and request accounting for durable object-store scheduling tests.
-async-trait = "0.1"
