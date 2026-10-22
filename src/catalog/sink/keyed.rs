@@ -63,26 +63,17 @@ pub(super) async fn apply(
     // bag publication and the caller's single progress/publication transaction.
     batching::apply_rows(tx, table, sink, &unpaired, &Value::Null).await?;
     let statement = statement(table, sink)?;
-    let mut chunk = batching::Chunk::new();
-    let mut bytes = 0_usize;
-    let mut count = 0_usize;
+    let mut chunk = batching::Chunk::default();
     for pair in replacements {
         let size = serde_json::to_vec(&pair)?.len().saturating_add(32);
-        if count > 0 && (count >= 512 || bytes.saturating_add(size) > 4 * 1024 * 1024) {
-            batching::execute(tx, &statement, chunk, sink.output, &Value::Null).await?;
-            chunk = batching::Chunk::new();
-            bytes = 0;
-            count = 0;
+        if chunk.full(size) {
+            batching::execute(tx, &statement, &mut chunk, sink.output, &Value::Null).await?;
         }
         chunk.push(&pair, 1, size)?;
-        bytes = bytes.saturating_add(size);
-        count += 1;
     }
-    if count > 0 {
-        batching::execute(tx, &statement, chunk, sink.output, &Value::Null).await?;
-    }
-    Ok(())
+    batching::execute(tx, &statement, &mut chunk, sink.output, &Value::Null).await
 }
+
 fn statement(table: &str, sink: &Sink) -> Result<String> {
     let old = layout::decode(sink, "(entry.value->0->0)")?;
     let new = layout::decode(sink, "(entry.value->0->1)")?;

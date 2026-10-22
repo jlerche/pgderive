@@ -5,14 +5,16 @@ use serde_json::{Value, json};
 use tokio_postgres::Transaction;
 const IDENTITIES: usize = 512;
 const BYTES: usize = 4 * 1024 * 1024;
+#[derive(Default)]
 pub(super) struct Chunk {
     values: Vec<Value>,
     bytes: usize,
     occurrences: u64,
 }
 impl Chunk {
-    pub(super) const fn new() -> Self {
-        Self { values: Vec::new(), bytes: 0, occurrences: 0 }
+    pub(super) const fn full(&self, bytes: usize) -> bool {
+        !self.values.is_empty()
+            && (self.values.len() >= IDENTITIES || self.bytes.saturating_add(bytes) > BYTES)
     }
     pub(super) fn push(&mut self, tuple: &Value, count: i64, bytes: usize) -> Result<()> {
         self.values.push(json!([tuple, count]));
@@ -52,34 +54,33 @@ pub(super) async fn apply_rows(
     let layout = Layout::new(sink)?;
     for positive in [false, true] {
         let statement = statement(table, &layout, positive);
-        let mut chunk = Chunk::new();
+        let mut chunk = Chunk::default();
         for (tuple, delta) in
             rows.iter().filter(|(_, delta)| *delta != 0 && (*delta > 0) == positive)
         {
             let count =
                 delta.checked_abs().ok_or_else(|| anyhow::anyhow!("result occurrence overflow"))?;
             let bytes = serde_json::to_vec(tuple)?.len().saturating_add(32);
-            if !chunk.values.is_empty()
-                && (chunk.values.len() >= IDENTITIES || chunk.bytes.saturating_add(bytes) > BYTES)
-            {
-                execute(tx, &statement, chunk, sink.output, context).await?;
-                chunk = Chunk::new();
+            if chunk.full(bytes) {
+                execute(tx, &statement, &mut chunk, sink.output, context).await?;
             }
             chunk.push(tuple, count, bytes)?;
         }
-        if !chunk.values.is_empty() {
-            execute(tx, &statement, chunk, sink.output, context).await?;
-        }
+        execute(tx, &statement, &mut chunk, sink.output, context).await?;
     }
     Ok(())
 }
 pub(super) async fn execute(
     tx: &Transaction<'_>,
     statement: &str,
-    chunk: Chunk,
+    chunk: &mut Chunk,
     output: super::SinkOutput,
     context: &Value,
 ) -> Result<()> {
+    let chunk = std::mem::take(chunk);
+    if chunk.values.is_empty() {
+        return Ok(());
+    }
     if output == super::SinkOutput::Stdout {
         return super::stdout::emit(
             context,
@@ -137,7 +138,7 @@ mod tests {
         assert!(deletion.contains("numeric_send(d.\"x\"\" label\")"));
         assert!(deletion.contains("LIMIT r.n FOR UPDATE"));
         assert!(!statement("owned.results", &layout, true).contains("INSERT INTO owned.results(n"));
-        let mut chunk = Chunk::new();
+        let mut chunk = Chunk::default();
         chunk.push(&serde_json::json!([null, ["1.00"]]), 3, 32)?;
         assert_eq!(chunk.occurrences, 3);
         assert_eq!(chunk.values, vec![serde_json::json!([[null, ["1.00"]], 3])]);
