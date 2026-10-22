@@ -32,11 +32,9 @@ class BindingFixture(Fixture):
             self.sql(f'ALTER TABLE {self.name}.bid ADD COLUMN note varchar(12)')
 
     def config(self, maximum=0):
-        path = super().config(maximum)
         expression = 'price+1' if self.computed else 'price'
-        text = path.read_text().split('[worker.query]')[0]
-        text += f'[worker.query]\nsql="SELECT {expression} AS value FROM {self.name}.bid"\n'
-        path.write_text(text.replace('retry_attempts=8', 'retry_attempts=1'))
+        path = super().config(maximum, query=f'SELECT {expression} AS value FROM {self.name}.bid', execution=False)
+        path.write_text(path.read_text().replace('retry_attempts=8', 'retry_attempts=1'))
         return path
 
     def verify(self):

@@ -63,10 +63,7 @@ class FunctionsFixture(SqlFixture):
         self.sql(f'CREATE MATERIALIZED VIEW {self.name}.oracle AS {self.query}')
 
     def verify(self):
-        self.sql(f'REFRESH MATERIALIZED VIEW {self.name}.oracle')
-        values = ','.join(f'v{index}' for index in range(len(EXPRESSIONS)))
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({values})) tuple,count(*)::bigint weight FROM {self.name}.oracle GROUP BY 1'
-        assert self.bag_difference(expected).strip() == '0', 'typed function sink differs from refreshed native MV'
+        self.verify_materialized(','.join(f'v{index}' for index in range(len(EXPRESSIONS))), 'typed function sink differs from refreshed native MV')
         rows = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a')) or []
         expected_memory = collections.Counter(memory(row) for row in rows if not (row['category'] or '').startswith('skip'))
         self.verify_memory(dict(expected_memory))

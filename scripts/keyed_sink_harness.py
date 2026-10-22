@@ -13,10 +13,8 @@ class KeyedFixture(Fixture):
         self.key=['book']
 
     def config(self, maximum=0):
-        path=super().config(maximum)
-        before,rest=path.read_text().split('[worker.query]')
-        _,execution=rest.split('[execution]')
-        path.write_text(before.replace('retry_attempts=8','retry_attempts=1')+'sink_key='+json.dumps(self.key)+'\n[worker.query]\nsql='+json.dumps(self.query)+'\n[execution]'+execution)
+        path=super().config(maximum, query=self.query)
+        path.write_text(path.read_text().replace('retry_attempts=8','retry_attempts=1').replace('[worker.query]','sink_key='+json.dumps(self.key)+'\n[worker.query]'))
         return path
 
     def verify(self):

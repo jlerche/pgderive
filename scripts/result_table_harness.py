@@ -91,9 +91,8 @@ class NumericFixture(Fixture):
         self.sql(f"ALTER TABLE {self.name}.bid ALTER COLUMN price TYPE numeric; DELETE FROM {self.name}.bid; INSERT INTO {self.name}.bid VALUES(1,1,1.0),(2,1,1.00),(3,1,NULL)")
 
     def config(self, maximum=0):
-        path = super().config(maximum)
-        text = path.read_text().split('[worker.query]')[0]
-        path.write_text(text.replace('retry_attempts=8','retry_attempts=1')+f'[worker.query]\nsql="SELECT price FROM {self.name}.bid"\n')
+        path = super().config(maximum, query=f'SELECT price FROM {self.name}.bid', execution=False)
+        path.write_text(path.read_text().replace('retry_attempts=8','retry_attempts=1'))
         return path
 
     def verify(self):

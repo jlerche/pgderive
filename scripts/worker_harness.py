@@ -120,7 +120,21 @@ class Fixture:
     def sql(self, text):
         return subprocess.check_output(self.pg + [text], env=self.environment, text=True)
 
-    def config(self, maximum=0):
+    def config(self, maximum=0, *, query=None, execution=True):
+        query = 'sql='+json.dumps(query, ensure_ascii=False)+'\n' if query is not None else f'''left_schema="{self.name}"
+left_table="auction"
+left_key="id"
+group="category"
+right_schema="{self.name}"
+right_table="bid"
+right_key="auction"
+sum="price"
+'''
+        limits = '''[execution]
+resident_entries=128
+resident_bytes=65536
+record_bytes=16384
+''' if execution else ''
         path = self.output / 'config.toml'
         path.write_text(f'''[postgres]
 host="127.0.0.1"
@@ -147,19 +161,7 @@ retry_attempts=8
 retry_delay_ms=100
 max_transactions={maximum}
 [worker.query]
-left_schema="{self.name}"
-left_table="auction"
-left_key="id"
-group="category"
-right_schema="{self.name}"
-right_table="bid"
-right_key="auction"
-sum="price"
-[execution]
-resident_entries=128
-resident_bytes=65536
-record_bytes=16384
-''')
+{query}{limits}''')
         return path
 
     def start(self, command, label, maximum=0):
@@ -176,12 +178,8 @@ record_bytes=16384
 
     def verify(self):
         # Compare every weighted aggregate with an independent PostgreSQL query.
-        difference = self.sql(f'''WITH source AS ({self.expected_query()}),
-          expected AS (SELECT jsonb_build_array(NULL,jsonb_build_array(group_key,row_count,total)) tuple,1::bigint weight FROM source),
-          actual AS (SELECT tuple,weight FROM {self.bag_relation()})
-          SELECT count(*) FROM ((SELECT * FROM expected EXCEPT SELECT * FROM actual)
-          UNION ALL (SELECT * FROM actual EXCEPT SELECT * FROM expected)) differences''').strip()
-        assert difference == '0', 'worker sink differs from independent SQL'
+        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array(group_key,row_count,total)) tuple,1::bigint weight FROM ({self.expected_query()}) source'
+        assert self.bag_difference(expected).strip() == '0', 'worker sink differs from independent SQL'
         beyond = self.acknowledgement_ahead().strip()
         assert beyond == '0', 'slot acknowledged beyond durable publication'
 

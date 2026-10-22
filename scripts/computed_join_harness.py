@@ -53,9 +53,7 @@ class JoinKeysFixture(SqlFixture):
         return expected
 
     def verify(self):
-        self.sql(f'REFRESH MATERIALIZED VIEW {self.name}.oracle')
-        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array(c,p)) tuple,count(*)::bigint weight FROM {self.name}.oracle GROUP BY 1'
-        assert self.bag_difference(expected).strip() == '0', 'computed join differs from native MV'
+        self.verify_materialized('c,p', 'computed join differs from native MV')
         self.verify_memory(dict(self.memory()))
 
 

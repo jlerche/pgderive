@@ -24,13 +24,12 @@ class SqlFixture(Fixture):
                       'WHERE ' + self.where + 'GROUP BY a.group_id')
 
     def config(self, maximum=0):
-        path = super().config(maximum)
-        text = path.read_text()
-        before, rest = text.split('[worker.query]')
-        _, after = rest.split('[execution]')
-        path.write_text(before + '[worker.query]\nsql=' + json.dumps(self.query, ensure_ascii=False)
-                        + '\n[execution]' + after)
-        return path
+        return super().config(maximum, query=self.query)
+
+    def verify_materialized(self, columns, message):
+        self.sql(f'REFRESH MATERIALIZED VIEW {self.name}.oracle')
+        expected = f'SELECT jsonb_build_array(NULL,jsonb_build_array({columns})) tuple,count(*)::bigint weight FROM {self.name}.oracle GROUP BY 1'
+        assert self.bag_difference(expected).strip() == '0', message
 
     def expected_query(self):
         self.sql(f"EXPLAIN {self.query}")
