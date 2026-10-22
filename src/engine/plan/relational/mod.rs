@@ -15,7 +15,10 @@ use crate::{
     },
 };
 use anyhow::{Context, Result, ensure};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 type JoinProject<K, V> = Project<K, (V, V), K, V>;
 
@@ -98,6 +101,7 @@ struct Execution<K: BatchData, V: BatchData> {
     writers: BTreeMap<String, Arrangement<K, V>>,
     limits: crate::engine::execution::Limits,
     cache: Arc<BlockCache>,
+    source_statistics: BTreeSet<String>,
 }
 #[derive(Debug)]
 pub(crate) struct MemtableFull;
@@ -119,7 +123,18 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     /// # Errors
     /// Rejects unsupported shapes, missing callbacks/state, and invalid resources.
     pub fn new(plan: Plan, operators: Operators<K, V>, settings: &Settings) -> Result<Self> {
-        circuit::validate(&plan, &operators)?;
+        Self::from_source_keys(plan, operators, settings, BTreeSet::new())
+    }
+    /// Internal capability boundary: the worker compiler proves complete source
+    /// PK preservation from an imported snapshot and committed ordered full CDC.
+    /// Arbitrary weighted batches/callbacks must use the strict public constructor.
+    pub(crate) fn from_source_keys(
+        plan: Plan,
+        operators: Operators<K, V>,
+        settings: &Settings,
+        source_statistics: BTreeSet<String>,
+    ) -> Result<Self> {
+        circuit::validate(&plan, &operators, &source_statistics)?;
         let limits = settings.limits.validate()?;
         let cache = Arc::new(
             BlockCache::new(limits.cache_bytes, limits.cache_entries)
@@ -153,8 +168,14 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let execution =
-            Arc::new(Execution { plan, operators: Arc::new(operators), writers, limits, cache });
+        let execution = Arc::new(Execution {
+            plan,
+            operators: Arc::new(operators),
+            writers,
+            limits,
+            cache,
+            source_statistics,
+        });
         Self::bind(execution, RelationalState { entries }, 0)
     }
     fn bind(

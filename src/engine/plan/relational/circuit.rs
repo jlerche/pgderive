@@ -29,6 +29,7 @@ type Replacement<K, V> = (String, Entry<K, V>);
 pub(super) fn validate<K: BatchData, V: BatchData>(
     plan: &Plan,
     operators: &Operators<K, V>,
+    source_statistics: &BTreeSet<String>,
 ) -> Result<()> {
     let definition = plan.definition();
     ensure!(definition.outputs.len() == 1, "relational executor requires one output");
@@ -43,6 +44,12 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
         ensure!(node.kind != Kind::Source, "source state requires a project node");
     }
     ensure!(maintained.contains(&definition.outputs[0]), "missing relational output state");
+    for id in source_statistics {
+        ensure!(
+            matches!(operators.get(id), Some(Operator::Statistics(_))),
+            "source proof requires linear statistics"
+        );
+    }
     let mut callbacks = 0;
     for node in &definition.nodes {
         if matches!(node.kind, Kind::Source | Kind::Union) {
@@ -56,6 +63,9 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
                 node.inputs.iter().all(|id| maintained.contains(id)),
                 "join inputs require maintained state"
             ),
+            Operator::Statistics(_) if source_statistics.contains(&node.id) => {
+                ensure!(maintained.contains(&node.id), "statistics require retained state");
+            }
             Operator::Ordered(_)
             | Operator::Statistics(_)
             | Operator::IndexedStatistics(_)
@@ -102,18 +112,12 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         let mut sources = input.batch.into_iter();
         let mut values = ValidatedValues { batches: BTreeMap::new(), bags: BTreeMap::new() };
         for node in &self.plan.definition().nodes {
+            self.validate_input_bag(node, &prior, &mut values).await?;
             if matches!(
                 self.operators.get(&node.id),
                 Some(Operator::Statistics(_) | Operator::IndexedStatistics(_))
-            ) && !values.bags.contains_key(&node.inputs[0])
-            {
-                let parent =
-                    values.batches.get(&node.inputs[0]).context("missing aggregate input")?;
-                let proof = self
-                    .prior(&node.inputs[0], &prior)?
-                    .validate_bag_batch(Arc::clone(parent))
-                    .await?;
-                values.bags.insert(node.inputs[0].clone(), proof);
+            ) {
+                profile.mark("input_bag_validation");
             }
             let batch = match node.kind {
                 Kind::Source => sources.next().context("incomplete relational input")?,
@@ -140,6 +144,45 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         let output =
             values.batches.remove(&self.plan.definition().outputs[0]).context("missing output")?;
         Ok((candidate, Arc::unwrap_or_clone(output)))
+    }
+    async fn validate_input_bag<'a>(
+        &self,
+        node: &Node,
+        prior: &'a RelationalState<K, V>,
+        values: &mut ValidatedValues<'a, K, V>,
+    ) -> Result<()> {
+        if !matches!(
+            self.operators.get(&node.id),
+            Some(Operator::Statistics(_) | Operator::IndexedStatistics(_))
+        ) || values.bags.contains_key(&node.inputs[0])
+        {
+            return Ok(());
+        }
+        let parent = values.batches.get(&node.inputs[0]).context("missing aggregate input")?;
+        if self.source_statistics.contains(&node.id) {
+            ensure!(
+                parent.iter().all(|(_, weight)| matches!(weight, -1 | 1)),
+                "source-key proof requires unit tuple deltas"
+            );
+            // Another consumer may still require this input arrangement. Its
+            // source-key invariant proves the same full-tuple coefficient bound.
+            if self
+                .plan
+                .definition()
+                .arrangements
+                .iter()
+                .any(|member| member.node == node.inputs[0])
+            {
+                let proof =
+                    self.prior(&node.inputs[0], prior)?.certify_source_batch(Arc::clone(parent))?;
+                values.bags.insert(node.inputs[0].clone(), proof);
+            }
+            return Ok(());
+        }
+        let proof =
+            self.prior(&node.inputs[0], prior)?.validate_bag_batch(Arc::clone(parent)).await?;
+        values.bags.insert(node.inputs[0].clone(), proof);
+        Ok(())
     }
     async fn stage_all(
         &self,

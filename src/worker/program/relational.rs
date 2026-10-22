@@ -18,10 +18,11 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 pub(in crate::worker) type Key = crate::engine::value::Value<Vec<String>>;
 type Inputs = TimedBatch<Vec<Batch<Key, Row>>>;
 pub(in crate::worker) type Query = Circuit<Key, Row>;
+#[cfg(test)]
 pub(in crate::worker) fn build(
     contract: &Contract,
     compiled: &Compiled,
@@ -29,6 +30,26 @@ pub(in crate::worker) fn build(
 ) -> Result<Query> {
     let ir = compiled.relational();
     Query::new(plan(contract, compiled, ir)?, operators(ir, settings), settings)
+}
+/// Bind only an imported `PostgreSQL` snapshot and complete ordered CDC transactions.
+/// Generic/manual weighted callers must use `build`, retaining strict validation.
+pub(in crate::worker) fn build_committed(
+    contract: &Contract,
+    compiled: &Compiled,
+    settings: &Settings,
+) -> Result<Query> {
+    let ir = compiled.relational();
+    let certified = super::source_keys::statistics(contract, ir)?;
+    Query::from_source_keys(
+        declared_plan(contract, compiled, ir, &certified)?,
+        operators(ir, settings),
+        settings,
+        certified,
+    )
+}
+pub(in crate::worker) fn committed_plan(contract: &Contract, compiled: &Compiled) -> Result<Plan> {
+    let ir = compiled.relational();
+    declared_plan(contract, compiled, ir, &super::source_keys::statistics(contract, ir)?)
 }
 type Bound<'a> = (&'a str, Operator<Key, Row>);
 fn operators(ir: &Relational, settings: &Settings) -> Operators<Key, Row> {
@@ -275,14 +296,23 @@ fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
     };
     plan::Node { id: id.clone(), kind, inputs, schema: schema(id) }
 }
+#[cfg(test)]
 pub(in crate::worker) fn plan(
     contract: &Contract,
     compiled: &Compiled,
     ir: &Relational,
 ) -> Result<Plan> {
+    declared_plan(contract, compiled, ir, &BTreeSet::new())
+}
+fn declared_plan(
+    contract: &Contract,
+    compiled: &Compiled,
+    ir: &Relational,
+    certified: &BTreeSet<String>,
+) -> Result<Plan> {
     contract.validate()?;
     let identity = format!("{:x}", Sha256::digest(serde_json::to_vec(&(contract, compiled))?));
-    let revision = "relational";
+    let revision = if certified.is_empty() { "relational" } else { "source-key-statistics-v1" };
     let Some(Node::Output { id: output, .. }) = ir.nodes.last() else {
         anyhow::bail!("relational program must end in an output node");
     };
@@ -302,6 +332,10 @@ pub(in crate::worker) fn plan(
     for node in &nodes {
         let inputs = match node.kind {
             plan::Kind::Join | plan::Kind::Window => node.inputs.as_slice(),
+            plan::Kind::Statistics if certified.contains(&node.id) => {
+                maintained.insert(node.id.clone(), node.id.clone());
+                &[]
+            }
             plan::Kind::Statistics | plan::Kind::Ordered | plan::Kind::Aggregate => {
                 maintained.insert(node.id.clone(), node.id.clone());
                 node.inputs.as_slice()

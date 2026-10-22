@@ -66,8 +66,13 @@ impl Open {
             encoded_cache,
         };
         let compiled = settings.query.compile_bound(&session.client, &contract).await?;
-        let mut query = relational::build(&contract, &compiled, &options)?;
-        if catalog.load_durable(&mut session.client, query.plan()).await?.is_none() {
+        let mut query = relational::build_committed(&contract, &compiled, &options)?;
+        if catalog
+            .load_durable(&mut session.client, query.plan())
+            .await
+            .context("loading durable physical plan; incompatible aggregation state requires query rebuild")?
+            .is_none()
+        {
             registration::reset_unactivated(&session.client, &contract).await?;
             bootstrap(&replication, settings, &mut session, &catalog, &mut query).await?;
         }
@@ -161,7 +166,7 @@ async fn bootstrap(
     export.close().await?;
     // The preliminary registration must match the exact imported source layout.
     let compiled = settings.query.compile_bound(&session.client, &contract).await?;
-    let exact = relational::build(
+    let exact = relational::build_committed(
         &contract,
         &compiled,
         &EngineSettings {

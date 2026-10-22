@@ -66,7 +66,7 @@ pub(super) async fn source(
         source.verify(sql).await?;
         ensure!(
             program::plan(&source, &compiled)?.identity() == row.try_get::<_, String>(5)?,
-            "worker registration query changed"
+            "worker registration query or physical plan changed; run query rebuild explicitly"
         );
         return Ok(source);
     }

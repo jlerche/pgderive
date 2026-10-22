@@ -15,13 +15,14 @@ mod ordered;
 mod partition;
 mod prefix;
 pub(super) mod relational;
+mod source_keys;
 mod statistics;
 mod topk;
 use crate::{compiler::Compiled, engine::plan::Plan, source::Contract};
 use anyhow::Result;
 pub(super) fn plan(contract: &Contract, compiled: &Compiled) -> Result<Plan> {
     compiled.validate_execution()?;
-    relational::plan(contract, compiled, compiled.relational())
+    relational::committed_plan(contract, compiled)
 }
 
 mod keys;

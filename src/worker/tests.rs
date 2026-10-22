@@ -166,6 +166,7 @@ mod relational;
 
 mod expansion;
 mod partition;
+mod source_keys;
 mod statistics;
 
 mod ranking;
