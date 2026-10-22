@@ -27,7 +27,7 @@ pub(super) fn operator(spec: &Partition, budget: Arc<NativeBudget>) -> Statistic
         move |key, values| encode(&encoded, key, values, (&encoded_codec, &budget)),
     )
 }
-fn measure(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
+pub(super) fn measure(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
     if let Some(values) = super::distinct_statistics::measure(spec, row)? {
         return Ok(values);
     }
@@ -48,18 +48,21 @@ fn decode(
     width: usize,
     codec: &super::native::Integers,
 ) -> Result<Decoded<Vec<BigInt>>> {
-    codec.decode(row, |fields| {
-        (0..width)
-            .map(|index| {
-                fields
-                    .get(&field(index))
-                    .and_then(Option::as_deref)
-                    .context("missing persisted statistic")?
-                    .parse()
-                    .map_err(Into::into)
-            })
-            .collect()
-    })
+    codec.decode(row, |row| decode_fields(row, width, "missing persisted statistic"))
+}
+pub(super) fn decode_fields(row: &Row, width: usize, missing: &'static str) -> Result<Vec<BigInt>> {
+    (0..width)
+        .map(|index| {
+            row.get(&field(index))
+                .and_then(Option::as_deref)
+                .context(missing)?
+                .parse()
+                .map_err(Into::into)
+        })
+        .collect()
+}
+pub(super) fn encode_fields(values: &[BigInt]) -> impl Iterator<Item = (String, Option<String>)> {
+    values.iter().enumerate().map(|(index, value)| (field(index), Some(value.to_string())))
 }
 
 fn validate(values: &[BigInt]) -> Result<bool> {
@@ -96,9 +99,7 @@ fn encode(
         .map(|(column, value)| (column.name.clone(), value.clone()))
         .collect::<BTreeMap<String, Option<String>>>();
     let mut row: Row = row.into();
-    for (index, value) in values.iter().enumerate() {
-        row.insert(field(index), Some(value.to_string()));
-    }
+    row.extend(encode_fields(values));
     Ok(Some(native.0.retain(row, values)?))
 }
 

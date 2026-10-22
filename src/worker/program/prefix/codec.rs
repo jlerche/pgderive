@@ -2,40 +2,19 @@ use super::Key;
 use crate::{
     compiler::partition::{Partition, statistics},
     transaction::Row,
-    worker::program::aggregate::Linear,
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 pub(super) const fn width(spec: &Partition) -> usize {
     statistics::width(spec.aggregates.len())
 }
+pub(super) use super::super::statistics::measure;
 pub(super) fn encode(values: &[BigInt]) -> Row {
-    values
-        .iter()
-        .enumerate()
-        .map(|(i, value)| (statistics::field(i), Some(value.to_string())))
-        .collect()
+    super::super::statistics::encode_fields(values).collect()
 }
 pub(super) fn decode(row: &Row, size: usize) -> Result<Vec<BigInt>> {
     ensure!(row.len() == size, "prefix statistic width mismatch");
-    (0..size)
-        .map(|i| {
-            row.get(&statistics::field(i))
-                .and_then(Option::as_deref)
-                .context("missing prefix statistic")?
-                .parse()
-                .map_err(Into::into)
-        })
-        .collect()
-}
-pub(super) fn measure(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
-    let mut values = vec![1.into()];
-    for aggregate in &spec.aggregates {
-        let mut linear = Linear::default();
-        linear.observe(aggregate, row, 1)?;
-        values.extend([linear.count, linear.sum]);
-    }
-    Ok(values)
+    super::super::statistics::decode_fields(row, size, "missing prefix statistic")
 }
 pub(super) fn validate(values: &[BigInt]) -> Result<()> {
     let rows = values.first().context("missing prefix rows")?;
