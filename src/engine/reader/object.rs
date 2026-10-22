@@ -312,3 +312,13 @@ pub fn valid_namespace(namespace: &str) -> bool {
 #[cfg(test)]
 #[path = "tests/codec.rs"]
 mod tests;
+
+pub(super) fn scoped_store(
+    store: &Arc<dyn ObjectStore>,
+    namespace: Option<&str>,
+) -> Arc<dyn ObjectStore> {
+    namespace.map_or_else(
+        || store.clone(),
+        |namespace| Arc::new(object_store::prefix::PrefixStore::new(store.clone(), namespace)),
+    )
+}

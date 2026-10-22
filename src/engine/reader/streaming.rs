@@ -1,6 +1,6 @@
 use super::{
     BatchCursor, BatchData, BlockCache, Entry, ObjectBatch, ObjectRef, bounded,
-    format::{Block, Index, hash, validate},
+    format::{Block, Index, validate},
 };
 use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
@@ -122,14 +122,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 "invalid streaming upload namespace"
             );
         }
-        let scoped: Arc<dyn ObjectStore> = namespace.map_or_else(
-            || store.clone(),
-            |namespace| {
-                let scoped: Arc<dyn ObjectStore> =
-                    Arc::new(object_store::prefix::PrefixStore::new(store.clone(), namespace));
-                scoped
-            },
-        );
+        let scoped = super::object::scoped_store(&store, namespace);
         ensure!(!schema.is_empty(), "empty streaming batch schema");
         let limits = limits.validate()?;
         let mut writer = Writer {
@@ -208,17 +201,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         let encoded = bounded::encode(&self.rows)?;
         ensure!(encoded.len() <= self.limits.block_bytes, "streaming block exceeds budget");
         let encoded_bytes = encoded.len();
-        let encoded = super::compression::compress(&encoded)?;
-        let digest = hash(&encoded);
-        let path = format!("pgderive/block/{digest}");
-        let block = Block {
-            path: path.clone(),
-            first: self.rows.first().context("empty streaming block")?.0.clone(),
-            last: self.rows.last().context("empty streaming block")?.0.clone(),
-            length: u64::try_from(encoded.len())?,
-            rows: self.rows.len(),
-            hash: digest,
-        };
+        let (block, encoded) = super::format::encode_block::<(K, V), _>(&self.rows, &encoded)?;
         let bytes = bounded::encode(&block)?.len();
         let header =
             bounded::encode(&Index::<K, V> { schema: self.schema.clone(), blocks: Vec::new() })?
@@ -235,7 +218,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         if self.blocks.len() == self.limits.index_blocks || total > self.limits.index_bytes {
             self.flush_root().await?;
         }
-        bounded::put(&self.store, &path, encoded).await?;
+        bounded::put(&self.store, &block.path, encoded).await?;
         if let Some(cache) = &self.cache {
             cache.insert(
                 &self.schema,

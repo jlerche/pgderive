@@ -1,8 +1,5 @@
 //! Retain locally constructed, validated immutable metadata after successful PUTs.
-use super::{
-    BatchData, BlockCache, ObjectBatch, bounded, compression,
-    format::{Block, hash},
-};
+use super::{BatchData, BlockCache, ObjectBatch, bounded};
 use crate::engine::Batch;
 use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
@@ -21,14 +18,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         if let Some(namespace) = namespace {
             ensure!(super::object::valid_namespace(namespace), "invalid batch upload namespace");
         }
-        let scoped: Arc<dyn ObjectStore> = namespace.map_or_else(
-            || store.clone(),
-            |namespace| {
-                let scoped: Arc<dyn ObjectStore> =
-                    Arc::new(object_store::prefix::PrefixStore::new(store.clone(), namespace));
-                scoped
-            },
-        );
+        let scoped = super::object::scoped_store(&store, namespace);
         let mut blocks = Vec::new();
         let mut fence_bytes = 0_usize;
         let mut rows = batch.iter();
@@ -39,25 +29,16 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             }
             let decoded_bytes = bounded::encode(&chunk)?;
             let encoded_bytes = decoded_bytes.len();
-            let encoded = compression::compress(&decoded_bytes)?;
-            let digest = hash(&encoded);
-            let path = format!("pgderive/block/{digest}");
-            bounded::put(&scoped, &path, encoded.clone()).await?;
-            let block = Block {
-                path,
-                first: chunk.first().context("empty chunk")?.0.clone(),
-                last: chunk.last().context("empty chunk")?.0.clone(),
-                length: u64::try_from(encoded.len())?,
-                rows: chunk.len(),
-                hash: digest.clone(),
-            };
+            let (block, encoded) =
+                super::format::encode_block::<(K, V), _>(&chunk, &decoded_bytes)?;
+            bounded::put(&scoped, &block.path, encoded).await?;
             fence_bytes = fence_bytes
                 .checked_add(bounded::encode(&block)?.len())
                 .context("manifest size overflow")?;
             ensure!(fence_bytes <= bounded::MAX_BYTES, "manifest exceeds byte limit");
             let decoded =
                 chunk.into_iter().map(|(tuple, weight)| (tuple.clone(), *weight)).collect();
-            cache.insert(schema, digest, Arc::new(decoded), encoded_bytes)?;
+            cache.insert(schema, block.hash.clone(), Arc::new(decoded), encoded_bytes)?;
             blocks.push(block);
         }
         // A successful index PUT remains mandatory. Only the redundant cold

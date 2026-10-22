@@ -2,6 +2,7 @@ use super::{BatchData, Entry};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::borrow::Borrow;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,4 +61,23 @@ pub(super) fn row_count<T>(blocks: &[Block<T>]) -> Result<usize> {
     blocks.iter().try_fold(0_usize, |total, block| {
         total.checked_add(block.rows).context("object row count overflow")
     })
+}
+
+type EncodedBlock<T> = (Block<T>, Vec<u8>);
+
+pub(super) fn encode_block<T: Clone, W>(
+    rows: &[(impl Borrow<T>, W)],
+    decoded: &[u8],
+) -> Result<EncodedBlock<T>> {
+    let encoded = super::compression::compress(decoded)?;
+    let digest = hash(&encoded);
+    let block = Block {
+        path: format!("pgderive/block/{digest}"),
+        first: rows.first().context("empty immutable block")?.0.borrow().clone(),
+        last: rows.last().context("empty immutable block")?.0.borrow().clone(),
+        length: u64::try_from(encoded.len())?,
+        rows: rows.len(),
+        hash: digest,
+    };
+    Ok((block, encoded))
 }
