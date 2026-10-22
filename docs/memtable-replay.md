@@ -29,7 +29,8 @@ transactions are skipped, while legitimate duplicate tuples retain their weights
 At P, the exact transaction identity and reconstructed logical time must agree
 with PostgreSQL before readiness. New transactions then publish normally.
 
-The worker checkpoints at `maintenance_ticks`, after `checkpoint_interval_ms`
+The worker checkpoints when retained arrangement run count reaches
+`maintenance_ticks`, after `checkpoint_interval_ms`
 (default 5000 ms), on memory pressure, and on graceful stop. `memtable_bytes`
 (default 64 MiB) caps retained serialized payload plus structural charges across
 arrangements. It is an estimate, not an RSS limit; temporary computations,

@@ -436,6 +436,9 @@ and memory graph with SQL after every committed transaction. Missing objects,
 filesystem PUT failures, corrupt immutable-upload collisions, arithmetic failures, retries and compaction
 races are exercised. These are correctness checks, not performance benchmarks.
 
+For reproducible baseline/candidate/RisingWave measurements and the planned
+qualification matrix, see [Performance qualification](docs/performance-benchmarks.md).
+
 ## Relational plan execution
 
 `TimedBatch<T>` represents one logical delta-tick value. The relational executor
