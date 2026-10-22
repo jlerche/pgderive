@@ -51,66 +51,51 @@ pub(in crate::worker) fn committed_plan(contract: &Contract, compiled: &Compiled
     let ir = compiled.relational();
     declared_plan(contract, compiled, ir, &super::source_keys::statistics(contract, ir)?)
 }
-type Bound<'a> = (&'a str, Operator<Key, Row>);
 fn operators(ir: &Relational, settings: &Settings) -> Operators<Key, Row> {
     let native = crate::engine::value::NativeBudget::new(settings.limits.native_cache_bytes);
     ir.nodes
         .iter()
-        .filter_map(|node| bind(node, &ir.output, settings, &native))
-        .map(|(id, operator)| (id.to_owned(), operator))
+        .filter_map(|node| {
+            bind(node, &ir.output, settings, &native)
+                .map(|operator| (node.id().to_owned(), operator))
+        })
         .collect()
 }
-fn bind<'a>(
-    node: &'a Node,
+fn bind(
+    node: &Node,
     projected: &Projected,
     settings: &Settings,
     native: &std::sync::Arc<crate::engine::value::NativeBudget>,
-) -> Option<Bound<'a>> {
+) -> Option<Operator<Key, Row>> {
     Some(match node {
         Node::Source { .. } | Node::Union { .. } => return None,
-        Node::PrefixInput { id, spec, .. } => (id, Operator::Project(super::prefix::input(spec))),
-        Node::PrefixStatistics { id, spec, .. } => {
-            (id, Operator::IndexedStatistics(super::prefix::statistics(spec, native.clone())))
+        Node::PrefixInput { spec, .. } => Operator::Project(super::prefix::input(spec)),
+        Node::PrefixStatistics { spec, .. } => {
+            Operator::IndexedStatistics(super::prefix::statistics(spec, native.clone()))
         }
-        Node::PrefixWindow { id, spec, .. } => {
-            (id, Operator::Window(super::prefix::window(spec, native.clone())))
+        Node::PrefixWindow { spec, .. } => {
+            Operator::Window(super::prefix::window(spec, native.clone()))
         }
-        Node::LookupInput { id, spec, .. } => (id, Operator::Project(super::lookup::input(spec))),
-        Node::Lookup { id, spec, .. } => (id, Operator::Partition(lookup_operator(spec, settings))),
-        Node::Expand { id, series, .. } => (id, Operator::Expand(expand(series))),
-        Node::Filter { id, predicate, .. } => (id, Operator::Project(filter(predicate))),
-        Node::Map { id, computed, .. } => (id, Operator::Project(map(computed))),
-        Node::PartitionBy { id, keys, .. } => {
-            (id, Operator::Project(partition_by(keys, native.clone())))
+        Node::LookupInput { spec, .. } => Operator::Project(super::lookup::input(spec)),
+        Node::Lookup { spec, .. } => Operator::Partition(lookup_operator(spec, settings)),
+        Node::Expand { series, .. } => Operator::Expand(expand(series)),
+        Node::Filter { predicate, .. } => Operator::Project(filter(predicate)),
+        Node::Map { computed, .. } => Operator::Project(map(computed)),
+        Node::PartitionBy { keys, .. } => Operator::Project(partition_by(keys, native.clone())),
+        Node::Rebind { fields, .. } => Operator::Project(super::bindings::rebind(fields)),
+        Node::CrossKey { .. } => Operator::Project(super::bindings::cross_key()),
+        Node::EquijoinKey { keys, .. } => Operator::Project(super::bindings::key_by(keys)),
+        Node::Join { .. } => Operator::Join(join_map()),
+        Node::Partition { spec, .. } => Operator::Partition(partition_operator(spec, settings)),
+        Node::Output { .. } => Operator::Project(output(projected)),
+        Node::SetDistinct { columns, .. } => {
+            Operator::Group(super::group_cursor::distinct(columns))
         }
-        Node::Rebind { id, fields, .. } => (id, Operator::Project(super::bindings::rebind(fields))),
-        Node::CrossKey { id, .. } => (id, Operator::Project(super::bindings::cross_key())),
-        Node::EquijoinKey { id, keys, .. } => {
-            (id, Operator::Project(super::bindings::key_by(keys)))
-        }
-        Node::Join { id, .. } => (id, Operator::Join(join_map())),
-        Node::Partition { id, spec, .. } => {
-            (id, Operator::Partition(partition_operator(spec, settings)))
-        }
-        Node::Output { id, .. } => (id, Operator::Project(output(projected))),
-        Node::SetDistinct { id, columns, .. } => {
-            (id, Operator::Group(super::group_cursor::distinct(columns)))
-        }
-        Node::RightCounts { id, .. } => {
-            (id, Operator::Statistics(super::membership_counts::counts()))
-        }
-        Node::RightPresence { id, .. } => {
-            (id, Operator::Project(super::membership_counts::presence()))
-        }
-        Node::Existence { id, anti, .. } => {
-            (id, Operator::Group(super::group_cursor::existence(*anti)))
-        }
-        Node::LeftJoinInput { id, spec, .. } => {
-            (id, Operator::Project(super::left_join::input(spec)))
-        }
-        Node::LeftJoin { id, spec, .. } => {
-            (id, Operator::Group(super::group_cursor::left_join(spec)))
-        }
+        Node::RightCounts { .. } => Operator::Statistics(super::membership_counts::counts()),
+        Node::RightPresence { .. } => Operator::Project(super::membership_counts::presence()),
+        Node::Existence { anti, .. } => Operator::Group(super::group_cursor::existence(*anti)),
+        Node::LeftJoinInput { spec, .. } => Operator::Project(super::left_join::input(spec)),
+        Node::LeftJoin { spec, .. } => Operator::Group(super::group_cursor::left_join(spec)),
         Node::DistinctInput { .. }
         | Node::DistinctCounts { .. }
         | Node::DistinctMembership { .. }
@@ -124,39 +109,37 @@ fn bind<'a>(
         | Node::OrderedFinalize { .. } => return bind_ordered(node),
     })
 }
-fn bind_statistics<'a>(
-    node: &'a Node,
+fn bind_statistics(
+    node: &Node,
     native: &std::sync::Arc<crate::engine::value::NativeBudget>,
-) -> Option<Bound<'a>> {
+) -> Option<Operator<Key, Row>> {
     Some(match node {
-        Node::DistinctInput { id, spec, .. } => {
-            (id, Operator::Expand(super::distinct_statistics::input(spec)))
+        Node::DistinctInput { spec, .. } => {
+            Operator::Expand(super::distinct_statistics::input(spec))
         }
-        Node::DistinctCounts { id, spec, .. } => {
-            (id, Operator::Statistics(super::distinct_statistics::counts(spec)))
+        Node::DistinctCounts { spec, .. } => {
+            Operator::Statistics(super::distinct_statistics::counts(spec))
         }
-        Node::DistinctMembership { id, spec, .. } => {
-            (id, Operator::Project(super::distinct_statistics::membership(spec)))
+        Node::DistinctMembership { spec, .. } => {
+            Operator::Project(super::distinct_statistics::membership(spec))
         }
-        Node::Statistics { id, spec, .. } => {
-            (id, Operator::Statistics(super::statistics::operator(spec, native.clone())))
+        Node::Statistics { spec, .. } => {
+            Operator::Statistics(super::statistics::operator(spec, native.clone()))
         }
-        Node::Finalize { id, spec, .. } => {
-            (id, Operator::Project(super::statistics::finalize(spec, native.clone())))
+        Node::Finalize { spec, .. } => {
+            Operator::Project(super::statistics::finalize(spec, native.clone()))
         }
         _ => return None,
     })
 }
-fn bind_ordered(node: &Node) -> Option<Bound<'_>> {
+fn bind_ordered(node: &Node) -> Option<Operator<Key, Row>> {
     Some(match node {
-        Node::TopKInput { id, spec, .. } => (id, Operator::Project(super::topk::input(spec))),
-        Node::TopK { id, spec, .. } => (id, Operator::Ordered(super::topk::operator(spec))),
-        Node::OrderedInput { id, spec, .. } => (id, Operator::Expand(super::ordered::input(spec))),
-        Node::OrderedFirst { id, spec, .. } => (id, Operator::Ordered(super::ordered::first(spec))),
-        Node::OrderedGroup { id, .. } => (id, Operator::Project(super::ordered::group())),
-        Node::OrderedFinalize { id, spec, .. } => {
-            (id, Operator::Partition(super::ordered::finalize(spec)))
-        }
+        Node::TopKInput { spec, .. } => Operator::Project(super::topk::input(spec)),
+        Node::TopK { spec, .. } => Operator::Ordered(super::topk::operator(spec)),
+        Node::OrderedInput { spec, .. } => Operator::Expand(super::ordered::input(spec)),
+        Node::OrderedFirst { spec, .. } => Operator::Ordered(super::ordered::first(spec)),
+        Node::OrderedGroup { .. } => Operator::Project(super::ordered::group()),
+        Node::OrderedFinalize { spec, .. } => Operator::Partition(super::ordered::finalize(spec)),
         _ => return None,
     })
 }
@@ -252,50 +235,6 @@ fn map(computed: &[crate::compiler::scalar::Computed]) -> Project<Key, Row, Key,
         Ok(Some((key.clone(), mapped)))
     })
 }
-fn declaration(node: &Node, schema: &impl Fn(&str) -> String) -> plan::Node {
-    let (id, kind, inputs) = match node {
-        Node::Source { id, source } => (id, plan::Kind::Source, vec![format!("source_{source}")]),
-        Node::Filter { id, input, .. }
-        | Node::Map { id, input, .. }
-        | Node::Rebind { id, input, .. }
-        | Node::CrossKey { id, input }
-        | Node::EquijoinKey { id, input, .. }
-        | Node::Output { id, input }
-        | Node::PartitionBy { id, input, .. }
-        | Node::Finalize { id, input, .. }
-        | Node::TopKInput { id, input, .. }
-        | Node::LeftJoinInput { id, input, .. }
-        | Node::LookupInput { id, input, .. }
-        | Node::OrderedGroup { id, input }
-        | Node::DistinctMembership { id, input, .. }
-        | Node::PrefixInput { id, input, .. }
-        | Node::RightPresence { id, input } => (id, plan::Kind::Project, vec![input.clone()]),
-        Node::Union { id, left, right } => {
-            (id, plan::Kind::Union, vec![left.clone(), right.clone()])
-        }
-        Node::Expand { id, input, .. }
-        | Node::OrderedInput { id, input, .. }
-        | Node::DistinctInput { id, input, .. } => (id, plan::Kind::Expand, vec![input.clone()]),
-        Node::Statistics { id, input, .. }
-        | Node::DistinctCounts { id, input, .. }
-        | Node::PrefixStatistics { id, input, .. }
-        | Node::RightCounts { id, input } => (id, plan::Kind::Statistics, vec![input.clone()]),
-        Node::OrderedFirst { id, input, .. } | Node::TopK { id, input, .. } => {
-            (id, plan::Kind::Ordered, vec![input.clone()])
-        }
-        Node::OrderedFinalize { id, input, .. }
-        | Node::Partition { id, input, .. }
-        | Node::LeftJoin { id, input, .. }
-        | Node::SetDistinct { id, input, .. }
-        | Node::Existence { id, input, .. }
-        | Node::Lookup { id, input, .. } => (id, plan::Kind::Aggregate, vec![input.clone()]),
-        Node::Join { id, left, right } => (id, plan::Kind::Join, vec![left.clone(), right.clone()]),
-        Node::PrefixWindow { id, left, right, .. } => {
-            (id, plan::Kind::Window, vec![left.clone(), right.clone()])
-        }
-    };
-    plan::Node { id: id.clone(), kind, inputs, schema: schema(id) }
-}
 #[cfg(test)]
 pub(in crate::worker) fn plan(
     contract: &Contract,
@@ -317,7 +256,7 @@ fn declared_plan(
         anyhow::bail!("relational program must end in an output node");
     };
     let schema = |id: &str| format!("{revision}:{identity}:{id}");
-    let nodes: Vec<_> = ir.nodes.iter().map(|node| declaration(node, &schema)).collect();
+    let nodes: Vec<_> = ir.nodes.iter().map(|node| node.declaration(&schema)).collect();
     let sources = ir
         .nodes
         .iter()

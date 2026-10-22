@@ -103,7 +103,7 @@ pub(in crate::compiler::bind) fn lower_source_filter(
     let source = id.clone();
     let filter = "scoped_source_filter";
     for node in &mut relational.nodes {
-        rewrite(node, &|id| id.into(), &|input| {
+        node.rewrite(&|id| id.into(), &|input| {
             if input == source { filter.into() } else { input.into() }
         });
     }
@@ -129,8 +129,7 @@ pub(super) fn compose(inner: &mut Relational, outer: &mut Relational) -> Result<
         if matches!(node, Node::Source { .. }) {
             continue;
         }
-        rewrite(
-            &mut node,
+        node.rewrite(
             &|id| if id == "project" { id.into() } else { format!("{prefix}{id}") },
             &|edge| if edge == "source" { input.clone() } else { format!("{prefix}{edge}") },
         );
@@ -138,53 +137,4 @@ pub(super) fn compose(inner: &mut Relational, outer: &mut Relational) -> Result<
     }
     inner.output = outer.output.clone();
     Ok(())
-}
-pub(in crate::compiler::bind) fn rewrite(
-    node: &mut Node,
-    rename: &impl Fn(&str) -> String,
-    edge: &impl Fn(&str) -> String,
-) {
-    match node {
-        Node::Source { id, .. } => *id = rename(id),
-        Node::Join { id, left, right }
-        | Node::Union { id, left, right }
-        | Node::PrefixWindow { id, left, right, .. } => {
-            *id = rename(id);
-            *left = edge(left);
-            *right = edge(right);
-        }
-        Node::Filter { id, input, .. }
-        | Node::Expand { id, input, .. }
-        | Node::Map { id, input, .. }
-        | Node::Rebind { id, input, .. }
-        | Node::CrossKey { id, input }
-        | Node::EquijoinKey { id, input, .. }
-        | Node::LeftJoinInput { id, input, .. }
-        | Node::LeftJoin { id, input, .. }
-        | Node::SetDistinct { id, input, .. }
-        | Node::Existence { id, input, .. }
-        | Node::PrefixInput { id, input, .. }
-        | Node::PrefixStatistics { id, input, .. }
-        | Node::RightCounts { id, input }
-        | Node::RightPresence { id, input }
-        | Node::LookupInput { id, input, .. }
-        | Node::Lookup { id, input, .. }
-        | Node::Output { id, input }
-        | Node::PartitionBy { id, input, .. }
-        | Node::Partition { id, input, .. }
-        | Node::Statistics { id, input, .. }
-        | Node::DistinctInput { id, input, .. }
-        | Node::DistinctCounts { id, input, .. }
-        | Node::DistinctMembership { id, input, .. }
-        | Node::OrderedInput { id, input, .. }
-        | Node::OrderedFirst { id, input, .. }
-        | Node::TopKInput { id, input, .. }
-        | Node::TopK { id, input, .. }
-        | Node::OrderedGroup { id, input }
-        | Node::OrderedFinalize { id, input, .. }
-        | Node::Finalize { id, input, .. } => {
-            *id = rename(id);
-            *input = edge(input);
-        }
-    }
 }

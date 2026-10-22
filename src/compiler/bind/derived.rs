@@ -41,9 +41,7 @@ pub(super) fn scope(
         anyhow::bail!("scoped join requires final relational Output");
     };
     for node in &mut ir.nodes {
-        super::partition::composition::rewrite(node, &|id| format!("{prefix}{id}"), &|edge| {
-            format!("{prefix}{edge}")
-        });
+        node.rewrite(&|id| format!("{prefix}{id}"), &|edge| format!("{prefix}{edge}"));
     }
     let fields = ir
         .output
@@ -118,7 +116,7 @@ fn adapt_sources(ir: &mut Relational, offset: usize, contract: &Contract) -> Res
         // Nested remaps strictly increase source indices; bind both boundaries into the ID.
         let mapped = format!("{id}_local_{global}_{local}");
         for node in &mut ir.nodes {
-            super::partition::composition::rewrite(node, &|id| id.into(), &|edge| {
+            node.rewrite(&|id| id.into(), &|edge| {
                 if edge == id { mapped.clone() } else { edge.into() }
             });
         }
