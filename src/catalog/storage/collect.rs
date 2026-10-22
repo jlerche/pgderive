@@ -24,6 +24,8 @@ impl Default for GcLimits {
 /// Physical collection result; logical/source progress is never modified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Collection {
+    /// Another physical collector already owns this catalog schema's sweep.
+    AlreadyRunning,
     /// An unresolved upload reservation protects the whole namespace.
     UploadProtected,
     /// Completed idempotent deletion of unreferenced canonical immutable objects.
@@ -55,14 +57,31 @@ impl Catalog {
             limits.roots > 0 && limits.objects > 0 && limits.metadata_bytes > 0,
             "invalid GC limits"
         );
-        let Some(Snapshot { roots, sealed }) = snapshot(sql, self, limits).await? else {
+        let mut tx = sql
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
+            .start()
+            .await?;
+        let scope = format!("pgderive-object-collection:{}", self.schema);
+        let acquired: bool = tx
+            .query_one(
+                "SELECT pg_catalog.pg_try_advisory_xact_lock(pg_catalog.hashtextextended($1,0))",
+                &[&scope],
+            )
+            .await?
+            .try_get(0)?;
+        if !acquired {
+            tx.rollback().await?;
+            return Ok(Collection::AlreadyRunning);
+        }
+        let Some(Snapshot { roots, sealed }) = snapshot(&mut tx, self, limits).await? else {
+            tx.rollback().await?;
             return Ok(Collection::UploadProtected);
         };
         let retained = mark(&store, roots, limits.objects).await?;
         let sweep = candidates(&store, &retained, &sealed, limits.objects).await?;
         let deleted = sweep.candidates.len();
         delete_candidates(&store, sweep.candidates).await?;
-        let tx = sql.transaction().await?;
         lock(&tx, self, true).await?;
         retire(&tx, self, &sealed, &sweep.surviving).await?;
         tx.commit()
@@ -76,11 +95,11 @@ struct Snapshot {
     sealed: BTreeSet<String>,
 }
 async fn snapshot(
-    sql: &mut Client,
+    parent: &mut Transaction<'_>,
     catalog: &Catalog,
     limits: GcLimits,
 ) -> Result<Option<Snapshot>> {
-    let tx = sql.transaction().await?;
+    let tx = parent.transaction().await?;
     lock(&tx, catalog, true).await?;
     let uploading: bool = tx
         .query_one(
@@ -93,7 +112,7 @@ async fn snapshot(
         .await?
         .try_get(0)?;
     if uploading {
-        tx.commit().await?;
+        tx.rollback().await?;
         return Ok(None);
     }
     let metadata = tx.query_one(&format!("SELECT (SELECT COALESCE(SUM(octet_length(definition::text)+octet_length(checkpoint::text)),0) FROM {0}.pgderive_queries)+(SELECT COALESCE(SUM(octet_length(roots::text)),0) FROM {0}.pgderive_protections WHERE active),(SELECT COUNT(*) FROM {0}.pgderive_protections WHERE uploading AND NOT active)",catalog.schema),&[]).await?;
@@ -109,7 +128,9 @@ async fn snapshot(
     // write::stage accepts exact current roots or active fresh uploads only.
     // New read protections pin current membership under the same barrier.
     // Release the lifecycle lock before all object-store I/O.
-    tx.commit().await.context("GC snapshot transaction failed")?;
+    // Roll back this read-only savepoint to release its lifecycle lock while
+    // retaining the outer transaction's independent collector coordination.
+    tx.rollback().await.context("GC snapshot savepoint rollback failed")?;
     Ok(Some(Snapshot { roots, sealed }))
 }
 

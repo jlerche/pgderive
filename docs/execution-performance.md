@@ -31,7 +31,7 @@ state, active block pins and allocator overhead have separate accounting.
 
 Codec IDs include their domain and decoding parameters. A view is reused only
 with its original budget. Cold values and values from another budget decode
-transiently; persisted data contains no native views. After recovery, cold state
+transiently without an extra wrapper allocation; persisted data contains no native views. After recovery, cold state
 can decode repeatedly until execution replaces it with a newly produced value.
 Budget exhaustion follows the same canonical in-engine computation.
 
@@ -63,6 +63,9 @@ source position. Native caches and sizing summaries are disposable.
 
 ## Physical collection
 
+A nonblocking schema-wide collector lock coalesces concurrent requests. A
+read-only savepoint captures metadata under the lifecycle lock; rolling it back
+releases that lock while keeping collector coordination until sweep completion.
 The collector captures all committed and protected roots and the set of sealed
 upload namespaces under the catalog lifecycle barrier. Marking, listing and
 object deletion run after releasing that barrier. Retirement reacquires it and

@@ -48,7 +48,7 @@ impl<T> Value<T> {
         let Some(payload) = budget::retained(value, budget, overhead) else {
             return Self::from_canonical(canonical);
         };
-        Self { canonical, view: Some(Arc::new(View { codec, payload: payload.0 })) }
+        Self { canonical, view: Some(Arc::new(View { codec, payload })) }
     }
 }
 impl<T> Value<T> {
@@ -70,7 +70,7 @@ impl<T> Value<T> {
                 .payload
                 .clone()
                 .downcast::<budget::Charged<D>>()
-                .map(Decoded)
+                .map(Decoded::shared)
                 .map_err(|_| anyhow::anyhow!("native codec type mismatch"))?;
             if payload.belongs_to(budget) {
                 return Ok(payload);

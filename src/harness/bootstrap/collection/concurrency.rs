@@ -38,6 +38,7 @@ async fn paused(
         () = store.entered.notified() => {}
         () = tokio::time::sleep(Duration::from_secs(10)) => anyhow::bail!("GC mark pause timed out"),
     }
+    competing(sql, catalog, recovery).await?;
     let mut resurrection = graph.checkpoint()?;
     for (member, old) in resurrection.arrangements.iter_mut().zip(&stale.arrangements) {
         member.trace.generation =
@@ -80,6 +81,20 @@ async fn paused(
     );
     eprintln!(
         "MVP paused GC permits pin/publication, rejects sealed-root resurrection and preserves fresh uploads"
+    );
+    Ok(())
+}
+
+async fn competing(sql: &mut Client, catalog: &Catalog, recovery: &Recovery) -> Result<()> {
+    let result = timeout(
+        Duration::from_secs(5),
+        catalog.collect(sql, recovery.store.clone(), GcLimits::default()),
+    )
+    .await
+    .context("concurrent collection waited on object I/O")??;
+    ensure!(
+        result == crate::catalog::Collection::AlreadyRunning,
+        "concurrent collection was not coalesced"
     );
     Ok(())
 }

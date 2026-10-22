@@ -53,30 +53,43 @@ impl Drop for Reservation {
 }
 pub(super) struct Charged<T> {
     value: T,
-    reservation: Option<Reservation>,
+    reservation: Reservation,
 }
 /// An immutable decoded handle. The handle itself owns its memory reservation,
 /// including after its originating canonical row is evicted or mutated.
-pub struct Decoded<T>(pub(super) Arc<Charged<T>>);
-impl<T> Clone for Decoded<T> {
+pub struct Decoded<T>(DecodedValue<T>);
+enum DecodedValue<T> {
+    Transient(T),
+    Shared(Arc<Charged<T>>),
+}
+impl<T: Clone> Clone for Decoded<T> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        match &self.0 {
+            DecodedValue::Transient(value) => Self::transient(value.clone()),
+            DecodedValue::Shared(value) => Self::shared(value.clone()),
+        }
     }
 }
 impl<T> Deref for Decoded<T> {
     type Target = T;
     fn deref(&self) -> &T {
-        &self.0.value
+        match &self.0 {
+            DecodedValue::Transient(value) => value,
+            DecodedValue::Shared(value) => &value.value,
+        }
     }
 }
 impl<T> Decoded<T> {
-    /// Own a transient decoding without retaining it in canonical state.
+    /// Own a transient decoding inline, without a cache or wrapper allocation.
     #[must_use]
-    pub fn transient(value: T) -> Self {
-        Self(Arc::new(Charged { value, reservation: None }))
+    pub const fn transient(value: T) -> Self {
+        Self(DecodedValue::Transient(value))
+    }
+    pub(super) const fn shared(value: Arc<Charged<T>>) -> Self {
+        Self(DecodedValue::Shared(value))
     }
     pub(super) fn belongs_to(&self, budget: &Arc<NativeBudget>) -> bool {
-        self.0.reservation.as_ref().is_some_and(|permit| Arc::ptr_eq(&permit.budget, budget))
+        matches!(&self.0, DecodedValue::Shared(value) if Arc::ptr_eq(&value.reservation.budget, budget))
     }
 }
 pub(super) fn arc_bytes<T>() -> Option<usize> {
@@ -91,8 +104,8 @@ pub(super) fn retained<T>(
     value: T,
     budget: &Arc<NativeBudget>,
     heap_bytes: Option<usize>,
-) -> Option<Decoded<T>> {
+) -> Option<Arc<Charged<T>>> {
     let bytes = heap_bytes?.checked_add(arc_bytes::<Charged<T>>()?)?;
     let reservation = budget.reserve(bytes)?;
-    Some(Decoded(Arc::new(Charged { value, reservation: Some(reservation) })))
+    Some(Arc::new(Charged { value, reservation }))
 }
