@@ -9,8 +9,8 @@ type UncontendedSpan<'a, K, V> = Option<(usize, &'a [Entry<K, V>])>;
 /// Each read operation stages cursor positions, preserving retry on GET errors.
 #[derive(Clone)]
 pub struct MergedCursor<K: BatchData, V: BatchData> {
-    cursors: Vec<Cursor<K, V>>,
-    row: Option<Entry<K, V>>,
+    pub(super) cursors: Vec<Cursor<K, V>>,
+    pub(super) row: Option<Entry<K, V>>,
 }
 
 impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
@@ -28,7 +28,7 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
     pub fn current(&self) -> Option<(&K, &V, i64)> {
         self.row.as_ref().map(|((key, val), weight)| (key, val, *weight))
     }
-    async fn find(&mut self) -> Result<()> {
+    pub(super) async fn find(&mut self) -> Result<()> {
         loop {
             let tuple = self
                 .cursors
@@ -144,7 +144,7 @@ impl<K: BatchData, V: BatchData> BatchCursor for MergedCursor<K, V> {
 /// It cannot be reseeked to another key after excluding irrelevant runs.
 #[derive(Clone)]
 pub struct KeyCursor<K: BatchData, V: BatchData> {
-    cursor: MergedCursor<K, V>,
+    pub(super) cursor: MergedCursor<K, V>,
 }
 impl<K: BatchData, V: BatchData> KeyCursor<K, V> {
     pub(super) async fn open(runs: &[Run<K, V>], key: &K) -> Result<Self> {
@@ -201,36 +201,6 @@ impl<K: BatchData, V: BatchData> RangeCursor<K, V> {
     /// Read/integrity failures preserve the old position for retry.
     pub async fn advance(&mut self) -> Result<()> {
         self.cursor.advance().await
-    }
-}
-
-/// Batch of key probes sharing a pinned snapshot and the current key's run heads.
-/// Repeated identities under one key reuse decoded heads without another GET.
-pub struct KeyProbes<K: BatchData, V: BatchData> {
-    snapshot: super::TraceSnapshot<K, V>,
-    current: Option<LastProbe<K, V>>,
-}
-struct LastProbe<K: BatchData, V: BatchData> {
-    key: K,
-    cursor: KeyCursor<K, V>,
-}
-impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
-    pub(super) const fn new(snapshot: super::TraceSnapshot<K, V>) -> Self {
-        Self { snapshot, current: None }
-    }
-    /// Pin a fresh cursor for one key, reusing the most recent key's run heads.
-    ///
-    /// # Errors
-    /// Returns selected-block read, integrity, or arithmetic errors.
-    pub async fn cursor(&mut self, key: &K) -> Result<KeyCursor<K, V>> {
-        if let Some(current) = &self.current
-            && &current.key == key
-        {
-            return Ok(current.cursor.clone());
-        }
-        let cursor = self.snapshot.key_cursor(key).await?;
-        self.current = Some(LastProbe { key: key.clone(), cursor: cursor.clone() });
-        Ok(cursor)
     }
 }
 

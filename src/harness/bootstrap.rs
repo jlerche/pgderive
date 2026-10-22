@@ -1,6 +1,7 @@
 mod activation;
 mod codec;
 mod collection;
+mod layout;
 mod ledger;
 mod maintenance;
 use super::{Fixture, apply, connect, source_state};
@@ -82,6 +83,7 @@ async fn finish_source(
     advanced_slot(sql, config, catalog, plan).await?;
     sql.query_one("SELECT pg_drop_replication_slot($1)", &[&config.replication.slot]).await?;
     codec::check(sql, fixture, config).await?;
+    layout::check(sql, fixture, &contract.identity).await?;
     Ok(())
 }
 async fn restore(

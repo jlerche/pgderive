@@ -4,7 +4,7 @@ use crate::engine::{
     Batch,
     execution::{Consolidator, Limits},
     reader::BatchData,
-    trace::TraceSnapshot,
+    trace::{KeyProbes, TraceSnapshot},
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
@@ -76,8 +76,9 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
             Ok(())
         })?;
         let mut changes = Consolidator::new(limits)?;
+        let mut probes = prior.probes();
         for (key, mut total) in totals {
-            let before = read(prior, &key).await?;
+            let before = read(&mut probes, &key).await?;
             if let Some(before) = &before {
                 let values = (self.decode)(before)?;
                 ensure!(values.len() == self.width, "persisted statistics width mismatch");
@@ -100,10 +101,10 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
     }
 }
 async fn read<K: BatchData, V: BatchData>(
-    prior: &TraceSnapshot<K, V>,
+    probes: &mut KeyProbes<K, V>,
     key: &K,
 ) -> Result<Option<V>> {
-    let mut cursor = prior.key_cursor(key).await?;
+    let mut cursor = probes.cursor(key).await?;
     let Some((_, value, weight)) = cursor.current() else {
         return Ok(None);
     };

@@ -172,3 +172,63 @@ async fn different_run_layouts_and_cache_budgets_preserve_full_identity() -> Res
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn grouped_probes_reuse_blocks_and_retry_without_losing_heads() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let cache = Arc::new(BlockCache::new(0, 0));
+    let batch = Batch::from_updates((0..12).map(|n| ((n, n), 1)))?;
+    let object = object(store.clone(), cache.clone(), &batch, 4).await?;
+    let trace = TraceSnapshot::from_runs(vec![Run::Object(object.clone())], 1, 1)?;
+    let mut probes = trace.probes();
+    assert_eq!(rows(probes.cursor(&0).await?).await?, Batch::from_updates([((0, 0), 1)])?);
+    let before = cache.stats()?;
+    for key in [3, 1, 2] {
+        assert_eq!(
+            rows(probes.cursor(&key).await?).await?,
+            Batch::from_updates([((key, key), 1)])?
+        );
+    }
+    assert_eq!(cache.stats()?.misses, before.misses);
+    let path = Path::from(object.block_path(1).context("missing block")?);
+    let bytes = store.get(&path).await?.bytes().await?;
+    store.delete(&path).await?;
+    assert!(probes.cursor(&5).await.is_err());
+    assert_eq!(rows(probes.cursor(&1).await?).await?, Batch::from_updates([((1, 1), 1)])?);
+    store.put(&path, bytes.into()).await?;
+    assert_eq!(rows(probes.cursor(&5).await?).await?, Batch::from_updates([((5, 5), 1)])?);
+    assert_eq!(rows(probes.cursor(&9).await?).await?, Batch::from_updates([((9, 9), 1)])?);
+    assert!(probes.cursor(&20).await?.current().is_none());
+    assert_eq!(rows(probes.cursor(&0).await?).await?, Batch::from_updates([((0, 0), 1)])?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn batched_tuple_validation_reads_each_selected_block_once() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let cache = Arc::new(BlockCache::new(0, 0));
+    let batch = Batch::from_updates((0..24).map(|n| ((n / 8, n), 2)))?;
+    let object = object(store.clone(), cache.clone(), &batch, 4).await?;
+    let trace = TraceSnapshot::from_runs(vec![Run::Object(object.clone())], 1, 1)?;
+    let delta = Batch::from_updates((0..16).map(|n| ((n / 8, n), -2)))?;
+    store.delete(&Path::from(object.block_path(5).context("missing block")?)).await?;
+    let before = cache.stats()?.misses;
+    trace.validate_bag_delta(&delta).await?;
+    assert_eq!(cache.stats()?.misses - before, 4);
+    assert!(trace.validate_bag_delta(&Batch::from_updates([((0, 1), -3)])?).await.is_err());
+    assert!(trace.validate_bag_delta(&Batch::from_updates([((0, 99), -1)])?).await.is_err());
+    assert!(trace.validate_delta(&Batch::from_updates([((2, 23), 1)])?).await.is_err());
+    trace.validate_bag_delta(&Batch::from_updates([((0, 1), -2)])?).await?;
+    let trace = TraceSnapshot::from_runs(
+        vec![
+            Run::Memory(Arc::new(Batch::from_updates([((1, 1), i64::MAX)])?)),
+            Run::Memory(Arc::new(Batch::from_updates([((1, 1), i64::MAX)])?)),
+            Run::Memory(Arc::new(Batch::from_updates([((1, 1), -i64::MAX)])?)),
+        ],
+        1,
+        1,
+    )?;
+    trace.validate_bag_delta(&Batch::from_updates([((1, 1), -i64::MAX)])?).await?;
+    assert!(trace.validate_delta(&Batch::from_updates([((1, 1), 1)])?).await.is_err());
+    Ok(())
+}

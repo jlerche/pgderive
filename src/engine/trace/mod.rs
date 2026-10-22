@@ -1,13 +1,15 @@
 //! Immutable trace generations, weighted merging and pinned membership.
 mod manifest;
 mod merged;
+mod probes;
 use super::{
     Batch, BatchBuilder,
     reader::{BatchData, BatchReader, Cursor, ObjectBatch},
 };
 use anyhow::{Context, Result, ensure};
 pub use manifest::Manifest;
-pub use merged::{KeyCursor, KeyProbes, MergedCursor, RangeCursor};
+pub use merged::{KeyCursor, MergedCursor, RangeCursor};
+pub use probes::KeyProbes;
 use std::sync::Arc;
 
 /// One immutable run, in memory or in object storage.
@@ -159,12 +161,20 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         self.validate_coefficients(delta, true).await
     }
     async fn validate_coefficients(&self, delta: &Batch<K, V>, nonnegative: bool) -> Result<()> {
-        for (tuple, weight) in delta.iter() {
-            let next = self
-                .tuple_weight(tuple)
-                .await?
-                .checked_add(*weight)
-                .context("final state coefficient overflow")?;
+        let mut totals = vec![num_bigint::BigInt::from(0); delta.iter().count()];
+        for run in &self.runs {
+            match run {
+                Run::Memory(batch) => {
+                    for ((tuple, _), total) in delta.iter().zip(&mut totals) {
+                        *total += batch.weight(tuple);
+                    }
+                }
+                Run::Object(batch) => batch.accumulate_weights(delta, &mut totals).await?,
+            }
+        }
+        for ((_, weight), total) in delta.iter().zip(totals) {
+            let prior = i64::try_from(total).context("final trace coefficient overflow")?;
+            let next = prior.checked_add(*weight).context("final state coefficient overflow")?;
             ensure!(!nonnegative || next >= 0, "negative full-tuple input multiplicity");
         }
         Ok(())

@@ -222,3 +222,23 @@ failure rejects the unpublished candidate without changing its predecessor.
 Only new-row sizing moves into arrangement staging; the final accounting phase
 now adds cached arrangement totals. Checks for full-tuple identity, multiplicity,
 logical equivalence during compaction and durable publication remain independent.
+
+## Batched affected-tuple and source-layout probes
+
+Full-tuple delta validation visits each immutable run once for the affected batch.
+Object probes retain the selected verified block while checking its affected
+identities, then release it on a block change. Exact coefficients are summed
+across all runs before narrowing to i64, followed by the unchanged delta overflow
+and bag nonnegativity checks. Aggregate group probes reuse one run head per run
+across keys; current and returned cursors can pin additional blocks. Returned
+cursors remain independent and failed reads leave the
+previous probe boundary intact. Neither path scans unrelated groups or treats a
+navigation key as tuple identity.
+
+Source publication still acquires ACCESS SHARE locks on every bound table and
+holds them through sink/progress commit. One typed catalog query then reads
+cluster/timeline/database identity, publication flags and membership, table
+properties, and all column contracts from the same statement snapshot. All
+previous source restrictions remain; semantic catalog verification remains an
+initialization operation. Immutable object publication, WAL replay boundaries,
+synchronous PostgreSQL commit and checkpoint-only acknowledgement are unchanged.

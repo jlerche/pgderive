@@ -33,10 +33,25 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
     }
 
     pub(crate) async fn object_key(batch: ObjectBatch<K, V>, key: &K) -> Result<Option<Self>> {
+        Self::object_key_reusing(batch, key, None).await
+    }
+    pub(crate) async fn object_key_reusing(
+        batch: ObjectBatch<K, V>,
+        key: &K,
+        previous: Option<&Self>,
+    ) -> Result<Option<Self>> {
         let Some(block) = batch.key_block(key) else {
             return Ok(None);
         };
-        let rows = batch.read(block).await?;
+        let rows = match previous {
+            Some(previous)
+                if previous.block == block
+                    && matches!(&previous.source, Source::Object(old) if old.reference() == batch.reference()) =>
+            {
+                previous.rows.clone()
+            }
+            _ => batch.read(block).await?,
+        };
         let position = rows.partition_point(|row| row.0.0 < *key);
         Ok(Some(Self {
             source: Source::Object(batch),

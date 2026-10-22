@@ -1,5 +1,6 @@
 //! Verified source registration and slot-consistent bootstrap primitives.
 mod contract;
+mod layout;
 pub use crate::semantics::Environment;
 mod copy;
 pub use copy::copy;

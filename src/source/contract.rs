@@ -101,14 +101,13 @@ impl Contract {
         sql: &tokio_postgres::Transaction<'_>,
     ) -> Result<()> {
         self.validate()?;
-        for relation in &self.relations {
-            sql.batch_execute(&format!(
-                "LOCK TABLE {}.{} IN ACCESS SHARE MODE",
-                quote(&relation.schema),
-                quote(&relation.table)
-            ))
-            .await?;
-        }
+        let tables = self
+            .relations
+            .iter()
+            .map(|relation| format!("{}.{}", quote(&relation.schema), quote(&relation.table)))
+            .collect::<Vec<_>>()
+            .join(",");
+        sql.batch_execute(&format!("LOCK TABLE {tables} IN ACCESS SHARE MODE")).await?;
         let current = inspect_layout(sql, &self.identity, &self.publication, &self.slot).await?;
         ensure!(current == self.relations, "source schema/publication contract changed");
         Ok(())
@@ -200,74 +199,13 @@ async fn inspect_layout(
         crate::configuration::identifier(publication) && crate::configuration::identifier(slot),
         "invalid source publication/slot"
     );
-    identity.verify_sql(sql).await?;
-    let row = sql.query_one("SELECT current_database(),puballtables,pubinsert,pubupdate,pubdelete,EXISTS(SELECT 1 FROM pg_publication_namespace pn WHERE pn.pnpubid=p.oid),pubtruncate FROM pg_publication p WHERE pubname=$1", &[&publication]).await?;
-    ensure!(
-        row.try_get::<_, String>(0)? == identity.database
-            && !row.try_get::<_, bool>(1)?
-            && row.try_get::<_, bool>(2)?
-            && row.try_get::<_, bool>(3)?
-            && row.try_get::<_, bool>(4)?
-            && !row.try_get::<_, bool>(5)?
-            && row.try_get::<_, bool>(6)?,
-        "unsupported source database/publication scope"
-    );
-    let rows = sql.query("SELECT c.oid,n.nspname,c.relname,c.relkind::text,c.relpersistence::text,c.relreplident::text,pr.prattrs IS NULL AND pr.prqual IS NULL,EXISTS(SELECT 1 FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid) FROM pg_publication_rel pr JOIN pg_publication p ON p.oid=pr.prpubid JOIN pg_class c ON c.oid=pr.prrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE p.pubname=$1 ORDER BY c.oid", &[&publication]).await?;
-    let mut relations = Vec::new();
-    for row in rows {
-        ensure!(
-            row.try_get::<_, String>(3)? == "r"
-                && row.try_get::<_, String>(4)? == "p"
-                && row.try_get::<_, String>(5)? == "f"
-                && row.try_get::<_, bool>(6)?
-                && !row.try_get::<_, bool>(7)?,
-            "unsupported source table or replica identity"
-        );
-        let oid = row.try_get(0)?;
-        relations.push(Relation {
-            oid,
-            schema: row.try_get(1)?,
-            table: row.try_get(2)?,
-            columns: columns(sql, oid).await?,
-        });
-    }
-    ensure!(!relations.is_empty(), "source publication is empty");
-    Ok(relations)
-}
-async fn columns(sql: &(impl GenericClient + Sync), oid: u32) -> Result<Vec<Column>> {
-    let rows = sql.query("SELECT a.attnum,a.attname,a.atttypid,a.atttypmod,a.attnotnull,a.attcollation,a.attgenerated::text,EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=a.attrelid AND i.indisprimary AND a.attnum=ANY(i.indkey)),COALESCE(co.collisdeterministic,true) FROM pg_attribute a LEFT JOIN pg_collation co ON co.oid=a.attcollation WHERE a.attrelid=$1 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum", &[&oid]).await?;
-    let mut columns = Vec::new();
-    for row in rows {
-        let oid = row.try_get(2)?;
-        ensure!(
-            matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184 | 1700)
-                && row.try_get::<_, String>(6)?.is_empty()
-                && row.try_get::<_, bool>(8)?,
-            "unsupported source type/generated column/nondeterministic collation"
-        );
-        columns.push(Column {
-            position: row.try_get(0)?,
-            name: row.try_get(1)?,
-            oid,
-            modifier: row.try_get(3)?,
-            nullable: !row.try_get::<_, bool>(4)?,
-            primary: row.try_get(7)?,
-            collation: row.try_get(5)?,
-        });
-    }
-    ensure!(
-        !columns.is_empty()
-            && columns.iter().any(|column| column.primary)
-            && columns.iter().filter(|column| column.primary).all(|column| !column.nullable),
-        "source requires nonnullable primary key columns"
-    );
-    Ok(columns)
+    super::layout::inspect(sql, identity, publication).await
 }
 
 pub(super) fn quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
-fn validate_columns(columns: &[Column]) -> Result<()> {
+pub(super) fn validate_columns(columns: &[Column]) -> Result<()> {
     ensure!(
         !columns.is_empty() && columns.iter().any(|column| column.primary),
         "source requires a primary key"

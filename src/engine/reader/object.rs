@@ -211,6 +211,27 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let rows = self.read(ordinal).await?;
         Ok(rows.binary_search_by(|row| row.0.cmp(tuple)).ok().map_or(0, |index| rows[index].1))
     }
+    pub(crate) async fn accumulate_weights(
+        &self,
+        delta: &Batch<K, V>,
+        totals: &mut [num_bigint::BigInt],
+    ) -> Result<()> {
+        let mut loaded = None;
+        for ((tuple, _), total) in delta.iter().zip(totals) {
+            let ordinal = self.blocks.partition_point(|block| block.last < *tuple);
+            if self.blocks.get(ordinal).is_none_or(|block| block.first > *tuple) {
+                continue;
+            }
+            if loaded.as_ref().is_none_or(|(block, _)| *block != ordinal) {
+                loaded = Some((ordinal, self.read(ordinal).await?));
+            }
+            let (_, rows) = loaded.as_ref().context("missing selected tuple block")?;
+            if let Ok(index) = rows.binary_search_by(|row| row.0.cmp(tuple)) {
+                *total += rows[index].1;
+            }
+        }
+        Ok(())
+    }
     pub(super) fn key_block(&self, key: &K) -> Option<usize> {
         let ordinal = self.blocks.partition_point(|block| block.last.0 < *key);
         self.blocks.get(ordinal).filter(|block| block.first.0 <= *key).map(|_| ordinal)
