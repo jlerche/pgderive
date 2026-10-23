@@ -53,9 +53,6 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
         }
     }
 
-    pub(crate) async fn object_key(batch: ObjectBatch<K, V>, key: &K) -> Result<Option<Self>> {
-        Self::object_key_reusing(batch, key, None).await
-    }
     pub(crate) async fn object_key_reusing(
         batch: ObjectBatch<K, V>,
         key: &K,

@@ -251,3 +251,65 @@ async fn bag_proofs_are_bound_to_exact_immutable_roots_and_batches() -> Result<(
     assert_eq!(first.time(), 1);
     Ok(())
 }
+
+#[tokio::test(start_paused = true)]
+async fn cold_run_heads_overlap_bounded_gets_and_cancel_without_advancing_probes() -> Result<()> {
+    use std::{sync::atomic::Ordering, time::Duration};
+    let mut store = crate::engine::tests::store::Store::unpaced();
+    store.read_delay = Duration::from_millis(10);
+    let store = Arc::new(store);
+    let cache = Arc::new(BlockCache::new(0, 0));
+    let mut runs = Vec::new();
+    for n in 0..20 {
+        let batch = Batch::from_updates([((1, n), 1), ((2, n), -1)])?;
+        runs.push(Run::Object(object(store.clone(), cache.clone(), &batch, 1).await?));
+    }
+    let snapshot = TraceSnapshot::from_runs(runs, 1, 1)?;
+    let started = tokio::time::Instant::now();
+    let actual = rows(snapshot.key_cursor(&1).await?).await?;
+    assert_eq!(actual, Batch::from_updates((0..20).map(|n| ((1, n), 1)))?);
+    assert_eq!(store.read_peak.load(Ordering::SeqCst), 8);
+    assert_eq!(store.read_active.load(Ordering::SeqCst), 0);
+    assert_eq!(started.elapsed(), Duration::from_millis(30));
+    let mut probes = snapshot.probes();
+    let before = rows(probes.cursor(&1).await?).await?;
+    assert!(tokio::time::timeout(Duration::from_millis(1), probes.cursor(&2)).await.is_err());
+    assert_eq!(store.read_active.load(Ordering::SeqCst), 0);
+    let reads = store.reads.load(Ordering::SeqCst);
+    assert_eq!(rows(probes.cursor(&1).await?).await?, before);
+    assert_eq!(store.reads.load(Ordering::SeqCst), reads);
+    let started = tokio::time::Instant::now();
+    assert_eq!(
+        rows(probes.cursor(&2).await?).await?,
+        Batch::from_updates((0..20).map(|n| ((2, n), -1)))?
+    );
+    assert_eq!(started.elapsed(), Duration::from_millis(30));
+    assert_eq!(store.read_active.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_fetches_deduplicate_storage_without_deduplicating_run_weights() -> Result<()> {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let cache = Arc::new(BlockCache::new(0, 0));
+    let batch = Batch::from_updates([((1, 2), 2)])?;
+    let data = object(store.clone(), cache.clone(), &batch, 1).await?;
+    let trace = TraceSnapshot::from_runs(vec![Run::Object(data.clone()); 20], 1, 1)?;
+    let before = store.reads.load(Ordering::SeqCst);
+    assert_eq!(rows(trace.key_cursor(&1).await?).await?, Batch::from_updates([((1, 2), 40)])?);
+    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 1);
+    let isolated = object(store.clone(), Arc::new(BlockCache::new(0, 0)), &batch, 1).await?;
+    let trace =
+        TraceSnapshot::from_runs(vec![Run::Object(data.clone()), Run::Object(isolated)], 1, 1)?;
+    let before = store.reads.load(Ordering::SeqCst);
+    assert_eq!(rows(trace.key_cursor(&1).await?).await?, Batch::from_updates([((1, 2), 4)])?);
+    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 2);
+    let other: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let damaged = object(other.clone(), cache, &batch, 1).await?;
+    assert_eq!(damaged.reference(), data.reference());
+    crate::engine::tests::store::corrupt_block(other.as_ref(), &damaged, 0).await?;
+    let trace = TraceSnapshot::from_runs(vec![Run::Object(data), Run::Object(damaged)], 1, 1)?;
+    assert!(trace.key_cursor(&1).await.is_err());
+    Ok(())
+}

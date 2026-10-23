@@ -21,6 +21,7 @@ type Bag = BTreeMap<Cells, i64>;
 #[serde(deny_unknown_fields)]
 struct Suite {
     version: u32,
+    limits: crate::engine::execution::Limits,
     cases: Vec<Case>,
 }
 #[derive(Deserialize)]
@@ -117,11 +118,12 @@ fn integrate(bag: &mut Bag, rows: &super::ProjectedBag) -> Result<()> {
     }
     Ok(())
 }
-async fn run(case: Case) -> Result<serde_json::Value> {
+async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<serde_json::Value> {
     let native = native();
     let compiled = crate::compiler::compile(&case.sql, &native)?;
     let mut settings = settings();
     settings.block_rows = 4096;
+    settings.limits = limits.validate()?;
     let store = Arc::new(crate::engine::tests::store::Store::unpaced());
     settings.store = store.clone();
     let mut query = build(&native, &compiled, &settings)?;
@@ -192,7 +194,7 @@ async fn fast_replay() -> Result<()> {
     let suite = parse(&text)?;
     let mut reports = Vec::new();
     for case in suite.cases {
-        reports.push(run(case).await?);
+        reports.push(run(case, suite.limits).await?);
     }
     if let Some(path) = std::env::var_os("PGDERIVE_FAST_REPORT") {
         std::fs::write(path, serde_json::to_vec_pretty(&reports)?)?;
@@ -236,7 +238,7 @@ async fn wrong_oracle_is_rejected() -> Result<()> {
     let mut suite = parse(include_str!("../../../tests/fixtures/fast-replay.json"))?;
     let mut case = suite.cases.remove(0);
     case.steps.last_mut().context("fixture missing steps")?.expected = Some(vec![]);
-    let error = run(case).await.err().context("wrong oracle unexpectedly passed")?;
+    let error = run(case, suite.limits).await.err().context("wrong oracle unexpectedly passed")?;
     assert!(error.to_string().contains("independent application oracle"));
     Ok(())
 }

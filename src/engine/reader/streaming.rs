@@ -9,7 +9,7 @@ use std::sync::Arc;
 // A point read decodes a complete block. Bound its ordinary JSON payload so cache
 // misses do not deserialize thousands of unrelated wide rows. A single larger
 // row remains valid up to the caller's hard block budget.
-pub(super) const TARGET_BLOCK_BYTES: usize = 128 * 1024;
+pub(super) const TARGET_BLOCK_BYTES: usize = 64 * 1024;
 
 /// Fixed encoded-byte and entry budgets for streaming immutable state output.
 ///

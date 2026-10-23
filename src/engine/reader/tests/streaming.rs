@@ -180,7 +180,7 @@ async fn borrowed_spans_share_decodes_preserve_restrictions_and_stream_objects()
     let second = object.cursor().await?;
     assert_eq!(first.current_span().as_ptr(), second.current_span().as_ptr());
     assert_eq!(cache.stats()?.pins, 2);
-    let mut restricted = Cursor::object_key(object.clone(), &1)
+    let mut restricted = Cursor::object_key_reusing(object.clone(), &1, None)
         .await?
         .ok_or_else(|| anyhow::anyhow!("missing key"))?;
     assert!(restricted.current_span().iter().all(|row| row.0.0 == 1));

@@ -63,7 +63,7 @@ including 255 keys already removed by the first attempt. This measures request
 amplification, not cloud latency or capacity. The durable object format is unchanged.
 
 Immutable blocks use canonical full-tuple weighted JSON compressed independently
-with Zstd level 3. The writer targets 128 KiB decoded JSON per block and packs
+with Zstd level 3. The writer targets 64 KiB decoded JSON per block and packs
 compressed blocks into `pgderive/pack/<sha256>` objects, targeting 4 MiB per
 pack. Roots remain JSON (`pgderive/batch/<sha256>`), containing pack addresses
 and per-block byte ranges, hashes and tuple fences. Reads fetch and authenticate

@@ -95,6 +95,13 @@ def test_binary(output, release):
     return binaries[0]
 
 
+def growth_limits(rows):
+    # Preloading wide aggregate statistics can emit many identities per group.
+    # Raise only fixture output guards; cache, spill and per-update budgets stay real.
+    return {'output_entries': max(250_000, rows * 16),
+            'output_bytes': max(64 * 1024 * 1024, rows * 4096)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=pathlib.Path, required=True)
@@ -108,8 +115,8 @@ def main():
     parser.add_argument('--replay', type=pathlib.Path)
     parser.add_argument('--worker', type=pathlib.Path)
     args = parser.parse_args()
-    if args.seeds < 1 or args.repeats < 1 or any(not 1 <= rows <= 100000 for rows in args.state_rows):
-        parser.error('Positive seeds/repeats and state rows in [1,100000] required')
+    if args.seeds < 1 or args.repeats < 1 or any(not 1 <= rows <= 262144 for rows in args.state_rows):
+        parser.error('Positive seeds/repeats and state rows in [1,262144] required')
     if args.warmup < 0 or args.updates < 1:
         parser.error('Nonnegative warmup and positive measured updates required')
     output = args.output.resolve()
@@ -155,11 +162,12 @@ def main():
                 for index, trace in enumerate(raw):
                     save(output / f'application-trace-{index}.json', trace)
             suite = output / 'replay.json'
-            suite.write_text(json.dumps({'version': 1, 'cases': cases}, ensure_ascii=False, separators=(',', ':')) + '\n')
+            limits = growth_limits(max(args.state_rows)) if args.mode == 'growth' else {}
+            suite.write_text(json.dumps({'version': 1, 'limits': limits, 'cases': cases}, ensure_ascii=False, separators=(',', ':')) + '\n')
             report['trace_sha256'] = sha256(suite)
             env = dict(os.environ, PGDERIVE_FAST_REPLAY=str(suite), PGDERIVE_FAST_REPORT=str(output / 'engine.json'))
-            report['steps'].append(execute([binary, REPLAY, '--exact', '--nocapture'], output, 'replay', env))
-            validate_tests(output/'replay.log', {REPLAY})
+            report['steps'].append(execute([binary, REPLAY, '--exact', '--nocapture'], output, 'engine-replay', env))
+            validate_tests(output/'engine-replay.log', {REPLAY})
             validate_report(output/'engine.json', cases)
         report['passed'] = True
     except BaseException as error:

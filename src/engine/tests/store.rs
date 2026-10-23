@@ -20,6 +20,21 @@ pub struct Store {
     pub(crate) peak: AtomicUsize,
     pub(crate) fail_at: Option<usize>,
     unpaced: bool,
+    pub(crate) read_delay: std::time::Duration,
+    pub(crate) read_active: AtomicUsize,
+    pub(crate) read_peak: AtomicUsize,
+}
+struct InFlight<'a>(&'a AtomicUsize);
+impl<'a> InFlight<'a> {
+    fn enter(active: &'a AtomicUsize, peak: &AtomicUsize) -> Self {
+        peak.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+        Self(active)
+    }
+}
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 impl Store {
     pub fn unpaced() -> Self {
@@ -65,6 +80,10 @@ impl ObjectStore for Store {
             self.range_start.store(range.start, Ordering::SeqCst);
             self.range_end.store(range.end, Ordering::SeqCst);
             self.range_bytes.fetch_add(range.end - range.start, Ordering::SeqCst);
+            if !self.read_delay.is_zero() {
+                let _in_flight = InFlight::enter(&self.read_active, &self.read_peak);
+                tokio::time::sleep(self.read_delay).await;
+            }
         }
         self.inner.get_opts(path, opts).await
     }

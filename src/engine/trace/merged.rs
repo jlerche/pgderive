@@ -147,17 +147,6 @@ pub struct KeyCursor<K: BatchData, V: BatchData> {
     pub(super) cursor: MergedCursor<K, V>,
 }
 impl<K: BatchData, V: BatchData> KeyCursor<K, V> {
-    pub(super) async fn open(runs: &[Run<K, V>], key: &K) -> Result<Self> {
-        let mut cursors = Vec::new();
-        for run in runs {
-            if let Some(cursor) = run.cursor_for_key(key).await? {
-                cursors.push(cursor);
-            }
-        }
-        let mut cursor = MergedCursor { cursors, row: None };
-        cursor.find().await?;
-        Ok(Self { cursor })
-    }
     /// Current full weighted identity, restricted to the probed key.
     #[must_use]
     pub fn current(&self) -> Option<(&K, &V, i64)> {

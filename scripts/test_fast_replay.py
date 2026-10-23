@@ -22,7 +22,7 @@ class FastReplayTests(unittest.TestCase):
 
     def test_exported_default_fixture_is_reproducible(self):
         actual = json.loads((pathlib.Path(__file__).parents[1]/'tests/fixtures/fast-replay.json').read_text())
-        self.assertEqual(actual, {'version': 1, 'cases': [export(t) for t in traces([1], transactions=8)]})
+        self.assertEqual(actual, {'version': 1, 'limits': {}, 'cases': [export(t) for t in traces([1], transactions=8)]})
 
     def test_weighted_changes_match_independent_full_snapshot_difference(self):
         for trace in traces(range(3)):
@@ -49,6 +49,11 @@ class FastReplayTests(unittest.TestCase):
             {'table':'entry', 'kind':'upsert', 'row':{'id':2, 'account_id':1, 'amount':3}},
             {'table':'entry', 'kind':'delete', 'id':2}]}
         self.assertEqual(delta(source, transaction), [])
+
+    def test_growth_limits_scale_only_output_guards(self):
+        from fast_validation import growth_limits
+        self.assertEqual(growth_limits(1000), {'output_entries':250000, 'output_bytes':67108864})
+        self.assertEqual(growth_limits(128000), {'output_entries':2048000, 'output_bytes':524288000})
 
     def test_preload_excludes_setup_and_warmup_from_measurements(self):
         trace = preloaded(10, warmup=2, measured=3)

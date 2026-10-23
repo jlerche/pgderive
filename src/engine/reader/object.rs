@@ -213,6 +213,12 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     pub(crate) fn share_cache(&mut self, cache: Arc<BlockCache>) {
         self.cache = cache;
     }
+    pub(crate) fn same_reader(&self, other: &Self) -> bool {
+        self.reference == other.reference
+            && Arc::ptr_eq(&self.store, &other.store)
+            && Arc::ptr_eq(&self.cache, &other.cache)
+    }
+
     /// Object path and exact compressed byte range containing a selected block.
     #[must_use]
     pub fn block_range(&self, ordinal: usize) -> Option<(&str, std::ops::Range<u64>)> {

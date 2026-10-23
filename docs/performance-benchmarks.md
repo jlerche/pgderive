@@ -345,8 +345,8 @@ optimized performance measurements.
 
 The group workload at `421344f` crossed the default 16 MiB decoded cache near
 24,000 groups. Each miss decoded a complete 4,096-row JSON block, including many
-unrelated groups. Both upload paths now share the streaming writer and target
-128 KiB of decoded JSON per block. Individual wider rows still use the existing
+unrelated groups. At `648d6c8`, both upload paths shared the streaming writer
+and targeted 128 KiB of decoded JSON per block. Individual wider rows still use the existing
 hard byte budget. Cold reads trim deserialization spare capacity and allocate the
 decompression buffer from the bounded frame content size; frames without that
 size are rejected. The engine's encoder always writes it. Checksums, canonical
@@ -412,7 +412,70 @@ bootstrapped into a new owned prefix before running this version. Retired
 and `batch/` objects. Do not resume an old deployment without rebuilding its
 state. No live deployment or R2 prefix was changed for this local comparison.
 
-Use growth mode with `--state-rows 8000 32000 40000 --warmup 64 --updates 64` to
+#### Cold-page access and larger-state validation
+
+The writer now targets 64 KiB decoded pages within the same 4 MiB storage packs.
+The default 16 MiB decoded-cache byte budget and 256-entry cap remain unchanged.
+This changes write granularity without changing the persisted schema: earlier
+128 KiB pages remain readable and acquire smaller boundaries when rewritten.
+Pack PUT, PostgreSQL publication and checkpoint-covered ACK ordering are unchanged.
+
+Exact-key cursors share the existing reusable probe path. A probe opens at most
+eight selected immutable run heads concurrently. Identical roots share one fetch
+only when their object-store and decoded-cache instances also match; the merge
+still receives every original run, preserving full-tuple weights. Different
+stores/caches never share that fetch. All replacement heads are staged until
+loads and initial consolidation succeed. This overlaps runs for one key, not
+all affected keys in an epoch. It does not prefetch unrelated pages. The soft
+page target is not an RSS cap: large individual records retain the hard codec
+limit, and concurrent reads can increase transient/pinned memory.
+
+An optimized paired run used the same saved 15-case suite for both versions,
+64 warmup and 64 measured updates, three repeats per size, and
+before/after/after/before order (384 measured updates per size/version).
+The baseline has only the fixture guard change; production behavior is `b0ab9fc`.
+All independent weighted oracles and cold restores passed:
+
+| Groups | Before p50 / p95 | After p50 / p95 | GETs before / after per 64 updates |
+| --- | --- | --- | --- |
+| 8,000 | 0.216 / 0.378 ms | 0.220 / 0.391 ms | 0 / 0 |
+| 32,000 | 2.080 / 3.422 ms | 0.890 / 1.880 ms | 176 / 146 |
+| 40,000 | 2.738 / 3.439 ms | 1.378 / 1.948 ms | 210 / 200 |
+| 64,000 | 3.238 / 3.758 ms | 1.765 / 2.109 ms | 247 / 234 |
+| 128,000 | 3.397 / 3.763 ms | 1.856 / 2.165 ms | 285 / 276 |
+
+Checkpoint PUTs stayed at 10 for every fixture size in both versions; measured
+updates performed zero PUTs. At 128,000 groups p50 falls 45%, and doubling state
+from 64,000 to 128,000 adds about 0.09 ms. The small-state p50 increases about
+4 microseconds. Stored bytes increase from 3,380,829 to 3,931,507 (16.3%) at
+128,000 groups because of finer framing/index metadata and compression changes.
+These local unpaced timings include actual decoding and execution, exclude
+setup/oracle work, and do not establish cloud freshness or daily request cost.
+The single-root growth improvement primarily measures reduced decode
+amplification; the run-head concurrency benefit is qualified separately below.
+
+A 32 KiB experiment reduced cold decoding further but introduced 18 GETs per
+64 updates at 8,000 groups where the baseline had none. The 64 KiB target avoids
+that small-state request penalty without enlarging the cache.
+
+The existing logical-clock test store verifies 20 selected run heads with 10 ms
+GET delays complete in three waves (30 ms), with at most eight requests active.
+Cancellation preserves the previous probe and releases in-flight request guards.
+Tests also verify duplicate-run multiplicity with one fetch, separate cache
+scopes, different-store corruption, same-key page continuation and signed
+consolidation. This is a scheduling proof, not a cloud latency estimate.
+
+Growth replay now records required execution limits in the suite. Only its
+preload/output guards scale with requested state size (16 output identities and
+4096 output bytes per group, with production-default floors); decoded/native
+caches, resident/spill budgets and contribution limits keep their production
+defaults. Guards still apply to measured updates. State sizes through 262,144
+are accepted by the CLI; a larger configured guard does not guarantee every
+query shape fits. Run metadata uses a different filename from the saved trace.
+The same production execution path, independent oracle, cold restore and
+zero-measured-PUT checks remain required.
+
+Use growth mode with `--state-rows 8000 32000 40000 64000 128000 --warmup 64 --updates 64` to
 repeat the candidate workload. The default eight warmups intentionally retain
 more cold-start effects; they may not warm every block at smaller block sizes.
 
