@@ -68,7 +68,7 @@ pub struct Settings {
     /// Maximum charged in-memory arrangement bytes between object checkpoints.
     #[serde(default = "default_memtable_bytes")]
     pub memtable_bytes: usize,
-    /// Maximum age of an uncheckpointed memtable in milliseconds.
+    /// Interval for scheduling checkpoint uploads; slow I/O is bounded by backpressure.
     #[serde(default = "default_checkpoint_interval")]
     pub checkpoint_interval_ms: u64,
     /// Adaptive committed-prefix publication policy.

@@ -3,6 +3,7 @@ mod flush;
 mod manifest;
 mod merged;
 mod probes;
+mod rebase;
 mod validation;
 use super::{
     Batch, BatchBuilder,
@@ -14,6 +15,10 @@ pub use merged::{KeyCursor, MergedCursor, RangeCursor};
 pub use probes::KeyProbes;
 use std::sync::Arc;
 pub(crate) use validation::ValidatedBag;
+
+// Allow a bounded 128-root uploaded checkpoint plus at most 128 newer
+// immutable memory deltas. Durable writers still cap each output at 128 roots.
+pub(crate) const MAX_RUNS: usize = 256;
 
 /// One immutable run, in memory or in object storage.
 #[derive(Debug, Clone)]

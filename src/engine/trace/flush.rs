@@ -5,9 +5,13 @@ use anyhow::{Context, Result, ensure};
 
 impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     pub(crate) async fn flush_memory(&self, writer: &Arrangement<K, V>) -> Result<Self> {
-        ensure!(self.run_count() <= 128, "flush input run limit exceeded");
+        ensure!(self.run_count() <= super::MAX_RUNS, "flush input run limit exceeded");
         if !self.has_memory() {
-            return Ok(self.clone());
+            return if self.run_count() > 128 {
+                writer.compact(self).await
+            } else {
+                Ok(self.clone())
+            };
         }
         let mut memory = BatchBuilder::default();
         for run in &self.runs {

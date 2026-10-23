@@ -338,7 +338,10 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         let prior = &prior.entries.get(&member.id).context("missing prior state")?.trace;
         if let Some(proof) = proof {
             ensure!(proof.matches(prior, delta.batch), "validated batch boundary mismatch");
-            ensure!(prior.run_count() < 128, "arrangement run limit requires checkpoint");
+            ensure!(
+                prior.run_count() < crate::engine::trace::MAX_RUNS,
+                "arrangement run limit requires checkpoint"
+            );
             let trace = match staging {
                 Staging::Objects(_) => writer.stage_bag(proof, delta.time).await?,
                 Staging::Memory => prior.append_validated(
@@ -351,7 +354,10 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         let trace = match staging {
             Staging::Objects(_) => writer.stage(prior, &delta).await?,
             Staging::Memory => {
-                ensure!(prior.run_count() < 128, "memtable run limit requires checkpoint");
+                ensure!(
+                    prior.run_count() < crate::engine::trace::MAX_RUNS,
+                    "memtable run limit requires checkpoint"
+                );
                 prior.validate_delta(delta.batch).await?;
                 prior.append_validated(
                     crate::engine::trace::Run::Memory(Arc::new(delta.batch.clone())),

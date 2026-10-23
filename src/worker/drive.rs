@@ -42,6 +42,12 @@ struct Metrics {
     maintenance: u64,
     failures: u32,
 }
+impl Metrics {
+    const fn stopping(&self, settings: &Settings, requested: bool) -> bool {
+        requested
+            || (settings.max_transactions != 0 && self.source.total() >= settings.max_transactions)
+    }
+}
 async fn retry(
     config: &Config,
     settings: &Settings,
@@ -145,6 +151,8 @@ async fn attempt(
             result = health.failed() => result,
         }
     }.await;
+    let cancelled = super::checkpoint::cancel(&mut open).await;
+    let result = crate::outcome::combine(result, cancelled, "checkpoint upload cancellation");
     let shutdown = timeout(Duration::from_secs(10), stream.shutdown())
         .await
         .context("worker replication shutdown timed out")
@@ -218,14 +226,8 @@ async fn consume(
     loop {
         let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
         let pending = durable.checkpoint_end < durable.end;
-        let stopping = *stop.borrow()
-            || (settings.max_transactions != 0
-                && count.0.source.total() >= settings.max_transactions);
-        if pending
-            && (stopping
-                || tokio::time::Instant::now() >= deadline
-                || u64::try_from(open.query.run_count())? >= settings.maintenance_ticks)
-        {
+        let stopping = count.0.stopping(settings, *stop.borrow());
+        if stopping || super::checkpoint::must_drain(open, pending) {
             count.1.record(open, "maintenance")?;
             timeout(
                 Duration::from_secs(settings.health.operation_timeout_secs),
@@ -236,16 +238,25 @@ async fn consume(
             stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
             deadline = tokio::time::Instant::now() + interval;
             count.1.record(open, "ready")?;
+            if stopping {
+                return Ok(());
+            }
+            continue;
         }
-        if stopping {
-            return Ok(());
+        if super::checkpoint::due(open, pending, deadline)? {
+            super::checkpoint::start(open).await?;
         }
-        let transaction = tokio::select! {
-            signal=stop.changed() => {signal.context("worker stop monitor closed")?;continue;}
-            ()=tokio::time::sleep_until(deadline), if pending => {continue;}
-            collection=open.collector.completed() => {collection?; continue;}
-            transaction=epochs.collector.recv(stream) => transaction?,
-        };
+        let transaction =
+            match next_event(open, stream, &mut epochs, (stop, count.0), (deadline, pending))
+                .await?
+            {
+                Event::Wake => continue,
+                Event::Checkpoint => {
+                    deadline = tokio::time::Instant::now() + interval;
+                    continue;
+                }
+                Event::Transaction(transaction) => transaction,
+            };
         let progress = Progress::new(
             transaction.transaction.xid,
             &transaction.transaction.commit_lsn,
@@ -265,6 +276,35 @@ async fn consume(
         .await
         .context("worker publication timed out; recover retained WAL without ACK")??;
         count.1.record(open, "ready")?;
+    }
+}
+
+enum Event {
+    Wake,
+    Checkpoint,
+    Transaction(super::epoch::collect::Input),
+}
+async fn next_event(
+    open: &mut Open,
+    stream: &mut crate::acknowledged::Stream,
+    epochs: &mut Epochs,
+    control: (&mut watch::Receiver<bool>, &mut Metrics),
+    timer: (tokio::time::Instant, bool),
+) -> Result<Event> {
+    let (stop, metrics) = control;
+    let seconds = open.settings.health.operation_timeout_secs;
+    tokio::select! {
+        signal=stop.changed() => {signal.context("worker stop monitor closed")?; Ok(Event::Wake)}
+        ()=tokio::time::sleep_until(timer.0), if timer.1 && open.checkpoint.is_none() => Ok(Event::Wake),
+        uploaded=super::checkpoint::ready(&mut open.checkpoint) => {
+            timeout(Duration::from_secs(seconds), super::checkpoint::complete(open, uploaded?))
+                .await.context("checkpoint publication timed out")??;
+            metrics.maintenance = metrics.maintenance.checked_add(1).context("maintenance counter overflow")?;
+            stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
+            Ok(Event::Checkpoint)
+        }
+        collection=open.collector.completed() => {collection?; Ok(Event::Wake)}
+        transaction=epochs.collector.recv(stream) => Ok(Event::Transaction(transaction?)),
     }
 }
 
@@ -335,6 +375,9 @@ async fn publish(
         Ok(work) => work,
         Err(error) if error.is::<crate::engine::plan::relational::MemtableFull>() => {
             preparation.mark("failed_preparation_tail");
+            emit(
+                &json!({"event":"checkpoint_backpressure","reason":"memtable_bytes", "time":open.query.time(),"checkpoint_in_flight":open.checkpoint.is_some()}),
+            )?;
             maintain(open, metrics).await?;
             preparation.mark("forced_maintenance");
             open.query
@@ -370,37 +413,10 @@ async fn publish(
     emit(&event)
 }
 async fn maintain(open: &mut Open, metrics: &mut Metrics) -> Result<()> {
-    let mut clock = crate::timing::Clock::new(open.settings.phase_metrics);
-    let runs = open.query.run_count();
-    let protection = open
-        .writer
-        .protect_upload(
-            &mut open.session.client,
-            &format!("worker:{}:maintenance:{}", open.nonce, open.writer.epoch()),
-        )
-        .await?;
-    let prepared = open.query.prepare_flush_protected(&protection).await?;
-    let checkpoint = open.query.prepared_compaction_checkpoint(&prepared)?;
-    open.writer
-        .checkpoint_memtable(&mut open.session.client, open.query.plan(), &checkpoint)
-        .await?;
-    open.query.commit_compaction(prepared)?;
-    protection
-        .published(&mut open.session.client, &open.writer, open.query.plan(), &checkpoint)
-        .await?;
-    open.collector.start(
-        open.catalog.clone(),
-        open.store.clone(),
-        open.settings.health.operation_timeout_secs,
-    )?;
+    let completed = super::checkpoint::flush(open).await?;
     metrics.maintenance =
-        metrics.maintenance.checked_add(1).context("worker maintenance metric overflow")?;
-    ensure!(open.query.time() == checkpoint.time, "worker maintenance advanced time");
-    let mut event = json!({"event":"maintenance","time":open.query.time(),"epoch":open.writer.epoch(),"previous_runs":runs,"collection":"background"});
-    if open.settings.phase_metrics {
-        event["elapsed_us"] = serde_json::to_value(clock.lap())?;
-    }
-    emit(&event)
+        metrics.maintenance.checked_add(completed).context("worker maintenance metric overflow")?;
+    Ok(())
 }
 pub(super) fn emit(event: &Value) -> Result<()> {
     let mut output = io::stdout().lock();

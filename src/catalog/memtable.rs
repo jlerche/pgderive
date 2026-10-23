@@ -63,19 +63,29 @@ impl Writer {
         ensure!(!self.uncertain, "uncertain checkpoint requires recovery");
         candidate.validate(plan)?;
         ensure!(
-            candidate.time == self.boundary.published_time,
-            "checkpoint does not cover published memtable"
+            candidate.time > self.boundary.stored.checkpoint.time
+                && candidate.time <= self.boundary.published_time,
+            "checkpoint is outside the published epoch suffix"
         );
         let tx = sql.transaction().await?;
         self.lock_memtable(&tx, plan, true).await?;
+        let row = tx.query_one(
+            &format!("SELECT end_lsn::text FROM {}.pgderive_epoch_boundaries WHERE query_id=$1 AND logical_time=$2", self.catalog.schema),
+            &[&self.catalog.query, &i64::try_from(candidate.time)?],
+        ).await.context("checkpoint has no captured epoch boundary")?;
+        let checkpoint_end: super::Lsn = row.try_get::<_, String>(0)?.parse()?;
+        ensure!(
+            checkpoint_end > self.boundary.checkpoint_end && checkpoint_end <= self.boundary.end,
+            "checkpoint source boundary is outside published progress"
+        );
         let epoch =
             write::stage(&tx, &self.catalog, plan, candidate, self.boundary.stored.epoch).await?;
         tx.execute(
             &format!(
-                "UPDATE {}.pgderive_progress SET checkpoint_lsn=end_lsn WHERE query_id=$1",
+                "UPDATE {}.pgderive_progress SET checkpoint_lsn=$2::text::pg_lsn WHERE query_id=$1",
                 self.catalog.schema
             ),
-            &[&self.catalog.query],
+            &[&self.catalog.query, &checkpoint_end.to_string()],
         )
         .await?;
         tx.execute(
@@ -89,7 +99,7 @@ impl Writer {
         self.commit(tx, "memtable checkpoint").await?;
         self.boundary.stored.checkpoint = candidate.clone();
         self.boundary.stored.epoch = epoch;
-        self.boundary.checkpoint_end = self.boundary.end;
+        self.boundary.checkpoint_end = checkpoint_end;
         Ok(())
     }
     async fn lock_memtable(

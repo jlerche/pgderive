@@ -11,7 +11,7 @@ type Rows = Batch<i64, Vec<i64>>;
 type Bag = BTreeMap<(i64, Vec<i64>), i64>;
 type Projection = Project<i64, Vec<i64>, i64, Vec<i64>>;
 type Join = super::JoinProject<i64, Vec<i64>>;
-fn plan() -> Result<Plan> {
+pub(super) fn plan() -> Result<Plan> {
     let nodes = [
         ("as", Kind::Source, vec!["a"]),
         ("bs", Kind::Source, vec!["b"]),
@@ -48,7 +48,7 @@ fn plan() -> Result<Plan> {
         outputs: vec!["abc".into()],
     })
 }
-fn operators() -> Operators<i64, Vec<i64>> {
+pub(super) fn operators() -> Operators<i64, Vec<i64>> {
     let projects = ["a", "b", "c"]
         .into_iter()
         .map(|id| {

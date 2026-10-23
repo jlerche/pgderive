@@ -38,6 +38,8 @@ PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-binding \
     python3 scripts/query_binding_harness.py "$output/query-binding" -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification memtable \
     python3 scripts/memtable_harness.py "$output/memtable" -- "${worker[@]}"
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification async-checkpoints \
+    python3 scripts/async_checkpoint_harness.py "$output/async-checkpoints" -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \
     python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 \
     "$output/transactions" -- "${worker[@]}"
@@ -147,7 +149,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==368,results
+assert len(results)==373,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))

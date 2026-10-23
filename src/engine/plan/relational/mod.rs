@@ -1,5 +1,6 @@
 //! Durable acyclic source/project/join circuits with explicitly registered state.
 mod circuit;
+mod flush;
 mod persistence;
 use super::{Binding, Engine, Plan, Settings, State};
 use crate::{
@@ -15,6 +16,7 @@ use crate::{
     },
 };
 use anyhow::{Context, Result, ensure};
+pub use flush::{FrozenFlush, UploadedFlush};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -115,6 +117,7 @@ impl std::error::Error for MemtableFull {}
 /// Every source is supplied on every tick, including empty deltas.
 pub struct Relational<K: BatchData, V: BatchData> {
     engine: Runtime<K, V>,
+    incarnation: Arc<()>,
     execution: Arc<Execution<K, V>>,
 }
 impl<K: BatchData, V: BatchData> Relational<K, V> {
@@ -188,7 +191,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
             let evaluator = evaluator.clone();
             async move { evaluator.evaluate(state, input, circuit::Staging::Objects(None)).await }
         })?;
-        Ok(Self { engine, execution })
+        Ok(Self { engine, execution, incarnation: Arc::new(()) })
     }
     /// Exact declaration, native layout, callback and codec identity.
     #[must_use]

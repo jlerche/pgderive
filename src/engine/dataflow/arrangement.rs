@@ -94,7 +94,10 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         prior: &TraceSnapshot<K, V>,
         delta: &TimedBatch<B>,
     ) -> Result<TraceSnapshot<K, V>> {
-        ensure!(prior.run_count() < 128, "arrangement run limit requires compaction");
+        ensure!(
+            prior.run_count() < crate::engine::trace::MAX_RUNS,
+            "arrangement run limit requires compaction"
+        );
         prior.validate_delta(delta.batch.borrow()).await?;
         prior.append_validated(self.upload(delta.batch.borrow()).await?, delta.time)
     }
@@ -103,7 +106,10 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         proof: &crate::engine::trace::ValidatedBag<'_, K, V>,
         time: u64,
     ) -> Result<TraceSnapshot<K, V>> {
-        ensure!(proof.trace().run_count() < 128, "arrangement run limit requires compaction");
+        ensure!(
+            proof.trace().run_count() < crate::engine::trace::MAX_RUNS,
+            "arrangement run limit requires compaction"
+        );
         proof.trace().append_validated(self.upload(proof.batch()).await?, time)
     }
     /// Persist memory deltas while retaining existing immutable object runs.
@@ -119,7 +125,10 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
     /// # Errors
     /// Returns read, upload or equivalence validation errors.
     pub async fn compact(&self, prior: &TraceSnapshot<K, V>) -> Result<TraceSnapshot<K, V>> {
-        ensure!(prior.run_count() <= 128, "compaction input run limit exceeded");
+        ensure!(
+            prior.run_count() <= crate::engine::trace::MAX_RUNS,
+            "compaction input run limit exceeded"
+        );
         let mut cursor = prior.cursor().await?;
         let limits =
             WriteLimits { block_rows: self.block_rows.min(65_536), ..WriteLimits::default() };

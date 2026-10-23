@@ -13,12 +13,26 @@ local engine visibility advances. No new object PUT is required for that commit.
 - `end_lsn` (P), `commit_lsn`, `xid` and `published_time` describe the complete
   transaction already reflected in the sink. P may be ahead of C.
 
-Checkpointing uploads equivalent consolidated arrangements under an upload
-protection. Independent arrangement uploads have bounded concurrency and drain
-before returning an error. One PostgreSQL transaction publishes the new object
-membership and sets C=P without repeating sink DML. Only then may slot feedback
-advance. A failed or uncertain publication causes authoritative recovery; cached
-bytes and received replication messages never authorize acknowledgement.
+Checkpointing captures immutable arrangements and their exact published epoch,
+then uploads them in one background task under an upload protection. Foreground
+epochs continue publishing. Independent arrangement uploads have concurrency eight
+and drain before returning an ordinary error. One PostgreSQL transaction publishes
+the captured object membership, resolves its exact LSN from the epoch journal, and
+advances C to that captured boundary. It preserves newer P and journal entries.
+No checkpoint repeats sink DML. Local adoption replaces only the captured run
+prefix, retaining all newer memory runs and their logical time. Only then may slot
+feedback advance to C. A failed or uncertain publication causes authoritative
+recovery; cached bytes and received messages never authorize acknowledgement.
+
+The coordinator owns at most one upload. A checkpoint contains at most 128 object
+roots per arrangement. It applies backpressure after 120 subsequent epochs or at
+248 resident runs, within the explicit 256-run input bound. Thus an uploaded
+128-root prefix plus its newer suffix fits without discarding any run. Memory
+pressure drains the in-flight checkpoint and checkpoints the remaining suffix
+before retrying the unpublished input. Frozen and active snapshots share immutable
+batches; frozen memory remains charged until physical adoption. Cancellation is
+awaited before a new worker attempt; failed/cancelled uploads retain their durable
+non-quiescent protection. Timeout never releases a namespace as safely collected.
 
 On restart, the engine claims and fences the query, pins and cold-validates C,
 validates the registered cluster/timeline/database/publication/slot, then starts
@@ -29,9 +43,11 @@ transactions are skipped, while legitimate duplicate tuples retain their weights
 At P, the exact transaction identity and reconstructed logical time must agree
 with PostgreSQL before readiness. New transactions then publish normally.
 
-The worker checkpoints when retained arrangement run count reaches
-`maintenance_ticks`, after `checkpoint_interval_ms`
-(default 5000 ms), on memory pressure, and on graceful stop. `memtable_bytes`
+The worker starts an upload when retained arrangement run count reaches
+`maintenance_ticks` or after `checkpoint_interval_ms` (default 5000 ms).
+This is a scheduling interval, not a hard bound on checkpoint age during slow I/O.
+Memory/run pressure waits for checkpoint completion. Graceful stop drains the
+in-flight checkpoint and then any newer suffix until C=P. `memtable_bytes`
 (default 64 MiB) caps retained serialized payload plus structural charges across
 arrangements. It is an estimate, not an RSS limit; temporary computations,
 allocator overhead, reader pins and immutable caches have separate costs. An
@@ -49,6 +65,11 @@ published backlog from retained WAL and flag acknowledgement beyond C.
 The live memtable harness witnesses two crashes with C<P, proves unchanged sink
 row versions and physical tuple identities during replay, compares joined aggregates with native
 PostgreSQL, checks timer checkpointing, and rejects an externally advanced slot.
+The asynchronous checkpoint harness additionally holds a witnessed PUT while five
+newer epochs publish, kills the worker during upload and after the older checkpoint
+commits, checks unchanged sink row identities on replay, exercises memory pressure
+with an upload in flight, drains a suffix during graceful shutdown, and verifies
+that upload timeout retains non-quiescent protection and safe acknowledgement.
 Existing COMMIT, object upload, recovery and GC crash probes remain enabled.
 
 Epoch publication also inserts a coarse boundary into `pgderive_epoch_boundaries`
@@ -115,3 +136,8 @@ and `forced_maintenance` separate the failed attempt from its checkpoint. The
 `publication_us` fields `boundary_guard`, `source_layout` and `progress` subdivide
 `membership_layout_progress`, so do not add that aggregate to its children.
 Disabled preparation profiling does not sample clocks or allocate operator labels.
+
+`maintenance.elapsed_us` is background checkpoint wall time, including time until
+foreground completion. It is not publication-blocking duration. The maintenance
+event reports captured `time` separately from current `published_time`; their gap
+shows foreground epochs that completed while the upload was outstanding.

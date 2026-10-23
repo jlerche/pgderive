@@ -95,6 +95,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         let restored =
             Self::bind(self.execution.clone(), RelationalState { entries }, checkpoint.time)?;
         self.engine = restored.engine;
+        self.incarnation = restored.incarnation;
         Ok(())
     }
     /// Stage equivalent physical state under an upload protection at the same tick.
@@ -105,31 +106,16 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         &self,
         protection: &Protection,
     ) -> Result<Compaction<K, V>> {
-        self.prepare_compaction_scoped(Some(protection.namespace()?), false).await
-    }
-    /// Flush memory deltas under the ordinary durable upload protection.
-    /// Existing object runs are retained until bounded periodic compaction.
-    ///
-    /// # Errors
-    /// Returns protection, storage, resource or arithmetic errors.
-    pub async fn prepare_flush_protected(
-        &self,
-        protection: &Protection,
-    ) -> Result<Compaction<K, V>> {
-        self.prepare_compaction_scoped(Some(protection.namespace()?), true).await
+        self.prepare_compaction_scoped(Some(protection.namespace()?)).await
     }
     /// Prepare equivalent local physical state.
     ///
     /// # Errors
     /// Returns storage, resource or equivalence failures.
     pub async fn prepare_compaction(&self) -> Result<Compaction<K, V>> {
-        self.prepare_compaction_scoped(None, false).await
+        self.prepare_compaction_scoped(None).await
     }
-    async fn prepare_compaction_scoped(
-        &self,
-        namespace: Option<&str>,
-        flush: bool,
-    ) -> Result<Compaction<K, V>> {
+    async fn prepare_compaction_scoped(&self, namespace: Option<&str>) -> Result<Compaction<K, V>> {
         let namespace = namespace.map(str::to_owned);
         let writers = self.execution.writers.clone();
         self.engine
@@ -143,10 +129,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                             || writer.clone(),
                             |scope| writer.clone().with_namespace(scope),
                         );
-                        Ok::<_, anyhow::Error>((
-                            id.clone(),
-                            maintenance_entry(entry, &writer, flush).await?,
-                        ))
+                        Ok::<_, anyhow::Error>((id.clone(), compact_entry(entry, &writer).await?))
                     }
                 });
                 // Drain all uploads before returning any error; protection covers all of them.
@@ -182,20 +165,6 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     ) -> Result<()> {
         self.engine.publish_compaction(sql, writer, work).await
     }
-}
-
-async fn maintenance_entry<K: BatchData, V: BatchData>(
-    entry: &Entry<K, V>,
-    writer: &crate::engine::dataflow::Arrangement<K, V>,
-    flush: bool,
-) -> Result<Entry<K, V>> {
-    if flush {
-        return Ok(Entry {
-            schema: entry.schema.clone(),
-            trace: writer.flush(&entry.trace).await?,
-        });
-    }
-    compact_entry(entry, writer).await
 }
 
 async fn compact_entry<K: BatchData, V: BatchData>(
