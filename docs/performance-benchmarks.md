@@ -30,7 +30,7 @@ python3 scripts/performance/matrix.py \
   --risingwave --output artifacts/performance/matrix-001
 
 python3 scripts/performance/compare.py \
-  artifacts/performance/matrix-001/steady-autocommit-*/report.json
+  artifacts/performance/matrix-001/steady-autocommit-*/report.json --gate
 python3 -m unittest discover -s scripts/performance -p 'test_*.py'
 ```
 
@@ -94,7 +94,9 @@ python3 scripts/performance/summarize.py \
 ```
 
 It reports input acceptance and consumer marker progress separately, plus latency,
-CPU, resource peaks and raw epoch/maintenance distributions. Mixed-workload marker
+CPU, resource peaks, raw epoch/maintenance distributions, and object request attempts.
+Object accounting includes bootstrap, drain, GC, failures and retries; HTTP-method
+Class A/B estimates are diagnostic, with ambiguous POST operations unclassified. Mixed-workload marker
 progress is a lower bound and cannot prove visibility of trailing inserts/deletes;
 final native equality checks cover those rows. Last-marker drain is not a claim
 of per-row delivery or whole-source-transaction external sink atomicity.
@@ -115,7 +117,7 @@ observations rather than equal-budget claims.
 
 `compare.py` compares run-level medians using a practical relative/absolute margin
 and three times run-to-run median absolute deviation. It reports possible
-regressions; performance currently has no hard exit-code gate. A single run is
+regressions; `--gate` makes performance findings an exit-code gate. Gate mode requires at least three controlled repeats, matched offered load, and no possible regressions; exploratory comparisons cannot pass. A single run is
 inconclusive regardless of how many rows it contains. Latency verdicts are invalidated unless both source producers achieve the offered rate
 in every measurement window within the configured 2% tolerance and achieve
 comparable commit counts. This checks source acceptance, not consumer capacity;

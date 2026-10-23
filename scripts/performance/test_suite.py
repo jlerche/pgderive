@@ -1,5 +1,6 @@
 """Pure harness tests; no infrastructure or application data touched."""
 import pathlib
+import json
 import sys
 import types
 import copy
@@ -9,15 +10,65 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from common import ROOT, distribution, wait
-from compare import environment_mismatches, latency_verdict, throughput_check, verdict
+from compare import validate_runs, gate_failures, environment_mismatches, latency_verdict, throughput_check, verdict
 from fixture import (Fixture, effective_proxy_profile,
                      effective_risingwave_sql, effective_worker_config)
 from run import close_fixtures
-from summarize import marker_progress
+from summarize import marker_progress, object_requests
 from workload import observe_prefix, operation
 
 
 class SuiteTests(unittest.TestCase):
+    def test_object_request_accounting_separates_attempts_errors_and_unknown_posts(self):
+        def request(method, listing=False, status=200, size=10):
+            return {'ordinal': 1, 'method': method, 'listing': listing, 'status': status,
+                    'request_body_bytes': size, 'response_body_bytes': 20}
+        rows = [{'ready': True}, {'error': 'failed', 'method': 'PUT'},
+                request('PUT', status=502), request('PUT'), request('GET', listing=True),
+                request('GET'), request('HEAD'), request('DELETE'), request('POST', size=None)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / 'proxy.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows))
+            result = object_requests(root)
+        self.assertEqual(result['attempts'], 7)
+        self.assertEqual(result['estimated_r2_classes'], {
+            'class_a': 3, 'class_b': 2, 'free': 1, 'unclassified': 1})
+        self.assertEqual(result['transport_errors'], 1)
+        self.assertEqual(result['status_codes']['502'], 1)
+        self.assertEqual(result['request_body_bytes'], 60)
+        self.assertEqual(result['response_body_bytes'], 140)
+        self.assertEqual(result['unknown_request_body_sizes'], 1)
+
+    def test_gate_requires_distinct_and_matching_run_evidence(self):
+        reports = [{'run_id': str(i)} for i in range(3)]
+        paths = ['a', 'b', 'c']
+        validate_runs(paths, reports, copy.deepcopy(reports))
+        for files, runs, manifests in [
+                (['a']*3, reports, reports),
+                (paths, [reports[0]]*3, [reports[0]]*3),
+                (paths, reports, list(reversed(reports))),
+                (paths, [{'run_id': None}]*3, reports)]:
+            with self.assertRaises(ValueError):
+                validate_runs(files, runs, manifests)
+
+    def test_verdict_rejects_invalid_metric_samples(self):
+        for values in [[], [float('nan')], [float('inf')], [-1], [None], [True]]:
+            with self.assertRaises(ValueError):
+                verdict(values, [1, 1, 1])
+            with self.assertRaises(ValueError):
+                verdict([1, 1, 1], values)
+
+    def test_gate_rejects_inconclusive_regressing_and_unmatched_evidence(self):
+        result = {'exploratory': False, 'throughput': {'runs': [
+            {'valid_for_latency_comparison': True}]},
+            'latency': verdict([10, 10, 10], [10, 10, 10])}
+        self.assertEqual(gate_failures(result), [])
+        for evidence in [verdict([10], [10]), verdict([10]*3, [20]*3)]:
+            self.assertTrue(gate_failures({**result, 'latency': evidence}))
+        self.assertTrue(gate_failures({**result, 'exploratory': True}))
+        self.assertTrue(gate_failures({**result, 'throughput': {'runs': [
+            {'valid_for_latency_comparison': False}]}}))
+
     def test_child_exit_is_not_a_retryable_startup_error(self):
         predicate = mock.Mock(side_effect=ChildProcessError('engine exited'))
         with self.assertRaises(ChildProcessError):

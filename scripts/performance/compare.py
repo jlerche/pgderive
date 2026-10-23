@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Compare repeat runs using run-level medians and explicit practical/noise margins.
 
-A nonzero exit signals correctness/cleanup failures. Performance findings are advisory:
-one run or overlapping dispersion does not establish a repeatable regression.
+A nonzero exit always signals correctness/cleanup failures. --gate additionally
+requires controlled repeat runs, matched throughput and no measured regressions.
 """
 import argparse
 import json
@@ -12,6 +12,10 @@ import statistics
 
 
 def verdict(baseline, candidate, relative=.10, absolute=2):
+    if not baseline or not candidate or any(
+            not isinstance(value, (int, float)) or isinstance(value, bool)
+            or not math.isfinite(value) or value < 0 for value in [*baseline, *candidate]):
+        raise ValueError('Metric samples must be nonempty, finite and nonnegative')
     old, new = statistics.median(baseline), statistics.median(candidate)
     # MAD across independent runs, not pseudo-replication of per-row samples.
     noise = 3 * max(statistics.median(abs(v - old) for v in baseline),
@@ -73,6 +77,33 @@ def latency_verdict(baseline, candidate, throughput_valid, relative=.10, absolut
     return result
 
 
+def gate_failures(result):
+    """Fail closed when controlled evidence cannot establish a passing comparison."""
+    failures = []
+    if result['exploratory']:
+        failures.append('exploratory environment cannot qualify a release')
+    if any(not run['valid_for_latency_comparison'] for run in result['throughput']['runs']):
+        failures.append('offered source load was not sustained comparably')
+    for name, value in result.items():
+        if not isinstance(value, dict) or 'baseline_runs' not in value:
+            continue
+        if min(value['baseline_runs'], value['candidate_runs']) < 3:
+            failures.append(name + ': at least three controlled repeats required')
+        elif value['status'] not in {'improvement', 'within noise/practical margin'}:
+            failures.append(name + ': ' + value['status'])
+    return failures
+
+
+def validate_runs(paths, reports, manifests):
+    identities = [report.get('run_id') for report in reports]
+    if any(not isinstance(identity, str) or not identity for identity in identities) or len(set(identities)) != len(identities):
+        raise ValueError('Gate requires distinct nonempty run identities')
+    if len({pathlib.Path(path).resolve() for path in paths}) != len(paths):
+        raise ValueError('Gate requires distinct report paths')
+    if any(report['run_id'] != manifest.get('run_id') for report, manifest in zip(reports, manifests)):
+        raise ValueError('Report and manifest run identities must match')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('reports', nargs='+')
@@ -80,9 +111,12 @@ def main():
     parser.add_argument('--absolute-ms', type=float, default=2)
     parser.add_argument('--throughput-tolerance', type=float, default=.02)
     parser.add_argument('--exploratory', action='store_true', help='Allow unmatched/missing environment fingerprints; mark results exploratory')
+    parser.add_argument('--gate', action='store_true', help='Fail on regressions, invalid load, exploratory evidence or fewer than three repeats')
     args = parser.parse_args()
     reports = [json.loads(pathlib.Path(path).read_text()) for path in args.reports]
     manifests = [json.loads(pathlib.Path(path).with_name('manifest.json').read_text()) for path in args.reports]
+    if args.gate:
+        validate_runs(args.reports, reports, manifests)
     ignored = {'output', 'baseline', 'candidate'}
     signatures = [{key: value for key, value in manifest['parameters'].items() if key not in ignored}
                   for manifest in manifests]
@@ -121,8 +155,13 @@ def main():
                 value['status'] = 'exploratory: ' + value['status']
     result['notes'] = ['Match scenario, hardware, image IDs and proxy settings before comparing.',
                        'Inspect achieved throughput and per-window trends; fast results with dropped offered load are not wins.',
-                       'No performance exit-code gate until sufficient controlled repeatability data exists.']
+                       'Gate mode requires three controlled repeats and rejects possible regressions.']
+    if args.gate:
+        result['gate'] = {'failures': gate_failures(result)}
+        result['gate']['passed'] = not result['gate']['failures']
     print(json.dumps(result, indent=2))
+    if args.gate and not result['gate']['passed']:
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only compact summaries of saved benchmark reports and marker timelines."""
 import argparse
+import collections
 import gzip
 import json
 import pathlib
@@ -53,6 +54,38 @@ def read_events(directory):
             'event_scope': 'All saved engine events, including post-input drain and shutdown maintenance.'}
 
 
+def object_requests(directory):
+    """Count completed proxy attempt records, including failures and retries."""
+    methods, classes, statuses = collections.Counter(), collections.Counter(), collections.Counter()
+    uploaded = downloaded = unknown_upload_sizes = transport_errors = 0
+    with (directory / 'proxy.jsonl').open() as stream:
+        for line in stream:
+            row = json.loads(line)
+            if 'error' in row:
+                transport_errors += 1
+            if 'ordinal' not in row:
+                continue
+            method = row['method']
+            category = ('class_a' if method == 'PUT' or (method == 'GET' and row['listing']) else
+                        'class_b' if method in {'GET', 'HEAD'} else
+                        'free' if method == 'DELETE' else 'unclassified')
+            methods[method] += 1
+            classes[category] += 1
+            statuses[str(row['status'])] += 1
+            if row['request_body_bytes'] is None:
+                unknown_upload_sizes += 1
+            else:
+                uploaded += row['request_body_bytes']
+            downloaded += row['response_body_bytes']
+    return {'attempts': sum(methods.values()), 'methods': dict(methods),
+            'estimated_r2_classes': dict(classes), 'status_codes': dict(statuses),
+            'transport_errors': transport_errors, 'request_body_bytes': uploaded,
+            'response_body_bytes': downloaded, 'unknown_request_body_sizes': unknown_upload_sizes,
+            'scope': 'All completed proxy attempts, including bootstrap, drain, GC and retries. '
+                     'Class estimates use HTTP method/listing flags; POST is unclassified because '
+                     'multipart versus bulk deletion is not recorded. Not a billing invoice.'}
+
+
 def summarize_report(path):
     report = json.loads(path.read_text())
     manifest = json.loads(path.with_name('manifest.json').read_text())
@@ -76,7 +109,8 @@ def summarize_report(path):
                    'peak_state_bytes': max((s['state']['bytes'] for s in samples), default=None),
                    'peak_retained_wal_bytes': max((s['retained_wal_bytes'] for s in samples), default=None),
                    'native_equal': engine['oracle_equal'], 'ack_safe': engine.get('ack_safe'),
-                   'execution': read_events(directory)}
+                   'execution': read_events(directory),
+                   'object_requests': object_requests(directory)}
         if timeline['native_arrivals']:
             summary['native_progress'] = marker_progress(timeline, parameters['duration'],
                                                         timeline['native_arrivals'], parameters['workload'])
