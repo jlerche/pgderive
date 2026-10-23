@@ -14,16 +14,6 @@ pub enum SinkOutput {
     /// Print attempted `PostgreSQL` DML and parameters without executing it.
     Stdout,
 }
-impl SinkOutput {
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "serde skip_serializing_if requires a borrowed predicate"
-    )]
-    pub(super) fn is_postgres(&self) -> bool {
-        *self == Self::Postgres
-    }
-}
-
 pub(super) fn emit(context: &Value, sql: &str, payload: &Value, occurrences: u64) -> Result<()> {
     let mut output = io::stdout().lock();
     write(&mut output, context, sql, payload, occurrences)?;
@@ -52,8 +42,8 @@ fn write(
 mod tests {
     use super::*;
     #[test]
-    fn default_bindings_keep_their_original_json() -> Result<()> {
-        let value = json!({"table":"results","columns":[]});
+    fn bindings_roundtrip_explicit_output_modes() -> Result<()> {
+        let value = json!({"table":"results","columns":[],"output":"postgres","primary_key":[]});
         let mut sink: crate::catalog::Sink = serde_json::from_value(value.clone())?;
         assert_eq!(sink.output, SinkOutput::Postgres);
         assert_eq!(serde_json::to_value(&sink)?, value);

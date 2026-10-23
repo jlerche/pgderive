@@ -23,18 +23,6 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def compatible_worker_template(text):
-    """Use candidate scheduler defaults without sending new fields to old binaries."""
-    result, skipping_epoch = [], False
-    for line in text.split('[worker.query]')[0].splitlines(keepends=True):
-        header = line.split('#', 1)[0].strip()
-        if header.startswith('['):
-            skipping_epoch = header == '[worker.epoch]'
-        if not skipping_epoch:
-            result.append(line)
-    return ''.join(result)
-
-
 def effective_worker_config(text):
     """Stable executed settings without credentials or per-run connection locations."""
     config = tomllib.loads(text)
@@ -159,7 +147,7 @@ class Fixture:
         reader.start(); self.readers.append(reader)
 
     def start_pgderive(self):
-        template = compatible_worker_template((ROOT / 'worker.example.toml').read_text())
+        template = (ROOT / 'worker.example.toml').read_text().split('[worker.query]')[0]
         replacements = {'port = 55434': f'port = {self.pg_port}',
             'database = "pgderive_dev"': 'database = "postgres"',
             'publication = "pgderive_worker_pub"': 'publication = "compare_pub"',

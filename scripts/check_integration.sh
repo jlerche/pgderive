@@ -53,7 +53,7 @@ assert 'MVP incomplete and corrupt catalog membership rejected without epoch cha
 assert harness_log.count('MVP atomic sink/membership/source publication passed at tick ')==15
 assert 'MVP failed destination DML and fenced writers preserved sink/membership/progress' in harness_log
 assert 'MVP suppressed destination DML rejected without progress change' in harness_log
-assert 'MVP batched sink native hash collisions, arrays, large values, decode aliases, underflow rollback and index backfill verified' in harness_log
+assert 'MVP batched sink native hash collisions, arrays, large values, decode aliases, underflow rollback and missing-index rejection verified' in harness_log
 assert 'MVP uncertain BEFORE COMMIT resolved as NotCommitted; blind retry rejected' in harness_log
 assert 'MVP uncertain AFTER COMMIT resolved as Committed; blind retry rejected' in harness_log
 assert 'MVP resumed from durable tick 16; received rows remained unacknowledged until atomic tick 17 publication' in harness_log

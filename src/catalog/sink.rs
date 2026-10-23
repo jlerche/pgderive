@@ -18,13 +18,11 @@ use tokio_postgres::Transaction;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sink {
-    /// Destination transport; omitted for backwards-compatible `PostgreSQL` bindings.
-    #[serde(default, skip_serializing_if = "SinkOutput::is_postgres")]
+    /// Destination transport.
     pub output: SinkOutput,
     /// Owned ordinary typed result table.
     pub table: String,
     /// Optional proven unique, non-NULL output columns for a physical primary key.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub primary_key: Vec<String>,
     /// Native output metadata.
     pub columns: Vec<ResultColumn>,
@@ -67,14 +65,14 @@ impl Sink {
             &[&self.table.as_str(), &catalog.query, &oid],
         )
         .await?;
-        self.prepare_index(tx, catalog).await
+        lookup::ensure(tx, catalog, self, true).await
     }
     pub(super) async fn prepare_index(
         &self,
         tx: &Transaction<'_>,
         catalog: &Catalog,
     ) -> Result<()> {
-        lookup::ensure(tx, catalog, self).await
+        lookup::ensure(tx, catalog, self, false).await
     }
     pub(crate) async fn owned(
         &self,

@@ -1,6 +1,6 @@
 use super::{Deltas, Lsn, Progress, Sink};
 use crate::engine::Batch;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::json;
 
 #[test]
@@ -147,11 +147,17 @@ fn native_jsonb_rows_preserve_weighted_tuple_identity() -> Result<()> {
 }
 
 #[test]
-fn keyed_sinks_validate_metadata_and_keep_legacy_bindings_unchanged() -> Result<()> {
+fn keyed_sinks_require_complete_bindings_and_validate_metadata() -> Result<()> {
     let mut sink = crate::harness::tuple_sink::sink("result");
-    let legacy = serde_json::to_value(&sink)?;
-    assert!(legacy.get("primary_key").is_none());
-    assert_eq!(serde_json::from_value::<Sink>(legacy)?, sink);
+    let encoded = serde_json::to_value(&sink)?;
+    assert_eq!(encoded["output"], "postgres");
+    assert_eq!(encoded["primary_key"], serde_json::json!([]));
+    assert_eq!(serde_json::from_value::<Sink>(encoded.clone())?, sink);
+    for field in ["output", "primary_key"] {
+        let mut incomplete = encoded.clone();
+        incomplete.as_object_mut().context("binding object required")?.remove(field);
+        assert!(serde_json::from_value::<Sink>(incomplete).is_err());
+    }
     sink.primary_key = vec!["tuple".into()];
     sink.validate()?;
     sink.primary_key.push("tuple".into());

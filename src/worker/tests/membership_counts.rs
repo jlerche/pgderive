@@ -1,10 +1,6 @@
 //! Persisted presence thresholds avoid hot-left scans; old layouts fail closed.
 use super::{batch, contract, row, settings};
-use crate::{
-    compiler::{Compiled, compile, relational::Node},
-    engine::Batch,
-    worker::program::relational,
-};
+use crate::{compiler::compile, engine::Batch, worker::program::relational};
 use anyhow::Result;
 #[tokio::test]
 async fn positive_right_count_changes_have_constant_cold_reads_and_zero_left_delta() -> Result<()> {
@@ -56,61 +52,25 @@ async fn positive_right_count_changes_have_constant_cold_reads_and_zero_left_del
     eprintln!("EXISTS positive-count cold reads at hot-left 8/128/1024: {measurements:?}");
     Ok(())
 }
-fn legacy(mut compiled: Compiled) -> Compiled {
-    let edges = compiled
-        .relational
-        .nodes
-        .iter()
-        .filter_map(|node| {
-            if let Node::RightCounts { id, input } = node {
-                Some((id.clone(), input.clone()))
-            } else {
-                None
-            }
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let presence = compiled
-        .relational
-        .nodes
-        .iter()
-        .filter_map(|node| {
-            if let Node::RightPresence { id, input } = node {
-                edges.get(input).map(|input| (id.clone(), input.clone()))
-            } else {
-                None
-            }
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    compiled.relational.nodes.retain_mut(|node| {
-        if let Node::Union { right, .. } = node
-            && let Some(input) = presence.get(right)
-        {
-            *right = input.clone();
-        }
-        !matches!(node, Node::RightCounts { .. } | Node::RightPresence { .. })
-    });
-    compiled
-}
 #[tokio::test]
-async fn old_membership_layout_requires_explicit_rebuild_and_counts_exceed_i64() -> Result<()> {
+async fn membership_counts_exceed_i64_and_reject_foreign_checkpoints() -> Result<()> {
     let native = contract();
     let compiled = compile(
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=a.id)",
         &native,
     )?;
-    let old = legacy(compiled.clone());
     let options = settings();
-    let mut old_query = relational::build_scanned(&native, &old, &options)?;
     let initial = batch(vec![
         ("auction", row(&[("id", Some("1")), ("category", None), ("other", None)]), 1),
         ("bid", row(&[("id", Some("1")), ("auction", Some("1")), ("price", None)]), i64::MAX),
         ("bid", row(&[("id", Some("2")), ("auction", Some("1")), ("price", None)]), i64::MAX),
     ]);
-    old_query
-        .commit(old_query.prepare(relational::inputs(&initial, old.relational(), 1)?).await?)?;
     let mut query = relational::build(&native, &compiled, &options)?;
-    assert_ne!(old_query.plan().identity(), query.plan().identity());
-    assert!(query.restore_checkpoint(old_query.checkpoint()?).await.is_err());
+    let before = query.checkpoint()?;
+    let mut foreign = before.clone();
+    foreign.plan_identity.push_str("-foreign");
+    assert!(query.restore_checkpoint(foreign).await.is_err());
+    assert_eq!(query.checkpoint()?, before);
     let prepared = query.prepare(relational::inputs(&initial, compiled.relational(), 1)?).await?;
     assert_eq!(prepared.output().batch.iter().count(), 1);
     query.commit(prepared)?;

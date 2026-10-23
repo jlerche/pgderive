@@ -178,7 +178,6 @@ fn bind_targets(
     let mut columns = Vec::new();
     for target in targets {
         let column = match target.value {
-            syntax::Value::Column(name) => resolve(&name)?,
             syntax::Value::Typed(value) => {
                 crate::compiler::typed::computed(&value, resolve, computed, context.scalar_scope)?
             }

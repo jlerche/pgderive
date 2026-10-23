@@ -82,12 +82,18 @@ def qualify(output,command):
         assert 1<mutations['delete']<10 and 1<mutations['insert']<10,mutations
         worker.finish(graceful=True)
         progress=fixture.sql(f'SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p')
+        definition=fixture.sql(f"SELECT pg_get_indexdef('{fixture.index()}'::regclass)")
         fixture.sql(f'DROP INDEX {fixture.index()}')
-        worker=fixture.start(command,'backfilled'); reopened=worker.event('ready')
+        boundary=fixture.boundary()
+        invalid=fixture.start(command,'missing-index'); invalid.process.wait(timeout=60); invalid.abort()
+        assert invalid.process.returncode!=0
+        assert 'lookup index definition changed' in (output/'missing-index/stderr.log').read_text()
+        assert fixture.boundary()==boundary
+        assert fixture.sql(f"SELECT to_regclass('{fixture.index()}') IS NULL").strip()=='t'
+        fixture.sql(definition)
+        worker=fixture.start(command,'repaired'); reopened=worker.event('ready')
         assert reopened['time']==event['time'] and reopened['slot']==ready['slot']
-        fixture.verify()
-        assert fixture.sql(f"SELECT to_regclass('{fixture.index()}') IS NOT NULL").strip()=='t'
-        worker.finish(graceful=True)
+        fixture.verify(); worker.finish(graceful=True)
         # Wrong definitions are never dropped/replaced automatically.
         fixture.sql(f'DROP INDEX {fixture.index()}; CREATE INDEX {fixture.index().split(".")[1]} ON {fixture.name}.groups ((1))')
         boundary=fixture.boundary()
@@ -95,7 +101,7 @@ def qualify(output,command):
         assert invalid.process.returncode!=0
         assert 'lookup index definition changed' in (output/'wrong-index/stderr.log').read_text()
         assert fixture.boundary()==boundary
-        fixture.sql(f'DROP INDEX {fixture.index()}')
+        fixture.sql(f'DROP INDEX {fixture.index()}'); fixture.sql(definition)
         worker=fixture.start(command,'restored'); worker.event('ready'); fixture.verify()
         before=counts(observed)
         fixture.sql(f'DELETE FROM {fixture.name}.bid')
@@ -103,7 +109,7 @@ def qualify(output,command):
         assert counts(observed)['delete']-before['delete']>1
         (output/'result.json').write_text(json.dumps({'ordinary_table':True,'initial_batches':initial,'mutation_batches':mutations,
             'sink_phase_us':event['publication_us']['sink_dml'],'binary_source_oracle':True,'native_mv':True,
-            'backfill_same_boundary':True,'wrong_index_rejected':True,'final_drain':True,'initial_progress':progress})+'\n')
+            'missing_index_rejected':True,'explicit_repair_same_boundary':True,'wrong_index_rejected':True,'final_drain':True,'initial_progress':progress})+'\n')
 
 
 def faults(output,command):

@@ -74,13 +74,13 @@ pub(super) async fn check(
     );
     let after = catalog.load_durable(sql, plan).await?.context("missing bulk checkpoint")?;
     ensure!(after == before, "failed bulk publication changed membership");
-    backfill(sql, &catalog, plan, schema, &before).await?;
+    missing_index(sql, &catalog, plan, schema, &before).await?;
     eprintln!(
-        "MVP batched sink native hash collisions, arrays, large values, decode aliases, underflow rollback and index backfill verified"
+        "MVP batched sink native hash collisions, arrays, large values, decode aliases, underflow rollback and missing-index rejection verified"
     );
     Ok(())
 }
-async fn backfill(
+async fn missing_index(
     sql: &mut Client,
     catalog: &Catalog,
     plan: &Plan,
@@ -94,11 +94,25 @@ async fn backfill(
         )
         .await?
         .try_get(0)?;
+    let name = format!("{schema}.pgderive_sink_lookup_{oid}");
+    let definition: String = sql
+        .query_one("SELECT pg_catalog.pg_get_indexdef($1::text::regclass)", &[&name])
+        .await?
+        .try_get(0)?;
     sql.batch_execute(&format!("DROP INDEX {schema}.pgderive_sink_lookup_{oid}")).await?;
+    ensure!(
+        catalog.claim(sql, plan, before.binding.clone()).await.is_err(),
+        "missing index was accepted"
+    );
+    sql.batch_execute(&definition).await?;
+    ensure!(
+        catalog.load_durable(sql, plan).await?.as_ref() == Some(before),
+        "rejected claim changed durable state"
+    );
     let reclaimed = catalog.claim(sql, plan, before.binding.clone()).await?;
     ensure!(
         reclaimed.epoch() == before.stored.epoch && reclaimed.end().to_string() == "0/4",
-        "index backfill changed progress"
+        "index repair changed progress"
     );
     Ok(())
 }

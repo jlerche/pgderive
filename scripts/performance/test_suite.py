@@ -10,7 +10,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from common import ROOT, distribution, wait
 from compare import environment_mismatches, latency_verdict, throughput_check, verdict
-from fixture import (Fixture, compatible_worker_template, effective_proxy_profile,
+from fixture import (Fixture, effective_proxy_profile,
                      effective_risingwave_sql, effective_worker_config)
 from run import close_fixtures
 from summarize import marker_progress
@@ -18,17 +18,6 @@ from workload import observe_prefix, operation
 
 
 class SuiteTests(unittest.TestCase):
-    def test_compatibility_template_strips_only_epoch_section(self):
-        import tomllib
-        original = (ROOT / 'worker.example.toml').read_text().split('[worker.query]')[0]
-        expected = tomllib.loads(original)
-        expected['worker'].pop('epoch', None)
-        actual = tomllib.loads(compatible_worker_template(original))
-        self.assertEqual(actual, expected)
-        text = '[worker]\nphase_metrics=false\n[worker.epoch] # scheduler\nfreshness_ms=100\n[worker.health]\nbacklog_alert_bytes=100\n'
-        self.assertEqual(tomllib.loads(compatible_worker_template(text)),
-                         {'worker': {'phase_metrics': False, 'health': {'backlog_alert_bytes': 100}}})
-
     def test_child_exit_is_not_a_retryable_startup_error(self):
         predicate = mock.Mock(side_effect=ChildProcessError('engine exited'))
         with self.assertRaises(ChildProcessError):

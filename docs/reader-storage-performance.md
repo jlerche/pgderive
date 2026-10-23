@@ -12,13 +12,10 @@ shared retention while checking every committed block and consolidated weight.
 
 ## Controlled experiment
 
-`python3 scripts/reader_format_experiment.py --baseline-ref d7368d1 --repeat 7`
-creates independent temporary source snapshots and Cargo targets, builds release
-executables, shuffles seven samples per case with seed 712, and retains build
-logs, raw test outputs, per-sample JSON and min/median/max summaries. It never
-connects to PostgreSQL or publishes catalog membership. Candidate codecs live
-only in the temporary experiment source; production Cargo dependencies do not
-include bincode or zstd. The common gate checks operator correctness separately.
+The retired format experiment used independent temporary snapshots and release
+executables, with seven shuffled samples per case (seed 712). Its executable
+harness and candidate codecs have been removed. The measurements below remain
+historical evidence; production uses the bounded canonical JSON+Zstd codec.
 
 The actual reader/execution fixture uses `object_store`'s `InMemory` adapter,
 4,096 canonical `(i64, String)` rows, 128-row blocks, a shared 8 MiB/128-entry
@@ -75,11 +72,11 @@ and a failed merged-span load followed by retry.
 
 Typed binary cannot silently replace the existing generic `BatchData` contract:
 an ordered serde untagged domain value roundtrips through JSON but the measured
-bincode candidate returns `DeserializeAnyNotSupported`. The reproducible
-experiment includes that contract regression. A production typed codec would need
+bincode candidate returns `DeserializeAnyNotSupported`. The retired
+experiment included that contract regression. A production typed codec would need
 an explicit supported-type boundary, durable codec/version identity, bounded
-compression decoding, legacy JSON fallback and separate native-type qualification.
-The experiment envelope is intentionally confined to unpublished fixture storage.
+compression decoding and separate native-type qualification. It would replace
+the current format explicitly, without compatibility decoders.
 
 The memory-batch cursor still constructs owned row storage from its tree; this
 change does not remove that initial clone. Streaming output still owns each row
@@ -179,13 +176,10 @@ production performance timings. The existing clone-count test measures only
 minimum-head selection; aggregate allocation counters do not attribute work to
 cloning versus decoding, hashing, serialization or operators.
 
-Reproduce these supplemental measurements with
-`python3 scripts/reader_format_experiment/profile.py --baseline-ref d7368d1`.
-The helper builds independent temporary sources and targets, retains failed perf
-output, collects uninstrumented GNU time data, and then adds the library-provided
-dhat allocator only inside the temporary snapshots. Production dependencies are
-unchanged. Raw compact measurements, summaries, tool availability and executable
-checksums are preserved in [CPU/allocator samples](reader-storage-profile-samples.json).
+These supplemental measurements came from the retired experiment's temporary
+snapshots, GNU time and a dhat allocator confined to the experiment. Raw compact
+measurements, summaries, tool availability and executable checksums are preserved
+in [CPU/allocator samples](reader-storage-profile-samples.json).
 
 ## Shared immutable memory cursors
 

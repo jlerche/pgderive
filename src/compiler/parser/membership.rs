@@ -26,25 +26,6 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         checked.where_clause = None;
     }
     let mut parsed = super::partition::parse(&checked)?;
-    // Keep the graph/column identities of existing column-only registrations.
-    if let Ok(columns) = super::projection_columns(&select.target_list) {
-        parsed.targets = columns
-            .into_iter()
-            .map(|(name, label)| super::partition::Target {
-                value: super::partition::Value::Column(name),
-                label,
-            })
-            .collect();
-    }
-    if existence.is_none() && parsed.expansion.is_none() {
-        parsed.source = match parsed.source {
-            super::partition::Source::Native(table) => {
-                super::partition::Source::Join(Tree::Source(table))
-            }
-            other => other,
-        };
-    }
-
     if let Some((query, anti)) = existence {
         parsed.source = super::partition::Source::Join(existence_source(select, query, anti)?);
     }

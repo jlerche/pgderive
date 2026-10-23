@@ -15,7 +15,6 @@ pub(in crate::compiler) enum Source {
 }
 #[derive(Clone)]
 pub(in crate::compiler) enum Value {
-    Column(Name),
     Typed(Box<Node>),
     Aggregate(Box<Aggregate>),
 }

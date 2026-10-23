@@ -18,8 +18,9 @@ underflow or suppressed DML must abort the complete publication transaction.
 A nonunique fixed-width hash expression index narrows candidate lookups. Hashes
 are not identity: the final predicate compares native send representations,
 including NULL, numeric scale and array metadata. Distinct representations may
-share a hash. Index installation/backfill and validation occur at initialization,
-including compatible old tables; no index catalog polling is added per computation.
+share a hash. New destinations create the index at initialization. Restart validates the existing
+index and rejects missing or altered definitions; it never backfills old tables.
+No index catalog polling is added per computation.
 The index is ordinary PostgreSQL storage infrastructure, not durable engine state.
 
 Keep the existing million-occurrence transaction cap. Batches target at most 512
@@ -31,17 +32,16 @@ compatible. Rebuild/drop must retain normal PostgreSQL table/index lifecycle.
 
 Acceptance requires exact typed/binary identity and pgoutput, duplicates/NULLs,
 hash collisions (including numeric scale), multi-batch retractions and insertion,
-large values, missing/suppressed DML rollback, cold restart and old-table index
-backfill. Measure query counts, index plans/buffer work and complete publication
+large values, missing/suppressed DML rollback, cold restart and missing/altered index rejection. Measure query counts, index plans/buffer work and complete publication
 cost with explicit index storage/write tradeoffs. No production capacity claim.
 
-Initialization may build an index over an existing destination, taking PostgreSQL's
-normal CREATE INDEX lock and requiring the destination owner's index privileges.
+New destination initialization creates its index with PostgreSQL's ordinary
+CREATE INDEX locking and privilege requirements.
 A conflicting index with the reserved name fails initialization with a repair
 error. The index adds storage and write amplification; its fixed-width key avoids
 index tuple limits for wide output values. Hash collisions affect lookup work,
 never occurrence identity. Dropping the index during a run preserves correctness
-but loses indexed lookup until initialization backfills it.
+and restart rejects the missing index until it is explicitly repaired.
 
 The qualification harness includes 1,800-row source transactions, multi-chunk
 key moves and drains, later-chunk trigger suppression and missing occurrences.

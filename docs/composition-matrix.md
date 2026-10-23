@@ -103,7 +103,6 @@ records per-case trace/result hashes and the bounded qualification scope.
 Subsequent persisted existence counts intentionally change the EXISTS/NOT EXISTS
 plan layout. The old EXISTS compatibility result above is historical, not a
 current promise: those registrations now require explicit `query rebuild`.
-SELECT DISTINCT cursor execution keeps its existing layout. The historical
-`membership_checkpoint_harness.py` verifies the older acceptance behavior;
-current rejection/rebuild-boundary tests are in `worker/tests/membership_counts.rs`.
+The obsolete cross-binary compatibility harness has been removed. Current
+checkpoint identity and wide-count tests are in `worker/tests/membership_counts.rs`.
 See [the current adaptation](incremental-group-adaptation.md).
