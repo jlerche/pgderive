@@ -9,6 +9,7 @@ mod harness;
 mod listener;
 mod numeric;
 mod outcome;
+mod replication;
 mod semantics;
 pub mod source;
 mod storage;

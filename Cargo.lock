@@ -1620,7 +1620,9 @@ dependencies = [
 
 [[package]]
 name = "pgwire-replication"
-version = "0.4.1"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a50650abe90031924c509ad2a3ac1e8f1cb8387dceb0fa4c1db382ea36f6b22"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1632,6 +1634,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tracing",
  "webpki-roots 0.26.11",
 ]

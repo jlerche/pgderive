@@ -126,6 +126,7 @@ impl Config {
             &self.replication.slot,
             self.replication.publication.as_str(),
         )
+        .with_max_message_size(crate::replication::MAX_PAYLOAD)
         .with_port(pg.port)
         .with_tls(tls)
         .with_options("-c DateStyle=ISO,MDY -c TimeZone=UTC -c IntervalStyle=iso_8601")

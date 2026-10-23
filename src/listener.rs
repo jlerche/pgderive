@@ -1,9 +1,10 @@
+use crate::replication::Client as ReplicationClient;
 use crate::{
     Config,
     transaction::{Decoder, Transaction},
 };
 use anyhow::{Context, Result, bail};
-use pgwire_replication::{ReplicationClient, ReplicationEvent};
+use pgwire_replication::ReplicationEvent;
 use postgres_replication::protocol::LogicalReplicationMessage;
 use std::io::{self, Write};
 use tokio::sync::{mpsc, oneshot};
@@ -25,9 +26,7 @@ pub async fn run(
     observed: Option<mpsc::Sender<Transaction>>,
 ) -> Result<()> {
     config.validate()?;
-    let mut client = ReplicationClient::connect(config.replication_config())
-        .await
-        .context("connecting replication stream")?;
+    let mut client = ReplicationClient::connect(config.replication_config());
     eprintln!("replication connected; diagnostic mode, durable acknowledgement disabled");
     if let Some(ready) = ready {
         let _ = ready.send(());

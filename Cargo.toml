@@ -14,7 +14,7 @@ num-bigint = { version = "0.4", features = ["serde"] }
 native-tls = "0.2"
 postgres-native-tls = "0.5"
 object_store = { version = "0.14.2", default-features = false, features = ["fs", "aws"] }
-pgwire-replication = "=0.4.1"
+pgwire-replication = "=0.5.0"
 postgres-replication = { git = "https://github.com/supabase/rust-postgres", rev = "8086f1fd19bd9abc0da86ba80f8b7dbdd676cb3e" }
 replication-control = { package = "tokio-postgres", git = "https://github.com/supabase/rust-postgres", rev = "8086f1fd19bd9abc0da86ba80f8b7dbdd676cb3e", default-features = false, features = ["runtime"] }
 replication-control-tls = { package = "postgres-native-tls", git = "https://github.com/supabase/rust-postgres", rev = "8086f1fd19bd9abc0da86ba80f8b7dbdd676cb3e" }
@@ -65,9 +65,6 @@ as_conversions = "deny"
 wildcard_imports = "deny"
 
 [patch.crates-io]
-# Upstream 0.4.1 with a 1 MiB pre-allocation frame cap; see vendor README.pgderive.md.
-pgwire-replication = { path = "vendor/pgwire-replication" }
-
 # Namespace bundled xxHash to coexist with pg_query; see vendor/lz4-sys/README.pgderive.md.
 lz4-sys = { path = "vendor/lz4-sys" }
 

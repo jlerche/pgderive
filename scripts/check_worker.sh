@@ -170,7 +170,7 @@ credential_info=private_credential.stat()
 assert stat.S_ISREG(credential_info.st_mode) and stat.S_IMODE(credential_info.st_mode)==0o600
 assert credential_info.st_uid==10001
 files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),pathlib.Path(sys.argv[3]).with_name('postgres_tls_control_probe'),
-       *sorted((root/'src').rglob('*.rs')), *sorted((root/'src').rglob('*.sql')), *sorted((root/'vendor/pgwire-replication/src').rglob('*.rs')),
+       *sorted((root/'src').rglob('*.rs')), *sorted((root/'src').rglob('*.sql')),
        *sorted((root/'docs').glob('*.md')), root/'.dockerignore', *sorted((root/'deploy').glob('*')), output/'package/bin/pgderive',
        *sorted((root/'scripts').glob('*.sh')), *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(path for path in output.rglob('*.json') if path != private_credential),
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]

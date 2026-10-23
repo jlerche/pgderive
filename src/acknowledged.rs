@@ -1,5 +1,6 @@
 //! Registered source stream whose feedback follows verified durable publication.
 mod reader;
+use crate::replication::Client as ReplicationClient;
 use crate::{
     Config,
     catalog::{Durable, Lsn, Writer},
@@ -7,7 +8,6 @@ use crate::{
     transaction::Transaction,
 };
 use anyhow::{Context, Result, ensure};
-use pgwire_replication::ReplicationClient;
 use tokio_postgres::Client;
 
 pub struct Stream {
@@ -40,9 +40,7 @@ impl Stream {
             .with_buffer_size(1)
             .with_status_interval(std::time::Duration::from_millis(100))
             .with_wakeup_interval(std::time::Duration::from_millis(100));
-        let client = ReplicationClient::connect(replication)
-            .await
-            .context("connecting registered durable source")?;
+        let client = ReplicationClient::connect(replication);
         let feedback = Box::new(client.durable_feedback());
         let bytes = config
             .worker

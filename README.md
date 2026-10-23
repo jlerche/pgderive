@@ -883,8 +883,9 @@ latency, cache bytes/entries/hits/misses, maintenance and retries. The worker
 processes one source transaction at a time, with one pgwire event of read-ahead.
 Execution limits bound decoded transaction output, operator contributions,
 resident consolidation, scratch, finalized batches and cache. They are not an
-RSS bound. The vendored pgwire framing patch rejects payloads over 1 MiB before
-allocation; a one-event channel limits read-ahead. The wire cap is independent
+RSS bound. The upstream pgwire framing reader rejects payloads over 1 MiB before
+allocation in every connection phase, including authentication and startup;
+a one-event channel limits read-ahead. The wire cap is independent
 of operator budgets, and an oversized frame fails without acknowledging it. WAL retention/backlog requires independent operational
 monitoring; crash consistency does not bound retained source WAL.
 

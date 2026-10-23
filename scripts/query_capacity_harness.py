@@ -152,14 +152,16 @@ def qualify(output,binary):
         assert {key:value for key,value in after.items() if key!='fence'} == {key:value for key,value in retried.items() if key!='fence'}
         assert fixture.sql(f"SELECT confirmed_flush_lsn > '{before['checkpoint_lsn']}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'").strip()=='f'
         for ordinal in range(5):
-            fixture.sql(f'UPDATE {fixture.name}.bid SET price={ordinal} WHERE id={ordinal+3}')
+            watermark = fixture.sql(f'UPDATE {fixture.name}.bid SET price={ordinal} WHERE id={ordinal+3} RETURNING pg_current_wal_insert_lsn()').splitlines()[0]
         while time.monotonic()-outage<60:
             time.sleep(max(0,min(1,60-(time.monotonic()-outage))))
         duration=time.monotonic()-outage
         proxy.send_signal(signal.SIGCONT); config.write_text(text)
         worker,sampler=start('restart','supervisor-recovered')
-        worker.event('ready')
-        worker.event('published',minimum_time=before['logical_time']+6)
+        caught_up = worker.event('ready')
+        # Source commits can share one DBSP epoch; wait for their WAL boundary.
+        while fixture.sql(f"SELECT '{caught_up['end_lsn']}'::pg_lsn >= '{watermark}'::pg_lsn").strip() != 't':
+            caught_up = worker.event('published')
         verify(fixture,labels); worker.finish(graceful=True)
         peak=max(peak,sampler.finish())
         physical_inventory=inventory(fixture)

@@ -22,7 +22,7 @@ def fault(output, binary, stage, mode):
         old_slot = old['registration']['slot_name']
         source = [fixture.sql(f'SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM {fixture.name}.{table} t') for table in ('auction','bid')]
         markers = {'intent':'pgderive_generations VALUES',
-                   'activation':'pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn) VALUES',
+                   'activation':'pgderive_progress(query_id,binding,sink_table,fence,commit_lsn,end_lsn,',
                    'cutover':'/* lifecycle:cutover */',
                    'retirement':'/* lifecycle:removal-complete */'}
         evidence = output/'fault.jsonl'

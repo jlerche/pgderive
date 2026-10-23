@@ -64,6 +64,7 @@ async fn public_entry_points_validate_before_connecting() -> Result<()> {
 #[test]
 fn replication_pins_canonical_native_text_settings() -> Result<()> {
     let settings = fixture()?.replication_config();
+    assert_eq!(settings.max_message_size, crate::replication::MAX_PAYLOAD);
     assert_eq!(
         settings.options.as_deref(),
         Some("-c DateStyle=ISO,MDY -c TimeZone=UTC -c IntervalStyle=iso_8601")

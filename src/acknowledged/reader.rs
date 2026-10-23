@@ -1,11 +1,12 @@
 //! Bounded committed-transaction read-ahead; feedback belongs to the consumer.
+use crate::replication::Client as ReplicationClient;
 use crate::{
     Config,
     catalog::{Durable, Lsn},
     transaction::{Decoder, Transaction},
 };
 use anyhow::{Context, Result, bail};
-use pgwire_replication::{ReplicationClient, ReplicationEvent};
+use pgwire_replication::ReplicationEvent;
 use postgres_replication::protocol::LogicalReplicationMessage;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc, watch};
