@@ -2,8 +2,8 @@
 use super::{open::Open, program::relational::Key};
 use crate::{catalog::Protection, engine::plan::relational::UploadedFlush, transaction::Row};
 use anyhow::{Context, Result, ensure};
-use std::time::Instant;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 type Uploaded = UploadedFlush<Key, Row>;
 pub(super) struct Pending {
@@ -134,16 +134,4 @@ pub(super) async fn cancel(open: &mut Open) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::bounded_work;
-
-    #[test]
-    fn replay_budget_counts_all_epochs_since_durable_checkpoint() {
-        assert!(!bounded_work(140, 12, 4096, 1));
-        assert!(bounded_work(140, 12, 4097, 1));
-        assert!(bounded_work(248, 1, 10, 9));
-        assert!(!bounded_work(247, 1, 10, 9));
-        assert!(!bounded_work(121, 119, 1000, 1));
-        assert!(bounded_work(122, 120, 1001, 1));
-    }
-}
+mod tests;

@@ -34,7 +34,7 @@ pub struct Transaction {
     #[serde(skip)]
     pub(super) commit_time_micros: Option<i64>,
     #[serde(skip)]
-    pub(super) received_at: Option<std::time::Instant>,
+    pub(super) received_at: Option<tokio::time::Instant>,
 }
 
 struct Relation {

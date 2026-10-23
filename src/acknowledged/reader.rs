@@ -94,7 +94,7 @@ impl Reader {
             ReplicationEvent::Commit { lsn, end_lsn, commit_time_micros } => {
                 let mut transaction = self.decoder.commit(lsn.to_string(), end_lsn.to_string())?;
                 transaction.commit_time_micros = Some(commit_time_micros);
-                transaction.received_at = Some(std::time::Instant::now());
+                transaction.received_at = Some(tokio::time::Instant::now());
                 if transaction.end_lsn.parse::<Lsn>()? > self.checkpoint {
                     return Ok(Some(transaction));
                 }

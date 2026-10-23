@@ -3,7 +3,7 @@ use crate::{
     transaction::{Change, Operation},
     weighted,
 };
-fn transaction(xid: u32, changes: Vec<Change>) -> Result<Transaction> {
+pub(super) fn transaction(xid: u32, changes: Vec<Change>) -> Result<Transaction> {
     let batch = weighted::Batch::from_changes(&changes)?;
     Ok(Transaction {
         xid,
@@ -16,7 +16,7 @@ fn transaction(xid: u32, changes: Vec<Change>) -> Result<Transaction> {
         received_at: None,
     })
 }
-fn insert(table: &str, values: &[(&str, Option<&str>)]) -> Change {
+pub(super) fn insert(table: &str, values: &[(&str, Option<&str>)]) -> Change {
     Change {
         schema: "source".into(),
         table: table.into(),
@@ -81,10 +81,10 @@ async fn epoch_joins_include_cross_terms_and_preserve_nulls() -> Result<()> {
 }
 #[test]
 fn source_clock_age_handles_absence_future_and_invalid_values() {
-    assert_eq!(source_age(None), Duration::ZERO);
-    assert_eq!(source_age(Some(-1)), Duration::ZERO);
-    assert_eq!(source_age(Some(i64::MAX)), Duration::ZERO);
-    assert!(!source_age(Some(1)).is_zero());
+    assert_eq!(source_age(None, SystemTime::now()), Duration::ZERO);
+    assert_eq!(source_age(Some(-1), SystemTime::now()), Duration::ZERO);
+    assert_eq!(source_age(Some(i64::MAX), SystemTime::now()), Duration::ZERO);
+    assert!(!source_age(Some(1), SystemTime::now()).is_zero());
 }
 #[test]
 fn adaptive_policy_learns_cost_and_avoids_sparse_or_late_waits() -> Result<()> {

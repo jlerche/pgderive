@@ -69,4 +69,5 @@ wildcard_imports = "deny"
 lz4-sys = { path = "vendor/lz4-sys" }
 
 [dev-dependencies]
-# Fault injection and request accounting for durable object-store scheduling tests.
+# Paused Tokio time exercises production scheduling and timeout paths without real sleeps.
+tokio = { version = "1", features = ["test-util"] }

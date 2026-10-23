@@ -9,7 +9,8 @@ pub(super) use collect::{Bounds, Collector};
 pub(super) use count::Count;
 pub(super) use policy::Controller;
 pub use policy::Policy;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::time::Instant;
 
 pub(super) struct Epoch {
     transaction: Transaction,
@@ -20,9 +21,17 @@ pub(super) struct Epoch {
 }
 impl Epoch {
     pub(super) fn new(transaction: Transaction, decode_us: u128) -> Result<Self> {
+        Self::at(transaction, decode_us, Instant::now(), SystemTime::now())
+    }
+    fn at(
+        transaction: Transaction,
+        decode_us: u128,
+        opened: Instant,
+        wall: SystemTime,
+    ) -> Result<Self> {
         Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
-        let source_age = source_age(transaction.commit_time_micros);
-        Ok(Self { transaction, transactions: 1, decode_us, opened: Instant::now(), source_age })
+        let source_age = source_age(transaction.commit_time_micros, wall);
+        Ok(Self { transaction, transactions: 1, decode_us, opened, source_age })
     }
     pub(super) fn push(
         &mut self,
@@ -89,11 +98,11 @@ impl Epoch {
         f64::from(changes).max(f64::from(bytes) / 256.0).max(1.0)
     }
 }
-fn source_age(commit: Option<i64>) -> Duration {
+fn source_age(commit: Option<i64>, wall: SystemTime) -> Duration {
     let Some(commit) = commit.and_then(|value| u64::try_from(value).ok()) else {
         return Duration::ZERO;
     };
-    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+    let Ok(now) = wall.duration_since(UNIX_EPOCH) else {
         return Duration::ZERO;
     };
     let committed = Duration::from_hours(262_968).saturating_add(Duration::from_micros(commit));

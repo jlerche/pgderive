@@ -296,6 +296,78 @@ The first measured scheduler comparison and its limitations are recorded in
 Use the adaptive implementation as the baseline for future regression checks;
 its predecessor is retained to document the transaction-at-a-time bottleneck.
 
+## Fast development validation
+
+Routine development uses production-path replay and virtual-time component tests,
+not the hours-long paced qualification matrix:
+
+```sh
+python3 scripts/fast_validation.py --output artifacts/fast-validation/check-001
+python3 scripts/fast_validation.py --mode growth --release \
+  --output artifacts/fast-validation/growth-001
+```
+
+The first command runs the actual epoch collector/controller with paused Tokio
+monotonic time, then compiles and replays the existing application grammar against
+its independent full-source oracle. Defaults cover projection, grouping, inner
+and left joins, derived queries and windows across three seeds. Rollbacks are
+excluded from committed input; simultaneous changes to both inputs stay in one
+transaction. Full weighted bags, emitted deltas and cold checkpoint restore are
+checked. The generator and oracle are `scripts/application_model.py`, also used
+by the live application qualification. There is no second implementation of the
+engine or query semantics. Saved `application-trace-N.json` files can be replayed
+with `--replay PATH`, or fed to the existing live application harness and reducer.
+
+Virtual tests offer 1,000 row changes per logical second without wall-clock sleeps.
+They check coalescing, source ordering, resource-held input, idle deadlines and
+shutdown. A one-hour upload timeout and twelve-hour idle interval advance in
+virtual time. Wall time remains separate from monotonic time, source LSNs and DBSP
+logical time. This is component testing, not a simulation of PostgreSQL or a claim
+about real freshness. The upload timeout test checks task ownership/cancellation;
+the live harness checks durable protection and acknowledgement.
+
+Growth mode preloads 1,000, 8,000 and 32,000 groups, compacts and cold-restores them,
+then runs eight warmup updates and 32 measured updates per case, with three repeats
+per size. It uses the same replay engine and application oracle. Reported
+`prepare_commit_ns` excludes compilation, preload, warmup, oracle evaluation,
+input adaptation and output integration. Reports also include weighted input
+counts, cache misses, charged memtable bytes and output-group counts. These are
+local microbenchmarks against an in-memory object backend, not end-to-end latency,
+S3 request measurements, allocator/RSS bounds or qualified regression baselines.
+Use `--state-rows N ...` and `--repeats N` for targeted investigations. Compilation
+is timed separately; omit `--release` for a fast debug check rather than comparable
+optimized performance measurements.
+
+For real durability integration, reuse the existing event-controlled harness:
+
+```sh
+cargo build --locked --bin pgderive_worker
+python3 scripts/fast_validation.py --mode integration \
+  --worker target/debug/pgderive_worker --output artifacts/fast-validation/live-001
+```
+
+This uses the same local PostgreSQL/object-service prerequisites as
+`scripts/check_worker.sh` (`PGDERIVE_TEST_POSTGRES_PORT` selects PostgreSQL), with
+isolated fixture schemas and sequential cases. It holds checkpoint PUTs, witnesses
+160 newer epochs, and exercises crash/replay, pressure, shutdown and timeout
+boundaries. Storage delay is zero except for explicit event holds. It preserves
+failed evidence and uses the existing native oracle and ACK/protection checks.
+The live application harness accepts the saved traces through `--replay` for an
+additional native-MV cross-check. Keep a short paced real-system run when changing
+the publication path; the existing performance runner supports short diagnostic
+runs, which intentionally cannot qualify its repeated regression gate.
+
+Each fast run requires a new output directory. Replay runs record executable and
+trace hashes, build/test timings and engine results; live runs record the worker
+hash and the existing per-case integration evidence. Zero selected tests, missing case
+reports, missing oracle checks and incomplete measurement arrays fail validation.
+The checked-in replay fixture is generated from `fast_replay.traces([1],
+transactions=8)` and `fast_replay.export`, and a unit test checks regeneration.
+The independent common check `./scripts/check.sh` is still required before commits.
+Broad repeated real benchmarks and long soaks remain periodic qualification;
+the interrupted collection is retained as incomplete evidence and is not restarted
+by the fast runner.
+
 ## Growing state and recovery qualification
 
 The separate soak runner keeps one aggregate circuit alive as source rows and

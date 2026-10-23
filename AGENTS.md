@@ -19,6 +19,18 @@ in object storage. Build small, independently testable steps toward that design.
 - Docker PostgreSQL is disposable: use tmpfs, never persistent Docker volumes
   or bind-mounted database storage. Do not recreate shared PoC containers.
 
+## Implementation approach
+
+- Reuse existing production code, workloads, traces, oracles, and harnesses before
+  introducing new implementations. Refactor shared behavior into one place when
+  needed; tests should exercise the production path rather than duplicate it.
+- Prefer removing and simplifying code over adding code or another execution
+  path. New abstractions must serve a concrete current use.
+- This project is still in development. Make hard cutovers when changing an
+  interface or state model: update all callers and remove superseded code. Do not
+  add backwards compatibility, legacy paths, migration adapters, or fallbacks to
+  preserve the old implementation.
+
 ## Rust quality rules
 
 - Use the pinned toolchain and rustfmt configuration. All compiler warnings are

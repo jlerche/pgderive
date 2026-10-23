@@ -359,3 +359,5 @@ fn peer_changes() -> [weighted::Batch; 4] {
         batch(vec![("bid", c, -1), ("bid", moved, -3), ("bid", a, -1)]),
     ]
 }
+
+mod fast_replay;

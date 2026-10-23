@@ -2,16 +2,39 @@ use super::{Controller, Epoch, Policy, policy::Decision};
 use crate::{acknowledged::Stream, engine::execution::Limits, transaction::Transaction};
 use anyhow::Result;
 use futures_util::FutureExt;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 pub(in crate::worker) struct Input {
     pub(in crate::worker) transaction: Transaction,
     pub(in crate::worker) decode_us: u128,
 }
 #[derive(Default)]
-pub(in crate::worker) struct Collector {
+pub(in crate::worker) struct Collector<C = WallTime> {
     held: Option<Input>,
+    clock: C,
+}
+/// Wall time converts `PostgreSQL` commit timestamps to age; monotonic waits use Tokio.
+pub(in crate::worker) trait Clock: Send + Sync {
+    fn wall(&self) -> SystemTime;
+}
+#[derive(Default)]
+pub(in crate::worker) struct WallTime;
+impl Clock for WallTime {
+    fn wall(&self) -> SystemTime {
+        SystemTime::now()
+    }
+}
+/// Complete committed inputs. Adapters must preserve cancellation-safe reception.
+pub(in crate::worker) trait InputStream: Send {
+    fn input(&mut self) -> impl std::future::Future<Output = Result<Input>> + Send;
+}
+impl InputStream for Stream {
+    async fn input(&mut self) -> Result<Input> {
+        let transaction = self.recv().await?;
+        Ok(Input { transaction, decode_us: self.decode_us() })
+    }
 }
 pub(in crate::worker) struct Bounds<'a> {
     pub(in crate::worker) limits: Limits,
@@ -25,23 +48,23 @@ pub(in crate::worker) struct Collected {
     pub(in crate::worker) reason: &'static str,
     pub(in crate::worker) predicted: Duration,
 }
-impl Collector {
-    pub(in crate::worker) async fn recv(&mut self, stream: &mut Stream) -> Result<Input> {
+impl<C: Clock> Collector<C> {
+    pub(in crate::worker) async fn recv(&mut self, stream: &mut impl InputStream) -> Result<Input> {
         if let Some(input) = self.held.take() {
             return Ok(input);
         }
-        let transaction = stream.recv().await?;
-        Ok(Input { transaction, decode_us: stream.decode_us() })
+        stream.input().await
     }
     pub(in crate::worker) async fn gather(
         &mut self,
         first: Input,
-        stream: &mut Stream,
+        stream: &mut impl InputStream,
         scheduler: &mut Controller,
         bounds: Bounds<'_>,
     ) -> Result<Collected> {
         scheduler.observe(first.transaction.commit_time_micros);
-        let mut epoch = Epoch::new(first.transaction, first.decode_us)?;
+        let mut epoch =
+            Epoch::at(first.transaction, first.decode_us, Instant::now(), self.clock.wall())?;
         loop {
             let decision = scheduler.decision(&epoch);
             let reason = ceiling(&epoch, &bounds)
@@ -106,11 +129,11 @@ fn fits(epoch: &Epoch, next: &Transaction, bounds: &Bounds<'_>) -> bool {
             .is_some_and(|n| n <= bounds.limits.output_entries.min(bounds.limits.contributions))
 }
 async fn receive(
-    stream: &mut Stream,
+    stream: &mut impl InputStream,
     stop: &mut watch::Receiver<bool>,
     decision: Decision,
 ) -> Result<Option<Input>> {
-    let transaction = if let Some(ready) = stream.recv().now_or_never() {
+    let input = if let Some(ready) = stream.input().now_or_never() {
         Some(ready?)
     } else if decision.wait.is_zero() {
         None
@@ -118,8 +141,11 @@ async fn receive(
         tokio::select! {
             signal=stop.changed()=>{signal?;None}
             ()=tokio::time::sleep(decision.wait)=>None,
-            transaction=stream.recv()=>Some(transaction?),
+            transaction=stream.input()=>Some(transaction?),
         }
     };
-    Ok(transaction.map(|transaction| Input { transaction, decode_us: stream.decode_us() }))
+    Ok(input)
 }
+
+#[cfg(test)]
+mod tests;
