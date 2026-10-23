@@ -27,62 +27,48 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     }
 }
 pub(super) fn legacy(selectors: Query, contract: &Contract) -> Result<Compiled> {
-    use super::parser::{
-        native_join::Tree,
-        partition::{self as syntax, Aggregate, Target, Value},
-        scalar::Key,
+    use super::parser::{native_join::Tree, partition::Value, scalar::Key};
+    // Parse fixed placeholders, then inject names without SQL identifier truncation.
+    let Parsed::Partition(mut parsed) = super::parser::parse(
+        "SELECT l.g AS g,COUNT(*) AS count,SUM(r.v) AS sum \
+         FROM ls.lt l JOIN rs.rt r ON l.k=r.k GROUP BY l.g",
+    )?
+    else {
+        anyhow::bail!("legacy template requires a partition");
     };
-    use super::partition::Function;
-    let group = Name(vec!["l".into(), selectors.group.clone()]);
-    let left = Table {
-        name: Name(vec![selectors.left_schema, selectors.left_table]),
-        alias: Some("l".into()),
+    let super::parser::partition::Source::Join { tree, validated } = &mut parsed.source else {
+        anyhow::bail!("legacy template requires a join");
     };
-    let right = Table {
-        name: Name(vec![selectors.right_schema, selectors.right_table]),
-        alias: Some("r".into()),
+    let Tree::Join { left, right, keys, .. } = tree else {
+        anyhow::bail!("legacy template requires a binary join");
     };
-    let mut targets = vec![Target { value: Value::Column(group.clone()), label: selectors.group }];
-    for (function, argument, label) in [
-        (Function::Count, None, "count"),
-        (
-            Function::Sum,
-            Some(syntax::Argument::Column(Name(vec!["r".into(), selectors.sum]))),
-            "sum",
-        ),
-    ] {
-        targets.push(Target {
-            value: Value::Aggregate(Box::new(Aggregate {
-                function,
-                argument,
-                filter: None,
-                window: None,
-                navigation: None,
-            })),
-            label: label.into(),
-        });
-    }
-    partition::bind(
-        syntax::Parsed {
-            source: syntax::Source::Join {
-                tree: Tree::Join {
-                    left: Box::new(Tree::Source(left)),
-                    right: Box::new(Tree::Source(right)),
-                    keys: vec![(
-                        Key::Column(Name(vec!["l".into(), selectors.left_key])),
-                        Key::Column(Name(vec!["r".into(), selectors.right_key])),
-                    )],
-                    outer: false,
-                },
-                validated: true,
-            },
-            targets,
-            groups: vec![Key::Column(group)],
-            predicate: None,
-            expansion: None,
-        },
-        contract,
-    )
+    let (Tree::Source(left), Tree::Source(right)) = (left.as_mut(), right.as_mut()) else {
+        anyhow::bail!("legacy template requires native sources");
+    };
+    left.name = Name(vec![selectors.left_schema, selectors.left_table]);
+    right.name = Name(vec![selectors.right_schema, selectors.right_table]);
+    *keys = vec![(
+        Key::Column(Name(vec!["l".into(), selectors.left_key])),
+        Key::Column(Name(vec!["r".into(), selectors.right_key])),
+    )];
+    *validated = true;
+    let [group, _, sum] = parsed.targets.as_mut_slice() else {
+        anyhow::bail!("legacy template requires group, count and sum outputs");
+    };
+    let group_name = Name(vec!["l".into(), selectors.group.clone()]);
+    group.value = Value::Column(group_name.clone());
+    group.label = selectors.group;
+    parsed.groups = vec![Key::Column(group_name)];
+    let Value::Aggregate(aggregate) = &mut sum.value else {
+        anyhow::bail!("legacy template requires SUM");
+    };
+    ensure!(
+        matches!(aggregate.function, super::partition::Function::Sum),
+        "legacy template requires SUM"
+    );
+    aggregate.argument =
+        Some(super::parser::partition::Argument::Column(Name(vec!["r".into(), selectors.sum])));
+    partition::bind(parsed, contract)
 }
 
 fn scope(table: Table, contract: &Contract) -> Result<Scope<'_>> {
