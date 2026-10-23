@@ -17,14 +17,7 @@ pub struct Storage {
     region: Option<String>,
     #[serde(default)]
     ca_file: Option<PathBuf>,
-    #[serde(default)]
-    credentials_file: Option<PathBuf>,
-    #[serde(default)]
-    access_key_id: String,
-    #[serde(default)]
-    secret_access_key: String,
-    #[serde(default)]
-    session_token: Option<String>,
+    credentials_file: PathBuf,
 }
 impl Storage {
     pub fn validate(&self) -> Result<()> {
@@ -57,21 +50,7 @@ impl Storage {
                 "invalid S3 region"
             );
         }
-        let inline = !self.access_key_id.is_empty() && !self.secret_access_key.is_empty();
-        if self.credentials_file.is_some() {
-            ensure!(
-                self.access_key_id.is_empty()
-                    && self.secret_access_key.is_empty()
-                    && self.session_token.is_none(),
-                "credential file conflicts with inline credentials"
-            );
-        } else {
-            ensure!(inline, "missing S3 credentials");
-            ensure!(
-                self.session_token.as_ref().is_none_or(|token| !token.is_empty()),
-                "empty S3 session token"
-            );
-        }
+        ensure!(!self.credentials_file.as_os_str().is_empty(), "missing S3 credential file");
         Ok(())
     }
     fn endpoint(&self) -> Result<Url> {
@@ -105,7 +84,7 @@ impl Storage {
     }
     pub fn build(&self, prefix: &str) -> Result<Arc<dyn ObjectStore>> {
         self.validate()?;
-        let credentials = credentials::load(self)?;
+        let credentials = credentials::load(&self.credentials_file)?;
         let mut options = ClientOptions::new()
             .with_allow_http(self.endpoint()?.scheme() == "http")
             .with_timeout(std::time::Duration::from_secs(30))

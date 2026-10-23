@@ -26,8 +26,9 @@ Errors do not include document contents. Nonblocking descriptor opening prevents
 FIFO paths from hanging startup; the opened descriptor is checked before reading.
 Protect parent directories and provision the file through your secret manager.
 Credential files are read when constructing the client; rotation requires a
-worker restart. Inline credentials remain available for fixture compatibility;
-file and inline credentials cannot be combined.
+worker restart. Storage configuration requires `credentials_file`; inline
+credential fields are rejected. For local fixtures, copy `s3.example.json` to a
+private file with `install -m 600 s3.example.json s3.local.json`.
 
 Before initial query registration, HTTPS startup performs a read-only HEAD probe
 under the owned prefix. Missing probe objects are expected. The probe verifies

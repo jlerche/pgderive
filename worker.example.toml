@@ -20,10 +20,9 @@ max_transaction_changes = 100000
 [object_store]
 endpoint = "http://127.0.0.1:8333"
 bucket = "pgderive-mvp-tests"
-access_key_id = "local"
-secret_access_key = "local"
+credentials_file = "s3.local.json"
 # For remote storage, replace this section with the HTTPS example in
-# docs/storage-configuration.md. Do not combine inline and file credentials.
+# docs/storage-configuration.md. Only credential files are accepted.
 
 # Each operator spills exact coefficients before reaching these resident limits.
 # Byte budgets count serialized records, with separate entry caps for overhead.

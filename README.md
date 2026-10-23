@@ -59,7 +59,7 @@ continuation of an existing logical-replication stream.
 existing registration. Both hold exclusive query ownership across that check
 and worker startup. Each catalog schema must use one object-store root prefix
 so garbage collection can mark all query and reader roots safely. The diagnostic
-listener's original `cargo run -- config.local.toml` interface remains available.
+listener uses `pgderive listen CONFIG.toml`.
 
 `query drop CONFIG.toml` takes exclusive query ownership, journals removal intent,
 fences prior writers and removes the exact registered physical slot. It retires
@@ -176,8 +176,9 @@ or a substitute for the independent correctness oracles.
 
 ```bash
 cp config.example.toml config.local.toml
+install -m 600 s3.example.json s3.local.json
 export PGDERIVE__POSTGRES__PASSWORD=postgres
-cargo run --locked --bin pgderive -- config.local.toml
+cargo run --locked --bin pgderive -- listen config.local.toml
 ```
 
 The TOML file selects the PostgreSQL endpoint, existing logical replication slot,

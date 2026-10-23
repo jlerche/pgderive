@@ -1,5 +1,4 @@
 //! Private, bounded credential documents; errors never include credential contents.
-use super::Storage;
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use std::{fs::File, io::Read};
@@ -12,14 +11,7 @@ pub(super) struct Credentials {
     #[serde(default)]
     pub(super) session_token: Option<String>,
 }
-pub(super) fn load(storage: &Storage) -> Result<Credentials> {
-    let Some(path) = &storage.credentials_file else {
-        return Ok(Credentials {
-            access_key_id: storage.access_key_id.clone(),
-            secret_access_key: storage.secret_access_key.clone(),
-            session_token: storage.session_token.clone(),
-        });
-    };
+pub(super) fn load(path: &std::path::Path) -> Result<Credentials> {
     let file = open(path)?;
     let metadata = file.metadata()?;
     ensure!(metadata.is_file(), "credential path must be a regular file");

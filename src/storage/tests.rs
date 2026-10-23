@@ -1,10 +1,19 @@
 use super::Storage;
 use anyhow::Result;
+#[cfg(unix)]
+fn credential_file() -> Result<tempfile::NamedTempFile> {
+    use std::io::Write as _;
+    let mut file = tempfile::NamedTempFile::new()?;
+    file.write_all(br#"{"access_key_id":"local","secret_access_key":"local"}"#)?;
+    Ok(file)
+}
+#[cfg(unix)]
 #[test]
 fn storage_configuration_rejects_shared_buckets_and_remote_endpoints() -> Result<()> {
-    let mut storage: Storage = serde_json::from_str(
-        r#"{"endpoint":"http://127.0.0.1:8334","bucket":"pgderive-tests","access_key_id":"local","secret_access_key":"local"}"#,
-    )?;
+    let file = credential_file()?;
+    let mut storage: Storage = serde_json::from_value(serde_json::json!({
+        "endpoint":"http://127.0.0.1:8334","bucket":"pgderive-tests","credentials_file":file.path()
+    }))?;
     storage.build("fixture")?;
     storage.bucket = "dataflow".into();
     assert!(storage.validate().is_err());
@@ -12,16 +21,18 @@ fn storage_configuration_rejects_shared_buckets_and_remote_endpoints() -> Result
     storage.endpoint = "https://remote".into();
     assert!(storage.validate().is_err());
     storage.endpoint = "http://localhost:8334".into();
-    storage.access_key_id.clear();
+    storage.credentials_file.clear();
     assert!(storage.validate().is_err());
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn https_endpoints_require_region_and_reject_credential_bearing_urls() -> Result<()> {
-    let mut storage: Storage = serde_json::from_str(
-        r#"{"endpoint":"https://objects.example.test:9443","bucket":"application-results","region":"custom-region","access_key_id":"local","secret_access_key":"local"}"#,
-    )?;
+    let file = credential_file()?;
+    let mut storage: Storage = serde_json::from_value(serde_json::json!({
+        "endpoint":"https://objects.example.test:9443","bucket":"application-results","region":"custom-region","credentials_file":file.path()
+    }))?;
     storage.build("owned-prefix")?;
     for endpoint in [
         "http://remote:9000",
@@ -49,13 +60,10 @@ fn credential_files_are_private_bounded_and_do_not_expose_secrets_in_errors() ->
     use std::{io::Write as _, os::unix::fs::PermissionsExt as _};
     let mut file = tempfile::NamedTempFile::new()?;
     file.write_all(br#"{"access_key_id":"local","secret_access_key":"sensitive-value","session_token":"temporary"}"#)?;
-    let mut storage: Storage = serde_json::from_value(
+    let storage: Storage = serde_json::from_value(
         serde_json::json!({"endpoint":"https://objects.example.test","bucket":"application-results","region":"custom-region","credentials_file":file.path()}),
     )?;
     storage.build("owned-prefix")?;
-    storage.access_key_id = "conflicting".into();
-    assert!(storage.validate().is_err());
-    storage.access_key_id.clear();
     std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644))?;
     assert!(storage.build("owned-prefix").is_err());
     std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600))?;
@@ -86,4 +94,17 @@ fn credential_fifo_is_rejected_without_waiting_for_a_writer() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("FIFO credentials accepted"))?;
     assert!(format!("{error:#}").contains("regular file"));
     Ok(())
+}
+
+#[test]
+fn storage_requires_a_file_and_rejects_inline_credential_fields() {
+    let mut config =
+        serde_json::json!({"endpoint":"http://127.0.0.1:8334","bucket":"pgderive-tests"});
+    assert!(serde_json::from_value::<Storage>(config.clone()).is_err());
+    config["credentials_file"] = serde_json::json!("fixture.json");
+    for field in ["access_key_id", "secret_access_key", "session_token"] {
+        let mut invalid = config.clone();
+        invalid[field] = serde_json::json!("removed-inline-value");
+        assert!(serde_json::from_value::<Storage>(invalid).is_err());
+    }
 }

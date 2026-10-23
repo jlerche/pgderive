@@ -126,6 +126,9 @@ class Fixture:
         return subprocess.check_output(self.pg + [text], env=self.environment, text=True)
 
     def config(self, maximum=0, *, query=None, execution=True):
+        credentials = self.output / 's3.json'
+        credentials.write_text(json.dumps({'access_key_id':'local','secret_access_key':'local'})+'\n')
+        credentials.chmod(0o600)
         if query is None:
             query = f'SELECT a.category,COUNT(*),SUM(b.price) FROM {self.name}.auction a JOIN {self.name}.bid b ON a.id=b.auction GROUP BY a.category'
         query = 'sql='+json.dumps(query, ensure_ascii=False)+'\n'
@@ -147,8 +150,7 @@ publication="{self.name}"
 [object_store]
 endpoint="http://127.0.0.1:8333"
 bucket="pgderive-mvp-tests"
-access_key_id="local"
-secret_access_key="local"
+credentials_file={json.dumps(str(credentials.resolve()))}
 [worker]
 catalog_schema="{self.name}"
 query_id="grouped"

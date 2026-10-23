@@ -28,6 +28,8 @@ fi
 mkdir -p artifacts/replication
 output=$(mktemp -d "$PWD/artifacts/replication/run-XXXXXXXX")
 printf 'Evidence: %s\n' "$output"
+install -m 600 s3.example.json "$output/s3.json"
+export PGDERIVE__OBJECT_STORE__CREDENTIALS_FILE="$output/s3.json"
 if PGDERIVE__POSTGRES__PASSWORD="$PGPASSWORD" python3 scripts/run_with_s3_proxy.py "$output" "${harness[@]}"; then
     cat "$output/harness.log"
 else

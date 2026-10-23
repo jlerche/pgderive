@@ -27,7 +27,7 @@ def effective_worker_config(text):
     """Stable executed settings without credentials or per-run connection locations."""
     config = tomllib.loads(text)
     dynamic = {'host', 'port', 'database', 'user', 'password', 'endpoint',
-               'access_key_id', 'secret_access_key', 'credentials_file', 'ca_file'}
+               'credentials_file', 'ca_file'}
     def scrub(value):
         if isinstance(value, dict):
             return {key: scrub(item) for key, item in value.items() if key not in dynamic}
@@ -147,8 +147,12 @@ class Fixture:
         reader.start(); self.readers.append(reader)
 
     def start_pgderive(self):
+        credentials = self.directory/'s3.json'
+        credentials.write_text(json.dumps({'access_key_id':'local','secret_access_key':'local'})+'\n')
+        credentials.chmod(0o600)
         template = (ROOT / 'worker.example.toml').read_text().split('[worker.query]')[0]
-        replacements = {'port = 55434': f'port = {self.pg_port}',
+        replacements = {'credentials_file = "s3.local.json"': 'credentials_file = '+json.dumps(str(credentials.resolve())),
+            'port = 55434': f'port = {self.pg_port}',
             'database = "pgderive_dev"': 'database = "postgres"',
             'publication = "pgderive_worker_pub"': 'publication = "compare_pub"',
             'endpoint = "http://127.0.0.1:8333"': f'endpoint = "http://127.0.0.1:{self.proxy_port}"',

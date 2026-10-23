@@ -67,6 +67,9 @@ def ready(action):
 
 
 def configuration(output, pg_port, object_port, diagnostic=False):
+    credentials = output/'s3.json'
+    credentials.write_text(json.dumps({'access_key_id':'local','secret_access_key':'local'})+'\n')
+    credentials.chmod(0o600)
     path = output/('stdout.toml' if diagnostic else 'worker.toml')
     query = (HERE/'query.sql').read_text().strip()
     path.write_text(f'''[postgres]
@@ -81,8 +84,7 @@ publication="demo_source"
 [object_store]
 endpoint="http://127.0.0.1:{object_port}"
 bucket="pgderive-demo"
-access_key_id="local"
-secret_access_key="local"
+credentials_file={json.dumps(str(credentials.resolve()))}
 [worker]
 catalog_schema="demo_engine"
 query_id="{'stdout' if diagnostic else 'totals'}"

@@ -2,3 +2,5 @@ target/
 __pycache__/
 /config.local.toml
 /artifacts/
+
+/s3.local.json
