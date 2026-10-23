@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 
-from common import ROOT, RW_IMAGE, SCHEMA_VERSION, S3_IMAGE, docker, host_observation, save, sha256
+from common import DEFAULT_WARMUP_WINDOWS, DEFAULT_WINDOW_SECONDS, ROOT, RW_IMAGE, SCHEMA_VERSION, S3_IMAGE, docker, host_observation, save, sha256
 from fixture import Fixture
 from workload import run
 
@@ -26,7 +26,7 @@ def arguments():
     parser.add_argument('--risingwave', action='store_true')
     parser.add_argument('--execution-mode', choices=['sequential', 'concurrent'], default='sequential')
     parser.add_argument('--pair-order', choices=['baseline-first', 'candidate-first'], default='baseline-first')
-    parser.add_argument('--warmup-windows', type=int, default=1)
+    parser.add_argument('--warmup-windows', type=int, default=DEFAULT_WARMUP_WINDOWS)
     parser.add_argument('--maximum-host-load-per-cpu', type=float, default=.25)
     parser.add_argument('--output', type=pathlib.Path, required=True)
     parser.add_argument('--duration', type=int, default=60)
@@ -37,7 +37,7 @@ def arguments():
     parser.add_argument('--transaction-mix', choices=['autocommit', 'varied'], default='autocommit')
     parser.add_argument('--burst-seconds', type=float, default=0)
     parser.add_argument('--proxy-scale', type=float, default=1)
-    parser.add_argument('--window-seconds', type=int, default=60)
+    parser.add_argument('--window-seconds', type=int, default=DEFAULT_WINDOW_SECONDS)
     parser.add_argument('--sample-seconds', type=float, default=10)
     parser.add_argument('--poll-ms', type=float, default=10)
     parser.add_argument('--drain-seconds', type=int, default=180)
@@ -98,7 +98,8 @@ def main():
             subprocess.run(['docker', 'pull', image], check=True)
     args.output.mkdir(parents=True)
     run_id = 'pgd-perf-' + uuid.uuid4().hex[:12]
-    harness_files = [*pathlib.Path(__file__).parent.glob('*.py'), ROOT/'scripts/s3_latency_proxy.py', ROOT/'worker.example.toml']
+    harness_files = [*pathlib.Path(__file__).parent.glob('*.py'), ROOT/'scripts/s3_latency_proxy.py', ROOT/'worker.example.toml',
+                     ROOT/'scripts/performance/scenarios.json']
     manifest = {'harness_sha256': {str(p.relative_to(ROOT)):sha256(p) for p in sorted(harness_files)}, 'schema_version': SCHEMA_VERSION, 'run_id': run_id,
         'started_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'git_head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),

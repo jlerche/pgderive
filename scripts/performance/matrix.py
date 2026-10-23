@@ -5,7 +5,24 @@ import json
 import pathlib
 import subprocess
 import sys
-from common import SCHEMA_VERSION
+from common import DEFAULT_WARMUP_WINDOWS, DEFAULT_WINDOW_SECONDS, SCHEMA_VERSION, growth_intervals
+
+
+
+def validate_catalog(specification):
+    profiles = specification['qualification_profiles']
+    catalog = specification['scenarios']
+    if not profiles or len(profiles) != len(set(profiles)) or any(name not in catalog for name in profiles):
+        raise ValueError('Qualification profiles must be unique known catalog scenarios')
+    for name in profiles:
+        parameters = catalog[name]
+        duration = parameters['duration']
+        width = parameters.get('window_seconds', DEFAULT_WINDOW_SECONDS)
+        warmup = parameters.get('warmup_windows', DEFAULT_WARMUP_WINDOWS)
+        try:
+            growth_intervals(duration, width, warmup)
+        except ValueError as error:
+            raise ValueError(name + ': ' + str(error)) from error
 
 
 def main():
@@ -21,6 +38,10 @@ def main():
     specification = json.loads((root / 'scenarios.json').read_text())
     if specification['schema_version'] != SCHEMA_VERSION:
         parser.error('Scenario catalog must use current evidence schema')
+    try:
+        validate_catalog(specification)
+    except ValueError as error:
+        parser.error(str(error))
     catalog = specification['scenarios']
     if args.repeats < 1 or any(name not in catalog for name in args.scenarios):
         parser.error('Positive repeats and valid catalog scenario names required')

@@ -1,5 +1,6 @@
 """Sequential pairing must tear down every fixture before starting the next."""
 import contextlib
+import copy
 import json
 import pathlib
 import sys
@@ -104,6 +105,16 @@ class ExecutionTests(unittest.TestCase):
             self.assertTrue(attempts[0]['errors'])
             self.assertEqual(attempts[1]['errors'], [])
             self.assertEqual(removals, ['owned-b', 'owned-a', 'owned-b'])
+
+    def test_qualification_catalog_has_enough_complete_trend_windows(self):
+        specification = json.loads((pathlib.Path(matrix.__file__).parent/'scenarios.json').read_text())
+        matrix.validate_catalog(specification)
+        self.assertEqual(len(specification['qualification_profiles']), 6)
+        for replacement in [{'window_seconds': 60}, {'window_seconds': 32}, {'warmup_windows': 9}]:
+            invalid = copy.deepcopy(specification)
+            invalid['scenarios']['storage-stress'].update(replacement)
+            with self.subTest(parameters=replacement), self.assertRaisesRegex(ValueError, 'storage-stress: qualification'):
+                matrix.validate_catalog(invalid)
 
     def test_matrix_alternates_actual_pair_order(self):
         with tempfile.TemporaryDirectory() as name, mock.patch.object(matrix.subprocess, 'run') as invoke:

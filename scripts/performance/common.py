@@ -10,6 +10,8 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCHEMA_VERSION = 3
+DEFAULT_WINDOW_SECONDS = 60
+DEFAULT_WARMUP_WINDOWS = 1
 RW_IMAGE = 'risingwavelabs/risingwave@sha256:ee2e8e7a10b728d01b0e149d2a4f35864f0f52a0c889fa6cf9bc32c8ff46c602'
 S3_IMAGE = 'chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d'
 QUERY = 'SELECT book_id,COUNT(*) AS positions,SUM(quantity) AS units FROM public.positions GROUP BY book_id'
@@ -28,6 +30,16 @@ def docker(*args):
     return subprocess.check_output(['docker', *args], text=True).strip()
 
 
+
+
+def growth_intervals(duration, width, warmup):
+    if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in [duration, width, warmup]):
+        raise ValueError('duration, window and warmup must be positive integers')
+    full = duration // width
+    third = (full - warmup) // 3
+    if duration % width or third < 2:
+        raise ValueError('qualification needs complete equal windows, warmup and at least six steady windows')
+    return [(warmup * width, (warmup + third) * width), ((full - third) * width, full * width)]
 
 def host_observation(owned_prefix):
     containers = docker('ps', '--filter', 'label=pgderive.performance', '--format', '{{.Names}}').splitlines()

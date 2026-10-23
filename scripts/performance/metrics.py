@@ -3,7 +3,7 @@ import gzip
 import json
 import math
 
-from common import distribution
+from common import distribution, growth_intervals
 from request_metrics import object_requests
 
 
@@ -122,14 +122,12 @@ def extract_engine(directory, engine, parameters):
     scalars['final_pending_changes'] = 0
     scalars['cpu_ms_per_source_change'] = number(engine['process_cpu_seconds']) * 1000 / max(1, number(engine['source_changes']))
     trends = {}
-    full = duration // width
-    steady = full - warmup
-    third = steady // 3
-    if duration % width or warmup < 1 or third < 2:
-        issues.append('Growth qualification needs warmup plus at least six complete steady windows')
+    try:
+        intervals = growth_intervals(duration, width, warmup)
+    except ValueError as error:
+        issues.append(str(error))
     else:
-        ranges = [(start + warmup * width, start + (warmup + third) * width),
-                  (start + (full - third) * width, start + full * width)]
+        ranges = [(start + begin, start + end) for begin, end in intervals]
         parts = [aggregate(*args, object_requests(directory, bounds), *bounds) for bounds in ranges]
         trend_names = ['sink_visibility_ms_p95', 'processing_ms_p95', 'received_to_sink_ms_p95',
                        'checkpoint_wall_ms_p95', 'peak_pending_changes', 'peak_rss_bytes',

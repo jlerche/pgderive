@@ -39,19 +39,22 @@
       "rate": 1000,
       "state_rows": 12000,
       "groups": 1000,
-      "proxy_scale": 3
+      "proxy_scale": 3,
+      "window_seconds": 30
     },
     "capacity-2000": {
       "duration": 300,
       "rate": 2000,
       "state_rows": 12000,
-      "groups": 1000
+      "groups": 1000,
+      "window_seconds": 30
     },
     "capacity-5000": {
       "duration": 300,
       "rate": 5000,
       "state_rows": 12000,
-      "groups": 1000
+      "groups": 1000,
+      "window_seconds": 30
     },
     "wide-autocommit": {
       "duration": 600,
@@ -92,5 +95,13 @@
       "workload": "mixed",
       "burst_seconds": 1
     }
-  }
+  },
+  "qualification_profiles": [
+    "steady-autocommit",
+    "varied-transactions",
+    "bursty-varied",
+    "varied-growth",
+    "wide-autocommit",
+    "storage-stress"
+  ]
 }

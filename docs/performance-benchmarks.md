@@ -187,8 +187,11 @@ windows after `--warmup-windows` (default one), and sufficient raw observations.
 Overall timing metrics need at least 20 marker/processing/receipt observations,
 three checkpoints and three resource samples. Each growth third needs at least
 20 marker/processing/receipt observations, one checkpoint and two resource samples.
-Missing evidence fails qualification. Short smoke runs remain useful diagnostics
-but cannot pass the performance gate. Unknown request sizes and transport errors
+Missing evidence fails qualification. The catalog declares the six required `qualification_profiles`; matrix preflight
+rejects insufficient window coverage before starting any fixture. The 300-second
+storage/capacity profiles use 30-second windows; 600-second profiles use the
+60-second default. Short smoke runs remain useful diagnostics but cannot pass
+the performance gate. Unknown request sizes and transport errors
 also prevent qualification.
 
 The default practical margins are 2 ms for timing distributions, 1 microsecond of
