@@ -4,7 +4,9 @@ The local suite compares immutable baseline and candidate Pgderive executables,
 optionally alongside a digest-pinned RisingWave single node. Each engine has its
 own PostgreSQL database, SeaweedFS instance and seeded object-storage latency
 proxy. Producers run concurrently and never wait for sink publication. Every
-measured DML statement affects exactly one row and commits using autocommit.
+measured DML statement affects exactly one row. Source transactions are either
+single-statement autocommits or an explicit deterministic mixture through 1,000
+statements; pacing always targets row changes per second.
 This is a performance experiment, not a replacement for crash/replay tests.
 
 ## Run
@@ -20,7 +22,7 @@ two engines, and an additional pair plus up to 8 GiB for optional RisingWave.
 python3 scripts/performance/run.py \
   --baseline artifacts/performance/binaries/baseline \
   --candidate target/package-release/x86_64-unknown-linux-gnu/release/pgderive \
-  --risingwave --duration 600 --rate 1000 \
+  --risingwave --duration 600 --rate 1000 --transaction-mix varied \
   --output artifacts/performance/autocommit-001
 
 python3 scripts/performance/matrix.py \
@@ -58,27 +60,35 @@ to output group count and must be kept constant in comparisons.
 
 `mixed` alternates marker updates, inserts and a mixture of deletes and additional
 inserts. New books and source rows grow without a cap. Every statement still
-changes exactly one row. Marker updates sample one third of commits. Insert and
-delete visibility latency is **not** inferred from that sample. Final grouped
+changes exactly one row. Marker updates occur every third statement; a transaction
+is sampled if it contains a marker update. Its last marker represents that complete
+commit even when inserts/deletes follow it inside the same transaction. Insert-only
+and delete-only transaction visibility is **not** inferred from that sample. Final grouped
 results are compared against a native PostgreSQL aggregation for both engines;
 RisingWave's native materialized view is also checked.
 
 The producer stops at the requested wall-clock duration. If it cannot sustain
-the offered rate, its actual transaction count and achieved rate reveal that
-shortfall; it does not extend the experiment to disguise overload. All generated
-transactions are single-row and source throughput is consequently transactions/s
-as well as rows/s. All connections have 10-second statement and 3-second lock timeouts, plus a
-3-second connection timeout. Producer DML permits up to 15 seconds. Final drain
+the offered rate, its actual row-change and transaction counts and achieved rate reveal that
+shortfall; it does not extend the experiment to disguise overload. `--transaction-mix autocommit` is the default. `varied` cycles through
+`1,2,1,8,1,32,1,128,1,512,1,4,1,16,1,64,1,256,1,1000` row changes per commit.
+Half of source commits are single-statement autocommits; larger transactions use
+explicit transaction blocks. The final transaction is shortened to the offered row
+budget. Row changes include repeated updates of a key inside one transaction,
+which the engine may consolidate before evaluation. `--burst-seconds 1` emits each
+second's offered load as a burst. An in-flight transaction finishes atomically even
+if its commit acknowledgement falls beyond the input window. Reports distinguish
+row changes/s, transactions/s, sampled transaction visibility and DBSP epochs. All connections have 10-second statement and 3-second lock timeouts, plus a
+3-second connection timeout. Producer statements and complete source transactions permit up to 15 seconds. Final drain
 time is bounded, and workload connections are canceled/closed during cleanup.
 An engine may publish before the producing client records commit acknowledgement;
 negative observed differences are clamped to zero and are not pure server timing.
 
-`report.json` schema version 1 contains per-engine:
+`report.json` schema version 2 contains per-engine:
 
-- Offered parameters in the adjacent manifest, achieved rows/s and commit count.
+- Offered parameters in the adjacent manifest, achieved row changes/s, commit count and transaction-size distribution.
 - Commit acknowledgement to PostgreSQL sink visibility p50/p95/p99/max.
 - RisingWave native visibility separately from external PostgreSQL sink visibility.
-- Per-window visibility and Pgderive processing distributions.
+- Per-window visibility, Pgderive processing, receipt-to-sink and background checkpoint wall-time distributions.
 - Periodic process CPU, RSS, physical object counts/bytes and retained source WAL.
 - Final source digest, exact native result equality and Pgderive durable progress
   ordering (`acknowledged LSN <= checkpoint LSN <= published end LSN`).
@@ -101,6 +111,13 @@ progress is a lower bound and cannot prove visibility of trailing inserts/delete
 final native equality checks cover those rows. Last-marker drain is not a claim
 of per-row delivery or whole-source-transaction external sink atomicity.
 
+Engine events and completed proxy attempts carry monotonic timestamps. The
+summarizer reports storage attempts by measurement window, separately from totals
+that include initialization and shutdown. The manifest fingerprints the exact
+harness source files and execution settings. Comparison and summary tools accept
+only the current evidence schema; rerun earlier experiments rather than converting
+them or guessing missing fields.
+
 Raw engine events, RisingWave Prometheus snapshots, proxy logs, source commit and
 visibility timestamps, fixture metadata, and container logs remain available for
 analysis. Processing timers and barrier timers measure different work; do not
@@ -118,11 +135,17 @@ observations rather than equal-budget claims.
 `compare.py` compares run-level medians using a practical relative/absolute margin
 and three times run-to-run median absolute deviation. It reports possible
 regressions; `--gate` makes performance findings an exit-code gate. Gate mode requires at least three controlled repeats, matched offered load, and no possible regressions; exploratory comparisons cannot pass. A single run is
-inconclusive regardless of how many rows it contains. Latency verdicts are invalidated unless both source producers achieve the offered rate
-in every measurement window within the configured 2% tolerance and achieve
-comparable commit counts. This checks source acceptance, not consumer capacity;
-inspect visible-prefix throughput and drain time from `summarize.py` before
-claiming an engine sustains a rate. Actual resolved
+inconclusive regardless of how many rows it contains. Latency verdicts are invalidated unless both source producers achieve the offered
+row rate globally within the configured 2% tolerance and achieve comparable row
+counts. Each measurement window permits the greater of that tolerance or one
+maximum transaction quantum to account for atomic commit boundaries. For varied
+transactions use windows long enough that 1,000 rows are a small fraction of the
+window's offered load. Source acceptance and consumer capacity are separate checks. Gate mode additionally
+requires the candidate's observed marker prefix to cover at least 98% of offered
+rows by input end and its final marker to drain within 1,000 ms. Adjust these
+explicitly with `--minimum-consumed-fraction` and `--maximum-drain-ms` for a declared
+qualification policy. Mixed trailing non-marker transactions still require the
+final native equality check; marker drain does not prove individual delivery. Actual resolved
 image IDs, host CPU/memory/affinity, fixture resource limits, executed engine
 configuration, PostgreSQL runtime settings and the proxy startup latency profile
 must match
@@ -140,7 +163,7 @@ starting points for a broader qualification matrix:
 | Transaction overhead | Single-row autocommit, sparse to overload | Executable catalog |
 | State growth | Initial rows/groups, growing inserts/deletes | Executable catalog |
 | Storage | No delay, realistic delay, elevated delay | Executable catalog |
-| Scheduling | Bursts, idle recovery, changing rates, large transactions | Add trace-based producers |
+| Scheduling | Periodic bursts and varied transactions through 1,000 rows | Executable catalog; idle recovery and changing rates remain to add |
 | Query shapes | Projection, joins with both sides changing, DISTINCT, extrema, windows | Extend fixtures using existing correctness portfolios |
 | Distribution | Uniform, Zipf/hot keys, wide fanout, nulls, wide rows | Hot key and growing groups available; expand |
 | Durability | Restart/replay, storage failures, slow sink, checkpoint recovery | Existing durability harnesses; add timed profiles |

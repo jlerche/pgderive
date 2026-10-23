@@ -148,12 +148,13 @@ class Handler(BaseHTTPRequestHandler):
                     response_bytes += len(chunk)
         except (OSError, EOFError, ValueError, http.client.HTTPException) as error:
             # Request/response logs are retained by the harness. No retry in proxy.
-            self.server.record({"error": str(error), "method": self.command})
+            self.server.record({"completed_monotonic": time.monotonic(), "error": str(error), "method": self.command})
             if status == 502:
                 self.send_error(502, "upstream request failed")
         finally:
             connection.close()
-            self.server.record({"method": self.command, "range": self.headers.get("Range"),
+            self.server.record({"completed_monotonic": time.monotonic(),
+                              "method": self.command, "range": self.headers.get("Range"),
                               "path": parsed.path, "listing": "list-type=" in parsed.query,
                               "request_body_bytes": request_bytes, "response_body_bytes": response_bytes,
                               "kind": kind, "ordinal": ordinal, "delay_ms": delay_ms,

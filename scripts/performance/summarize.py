@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Read-only compact summaries of saved benchmark reports and marker timelines."""
 import argparse
-import collections
 import gzip
 import json
 import pathlib
 
 from common import distribution, SCHEMA_VERSION
+from request_metrics import object_requests, request_windows
 
 
 def marker_progress(timeline, duration, arrivals, workload):
@@ -21,14 +21,17 @@ def marker_progress(timeline, duration, arrivals, workload):
     end = start + duration
     records = timeline['transactions']
     accepted = sum(start <= record['commit'] < end for record in records)
+    accepted_changes = sum(record['source_changes'] for record in records if start <= record['commit'] < end)
     markers = {record['tick'] for record in records if record['marker']}
     observed = {int(tick): at for tick, at in arrivals.items() if int(tick) in markers}
     visible = max((tick for tick, at in observed.items() if at <= end), default=0)
     last = max(markers, default=None)
     return {'source_commits_in_input_window': accepted,
-            'source_accepted_rows_per_second': accepted / duration,
+            'source_accepted_rows_per_second': accepted_changes / duration,
+            'source_changes_in_input_window': accepted_changes,
             'visible_marker_prefix_transactions_at_input_end': visible,
             'visible_marker_prefix_transactions_per_second': visible / duration,
+            'visible_marker_prefix_rows_per_second': sum(record['source_changes'] for record in records if record['tick'] <= visible) / duration,
             'prefix_is_lower_bound': workload == 'mixed',
             'marker_samples': len(observed),
             'last_source_marker_tick': last,
@@ -54,41 +57,11 @@ def read_events(directory):
             'event_scope': 'All saved engine events, including post-input drain and shutdown maintenance.'}
 
 
-def object_requests(directory):
-    """Count completed proxy attempt records, including failures and retries."""
-    methods, classes, statuses = collections.Counter(), collections.Counter(), collections.Counter()
-    uploaded = downloaded = unknown_upload_sizes = transport_errors = 0
-    with (directory / 'proxy.jsonl').open() as stream:
-        for line in stream:
-            row = json.loads(line)
-            if 'error' in row:
-                transport_errors += 1
-            if 'ordinal' not in row:
-                continue
-            method = row['method']
-            category = ('class_a' if method == 'PUT' or (method == 'GET' and row['listing']) else
-                        'class_b' if method in {'GET', 'HEAD'} else
-                        'free' if method == 'DELETE' else 'unclassified')
-            methods[method] += 1
-            classes[category] += 1
-            statuses[str(row['status'])] += 1
-            if row['request_body_bytes'] is None:
-                unknown_upload_sizes += 1
-            else:
-                uploaded += row['request_body_bytes']
-            downloaded += row['response_body_bytes']
-    return {'attempts': sum(methods.values()), 'methods': dict(methods),
-            'estimated_r2_classes': dict(classes), 'status_codes': dict(statuses),
-            'transport_errors': transport_errors, 'request_body_bytes': uploaded,
-            'response_body_bytes': downloaded, 'unknown_request_body_sizes': unknown_upload_sizes,
-            'scope': 'All completed proxy attempts, including bootstrap, drain, GC and retries. '
-                     'Class estimates use HTTP method/listing flags; POST is unclassified because '
-                     'multipart versus bulk deletion is not recorded. Not a billing invoice.'}
-
-
 def summarize_report(path):
     report = json.loads(path.read_text())
     manifest = json.loads(path.with_name('manifest.json').read_text())
+    if report.get('schema_version') != SCHEMA_VERSION or manifest.get('schema_version') != SCHEMA_VERSION:
+        raise ValueError('Only current performance evidence schema is accepted; rerun old experiments')
     parameters = manifest['parameters']
     result = {'schema_version': SCHEMA_VERSION, 'run_id': report['run_id'],
               'passed': report['passed'], 'parameters': parameters,
@@ -99,6 +72,8 @@ def summarize_report(path):
             timeline = json.load(stream)
         samples = engine['samples']
         summary = {'source_transactions_total': engine['transactions'],
+                   'source_changes_total': engine['source_changes'],
+                   'transaction_sizes': engine['transaction_sizes'],
                    'source_acceptance_rate_including_late_commits': engine['actual_rows_per_second'],
                    'sink_progress': marker_progress(timeline, parameters['duration'],
                                                    timeline['sink_arrivals'], parameters['workload']),
@@ -110,7 +85,9 @@ def summarize_report(path):
                    'peak_retained_wal_bytes': max((s['retained_wal_bytes'] for s in samples), default=None),
                    'native_equal': engine['oracle_equal'], 'ack_safe': engine.get('ack_safe'),
                    'execution': read_events(directory),
-                   'object_requests': object_requests(directory)}
+                   'object_requests': object_requests(directory),
+                   'object_request_windows': request_windows(directory, timeline['start_monotonic'],
+                                                            parameters['duration'], parameters['window_seconds'])}
         if timeline['native_arrivals']:
             summary['native_progress'] = marker_progress(timeline, parameters['duration'],
                                                         timeline['native_arrivals'], parameters['workload'])

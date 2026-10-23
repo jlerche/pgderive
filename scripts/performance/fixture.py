@@ -134,14 +134,19 @@ class Fixture:
         def read():
             import time
             for line in process.stdout:
-                output.write(line); output.flush()
-                if filename == 'events.jsonl':
-                    try:
-                        event = json.loads(line)
-                        self.events.append({'event': event.get('event'), 'elapsed_ms': event.get('elapsed_ms'),
-                                            '_observed_at': time.monotonic()})
-                    except ValueError:
-                        self.error = 'Unparseable engine event; inspect events.jsonl'
+                if filename != 'events.jsonl':
+                    output.write(line); output.flush()
+                    continue
+                try:
+                    event = json.loads(line)
+                    event['_observed_at'] = time.monotonic()
+                    self.events.append({key: event[key] for key in [
+                        'event', 'elapsed_ms', 'elapsed_us', 'received_to_sink_ms',
+                        'source_transactions', 'changes', '_observed_at'] if key in event})
+                    output.write(json.dumps(event)+'\n'); output.flush()
+                except ValueError:
+                    self.error = 'Unparseable engine event; inspect events.jsonl'
+                    output.write(line); output.flush()
             output.close()
         reader = threading.Thread(target=read, daemon=True)
         reader.start(); self.readers.append(reader)

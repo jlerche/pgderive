@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "scenarios": {
     "smoke": {
       "duration": 10,
@@ -59,6 +59,38 @@
       "state_rows": 12000,
       "groups": 1000,
       "workload": "wide-updates"
+    },
+    "varied-transactions": {
+      "duration": 600,
+      "rate": 1000,
+      "state_rows": 12000,
+      "groups": 1000,
+      "transaction_mix": "varied"
+    },
+    "bursty-varied": {
+      "duration": 600,
+      "rate": 1000,
+      "state_rows": 12000,
+      "groups": 1000,
+      "transaction_mix": "varied",
+      "burst_seconds": 1
+    },
+    "varied-growth": {
+      "duration": 600,
+      "rate": 1000,
+      "state_rows": 12000,
+      "groups": 1000,
+      "transaction_mix": "varied",
+      "workload": "mixed"
+    },
+    "bursty-varied-growth": {
+      "duration": 600,
+      "rate": 1000,
+      "state_rows": 12000,
+      "groups": 1000,
+      "transaction_mix": "varied",
+      "workload": "mixed",
+      "burst_seconds": 1
     }
   }
 }

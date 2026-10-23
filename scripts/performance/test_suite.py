@@ -10,20 +10,100 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from common import ROOT, distribution, wait
-from compare import validate_runs, gate_failures, environment_mismatches, latency_verdict, throughput_check, verdict
+from compare import capacity_check, validate_runs, gate_failures, environment_mismatches, latency_verdict, throughput_check, verdict
 from fixture import (Fixture, effective_proxy_profile,
                      effective_risingwave_sql, effective_worker_config)
 from run import close_fixtures
 from summarize import marker_progress, object_requests
-from workload import observe_prefix, operation
+from request_metrics import request_windows
+from workload import observe_prefix, operation, transaction_size, scheduled_at, execute_transaction, VARIED_SIZES, consumer_progress, in_window, sampling_active, offered_changes
 
 
 class SuiteTests(unittest.TestCase):
+    def test_burst_windows_follow_offered_schedule(self):
+        self.assertEqual([offered_changes(i, i+1, 1000, 4, 2) for i in range(4)],
+                         [2000, 0, 2000, 0])
+        self.assertEqual(offered_changes(0, .5, 1000, 4, 2), 2000)
+        self.assertEqual(offered_changes(3, 4, 1000, 4, 0), 1000)
+        manifest = {'parameters': {'rate':1000, 'duration':4, 'window_seconds':1,
+                                  'transaction_mix':'autocommit', 'burst_seconds':2}}
+        engine = {'windows':[{'start_seconds':i, 'source_changes':n}
+                            for i,n in enumerate([2000,0,2000,0])]}
+        self.assertTrue(throughput_check({'engines':{'baseline':engine,'candidate':engine}},
+                                         manifest)['valid_for_latency_comparison'])
+
+    def test_final_window_excludes_late_commits_and_events(self):
+        self.assertTrue(in_window(109.99, 100, 0, 60, 10))
+        self.assertFalse(in_window(110, 100, 0, 60, 10))
+        self.assertFalse(in_window(110.5, 100, 0, 60, 10))
+        self.assertFalse(in_window(99.9, 100, 0, 60, 10))
+
+    def test_resource_sampling_covers_input_and_bounded_drain(self):
+        producer, observer = mock.Mock(), mock.Mock()
+        producer.is_alive.return_value = False
+        observer.is_alive.return_value = False
+        self.assertTrue(sampling_active(producer, observer, 109, 110, 20))
+        self.assertFalse(sampling_active(producer, observer, 111, 110, 20))
+        observer.is_alive.return_value = True
+        self.assertTrue(sampling_active(producer, observer, 111, 110, 20))
+        self.assertFalse(sampling_active(producer, observer, 130, 110, 20))
+        producer.is_alive.return_value = True
+        self.assertFalse(sampling_active(producer, observer, 131, 110, 20))
+
+    def test_capacity_gate_catches_backlog_even_when_source_accepts_every_row(self):
+        records=[{'tick':1,'marker':True,'source_changes':1000,'last_change':1000},
+                 {'tick':2,'marker':True,'source_changes':1000,'last_change':2000}]
+        progress=consumer_progress(records,{1:101,2:104},100,2)
+        self.assertEqual(progress['visible_prefix_source_changes_at_input_end'],1000)
+        self.assertEqual(progress['last_marker_drain_ms'],2000)
+        report={'engines':{'candidate':{'consumer_progress':progress}}}
+        manifest={'parameters':{'duration':2,'rate':1000}}
+        self.assertFalse(capacity_check(report,manifest,.98,1000)['passed'])
+        progress=consumer_progress(records,{1:101,2:101.9},100,2)
+        report['engines']['candidate']['consumer_progress']=progress
+        self.assertTrue(capacity_check(report,manifest,.98,1000)['passed'])
+
+    def test_varied_transactions_are_bounded_and_row_paced(self):
+        sizes = [transaction_size(i, 10000, 'varied') for i in range(20)]
+        self.assertEqual(sizes, list(VARIED_SIZES))
+        self.assertEqual(sizes.count(1), 10)
+        self.assertEqual(max(sizes), 1000)
+        self.assertEqual(transaction_size(19, 17, 'varied'), 17)
+        self.assertEqual(transaction_size(19, 10000, 'autocommit'), 1)
+        self.assertEqual(scheduled_at(100, 500, 1000, 0), 100.5)
+        self.assertEqual(scheduled_at(100, 999, 1000, 1), 100)
+        self.assertEqual(scheduled_at(100, 1000, 1000, 1), 101)
+
+    def test_explicit_transaction_marks_last_marker_not_last_changed_row(self):
+        args = types.SimpleNamespace(workload='mixed', state_rows=12000)
+        for size in [1, 3]:
+            connection = mock.MagicMock()
+            connection.execute.return_value.rowcount = 1
+            record = execute_transaction(connection, args, 3, size)
+            self.assertEqual(connection.execute.call_count, size)
+            self.assertEqual(connection.transaction.call_count, int(size > 1))
+            self.assertEqual(record['source_changes'], size)
+            self.assertEqual(record['marker_value'], 4 if size == 3 else None)
+            if size == 3:
+                self.assertEqual(record['last_change'], 5)
+                record['tick'] = 1
+                seen = {}
+                self.assertEqual(observe_prefix([record], 0, 4, seen, 100), 1)
+                self.assertEqual(seen, {1:100})
+
+    def test_source_row_rate_is_independent_of_transaction_count(self):
+        manifest = {'parameters':{'rate':1000,'duration':60,'window_seconds':60,
+                                  'transaction_mix':'varied'}}
+        report = {'engines':{label:{'windows':[{'start_seconds':0,
+                   'transactions':transactions,'source_changes':60000}]}
+                   for label,transactions in [('baseline',60000),('candidate',600)]}}
+        self.assertTrue(throughput_check(report,manifest)['valid_for_latency_comparison'])
+
     def test_object_request_accounting_separates_attempts_errors_and_unknown_posts(self):
         def request(method, listing=False, status=200, size=10):
-            return {'ordinal': 1, 'method': method, 'listing': listing, 'status': status,
+            return {'ordinal': 1, 'completed_monotonic':1, 'method': method, 'listing': listing, 'status': status,
                     'request_body_bytes': size, 'response_body_bytes': 20}
-        rows = [{'ready': True}, {'error': 'failed', 'method': 'PUT'},
+        rows = [{'ready': True}, {'error': 'failed', 'method': 'PUT', 'completed_monotonic':1},
                 request('PUT', status=502), request('PUT'), request('GET', listing=True),
                 request('GET'), request('HEAD'), request('DELETE'), request('POST', size=None)]
         with tempfile.TemporaryDirectory() as directory:
@@ -59,7 +139,7 @@ class SuiteTests(unittest.TestCase):
                 verdict([1, 1, 1], values)
 
     def test_gate_rejects_inconclusive_regressing_and_unmatched_evidence(self):
-        result = {'exploratory': False, 'throughput': {'runs': [
+        result = {'capacity':[{'passed':True}], 'exploratory': False, 'throughput': {'runs': [
             {'valid_for_latency_comparison': True}]},
             'latency': verdict([10, 10, 10], [10, 10, 10])}
         self.assertEqual(gate_failures(result), [])
@@ -101,9 +181,9 @@ class SuiteTests(unittest.TestCase):
 
     def test_progress_distinguishes_source_acceptance_from_consumer_cutoff(self):
         timeline = {'start_monotonic': 100, 'transactions': [
-            {'tick': 1, 'commit': 100.1, 'marker': True},
-            {'tick': 2, 'commit': 100.2, 'marker': True},
-            {'tick': 3, 'commit': 100.3, 'marker': True}]}
+            {'tick': 1, 'source_changes': 1, 'commit': 100.1, 'marker': True},
+            {'tick': 2, 'source_changes': 1, 'commit': 100.2, 'marker': True},
+            {'tick': 3, 'source_changes': 1, 'commit': 100.3, 'marker': True}]}
         result = marker_progress(timeline, 1, {'1': 100.5, '2': 101.1, '3': 101.8}, 'updates')
         self.assertEqual(result['source_commits_in_input_window'], 3)
         self.assertEqual(result['visible_marker_prefix_transactions_at_input_end'], 1)
@@ -112,8 +192,8 @@ class SuiteTests(unittest.TestCase):
 
     def test_progress_preserves_client_ack_race_without_inventing_commit_time(self):
         timeline = {'start_monotonic': 100, 'transactions': [
-            {'tick': 1, 'commit': 100.9, 'marker': True},
-            {'tick': 2, 'commit': 101.01, 'marker': True}]}
+            {'tick': 1, 'source_changes': 1, 'commit': 100.9, 'marker': True},
+            {'tick': 2, 'source_changes': 1, 'commit': 101.01, 'marker': True}]}
         result = marker_progress(timeline, 1, {'1': 100.95, '2': 100.99}, 'updates')
         self.assertEqual(result['source_commits_in_input_window'], 1)
         self.assertEqual(result['visible_marker_prefix_transactions_at_input_end'], 2)
@@ -121,7 +201,7 @@ class SuiteTests(unittest.TestCase):
 
     def test_mixed_marker_progress_is_lower_bound_and_unknown_drain_stays_unknown(self):
         timeline = {'start_monotonic': 100, 'transactions': [
-            {'tick': tick, 'commit': 100 + tick / 10, 'marker': tick % 3 == 1}
+            {'tick': tick, 'source_changes': 1, 'commit': 100 + tick / 10, 'marker': tick % 3 == 1}
             for tick in range(1, 7)]}
         result = marker_progress(timeline, 1, {'1': 100.5}, 'mixed')
         self.assertTrue(result['prefix_is_lower_bound'])
@@ -141,9 +221,9 @@ class SuiteTests(unittest.TestCase):
         self.assertEqual(verdict([10, 20, 30], [20, 25, 30])['status'], 'within noise/practical margin')
 
     def test_slow_low_latency_producer_cannot_be_a_win(self):
-        manifest = {'parameters': {'rate': 1000, 'duration': 60, 'window_seconds': 60}}
+        manifest = {'parameters': {'rate': 1000, 'duration': 60, 'window_seconds': 60, 'transaction_mix':'autocommit'}}
         def engine(count):
-            return {'windows': [{'start_seconds': 0, 'transactions': count}]}
+            return {'windows': [{'start_seconds': 0, 'transactions': count, 'source_changes':count}]}
         report = {'engines': {'baseline': engine(60000), 'candidate': engine(6000)}}
         check = throughput_check(report, manifest)
         self.assertFalse(check['valid_for_latency_comparison'])
@@ -153,7 +233,7 @@ class SuiteTests(unittest.TestCase):
         self.assertTrue(throughput_check(report, manifest)['valid_for_latency_comparison'])
 
     def test_mutable_image_and_host_changes_rejected(self):
-        manifest = {'host': {'cpu_affinity': [0, 1]},
+        manifest = {'harness_sha256':{'runner':'abc'}, 'host': {'cpu_affinity': [0, 1]},
                     'fixtures': {'baseline': {'images': {'pg': 'sha256:first'}, 'resources': {'Memory': 4000}}}}
         self.assertEqual(environment_mismatches([manifest, copy.deepcopy(manifest)]), [])
         image_changed = copy.deepcopy(manifest)
@@ -165,6 +245,17 @@ class SuiteTests(unittest.TestCase):
         resource_changed['fixtures']['baseline']['resources']['Memory'] = 8000
         self.assertTrue(environment_mismatches([manifest, resource_changed]))
         self.assertTrue(environment_mismatches([{}]))
+
+    def test_request_windows_exclude_bootstrap_and_later_drain(self):
+        rows = [{'ordinal':i,'method':'PUT','listing':False,'status':200,
+                 'request_body_bytes':0,'response_body_bytes':0,'completed_monotonic':at}
+                for i,at in enumerate([1,2,3])]
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory)
+            (root/'proxy.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in rows))
+            self.assertEqual(object_requests(root,(2,3))['attempts'],1)
+            self.assertEqual(object_requests(root)['attempts'],3)
+            self.assertEqual([r['attempts'] for r in request_windows(root,1,3,1)],[1,1,1])
 
     def test_cleanup_continues_after_process_and_file_races(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -230,8 +321,8 @@ class SuiteTests(unittest.TestCase):
         records, seen = [], {}
         index = observe_prefix(records, 0, 10, seen, 100)
         self.assertEqual(index, 0)
-        records.extend([{'tick': 1, 'marker': True}, {'tick': 2, 'marker': False},
-                        {'tick': 3, 'marker': True}])
+        records.extend([{'tick': 1, 'marker': True, 'marker_value':1}, {'tick': 2, 'marker': False},
+                        {'tick': 3, 'marker': True, 'marker_value':3}])
         index = observe_prefix(records, index, 10, seen, 101)
         self.assertEqual(index, 3)
         self.assertEqual(seen, {1: 101, 3: 101})

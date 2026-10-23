@@ -9,6 +9,8 @@ import json
 import math
 import pathlib
 import statistics
+from common import SCHEMA_VERSION
+from workload import VARIED_SIZES, offered_changes
 
 
 def verdict(baseline, candidate, relative=.10, absolute=2):
@@ -33,11 +35,11 @@ def environment_mismatches(manifests):
     """Require measured image/resource identities, not mutable configured tags."""
     mismatches = []
     for index, manifest in enumerate(manifests):
-        if not manifest.get('fixtures') or not manifest.get('host'):
-            mismatches.append(f'run {index + 1}: missing measured fixture/host fingerprint')
+        if not manifest.get('fixtures') or not manifest.get('host') or not manifest.get('harness_sha256'):
+            mismatches.append(f'run {index + 1}: missing measured fixture/host/harness fingerprint')
     if mismatches:
         return mismatches
-    for field in ['host', 'fixtures']:
+    for field in ['host', 'fixtures', 'harness_sha256']:
         if any(manifest[field] != manifests[0][field] for manifest in manifests[1:]):
             mismatches.append(field + ' fingerprint differs across runs')
     return mismatches
@@ -52,20 +54,26 @@ def throughput_check(report, manifest, tolerance=.02):
     engines, issues = {}, []
     for label in ['baseline', 'candidate']:
         engine = report['engines'][label]
-        actual_windows = {window['start_seconds']: window['transactions'] for window in engine['windows']}
+        actual_windows = {window['start_seconds']: window['source_changes'] for window in engine['windows']}
+        if any(not isinstance(value,int) or isinstance(value,bool) or value < 0 for value in actual_windows.values()):
+            raise ValueError('Source change counts must be nonnegative integers')
         total = sum(actual_windows.values())
-        engines[label] = {'commits_in_measurement_window': total,
+        engines[label] = {'source_changes_in_measurement_window': total,
                          'source_accepted_rows_per_second': total / duration,
                          'offered_rows_per_second': rate,
                          'offered_fraction': total / max(1, expected_total)}
+        if total < expected_total - max(1, expected_total * tolerance):
+            issues.append(f'{label}: total {total}/{expected_total} offered row changes')
         for start in range(0, duration, windows):
-            expected = int(rate * min(windows, duration - start))
+            expected = offered_changes(start, min(start + windows, duration), rate, duration,
+                                       parameters.get('burst_seconds', 0))
             actual = actual_windows.get(start, 0)
-            if actual < expected - max(1, expected * tolerance):
-                issues.append(f'{label} window {start}: {actual}/{expected} offered commits')
-    old, new = (engines[label]['commits_in_measurement_window'] for label in ['baseline', 'candidate'])
+            quantum = max(VARIED_SIZES) if parameters['transaction_mix'] == 'varied' else 1
+            if actual < expected - max(quantum, expected * tolerance):
+                issues.append(f'{label} window {start}: {actual}/{expected} offered row changes')
+    old, new = (engines[label]['source_changes_in_measurement_window'] for label in ['baseline', 'candidate'])
     if abs(old - new) > max(1, max(old, new) * tolerance):
-        issues.append('baseline/candidate achieved commit counts differ')
+        issues.append('baseline/candidate achieved source change counts differ')
     return {'valid_for_latency_comparison': not issues, 'engines': engines, 'issues': issues,
             'tolerance_fraction': tolerance}
 
@@ -77,9 +85,28 @@ def latency_verdict(baseline, candidate, throughput_valid, relative=.10, absolut
     return result
 
 
+def capacity_check(report, manifest, minimum_fraction, maximum_drain_ms):
+    candidate = report['engines']['candidate']['consumer_progress']
+    offered = manifest['parameters']['rate']*manifest['parameters']['duration']
+    prefix = candidate['visible_prefix_source_changes_at_input_end']
+    if not isinstance(prefix,int) or isinstance(prefix,bool) or prefix < 0:
+        raise ValueError('Consumer prefix must be a nonnegative integer row count')
+    fraction = prefix/offered
+    drain = candidate['last_marker_drain_ms']
+    issues = []
+    if fraction < minimum_fraction:
+        issues.append('candidate consumed prefix falls below required offered-load fraction')
+    if not isinstance(drain,(int,float)) or isinstance(drain,bool) or not math.isfinite(drain) or drain < 0 or drain > maximum_drain_ms:
+        issues.append('candidate last-marker drain is missing or exceeds the capacity bound')
+    return {'passed':not issues,'offered_prefix_fraction':fraction,'last_marker_drain_ms':drain,
+            'minimum_fraction':minimum_fraction,'maximum_drain_ms':maximum_drain_ms,'issues':issues}
+
+
 def gate_failures(result):
     """Fail closed when controlled evidence cannot establish a passing comparison."""
     failures = []
+    if any(not run['passed'] for run in result['capacity']):
+        failures.append('candidate consumer capacity bound failed')
     if result['exploratory']:
         failures.append('exploratory environment cannot qualify a release')
     if any(not run['valid_for_latency_comparison'] for run in result['throughput']['runs']):
@@ -111,10 +138,16 @@ def main():
     parser.add_argument('--absolute-ms', type=float, default=2)
     parser.add_argument('--throughput-tolerance', type=float, default=.02)
     parser.add_argument('--exploratory', action='store_true', help='Allow unmatched/missing environment fingerprints; mark results exploratory')
+    parser.add_argument('--minimum-consumed-fraction', type=float, default=.98)
+    parser.add_argument('--maximum-drain-ms', type=float, default=1000)
     parser.add_argument('--gate', action='store_true', help='Fail on regressions, invalid load, exploratory evidence or fewer than three repeats')
     args = parser.parse_args()
+    if not math.isfinite(args.minimum_consumed_fraction) or not 0 < args.minimum_consumed_fraction <= 1 or not math.isfinite(args.maximum_drain_ms) or args.maximum_drain_ms < 0:
+        parser.error('Consumed fraction must be in (0,1]; drain bound must be finite and nonnegative')
     reports = [json.loads(pathlib.Path(path).read_text()) for path in args.reports]
     manifests = [json.loads(pathlib.Path(path).with_name('manifest.json').read_text()) for path in args.reports]
+    if any(row.get('schema_version') != SCHEMA_VERSION for row in [*reports, *manifests]):
+        parser.error('Only current performance evidence schema is accepted; rerun old experiments')
     if args.gate:
         validate_runs(args.reports, reports, manifests)
     ignored = {'output', 'baseline', 'candidate'}
@@ -133,7 +166,9 @@ def main():
         raise SystemExit('Correctness/cleanup failure in supplied report')
     checks = [throughput_check(report, manifest, args.throughput_tolerance) for report, manifest in zip(reports, manifests)]
     throughput_valid = all(check['valid_for_latency_comparison'] for check in checks)
-    result = {'throughput': {'status': 'matched source offered load' if throughput_valid else 'source offered load not sustained or accepted rates differ',
+    capacity = [capacity_check(report, manifest, args.minimum_consumed_fraction, args.maximum_drain_ms)
+                for report,manifest in zip(reports,manifests)]
+    result = {'capacity':capacity, 'throughput': {'status': 'matched source offered load' if throughput_valid else 'source offered load not sustained or accepted rates differ',
                              'runs': checks}, 'environment_mismatches': mismatches,
               'exploratory': bool(mismatches)}
     for metric in ['p50', 'p95', 'p99']:
@@ -142,7 +177,7 @@ def main():
             [r['engines']['candidate']['sink_visibility_ms'][metric] for r in reports],
             throughput_valid, args.relative_margin, args.absolute_ms)
     for metric, extract in [
-        ('cpu_ms_per_transaction', lambda e: e['process_cpu_seconds'] * 1000 / max(1, e['transactions'])),
+        ('cpu_ms_per_source_change', lambda e: e['process_cpu_seconds'] * 1000 / max(1, e['source_changes'])),
         ('peak_rss_bytes', lambda e: max(s['rss_bytes'] for s in e['samples'])),
         ('peak_state_bytes', lambda e: max(s['state']['bytes'] for s in e['samples'])),
         ('peak_retained_wal_bytes', lambda e: max(s['retained_wal_bytes'] for s in e['samples']))]:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible local autocommit comparison. See docs/performance-benchmarks.md."""
+"""Reproducible local transaction workload comparison. See docs/performance-benchmarks.md."""
 import argparse
 import concurrent.futures
 import datetime
@@ -30,6 +30,8 @@ def arguments():
     parser.add_argument('--state-rows', type=int, default=12000)
     parser.add_argument('--groups', type=int, default=1000)
     parser.add_argument('--workload', choices=['updates', 'wide-updates', 'mixed'], default='updates')
+    parser.add_argument('--transaction-mix', choices=['autocommit', 'varied'], default='autocommit')
+    parser.add_argument('--burst-seconds', type=float, default=0)
     parser.add_argument('--proxy-scale', type=float, default=1)
     parser.add_argument('--window-seconds', type=int, default=60)
     parser.add_argument('--sample-seconds', type=float, default=10)
@@ -46,6 +48,10 @@ def arguments():
                   'drain_seconds', 'rw_barrier_ms', 'rw_memory_bytes']:
         if not math.isfinite(getattr(args, field)) or getattr(args, field) <= 0:
             parser.error(field + ' must be finite and positive')
+    if not math.isfinite(args.burst_seconds) or args.burst_seconds < 0 or args.burst_seconds > args.duration:
+        parser.error('burst-seconds must be finite and between zero and duration')
+    if args.rate*args.duration < 1:
+        parser.error('Experiment must offer at least one row change')
     if args.state_rows < 0 or args.state_rows >= 1000000000:
         parser.error('state-rows must be in [0,1000000000)')
     if not math.isfinite(args.proxy_scale) or args.proxy_scale < 0:
@@ -86,7 +92,8 @@ def main():
             subprocess.run(['docker', 'pull', image], check=True)
     args.output.mkdir(parents=True)
     run_id = 'pgd-perf-' + uuid.uuid4().hex[:12]
-    manifest = {'schema_version': SCHEMA_VERSION, 'run_id': run_id,
+    harness_files = [*pathlib.Path(__file__).parent.glob('*.py'), ROOT/'scripts/s3_latency_proxy.py', ROOT/'worker.example.toml']
+    manifest = {'harness_sha256': {str(p.relative_to(ROOT)):sha256(p) for p in sorted(harness_files)}, 'schema_version': SCHEMA_VERSION, 'run_id': run_id,
         'started_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'git_head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'git_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True)),

@@ -5,6 +5,7 @@ import json
 import pathlib
 import subprocess
 import sys
+from common import SCHEMA_VERSION
 
 
 def main():
@@ -17,7 +18,10 @@ def main():
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--risingwave', action='store_true')
     args = parser.parse_args()
-    catalog = json.loads((root / 'scenarios.json').read_text())['scenarios']
+    specification = json.loads((root / 'scenarios.json').read_text())
+    if specification['schema_version'] != SCHEMA_VERSION:
+        parser.error('Scenario catalog must use current evidence schema')
+    catalog = specification['scenarios']
     if args.repeats < 1 or any(name not in catalog for name in args.scenarios):
         parser.error('Positive repeats and valid catalog scenario names required')
     if args.output.exists():
