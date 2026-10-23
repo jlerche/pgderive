@@ -25,6 +25,8 @@ def case(output, command, after_checkpoint, shutdown=False):
     process, log, error, port = proxy(output, 's3', gate)
     fixture.environment['PGDERIVE__OBJECT_STORE__ENDPOINT'] = f'http://127.0.0.1:{port}'
     original = fixture.config
+    suffix_epochs = 160
+    final_time = suffix_epochs + 2
     def config(maximum=0):
         path = original(maximum)
         path.write_text(path.read_text().replace('maintenance_ticks=4',
@@ -39,12 +41,12 @@ def case(output, command, after_checkpoint, shutdown=False):
             fixture.sql(f'UPDATE {fixture.name}.bid SET price=111 WHERE id=1')
             worker.event('published', minimum_time=2)
             wait_for(lambda: pathlib.Path(str(gate)+'.pending').exists(), 'checkpoint PUT held')
-            for tick in range(5):
+            for tick in range(suffix_epochs):
                 fixture.sql(f'UPDATE {fixture.name}.bid SET price={112+tick} WHERE id=1')
                 worker.event('published', minimum_time=tick+3)
             before = boundary(fixture)
-            assert before['published_time'] == 7 and before['checkpoint_time'] == 1, before
-            assert before['ack_safe'] and before['journal'] == 6, before
+            assert before['published_time'] == final_time and before['checkpoint_time'] == 1, before
+            assert before['ack_safe'] and before['journal'] == suffix_epochs + 1, before
             fixture.verify()
             if shutdown:
                 audit_sql = f'SELECT json_agg(json_build_array(ctid::text,xmin::text,to_jsonb(g)) ORDER BY ctid) FROM {fixture.name}.groups g'
@@ -53,7 +55,7 @@ def case(output, command, after_checkpoint, shutdown=False):
                 gate.touch()
                 worker.finish()
                 final = boundary(fixture)
-                assert final['checkpoint_time'] == final['published_time'] == 7, final
+                assert final['checkpoint_time'] == final['published_time'] == final_time, final
                 assert final['journal'] == 0 and final['ack_safe'], final
                 assert fixture.sql(audit_sql) == audit, 'shutdown rewrote published sink'
                 (output/'result.json').write_text(json.dumps({'passed':True,
@@ -63,9 +65,9 @@ def case(output, command, after_checkpoint, shutdown=False):
             if after_checkpoint:
                 gate.touch()
                 captured = worker.event('maintenance')
-                assert captured['time'] == 2 and captured['published_time'] == 7, captured
+                assert captured['time'] == 2 and captured['published_time'] == final_time, captured
                 committed = boundary(fixture)
-                assert committed['checkpoint_time'] == 2 and committed['journal'] == 5, committed
+                assert committed['checkpoint_time'] == 2 and committed['journal'] == suffix_epochs, committed
                 assert committed['ack_safe'], committed
             audit_sql = f'SELECT json_agg(json_build_array(ctid::text,xmin::text,to_jsonb(g)) ORDER BY ctid) FROM {fixture.name}.groups g'
             audit = fixture.sql(audit_sql)
@@ -73,17 +75,17 @@ def case(output, command, after_checkpoint, shutdown=False):
             gate.touch()
             resumed = fixture.start(command, 'replay')
             ready = resumed.event('ready')
-            assert ready['time'] == 7, ready
+            assert ready['time'] == final_time, ready
             assert fixture.sql(audit_sql) == audit, 'replay rewrote already published sink rows'
             fixture.verify()
             resumed.finish(graceful=True)
             final = boundary(fixture)
-            assert final['checkpoint_time'] == final['published_time'] == 7, final
+            assert final['checkpoint_time'] == final['published_time'] == final_time, final
             assert final['checkpoint_lsn'] == final['end_lsn'] and final['journal'] == 0, final
             assert final['ack_safe'], final
             (output/'result.json').write_text(json.dumps({'passed':True,
                 'kill':'after older checkpoint commit' if after_checkpoint else 'during held checkpoint PUT',
-                'published_while_upload_held':5,'sink_replay_writes':0,
+                'published_while_upload_held':suffix_epochs,'sink_replay_writes':0,
                 'before':before,'captured_checkpoint':captured,'final':final},indent=2)+'\n')
     finally:
         gate.touch()

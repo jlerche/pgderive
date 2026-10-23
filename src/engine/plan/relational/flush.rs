@@ -67,12 +67,37 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     ///
     /// # Errors
     /// Rejects a protection that does not authorize uploads.
-    pub fn freeze_flush(&self, protection: &Protection) -> Result<FrozenFlush<K, V>> {
+    pub async fn freeze_flush(&mut self, protection: &Protection) -> Result<FrozenFlush<K, V>> {
+        self.capture_flush(protection.namespace()?.to_owned()).await
+    }
+    async fn capture_flush(&mut self, namespace: String) -> Result<FrozenFlush<K, V>> {
+        let sealed = self
+            .engine
+            .prepare_maintenance(|state| async move {
+                let entries = state
+                    .entries
+                    .iter()
+                    .map(|(id, entry)| {
+                        (
+                            id.clone(),
+                            Entry {
+                                schema: entry.schema.clone(),
+                                trace: entry.trace.seal_memory(),
+                            },
+                        )
+                    })
+                    .collect();
+                Ok(RelationalState { entries })
+            })
+            .await?;
+        // Renew runtime ownership before capturing. A candidate prepared before
+        // the seal could otherwise merge across this newly frozen prefix.
+        self.engine.commit_maintenance(sealed)?;
         Ok(FrozenFlush {
             captured: self.snapshot(),
             execution: self.execution.clone(),
             incarnation: self.incarnation.clone(),
-            namespace: protection.namespace()?.to_owned(),
+            namespace,
             time: self.time(),
         })
     }

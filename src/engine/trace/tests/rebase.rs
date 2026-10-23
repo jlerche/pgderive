@@ -21,7 +21,7 @@ async fn uploaded_prefix_preserves_newer_retractions_and_duplicate_objects() -> 
         .empty()
         .append_validated(Run::Object(object.clone()), 1)?
         .append_validated(Run::Object(object), 2)?;
-    let captured = append(&base, 3)?;
+    let captured = append(&base, 3)?.seal_memory();
     let flushed = writer.flush(&captured).await?;
     let current = append(&append(&captured, -2)?, 4)?;
     let rebased = current.rebase_flushed(&captured, &flushed)?;
@@ -38,7 +38,7 @@ async fn uploaded_prefix_preserves_newer_retractions_and_duplicate_objects() -> 
 #[tokio::test]
 async fn prefix_rebase_rejects_unrelated_memory_clocks_and_unflushed_state() -> Result<()> {
     let writer = Arrangement::new(Arc::new(InMemory::new()), "rebase-v1".into(), 16)?;
-    let captured = append(&writer.empty(), 1)?;
+    let captured = append(&writer.empty(), 1)?.seal_memory();
     let flushed = writer.flush(&captured).await?;
     let current = append(&captured, 2)?;
     let unrelated = append(&writer.empty(), 1)?;
@@ -53,18 +53,13 @@ async fn prefix_rebase_rejects_unrelated_memory_clocks_and_unflushed_state() -> 
 }
 
 #[tokio::test]
-async fn rebase_rejects_physical_replacement_and_excessive_fan_in() -> Result<()> {
+async fn rebase_rejects_physical_replacement() -> Result<()> {
     let writer = Arrangement::new(Arc::new(InMemory::new()), "rebase-v1".into(), 16)?;
-    let captured = append(&writer.empty(), 1)?;
+    let captured = append(&writer.empty(), 1)?.seal_memory();
     let flushed = writer.flush(&captured).await?;
     let current = append(&captured, 2)?;
     let rewritten = writer.compact(&current).await?;
     assert!(rewritten.rebase_flushed(&captured, &flushed).is_err());
-    let mut excessive = captured.clone();
-    for _ in 0..crate::engine::trace::MAX_RUNS {
-        excessive = append(&excessive, 1)?;
-    }
-    assert!(excessive.rebase_flushed(&captured, &flushed).is_err());
     Ok(())
 }
 
@@ -74,7 +69,8 @@ async fn maximum_uploaded_roots_plus_bounded_suffix_rebases_and_flushes() -> Res
     let store = Arc::new(InMemory::new());
     let writer = Arrangement::new(store.clone(), "rebase-v1".into(), 16)?;
     let batch = Batch::from_updates((1..=128).map(|key| ((key, key), 1)))?;
-    let captured = writer.empty().append_validated(Run::Memory(Arc::new(batch.clone())), 1)?;
+    let captured =
+        writer.empty().append_validated(Run::Memory(Arc::new(batch.clone())), 1)?.seal_memory();
     let limits = WriteLimits {
         block_bytes: 128,
         block_rows: 1,
@@ -96,7 +92,54 @@ async fn maximum_uploaded_roots_plus_bounded_suffix_rebases_and_flushes() -> Res
         current = append(&current, 1)?;
     }
     let rebased = current.rebase_flushed(&captured, &flushed)?;
+    assert_eq!(rebased.run_count(), 132);
+    assert_eq!(rebased.materialize().await?, current.materialize().await?);
+    let next = writer.flush(&rebased).await?;
+    assert!(next.run_count() <= 128);
+    assert_eq!(next.materialize().await?, current.materialize().await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn expanding_prefix_keeps_room_for_unmergeable_suffix_runs() -> Result<()> {
+    use crate::engine::reader::{BatchReader as _, WriteLimits};
+    let store = Arc::new(InMemory::new());
+    let writer = Arrangement::new(store.clone(), "rebase-v1".into(), 16)?;
+    let batch = Batch::from_updates((1..=128).map(|key| ((key, 1), -i64::MAX)))?;
+    let captured =
+        writer.empty().append_validated(Run::Memory(Arc::new(batch.clone())), 1)?.seal_memory();
+    let references = ObjectBatch::write_stream(
+        store.clone(),
+        &mut batch.cursor().await?,
+        "rebase-v1",
+        WriteLimits {
+            block_bytes: 128,
+            block_rows: 1,
+            index_bytes: 1024,
+            index_blocks: 1,
+            output_roots: 128,
+        },
+    )
+    .await?;
+    let mut roots = Vec::new();
+    for reference in references {
+        roots.push(Run::Object(ObjectBatch::open(store.clone(), reference, "rebase-v1").await?));
+    }
+    assert_eq!(roots.len(), 128);
+    let flushed = TraceSnapshot::from_runs(roots, 2, 1)?;
+    let mut current = captured.clone();
+    for key in 1..=120 {
+        // Adjacent chunks share an overflowing positive coefficient, but
+        // retained negative prefix weights keep every complete state valid.
+        let delta = Batch::from_updates([((key, 1), i64::MAX), ((key + 1, 1), i64::MAX)])?;
+        current.validate_delta(&delta).await?;
+        current = current.append_validated(Run::Memory(Arc::new(delta)), current.time() + 1)?;
+    }
+    assert_eq!(current.run_count(), 121);
+    assert_eq!(current.unsealed_run_count(), 120);
+    let rebased = current.rebase_flushed(&captured, &flushed)?;
     assert_eq!(rebased.run_count(), 248);
+    assert_eq!(rebased.unsealed_run_count(), 120);
     assert_eq!(rebased.materialize().await?, current.materialize().await?);
     let next = writer.flush(&rebased).await?;
     assert!(next.run_count() <= 128);

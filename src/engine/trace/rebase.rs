@@ -13,9 +13,9 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let ticks = self.time.checked_sub(captured.time).context("checkpoint time underflow")?;
         ensure!(
             captured.generation.checked_add(ticks) == Some(self.generation)
-                && captured.runs.len().checked_add(usize::try_from(ticks)?)
-                    == Some(self.runs.len()),
-            "checkpoint prefix is not an append-only ancestor"
+                && self.runs.len() >= captured.runs.len()
+                && self.valid_suffix(captured),
+            "checkpoint prefix is not a contiguous memory ancestor"
         );
         ensure!(
             self.runs.iter().zip(&captured.runs).all(|(current, prior)| same_run(current, prior)),
@@ -25,7 +25,10 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         runs.extend_from_slice(&self.runs[captured.runs.len()..]);
         ensure!(runs.len() <= super::MAX_RUNS, "rebased checkpoint run limit exceeded");
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
-        Self::from_runs(runs, generation, self.time)
+        let mut rebased = Self::from_runs(runs, generation, self.time)?;
+        rebased.spans[flushed.runs.len()..].copy_from_slice(&self.spans[captured.runs.len()..]);
+        rebased.sealed_time = captured.time;
+        Ok(rebased)
     }
 }
 

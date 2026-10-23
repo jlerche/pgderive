@@ -11,7 +11,6 @@ pub(super) struct Pending {
     protection: Option<Protection>,
     started: Instant,
     runs: usize,
-    time: u64,
     deadline: tokio::time::Instant,
     resolved: bool,
 }
@@ -22,13 +21,16 @@ impl Drop for Pending {
         self.task.abort();
     }
 }
-pub(super) fn must_drain(open: &Open, pending: bool) -> bool {
-    pending
-        && (open.query.run_count() >= crate::engine::trace::MAX_RUNS - 8
-            || open
-                .checkpoint
-                .as_ref()
-                .is_some_and(|upload| open.query.time().saturating_sub(upload.time) >= 120))
+pub(super) fn must_drain(open: &Open, pending: bool, checkpoint_time: u64) -> bool {
+    let suffix_runs = if open.checkpoint.is_some() { open.query.unsealed_run_count() } else { 0 };
+    pending && bounded_work(open.query.run_count(), suffix_runs, open.query.time(), checkpoint_time)
+}
+const fn bounded_work(runs: usize, suffix_runs: usize, time: u64, checkpoint_time: u64) -> bool {
+    // Bound replay journal work independently of physical memory-run merging.
+    // Include every epoch after durable C, even those preceding this upload.
+    runs >= crate::engine::trace::MAX_RUNS - 8
+        || suffix_runs >= 120
+        || time.saturating_sub(checkpoint_time) >= 4096
 }
 pub(super) fn due(open: &Open, pending: bool, deadline: tokio::time::Instant) -> Result<bool> {
     Ok(pending
@@ -45,14 +47,13 @@ pub(super) async fn start(open: &mut Open) -> Result<()> {
             &format!("worker:{}:maintenance:{}", open.nonce, open.writer.epoch()),
         )
         .await?;
-    let frozen = open.query.freeze_flush(&protection)?;
+    let frozen = open.query.freeze_flush(&protection).await?;
     open.checkpoint = Some(Pending {
         task: tokio::spawn(frozen.upload()),
         resolved: false,
         protection: Some(protection),
         started: Instant::now(),
         runs: open.query.run_count(),
-        time: open.query.time(),
         deadline: tokio::time::Instant::now()
             + std::time::Duration::from_secs(open.settings.health.operation_timeout_secs),
     });
@@ -130,4 +131,19 @@ pub(super) async fn cancel(open: &mut Open) -> Result<()> {
     }
     open.checkpoint = None;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bounded_work;
+
+    #[test]
+    fn replay_budget_counts_all_epochs_since_durable_checkpoint() {
+        assert!(!bounded_work(140, 12, 4096, 1));
+        assert!(bounded_work(140, 12, 4097, 1));
+        assert!(bounded_work(248, 1, 10, 9));
+        assert!(!bounded_work(247, 1, 10, 9));
+        assert!(!bounded_work(121, 119, 1000, 1));
+        assert!(bounded_work(122, 120, 1001, 1));
+    }
 }

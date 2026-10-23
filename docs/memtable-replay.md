@@ -25,9 +25,15 @@ feedback advance to C. A failed or uncertain publication causes authoritative
 recovery; cached bytes and received messages never authorize acknowledgement.
 
 The coordinator owns at most one upload. A checkpoint contains at most 128 object
-roots per arrangement. It applies backpressure after 120 subsequent epochs or at
-248 resident runs, within the explicit 256-run input bound. Thus an uploaded
-128-root prefix plus its newer suffix fits without discarding any run. Memory
+roots per arrangement. Adjacent memory runs consolidate by binary carry over equal contiguous epoch spans.
+Capturing a checkpoint seals its prefix and invalidates outstanding preparations;
+subsequent merges affect only the newer suffix. Empty consolidated runs retain
+their spans. This bounds normal suffix fan-in logarithmically rather than keeping
+one run per epoch. Subsets whose weights exceed i64 retain separate exact runs
+until checkpointing resolves their cancellation with retained objects.
+Backpressure applies at 120 actual suffix runs while uploading (leaving room
+for a 128-root replacement), at 248 resident runs within the 256-run input bound, or at
+4,096 total epochs beyond durable C, independently of when the upload started. Memory
 pressure drains the in-flight checkpoint and checkpoints the remaining suffix
 before retrying the unpublished input. Frozen and active snapshots share immutable
 batches; frozen memory remains charged until physical adoption. Cancellation is
@@ -65,7 +71,7 @@ published backlog from retained WAL and flag acknowledgement beyond C.
 The live memtable harness witnesses two crashes with C<P, proves unchanged sink
 row versions and physical tuple identities during replay, compares joined aggregates with native
 PostgreSQL, checks timer checkpointing, and rejects an externally advanced slot.
-The asynchronous checkpoint harness additionally holds a witnessed PUT while five
+The asynchronous checkpoint harness additionally holds a witnessed PUT while 160
 newer epochs publish, kills the worker during upload and after the older checkpoint
 commits, checks unchanged sink row identities on replay, exercises memory pressure
 with an upload in flight, drains a suffix during graceful shutdown, and verifies

@@ -227,7 +227,8 @@ async fn consume(
         let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
         let pending = durable.checkpoint_end < durable.end;
         let stopping = count.0.stopping(settings, *stop.borrow());
-        if stopping || super::checkpoint::must_drain(open, pending) {
+        if stopping || super::checkpoint::must_drain(open, pending, durable.stored.checkpoint.time)
+        {
             count.1.record(open, "maintenance")?;
             timeout(
                 Duration::from_secs(settings.health.operation_timeout_secs),

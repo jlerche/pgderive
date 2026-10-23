@@ -219,6 +219,14 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
             bytes.checked_add(entry.trace.memory_charge()).context("memtable charge overflow")
         })
     }
+    pub(crate) fn unsealed_run_count(&self) -> usize {
+        self.snapshot()
+            .entries
+            .values()
+            .map(|entry| entry.trace.unsealed_run_count())
+            .max()
+            .unwrap_or(0)
+    }
     /// Resident cache usage and physical read counters.
     ///
     /// # Errors

@@ -1,6 +1,7 @@
 //! Immutable trace generations, weighted merging and pinned membership.
 mod flush;
 mod manifest;
+mod memory;
 mod merged;
 mod probes;
 mod rebase;
@@ -16,8 +17,9 @@ pub use probes::KeyProbes;
 use std::sync::Arc;
 pub(crate) use validation::ValidatedBag;
 
-// Allow a bounded 128-root uploaded checkpoint plus at most 128 newer
-// immutable memory deltas. Durable writers still cap each output at 128 roots.
+// Bound merge fan-in across durable roots and immutable memory chunks.
+// Normal memory fan-in grows logarithmically; unmergeable coefficient subsets
+// still consume this explicit budget. Durable outputs remain capped at 128 roots.
 pub(crate) const MAX_RUNS: usize = 256;
 
 /// One immutable run, in memory or in object storage.
@@ -70,6 +72,8 @@ impl<K: BatchData, V: BatchData> BatchReader for Run<K, V> {
 #[derive(Debug, Clone)]
 pub struct TraceSnapshot<K: BatchData, V: BatchData> {
     runs: Vec<Run<K, V>>,
+    spans: Vec<Option<memory::Span>>,
+    sealed_time: u64,
     memory_bytes: usize,
     generation: u64,
     time: u64,
@@ -77,7 +81,14 @@ pub struct TraceSnapshot<K: BatchData, V: BatchData> {
 
 impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     pub(super) const fn empty() -> Self {
-        Self { runs: Vec::new(), memory_bytes: 0, generation: 0, time: 0 }
+        Self {
+            runs: Vec::new(),
+            spans: Vec::new(),
+            sealed_time: 0,
+            memory_bytes: 0,
+            generation: 0,
+            time: 0,
+        }
     }
     pub(crate) async fn replace_runs(&self, runs: Vec<Run<K, V>>) -> Result<Self> {
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
@@ -103,7 +114,8 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let memory_bytes = runs.iter().try_fold(0_usize, |bytes, run| {
             bytes.checked_add(memory_run_charge(run)?).context("memtable charge overflow")
         })?;
-        Ok(Self { runs, memory_bytes, generation, time })
+        let spans = vec![None; runs.len()];
+        Ok(Self { runs, spans, sealed_time: time, memory_bytes, generation, time })
     }
     pub(crate) fn into_runs(self) -> Vec<Run<K, V>> {
         self.runs
@@ -191,8 +203,14 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             .checked_add(memory_run_charge(&run)?)
             .context("memtable charge overflow")?;
         let mut runs = self.runs.clone();
+        let mut spans = self.spans.clone();
+        spans.push(matches!(&run, Run::Memory(_)).then_some(memory::Span::new(time)));
         runs.push(run);
-        Ok(Self { runs, memory_bytes, generation, time })
+        let mut next =
+            Self { runs, spans, sealed_time: self.sealed_time, memory_bytes, generation, time };
+        next.consolidate_memory()?;
+        ensure!(next.runs.len() <= MAX_RUNS, "arrangement run limit requires checkpoint");
+        Ok(next)
     }
     /// Physical membership generation; compaction may change it without a tick.
     #[must_use]
