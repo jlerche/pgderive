@@ -245,3 +245,50 @@ The first measured scheduler comparison and its limitations are recorded in
 [machine-readable snapshot](../scripts/performance/baselines/adaptive-epochs.json).
 Use the adaptive implementation as the baseline for future regression checks;
 its predecessor is retained to document the transaction-at-a-time bottleneck.
+
+## Growing state and recovery qualification
+
+The separate soak runner keeps one aggregate circuit alive as source rows and
+output groups grow. The default is three hours at 1,000 row changes/s, with the
+same deterministic mix of single-statement autocommits and transactions through
+1,000 rows used by the comparison harness:
+
+```sh
+python3 scripts/performance/soak.py \
+  --binary artifacts/package/bin/pgderive \
+  --output artifacts/performance/growth-recovery-001
+```
+
+The producer continues committing through two worker SIGKILL/restarts. The second
+crash follows a witnessed checkpoint PUT hold and newer foreground publication.
+A commit after confirmed worker death proves that ingestion continued before
+recovery began. Restarts retain the source slot, and unchanged seed result rows
+must retain their CTIDs and xmin values. Every ten minutes and at input end, the
+runner pauses source writes at a complete transaction boundary and compares both
+bags with native SQL using bidirectional EXCEPT ALL. Final graceful shutdown must
+leave the durable checkpoint equal to published logical time with an empty epoch
+journal. ACK ordering is checked throughout.
+
+Sampling continues through verification, downtime, recovery and final checkpoint
+drain. Missing process measurements are recorded explicitly during witnessed
+downtime; an unexpected process exit fails the run. Samples include source and
+marker progress, freshness, engine phases, RSS, WAL, journal/protection/root counts,
+S3-visible object counts/bytes and backend file bytes. S3 inventory and backend
+file usage are different measurements: a deleted S3 object can leave filesystem
+space pending backend reclamation.
+
+Default budgets are 4 GiB engine RSS, 512 MiB retained WAL, 4 GiB S3-visible state,
+60,000 changes after the observed marker, 4,096 epoch journal rows and 1,024
+protection rows. Steady windows containing at least 20 marker samples must have
+freshness p50 at most 100 ms and p95 at most 250 ms. Windows crossing an intentional
+crash, native check or final drain are labelled and retain their measurements;
+resource and ACK budgets still apply. At least three steady windows are required.
+CLI options record any changed policy in the manifest. These are declared
+qualification limits, not promises for every query or data size.
+
+A short harness check uses `--duration 60 --state-rows 120 --groups 10
+--verify-seconds 15 --sample-seconds 5`. It exercises control flow and cleanup;
+it does not substitute for the three-hour qualification. Owned PostgreSQL and
+object-store containers use 6 GiB and 8 GiB tmpfs limits, respectively. Failure
+preserves a database dump and object-store archive before cleanup. SIGTERM enters
+that cleanup path; SIGKILL of the runner or host failure cannot do so.
