@@ -217,14 +217,18 @@ async fn reject_publication_drift(
     writer: &mut Writer,
 ) -> Result<()> {
     let before = writer.confirmed(sql, graph.plan()).await?;
+    let upload = writer.protect_upload(sql, "reject-publication-drift").await?;
     let prepared = graph
-        .prepare(Tick {
-            time: 3,
-            batch: vec![
-                crate::engine::Batch::from_updates([])?,
-                crate::engine::Batch::from_updates([])?,
-            ],
-        })
+        .prepare_protected(
+            Tick {
+                time: 3,
+                batch: vec![
+                    crate::engine::Batch::from_updates([])?,
+                    crate::engine::Batch::from_updates([])?,
+                ],
+            },
+            &upload,
+        )
         .await?;
     let checkpoint = graph.prepared_checkpoint(&prepared)?;
     let deltas = crate::harness::tuple_sink::deltas(&prepared.output().batch)?;
@@ -254,6 +258,9 @@ async fn reject_publication_drift(
         "source schema drift changed durable progress"
     );
     sql.batch_execute(&format!("ALTER TABLE {schema}.person ADD PRIMARY KEY(id)")).await?;
+    let catalog = Catalog::new(schema, "snapshot_grouped")?;
+    *writer = catalog.claim(sql, graph.plan(), after.binding).await?;
+    writer.seal_fenced_uploads(sql, graph.plan()).await?;
     eprintln!("MVP source schema drift blocked publication and preserved durable boundary");
     Ok(())
 }

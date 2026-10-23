@@ -25,10 +25,22 @@ pub(super) async fn corrupt_membership(
         .iter()
         .position(|member| member.id == "output")
         .context("missing output corruption target")?;
-    for expression in [
-        format!("checkpoint #- '{{arrangements,{index},trace,objects,0}}'"),
-        format!(
-            "jsonb_set(checkpoint,'{{arrangements,{index},trace,objects,0,bytes}}','0'::jsonb)"
+    for (expression, expected) in [
+        (
+            format!("checkpoint #- '{{arrangements,{index},trace,objects,0}}'"),
+            "catalog checkpoint checksum mismatch",
+        ),
+        (
+            format!(
+                "jsonb_set(checkpoint,'{{arrangements,{index},trace,objects,0,bytes}}','0'::jsonb)"
+            ),
+            "catalog checkpoint checksum mismatch",
+        ),
+        (
+            format!(
+                "jsonb_set(checkpoint,'{{arrangements,{index},trace,objects,0,namespace}}','null'::jsonb)"
+            ),
+            "catalog objects require managed upload namespaces",
         ),
     ] {
         let changed = sql
@@ -38,13 +50,10 @@ pub(super) async fn corrupt_membership(
             )
             .await?;
         ensure!(changed == 1, "missing metadata corruption target");
-        expect_failure(
-            catalog.load_durable(sql, plan).await,
-            "catalog checkpoint checksum mismatch",
-        )?;
+        expect_failure(catalog.load_durable(sql, plan).await, expected)?;
         expect_failure(
             catalog.collect(sql, store.clone(), crate::catalog::GcLimits::default()).await,
-            "catalog checkpoint checksum mismatch",
+            expected,
         )?;
         for member in &before.stored.checkpoint.arrangements {
             for root in &member.trace.objects {
@@ -63,6 +72,7 @@ pub(super) async fn corrupt_membership(
         .await?
         .context("checkpoint missing after corruption restoration")?;
     ensure!(after == before, "restored catalog differs from original checkpoint");
+    eprintln!("MVP unmanaged catalog roots rejected before recovery or GC");
     eprintln!("MVP incomplete and corrupt catalog membership rejected without epoch change");
     Ok(())
 }

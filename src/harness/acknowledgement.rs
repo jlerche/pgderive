@@ -74,16 +74,21 @@ async fn exercise(
         flush(sql, &fixture.slot).await? < progress.end,
         "old durable capability acknowledged newer received transaction"
     );
+    let upload = writer.protect_upload(sql, "acknowledged-resume").await?;
     let prepared = graph
-        .prepare(Tick {
-            time: graph.time() + 1,
-            batch: vec![
-                mvp::input(&transaction.batch, "auction", "id")?,
-                mvp::input(&transaction.batch, "bid", "auction")?,
-            ],
-        })
+        .prepare_protected(
+            Tick {
+                time: graph.time() + 1,
+                batch: vec![
+                    mvp::input(&transaction.batch, "auction", "id")?,
+                    mvp::input(&transaction.batch, "bid", "auction")?,
+                ],
+            },
+            &upload,
+        )
         .await?;
     graph.publish_prepared(sql, writer, prepared, &progress).await?;
+    upload.published(sql, writer, graph.plan(), &graph.checkpoint()?).await?;
     stream.acknowledge(sql, writer, graph.plan()).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {

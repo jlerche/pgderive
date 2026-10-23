@@ -25,6 +25,14 @@ pub(super) async fn boundary(
     ensure!(epoch > 0, "invalid catalog epoch");
     let checkpoint: Checkpoint = serde_json::from_value(row.try_get(5)?)?;
     ensure!(
+        checkpoint
+            .arrangements
+            .iter()
+            .flat_map(|member| &member.trace.objects)
+            .all(|root| root.namespace().is_some()),
+        "catalog objects require managed upload namespaces"
+    );
+    ensure!(
         super::checkpoint_digest(&checkpoint)? == row.try_get::<_, String>(6)?,
         "catalog checkpoint checksum mismatch"
     );

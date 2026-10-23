@@ -77,7 +77,7 @@ async fn retained_partition_histories_restore_and_callback_work() -> Result<()> 
 }
 
 #[tokio::test]
-async fn generic_empty_callback_keeps_legacy_semantics() -> Result<()> {
+async fn generic_empty_callback_recomputes_empty_input() -> Result<()> {
     let inputs = Arrangement::<i64, i64>::new(Arc::new(InMemory::new()), "generic-v1".into(), 1)?;
     let operator = Partition::new(|_: &i64, bag: &Batch<(), i64>, _| {
         Batch::from_updates([(((), i64::try_from(bag.iter().count())?), 1)])
@@ -156,11 +156,11 @@ async fn retained_partition_rejects_invalid_boundaries_and_bags() -> Result<()> 
 }
 
 #[tokio::test]
-async fn retained_output_reduces_callback_visits_against_legacy() -> Result<()> {
+async fn retained_output_reduces_callback_visits_against_recomputation() -> Result<()> {
     let store = Arc::new(InMemory::new());
     let input_writer = Arrangement::<i64, i64>::new(store.clone(), "measure-input".into(), 32)?;
     let output_writer = Arrangement::<i64, i64>::new(store, "measure-output".into(), 1)?;
-    let legacy_visits = Arc::new(AtomicUsize::new(0));
+    let recomputed_visits = Arc::new(AtomicUsize::new(0));
     let retained_visits = Arc::new(AtomicUsize::new(0));
     let transform = |visits: Arc<AtomicUsize>| {
         move |_: &i64, rows: &Batch<(), i64>, work: &mut crate::engine::dataflow::PartitionWork| {
@@ -170,7 +170,7 @@ async fn retained_output_reduces_callback_visits_against_legacy() -> Result<()> 
             Batch::from_updates(maximum.map(|maximum| (((), maximum), 1)))
         }
     };
-    let legacy = Partition::new(transform(legacy_visits.clone()));
+    let recomputed = Partition::new(transform(recomputed_visits.clone()));
     let retained = Partition::new_zero_preserving(transform(retained_visits.clone()));
     let bootstrap =
         TimedBatch { time: 1, batch: Batch::from_updates((0..1000).map(|row| ((0, row), 1)))? };
@@ -186,11 +186,11 @@ async fn retained_output_reduces_callback_visits_against_legacy() -> Result<()> 
     let output = output_writer.stage(&output_writer.empty(), &first).await?;
     retained_visits.store(0, Ordering::Relaxed);
     let delta = TimedBatch { time: 2, batch: Batch::from_updates([((0, 1000), 1)])? };
-    let old = legacy.evaluate(&delta, &input, Limits::default()).await?;
+    let old = recomputed.evaluate(&delta, &input, Limits::default()).await?;
     let new = retained.evaluate_retained(&delta, &input, &output, Limits::default()).await?;
     assert_eq!(old.batch, new.batch);
     assert_eq!(new.batch, Batch::from_updates([((0, 999), -1), ((0, 1000), 1)])?);
-    assert_eq!(legacy_visits.load(Ordering::Relaxed), 2001);
+    assert_eq!(recomputed_visits.load(Ordering::Relaxed), 2001);
     assert_eq!(retained_visits.load(Ordering::Relaxed), 1001);
     Ok(())
 }

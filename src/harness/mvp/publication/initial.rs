@@ -49,3 +49,9 @@ impl Initial<'_> {
         Ok((writer, checkpoint))
     }
 }
+
+pub(super) async fn source(sql: &Client, config: &crate::Config) -> Result<Contract> {
+    let identity = crate::source::Identity::inspect(config).await?;
+    Contract::inspect(sql, identity, &config.replication.publication, &config.replication.slot)
+        .await
+}

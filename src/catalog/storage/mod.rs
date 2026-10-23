@@ -1,7 +1,7 @@
 mod collect;
 mod protections;
 use super::Catalog;
-use anyhow::Result;
+use anyhow::{Context, Result};
 pub use collect::{Collection, GcLimits};
 pub use protections::Protection;
 use tokio_postgres::Transaction;
@@ -42,8 +42,13 @@ pub(super) async fn validate_additions(
         .arrangements
         .iter()
         .flat_map(|member| &member.trace.objects)
-        .filter_map(|root| root.namespace().map(|namespace| (root, namespace)))
-        .collect::<Vec<_>>();
+        .map(|root| {
+            Ok((
+                root,
+                root.namespace().context("catalog objects require managed upload namespaces")?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let row = sql.query_one(
         &format!("WITH current_roots AS MATERIALIZED (SELECT reference FROM {0}.pgderive_roots WHERE query_id=$1), candidates AS (SELECT value->0 AS reference,value->>1 AS namespace FROM jsonb_array_elements($2::jsonb))
             SELECT NOT EXISTS(SELECT 1 FROM candidates c WHERE NOT EXISTS(SELECT 1 FROM current_roots r WHERE r.reference=c.reference) AND NOT EXISTS(SELECT 1 FROM {0}.pgderive_protections p WHERE p.query_id=$1 AND p.uploading AND p.active AND p.namespace=c.namespace AND p.owner_fence=COALESCE((SELECT fence FROM {0}.pgderive_progress WHERE query_id=$1),0)))", catalog.schema),

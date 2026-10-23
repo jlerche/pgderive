@@ -7,16 +7,20 @@ mod recovery;
 mod representations;
 use super::{MvpFixture, Query};
 use crate::{
-    catalog::{Binding, Catalog, Progress, Publication, Snapshot, Writer},
-    engine::plan::relational::Prepared,
+    catalog::{Binding, Catalog, Progress, Protection, Publication, Snapshot, Writer},
+    engine::plan::{Plan, relational::Prepared},
     transaction::Transaction,
 };
 use anyhow::{Result, ensure};
 use tokio_postgres::Client;
 
+pub(super) struct Staged {
+    pub(super) prepared: Prepared<super::Key, crate::transaction::Row>,
+    pub(super) upload: Protection,
+}
 pub(super) struct PublicationFixture {
     pub(super) grouped: Writer,
-    bag: Writer,
+    pub(super) bag: Writer,
     stale: Writer,
     catalog: Catalog,
     schema: String,
@@ -30,14 +34,7 @@ impl MvpFixture {
         config: &crate::Config,
         initial: &str,
     ) -> Result<()> {
-        let identity = crate::source::Identity::inspect(config).await?;
-        let source = crate::source::Contract::inspect(
-            sql,
-            identity,
-            &config.replication.publication,
-            &config.replication.slot,
-        )
-        .await?;
+        let source = initial::source(sql, config).await?;
         ensure!(
             super::super::source_state(sql, schema).await?.is_empty(),
             "MVP initial snapshot requires empty source tables"
@@ -50,33 +47,12 @@ impl MvpFixture {
         representations::check(sql, schema, &setup).await?;
         bulk::check(sql, schema, &setup).await?;
         let bag_catalog = Catalog::new(schema, "atomic_bag")?;
-        let (bag, _) = setup
+        let (bag, bag_checkpoint) = setup
             .synthetic(sql, &bag_catalog, crate::harness::tuple_sink::sink("derived_bag"))
             .await?;
-        let prepared = self
-            .graph
-            .prepare(crate::engine::dataflow::TimedBatch {
-                time: 1,
-                batch: vec![super::Batch::default(), super::Batch::default()],
-            })
-            .await?;
-        let checkpoint = self.graph.prepared_checkpoint(&prepared)?;
-        let deltas = crate::harness::tuple_sink::deltas(&prepared.output().batch)?;
+        self.bag_graph.restore_checkpoint(bag_checkpoint).await?;
         let binding = Binding { source, sink: crate::harness::tuple_sink::sink("derived_groups") };
-        catalog
-            .activate_snapshot(
-                sql,
-                self.graph.plan(),
-                Snapshot {
-                    checkpoint: &checkpoint,
-                    deltas: &deltas,
-                    source: &binding.source,
-                    boundary: initial.parse()?,
-                    sink: binding.sink.clone(),
-                },
-            )
-            .await?;
-        self.graph.commit(prepared)?;
+        self.initial_snapshot(sql, &catalog, &binding, initial).await?;
         let stale = catalog.claim(sql, self.graph.plan(), binding.clone()).await?;
         let grouped = catalog.claim(sql, self.graph.plan(), binding).await?;
         checks::require_synchronous_commit(sql, schema).await?;
@@ -90,19 +66,65 @@ impl MvpFixture {
         });
         Ok(())
     }
+    async fn initial_snapshot(
+        &mut self,
+        sql: &mut Client,
+        catalog: &Catalog,
+        binding: &Binding,
+        initial: &str,
+    ) -> Result<()> {
+        let mut checkpoint = self.graph.checkpoint()?;
+        bags::advance(&mut checkpoint);
+        let deltas = crate::harness::tuple_sink::deltas(&super::Batch::<
+            super::Key,
+            crate::transaction::Row,
+        >::default())?;
+        catalog
+            .activate_snapshot(
+                sql,
+                self.graph.plan(),
+                Snapshot {
+                    checkpoint: &checkpoint,
+                    deltas: &deltas,
+                    source: &binding.source,
+                    boundary: initial.parse()?,
+                    sink: binding.sink.clone(),
+                },
+            )
+            .await?;
+        self.graph.restore_checkpoint(checkpoint).await
+    }
 }
 impl PublicationFixture {
+    pub(super) async fn retry_upload(
+        &mut self,
+        sql: &mut Client,
+        plan: &Plan,
+        token: &str,
+    ) -> Result<Protection> {
+        let binding = self.grouped.confirmed(sql, plan).await?.binding;
+        self.grouped = self.catalog.claim(sql, plan, binding).await?;
+        self.grouped.seal_fenced_uploads(sql, plan).await?;
+        self.grouped.protect_upload(sql, token).await
+    }
     pub(super) async fn publish(
         &mut self,
         sql: &mut Client,
-        graph: &mut Query,
-        prepared: Prepared<super::Key, crate::transaction::Row>,
+        graphs: (&mut Query, &mut Query),
+        staged: (Staged, Staged),
         transaction: &Transaction,
     ) -> Result<()> {
-        let checkpoint = graph.prepared_checkpoint(&prepared)?;
+        let (graph, bag_graph) = graphs;
+        let (main, bag) = staged;
+        let checkpoint = graph.prepared_checkpoint(&main.prepared)?;
+        let bag_checkpoint = bag_graph.prepared_checkpoint(&bag.prepared)?;
+        ensure!(
+            main.prepared.output().batch == bag.prepared.output().batch,
+            "independent publication graphs disagree"
+        );
         let progress =
             Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
-        let deltas = crate::harness::tuple_sink::deltas(&prepared.output().batch)?;
+        let deltas = crate::harness::tuple_sink::deltas(&main.prepared.output().batch)?;
         let publication =
             || Publication { checkpoint: &checkpoint, progress: &progress, deltas: &deltas };
         if checkpoint.time == 2 {
@@ -110,16 +132,19 @@ impl PublicationFixture {
         }
         if !self.uncertain_commit(sql, graph, publication()).await? {
             self.grouped.publish(sql, graph.plan(), publication()).await?;
-            graph.commit(prepared)?;
+            graph.commit(main.prepared)?;
         }
 
         self.bag
             .publish(
                 sql,
                 graph.plan(),
-                Publication { checkpoint: &checkpoint, progress: &progress, deltas: &deltas },
+                Publication { checkpoint: &bag_checkpoint, progress: &progress, deltas: &deltas },
             )
             .await?;
+        bag_graph.commit(bag.prepared)?;
+        main.upload.published(sql, &self.grouped, graph.plan(), &checkpoint).await?;
+        bag.upload.published(sql, &self.bag, bag_graph.plan(), &bag_checkpoint).await?;
         ensure!(
             self.grouped.end() == progress.end && self.bag.end() == progress.end,
             "publisher returned wrong durable source position"

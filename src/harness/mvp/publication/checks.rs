@@ -89,6 +89,28 @@ impl PublicationFixture {
             "unrepresentable generation was committed"
         );
         self.unchanged(sql, graph, before).await?;
+        let mut unmanaged = publication.checkpoint.clone();
+        let root = unmanaged
+            .arrangements
+            .iter_mut()
+            .flat_map(|member| &mut member.trace.objects)
+            .next()
+            .context("namespace fixture requires an object")?;
+        let mut encoded = serde_json::to_value(&*root)?;
+        encoded["namespace"] = serde_json::Value::Null;
+        *root = serde_json::from_value(encoded)?;
+        let failure = self
+            .grouped
+            .publish(sql, graph.plan(), Publication { checkpoint: &unmanaged, ..publication })
+            .await
+            .err()
+            .context("unmanaged object was published")?;
+        ensure!(
+            format!("{failure:#}").contains("managed upload namespaces"),
+            "unexpected unmanaged publication failure: {failure:#}"
+        );
+        self.unchanged(sql, graph, before).await?;
+        eprintln!("MVP unmanaged publication roots rejected without progress change");
         Ok(())
     }
     async fn boundary(&self, sql: &mut Client, graph: &Query) -> Result<Durable> {

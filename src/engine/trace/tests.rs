@@ -3,7 +3,7 @@ use crate::engine::{
     Batch,
     reader::{BatchReader, ObjectBatch},
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
 use std::sync::Arc;
 
@@ -134,6 +134,10 @@ async fn filesystem_reopen_preserves_full_weighted_state() -> Result<()> {
     let batch = Batch::from_updates([((1, 2), 3), ((1, 3), -2), ((-1, 1), i64::MIN)])?;
     let reference = ObjectBatch::write(store, &batch, "disk-v1", 1).await?;
     let catalog = serde_json::to_vec(&reference)?;
+    let mut omitted = serde_json::to_value(&reference)?;
+    assert!(omitted.get("namespace").is_some());
+    omitted.as_object_mut().context("reference object required")?.remove("namespace");
+    assert!(serde_json::from_value::<crate::engine::reader::ObjectRef>(omitted).is_err());
     let fresh: Arc<dyn ObjectStore> =
         Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&root)?);
     let reopened =

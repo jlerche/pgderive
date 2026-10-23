@@ -41,3 +41,8 @@ class BindingObserverTests(unittest.TestCase):
         self.assertEqual(observer.observe(b'E', b'p\0'+struct.pack('!I',0)), 'delete')
         self.assertIsNone(category(b'SELECT 1 /* pgderive:sink-delete-v1 */'))
         self.assertEqual(category(b'/* pgderive:sink-insert-v1 */ INSERT INTO owned.results'), 'insert')
+
+    def test_removed_per_row_sink_sql_is_not_classified(self):
+        from sink_observer import category
+        self.assertIsNone(category(b'INSERT INTO owned.results SELECT pg_catalog.generate_series(1::bigint,$2::bigint)'))
+        self.assertIsNone(category(b'WITH selected AS (SELECT ctid FROM owned.results LIMIT $2 FOR UPDATE) DELETE FROM owned.results'))

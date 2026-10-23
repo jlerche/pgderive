@@ -99,7 +99,7 @@ fn sinks_reject_removed_expression_programs() {
 #[test]
 fn checkpoint_checksum_retains_run_order_multiplicity_and_numeric_limits() -> Result<()> {
     use crate::engine::plan::Checkpoint;
-    let root = |hash: &str| json!({"path":format!("pgderive/batch/{hash}"),"bytes":1,"hash":hash,"schema":"rows"});
+    let root = |hash: &str| json!({"path":format!("pgderive/batch/{hash}"),"bytes":1,"hash":hash,"schema":"rows","namespace":null});
     let first = root(&"a".repeat(64));
     let second = root(&"b".repeat(64));
     let encoded = json!({"version":1,"plan_identity":"plan","time":1,"arrangements":[{

@@ -142,8 +142,7 @@ records require a durable writes-finished (`quiescent`) proof, complete bounded
 listing, successful physical sweep and no surviving namespace objects before
 retirement under the schema lifecycle barrier. `Protection::published` requires
 every namespace PUT to have finished; authoritative checkpoint confirmation alone
-is insufficient. Unknown objects prevent retirement. Older schema rows default
-to no proof. Fencing does not establish quiescence, so abandoned upload records
+is insufficient. Unknown objects prevent retirement. Fencing does not establish quiescence, so abandoned upload records
 stay available to identify delayed PUT orphans. Handles bind a unique reservation
 ID as well as their token; stale handles cannot close a later token generation.
 There is no time-based expiration or universal bound on unresolved records.

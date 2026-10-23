@@ -52,6 +52,8 @@ for tick,epoch in [(6,7),(16,17)]:
     assert f'MVP durable manifest recovered all registered arrangements at tick {tick} epoch {epoch}' in harness_log
 assert harness_log.count('expected cold-recovery failure for ')==2
 assert 'MVP incomplete and corrupt catalog membership rejected without epoch change' in harness_log
+assert 'MVP unmanaged catalog roots rejected before recovery or GC' in harness_log
+assert 'MVP unmanaged publication roots rejected without progress change' in harness_log
 assert harness_log.count('MVP atomic sink/membership/source publication passed at tick ')==15
 assert 'MVP failed destination DML and fenced writers preserved sink/membership/progress' in harness_log
 assert 'MVP suppressed destination DML rejected without progress change' in harness_log

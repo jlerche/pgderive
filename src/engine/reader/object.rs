@@ -17,7 +17,7 @@ pub struct ObjectRef {
     bytes: u64,
     hash: String,
     schema: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "Option::<String>::deserialize")]
     namespace: Option<String>,
 }
 

@@ -21,7 +21,9 @@ type Group = Option<String>;
 pub(super) type Query = Relational<Key, Row>;
 pub(super) struct MvpFixture {
     graph: Query,
+    bag_graph: Query,
     publication: Option<publication::PublicationFixture>,
+    storage_failure_observed: bool,
 }
 impl MvpFixture {
     pub(super) fn new(
@@ -29,14 +31,12 @@ impl MvpFixture {
         limits: crate::engine::execution::Limits,
     ) -> Result<Self> {
         let plan = registered_plan()?;
-        let operators = operators();
-        let graph = Query::new(
-            plan,
-            operators,
-            &crate::engine::plan::Settings { store, block_rows: 3, limits, encoded_cache: None },
-        )?;
+        let settings =
+            crate::engine::plan::Settings { store, block_rows: 3, limits, encoded_cache: None };
+        let graph = Query::new(plan.clone(), operators(), &settings)?;
+        let bag_graph = Query::new(plan, operators(), &settings)?;
         eprintln!("registered engine query: {}", graph.plan().identity());
-        Ok(Self { graph, publication: None })
+        Ok(Self { graph, bag_graph, publication: None, storage_failure_observed: false })
     }
     pub(super) fn time(&self) -> u64 {
         self.graph.time()
@@ -54,23 +54,42 @@ impl MvpFixture {
             time,
             batch: vec![input(batch, "auction", "id")?, input(batch, "bid", "auction")?],
         };
+        let publication =
+            self.publication.as_mut().context("publication fixture not initialized")?;
+        let mut upload =
+            publication.grouped.protect_upload(sql, &format!("grouped:{time}")).await?;
         let pinned = self.graph.snapshot();
-        let prepared = self.graph.prepare(input.clone()).await;
-        let prepared = if time == 2 && std::env::var("PGDERIVE_EXPECT_STORAGE_FAILURE").is_ok() {
-            ensure!(prepared.is_err(), "expected injected S3 failure was not observed");
+        let prepared = self.graph.prepare_protected(input.clone(), &upload).await;
+        let expect_failure = std::env::var("PGDERIVE_EXPECT_STORAGE_FAILURE").is_ok();
+        let prepared = if expect_failure && !self.storage_failure_observed && prepared.is_err() {
+            self.storage_failure_observed = true;
             ensure!(
-                self.graph.time() == 1 && Arc::ptr_eq(&pinned, &self.graph.snapshot()),
+                self.graph.time() == time - 1 && Arc::ptr_eq(&pinned, &self.graph.snapshot()),
                 "storage failure published partial graph state"
             );
             eprintln!("MVP injected storage failure preserved root; retrying same transaction");
-            self.graph.prepare(input).await?
+            upload =
+                publication.retry_upload(sql, self.graph.plan(), &format!("retry:{time}")).await?;
+            self.graph.prepare_protected(input.clone(), &upload).await?
         } else {
             prepared?
         };
-        self.publication
-            .as_mut()
-            .context("publication fixture not initialized")?
-            .publish(sql, &mut self.graph, prepared, transaction)
+        ensure!(
+            time < 16 || !expect_failure || self.storage_failure_observed,
+            "expected injected S3 failure was not observed"
+        );
+        let bag_upload = publication.bag.protect_upload(sql, &format!("bag:{time}")).await?;
+        let bag_prepared = self.bag_graph.prepare_protected(input, &bag_upload).await?;
+        publication
+            .publish(
+                sql,
+                (&mut self.graph, &mut self.bag_graph),
+                (
+                    publication::Staged { prepared, upload },
+                    publication::Staged { prepared: bag_prepared, upload: bag_upload },
+                ),
+                transaction,
+            )
             .await?;
         let state = self.graph.snapshot();
         let expected = memory(model)?;
@@ -99,10 +118,14 @@ impl MvpFixture {
         let pinned = self.graph.snapshot();
         let expected = pinned.trace("output")?.materialize().await?;
         let time = self.graph.time();
-        let work = self.graph.prepare_compaction().await?;
         let publication =
             self.publication.as_mut().context("publication fixture not initialized")?;
+        let upload = publication.grouped.protect_upload(sql, "fixture-compaction").await?;
+        let work = self.graph.prepare_compaction_protected(&upload).await?;
         self.graph.publish_compaction(sql, &mut publication.grouped, work).await?;
+        upload
+            .published(sql, &publication.grouped, self.graph.plan(), &self.graph.checkpoint()?)
+            .await?;
         ensure!(
             self.graph.time() == time
                 && pinned.trace("output")?.materialize().await? == expected

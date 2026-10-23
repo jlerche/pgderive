@@ -511,15 +511,17 @@ reproducible per operation, though concurrency can change request assignment.
 ```bash
 ./scripts/check_integration.sh                         # published latency profile
 PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh # fast local correctness
-PGDERIVE_S3_FAIL=GET:1 PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh
+PGDERIVE_S3_FAIL=GET:1 PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh # expected read failure; fixture retained
 PGDERIVE_S3_FAIL=PUT:1 PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh
 python3 scripts/s3_latency_proxy.py --port 8334         # standalone local proxy
 ```
 
-The failure cases disable S3 client retries, verify that the first failed
-transaction did not publish any graph state, then explicitly retry the same
-transaction and run all SQL checks. Arbitrary injection positions are available
-in the proxy; the harness's expected-failure mode targets the first transaction.
+The PUT failure case disables S3 client retries, verifies that a failed
+preparation preserves its prior graph root, then fences the abandoned upload
+and retries the same transaction before running all SQL checks. GET:1 currently
+targets authoritative reload after an uncertain COMMIT: it stops with a retained
+fixture for fresh-process recovery instead of authorizing progress from a failed
+read. Arbitrary injection positions are available in the proxy.
 The MVP uses valid SQL bags and nullable i64 measures/sums. It has no SQL parser.
 The registered contract, bounded writers, restart manifests, atomic publication
 and collection implemented in the following sections complete the durable path.
@@ -558,10 +560,9 @@ fails rather than splitting automatically. Reduce `block_rows` for wide rows.
 Failed uploads leave unpublished objects for later garbage collection and never
 advance engine state. Retry collisions check stored size and exact bytes.
 
-Packed v1 objects remain readable within the same 8 MiB block/index caps.
-Oversized legacy objects require an offline rewrite before this reader accepts
-them. Durable membership will publish the manifest root; reclamation must follow
-its block references rather than treating that root as the complete batch bytes.
+Immutable objects must satisfy the current 8 MiB block/index caps. Catalog
+membership publishes manifest roots; reclamation follows their block references
+rather than treating a root as the complete batch bytes.
 
 ## Transaction execution limits
 
@@ -614,8 +615,8 @@ Cursor clones and new readers share verified decoded blocks; cache hits still
 check the requesting object's row count and fences. Streaming compaction borrows
 uncontended block prefixes strictly before other run heads; overlapping full
 identities retain exact scalar consolidation and fallible staged advancement.
-The durable v1/v2 canonical JSON format is unchanged, and existing committed
-objects remain readable without migration. Controlled release measurements and
+Canonical JSON+Zstd blocks remain the current codec. Catalog references require
+explicit managed upload namespaces; omitted or null namespaces are rejected. Controlled release measurements and
 format tradeoffs are recorded in [reader/storage performance](docs/reader-storage-performance.md).
 
 Cold, cached, evicted, and differently split runs are checked for equal weighted
@@ -818,10 +819,10 @@ DELETE. Partial sweep failures are safe to retry. Committed memberships, source
 progress and destination data are never changed by collection.
 
 Use a store prefix owned exclusively by the catalog schema. Unknown names and
-legacy objects written without managed upload reservations are retained; migrating
-that diagnostic state needs a separate offline procedure. Closed upload namespace records are retired only after all writes are known
+objects outside managed upload namespaces are retained and cannot become catalog
+members. Closed upload namespace records are retired only after all writes are known
 to have finished and a complete GC sweep leaves the namespace empty. Unknown
-objects, legacy reservations without that proof and fence-sealed abandoned uploads
+objects, reservations without that proof and fence-sealed abandoned uploads
 retain their records; delayed PUTs in fenced namespaces must remain collectible.
 Those unresolved records can still grow over time. Reader protection cleanup after an actual
 reader crash requires evidence that its readers have ended; there is no time-based
