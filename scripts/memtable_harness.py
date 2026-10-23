@@ -38,13 +38,19 @@ def qualify(output, command):
         audit_sql = f'SELECT json_agg(json_build_array(g.ctid::text,g.xmin::text,to_jsonb(g)) ORDER BY g.ctid) FROM {fixture.name}.groups g'
         audit = fixture.sql(audit_sql)
         first.abort()
-        # This serialized fixture has one source transaction per tick. Recreate
-        # the previous format's legitimate uncheckpointed suffix, then require
-        # recovery to checkpoint it before enabling the epoch journal.
-        fixture.sql(f'''BEGIN;
-          DELETE FROM {fixture.name}.pgderive_epoch_boundaries;
-          UPDATE {fixture.name}.pgderive_queries SET format_version=2;
-          COMMIT''')
+        # Old formats fail closed; startup must neither upgrade nor touch results.
+        fixture.sql(f'ALTER TABLE {fixture.name}.pgderive_queries DROP CONSTRAINT pgderive_queries_memtable_format_check')
+        for version in (1, 2):
+            fixture.sql(f'UPDATE {fixture.name}.pgderive_queries SET format_version={version}')
+            before = fixture.sql(f'SELECT row_to_json(q) FROM {fixture.name}.pgderive_queries q')
+            rejected = fixture.start(command, f'old-format-{version}')
+            rejected.process.wait(timeout=60)
+            rejected.abort()
+            assert rejected.process.returncode != 0, 'old catalog format was accepted'
+            assert 'unsupported catalog query format' in pathlib.Path(rejected.stderr.name).read_text()
+            assert fixture.sql(f'SELECT row_to_json(q) FROM {fixture.name}.pgderive_queries q') == before
+            assert fixture.sql(audit_sql) == audit
+        fixture.sql(f'UPDATE {fixture.name}.pgderive_queries SET format_version=3; ALTER TABLE {fixture.name}.pgderive_queries ADD CONSTRAINT pgderive_queries_memtable_format_check CHECK(format_version=3)')
         for iteration in range(2):
             resumed = fixture.start(command, f'replay-{iteration}')
             reopened = resumed.event('ready')

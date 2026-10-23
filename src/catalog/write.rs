@@ -22,11 +22,11 @@ pub(super) async fn stage(
     let digest = super::checkpoint_digest(checkpoint)?;
     let affected = if expected == 0 {
         tx.execute(&format!("INSERT INTO {}.pgderive_queries(query_id,format_version,plan_identity,definition,logical_time,epoch,checkpoint,checkpoint_digest)
-            VALUES($1,2,$2,$3,$4,$5,$6,$7) ON CONFLICT(query_id) DO NOTHING", catalog.schema),
+            VALUES($1,3,$2,$3,$4,$5,$6,$7) ON CONFLICT(query_id) DO NOTHING", catalog.schema),
             &[&catalog.query, &plan.identity(), &definition, &time, &next, &encoded, &digest]).await?
     } else {
         tx.execute(&format!("UPDATE {}.pgderive_queries SET logical_time=$4,epoch=$5,checkpoint=$7,checkpoint_digest=$8
-            WHERE query_id=$1 AND plan_identity=$2 AND definition=$3 AND epoch=$6 AND logical_time<=$4 AND format_version IN (1,2,3)", catalog.schema),
+            WHERE query_id=$1 AND plan_identity=$2 AND definition=$3 AND epoch=$6 AND logical_time<=$4 AND format_version=3", catalog.schema),
             &[&catalog.query, &plan.identity(), &definition, &time, &next, &expected, &encoded, &digest]).await?
     };
     ensure!(affected == 1, "stale or incompatible catalog checkpoint writer");

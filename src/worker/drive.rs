@@ -131,7 +131,6 @@ async fn attempt(
     if !super::replay::monitored(&mut open, &mut stream, &durable, stop).await? {
         return Ok((open.query.time(), durable.end.to_string()));
     }
-    activate_epochs(&mut open, &mut stream, metrics).await?;
     let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
     let mut health = super::health::Monitor::start(config, &open, &durable).await?;
     let reporter = health.reporter();
@@ -201,29 +200,6 @@ fn ready(
         event["open_recovery_us"] = serde_json::to_value(startup.lap())?;
     }
     emit(&event)
-}
-
-async fn activate_epochs(
-    open: &mut Open,
-    stream: &mut crate::acknowledged::Stream,
-    metrics: &mut Metrics,
-) -> Result<()> {
-    if !open.writer.epochs_enabled(&open.session.client).await? {
-        if open.query.time()
-            != open
-                .writer
-                .confirmed(&mut open.session.client, open.query.plan())
-                .await?
-                .stored
-                .checkpoint
-                .time
-        {
-            maintain(open, metrics).await?;
-            stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
-        }
-        open.writer.activate_epochs(&mut open.session.client, open.query.plan()).await?;
-    }
-    Ok(())
 }
 
 async fn consume(

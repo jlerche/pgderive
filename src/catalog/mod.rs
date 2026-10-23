@@ -57,7 +57,7 @@ impl Catalog {
         sql.batch_execute(&format!(
             "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('pgderive-catalog-install:{0}',0));
              CREATE TABLE IF NOT EXISTS {0}.pgderive_queries (
-                query_id text PRIMARY KEY, format_version integer NOT NULL CONSTRAINT pgderive_queries_memtable_format_check CHECK(format_version IN (1,2)),
+                query_id text PRIMARY KEY, format_version integer NOT NULL CONSTRAINT pgderive_queries_memtable_format_check CHECK(format_version=3),
                 plan_identity text NOT NULL, definition jsonb NOT NULL,
                 logical_time bigint NOT NULL CHECK(logical_time>=0),
                 epoch bigint NOT NULL CHECK(epoch>0),
@@ -82,19 +82,6 @@ impl Catalog {
                 sink_table text PRIMARY KEY,query_id text NOT NULL UNIQUE
                 REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
                 relation_oid oid NOT NULL);
-             DO $pgderive_memtable$ BEGIN
-             IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid='{0}.pgderive_queries'::regclass AND conname='pgderive_queries_memtable_format_check') THEN
-               ALTER TABLE {0}.pgderive_progress ADD COLUMN IF NOT EXISTS checkpoint_lsn pg_lsn;
-               ALTER TABLE {0}.pgderive_progress ADD COLUMN IF NOT EXISTS published_time bigint;
-               UPDATE {0}.pgderive_progress p SET checkpoint_lsn=COALESCE(p.checkpoint_lsn,p.end_lsn),published_time=COALESCE(p.published_time,q.logical_time) FROM {0}.pgderive_queries q WHERE p.query_id=q.query_id AND (p.checkpoint_lsn IS NULL OR p.published_time IS NULL);
-               ALTER TABLE {0}.pgderive_progress ALTER COLUMN checkpoint_lsn SET NOT NULL;
-               ALTER TABLE {0}.pgderive_progress ALTER COLUMN published_time SET NOT NULL;
-               ALTER TABLE {0}.pgderive_queries DROP CONSTRAINT IF EXISTS pgderive_queries_format_version_check;
-               ALTER TABLE {0}.pgderive_queries ADD CONSTRAINT pgderive_queries_memtable_format_check CHECK(format_version IN (1,2));
-               UPDATE {0}.pgderive_queries SET format_version=2 WHERE format_version=1;
-             END IF; END $pgderive_memtable$;
-             ALTER TABLE {0}.pgderive_queries DROP CONSTRAINT IF EXISTS pgderive_queries_memtable_format_check;
-             ALTER TABLE {0}.pgderive_queries ADD CONSTRAINT pgderive_queries_memtable_format_check CHECK(format_version IN (1,2,3));
              CREATE TABLE IF NOT EXISTS {0}.pgderive_epoch_boundaries (
                 query_id text NOT NULL REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
                 logical_time bigint NOT NULL CHECK(logical_time>1),

@@ -29,27 +29,10 @@ pub(super) async fn monitored(
 async fn recover(open: &mut Open, stream: &mut Stream, durable: &Durable) -> Result<()> {
     let mut replay = Replay::new(durable.clone());
     let epochs = open.catalog.replay_epochs(&open.session.client, durable).await?;
-    if let Some(epochs) = epochs {
-        for epoch in epochs {
-            recover_epoch(open, stream, &mut replay, &epoch).await?;
-        }
+    for epoch in epochs {
+        recover_epoch(open, stream, &mut replay, &epoch).await?;
     }
-    while !replay.complete() {
-        let transaction = stream.recv().await?;
-        let progress =
-            Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
-        if !replay.accept(&progress)? {
-            continue;
-        }
-        let time = open
-            .query
-            .time()
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("replay time overflow"))?;
-        let input = relational::inputs(&transaction.batch, open.compiled.relational(), time)?;
-        let work = open.query.prepare_memtable(input, open.settings.memtable_bytes).await?;
-        open.query.commit(work)?;
-    }
+    ensure!(replay.complete(), "epoch replay did not reach durable progress");
     ensure!(
         open.query.time() == durable.published_time,
         "replay logical clock disagrees with published progress"

@@ -59,12 +59,10 @@ boundary chain and fails closed if a boundary is missing or inconsistent. A
 checkpoint atomically removes the entries it covers. No tuple indexes live in
 this journal.
 
-New registrations start in format 2 and activate format 3 at a fully checkpointed
-boundary. Existing format 2 suffixes first replay with their original transaction
-boundaries, then checkpoint before activating epochs. Older binaries reject format
-3. This is a forward metadata upgrade, not a reversible configuration change;
-roll forward or explicitly rebuild from a fresh source snapshot. Immutable trace
-codecs remain version 1.
+All registrations use format 3 and record complete epoch boundaries. Recovery
+requires the journal to cover the exact durable suffix; older catalog formats
+are rejected and require a fresh registration. There is no automatic upgrade or
+transaction-by-transaction replay fallback.
 
 The adaptive scheduler learns arrival intervals, fixed publication cost, marginal
 work cost and prediction error. It drains ready transactions or briefly waits for

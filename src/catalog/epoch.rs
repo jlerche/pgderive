@@ -1,6 +1,5 @@
 //! Coarse WAL boundaries needed to reconstruct adaptive execution ticks exactly.
 use super::{Catalog, Durable, Lsn, Progress, Writer};
-use crate::engine::plan::Plan;
 use anyhow::{Context, Result, ensure};
 use tokio_postgres::{Client, Transaction};
 
@@ -12,29 +11,6 @@ pub struct ReplayEpoch {
     pub transactions: u64,
 }
 impl Writer {
-    pub(crate) async fn epochs_enabled(&self, sql: &Client) -> Result<bool> {
-        self.catalog.epochs_enabled(sql).await
-    }
-    /// Upgrade only a fully checkpointed boundary; old readers reject format three.
-    pub(crate) async fn activate_epochs(&mut self, sql: &mut Client, plan: &Plan) -> Result<()> {
-        ensure!(!self.uncertain, "uncertain epoch activation requires recovery");
-        ensure!(
-            self.boundary.checkpoint_end == self.boundary.end,
-            "epoch activation requires checkpointed progress"
-        );
-        let tx = sql.transaction().await?;
-        super::storage::publication_lock(&tx, &self.catalog).await?;
-        self.guard_memtable(&tx, plan).await?;
-        tx.execute(
-            &format!(
-                "UPDATE {}.pgderive_queries SET format_version=3 WHERE query_id=$1",
-                self.catalog.schema
-            ),
-            &[&self.catalog.query],
-        )
-        .await?;
-        self.commit(tx, "epoch activation").await
-    }
     pub(super) async fn journal_epoch(
         &self,
         tx: &Transaction<'_>,
@@ -43,33 +19,16 @@ impl Writer {
         let (time, progress, transactions) = publication;
         ensure!(transactions > 0, "empty source epoch");
         let inserted = tx.execute(&format!("INSERT INTO {0}.pgderive_epoch_boundaries(query_id,logical_time,previous_end_lsn,commit_lsn,end_lsn,xid,transactions) SELECT $1,$2,$3::text::pg_lsn,$4::text::pg_lsn,$5::text::pg_lsn,$6,$7 FROM {0}.pgderive_queries WHERE query_id=$1 AND format_version=3",self.catalog.schema), &[&self.catalog.query,&i64::try_from(time)?,&self.boundary.end.to_string(),&progress.commit.to_string(),&progress.end.to_string(),&i64::from(progress.xid),&i64::try_from(transactions)?]).await?;
-        ensure!(inserted == 1, "adaptive publication requires epoch journal activation");
+        ensure!(inserted == 1, "publication requires the current catalog format");
         Ok(())
     }
 }
 impl Catalog {
-    async fn epochs_enabled(&self, sql: &Client) -> Result<bool> {
-        let version: i32 = sql
-            .query_one(
-                &format!(
-                    "SELECT format_version FROM {}.pgderive_queries WHERE query_id=$1",
-                    self.schema
-                ),
-                &[&self.query],
-            )
-            .await?
-            .try_get(0)?;
-        ensure!(matches!(version, 1..=3), "unsupported catalog query format");
-        Ok(version == 3)
-    }
     pub(crate) async fn replay_epochs(
         &self,
         sql: &Client,
         durable: &Durable,
-    ) -> Result<Option<Vec<ReplayEpoch>>> {
-        if !self.epochs_enabled(sql).await? {
-            return Ok(None);
-        }
+    ) -> Result<Vec<ReplayEpoch>> {
         let count = durable
             .published_time
             .checked_sub(durable.stored.checkpoint.time)
@@ -92,7 +51,7 @@ impl Catalog {
             })
             .collect::<Result<Vec<_>>>()?;
         validate_epochs(&epochs, durable)?;
-        Ok(Some(epochs))
+        Ok(epochs)
     }
 }
 fn validate_epochs(epochs: &[ReplayEpoch], durable: &Durable) -> Result<()> {
