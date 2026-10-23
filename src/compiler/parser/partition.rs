@@ -9,7 +9,7 @@ pub(in crate::compiler) struct Parsed {
     pub predicate: Option<crate::compiler::syntax::Expr>,
 }
 pub(in crate::compiler) enum Source {
-    Join { tree: super::native_join::Tree, validated: bool },
+    Join(super::native_join::Tree),
     Native(Table),
     Derived { inner: Box<super::Parsed>, alias: String },
 }
@@ -54,7 +54,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
         let (inner, alias) = super::derived::source_query(derived)?;
         (Source::Derived { inner: Box::new(inner), alias }, None)
     } else if matches!(node(from)?, NodeEnum::JoinExpr(_)) && !super::expansion::eligible(from)? {
-        (Source::Join { tree: super::native_join::tree(from, &mut 0, 0)?, validated: false }, None)
+        (Source::Join(super::native_join::tree(from, &mut 0, 0)?), None)
     } else {
         let (table, expansion) = super::expansion::source(from)?;
         (Source::Native(table), expansion)

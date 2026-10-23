@@ -22,7 +22,7 @@ mod syntax;
 pub(crate) mod topk;
 mod typed;
 mod value;
-use crate::{source::Contract, worker::Query};
+use crate::source::Contract;
 use anyhow::Result;
 pub(crate) use expression::Predicate;
 pub(crate) use expression::native_key;
@@ -66,11 +66,6 @@ impl Compiled {
             primary_key: primary_key.to_vec(),
             columns: self.result_columns.clone(),
         })
-    }
-
-    pub(crate) fn legacy(selectors: Query, contract: &Contract) -> Result<Self> {
-        selectors.validate(contract)?;
-        bind::legacy(selectors, contract)
     }
 }
 /// Parse, resolve, type-check and lower the supported SQL shape without side effects.

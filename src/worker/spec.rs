@@ -1,44 +1,11 @@
-use crate::{
-    configuration::identifier,
-    source::{Column, Contract, Relation},
-};
-use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize};
+use crate::{configuration::identifier, source::Contract};
+use anyhow::{Result, ensure};
+use serde::Deserialize;
 
-/// Hand-authored grouped inner-join registration; SQL lowering follows the MVP.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Query {
-    /// Left source namespace.
-    pub left_schema: String,
-    /// Left source table.
-    pub left_table: String,
-    /// Left equijoin column (NULL never matches).
-    pub left_key: String,
-    /// Left grouping column, preserving NULL.
-    pub group: String,
-    /// Right source namespace.
-    pub right_schema: String,
-    /// Right source table.
-    pub right_table: String,
-    /// Right equijoin column.
-    pub right_key: String,
-    /// Nullable integral right-side SUM column.
-    pub sum: String,
-}
-/// SQL frontend input, retaining the legacy selector form for existing registrations.
-#[derive(Clone, Deserialize)]
-#[serde(untagged)]
-pub enum QueryDefinition {
-    /// Compile SQL into the supported durable composition.
-    Sql(SqlQuery),
-    /// Existing explicit selector registration.
-    Legacy(Query),
-}
-/// SQL text supplied in `[worker.query]` instead of explicit selectors.
+/// SQL text supplied in `[worker.query]`.
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SqlQuery {
+pub struct QueryDefinition {
     /// One supported SELECT statement.
     pub sql: String,
 }
@@ -61,10 +28,7 @@ impl QueryDefinition {
         Ok((compiled, description))
     }
     pub(crate) fn compile(&self, contract: &Contract) -> Result<crate::compiler::Compiled> {
-        match self {
-            Self::Sql(query) => crate::compiler::compile(&query.sql, contract),
-            Self::Legacy(query) => crate::compiler::Compiled::legacy(query.clone(), contract),
-        }
+        crate::compiler::compile(&self.sql, contract)
     }
 }
 /// Continuous worker configuration and bounded maintenance/retry policy.
@@ -150,46 +114,6 @@ impl Settings {
         Ok(())
     }
 }
-impl Query {
-    pub(crate) fn validate(&self, contract: &Contract) -> Result<()> {
-        contract.validate()?;
-        let left = self.relation(contract, true)?;
-        let right = self.relation(contract, false)?;
-        ensure!(left.oid != right.oid, "worker join requires distinct source relations");
-        let lhs = column(left, &self.left_key)?;
-        let rhs = column(right, &self.right_key)?;
-        ensure!(
-            lhs.oid == rhs.oid && lhs.modifier == rhs.modifier && lhs.collation == rhs.collation,
-            "worker join key native types differ"
-        );
-        column(left, &self.group)?;
-        ensure!(
-            matches!(column(right, &self.sum)?.oid, 20 | 21 | 23),
-            "worker SUM requires an integral native column"
-        );
-        Ok(())
-    }
-    fn relation<'a>(&self, contract: &'a Contract, left: bool) -> Result<&'a Relation> {
-        let (schema, table) = if left {
-            (&self.left_schema, &self.left_table)
-        } else {
-            (&self.right_schema, &self.right_table)
-        };
-        contract
-            .relations
-            .iter()
-            .find(|relation| &relation.schema == schema && &relation.table == table)
-            .context("worker source missing from native publication")
-    }
-}
-fn column<'a>(relation: &'a Relation, name: &str) -> Result<&'a Column> {
-    relation
-        .columns
-        .iter()
-        .find(|column| column.name == name)
-        .context("worker column missing from native contract")
-}
-
 const fn default_startup_timeout() -> u64 {
     180
 }

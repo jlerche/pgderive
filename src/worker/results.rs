@@ -1,8 +1,5 @@
 //! Native result metadata resolved at initialization; no `PostgreSQL` presentation view.
-use super::{
-    admin::{query_sql, quote},
-    spec::QueryDefinition,
-};
+use super::{admin::quote, spec::QueryDefinition};
 use crate::catalog::ResultColumn;
 use anyhow::{Result, ensure};
 use tokio_postgres::{Column, GenericClient};
@@ -11,9 +8,8 @@ pub(super) async fn columns(
     sql: &(impl GenericClient + Sync),
     query: &QueryDefinition,
 ) -> Result<(Vec<ResultColumn>, Vec<serde_json::Value>)> {
-    let query = query_sql(query);
-    let statement = sql.prepare(&query).await?;
-    let query = pg_query::parse(&query)?.deparse()?;
+    let statement = sql.prepare(&query.sql).await?;
+    let query = pg_query::parse(&query.sql)?.deparse()?;
     let mut description = Vec::new();
     let mut columns = Vec::new();
     for column in statement.columns() {

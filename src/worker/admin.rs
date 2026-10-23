@@ -1,5 +1,5 @@
 //! Operator-facing query inspection, separate from durable worker startup.
-use super::{program, spec::QueryDefinition, sql::Session};
+use super::{program, sql::Session};
 use crate::{
     Config,
     source::{Contract, Identity},
@@ -151,23 +151,6 @@ pub async fn status(config: &Config) -> Result<Value> {
     tx.commit().await?;
     Ok(json!({"version":1,"query_id":settings.query_id,"state":state,
         "registration":registration,"progress":progress,"lifecycle":lifecycle,"health":health,"worker_attempt":attempt}))
-}
-
-pub(super) fn query_sql(query: &QueryDefinition) -> String {
-    match query {
-        QueryDefinition::Sql(query) => query.sql.clone(),
-        QueryDefinition::Legacy(query) => format!(
-            "SELECT l.{group},COUNT(*),SUM(r.{sum}) FROM {left_schema}.{left_table} l JOIN {right_schema}.{right_table} r ON l.{left_key}=r.{right_key} GROUP BY l.{group}",
-            group = quote(&query.group),
-            sum = quote(&query.sum),
-            left_schema = quote(&query.left_schema),
-            left_table = quote(&query.left_table),
-            right_schema = quote(&query.right_schema),
-            right_table = quote(&query.right_table),
-            left_key = quote(&query.left_key),
-            right_key = quote(&query.right_key),
-        ),
-    }
 }
 
 pub(super) fn quote(name: &str) -> String {

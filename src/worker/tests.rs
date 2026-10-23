@@ -1,4 +1,4 @@
-use super::{program, spec::Query};
+use super::program;
 use crate::{
     engine::{Batch, plan::Settings},
     source::{Column, Contract, Identity, Relation},
@@ -48,18 +48,7 @@ pub(super) fn contract() -> Contract {
         ],
     }
 }
-fn spec() -> Query {
-    Query {
-        left_schema: "source".into(),
-        left_table: "auction".into(),
-        left_key: "id".into(),
-        group: "category".into(),
-        right_schema: "source".into(),
-        right_table: "bid".into(),
-        right_key: "auction".into(),
-        sum: "price".into(),
-    }
-}
+const SQL: &str = "SELECT a.category,COUNT(*),SUM(b.price) FROM source.auction a JOIN source.bid b ON a.id=b.auction GROUP BY a.category";
 pub(super) fn settings() -> Settings {
     Settings {
         store: Arc::new(InMemory::new()),
@@ -83,15 +72,13 @@ pub(super) fn batch(rows: Vec<(&str, Row, i64)>) -> weighted::Batch {
     }
 }
 #[test]
-fn registration_binds_native_types_and_query_selectors() -> Result<()> {
+fn registration_binds_native_types_and_sql() -> Result<()> {
     let native = contract();
-    let original =
-        build(&native, &crate::compiler::Compiled::legacy(spec(), &native)?, &settings())?;
-    let mut changed = spec();
-    changed.group = "other".into();
+    let original = build(&native, &crate::compiler::compile(SQL, &native)?, &settings())?;
+    let changed = SQL.replace("a.category", "a.other");
     assert_ne!(
         original.plan().identity(),
-        build(&native, &crate::compiler::Compiled::legacy(changed.clone(), &native)?, &settings())?
+        build(&native, &crate::compiler::compile(&changed, &native)?, &settings())?
             .plan()
             .identity()
     );
@@ -99,24 +86,18 @@ fn registration_binds_native_types_and_query_selectors() -> Result<()> {
     changed_native.relations[1].columns[2].oid = 23;
     assert_ne!(
         original.plan().identity(),
-        build(
-            &changed_native,
-            &crate::compiler::Compiled::legacy(spec(), &changed_native)?,
-            &settings()
-        )?
-        .plan()
-        .identity()
+        build(&changed_native, &crate::compiler::compile(SQL, &changed_native)?, &settings())?
+            .plan()
+            .identity()
     );
-    changed.sum = "missing".into();
-    assert!(crate::compiler::Compiled::legacy(changed, &native).is_err());
+    assert!(crate::compiler::compile(&SQL.replace("b.price", "b.missing"), &native).is_err());
     changed_native.relations[1].columns[1].oid = 20;
-    assert!(crate::compiler::Compiled::legacy(spec(), &changed_native).is_err());
+    assert!(crate::compiler::compile(SQL, &changed_native).is_err());
     Ok(())
 }
 #[tokio::test]
 async fn full_row_join_nulls_and_simultaneous_retractions_match_sql_semantics() -> Result<()> {
-    let selectors = spec();
-    let compiled = crate::compiler::Compiled::legacy(selectors, &contract())?;
+    let compiled = crate::compiler::compile(SQL, &contract())?;
     let mut query = build(&contract(), &compiled, &settings())?;
     let left = row(&[("id", Some("1")), ("category", None), ("other", Some("a"))]);
     let nil = row(&[("id", Some("3")), ("auction", Some("1")), ("price", None)]);

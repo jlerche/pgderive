@@ -20,7 +20,7 @@ use crate::Config;
 pub use admin::{environment, start, status, validate};
 use anyhow::{Context, Result};
 pub use lifecycle::{drop_query, rebuild};
-pub use spec::{Query, QueryDefinition, Settings, SqlQuery};
+pub use spec::{QueryDefinition, Settings};
 
 /// Start or resume a durable grouped worker using the configuration's worker section.
 ///

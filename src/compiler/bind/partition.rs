@@ -32,8 +32,8 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
     let body = Body { expansion, targets, groups, predicate };
     match source {
         syntax::Source::Native(table) => bind_native(table, &body, contract),
-        syntax::Source::Join { tree, validated } => {
-            let scope = super::native_join::scope(tree, contract, validated)?;
+        syntax::Source::Join(tree) => {
+            let scope = super::native_join::scope(tree, contract)?;
             let mut outer =
                 composition::stage(&scope.ir, &body, &|name| scope.resolve(name), contract)?;
             let mut relational = scope.ir;

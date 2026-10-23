@@ -27,7 +27,6 @@ struct Builder<'a> {
     sources: Vec<Source>,
     nodes: Vec<Node>,
     joins: usize,
-    validated: bool,
 }
 pub(super) struct Scope {
     pub(super) ir: Relational,
@@ -38,9 +37,8 @@ impl Scope {
         Ok(resolve(name, &self.columns)?.value.clone())
     }
 }
-pub(super) fn scope(tree: Tree, contract: &Contract, validated: bool) -> Result<Scope> {
-    let mut builder =
-        Builder { contract, sources: Vec::new(), nodes: Vec::new(), joins: 0, validated };
+pub(super) fn scope(tree: Tree, contract: &Contract) -> Result<Scope> {
+    let mut builder = Builder { contract, sources: Vec::new(), nodes: Vec::new(), joins: 0 };
     let edge = builder.tree(tree)?;
     let columns = edge
         .columns
@@ -151,8 +149,7 @@ impl Builder<'_> {
             "duplicate exposed table qualifier"
         );
         let id = format!("tree_join_{}", self.joins);
-        let keys::Bound { keys, computed } =
-            keys::bind(names, &left.columns, &right.columns, &id, self.validated)?;
+        let keys::Bound { keys, computed } = keys::bind(names, &left.columns, &right.columns, &id)?;
         let [left_computed, right_computed] = computed;
         self.map(&mut left, left_computed, &format!("{id}_left_map"));
         self.map(&mut right, right_computed, &format!("{id}_right_map"));

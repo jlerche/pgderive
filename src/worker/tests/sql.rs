@@ -45,9 +45,7 @@ fn normalized_identity_and_native_layout_are_restart_boundaries() -> Result<()> 
     let mut changed = native();
     changed.relations[1].columns[2].nullable = false;
     assert_ne!(identity(SQL)?, program::plan(&changed, &compile(SQL, &changed)?)?.identity());
-    let mut selectors = super::spec();
-    selectors.group = "id".into();
-    let translated = Compiled::legacy(selectors, &native())?;
+    let translated = compile(&super::SQL.replace("a.category", "a.id"), &native())?;
     assert_ne!(identity(SQL)?, program::plan(&native(), &translated)?.identity());
     Ok(())
 }
@@ -173,6 +171,14 @@ fn quoted_names_qualifiers_and_conjunctions() -> Result<()> {
     let defined: crate::worker::QueryDefinition =
         serde_json::from_value(serde_json::json!({"sql":SQL}))?;
     defined.compile(&native())?;
+    for rejected in [
+        serde_json::json!({"left_schema":"source","left_table":"auction","left_key":"id","group":"category","right_schema":"source","right_table":"bid","right_key":"auction","sum":"price"}),
+        serde_json::json!({}),
+        serde_json::json!({"sql":42}),
+    ] {
+        assert!(serde_json::from_value::<crate::worker::QueryDefinition>(rejected).is_err());
+    }
+
     assert!(
         serde_json::from_value::<crate::worker::QueryDefinition>(
             serde_json::json!({"sql":SQL,"group":"id"})
@@ -362,16 +368,11 @@ async fn right_null_predicate_and_wide_sum_follow_sql_numeric_output() -> Result
 }
 
 #[test]
-fn selector_text_equality_does_not_expand_the_sql_join_allowlist() -> Result<()> {
+fn text_equality_is_outside_the_sql_join_allowlist() {
     let mut native = native();
     native.relations[1].columns[1].oid = 25;
     native.relations[1].columns[1].collation = 100;
-    let mut selectors = super::spec();
-    selectors.left_key = "other".into();
-    selectors.group = "id".into();
-    Compiled::legacy(selectors, &native)?;
     assert!(compile("SELECT a.id,COUNT(*),SUM(b.price) FROM source.auction a JOIN source.bid b ON a.other=b.auction GROUP BY a.id", &native).is_err());
-    Ok(())
 }
 
 #[tokio::test]

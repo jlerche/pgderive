@@ -126,15 +126,9 @@ class Fixture:
         return subprocess.check_output(self.pg + [text], env=self.environment, text=True)
 
     def config(self, maximum=0, *, query=None, execution=True):
-        query = 'sql='+json.dumps(query, ensure_ascii=False)+'\n' if query is not None else f'''left_schema="{self.name}"
-left_table="auction"
-left_key="id"
-group="category"
-right_schema="{self.name}"
-right_table="bid"
-right_key="auction"
-sum="price"
-'''
+        if query is None:
+            query = f'SELECT a.category,COUNT(*),SUM(b.price) FROM {self.name}.auction a JOIN {self.name}.bid b ON a.id=b.auction GROUP BY a.category'
+        query = 'sql='+json.dumps(query, ensure_ascii=False)+'\n'
         limits = '''[execution]
 resident_entries=128
 resident_bytes=65536

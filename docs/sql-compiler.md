@@ -6,7 +6,7 @@ see the [compatibility contract](postgres-compatibility.md) and
 
 The compiler executes a deliberately bounded PostgreSQL SELECT through durable
 grouped-join, single-source projection, ungrouped inner-join and affected-partition workers. It is not a general SQL planner
-or an interpreter for plan declarations. Configure it in place of selectors:
+or an interpreter for plan declarations. Configure it with SQL:
 
 ```toml
 [worker.query]
@@ -101,8 +101,7 @@ rejected. Aliases and reversed equality operands normalize to the same semantics
 output labels and order remain part of durable identity.
 
 Ungrouped joins lower to explicit Source, KeyBy, Join and Project IR nodes. The
-worker binds those nodes to a reusable durable acyclic circuit executor, rather
-than hand-authored query selectors. Both keyed inputs retain complete native
+worker binds those nodes to a reusable durable acyclic circuit executor. Both keyed inputs retain complete native
 source tuples. The Join evaluates ΔL⋈R + L⋈ΔR + ΔL⋈ΔR against immutable prior
 state; WHERE and final projection operate on signed joined contributions. The
 final output arrangement preserves projected bag collisions. Every source receives
@@ -169,8 +168,7 @@ COMMIT; only authoritative publication permits slot ACK. Source LSN never become
 DBSP time. The compiler adds no acknowledgement or publication capability.
 
 COUNT and final weights must fit signed i64. Sufficient statistics use exact
-intermediate arithmetic. SUM(int8) emits PostgreSQL numeric, including selector
-configurations; SUM(int2/int4) must fit i64. Output conversion
+intermediate arithmetic. SUM(int8) emits PostgreSQL numeric; SUM(int2/int4) must fit i64. Output conversion
 and publication failures cannot advance progress or ACK. These are explicit
 operator/result limits, not a claim of unrestricted PostgreSQL aggregate coverage.
 

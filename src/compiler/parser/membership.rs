@@ -39,17 +39,14 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     if existence.is_none() && parsed.expansion.is_none() {
         parsed.source = match parsed.source {
             super::partition::Source::Native(table) => {
-                super::partition::Source::Join { tree: Tree::Source(table), validated: false }
+                super::partition::Source::Join(Tree::Source(table))
             }
             other => other,
         };
     }
 
     if let Some((query, anti)) = existence {
-        parsed.source = super::partition::Source::Join {
-            tree: existence_source(select, query, anti)?,
-            validated: false,
-        };
+        parsed.source = super::partition::Source::Join(existence_source(select, query, anti)?);
     }
     Ok(Some(Parsed::Membership { parsed, distinct }))
 }

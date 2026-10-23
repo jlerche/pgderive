@@ -538,7 +538,7 @@ state membership, schema identities, and every arrangement tick before local
 publication. Missing, extra, duplicate, or differently timed state fails without
 moving visibility. `plan::relational::Relational<K,V>` is the common executor for
 source projections, joins, grouped aggregates, and ordered/window compositions.
-The compiler lowers SQL and selector configurations to one relational IR; worker
+The compiler lowers SQL to one relational IR; worker
 execution has one runtime and an ordinary typed occurrence destination. The live harness
 uses the same executor with independent domain adapters and memory/SQL oracles.
 A separate three-source chained-join test checks simultaneous input changes
