@@ -1,5 +1,5 @@
 use super::bounded;
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 
 pub(super) const STORED_LIMIT: usize = bounded::MAX_BYTES + 65_536;
 pub(super) fn compress(bytes: &[u8]) -> Result<Vec<u8>> {
@@ -14,9 +14,16 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Vec<u8>> {
             == bytes.len(),
         "trailing data after compressed block"
     );
+    let size = zstd::zstd_safe::get_frame_content_size(bytes)
+        .map_err(|_| anyhow::anyhow!("invalid Zstd content size"))?
+        .context("immutable Zstd frame has no decoded size")?;
+    let size = usize::try_from(size)?;
+    ensure!(size <= bounded::MAX_BYTES, "decoded block exceeds byte limit");
     let mut decoder = zstd::bulk::Decompressor::new()?;
     decoder.set_parameter(zstd::zstd_safe::DParameter::WindowLogMax(23))?;
-    Ok(decoder.decompress(bytes, bounded::MAX_BYTES)?)
+    let output = decoder.decompress(bytes, size)?;
+    ensure!(output.len() == size, "decoded block size mismatch");
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -31,6 +38,8 @@ mod tests {
         assert_eq!(decode(&encoded)?, data);
         assert!(decode(b"[]").is_err());
         assert!(decode(b"invalid").is_err());
+        let unknown_size = zstd::stream::encode_all(data.as_slice(), 3)?;
+        assert!(decode(&unknown_size).is_err());
         let mut trailing = encoded.clone();
         trailing.extend_from_slice(&encoded);
         assert!(decode(&trailing).is_err());

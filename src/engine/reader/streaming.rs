@@ -6,6 +6,11 @@ use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
 use std::sync::Arc;
 
+// A point read decodes a complete block. Bound its ordinary JSON payload so cache
+// misses do not deserialize thousands of unrelated wide rows. A single larger
+// row remains valid up to the caller's hard block budget.
+pub(super) const TARGET_BLOCK_BYTES: usize = 128 * 1024;
+
 /// Fixed encoded-byte and entry budgets for streaming immutable state output.
 ///
 /// Total state size may exceed these budgets; complete canonical identities are
@@ -181,7 +186,9 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             .checked_add(bytes)
             .and_then(|bytes| bytes.checked_add(comma))
             .context("streaming block size overflow")?;
-        if self.rows.len() == self.limits.block_rows || next > self.limits.block_bytes {
+        if self.rows.len() == self.limits.block_rows
+            || (!self.rows.is_empty() && next > self.limits.block_bytes.min(TARGET_BLOCK_BYTES))
+        {
             self.flush_block().await?;
         }
         self.row_bytes = self

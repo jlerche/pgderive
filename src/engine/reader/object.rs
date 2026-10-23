@@ -273,8 +273,11 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 };
                 ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
                 let decoded = super::compression::decode(&bytes)?;
-                let rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
+                let mut rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
                 validate(&rows)?;
+                // JSON arrays do not carry a length hint. Do not retain their
+                // geometric deserialization spare capacity in the bounded cache.
+                rows.shrink_to_fit();
                 let rows = Arc::new(rows);
                 self.cache.insert(
                     &self.reference.schema,

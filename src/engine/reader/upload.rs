@@ -1,7 +1,7 @@
 //! Retain locally constructed, validated immutable metadata after successful PUTs.
-use super::{BatchData, BlockCache, ObjectBatch, bounded};
+use super::{BatchData, BatchReader as _, BlockCache, ObjectBatch, WriteLimits};
 use crate::engine::Batch;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use object_store::ObjectStore;
 use std::sync::Arc;
 
@@ -13,55 +13,33 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         target: (Option<&str>, usize),
         cache: Arc<BlockCache>,
     ) -> Result<Self> {
-        let (namespace, block_rows) = target;
-        ensure!(!schema.is_empty() && block_rows > 0, "invalid batch schema or block size");
-        if let Some(namespace) = namespace {
-            ensure!(super::object::valid_namespace(namespace), "invalid batch upload namespace");
-        }
-        let scoped = super::object::scoped_store(&store, namespace);
-        let mut blocks = Vec::new();
-        let mut fence_bytes = 0_usize;
-        let mut rows = batch.iter();
-        loop {
-            let chunk = rows.by_ref().take(block_rows.min(65_536)).collect::<Vec<_>>();
-            if chunk.is_empty() {
-                break;
-            }
-            let decoded_bytes = bounded::encode(&chunk)?;
-            let encoded_bytes = decoded_bytes.len();
-            let (block, encoded) =
-                super::format::encode_block::<(K, V), _>(&chunk, &decoded_bytes)?;
-            bounded::put(&scoped, &block.path, encoded).await?;
-            fence_bytes = fence_bytes
-                .checked_add(bounded::encode(&block)?.len())
-                .context("manifest size overflow")?;
-            ensure!(fence_bytes <= bounded::MAX_BYTES, "manifest exceeds byte limit");
-            let decoded =
-                chunk.into_iter().map(|(tuple, weight)| (tuple.clone(), *weight)).collect();
-            cache.insert(schema, block.hash.clone(), Arc::new(decoded), encoded_bytes)?;
-            blocks.push(block);
-        }
-        // A successful index PUT remains mandatory. Only the redundant cold
-        // reopen is avoided; arbitrary recovered references still use open().
-        let mut reference = Self::upload_index(&scoped, schema, blocks.clone()).await?;
-        if let Some(namespace) = namespace {
-            reference = reference.qualify(namespace)?;
-        }
-        for block in &mut blocks {
-            block.path = reference.child_path(&block.path);
-        }
-        let rows = super::format::row_count(&blocks)?;
-        Ok(Self { store, reference, blocks: Arc::new(blocks), rows, cache })
+        // Both upload paths use the same byte/row boundaries and integrity checks.
+        // This API returns one root; reject overflow rather than discard membership.
+        let limits = WriteLimits {
+            block_rows: target.1.min(65_536),
+            output_roots: 1,
+            ..WriteLimits::default()
+        };
+        let mut objects = Self::write_stream_resident(
+            store,
+            &mut batch.cursor().await?,
+            schema,
+            (target.0, limits),
+            cache,
+        )
+        .await?;
+        objects.pop().context("single-root upload returned no object")
     }
 }
 
 #[cfg(test)]
+#[path = "tests/block_target.rs"]
+mod block_target;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{
-        reader::{BatchReader as _, WriteLimits},
-        tests::store::Store,
-    };
+    use crate::engine::{reader::WriteLimits, tests::store::Store};
     use object_store::{ObjectStoreExt as _, path::Path};
     use std::sync::atomic::Ordering;
     #[tokio::test]

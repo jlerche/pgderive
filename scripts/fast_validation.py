@@ -47,7 +47,10 @@ def validate_report(path, cases):
                   'output_groups': len(steps[-1]['expected'])}
         if (len(times) != len(measured) or any(type(t) is not int or t < 0 for t in times)
                 or any(type(row[key]) is not int or row[key] != count for key, count in counts.items())
-                or any(type(row[key]) is not int or row[key] < 0 for key in ['memtable_bytes', 'measured_cache_misses'])):
+                or any(type(row[key]) is not int or row[key] < 0 for key in [
+                    'memtable_bytes', 'measured_cache_misses', 'measured_object_reads',
+                    'measured_object_puts', 'object_puts', 'stored_objects', 'stored_bytes'])
+                or row['measured_object_puts'] != 0):
             raise RuntimeError('Engine measurement/oracle coverage differs: ' + row['case'])
 
 
@@ -99,12 +102,16 @@ def main():
     parser.add_argument('--seeds', type=int, default=3)
     parser.add_argument('--state-rows', type=int, nargs='+', default=[1000, 8000, 32000])
     parser.add_argument('--repeats', type=int, default=3)
+    parser.add_argument('--warmup', type=int, default=8, help='Growth warmup updates after cold restore')
+    parser.add_argument('--updates', type=int, default=32, help='Growth measured updates per case')
     parser.add_argument('--release', action='store_true')
     parser.add_argument('--replay', type=pathlib.Path)
     parser.add_argument('--worker', type=pathlib.Path)
     args = parser.parse_args()
     if args.seeds < 1 or args.repeats < 1 or any(not 1 <= rows <= 100000 for rows in args.state_rows):
         parser.error('Positive seeds/repeats and state rows in [1,100000] required')
+    if args.warmup < 0 or args.updates < 1:
+        parser.error('Nonnegative warmup and positive measured updates required')
     output = args.output.resolve()
     if output.exists():
         parser.error('Output must be new; previous evidence is retained')
@@ -138,8 +145,8 @@ def main():
                 cases = []
                 for rows in args.state_rows:
                     for repeat in range(args.repeats):
-                        trace = preloaded(rows)
-                        case = export(trace, measured_from=9, final_only=True)
+                        trace = preloaded(rows, warmup=args.warmup, measured=args.updates)
+                        case = export(trace, measured_from=args.warmup + 1, final_only=True)
                         case['name'] += '-' + str(repeat)
                         cases.append(case)
             else:

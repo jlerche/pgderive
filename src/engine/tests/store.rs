@@ -15,8 +15,12 @@ pub struct Store {
     pub(crate) active: AtomicUsize,
     pub(crate) peak: AtomicUsize,
     pub(crate) fail_first: bool,
+    unpaced: bool,
 }
 impl Store {
+    pub fn unpaced() -> Self {
+        Self { unpaced: true, ..Self::default() }
+    }
     pub fn new(fail_first: bool) -> Self {
         Self { fail_first, ..Self::default() }
     }
@@ -32,7 +36,9 @@ impl ObjectStore for Store {
         let call = self.puts.fetch_add(1, Ordering::SeqCst);
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(active, Ordering::SeqCst);
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        if !self.unpaced {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         self.active.fetch_sub(1, Ordering::SeqCst);
         if self.fail_first && call == 0 {
             return Err(object_store::Error::Generic {

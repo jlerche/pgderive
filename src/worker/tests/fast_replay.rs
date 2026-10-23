@@ -6,9 +6,12 @@ use crate::{
     weighted,
 };
 use anyhow::{Context, Result, ensure};
+use futures_util::TryStreamExt as _;
+use object_store::ObjectStore as _;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    sync::{Arc, atomic::Ordering},
     time::Instant,
 };
 
@@ -119,11 +122,15 @@ async fn run(case: Case) -> Result<serde_json::Value> {
     let compiled = crate::compiler::compile(&case.sql, &native)?;
     let mut settings = settings();
     settings.block_rows = 4096;
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    settings.store = store.clone();
     let mut query = build(&native, &compiled, &settings)?;
     let mut output = Bag::new();
     let mut elapsed = Vec::new();
     let mut measured_changes = 0;
     let mut cache_misses = 0;
+    let mut object_reads = 0;
+    let mut object_puts = 0;
     let mut oracle_checks = 0;
     for (index, step) in case.steps.into_iter().enumerate() {
         if step.restart {
@@ -138,6 +145,8 @@ async fn run(case: Case) -> Result<serde_json::Value> {
                 query.time() + 1,
             )?;
             let before = query.cache_stats()?;
+            let reads = store.reads.load(Ordering::SeqCst);
+            let puts = store.puts.load(Ordering::SeqCst);
             let started = Instant::now();
             let work = query
                 .prepare_memtable(input, 256 * 1024 * 1024)
@@ -148,6 +157,8 @@ async fn run(case: Case) -> Result<serde_json::Value> {
                 elapsed.push(started.elapsed().as_nanos());
                 measured_changes += count;
                 cache_misses += query.cache_stats()?.misses - before.misses;
+                object_reads += store.reads.load(Ordering::SeqCst) - reads;
+                object_puts += store.puts.load(Ordering::SeqCst) - puts;
             }
             integrate(&mut output, &super::projected_batch(&delta.batch, &compiled)?)?;
         }
@@ -163,7 +174,11 @@ async fn run(case: Case) -> Result<serde_json::Value> {
             ensure!(snapshot == output, "replay {} snapshot differs at step {index}", case.name);
         }
     }
+    let objects = store.list(None).try_collect::<Vec<_>>().await?;
     Ok(serde_json::json!({"case":case.name,"prepare_commit_ns":elapsed,
+        "object_puts":store.puts.load(Ordering::SeqCst),"stored_objects":objects.len(),
+        "stored_bytes":objects.iter().map(|object| object.size).sum::<u64>(),
+        "measured_object_reads":object_reads,"measured_object_puts":object_puts,
         "oracle_checks":oracle_checks,"measured_weighted_updates":measured_changes,"measured_cache_misses":cache_misses,"output_groups":output.len(),
         "memtable_bytes":query.memtable_bytes()?,"logical_time":query.time()}))
 }

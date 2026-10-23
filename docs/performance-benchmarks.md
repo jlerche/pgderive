@@ -331,12 +331,49 @@ then runs eight warmup updates and 32 measured updates per case, with three repe
 per size. It uses the same replay engine and application oracle. Reported
 `prepare_commit_ns` excludes compilation, preload, warmup, oracle evaluation,
 input adaptation and output integration. Reports also include weighted input
-counts, cache misses, charged memtable bytes and output-group counts. These are
+counts, cache misses, charged memtable bytes and output-group counts. Storage
+reports count GET/HEAD and PUT attempts during measured updates separately from
+total PUT attempts and final object count/bytes, including setup and checkpointing.
+Measured memtable updates must perform zero PUTs. These are
 local microbenchmarks against an in-memory object backend, not end-to-end latency,
 S3 request measurements, allocator/RSS bounds or qualified regression baselines.
-Use `--state-rows N ...` and `--repeats N` for targeted investigations. Compilation
+Use `--state-rows N ...`, `--repeats N`, `--warmup N` and `--updates N` for targeted investigations. Compilation
 is timed separately; omit `--release` for a fast debug check rather than comparable
 optimized performance measurements.
+
+### Decoded-cache capacity boundary
+
+The group workload at `421344f` crossed the default 16 MiB decoded cache near
+24,000 groups. Each miss decoded a complete 4,096-row JSON block, including many
+unrelated groups. Both upload paths now share the streaming writer and target
+128 KiB of decoded JSON per block. Individual wider rows still use the existing
+hard byte budget. Cold reads trim deserialization spare capacity and allocate the
+decompression buffer from the bounded frame content size; frames without that
+size are rejected. The engine's encoder always writes it. Checksums, canonical
+ordering, count/fence validation and publication/ACK ordering remain required.
+
+An optimized, unpaced paired comparison used the same saved trace, 64 warmup and
+64 measured updates, three repeats per state size, and before/after/after/before
+process order. Each size/version has 384 measured updates. All final weighted
+bags and cold restores passed the independent oracle. Compilation, oracle work,
+preload and warmup are excluded:
+
+| Groups | Before p50 / p95 | After p50 / p95 |
+| --- | --- | --- |
+| 8,000 | 0.219 / 0.403 ms | 0.221 / 0.376 ms |
+| 32,000 | 13.144 / 14.816 ms | 2.208 / 3.736 ms |
+| 40,000 | 13.464 / 14.517 ms | 2.738 / 3.550 ms |
+
+Smaller blocks have a storage cost: the 32,000-group fixture's initial checkpoint
+went from 53 to 209 PUT attempts/objects, and stored bytes from 698,179 to 864,469.
+Measured updates performed zero PUTs in both versions. This does not establish a
+live Class A operation rate or cloud latency. Cache misses still cost more than
+hits; the change reduces their decoding amplification. Existing large blocks
+take the new boundaries when rewritten by checkpoint compaction.
+
+Use growth mode with `--state-rows 8000 32000 40000 --warmup 64 --updates 64` to
+repeat the candidate workload. The default eight warmups intentionally retain
+more cold-start effects; they may not warm every block at smaller block sizes.
 
 For real durability integration, reuse the existing event-controlled harness:
 
