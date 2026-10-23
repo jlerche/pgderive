@@ -19,6 +19,7 @@ type Identity = (&'static str, String, String, TypeId);
 pub struct BlockCache {
     bytes: usize,
     entries: usize,
+    parent: Option<Arc<Self>>,
     state: Mutex<State>,
     pub(super) encoded: Option<Arc<super::EncodedCache>>,
 }
@@ -55,7 +56,28 @@ impl BlockCache {
     /// Set decoded-charge and entry caps; either zero disables retention.
     #[must_use]
     pub fn new(bytes: usize, entries: usize) -> Self {
-        Self { bytes, entries, state: Mutex::new(State::default()), encoded: None }
+        Self { bytes, entries, parent: None, state: Mutex::new(State::default()), encoded: None }
+    }
+    /// Reuse foreground blocks without admitting scan data or promoting its LRU.
+    pub(crate) fn scan(parent: Arc<Self>) -> Arc<Self> {
+        let parent = parent.parent.clone().unwrap_or(parent);
+        Arc::new(Self { encoded: parent.encoded.clone(), parent: Some(parent), ..Self::new(0, 0) })
+    }
+    pub(super) const fn admits_encoded(&self) -> bool {
+        self.parent.is_none()
+    }
+    fn peek<K: BatchData, V: BatchData>(
+        &self,
+        schema: &str,
+        hash: &str,
+    ) -> Result<Option<SharedRows<K, V>>> {
+        let state = self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
+        let identity =
+            (ROW_CODEC, schema.to_owned(), hash.to_owned(), TypeId::of::<Vec<Entry<K, V>>>());
+        let rows = state.blocks.get(&identity).map(|entry| entry.rows.clone());
+        drop(state);
+        rows.map(|rows| rows.downcast().map_err(|_| anyhow::anyhow!("cache type mismatch")))
+            .transpose()
     }
     /// Attach a shared Foyer cache for encoded immutable blocks.
     #[must_use]
@@ -82,6 +104,9 @@ impl BlockCache {
         schema: &str,
         hash: &str,
     ) -> Result<Option<SharedRows<K, V>>> {
+        if let Some(parent) = &self.parent {
+            return parent.peek(schema, hash);
+        }
         let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
         state.clock = state.clock.saturating_add(1);
         let clock = state.clock;
@@ -148,6 +173,32 @@ mod tests {
     use super::BlockCache;
     use anyhow::Result;
     use std::sync::Arc;
+
+    #[test]
+    fn scan_preserves_foreground_lru_counters_and_tracks_its_own_pins() -> Result<()> {
+        let cache = Arc::new(BlockCache::new(4096, 2));
+        for hash in ["a", "b"] {
+            cache.insert("s", hash.into(), Arc::new(vec![((1_i64, 2_i64), 1)]), 8)?;
+        }
+        let scan = BlockCache::scan(cache.clone());
+        assert!(scan.get::<i64, i64>("s", "a")?.is_some());
+        assert!(scan.get::<i64, i64>("s", "missing")?.is_none());
+        let cold = Arc::new(vec![((3_i64, 4_i64), 1)]);
+        scan.insert("s", "cold".into(), cold.clone(), 8)?;
+        assert_eq!(scan.stats()?.entries, 0);
+        assert_eq!(scan.stats()?.pins, 1);
+        assert_eq!(cache.stats()?.hits, 0);
+        assert_eq!(cache.stats()?.misses, 0);
+        cache.insert("s", "c".into(), Arc::new(vec![((5_i64, 6_i64), 1)]), 8)?;
+        assert!(cache.get::<i64, i64>("s", "a")?.is_none());
+        assert!(cache.get::<i64, i64>("s", "b")?.is_some());
+        assert!(cache.get::<i64, i64>("s", "cold")?.is_none());
+        assert!(!scan.admits_encoded());
+        assert!(cache.admits_encoded());
+        drop(cold);
+        assert_eq!(scan.stats()?.live_bytes, 0);
+        Ok(())
+    }
 
     #[test]
     fn decoded_sharing_tracks_evicted_and_disabled_pins() -> Result<()> {

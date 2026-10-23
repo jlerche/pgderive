@@ -1,7 +1,7 @@
 use super::TimedBatch;
 use crate::engine::{
     Batch,
-    reader::{BatchData, BatchReader, BlockCache, ObjectBatch, WriteLimits},
+    reader::{BatchCursor, BatchData, BatchReader, BlockCache, ObjectBatch, WriteLimits},
     trace::{Manifest, Run, TraceSnapshot},
 };
 use anyhow::{Result, ensure};
@@ -41,6 +41,9 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         self.cache = cache;
         self
     }
+    pub(crate) fn cache(&self) -> Arc<BlockCache> {
+        self.cache.clone()
+    }
     pub(crate) fn with_namespace(mut self, namespace: &str) -> Self {
         self.namespace = Some(namespace.into());
         self
@@ -71,11 +74,17 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
     }
     pub(crate) async fn upload_flush(&self, batch: &Batch<K, V>) -> Result<Vec<Run<K, V>>> {
         let mut cursor = batch.cursor().await?;
+        self.upload_cursor(&mut cursor).await
+    }
+    pub(crate) async fn upload_cursor(
+        &self,
+        cursor: &mut impl BatchCursor<Key = K, Val = V>,
+    ) -> Result<Vec<Run<K, V>>> {
         let limits =
             WriteLimits { block_rows: self.block_rows.min(65_536), ..WriteLimits::default() };
         Ok(ObjectBatch::<K, V>::write_stream_resident(
             self.store.clone(),
-            &mut cursor,
+            cursor,
             &self.schema,
             (self.namespace.as_deref(), limits),
             self.cache.clone(),
@@ -123,26 +132,8 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
     /// Upload equivalent consolidated state without advancing logical time.
     ///
     /// # Errors
-    /// Returns read, upload or equivalence validation errors.
+    /// Returns read, upload or arithmetic errors.
     pub async fn compact(&self, prior: &TraceSnapshot<K, V>) -> Result<TraceSnapshot<K, V>> {
-        ensure!(
-            prior.run_count() <= crate::engine::trace::MAX_RUNS,
-            "compaction input run limit exceeded"
-        );
-        let mut cursor = prior.cursor().await?;
-        let limits =
-            WriteLimits { block_rows: self.block_rows.min(65_536), ..WriteLimits::default() };
-        let runs = ObjectBatch::<K, V>::write_stream_resident(
-            self.store.clone(),
-            &mut cursor,
-            &self.schema,
-            (self.namespace.as_deref(), limits),
-            self.cache.clone(),
-        )
-        .await?
-        .into_iter()
-        .map(Run::Object)
-        .collect();
-        prior.replace_runs(runs).await
+        prior.compact_with(self).await
     }
 }

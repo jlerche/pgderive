@@ -100,3 +100,58 @@ async fn memory_and_invalid_logical_membership_cannot_be_recovered() -> Result<(
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn full_compaction_preserves_hot_cache_and_admits_output_only_when_read() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let cache = Arc::new(BlockCache::new(4096, 1));
+    let writer =
+        Arrangement::<i64, i64>::new(store.clone(), "scan".into(), 1)?.with_cache(cache.clone());
+    let batch = Batch::from_updates((0..32).map(|key| ((key, key), 1)))?;
+    let cold_writer = Arrangement::<i64, i64>::new(store, "scan".into(), 1)?;
+    let state = cold_writer.stage(&cold_writer.empty(), &TimedBatch { time: 1, batch }).await?;
+    let state = writer.reopen(state.manifest()?).await?;
+    // Materialization leaves the final block hot in this one-entry cache.
+    state.materialize().await?;
+    let before = cache.stats()?;
+    let compacted = writer.compact(&state).await?;
+    let after = cache.stats()?;
+    assert_eq!((before.hits, before.misses, before.bytes), (after.hits, after.misses, after.bytes));
+    assert_eq!(compacted.time(), state.time());
+    assert_eq!(compacted.generation(), state.generation() + 1);
+    let delta = Batch::from_updates([((31, 31), -1)])?;
+    state.validate_delta(&delta).await?;
+    assert_eq!(cache.stats()?.misses, before.misses);
+    let delta = Batch::from_updates([((0, 0), -1)])?;
+    compacted.validate_delta(&delta).await?;
+    let loaded = cache.stats()?;
+    assert_eq!(loaded.misses, before.misses + 1);
+    compacted.validate_delta(&delta).await?;
+    assert_eq!(cache.stats()?.misses, loaded.misses);
+    assert!(cache.stats()?.hits > loaded.hits);
+    assert_eq!(compacted.materialize().await?, state.materialize().await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn trusted_compaction_reads_each_cold_input_block_once_and_rejects_corruption() -> Result<()>
+{
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(crate::engine::tests::store::Store::default());
+    let writer = Arrangement::<i64, i64>::new(store.clone(), "once".into(), 1)?;
+    let batch = Batch::from_updates((0..8).map(|key| ((key, key), 1)))?;
+    let state = writer.stage(&writer.empty(), &TimedBatch { time: 1, batch }).await?;
+    let before = store.reads.load(Ordering::SeqCst);
+    let compacted =
+        writer.clone().with_namespace("pgderive/upload-v1/compaction-once").compact(&state).await?;
+    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 8);
+    assert_eq!(compacted.materialize().await?, state.materialize().await?);
+    let manifest = state.manifest()?;
+    let root = manifest.objects.first().context("missing root")?;
+    let object = ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "once").await?;
+    let path = Path::from(object.block_path(3).context("missing block")?);
+    store.put(&path, b"corrupt".to_vec().into()).await?;
+    assert!(writer.compact(&state).await.is_err());
+    assert_eq!(state.manifest()?, manifest);
+    Ok(())
+}

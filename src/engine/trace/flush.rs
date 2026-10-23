@@ -1,9 +1,37 @@
 //! Flush bounded memory deltas without revisiting retained object data.
 use super::{Run, TraceSnapshot};
-use crate::engine::{BatchBuilder, dataflow::Arrangement, reader::BatchData};
+use crate::engine::{
+    BatchBuilder,
+    dataflow::Arrangement,
+    reader::{BatchData, BatchReader, BlockCache},
+};
 use anyhow::{Context, Result, ensure};
 
 impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
+    pub(crate) async fn compact_with(&self, writer: &Arrangement<K, V>) -> Result<Self> {
+        ensure!(self.run_count() <= super::MAX_RUNS, "compaction input run limit exceeded");
+        let generation = self.generation.checked_add(1).context("trace generation overflow")?;
+        let cache = writer.cache();
+        let scan_cache = BlockCache::scan(cache.clone());
+        let mut input = self.clone();
+        input.share_cache(&scan_cache);
+        let mut cursor = input.cursor().await?;
+        let scan_writer = writer.clone().with_cache(scan_cache);
+        let runs = scan_writer.upload_cursor(&mut cursor).await?;
+        // This private construction streams exactly the validated merged input.
+        // Untrusted replacements still require replace_runs' equivalence check.
+        let mut next = Self::from_runs(runs, generation, self.time)?;
+        next.share_cache(&cache);
+        Ok(next)
+    }
+    fn share_cache(&mut self, cache: &std::sync::Arc<BlockCache>) {
+        for run in &mut self.runs {
+            if let Run::Object(object) = run {
+                object.share_cache(cache.clone());
+            }
+        }
+    }
+
     pub(crate) async fn flush_memory(&self, writer: &Arrangement<K, V>) -> Result<Self> {
         ensure!(self.run_count() <= super::MAX_RUNS, "flush input run limit exceeded");
         if !self.has_memory() {

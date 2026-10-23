@@ -264,7 +264,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                         .await?
                         .to_vec();
                     ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
-                    if let Some(cache) = &self.cache.encoded {
+                    if self.cache.admits_encoded()
+                        && let Some(cache) = &self.cache.encoded
+                    {
                         cache.insert(key, bytes.clone());
                     }
                     bytes
