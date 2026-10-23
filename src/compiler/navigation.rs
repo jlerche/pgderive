@@ -1,5 +1,5 @@
 //! Typed native LAG/LEAD operands and PostgreSQL-compatible result promotion.
-use super::{ColumnRef, parser::Name, syntax::Scalar};
+use super::{ColumnRef, parser::Name, typed};
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 #[derive(Clone, Serialize)]
@@ -19,54 +19,45 @@ pub struct Navigation {
     pub oid: u32,
 }
 pub(super) fn bind(
-    parsed: super::parser::navigation::Navigation,
+    parsed: &super::parser::navigation::Navigation,
     argument: &ColumnRef,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
 ) -> Result<Navigation> {
-    let offset = match parsed.offset {
-        Scalar::Null => Offset::Constant(None),
-        Scalar::Integer(value) => {
-            Offset::Constant(Some(i32::try_from(value).context("LAG/LEAD offset requires int4")?))
-        }
-        Scalar::Column(name) => {
-            let column = resolve(&name)?;
-            ensure!(matches!(column.oid, 21 | 23), "LAG/LEAD offset column requires int2/int4");
-            Offset::Column(column)
-        }
-        _ => anyhow::bail!("unsupported LAG/LEAD offset"),
-    };
-    let (default, oid) = default(parsed.default, argument.oid, resolve)?;
+    let offset = parsed
+        .offset
+        .as_deref()
+        .map(|value| offset(value, resolve))
+        .transpose()?
+        .unwrap_or(Offset::Constant(Some(1)));
+    let (default, oid) = default(parsed.default.as_deref(), argument.oid, resolve)?;
     Ok(Navigation { offset, default, oid })
 }
+fn offset(value: &pg_query::Node, resolve: &impl Fn(&Name) -> Result<ColumnRef>) -> Result<Offset> {
+    let value = typed::navigation(value, resolve)?;
+    if let Some(column) = value.as_column() {
+        ensure!(matches!(column.oid, 21 | 23), "LAG/LEAD offset column requires int2/int4");
+        return Ok(Offset::Column(column.clone()));
+    }
+    let integer = value.as_integer_literal();
+    ensure!(integer.is_some() || value.oid() == 0, "unsupported LAG/LEAD offset");
+    Ok(Offset::Constant(
+        integer.map(i32::try_from).transpose().context("LAG/LEAD offset requires int4")?,
+    ))
+}
 fn default(
-    value: Scalar,
+    value: Option<&pg_query::Node>,
     argument: u32,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
 ) -> Result<(Default, u32)> {
-    let (value, oid) = match value {
-        Scalar::Null => (Default::Constant(None), argument),
-        Scalar::Column(name) => {
-            let column = resolve(&name)?;
-            let oid = column.oid;
-            (Default::Column(column), oid)
-        }
-        Scalar::Integer(value) => (
-            Default::Constant(Some(value.to_string())),
-            if i32::try_from(value).is_ok() { 23 } else { 20 },
-        ),
-        Scalar::Boolean(value) => {
-            (Default::Constant(Some(if value { "t" } else { "f" }.into())), 16)
-        }
-        Scalar::String(value) => {
-            ensure!(
-                matches!(argument, 25 | 1043),
-                "string LAG/LEAD defaults require text/varchar; other input casts need typed expression lowering"
-            );
-            (Default::Constant(Some(value)), argument)
-        }
-        Scalar::Remainder(..) | Scalar::Difference(..) | Scalar::Interval(..) => {
-            anyhow::bail!("unsupported LAG/LEAD default")
-        }
+    let Some(value) = value else {
+        return Ok((Default::Constant(None), argument));
+    };
+    let value = typed::navigation(value, resolve)?;
+    let (value, oid) = if let Some(column) = value.as_column() {
+        (Default::Column(column.clone()), column.oid)
+    } else {
+        let (value, oid) = value.navigation_default(argument)?;
+        (Default::Constant(value), oid)
     };
     Ok((value, common_type(argument, oid)?))
 }

@@ -1,42 +1,47 @@
 //! Contextual literal binding and native values for the shared scalar IR.
 use super::{ColumnRef, Typed, Value};
-use crate::{
-    compiler::{syntax, value},
-    transaction::Row,
-};
+use crate::{compiler::value, transaction::Row};
 use anyhow::{Context, Result, ensure};
 impl Typed {
     pub(in crate::compiler) const fn column(column: ColumnRef) -> Self {
         Self { oid: column.oid, value: Value::Column(column) }
     }
-    pub(in crate::compiler) fn predicate_literal(value: syntax::Scalar, oid: u32) -> Result<Self> {
-        let text = match value {
-            syntax::Scalar::Null => None,
-            syntax::Scalar::Integer(value) if matches!(oid, 20 | 21 | 23) => {
-                return Ok(Self {
-                    oid: if i32::try_from(value).is_ok() { 23 } else { 20 },
-                    value: Value::Literal(Some(value)),
-                });
+    pub(super) fn predicate_literal(self, oid: u32) -> Result<Self> {
+        let text = match self.value {
+            Value::Literal(None) => None,
+            Value::Literal(Some(value)) if matches!(oid, 20 | 21 | 23) => {
+                return Ok(Self { oid: self.oid, value: Value::Literal(Some(value)) });
             }
-            syntax::Scalar::Integer(value) if oid == 1700 => Some(value.to_string()),
-            syntax::Scalar::Boolean(value) if oid == 16 => {
-                Some(if value { "t" } else { "f" }.into())
-            }
-            syntax::Scalar::String(value)
-                if matches!(oid, 25 | 1043 | 1700 | 2950 | 1114 | 1184) =>
-            {
+            Value::Literal(Some(value)) if oid == 1700 => Some(value.to_string()),
+            Value::Encoded(value) if self.oid == 16 && oid == 16 => value,
+            Value::Text(value) if matches!(oid, 25 | 1043 | 1700 | 2950 | 1114 | 1184) => {
                 Some(value)
             }
-            syntax::Scalar::Interval(value) if oid == 1186 => {
-                return Ok(Self {
-                    oid,
-                    value: Value::Interval(crate::temporal::Gap::Finite(value)),
-                });
+            Value::Interval(value) if oid == 1186 => {
+                return Ok(Self { oid, value: Value::Interval(value) });
             }
             _ => anyhow::bail!("SQL type: literal does not match native column"),
         };
         let text = text.map(|text| value::literal_text(oid, &text)).transpose()?;
         Ok(Self { oid, value: Value::Encoded(text) })
+    }
+    pub(in crate::compiler) fn navigation_default(
+        self,
+        argument: u32,
+    ) -> Result<(Option<String>, u32)> {
+        Ok(match self.value {
+            Value::Literal(None) => (None, argument),
+            Value::Literal(Some(value)) => (Some(value.to_string()), self.oid),
+            Value::Encoded(value) if self.oid == 16 => (value, 16),
+            Value::Text(value) => {
+                ensure!(
+                    matches!(argument, 25 | 1043),
+                    "string LAG/LEAD defaults require text/varchar; other input casts need typed expression lowering"
+                );
+                (Some(value), argument)
+            }
+            _ => anyhow::bail!("unsupported LAG/LEAD default"),
+        })
     }
     pub(in crate::compiler) fn difference(left: ColumnRef, right: ColumnRef) -> Result<Self> {
         if matches!(left.oid, 20 | 21 | 23 | 1700) && matches!(right.oid, 20 | 21 | 23 | 1700) {

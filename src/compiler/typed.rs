@@ -8,7 +8,9 @@ use types::numeric_common;
 mod case;
 mod evaluate;
 mod functions;
+mod operand;
 mod predicate;
+pub(super) use operand::{Operand, bind as operand, native_literal, navigation};
 mod types;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Typed {
@@ -108,7 +110,7 @@ fn bind_inner(
             Ok(Typed { oid: column.oid, value: Value::Column(column) })
         }
         NodeEnum::AConst(constant) => literal(constant),
-        NodeEnum::TypeCast(cast) => cast_expression(cast, resolve, depth),
+        NodeEnum::TypeCast(cast) => types::cast(cast, resolve, depth),
         NodeEnum::AExpr(expression) => {
             ensure!(
                 expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprOp),
@@ -256,8 +258,6 @@ pub(super) fn difference(left: ColumnRef, right: ColumnRef) -> Typed {
     }
 }
 
-impl Typed {}
-
 fn numeric_cast_input(
     value: &Node,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
@@ -270,14 +270,6 @@ fn numeric_cast_input(
         return Ok(Typed { oid: 1700, value: Value::Numeric(value.sval.clone()) });
     }
     bind(value, resolve, depth)
-}
-
-fn cast_expression(
-    cast: &pg_query::protobuf::TypeCast,
-    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
-    depth: usize,
-) -> Result<Typed> {
-    types::cast(cast, resolve, depth)
 }
 
 impl Typed {

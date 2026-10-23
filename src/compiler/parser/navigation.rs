@@ -1,13 +1,13 @@
 //! Native-column LAG/LEAD arguments, offset and current-row fallback.
 use super::{Name, column};
-use crate::compiler::syntax::{self, Scalar};
+use crate::compiler::syntax::Expr;
 use anyhow::{Result, ensure};
 use pg_query::protobuf as pg;
 #[derive(Clone)]
 pub(in crate::compiler) struct Navigation {
     pub argument: Name,
-    pub offset: Scalar,
-    pub default: Scalar,
+    pub offset: Option<Expr>,
+    pub default: Option<Expr>,
 }
 pub(super) fn parse(call: &pg::FuncCall) -> Result<Navigation> {
     ensure!(
@@ -16,12 +16,8 @@ pub(super) fn parse(call: &pg::FuncCall) -> Result<Navigation> {
     );
     ensure!((1..=3).contains(&call.args.len()), "LAG/LEAD require one to three arguments");
     let argument = column(&call.args[0])?;
-    let offset = call.args.get(1).map(syntax::scalar).transpose()?.unwrap_or(Scalar::Integer(1));
-    let default = call.args.get(2).map(syntax::scalar).transpose()?.unwrap_or(Scalar::Null);
-    ensure!(
-        !matches!(offset, Scalar::Remainder(_, _)) && !matches!(default, Scalar::Remainder(_, _)),
-        "LAG/LEAD offset/default expressions require native columns or literals"
-    );
+    let offset = call.args.get(1).cloned().map(Box::new);
+    let default = call.args.get(2).cloned().map(Box::new);
     Ok(Navigation { argument, offset, default })
 }
 

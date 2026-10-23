@@ -313,6 +313,7 @@ fn aggregate(
     )?;
     let navigation = value
         .navigation
+        .as_ref()
         .map(|parsed| {
             crate::compiler::navigation::bind(
                 parsed,

@@ -1,9 +1,11 @@
+use super::{ColumnRef, parser::Name, syntax::Compare};
 use super::{
-    ColumnRef,
-    parser::Name,
-    syntax::{self, Compare},
+    typed::{self, Operand, Typed as Scalar},
+    value::Value,
 };
-use super::{typed::Typed as Scalar, value::Value};
+fn operand(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Operand> {
+    typed::operand(value, &|name| resolve(name))
+}
 use crate::transaction::Row;
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
@@ -51,13 +53,7 @@ fn bind_ast(
                 pg::NullTestType::Undefined => anyhow::bail!("invalid NULL test"),
             };
             let value = optional(value.arg.as_deref())?;
-            ensure!(
-                matches!(syntax::scalar(value), Ok(syntax::Scalar::Column(_)) | Err(_)),
-                "SQL type: NULL tests require a column or typed expression"
-            );
-            let Operand::Bound(value) = operand(value, resolve)? else {
-                anyhow::bail!("unresolved NULL test");
-            };
+            let value = operand(value, resolve)?.null_test()?;
             Ok(Expr::Null(value, not))
         }
         NodeEnum::AExpr(value) => {
@@ -142,46 +138,6 @@ fn normalized(args: Vec<Expr>, and: bool) -> Result<Expr> {
         return values.pop().context("empty normalized expression");
     }
     Ok(if and { Expr::And(values) } else { Expr::Or(values) })
-}
-fn operand(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Operand> {
-    match syntax::scalar(value) {
-        Ok(syntax::Scalar::Column(name)) => Ok(Operand::Bound(Scalar::column(resolve(&name)?))),
-        Err(_) => Ok(Operand::Bound(super::typed::bind(value, &|name| resolve(name), 0)?)),
-        Ok(syntax::Scalar::Remainder(name, divisor)) => {
-            Ok(Operand::Bound(Scalar::remainder(resolve(&name)?, divisor)?))
-        }
-        Ok(syntax::Scalar::Difference(left, right)) => {
-            Ok(Operand::Bound(Scalar::difference(resolve(&left)?, resolve(&right)?)?))
-        }
-        Ok(literal) => Ok(Operand::Literal(literal)),
-    }
-}
-enum Operand {
-    Bound(Scalar),
-    Literal(syntax::Scalar),
-}
-impl Operand {
-    const fn oid(&self) -> Option<u32> {
-        match self {
-            Self::Bound(value) => Some(value.oid()),
-            Self::Literal(_) => None,
-        }
-    }
-    fn coerce(self, oid: u32) -> Result<Scalar> {
-        match self {
-            Self::Bound(value) => {
-                ensure!(
-                    value.oid() == oid || (numeric(oid) && numeric(value.oid())),
-                    "SQL type: incompatible comparison operands"
-                );
-                Ok(value)
-            }
-            Self::Literal(value) => Scalar::predicate_literal(value, oid),
-        }
-    }
-}
-const fn numeric(oid: u32) -> bool {
-    matches!(oid, 20 | 21 | 23 | 1700)
 }
 impl Expr {
     pub(super) fn evaluate(&self, rows: (&Row, &Row)) -> Result<Option<bool>> {

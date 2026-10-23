@@ -1,6 +1,6 @@
 //! `PostgreSQL` correlated left lookup with an explicit deterministic LIMIT 1.
 use super::{Columns, Name, Table, node, optional, projection_columns, table};
-use crate::compiler::syntax::{self, Expr, Scalar};
+use crate::compiler::syntax::{self, Expr};
 use anyhow::{Context, Result, ensure};
 use pg_query::{NodeEnum, protobuf as pg};
 pub(in crate::compiler) struct Parsed {
@@ -64,7 +64,7 @@ fn validate_join(
         "lookup requires LEFT JOIN LATERAL without grouping/join modifiers"
     );
     ensure!(
-        matches!(syntax::scalar(optional(join.quals.as_deref())?)?, Scalar::Boolean(true)),
+        matches!(node(optional(join.quals.as_deref())?)?, NodeEnum::AConst(value) if !value.isnull && matches!(&value.val, Some(pg::a_const::Val::Boolval(value)) if value.boolval)),
         "lookup requires ON true"
     );
     Ok(())
@@ -72,7 +72,9 @@ fn validate_join(
 type Inner = (Table, Expr, Vec<(Name, bool, bool)>);
 fn inner_shape(select: &pg::SelectStmt) -> Result<Inner> {
     ensure!(
-        matches!(syntax::scalar(optional(select.limit_count.as_deref())?)?, Scalar::Integer(1))
+        crate::compiler::typed::native_literal(optional(select.limit_count.as_deref())?)?
+            .as_integer_literal()
+            == Some(1)
             && select.limit_option == i32::from(pg::LimitOption::Count)
             && select.group_clause.is_empty(),
         "lookup requires LIMIT 1 without WITH TIES/grouping"
