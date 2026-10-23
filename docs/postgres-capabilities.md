@@ -1,12 +1,21 @@
 # PostgreSQL semantic capability inventory
 
-Baseline: scalar/relational code inspected at commit `867c2a2`; the binding
-checks below include the subsequent M0 implementation. Scope is the SQL compiler and continuous worker, not generic engine APIs.
-The exact closed signatures in `src/compiler/capabilities.rs` and parser guards
-linked below are authoritative;
-a family name is not permission to use all PostgreSQL overloads. Read with the
-[compatibility contract](postgres-compatibility.md) and
-[SQL subset](sql-compiler.md).
+Scope: the SQL compiler and continuous worker. The machine-readable
+[support matrix](postgres-support-matrix.json) lists every closed scalar signature,
+accepted source OID, selected coercions, rejected examples and bounded feature
+families with implementation and qualification references. A Rust drift test
+requires its scalar signatures to match `src/compiler/capabilities.rs` exactly.
+
+`scripts/postgres_support_harness.py` executes all listed scalar cases against a
+native PostgreSQL materialized view and an independent Python oracle through
+snapshot, CDC and restart. It compares duplicate-preserving bags, native send
+representations and output names, types, modifiers and collations. Unsupported
+examples must fail with the declared diagnostic before activation or slot creation.
+Other feature references identify their qualification scope, not exhaustive proof
+of every input or combination. Parser guards and the
+[SQL subset](sql-compiler.md) define accepted contexts; a family name does not
+enable every PostgreSQL overload. Read with the
+[compatibility contract](postgres-compatibility.md).
 
 ## Scalar and transport capabilities
 

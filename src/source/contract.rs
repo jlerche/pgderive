@@ -205,6 +205,8 @@ async fn inspect_layout(
 pub(super) fn quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
+const SOURCE_TYPE_OIDS: &[u32] = &[16, 20, 21, 23, 25, 1043, 2950, 1114, 1184, 1700];
+
 pub(super) fn validate_columns(columns: &[Column]) -> Result<()> {
     ensure!(
         !columns.is_empty() && columns.iter().any(|column| column.primary),
@@ -222,10 +224,33 @@ pub(super) fn validate_columns(columns: &[Column]) -> Result<()> {
         );
         previous = column.position;
         ensure!(
-            matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184 | 1700)
-                && !(column.primary && column.nullable),
+            SOURCE_TYPE_OIDS.contains(&column.oid) && !(column.primary && column.nullable),
             "unsupported source column contract"
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod matrix_tests {
+    use super::SOURCE_TYPE_OIDS;
+    use anyhow::Result;
+    use serde::Deserialize;
+    use std::collections::BTreeSet;
+
+    #[derive(Deserialize)]
+    struct Matrix {
+        source_type_oids: Vec<u32>,
+        unsupported_source_type_oids: Vec<u32>,
+    }
+    #[test]
+    fn source_matrix_exactly_matches_admitted_types() -> Result<()> {
+        let matrix: Matrix =
+            serde_json::from_str(include_str!("../../docs/postgres-support-matrix.json"))?;
+        let declared = matrix.source_type_oids.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(declared.len(), matrix.source_type_oids.len());
+        assert_eq!(declared, SOURCE_TYPE_OIDS.iter().copied().collect::<BTreeSet<_>>());
+        assert!(matrix.unsupported_source_type_oids.iter().all(|oid| !declared.contains(oid)));
+        Ok(())
+    }
 }

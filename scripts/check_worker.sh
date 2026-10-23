@@ -49,7 +49,7 @@ PGDERIVE_S3_LATENCY_SCALE="$crash_scale" run_qualification crashes python3 scrip
 while read -r qualification script; do
     if [[ "$profile" == core ]]; then
         case "$qualification" in
-            keyed-sink|compiler|application|composition-matrix|sliding-extrema|prefix-window|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|computed-join|environment|aggregate-inputs|relational|partition|numeric|native|navigation|case) ;;
+            keyed-sink|compiler|application|composition-matrix|sliding-extrema|prefix-window|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|postgres-support|computed-join|environment|aggregate-inputs|relational|partition|numeric|native|navigation|case) ;;
             *) continue ;;
         esac
     fi
@@ -72,6 +72,7 @@ sink-batch sink_batch
 stdout-sink stdout_sink
 projection projection_compiler
 functions functions_compiler
+postgres-support postgres_support
 environment environment
 computed-join computed_join
 aggregate-inputs aggregate_inputs_compiler
@@ -149,7 +150,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==373,results
+assert len(results)==374,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))
@@ -173,7 +174,7 @@ assert stat.S_ISREG(credential_info.st_mode) and stat.S_IMODE(credential_info.st
 assert credential_info.st_uid==10001
 files=[root/'Cargo.lock',root/'Cargo.toml',root/'worker.example.toml',pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),pathlib.Path(sys.argv[3]).with_name('postgres_tls_control_probe'),
        *sorted((root/'src').rglob('*.rs')), *sorted((root/'src').rglob('*.sql')),
-       *sorted((root/'docs').glob('*.md')), root/'.dockerignore', *sorted((root/'deploy').glob('*')), output/'package/bin/pgderive',
+       *sorted((root/'docs').glob('*.md')), root/'docs/postgres-support-matrix.json', root/'.dockerignore', *sorted((root/'deploy').glob('*')), output/'package/bin/pgderive',
        *sorted((root/'scripts').glob('*.sh')), *sorted((root/'scripts').glob('*.py')), *sorted((root/'queries').rglob('*.sql')), *sorted(path for path in output.rglob('*.json') if path != private_credential),
        *sorted(output.rglob('*.jsonl')), *sorted(output.rglob('*.toml')), *sorted(output.rglob('*.log'))]
 provenance={'private_inputs':{str(private_credential.relative_to(root)):{'uid':credential_info.st_uid,'gid':credential_info.st_gid,'mode':'0600','bytes':credential_info.st_size,'scope':'ownership/mode attestation only; private credential contents remain unreadable to the host qualifier'}},

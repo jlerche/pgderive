@@ -159,12 +159,11 @@ Workers set pg_catalog search_path, UTC, ISO/MDY
 DateStyle, ISO intervals and extra_float_digits=3 during initialization; callers
 must keep that session context stable for the worker lifetime.
 
-An incompatible old serialized source binding is rejected; the unreleased
-format has no automatic migration. Registrations from before this shape change
-need retirement with a compatible older binary before upgrade, followed by fresh
-registration/bootstrap. New-format registrations with compatible structure but
-changed attested semantics require explicit rebuild after restoring or qualifying
-the supported environment. Fingerprints attest catalog
+Incompatible serialized source bindings are rejected. Development changes cut
+over directly to the current format and require fresh registration/bootstrap;
+there are no historical-format adapters or prior-binary migration workflows.
+Registrations with compatible structure but changed attested semantics require
+explicit rebuild after restoring or qualifying the supported environment. Fingerprints attest catalog
 metadata, not the contents of backend binaries, shared libraries or timezone files.
 The maintenance barrier prevents coordinated changes from overlapping active
 workers and binds the revision at initialization. It does not intercept arbitrary
@@ -198,10 +197,10 @@ object-backed. DML and source progress roll back together on a missing occurrenc
 resource limit or evaluation error. External writes and runtime administrative
 changes are unsupported; consumer roles must have read-only access.
 
-Old `result_view` configurations and weighted sink bindings require explicit
-migration using the prior binary to retire the old registration and a fresh owned
-namespace with this version. There is no silent adoption or conversion of existing
-relations. A replaced relation requires downstream publication setup and resnapshot.
+Only the current ordinary-table sink configuration is accepted. Incompatible
+state requires a fresh owned namespace; existing relations are never silently
+adopted or converted. A replaced relation requires downstream publication setup
+and resnapshot.
 
 The lease and revision are database-local. For shared backend binaries, libraries,
 timezone/locale files or cluster-wide settings, quiesce workers and begin

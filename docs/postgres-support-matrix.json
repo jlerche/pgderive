@@ -1,0 +1,837 @@
+{
+  "version": 1,
+  "scope": "PostgreSQL-only SQL compiler and continuous worker; in-engine execution only. Bounded domains are not arbitrary PostgreSQL SQL support.",
+  "environment": {
+    "parser": "PostgreSQL 17.7 grammar pinned by pg_query",
+    "live_qualification": "PostgreSQL 17 owned fixtures; exact runtime/catalog identity bound per registration",
+    "execution_settings": "pg_catalog search_path, UTF8, UTC, ISO/MDY dates, ISO intervals; deterministic source collations only"
+  },
+  "source_type_oids": [
+    16,
+    20,
+    21,
+    23,
+    25,
+    1043,
+    1114,
+    1184,
+    1700,
+    2950
+  ],
+  "unsupported_source_type_oids": [
+    700,
+    701,
+    1186,
+    1007,
+    1009,
+    3802
+  ],
+  "scalar_functions": [
+    {
+      "name": "length",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 23,
+      "expression": "length(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "char_length",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 23,
+      "expression": "char_length(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "character_length",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 23,
+      "expression": "character_length(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "octet_length",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 23,
+      "expression": "octet_length(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "bit_length",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 23,
+      "expression": "bit_length(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "ascii",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 23,
+      "expression": "ascii(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "chr",
+      "input_oids": [
+        23
+      ],
+      "result_oid": 25,
+      "expression": "chr(a.codepoint)",
+      "arguments": [
+        {
+          "column": "codepoint"
+        }
+      ]
+    },
+    {
+      "name": "reverse",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 25,
+      "expression": "reverse(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "left",
+      "input_oids": [
+        25,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "left(a.category,a.group_id)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "right",
+      "input_oids": [
+        25,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "right(a.category,a.group_id)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "ltrim",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 25,
+      "expression": "ltrim(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "ltrim",
+      "input_oids": [
+        25,
+        25
+      ],
+      "result_oid": 25,
+      "expression": "ltrim(a.category,'é🙂 ')",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "literal": "é🙂 "
+        }
+      ]
+    },
+    {
+      "name": "rtrim",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 25,
+      "expression": "rtrim(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "rtrim",
+      "input_oids": [
+        25,
+        25
+      ],
+      "result_oid": 25,
+      "expression": "rtrim(a.category,'é🙂 ')",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "literal": "é🙂 "
+        }
+      ]
+    },
+    {
+      "name": "btrim",
+      "input_oids": [
+        25
+      ],
+      "result_oid": 25,
+      "expression": "btrim(a.category)",
+      "arguments": [
+        {
+          "column": "category"
+        }
+      ]
+    },
+    {
+      "name": "btrim",
+      "input_oids": [
+        25,
+        25
+      ],
+      "result_oid": 25,
+      "expression": "btrim(a.category,'é🙂 ')",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "literal": "é🙂 "
+        }
+      ]
+    },
+    {
+      "name": "replace",
+      "input_oids": [
+        25,
+        25,
+        25
+      ],
+      "result_oid": 25,
+      "expression": "replace(a.category,'é','xy')",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "literal": "é"
+        },
+        {
+          "literal": "xy"
+        }
+      ]
+    },
+    {
+      "name": "translate",
+      "input_oids": [
+        25,
+        25,
+        25
+      ],
+      "result_oid": 25,
+      "expression": "translate(a.category,'é🙂é','abz')",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "literal": "é🙂é"
+        },
+        {
+          "literal": "abz"
+        }
+      ]
+    },
+    {
+      "name": "strpos",
+      "input_oids": [
+        25,
+        25
+      ],
+      "result_oid": 23,
+      "expression": "strpos(a.category,'🙂')",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "literal": "🙂"
+        }
+      ]
+    },
+    {
+      "name": "starts_with",
+      "input_oids": [
+        25,
+        25
+      ],
+      "result_oid": 16,
+      "expression": "starts_with(a.category,'é')",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "literal": "é"
+        }
+      ]
+    },
+    {
+      "name": "repeat",
+      "input_oids": [
+        25,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "repeat(a.category,a.group_id)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "split_part",
+      "input_oids": [
+        25,
+        25,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "split_part(a.category,'🙂',-2)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "literal": "🙂"
+        },
+        {
+          "literal": -2
+        }
+      ]
+    },
+    {
+      "name": "substr",
+      "input_oids": [
+        25,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "substr(a.category,a.group_id)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "substr",
+      "input_oids": [
+        25,
+        23,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "substr(a.category,a.group_id,2)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        },
+        {
+          "literal": 2
+        }
+      ]
+    },
+    {
+      "name": "substring",
+      "input_oids": [
+        25,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "substring(a.category,a.group_id)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "substring",
+      "input_oids": [
+        25,
+        23,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "substring(a.category,a.group_id,2)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        },
+        {
+          "literal": 2
+        }
+      ]
+    },
+    {
+      "name": "to_hex",
+      "input_oids": [
+        23
+      ],
+      "result_oid": 25,
+      "expression": "to_hex(a.group_id)",
+      "arguments": [
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "to_hex",
+      "input_oids": [
+        20
+      ],
+      "result_oid": 25,
+      "expression": "to_hex(a.large_value)",
+      "arguments": [
+        {
+          "column": "large_value"
+        }
+      ]
+    },
+    {
+      "name": "abs",
+      "input_oids": [
+        21
+      ],
+      "result_oid": 21,
+      "expression": "abs(a.small_value)",
+      "arguments": [
+        {
+          "column": "small_value"
+        }
+      ]
+    },
+    {
+      "name": "abs",
+      "input_oids": [
+        23
+      ],
+      "result_oid": 23,
+      "expression": "abs(a.group_id)",
+      "arguments": [
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "abs",
+      "input_oids": [
+        20
+      ],
+      "result_oid": 20,
+      "expression": "abs(a.large_value)",
+      "arguments": [
+        {
+          "column": "large_value"
+        }
+      ]
+    }
+  ],
+  "coercion_cases": [
+    {
+      "name": "length",
+      "input_oids": [
+        1043
+      ],
+      "result_oid": 23,
+      "expression": "length(a.vartext)",
+      "arguments": [
+        {
+          "column": "vartext"
+        }
+      ]
+    },
+    {
+      "name": "left",
+      "input_oids": [
+        25,
+        21
+      ],
+      "result_oid": 25,
+      "expression": "left(a.category,a.small_value)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "small_value"
+        }
+      ]
+    },
+    {
+      "name": "substr",
+      "input_oids": [
+        25,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "substr(a.category,NULL::integer)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "literal": null
+        }
+      ]
+    }
+  ],
+  "rejections": [
+    {
+      "id": "locale-case",
+      "expression": "lower(a.category)",
+      "error_contains": "function lower is not available in-engine"
+    },
+    {
+      "id": "named-timezone",
+      "expression": "timezone('America/New_York',a.event_time)",
+      "error_contains": "function timezone is not available in-engine"
+    },
+    {
+      "id": "calendar-truncation",
+      "expression": "date_trunc('month',a.event_time)",
+      "error_contains": "function date_trunc is not available in-engine"
+    },
+    {
+      "id": "formatting",
+      "expression": "to_char(a.event_time,'YYYY-MM-DD')",
+      "error_contains": "function to_char is not available in-engine"
+    },
+    {
+      "id": "regex",
+      "expression": "regexp_replace(a.category,'é','x','g')",
+      "error_contains": "function regexp_replace is not available in-engine"
+    },
+    {
+      "id": "volatile",
+      "expression": "random()",
+      "error_contains": "function random is not available in-engine"
+    },
+    {
+      "id": "wall-clock",
+      "expression": "now()",
+      "error_contains": "function now is not available in-engine"
+    },
+    {
+      "id": "session-state",
+      "expression": "current_setting('TimeZone')",
+      "error_contains": "function current_setting is not available in-engine"
+    },
+    {
+      "id": "numeric-division",
+      "expression": "a.amount/2",
+      "error_contains": "operator / is not available in-engine"
+    },
+    {
+      "id": "numeric-abs",
+      "expression": "abs(a.amount)",
+      "error_contains": "overload is not available in-engine"
+    },
+    {
+      "id": "floating-function",
+      "expression": "sqrt(2.0::double precision)",
+      "error_contains": "function sqrt is not available in-engine"
+    },
+    {
+      "id": "array-function",
+      "expression": "cardinality(ARRAY[1,2])",
+      "error_contains": "function cardinality is not available in-engine"
+    },
+    {
+      "id": "ambiguous-null-substring",
+      "expression": "substring(a.category,NULL)",
+      "error_contains": "untyped NULL position selects an unsupported regex overload"
+    }
+  ],
+  "features": [
+    {
+      "id": "native-codecs",
+      "status": "bounded",
+      "domain": "Source OIDs listed below; native widths, UUID, UTF8 text/varchar, timestamp/timestamptz and bounded exact numeric. Codec availability does not enable every relational position.",
+      "implementation": [
+        "src/source/contract.rs",
+        "src/compiler/value.rs",
+        "src/numeric.rs",
+        "src/temporal.rs"
+      ],
+      "qualification": [
+        "scripts/native_compiler_harness.py",
+        "scripts/projection_compiler_harness.py"
+      ]
+    },
+    {
+      "id": "scalar-functions",
+      "status": "bounded",
+      "domain": "Only scalar_functions signatures and declared coercions. Strict NULL propagation after eager argument evaluation. CASE/COALESCE remain lazy. Integer overflow, expansion budgets and invalid code points fail without publication.",
+      "implementation": [
+        "src/compiler/capabilities.rs",
+        "src/compiler/typed.rs",
+        "src/compiler/typed/functions/strings.rs"
+      ],
+      "qualification": [
+        "scripts/postgres_support_harness.py",
+        "scripts/functions_compiler_harness.py",
+        "src/worker/tests/engine_expressions.rs"
+      ]
+    },
+    {
+      "id": "arithmetic-and-casts",
+      "status": "bounded",
+      "domain": "Checked integral and bounded exact numeric +,-,*. Supported casts and predicates only; no generic PostgreSQL coercion engine. Numeric division and additional overloads reject.",
+      "implementation": [
+        "src/compiler/typed.rs",
+        "src/compiler/capabilities.rs"
+      ],
+      "qualification": [
+        "scripts/projection_compiler_harness.py",
+        "scripts/circuit_numeric_harness.py"
+      ]
+    },
+    {
+      "id": "time-instants",
+      "status": "bounded",
+      "domain": "Microsecond timestamp/timestamptz values, BC/infinities and stored instant normalization. UTC execution; bounded fixed-duration offsets/date_bin. No named-zone conversion, DST calendar arithmetic, month bins or formatting.",
+      "implementation": [
+        "src/temporal.rs",
+        "src/compiler/scalar.rs"
+      ],
+      "qualification": [
+        "scripts/native_compiler_harness.py",
+        "scripts/date_bin_compiler_harness.py",
+        "scripts/postgres_support_harness.py"
+      ]
+    },
+    {
+      "id": "joins",
+      "status": "bounded",
+      "domain": "Declared equijoins, CROSS/self/multiway, bounded LEFT and restricted EXISTS/NOT EXISTS. SQL NULL matching and complete tuple multiplicity; simultaneous-input cross term. Computed key families and ON scopes follow sql-compiler.md.",
+      "implementation": [
+        "src/compiler/bind/native_join.rs",
+        "src/compiler/left_join.rs",
+        "src/compiler/bind/membership.rs"
+      ],
+      "qualification": [
+        "scripts/query_native_join_harness.py",
+        "scripts/computed_join_harness.py",
+        "scripts/join_composition_harness.py",
+        "src/engine/dataflow/tests/join.rs"
+      ]
+    },
+    {
+      "id": "grouping-and-distinct",
+      "status": "bounded",
+      "domain": "NULL groups, duplicates, retractions, group-only membership and accepted computed DISTINCT/grouping compositions. Full tuples remain weighted identities.",
+      "implementation": [
+        "src/compiler/partition.rs",
+        "src/compiler/bind/membership.rs"
+      ],
+      "qualification": [
+        "scripts/group_membership_harness.py",
+        "scripts/composition_matrix_harness.py"
+      ]
+    },
+    {
+      "id": "aggregates",
+      "status": "bounded",
+      "domain": "COUNT, supported SUM/AVG/MIN/MAX, FILTER and bounded distinct-membership forms. Empty/all-NULL rules, exact intermediate statistics and result-width/scale bounds; not every PostgreSQL aggregate/type combination.",
+      "implementation": [
+        "src/compiler/partition.rs",
+        "src/numeric.rs"
+      ],
+      "qualification": [
+        "scripts/numeric_compiler_harness.py",
+        "scripts/circuit_numeric_harness.py",
+        "scripts/aggregate_inputs_compiler_harness.py"
+      ]
+    },
+    {
+      "id": "windows-and-navigation",
+      "status": "bounded",
+      "domain": "Declared ROWS/RANGE/GROUPS frames, rank/row_number/top-k and bounded lag/lead/lookup. Peer and physical occurrence identity differ. Explicit order proofs, frame forms, offsets and resource bounds in sql-compiler.md.",
+      "implementation": [
+        "src/compiler/partition.rs",
+        "src/compiler/topk.rs",
+        "src/compiler/navigation.rs",
+        "src/compiler/lookup.rs"
+      ],
+      "qualification": [
+        "scripts/sliding_window_harness.py",
+        "scripts/peer_frames_compiler_harness.py",
+        "scripts/navigation_compiler_harness.py",
+        "scripts/lookup_compiler_harness.py"
+      ]
+    },
+    {
+      "id": "temporal-relations",
+      "status": "bounded",
+      "domain": "Bounded hopping expansion and revisable sessions over stored timestamps. No watermarks or wall-clock expiry.",
+      "implementation": [
+        "src/compiler/expansion.rs"
+      ],
+      "qualification": [
+        "scripts/hopping_compiler_harness.py",
+        "scripts/session_compiler_harness.py"
+      ]
+    },
+    {
+      "id": "composition",
+      "status": "bounded",
+      "domain": "Only bound derived scopes and compositions. Finalized aggregate types cross SQL boundaries; not arbitrary CTEs, recursion or subqueries.",
+      "implementation": [
+        "src/compiler/bind/derived.rs"
+      ],
+      "qualification": [
+        "scripts/expression_composition_harness.py",
+        "scripts/composition_matrix_harness.py",
+        "scripts/native_cross_harness.py"
+      ]
+    },
+    {
+      "id": "binding-environment",
+      "status": "bounded",
+      "domain": "Catalog fingerprints/server version/settings bound on initialization/restart/rebuild. Cooperative maintenance revision fences coordinated changes; external timezone/locale files need operator attestation.",
+      "implementation": [
+        "src/semantics/catalog.sql",
+        "src/semantics/maintenance.rs",
+        "src/worker/results.rs"
+      ],
+      "qualification": [
+        "scripts/query_binding_harness.py",
+        "scripts/environment_harness.py"
+      ]
+    },
+    {
+      "id": "ordinary-result-table",
+      "status": "bounded",
+      "domain": "Typed result occurrences with original names/order/types/modifiers/collations. Bags permit only query-produced duplicates/NULLs; optional proven keys permit UPDATE. Atomic source progress and safe checkpoint-only ACK.",
+      "implementation": [
+        "src/catalog/memtable.rs",
+        "src/catalog/sink.rs",
+        "src/worker/checkpoint.rs"
+      ],
+      "qualification": [
+        "scripts/result_table_harness.py",
+        "scripts/keyed_sink_harness.py",
+        "scripts/async_checkpoint_harness.py"
+      ]
+    }
+  ],
+  "error_contract": "Unavailable functions/overloads/shapes reject before activation. Valid queries can encounter runtime value/resource errors; preserve last complete sink/progress and never ACK the failing input. Native optimizer error order is not generally reproduced.",
+  "qualification_scope": "References identify implementation/test ownership and explicit bounded evidence, not exhaustive proof over every input. Scalar closed-signature drift is checked by Rust; live scalar matrix covers all listed signatures and coercions through snapshot, CDC, NULLs, duplicates, retractions and restart.",
+  "source_rejections": [
+    {
+      "oid": 700,
+      "sql_type": "real",
+      "error_contains": "unsupported source column contract"
+    },
+    {
+      "oid": 701,
+      "sql_type": "double precision",
+      "error_contains": "unsupported source column contract"
+    },
+    {
+      "oid": 1186,
+      "sql_type": "interval",
+      "error_contains": "unsupported source column contract"
+    },
+    {
+      "oid": 1007,
+      "sql_type": "integer[]",
+      "error_contains": "unsupported source column contract"
+    },
+    {
+      "oid": 1009,
+      "sql_type": "text[]",
+      "error_contains": "unsupported source column contract"
+    },
+    {
+      "oid": 3802,
+      "sql_type": "jsonb",
+      "error_contains": "unsupported source column contract"
+    }
+  ]
+}

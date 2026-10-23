@@ -153,10 +153,10 @@ with argument type names/OIDs and supported signatures. Nested calls and text CA
 Native and derived scalar projections use one AST-to-bound-expression path. There is no retry through a second projection binder. Aggregate AVG results are finalized by typed Map nodes before every SQL output boundary, including the root; output layouts carry columns rather than deferred computation.
 Expansion budgets and the rejected `right(text, -2147483648)` boundary are listed
 in the [fidelity roadmap](postgres-fidelity-roadmap.md#qualified-local-function-batch).
-Mapped sink APIs and expression placement reports have
-been removed. Existing registrations with changed plan/binding layouts require
-retirement with the prior binary and recreation with this binary when the old
-binding contains removed map fields. Old state is never silently reinterpreted.
+The current plan contains no sink-expression programs or placement reports.
+Development changes cut over directly to the current compiler and state format;
+incompatible state is rejected and requires a fresh owned registration. Historical
+binaries and migration adapters are outside the development workflow.
 
 ## Compiler and runtime boundaries
 
