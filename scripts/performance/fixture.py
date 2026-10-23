@@ -295,7 +295,7 @@ class Fixture:
         for stream in self.files:
             attempt('close log file', stream.close)
         removed, mounts = [], {}
-        for name in reversed(self.containers):
+        for name in reversed(self.containers.copy()):
             try:
                 details = json.loads(docker('inspect', name))[0]
                 mounts[name] = details['Mounts']
@@ -304,6 +304,7 @@ class Fixture:
                 with (self.directory / (name + '.log')).open('w') as log:
                     subprocess.run(['docker', 'logs', name], stdout=log, stderr=subprocess.STDOUT, check=False)
                 docker('rm', '-f', '-v', name); removed.append(name)
+                self.containers.remove(name)
             except Exception as error:
                 errors.append('container ' + name + ': ' + repr(error))
         scratch_removed = False
@@ -311,8 +312,11 @@ class Fixture:
         if success and not errors and scratch.exists():
             attempt('remove scratch', lambda: shutil.rmtree(scratch))
             scratch_removed = not scratch.exists()
-        save(self.directory / 'cleanup.json', {'removed_containers': removed, 'mounts': mounts,
+        evidence = {'removed_containers': removed, 'mounts': mounts,
              'scratch_removed': scratch_removed,
              'docker_volumes_created': sum(m['Type'] == 'volume' for ms in mounts.values() for m in ms),
-             'errors': errors})
+             'errors': errors}
+        save(self.directory / 'cleanup.json', evidence)
+        with (self.directory / 'cleanup-attempts.jsonl').open('a') as stream:
+            stream.write(json.dumps(evidence) + '\n')
         return errors

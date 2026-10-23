@@ -5,8 +5,10 @@ import unittest
 
 
 def load_tests(_loader, _tests, _pattern):
-    path = pathlib.Path(__file__).parent / 'performance' / 'test_suite.py'
-    spec = importlib.util.spec_from_file_location('pgderive_performance_tests', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return unittest.defaultTestLoader.loadTestsFromModule(module)
+    tests = unittest.TestSuite()
+    for path in sorted((pathlib.Path(__file__).parent / 'performance').glob('test_*.py')):
+        spec = importlib.util.spec_from_file_location('pgderive_performance_' + path.stem, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        tests.addTests(unittest.defaultTestLoader.loadTestsFromModule(module))
+    return tests

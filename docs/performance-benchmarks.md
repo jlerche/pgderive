@@ -3,7 +3,9 @@
 The local suite compares immutable baseline and candidate Pgderive executables,
 optionally alongside a digest-pinned RisingWave single node. Each engine has its
 own PostgreSQL database, SeaweedFS instance and seeded object-storage latency
-proxy. Producers run concurrently and never wait for sink publication. Every
+proxy. Paired engines run sequentially by default, with each fixture fully
+removed before the next starts. Each producer runs independently of sink
+publication. Every
 measured DML statement affects exactly one row. Source transactions are either
 single-statement autocommits or an explicit deterministic mixture through 1,000
 statements; pacing always targets row changes per second.
@@ -15,8 +17,9 @@ Linux, Docker and Python 3.11+ are required. Install `psycopg[binary]>=3,<4` in 
 Python environment. Build release binaries before starting the experiment and
 copy the baseline executable to an ignored directory before rebuilding.
 The harness records executable hashes rather than inferring their revision from
-its own Git HEAD. Leave enough host memory for two PostgreSQL/SeaweedFS pairs,
-two engines, and an additional pair plus up to 8 GiB for optional RisingWave.
+its own Git HEAD. Sequential mode needs memory for one PostgreSQL/SeaweedFS
+pair and one engine at a time; optional RisingWave uses up to 8 GiB. Explicit
+`--execution-mode concurrent` needs all fixture pairs and is diagnostic only.
 
 ```sh
 python3 scripts/performance/run.py \
@@ -28,7 +31,7 @@ python3 scripts/performance/run.py \
 python3 scripts/performance/matrix.py \
   --baseline artifacts/performance/binaries/baseline \
   --candidate target/package-release/x86_64-unknown-linux-gnu/release/pgderive \
-  --scenarios smoke steady-autocommit mixed-growth --repeats 3 \
+  --scenarios steady-autocommit varied-transactions bursty-varied varied-growth wide-autocommit storage-stress --repeats 5 \
   --risingwave --output artifacts/performance/matrix-001
 
 python3 scripts/performance/compare.py \
@@ -83,7 +86,7 @@ time is bounded, and workload connections are canceled/closed during cleanup.
 An engine may publish before the producing client records commit acknowledgement;
 negative observed differences are clamped to zero and are not pure server timing.
 
-`report.json` schema version 2 contains per-engine:
+`report.json` schema version 3 contains per-engine:
 
 - Offered parameters in the adjacent manifest, achieved row changes/s, commit count and transaction-size distribution.
 - Commit acknowledgement to PostgreSQL sink visibility p50/p95/p99/max.
@@ -104,11 +107,17 @@ python3 scripts/performance/summarize.py \
 ```
 
 It reports input acceptance and consumer marker progress separately, plus latency,
-CPU, resource peaks, raw epoch/maintenance distributions, and object request attempts.
+CPU, resource peaks, canonical input-window engine/checkpoint distributions,
+growth trends, and object request attempts.
 Object accounting includes bootstrap, drain, GC, failures and retries; HTTP-method
 Class A/B estimates are diagnostic, with ambiguous POST operations unclassified. Mixed-workload marker
 progress is a lower bound and cannot prove visibility of trailing inserts/deletes;
-final native equality checks cover those rows. Last-marker drain is not a claim
+final native equality checks verify those rows. Each source transaction also
+returns `pg_current_wal_insert_lsn()` from its last DML statement, without an extra
+network round trip. This WAL fence precedes that transaction's commit; it is not
+labelled a commit LSN. Final Pgderive drain additionally waits until its published
+source boundary covers the last fence, proving consumption even when trailing
+unmarked changes have net-zero output. Last-marker drain is not a claim
 of per-row delivery or whole-source-transaction external sink atomicity.
 
 Engine events and completed proxy attempts carry monotonic timestamps. The
@@ -127,8 +136,13 @@ compare them as interchangeable end-to-end freshness distributions.
 
 Run the same scenario at least three times on the same quiet host. Keep duration,
 initial state, group cardinality, proxy scale, image IDs and resource allocation
-constant. Concurrent engines share host resources, so repeat with CPU isolation
-or separate hosts before attributing small differences to code. Current Pgderive
+constant. `matrix.py` alternates baseline-first and candidate-first pairs. Gate
+mode requires both orders, verifies their actual fixture lifetimes do not overlap,
+and checks equal final source digests. Explicit concurrent mode remains diagnostic.
+Before, during and after each run, sampled normalized host load must stay below
+`--maximum-host-load-per-cpu` (default 0.25) and no competing performance fixtures
+may be present. These observations do not exclude every unrelated host process;
+use a quiet dedicated runner for qualifying baselines. Current Pgderive
 RSS is uncapped while the RisingWave cap is explicit; memory measurements are
 observations rather than equal-budget claims.
 
@@ -145,7 +159,8 @@ requires the candidate's observed marker prefix to cover at least 98% of offered
 rows by input end and its final marker to drain within 1,000 ms. Adjust these
 explicitly with `--minimum-consumed-fraction` and `--maximum-drain-ms` for a declared
 qualification policy. Mixed trailing non-marker transactions still require the
-final native equality check; marker drain does not prove individual delivery. Actual resolved
+final native equality and published WAL-fence checks; marker drain does not
+prove individual delivery. Actual resolved
 image IDs, host CPU/memory/affinity, fixture resource limits, executed engine
 configuration, PostgreSQL runtime settings and the proxy startup latency profile
 must match
@@ -153,6 +168,38 @@ across repeats; `--exploratory` allows diagnostics with explicit exploratory
 labels. Correctness and cleanup failures are hard failures. Check achieved throughput before accepting a latency
 improvement. Inspect last-window versus first-window latency, RSS, physical state,
 WAL retention and backlog rather than relying on one overall percentile.
+
+`metrics.py` is the shared extractor used by both comparison and summarization.
+It computes quantiles from raw observations, never by averaging window quantiles.
+Input-window metrics remain separate from initialization and shutdown totals:
+
+| Gated measurements | Scope |
+| --- | --- |
+| Visibility p50/p95/p99; processing and receipt-to-sink p50/p95 | Source commits or engine events within the input interval |
+| Checkpoint p95 and total checkpoint milliseconds/change | Completed background maintenance events in the input interval; overlapping wall time is work, not a foreground stall fraction |
+| Peak RSS, state bytes, retained WAL and pending marker-prefix changes | Input, drain, and combined measurement/drain peaks are compared separately; periodic samples can miss transient peaks |
+| Final pending source changes | Zero only after native equality, marker drain and published source WAL-fence coverage |
+| Class A, Class B, all attempts and upload bytes/change | Completed input-window proxy attempts normalized by accepted source changes; full lifecycle totals remain separately visible |
+| Early-to-late growth | Signed changes between the first and last thirds after warmup, covering freshness, processing, receipt, checkpoints, queue, RSS, state, WAL and operations/change |
+
+Growth qualification requires complete equal-duration windows, at least six steady
+windows after `--warmup-windows` (default one), and sufficient raw observations.
+Overall timing metrics need at least 20 marker/processing/receipt observations,
+three checkpoints and three resource samples. Each growth third needs at least
+20 marker/processing/receipt observations, one checkpoint and two resource samples.
+Missing evidence fails qualification. Short smoke runs remain useful diagnostics
+but cannot pass the performance gate. Unknown request sizes and transport errors
+also prevent qualification.
+
+The default practical margins are 2 ms for timing distributions, 1 microsecond of
+CPU/change, 0.005 checkpoint ms/change, 1 MiB RSS, 64 KiB physical state, 16 MiB WAL,
+one transaction quantum for queue counts, 0.0001 operations/change and 0.1 uploaded
+bytes/change. Each comparison also uses the larger of the 10% relative margin and
+three times run-level median absolute deviation. Signed growth comparisons retain
+decreases instead of clipping them to zero. These margins are explicit initial
+policy, pending repeated controlled baseline evidence, rather than measured noise
+claims. Sampling continues through native/source-progress drain; shutdown resource
+qualification belongs to the separate recovery soak.
 
 The catalog provides smoke, sparse, 1,000/s steady, mixed growth, large retained
 state, elevated storage latency and 2,000/5,000/s capacity scenarios. These are
@@ -292,3 +339,32 @@ it does not substitute for the three-hour qualification. Owned PostgreSQL and
 object-store containers use 6 GiB and 8 GiB tmpfs limits, respectively. Failure
 preserves a database dump and object-store archive before cleanup. SIGTERM enters
 that cleanup path; SIGKILL of the runner or host failure cannot do so.
+
+## Measured background-checkpoint growth qualification
+
+The three-hour aggregate qualification at engine commit `3400777` processed
+10,743,871 source changes in 105,750 transactions. Active ingestion averaged
+1,000.03 changes/s; 18 native checks paused source writes for 56.47 seconds total.
+Both witnessed crash/restarts retained the slot and replayed the committed suffix.
+The final checkpoint equalled publication with an empty journal. Independent
+review recomputed source continuity, LSN ordering, clock monotonicity, restart
+replay, native equality, and binary/source hashes. Owned fixtures were removed
+without cleanup errors. The compact
+[evidence snapshot](../scripts/performance/baselines/checkpoint-growth.json)
+records parameters, recovery events, request counts and raw-evidence checksums.
+
+| Hour | Median steady-window p95 freshness | Worst steady-window p95 freshness |
+| --- | --- | --- |
+| 1 | 23.30 ms | 57.22 ms |
+| 2 | 24.70 ms | 28.16 ms |
+| 3 | 23.57 ms | 30.78 ms |
+
+Steady latency did not grow in this run. Intentional crash/recovery windows had
+maximum visibility delays around 20 and 41 seconds and are reported separately.
+Source rows and output groups reached about 3.59 million; memory was not constant.
+Peak sampled RSS was 640 MiB, retained WAL 116 MiB, journal size 810 epochs and
+pending marker-prefix changes 17,601. S3-visible state peaked at 19.1 MB and ended
+near 10.5 MB as checkpoint generations were collected. Local backend file usage
+peaked at 267 MB and includes reclaimable history. These observations qualify
+this workload and duration; they do not prove unlimited-duration memory bounds
+or replace controlled repeated regression baselines.

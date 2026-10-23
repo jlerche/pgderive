@@ -30,7 +30,9 @@ def main():
     for name in args.scenarios:
         for repeat in range(args.repeats):
             command = [sys.executable, str(root / 'run.py'), '--baseline', args.baseline,
-                       '--candidate', args.candidate, '--output', str(args.output / f'{name}-{repeat + 1}')]
+                       '--candidate', args.candidate, '--output', str(args.output / f'{name}-{repeat + 1}'),
+                       '--execution-mode', 'sequential', '--pair-order',
+                       'baseline-first' if repeat % 2 == 0 else 'candidate-first']
             if args.risingwave:
                 command.append('--risingwave')
             for key, value in catalog[name].items():

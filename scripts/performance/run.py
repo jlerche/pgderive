@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 
-from common import ROOT, RW_IMAGE, SCHEMA_VERSION, S3_IMAGE, docker, save, sha256
+from common import ROOT, RW_IMAGE, SCHEMA_VERSION, S3_IMAGE, docker, host_observation, save, sha256
 from fixture import Fixture
 from workload import run
 
@@ -24,6 +24,10 @@ def arguments():
     parser.add_argument('--baseline', type=pathlib.Path, required=True)
     parser.add_argument('--candidate', type=pathlib.Path, required=True)
     parser.add_argument('--risingwave', action='store_true')
+    parser.add_argument('--execution-mode', choices=['sequential', 'concurrent'], default='sequential')
+    parser.add_argument('--pair-order', choices=['baseline-first', 'candidate-first'], default='baseline-first')
+    parser.add_argument('--warmup-windows', type=int, default=1)
+    parser.add_argument('--maximum-host-load-per-cpu', type=float, default=.25)
     parser.add_argument('--output', type=pathlib.Path, required=True)
     parser.add_argument('--duration', type=int, default=60)
     parser.add_argument('--rate', type=float, default=1000)
@@ -45,13 +49,15 @@ def arguments():
     args = parser.parse_args()
     import math
     for field in ['duration', 'rate', 'groups', 'window_seconds', 'sample_seconds', 'poll_ms',
-                  'drain_seconds', 'rw_barrier_ms', 'rw_memory_bytes']:
+                  'drain_seconds', 'rw_barrier_ms', 'rw_memory_bytes', 'maximum_host_load_per_cpu']:
         if not math.isfinite(getattr(args, field)) or getattr(args, field) <= 0:
             parser.error(field + ' must be finite and positive')
     if not math.isfinite(args.burst_seconds) or args.burst_seconds < 0 or args.burst_seconds > args.duration:
         parser.error('burst-seconds must be finite and between zero and duration')
     if args.rate*args.duration < 1:
         parser.error('Experiment must offer at least one row change')
+    if args.warmup_windows < 1:
+        parser.error('warmup-windows must be positive')
     if args.state_rows < 0 or args.state_rows >= 1000000000:
         parser.error('state-rows must be in [0,1000000000)')
     if not math.isfinite(args.proxy_scale) or args.proxy_scale < 0:
@@ -104,7 +110,7 @@ def main():
         'parameters': {key: str(value) if isinstance(value, pathlib.Path) else value for key, value in vars(args).items()},
         'binaries': {name: {'path': str(path), 'sha256': sha256(path)} for name, path in
                      [('baseline', args.baseline), ('candidate', args.candidate)]},
-        'limitations': ['Concurrent engines compete for host resources; repeat with order/host controls.',
+        'limitations': ['Concurrent mode is diagnostic; qualification requires sequential paired runs with alternating order.',
             'Pgderive RSS uncapped; RisingWave memory cap recorded separately.',
             'Visibility uses a monotonic aggregate marker; it does not prove intermediate sink atomicity.',
             'Mixed workload samples marker updates only; insert/delete latency is not measured.',
@@ -112,36 +118,72 @@ def main():
             'Observed visibility can precede client commit acknowledgement; negative values clamp to zero.']}
     save(args.output / 'manifest.json', manifest)
     fixtures, stops, results = [], [], {}
-    report = {'schema_version': SCHEMA_VERSION, 'run_id': run_id, 'passed': False, 'engines': results}
+    pairs = [('baseline', args.baseline), ('candidate', args.candidate)]
+    if args.pair_order == 'candidate-first':
+        pairs.reverse()
+    if args.risingwave:
+        pairs.append(('risingwave', None))
+    manifest['execution_order'] = [label for label, _ in pairs]
+    manifest['execution_intervals'] = []
+    manifest['fixtures'] = {}
+    report = {'schema_version': SCHEMA_VERSION, 'run_id': run_id, 'passed': False, 'engines': results, 'cleanup_errors': {}}
     def interrupt(signum, frame):
         for stop in stops:
             stop.set()
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, interrupt)
     signal.signal(signal.SIGINT, interrupt)
-    try:
-        for label, binary in [('baseline', args.baseline), ('candidate', args.candidate)] + ([('risingwave', None)] if args.risingwave else []):
-            fixture = Fixture(run_id + '-' + label, args.output / label, args, binary)
-            fixtures.append(fixture)
-            fixture.start()
-        manifest['fixtures'] = {fixture.directory.name: fixture.fingerprint for fixture in fixtures}
+    def start_fixture(label, binary):
+        fixture = Fixture(run_id + '-' + label, args.output / label, args, binary)
+        fixtures.append(fixture)
+        interval = {'engine': label, 'started_at': time.monotonic(), 'closed_at': None,
+                    'host_before': host_observation(fixture.name)}
+        manifest['execution_intervals'].append(interval)
+        fixture.start()
+        manifest['fixtures'][label] = fixture.fingerprint
         save(args.output / 'manifest.json', manifest)
-        start = time.monotonic() + 1
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(fixtures)) as executor:
-            pending = {}
-            for fixture in fixtures:
+        return fixture, interval
+
+    def record_cleanup(cleanup):
+        for label, errors in cleanup.items():
+            report['cleanup_errors'].setdefault(label, []).extend(errors)
+
+    def record_result(label, result):
+        results[label] = result
+        print(json.dumps({'engine': label, 'transactions': result['transactions'],
+                          'sink_visibility_ms': result['sink_visibility_ms']}), flush=True)
+
+    try:
+        if args.execution_mode == 'sequential':
+            for label, binary in pairs:
+                fixture, interval = start_fixture(label, binary)
                 stop = threading.Event(); stops.append(stop)
-                pending[executor.submit(run, fixture, args, start, stop)] = fixture.directory.name
-            for future in concurrent.futures.as_completed(pending):
-                label = pending[future]
-                try:
-                    results[label] = future.result()
-                    print(json.dumps({'engine': label, 'transactions': results[label]['transactions'],
-                                      'sink_visibility_ms': results[label]['sink_visibility_ms']}), flush=True)
-                except BaseException:
-                    for stop in stops:
-                        stop.set()
-                    raise
+                record_result(label, run(fixture, args, time.monotonic() + 1, stop))
+                cleanup = close_fixtures([fixture], success=results[label]['passed'])
+                record_cleanup(cleanup)
+                interval['closed_at'] = time.monotonic()
+                interval['host_after'] = host_observation(fixture.name)
+                save(args.output / 'manifest.json', manifest)
+                if any(cleanup.values()):
+                    raise RuntimeError('Paired fixture cleanup failed before next engine')
+                fixtures.remove(fixture)
+        else:
+            for label, binary in pairs:
+                start_fixture(label, binary)
+            start = time.monotonic() + 1
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(fixtures)) as executor:
+                pending = {}
+                for fixture in fixtures:
+                    stop = threading.Event(); stops.append(stop)
+                    pending[executor.submit(run, fixture, args, start, stop)] = fixture.directory.name
+                for future in concurrent.futures.as_completed(pending):
+                    label = pending[future]
+                    try:
+                        record_result(label, future.result())
+                    except BaseException:
+                        for stop in stops:
+                            stop.set()
+                        raise
         report['passed'] = all(result['passed'] for result in results.values())
     except BaseException as error:
         report['error'] = repr(error)
@@ -149,7 +191,12 @@ def main():
     finally:
         for stop in stops:
             stop.set()
-        report['cleanup_errors'] = close_fixtures(fixtures, report['passed'])
+        record_cleanup(close_fixtures(fixtures, report['passed']))
+        for interval in manifest['execution_intervals']:
+            if interval['closed_at'] is None:
+                interval['closed_at'] = time.monotonic()
+                interval['host_after'] = host_observation(run_id + '-' + interval['engine'])
+        save(args.output / 'manifest.json', manifest)
         if any(report['cleanup_errors'].values()):
             report['passed'] = False
         save(args.output / 'report.json', report)

@@ -10,14 +10,15 @@ import math
 import pathlib
 import statistics
 from common import SCHEMA_VERSION
+from metrics import execution_issues, extract_engine
 from workload import VARIED_SIZES, offered_changes
 
 
-def verdict(baseline, candidate, relative=.10, absolute=2):
+def verdict(baseline, candidate, relative=.10, absolute=2, *, signed=False):
     if not baseline or not candidate or any(
             not isinstance(value, (int, float)) or isinstance(value, bool)
-            or not math.isfinite(value) or value < 0 for value in [*baseline, *candidate]):
-        raise ValueError('Metric samples must be nonempty, finite and nonnegative')
+            or not math.isfinite(value) or (value < 0 and not signed) for value in [*baseline, *candidate]):
+        raise ValueError('Metric samples must be nonempty, finite and nonnegative unless explicitly signed')
     old, new = statistics.median(baseline), statistics.median(candidate)
     # MAD across independent runs, not pseudo-replication of per-row samples.
     noise = 3 * max(statistics.median(abs(v - old) for v in baseline),
@@ -30,6 +31,45 @@ def verdict(baseline, candidate, relative=.10, absolute=2):
             'threshold': threshold, 'status': status,
             'baseline_runs': len(baseline), 'candidate_runs': len(candidate)}
 
+
+
+def metric_margin(name, absolute_ms, quantum):
+    name = name.removeprefix('measurement_and_drain_').removeprefix('drain_')
+    if name == 'cpu_ms_per_source_change':
+        return .001
+    if name.endswith('_per_change'):
+        return .1 if 'bytes' in name else .0001 if 'class_' in name or 'attempts' in name else .005
+    if name == 'peak_rss_bytes':
+        return 1024 * 1024
+    if name == 'peak_state_bytes':
+        return 65536
+    if name == 'peak_retained_wal_bytes':
+        return 16 * 1024 * 1024
+    if 'pending_changes' in name:
+        return quantum
+    return absolute_ms
+
+
+def compare_measurements(measurements, relative, absolute_ms, quantum, *, throughput_valid):
+    result = {}
+    for section in ['scalars', 'trends']:
+        names = set().union(*(engine[section] for run in measurements for engine in run.values()))
+        for name in sorted(names):
+            values = [[run[label][section].get(name) for run in measurements]
+                      for label in ['baseline', 'candidate']]
+            if section == 'trends':
+                values = [[value['delta'] if value is not None else None for value in group] for group in values]
+            key = ('trend_' if section == 'trends' else '') + name
+            if any(value is None for group in values for value in group):
+                result[key] = {'status': 'unavailable: insufficient measurement evidence',
+                               'baseline_runs': len(values[0]), 'candidate_runs': len(values[1])}
+            else:
+                result[key] = verdict(*values, relative, metric_margin(name, absolute_ms, quantum),
+                                      signed=section == 'trends')
+    if not throughput_valid:
+        for value in result.values():
+            value['status'] = 'invalid comparison: source offered load was not sustained comparably'
+    return result
 
 def environment_mismatches(manifests):
     """Require measured image/resource identities, not mutable configured tags."""
@@ -66,7 +106,7 @@ def throughput_check(report, manifest, tolerance=.02):
             issues.append(f'{label}: total {total}/{expected_total} offered row changes')
         for start in range(0, duration, windows):
             expected = offered_changes(start, min(start + windows, duration), rate, duration,
-                                       parameters.get('burst_seconds', 0))
+                                       parameters['burst_seconds'])
             actual = actual_windows.get(start, 0)
             quantum = max(VARIED_SIZES) if parameters['transaction_mix'] == 'varied' else 1
             if actual < expected - max(quantum, expected * tolerance):
@@ -76,13 +116,6 @@ def throughput_check(report, manifest, tolerance=.02):
         issues.append('baseline/candidate achieved source change counts differ')
     return {'valid_for_latency_comparison': not issues, 'engines': engines, 'issues': issues,
             'tolerance_fraction': tolerance}
-
-
-def latency_verdict(baseline, candidate, throughput_valid, relative=.10, absolute=2):
-    result = verdict(baseline, candidate, relative, absolute)
-    if not throughput_valid:
-        result['status'] = 'invalid latency comparison: offered/achieved throughput mismatch'
-    return result
 
 
 def capacity_check(report, manifest, minimum_fraction, maximum_drain_ms):
@@ -105,6 +138,10 @@ def capacity_check(report, manifest, minimum_fraction, maximum_drain_ms):
 def gate_failures(result):
     """Fail closed when controlled evidence cannot establish a passing comparison."""
     failures = []
+    if any(run['issues'] for run in result['qualification']):
+        failures.append('Canonical metrics, paired execution or source equivalence did not qualify')
+    if set(result['pair_orders']) != {'baseline-first', 'candidate-first'}:
+        failures.append('Both paired execution orders are required')
     if any(not run['passed'] for run in result['capacity']):
         failures.append('candidate consumer capacity bound failed')
     if result['exploratory']:
@@ -150,7 +187,7 @@ def main():
         parser.error('Only current performance evidence schema is accepted; rerun old experiments')
     if args.gate:
         validate_runs(args.reports, reports, manifests)
-    ignored = {'output', 'baseline', 'candidate'}
+    ignored = {'output', 'baseline', 'candidate', 'pair_order'}
     signatures = [{key: value for key, value in manifest['parameters'].items() if key not in ignored}
                   for manifest in manifests]
     if any(signature != signatures[0] for signature in signatures):
@@ -171,19 +208,21 @@ def main():
     result = {'capacity':capacity, 'throughput': {'status': 'matched source offered load' if throughput_valid else 'source offered load not sustained or accepted rates differ',
                              'runs': checks}, 'environment_mismatches': mismatches,
               'exploratory': bool(mismatches)}
-    for metric in ['p50', 'p95', 'p99']:
-        result['sink_visibility_ms_' + metric] = latency_verdict(
-            [r['engines']['baseline']['sink_visibility_ms'][metric] for r in reports],
-            [r['engines']['candidate']['sink_visibility_ms'][metric] for r in reports],
-            throughput_valid, args.relative_margin, args.absolute_ms)
-    for metric, extract in [
-        ('cpu_ms_per_source_change', lambda e: e['process_cpu_seconds'] * 1000 / max(1, e['source_changes'])),
-        ('peak_rss_bytes', lambda e: max(s['rss_bytes'] for s in e['samples'])),
-        ('peak_state_bytes', lambda e: max(s['state']['bytes'] for s in e['samples'])),
-        ('peak_retained_wal_bytes', lambda e: max(s['retained_wal_bytes'] for s in e['samples']))]:
-        result[metric] = verdict([extract(r['engines']['baseline']) for r in reports],
-                                 [extract(r['engines']['candidate']) for r in reports],
-                                 args.relative_margin, 0)
+    measurements, qualifications = [], []
+    for path, report, manifest in zip(args.reports, reports, manifests):
+        directory = pathlib.Path(path).parent
+        measured = {label: extract_engine(directory / label, report['engines'][label], manifest['parameters'])
+                    for label in ['baseline', 'candidate']}
+        measurements.append(measured)
+        issues = execution_issues(manifest, report['engines'])
+        for label, engine in measured.items():
+            issues.extend(label + ': ' + issue for issue in engine['qualification_issues'])
+        qualifications.append({'run_id': report['run_id'], 'issues': issues})
+    quantum = max(VARIED_SIZES) if manifests[0]['parameters']['transaction_mix'] == 'varied' else 1
+    result.update(compare_measurements(measurements, args.relative_margin, args.absolute_ms, quantum, throughput_valid=throughput_valid))
+    result['qualification'] = qualifications
+    result['pair_orders'] = [manifest['parameters']['pair_order'] for manifest in manifests]
+    result['measurements'] = measurements
     if mismatches:
         for value in result.values():
             if isinstance(value, dict) and 'status' in value:

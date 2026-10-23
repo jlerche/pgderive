@@ -5,7 +5,8 @@ import gzip
 import json
 import pathlib
 
-from common import distribution, SCHEMA_VERSION
+from common import SCHEMA_VERSION
+from metrics import extract_engine
 from request_metrics import object_requests, request_windows
 
 
@@ -42,21 +43,6 @@ def marker_progress(timeline, duration, arrivals, workload):
                      'Mixed latency/progress samples marker updates; trailing non-marker DML requires final oracle.'}
 
 
-def read_events(directory):
-    path = directory / 'events.jsonl'
-    if not path.exists():
-        return None
-    events = [json.loads(line) for line in path.read_text().splitlines()]
-    publications = [event for event in events if event.get('event') == 'published']
-    maintenance = [event for event in events if event.get('event') == 'maintenance']
-    return {'publication_epochs': len(publications),
-            'source_transactions_per_epoch': distribution([event.get('source_transactions', 1) for event in publications]),
-            'source_changes_per_epoch': distribution([event['changes'] for event in publications]),
-            'processing_ms': distribution([event['elapsed_ms'] for event in publications]),
-            'maintenance_ms': distribution([event['elapsed_us'] / 1000 for event in maintenance]),
-            'event_scope': 'All saved engine events, including post-input drain and shutdown maintenance.'}
-
-
 def summarize_report(path):
     report = json.loads(path.read_text())
     manifest = json.loads(path.with_name('manifest.json').read_text())
@@ -84,7 +70,7 @@ def summarize_report(path):
                    'peak_state_bytes': max((s['state']['bytes'] for s in samples), default=None),
                    'peak_retained_wal_bytes': max((s['retained_wal_bytes'] for s in samples), default=None),
                    'native_equal': engine['oracle_equal'], 'ack_safe': engine.get('ack_safe'),
-                   'execution': read_events(directory),
+                   'execution': extract_engine(directory, engine, parameters) if label != 'risingwave' else None,
                    'object_requests': object_requests(directory),
                    'object_request_windows': request_windows(directory, timeline['start_monotonic'],
                                                             parameters['duration'], parameters['window_seconds'])}

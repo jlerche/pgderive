@@ -1,0 +1,212 @@
+{
+  "kind": "growing-aggregate-recovery-qualification",
+  "version": 1,
+  "compiled_source_commit": "3400777",
+  "binary_sha256": "023d8a602ef629ba906b3d14286403f52215e3505a9a0597456e5a5cfe647aa2",
+  "duration_seconds": 10806.952458468964,
+  "source_changes": 10743871,
+  "source_transactions": 105750,
+  "native_check_pauses_seconds": 56.46817376092076,
+  "active_rows_per_second": 1000.0315700429251,
+  "native_checks": 18,
+  "final_source_rows": 3593291,
+  "final_groups": 3581292,
+  "steady_windows": 337,
+  "hourly": [
+    {
+      "hour": 1,
+      "steady_windows": 112,
+      "median_window_p95_ms": 23.298163956496865,
+      "worst_window_p95_ms": 57.223581010475755,
+      "median_rss_bytes": 347863040.0
+    },
+    {
+      "hour": 2,
+      "steady_windows": 113,
+      "median_window_p95_ms": 24.70093104057014,
+      "worst_window_p95_ms": 28.164015035144985,
+      "median_rss_bytes": 461627392
+    },
+    {
+      "hour": 3,
+      "steady_windows": 112,
+      "median_window_p95_ms": 23.566823452711105,
+      "worst_window_p95_ms": 30.78363393433392,
+      "median_rss_bytes": 631787520.0
+    }
+  ],
+  "resource_peaks": {
+    "rss_bytes": 671494144,
+    "retained_wal_bytes": 121776736,
+    "journal_rows": 810,
+    "protection_rows": 11,
+    "pending_changes_after_marker": 17601
+  },
+  "object_state_peak_bytes": 19101248,
+  "object_backend_peak_bytes": 266610274,
+  "final_progress": {
+    "checkpoint_time": 92249,
+    "published_time": 92249,
+    "ack_safe": true,
+    "retained_wal_bytes": 9129296,
+    "journal_rows": 0,
+    "protection_rows": 6,
+    "roots": 10,
+    "slot": "pgderive_worker_398999070d5348138f62d21c7540e4be",
+    "ack_lsn": "1/17B24CC8",
+    "checkpoint_lsn": "1/17B24CC8",
+    "end_lsn": "1/17B24CC8"
+  },
+  "recovery": [
+    {
+      "kind": "during ingestion",
+      "ready_seconds": 20.21493544895202,
+      "caught_up_seconds": 20.326743865967728,
+      "source_changes_before": 3594608,
+      "source_changes_at_confirmed_death": 3594608,
+      "source_changes_while_engine_down": 3594620,
+      "source_changes_after": 3614928,
+      "before": {
+        "checkpoint_time": 31117,
+        "published_time": 31137,
+        "ack_safe": true,
+        "retained_wal_bytes": 14534568,
+        "journal_rows": 20,
+        "protection_rows": 4,
+        "roots": 8,
+        "slot": "pgderive_worker_398999070d5348138f62d21c7540e4be",
+        "ack_lsn": "0/45616068",
+        "checkpoint_lsn": "0/45616068",
+        "end_lsn": "0/45A797E8"
+      },
+      "held": null,
+      "after": {
+        "checkpoint_time": 31117,
+        "published_time": 31140,
+        "ack_safe": true,
+        "retained_wal_bytes": 31415632,
+        "journal_rows": 23,
+        "protection_rows": 5,
+        "roots": 8,
+        "slot": "pgderive_worker_398999070d5348138f62d21c7540e4be",
+        "ack_lsn": "0/45616068",
+        "checkpoint_lsn": "0/45616068",
+        "end_lsn": "0/45EAC938"
+      },
+      "unchanged_sink_rows_preserved": true
+    },
+    {
+      "kind": "during witnessed checkpoint PUT",
+      "ready_seconds": 41.03160187706817,
+      "caught_up_seconds": 41.4433711450547,
+      "source_changes_before": 7175679,
+      "source_changes_at_confirmed_death": 7175679,
+      "source_changes_while_engine_down": 7175684,
+      "source_changes_after": 7217664,
+      "before": {
+        "checkpoint_time": 61363,
+        "published_time": 61877,
+        "ack_safe": true,
+        "retained_wal_bytes": 23040776,
+        "journal_rows": 514,
+        "protection_rows": 9,
+        "roots": 16,
+        "slot": "pgderive_worker_398999070d5348138f62d21c7540e4be",
+        "ack_lsn": "0/A27207B0",
+        "checkpoint_lsn": "0/A27207B0",
+        "end_lsn": "0/A3BA4198"
+      },
+      "held": {
+        "checkpoint_time": 61363,
+        "published_time": 61878,
+        "ack_safe": true,
+        "retained_wal_bytes": 23054848,
+        "journal_rows": 515,
+        "protection_rows": 9,
+        "roots": 16,
+        "slot": "pgderive_worker_398999070d5348138f62d21c7540e4be",
+        "ack_lsn": "0/A27207B0",
+        "checkpoint_lsn": "0/A27207B0",
+        "end_lsn": "0/A3BDB378"
+      },
+      "after": {
+        "checkpoint_time": 61363,
+        "published_time": 61886,
+        "ack_safe": true,
+        "retained_wal_bytes": 65746640,
+        "journal_rows": 523,
+        "protection_rows": 10,
+        "roots": 16,
+        "slot": "pgderive_worker_398999070d5348138f62d21c7540e4be",
+        "ack_lsn": "0/A27207B0",
+        "checkpoint_lsn": "0/A27207B0",
+        "end_lsn": "0/A6136930"
+      },
+      "unchanged_sink_rows_preserved": true
+    }
+  ],
+  "request_counts": {
+    "interval": null,
+    "attempts": 217183,
+    "methods": {
+      "PUT": 100309,
+      "HEAD": 9636,
+      "GET": 106784,
+      "POST": 454
+    },
+    "estimated_r2_classes": {
+      "class_a": 101796,
+      "class_b": 114933,
+      "unclassified": 454
+    },
+    "status_codes": {
+      "200": 111886,
+      "206": 105297
+    },
+    "transport_errors": 0,
+    "request_body_bytes": 607810605,
+    "response_body_bytes": 1209339593,
+    "unknown_request_body_sizes": 0,
+    "scope": "All completed proxy attempts, including bootstrap, drain, GC and retries. Class estimates use HTTP method/listing flags; POST is unclassified because multipart versus bulk deletion is not recorded. Not a billing invoice."
+  },
+  "cleanup_errors": [],
+  "evidence_sha256": {
+    "manifest.json": "b4467bd3a0ebf3823b6c7327e407ed5bb45212a010eca15f26343f938b3be7f3",
+    "qualification.json": "5100e4613cb53e58f5f57de6d13258050f23fe314f54a96f93a5ad26c85ad6e4",
+    "samples.jsonl": "d1bc94f39e80d545a6ee7fc9d700b7cc552e2a467389482d8bd56f9008cc7a64",
+    "crashes.json": "ab1ae8d2452ef9b6fb8861fc1e978c0168fc9cbdd8c134d6df05f7d2f375c5aa",
+    "verifications.json": "1aff26464521b7d99881073bf6bd569444f05bcc824961ada7849b98988301ae",
+    "cleanup.json": "339acc3b09add3c3d0e689adf17878a1bd264d3a3f00fccce7db538630e20066"
+  },
+  "raw_evidence_directory": "artifacts/checkpoint-roadmap/scan-cache-growth-3h-001",
+  "independent_review": "review_checkpoint_design verified raw transaction continuity, native equality, clocks, LSN ordering, replay, source activity during downtime and source/binary hashes",
+  "limits": [
+    "One growing aggregate with synthetic storage latency, not universal query or cloud performance.",
+    "Steady windows exclude deliberate crash/recovery and native verification; recovery visibility delays reached about 20s and 41s.",
+    "RSS grows with source/output state; periodic samples can miss transient peaks.",
+    "Backend file bytes include reclaimable SeaweedFS history and differ from S3-visible state.",
+    "This soak is not a controlled repeated baseline/candidate comparison."
+  ],
+  "parameters": {
+    "binary": "/home/jlerche/programming_projects/github.com/jlerche/pgderive/artifacts/checkpoint-roadmap/scan-cache-package/bin/pgderive",
+    "output": "/home/jlerche/programming_projects/github.com/jlerche/pgderive/artifacts/checkpoint-roadmap/scan-cache-growth-3h-001",
+    "duration": 10800.0,
+    "rate": 1000.0,
+    "state_rows": 12000,
+    "groups": 1000,
+    "transaction_mix": "varied",
+    "proxy_scale": 1.0,
+    "verify_seconds": 600.0,
+    "sample_seconds": 30.0,
+    "postgres_image": "postgres:17",
+    "postgres_memory": "8g",
+    "max_rss_bytes": 4294967296,
+    "max_wal_bytes": 536870912,
+    "max_state_bytes": 4294967296,
+    "max_pending_changes": 60000,
+    "max_steady_p50_ms": 100,
+    "max_steady_p95_ms": 250,
+    "workload": "mixed"
+  },
+  "passed": true
+}

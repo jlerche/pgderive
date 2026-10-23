@@ -45,6 +45,9 @@ def rows(directory):
         for line in stream:
             row = json.loads(line)
             if 'ordinal' in row or 'error' in row:
+                at = row['completed_monotonic']
+                if not isinstance(at, (int, float)) or isinstance(at, bool) or not math.isfinite(at) or at < 0:
+                    raise ValueError('Request completion timestamps must be finite and nonnegative')
                 yield row
 
 

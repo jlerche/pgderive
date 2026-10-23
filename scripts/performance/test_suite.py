@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from common import ROOT, distribution, wait
-from compare import capacity_check, validate_runs, gate_failures, environment_mismatches, latency_verdict, throughput_check, verdict
+from compare import capacity_check, validate_runs, gate_failures, environment_mismatches, compare_measurements, throughput_check, verdict
 from fixture import (Fixture, effective_proxy_profile,
                      effective_risingwave_sql, effective_worker_config)
 from run import close_fixtures
@@ -79,10 +79,12 @@ class SuiteTests(unittest.TestCase):
         for size in [1, 3]:
             connection = mock.MagicMock()
             connection.execute.return_value.rowcount = 1
+            connection.execute.return_value.fetchone.return_value = ('0/100',)
             record = execute_transaction(connection, args, 3, size)
             self.assertEqual(connection.execute.call_count, size)
             self.assertEqual(connection.transaction.call_count, int(size > 1))
             self.assertEqual(record['source_changes'], size)
+            self.assertEqual(record['source_wal_fence'], '0/100')
             self.assertEqual(record['marker_value'], 4 if size == 3 else None)
             if size == 3:
                 self.assertEqual(record['last_change'], 5)
@@ -93,7 +95,7 @@ class SuiteTests(unittest.TestCase):
 
     def test_source_row_rate_is_independent_of_transaction_count(self):
         manifest = {'parameters':{'rate':1000,'duration':60,'window_seconds':60,
-                                  'transaction_mix':'varied'}}
+                                  'transaction_mix':'varied', 'burst_seconds':0}}
         report = {'engines':{label:{'windows':[{'start_seconds':0,
                    'transactions':transactions,'source_changes':60000}]}
                    for label,transactions in [('baseline',60000),('candidate',600)]}}
@@ -139,7 +141,8 @@ class SuiteTests(unittest.TestCase):
                 verdict([1, 1, 1], values)
 
     def test_gate_rejects_inconclusive_regressing_and_unmatched_evidence(self):
-        result = {'capacity':[{'passed':True}], 'exploratory': False, 'throughput': {'runs': [
+        result = {'qualification': [], 'pair_orders': ['baseline-first', 'candidate-first'],
+                  'capacity':[{'passed':True}], 'exploratory': False, 'throughput': {'runs': [
             {'valid_for_latency_comparison': True}]},
             'latency': verdict([10, 10, 10], [10, 10, 10])}
         self.assertEqual(gate_failures(result), [])
@@ -221,14 +224,17 @@ class SuiteTests(unittest.TestCase):
         self.assertEqual(verdict([10, 20, 30], [20, 25, 30])['status'], 'within noise/practical margin')
 
     def test_slow_low_latency_producer_cannot_be_a_win(self):
-        manifest = {'parameters': {'rate': 1000, 'duration': 60, 'window_seconds': 60, 'transaction_mix':'autocommit'}}
+        manifest = {'parameters': {'rate': 1000, 'duration': 60, 'window_seconds': 60, 'transaction_mix':'autocommit', 'burst_seconds':0}}
         def engine(count):
             return {'windows': [{'start_seconds': 0, 'transactions': count, 'source_changes':count}]}
         report = {'engines': {'baseline': engine(60000), 'candidate': engine(6000)}}
         check = throughput_check(report, manifest)
         self.assertFalse(check['valid_for_latency_comparison'])
-        result = latency_verdict([100, 100, 100], [1, 1, 1], check['valid_for_latency_comparison'])
-        self.assertIn('invalid latency comparison', result['status'])
+        metrics = {'baseline': {'scalars': {'sink_visibility_ms_p50': 100}, 'trends': {}},
+                   'candidate': {'scalars': {'sink_visibility_ms_p50': 1}, 'trends': {}}}
+        result = compare_measurements([metrics]*3, .1, 2, 1,
+                    throughput_valid=check['valid_for_latency_comparison'])
+        self.assertIn('invalid comparison', result['sink_visibility_ms_p50']['status'])
         report['engines']['candidate'] = engine(60000)
         self.assertTrue(throughput_check(report, manifest)['valid_for_latency_comparison'])
 

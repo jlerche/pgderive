@@ -8,7 +8,7 @@ import threading
 import time
 import urllib.request
 
-from common import distribution, process_stats, wait
+from common import host_observation, distribution, process_stats, wait
 
 
 def operation(tick, args):
@@ -58,17 +58,24 @@ def offered_changes(first, end, rate, duration, burst_seconds):
 def execute_transaction(connection, args, first, size):
     """One source commit, preserving the last monotonic marker inside that commit."""
     marker = None
+    source_wal_fence = None
     begin = time.monotonic()
     with connection.transaction() if size > 1 else nullcontext():
         for change in range(first, first + size):
             statement, values, marked = operation(change, args)
-            changed = connection.execute(statement, values).rowcount
+            last = change == first + size - 1
+            if last:
+                statement += ' RETURNING pg_current_wal_insert_lsn()'
+            result = connection.execute(statement, values)
+            changed = result.rowcount
+            if last:
+                source_wal_fence = str(result.fetchone()[0])
             if changed != 1:
                 raise RuntimeError(f'Expected one affected row, got {changed} at change {change}')
             if marked:
                 marker = change
     return {'begin': begin, 'commit': time.monotonic(), 'marker': marker is not None,
-            'marker_value': marker, 'source_changes': size,
+            'marker_value': marker, 'source_changes': size, 'source_wal_fence': source_wal_fence,
             'first_change': first, 'last_change': first + size - 1}
 
 
@@ -172,31 +179,47 @@ def run(fixture, args, start, stop):
     producer = threading.Thread(target=produce, daemon=True)
     observer = threading.Thread(target=observe, daemon=True)
     producer.start(); observer.start()
-    next_sample = start
+    sampler_done = threading.Event()
+    def collect_sample():
+        visible_tick = max(arrivals, default=0)
+        visible_rows = records[visible_tick-1]['last_change'] if visible_tick else 0
+        submitted = len(records)
+        submitted_changes = records[submitted-1]['last_change'] if submitted else 0
+        sample = {'seconds': time.monotonic() - start, **process_stats(fixture.pid),
+                  'submitted_transactions': submitted, 'submitted_source_changes': submitted_changes, 'visible_marker': visible_tick,
+                  'pending_transactions_after_marker': submitted - visible_tick,
+                  'pending_source_changes_after_marker': submitted_changes-visible_rows,
+                  'state': fixture.objects(), 'host': host_observation(fixture.name)}
+        with connect() as conn:
+            row = conn.execute("SELECT pg_wal_lsn_diff(pg_current_wal_lsn(),restart_lsn)::bigint "
+                               'FROM pg_replication_slots WHERE restart_lsn IS NOT NULL').fetchall()
+            sample['retained_wal_bytes'] = sum(r[0] for r in row)
+            counters = conn.execute("SELECT n_live_tup,n_tup_ins,n_tup_upd,n_tup_del FROM pg_stat_user_tables WHERE schemaname='public' AND relname='positions'").fetchone()
+            sample['source_statistics'] = dict(zip(['approx_live_rows', 'inserts', 'updates', 'deletes'], counters))
+        if not fixture.binary:
+            with urllib.request.urlopen(f'http://127.0.0.1:{fixture.metrics_port}/metrics', timeout=10) as response:
+                (fixture.directory / f'rw-metrics-{len(samples):05}.txt').write_bytes(response.read())
+        samples.append(sample)
+        with (fixture.directory / 'samples.jsonl').open('a') as stream:
+            stream.write(json.dumps(sample) + '\n')
+
+    def sample_resources():
+        try:
+            if sampler_done.wait(max(0, start - time.monotonic())):
+                return
+            while not sampler_done.is_set() and not stop.is_set():
+                collect_sample()
+                sampler_done.wait(args.sample_seconds)
+            if not stop.is_set():
+                collect_sample()
+        except BaseException as error:
+            errors.append('resource sampler: ' + repr(error)); stop.set()
+
+    sampler = threading.Thread(target=sample_resources, daemon=True)
+    sampler.start()
     try:
         while sampling_active(producer, observer, time.monotonic(), duration_end,
                               args.drain_seconds) and not stop.is_set():
-            if time.monotonic() >= next_sample:
-                visible_tick = max(arrivals, default=0)
-                visible_rows = records[visible_tick-1]['last_change'] if visible_tick else 0
-                sample = {'seconds': time.monotonic() - start, **process_stats(fixture.pid),
-                          'submitted_transactions': len(records), 'submitted_source_changes': emitted_changes, 'visible_marker': max(arrivals, default=0),
-                          'pending_transactions_after_marker': max(0, len(records) - visible_tick),
-                          'pending_source_changes_after_marker': max(0, emitted_changes-visible_rows),
-                          'state': fixture.objects()}
-                with connect() as conn:
-                    row = conn.execute("SELECT pg_wal_lsn_diff(pg_current_wal_lsn(),restart_lsn)::bigint "
-                                       'FROM pg_replication_slots WHERE restart_lsn IS NOT NULL').fetchall()
-                    sample['retained_wal_bytes'] = sum(r[0] for r in row)
-                    counters = conn.execute("SELECT n_live_tup,n_tup_ins,n_tup_upd,n_tup_del FROM pg_stat_user_tables WHERE schemaname='public' AND relname='positions'").fetchone()
-                    sample['source_statistics'] = dict(zip(['approx_live_rows', 'inserts', 'updates', 'deletes'], counters))
-                if not fixture.binary:
-                    with urllib.request.urlopen(f'http://127.0.0.1:{fixture.metrics_port}/metrics', timeout=10) as response:
-                        (fixture.directory / f'rw-metrics-{len(samples):05}.txt').write_bytes(response.read())
-                samples.append(sample)
-                with (fixture.directory / 'samples.jsonl').open('a') as stream:
-                    stream.write(json.dumps(sample) + '\n')
-                next_sample += args.sample_seconds
             stop.wait(.05)
         producer.join(timeout=20)
         observer.join(timeout=max(0, duration_end + args.drain_seconds - time.monotonic()))
@@ -206,7 +229,25 @@ def run(fixture, args, start, stop):
             raise RuntimeError(errors)
         if fixture.error or (fixture.worker and fixture.worker.poll() is not None):
             raise RuntimeError(fixture.error or 'Pgderive exited during measurement')
-        wait(fixture.equal, args.drain_seconds)
+        if not records:
+            raise RuntimeError('No source transactions were emitted')
+        fence = records[-1]['source_wal_fence']
+        final_progress = None
+        def drained():
+            nonlocal final_progress
+            if fixture.binary:
+                with connect() as conn:
+                    row = conn.execute('SELECT end_lsn::text,end_lsn >= %s::pg_lsn '
+                        'FROM pgd.pgderive_progress', (fence,)).fetchone()
+                if not row or not row[1]:
+                    return False
+                final_progress = {'source_wal_fence': fence, 'published_end_lsn': row[0]}
+            return fixture.equal()
+        wait(drained, args.drain_seconds)
+        sampler_done.set()
+        sampler.join(timeout=20)
+        if sampler.is_alive() or errors:
+            raise RuntimeError(errors or 'Resource sampler did not stop')
         ack_safe = None
         if fixture.binary:
             with connect() as conn:
@@ -236,7 +277,7 @@ def run(fixture, args, start, stop):
                 'actual_rows_per_second': emitted_changes / args.duration,
                 'transaction_sizes': dict(Counter(r['source_changes'] for r in records)),
                 'consumer_progress': consumer_progress(records, arrivals, start, args.duration),
-                'source_digest': source, 'process_cpu_seconds': process_stats(fixture.pid)['cpu_seconds'] - initial_process['cpu_seconds'], 'oracle_equal': True, 'ack_safe': ack_safe, 'windows': bins,
+                'source_digest': source, 'process_cpu_seconds': process_stats(fixture.pid)['cpu_seconds'] - initial_process['cpu_seconds'], 'oracle_equal': True, 'ack_safe': ack_safe, 'final_progress': final_progress, 'windows': bins,
                 'visibility_sample_fraction': sum(r['marker'] for r in records) / max(1, len(records)),
                 'sink_visibility_ms': distribution([max(0, (arrivals[r['tick']] - r['commit']) * 1000)
                                                    for r in records if r['marker']]),
@@ -245,6 +286,7 @@ def run(fixture, args, start, stop):
                 'samples': samples}
     finally:
         stop.set()
+        sampler_done.set()
         for connection in connections:
             try:
                 if not connection.closed:
@@ -252,7 +294,7 @@ def run(fixture, args, start, stop):
                     connection.close()
             except Exception as error:
                 errors.append('connection cleanup: ' + repr(error))
-        producer.join(timeout=20); observer.join(timeout=20)
+        producer.join(timeout=20); observer.join(timeout=20); sampler.join(timeout=20)
         with gzip.open(fixture.directory / 'timeline.json.gz', 'wt') as stream:
             json.dump({'start_monotonic': start, 'transactions': records,
                        'sink_arrivals': arrivals, 'native_arrivals': native_arrivals,

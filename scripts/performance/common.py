@@ -9,7 +9,7 @@ import subprocess
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 RW_IMAGE = 'risingwavelabs/risingwave@sha256:ee2e8e7a10b728d01b0e149d2a4f35864f0f52a0c889fa6cf9bc32c8ff46c602'
 S3_IMAGE = 'chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d'
 QUERY = 'SELECT book_id,COUNT(*) AS positions,SUM(quantity) AS units FROM public.positions GROUP BY book_id'
@@ -27,6 +27,12 @@ def sha256(path):
 def docker(*args):
     return subprocess.check_output(['docker', *args], text=True).strip()
 
+
+
+def host_observation(owned_prefix):
+    containers = docker('ps', '--filter', 'label=pgderive.performance', '--format', '{{.Names}}').splitlines()
+    return {'load_per_cpu': os.getloadavg()[0] / len(os.sched_getaffinity(0)),
+            'external_performance_containers': [name for name in containers if not name.startswith(owned_prefix + '-')]}
 
 def wait(predicate, timeout=180):
     end = time.monotonic() + timeout
