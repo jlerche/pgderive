@@ -21,9 +21,9 @@ async fn sole_format_rejects_old_layouts_and_plain_json() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let data = serde_json::to_vec(&vec![((1_i64, 2_i64), -3_i64)])?;
     let digest = hash(&data);
-    let child = format!("pgderive/block/{digest}");
-    let index = serde_json::json!({"schema": "tuple", "blocks": [{
-        "path": child, "first": [1, 2], "last": [1, 2],
+    let child = format!("pgderive/pack/{digest}");
+    let index = serde_json::json!({"schema": "tuple", "packs":[{"path":child,"bytes":data.len(),"hash":digest}], "blocks": [{
+        "pack":0, "offset": 0, "first": [1, 2], "last": [1, 2],
         "length": data.len(), "rows": 1, "hash": digest
     }]});
     store.put(&Path::from(child), data.into()).await?;
@@ -46,11 +46,82 @@ async fn sole_format_rejects_old_layouts_and_plain_json() -> Result<()> {
         assert!(old_path.dependencies(&store).await.is_err());
     }
     let mut obsolete = index.clone();
-    obsolete["blocks"][0]["offset"] = 0.into();
+    obsolete.as_object_mut().ok_or_else(|| anyhow::anyhow!("invalid fixture"))?.remove("packs");
+    obsolete["blocks"][0]["path"] = "pgderive/block/old".into();
     let invalid = root(&store, serde_json::to_vec(&obsolete)?).await?;
     assert!(ObjectBatch::<i64, i64>::open(store.clone(), invalid, "tuple").await.is_err());
+    let empty_old = root(&store, br#"{"schema":"tuple","blocks":[]}"#.to_vec()).await?;
+    assert!(
+        ObjectBatch::<i64, i64>::open(store.clone(), empty_old.clone(), "tuple").await.is_err()
+    );
+    assert!(empty_old.dependencies(&store).await.is_err());
     let mut obsolete = serde_json::to_value(reference)?;
     obsolete["index_offset"] = 0.into();
     assert!(serde_json::from_value::<ObjectRef>(obsolete).is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_packed_ranges_fail_open_and_gc_dependency_discovery() -> Result<()> {
+    use crate::engine::Batch;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let batch = Batch::from_updates((0..4).map(|n| ((n, n), 1)))?;
+    let reference = ObjectBatch::write(store.clone(), &batch, "tuple", 1).await?;
+    let bytes = store.get(&Path::from(reference.path())).await?.bytes().await?;
+    let index: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let mut invalid = Vec::new();
+    for (field, value) in [("offset", 1_u64), ("length", 0), ("rows", 65_537)] {
+        let mut bad = index.clone();
+        bad["blocks"][0][field] = value.into();
+        invalid.push(bad);
+    }
+    let mut bad = index.clone();
+    bad["blocks"][1]["offset"] = 0.into();
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["blocks"][1]["offset"] = u64::MAX.into();
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["blocks"][0]["hash"] = "invalid".into();
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["packs"][0]["bytes"] = (16 * 1024 * 1024).into();
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["packs"][0]["path"] = "../unmanaged".into();
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["packs"][0]["hash"] = "invalid".into();
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["packs"] = serde_json::Value::Null;
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["blocks"] = serde_json::json!([]);
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["blocks"][0]["pack"] = 1.into();
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["blocks"][1]["pack"] = u64::MAX.into();
+    invalid.push(bad);
+    let mut bad = index.clone();
+    bad["packs"]
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("missing packs"))?
+        .push(index["packs"][0].clone());
+    invalid.push(bad);
+    let mut bad = index;
+    bad["packs"][0]["bytes"] =
+        (bad["packs"][0]["bytes"].as_u64().ok_or_else(|| anyhow::anyhow!("missing size"))? + 1)
+            .into();
+    invalid.push(bad);
+    for index in invalid {
+        let reference = root(&store, serde_json::to_vec(&index)?).await?;
+        assert!(
+            ObjectBatch::<i32, i32>::open(store.clone(), reference.clone(), "tuple").await.is_err()
+        );
+        assert!(reference.dependencies(&store).await.is_err());
+    }
     Ok(())
 }

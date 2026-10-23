@@ -4,28 +4,99 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::borrow::Borrow;
 
+pub(super) const TARGET_OBJECT_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Pack {
+    pub(super) path: String,
+    pub(super) bytes: u64,
+    pub(super) hash: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Block<T> {
-    pub(super) path: String,
+    pub(super) pack: usize,
+    pub(super) offset: u64,
     pub(super) first: T,
     pub(super) last: T,
     pub(super) length: u64,
     pub(super) rows: usize,
     pub(super) hash: String,
 }
-
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Index<K, V> {
     pub(super) schema: String,
+    pub(super) packs: Vec<Pack>,
     pub(super) blocks: Vec<Block<(K, V)>>,
 }
-
+impl<K, V> Index<K, V> {
+    pub(super) fn validate_storage(&self) -> Result<()> {
+        if self.blocks.is_empty() {
+            ensure!(self.packs.is_empty(), "empty root retains data packs");
+            return Ok(());
+        }
+        for pack in &self.packs {
+            ensure!(
+                pack.bytes > 0
+                    && pack.bytes <= u64::try_from(super::compression::STORED_LIMIT)?
+                    && valid_hash(&pack.hash)
+                    && pack.path == format!("pgderive/pack/{}", pack.hash),
+                "invalid immutable pack address/size"
+            );
+        }
+        let mut ordinal = 0_usize;
+        let mut offset = 0_u64;
+        for block in &self.blocks {
+            block.validate_address()?;
+            if block.pack != ordinal {
+                let pack = self.packs.get(ordinal).context("missing packed data")?;
+                ensure!(
+                    block.pack == ordinal + 1 && offset == pack.bytes,
+                    "noncontiguous pack membership"
+                );
+                ordinal = block.pack;
+                offset = 0;
+            }
+            let pack = self.packs.get(ordinal).context("missing packed data")?;
+            ensure!(block.offset == offset, "noncontiguous packed block range");
+            offset = offset.checked_add(block.length).context("packed range overflow")?;
+            ensure!(offset <= pack.bytes, "packed block exceeds object size");
+        }
+        ensure!(
+            ordinal + 1 == self.packs.len()
+                && self.packs.get(ordinal).is_some_and(|pack| offset == pack.bytes),
+            "packed object contains unindexed bytes"
+        );
+        Ok(())
+    }
+}
+pub(super) fn header_bytes(schema: &str) -> Result<usize> {
+    super::bounded::encode(&Index::<(), ()> {
+        schema: schema.into(),
+        packs: Vec::new(),
+        blocks: Vec::new(),
+    })
+    .map(|bytes| bytes.len())
+}
+pub(super) fn pack_bytes() -> Result<usize> {
+    // Reserve the largest descriptor's decimal byte count before its digest is known.
+    let digest = "0".repeat(64);
+    super::bounded::encode(&Pack {
+        path: format!("pgderive/pack/{digest}"),
+        bytes: u64::try_from(super::compression::STORED_LIMIT)?,
+        hash: digest,
+    })
+    .map(|bytes| bytes.len())
+}
 pub(super) fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-
+fn valid_hash(hash: &str) -> bool {
+    hash.len() == 64
+        && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 pub(super) fn validate<K: BatchData, V: BatchData>(rows: &[Entry<K, V>]) -> Result<()> {
     ensure!(rows.iter().all(|(_, weight)| *weight != 0), "zero weight in immutable batch");
     ensure!(
@@ -34,9 +105,8 @@ pub(super) fn validate<K: BatchData, V: BatchData>(rows: &[Entry<K, V>]) -> Resu
     );
     Ok(())
 }
-
 impl<T> Block<T> {
-    pub(super) fn validate_address(&self) -> Result<()> {
+    fn validate_address(&self) -> Result<()> {
         ensure!(
             self.rows > 0
                 && self.rows <= 65_536
@@ -44,40 +114,29 @@ impl<T> Block<T> {
                 && self.length <= u64::try_from(super::compression::STORED_LIMIT)?,
             "invalid immutable block size"
         );
-        ensure!(
-            self.hash.len() == 64
-                && self
-                    .hash
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                && self.path == format!("pgderive/block/{}", self.hash),
-            "invalid immutable block address"
-        );
+        ensure!(valid_hash(&self.hash), "invalid immutable block checksum");
         Ok(())
     }
 }
-
 pub(super) fn row_count<T>(blocks: &[Block<T>]) -> Result<usize> {
     blocks.iter().try_fold(0_usize, |total, block| {
         total.checked_add(block.rows).context("object row count overflow")
     })
 }
-
 type EncodedBlock<T> = (Block<T>, Vec<u8>);
-
 pub(super) fn encode_block<T: Clone, W>(
     rows: &[(impl Borrow<T>, W)],
     decoded: &[u8],
 ) -> Result<EncodedBlock<T>> {
     let encoded = super::compression::compress(decoded)?;
-    let digest = hash(&encoded);
     let block = Block {
-        path: format!("pgderive/block/{digest}"),
+        pack: 0,
+        offset: 0,
         first: rows.first().context("empty immutable block")?.0.borrow().clone(),
         last: rows.last().context("empty immutable block")?.0.borrow().clone(),
         length: u64::try_from(encoded.len())?,
         rows: rows.len(),
-        hash: digest,
+        hash: hash(&encoded),
     };
     Ok((block, encoded))
 }

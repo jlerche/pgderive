@@ -90,7 +90,7 @@ async fn flush_never_reads_retained_blocks_and_preserves_duplicate_membership() 
         ObjectBatch::write(store.clone(), &Batch::from_updates([((1, 1), 2)])?, "flush-v1", 1)
             .await?;
     let object = ObjectBatch::open(store.clone(), reference.clone(), "flush-v1").await?;
-    let block = Path::from(object.block_path(0).context("missing block")?);
+    let block = Path::from(object.block_range(0).map(|(path, _)| path).context("missing block")?);
     let bytes = store.get(&block).await?.bytes().await?;
     let base = writer
         .empty()
@@ -152,7 +152,7 @@ async fn canceling_memory_never_reads_eight_retained_runs() -> Result<()> {
         ObjectBatch::write(store.clone(), &Batch::from_updates([((1, 1), 2)])?, "zero-v1", 1)
             .await?;
     let object = ObjectBatch::open(store.clone(), reference, "zero-v1").await?;
-    let block = Path::from(object.block_path(0).context("missing block")?);
+    let block = Path::from(object.block_range(0).map(|(path, _)| path).context("missing block")?);
     let bytes = store.get(&block).await?.bytes().await?;
     let mut base = writer.empty();
     for time in 1..=8 {

@@ -12,7 +12,7 @@ import urllib.request
 
 from native_mv_oracle import expected as native_expected
 from query_capacity_harness import inventory
-from query_lifecycle_harness import configured, grouped, rejected
+from query_lifecycle_harness import configured, grouped, rejected, verify_packed_root
 from query_rebuild_harness import command, pin_roots, verify
 from worker_harness import Worker
 
@@ -62,16 +62,7 @@ def archive_objects(fixture, roots):
         records[key]={'file':str(file),'sha256':hashlib.sha256(content).hexdigest(),'bytes':len(content)}
     # Verify closure from PG membership and reader roots, not merely a prefix count.
     for root in roots:
-        key=fixture.name+'/'+root['path']
-        content=pathlib.Path(records[key]['file']).read_bytes()
-        index=content
-        assert hashlib.sha256(index).hexdigest()==root['hash']
-        decoded=json.loads(index)
-        assert 'blocks' in decoded, 'fixture must exercise the directly indexed object format'
-        for block in decoded['blocks']:
-            block_key=fixture.name+'/'+root['namespace']+'/'+block['path']
-            data=pathlib.Path(records[block_key]['file']).read_bytes()
-            assert hashlib.sha256(data).hexdigest()==block['hash']
+        verify_packed_root(root, lambda path: pathlib.Path(records[fixture.name+'/'+path]['file']).read_bytes())
     (fixture.output/'object-backup-manifest.json').write_text(json.dumps(records,indent=2)+'\n')
     return records
 

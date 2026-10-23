@@ -153,7 +153,7 @@ async fn closed_namespace_deletes_cannot_hit_recreated_equal_content() -> Result
     assert_eq!(cursor.current(), Some((&1, &2, 3)));
     cursor.advance().await?;
     assert!(cursor.current().is_none());
-    assert_eq!(object.block_path(0), new_blocks.first().map(String::as_str));
+    assert_eq!(object.block_range(0).map(|(path, _)| path), new_blocks.first().map(String::as_str));
     let roots = ObjectBatch::write_stream_namespaced(
         store.clone(),
         &mut batch.cursor().await?,
@@ -225,7 +225,12 @@ async fn shared_decode_rechecks_fences_and_failed_span_load_retains_position() -
     fences[0].rows += 1;
     wrong.blocks = Arc::new(fences);
     assert!(wrong.cursor().await.is_err());
-    let path = Path::from(object.block_path(1).ok_or_else(|| anyhow::anyhow!("missing block"))?);
+    let path = Path::from(
+        object
+            .block_range(1)
+            .map(|(path, _)| path)
+            .ok_or_else(|| anyhow::anyhow!("missing block"))?,
+    );
     let original = store.get(&path).await?.bytes().await?;
     store.put(&path, b"bad".to_vec().into()).await?;
     assert!(cursor.advance_span().await.is_err());
@@ -275,7 +280,12 @@ async fn failed_merged_span_load_keeps_consolidated_position_for_retry() -> Resu
     let root = ObjectBatch::write(store.clone(), &batch, "span-retry-v1", 1).await?;
     let object =
         ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "span-retry-v1").await?;
-    let path = Path::from(object.block_path(1).ok_or_else(|| anyhow::anyhow!("missing block"))?);
+    let path = Path::from(
+        object
+            .block_range(1)
+            .map(|(path, _)| path)
+            .ok_or_else(|| anyhow::anyhow!("missing block"))?,
+    );
     let prior = TraceSnapshot::<i64, i64>::reopen(
         store.clone(),
         Manifest { version: 1, time: 0, generation: 0, objects: vec![root] },

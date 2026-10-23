@@ -95,7 +95,7 @@ async fn freeze_fences_work_prepared_before_the_new_memory_boundary() -> Result<
 async fn failed_upload_drains_siblings_without_changing_local_state() -> Result<()> {
     use crate::engine::tests::store::Store;
     use std::sync::atomic::Ordering;
-    let store = Arc::new(Store::new(true));
+    let store = Arc::new(Store::new(Some(0)));
     let settings = Settings { store: store.clone(), ..settings() };
     let mut query = Query::new(plan()?, operators(), &settings)?;
     tick(&mut query, 1, 2).await?;

@@ -62,13 +62,24 @@ three batches of 256, 256 and one path. Its partial-error retry deletes all keys
 including 255 keys already removed by the first attempt. This measures request
 amplification, not cloud latency or capacity. The durable object format is unchanged.
 
-New immutable data blocks use canonical full-tuple weighted JSON compressed with
-Zstd level 3 (`pgderive/block/<sha256>`). Hashes cover compressed bytes. Resident
-fences and root indexes remain JSON (`pgderive/batch/<sha256>`). This is the sole
-object format; old JSON layouts and versioned paths are unsupported. Existing
-registrations using those layouts must be rebuilt. Decoded JSON is capped at
-8 MiB per block, stored bytes at 8 MiB + 64 KiB, and Zstd frames/windows are checked before
-rows are exposed. Streaming block-byte budgets refer to uncompressed JSON.
+Immutable blocks use canonical full-tuple weighted JSON compressed independently
+with Zstd level 3. The writer targets 128 KiB decoded JSON per block and packs
+compressed blocks into `pgderive/pack/<sha256>` objects, targeting 4 MiB per
+pack. Roots remain JSON (`pgderive/batch/<sha256>`), containing pack addresses
+and per-block byte ranges, hashes and tuple fences. Reads fetch and authenticate
+only the selected compressed range. Packs can contain multiple blocks, and roots
+can reference multiple packs. PostgreSQL stores coarse root membership.
+
+This is the sole object format. Earlier individual-block layouts and versioned
+paths are unsupported, including old empty roots. Existing registrations must be
+freshly bootstrapped into a new owned prefix before running this version; retired
+`block/` objects need separate cleanup. Decoded JSON is capped at 8 MiB per block,
+stored packs at 8 MiB + 64 KiB, and Zstd frames/windows are checked before rows
+are exposed. A single wide block may exceed either soft target within those hard
+limits. Streaming block-byte budgets refer to uncompressed JSON. Each root's pack PUTs
+complete before its root PUT; all root PUTs precede PostgreSQL publication.
+Acknowledgement still waits
+for checkpoint-covered durable progress.
 
 An optional Foyer memory/disk cache retains encoded immutable blocks:
 

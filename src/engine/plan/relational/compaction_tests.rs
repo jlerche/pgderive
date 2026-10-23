@@ -45,7 +45,7 @@ async fn selective_compaction_preserves_single_roots_and_only_writes_multirun_st
         .iter()
         .filter(|object| !before.iter().any(|prior| prior.location == object.location))
         .count();
-    assert_eq!(added, 3, "only two consolidated blocks and one root should be written");
+    assert_eq!(added, 2, "only one consolidated pack and one root should be written");
     let reopened = scoped.reopen(compacted.trace.manifest()?).await?;
     assert_eq!(reopened.materialize().await?, many.trace.materialize().await?);
     let empty = Entry { schema: one.schema.clone(), trace: writer.empty() };

@@ -170,3 +170,19 @@ async fn s3_gc_partial_object_error_preserves_all_keys_for_idempotent_retry() ->
     assert_eq!(capture.missing, 255);
     Ok(())
 }
+
+#[test]
+fn only_current_packed_storage_in_closed_namespaces_is_managed() {
+    let namespace = "pgderive/upload-v1/closed";
+    let sealed = BTreeSet::from([namespace.to_owned()]);
+    let digest = "a".repeat(64);
+    for kind in ["batch", "pack"] {
+        assert!(super::managed(&format!("{namespace}/pgderive/{kind}/{digest}"), &sealed));
+        assert!(!super::managed(
+            &format!("pgderive/upload-v1/active/pgderive/{kind}/{digest}"),
+            &sealed
+        ));
+    }
+    assert!(!super::managed(&format!("{namespace}/pgderive/pack/not-a-hash"), &sealed));
+    assert!(!super::managed(&format!("{namespace}/pgderive/block/{digest}"), &sealed));
+}

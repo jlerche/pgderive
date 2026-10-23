@@ -364,12 +364,53 @@ preload and warmup are excluded:
 | 32,000 | 13.144 / 14.816 ms | 2.208 / 3.736 ms |
 | 40,000 | 13.464 / 14.517 ms | 2.738 / 3.550 ms |
 
-Smaller blocks have a storage cost: the 32,000-group fixture's initial checkpoint
+The initial unpacked implementation at `648d6c8` had a storage cost: the 32,000-group fixture's initial checkpoint
 went from 53 to 209 PUT attempts/objects, and stored bytes from 698,179 to 864,469.
 Measured updates performed zero PUTs in both versions. This does not establish a
 live Class A operation rate or cloud latency. Cache misses still cost more than
-hits; the change reduces their decoding amplification. Existing large blocks
-take the new boundaries when rewritten by checkpoint compaction.
+hits; the change reduces their decoding amplification. The packed format below replaces individual block objects.
+
+#### Packing small decode blocks
+
+The writer groups independently compressed blocks into immutable packs with a
+4 MiB compressed-byte target. A single wider block can exceed this soft target
+within the existing hard codec limit. Roots contain pack addresses and each
+block's pack ordinal, offset, length, hash and tuple fences. Point reads issue an
+exact range GET and verify the block hash before bounded decoding. Fine-grained
+indexes remain object-local; PostgreSQL still stores coarse root membership.
+The writer retains one compressed pack at a time and supports multiple packs
+per root, so packing does not impose a new total-state limit.
+
+Each root's pack PUTs precede its root PUT; all roots precede PostgreSQL
+publication. Publication and
+checkpoint-covered slot acknowledgement retain their existing ordering. Failed
+uploads return no membership; unreachable packs remain eligible for physical GC.
+Tests cover range isolation, malformed ranges, independent pack/root rollover,
+failed pack/root PUTs, cache reuse after retries, and cold weighted restoration.
+
+An optimized paired comparison against the unpacked `648d6c8` implementation
+reused the exact saved trace and before/after/after/before process order above
+(384 measured updates per size/version):
+
+| Groups | Unpacked / packed PUTs | Unpacked p50 / p95 | Packed p50 / p95 |
+| --- | --- | --- | --- |
+| 8,000 | 58 / 10 | 0.217 / 0.383 ms | 0.207 / 0.366 ms |
+| 32,000 | 209 / 10 | 2.112 / 3.497 ms | 2.040 / 3.418 ms |
+| 40,000 | 259 / 10 | 2.748 / 3.458 ms | 2.672 / 3.462 ms |
+
+At 32,000 groups this removes 95.2% of the unpacked checkpoint PUTs and
+uses fewer than the original large-block implementation's 53 PUTs. Stored bytes
+fall from 864,469 to 852,186. All weighted oracles and cold restores passed;
+measured updates performed zero PUTs. These are local fixture checkpoint counts,
+not a forecast of live daily operations. Packing preserves the small-block
+latency improvement without its per-block PUT amplification.
+
+This is a hard storage-format cutover. Earlier individual-block roots are
+rejected, including empty old roots. Registered state must be freshly
+bootstrapped into a new owned prefix before running this version. Retired
+`block/` objects require separate cleanup; the new collector manages `pack/`
+and `batch/` objects. Do not resume an old deployment without rebuilding its
+state. No live deployment or R2 prefix was changed for this local comparison.
 
 Use growth mode with `--state-rows 8000 32000 40000 --warmup 64 --updates 64` to
 repeat the candidate workload. The default eight warmups intentionally retain

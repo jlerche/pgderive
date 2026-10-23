@@ -1,6 +1,6 @@
 use super::{
     BatchData, BatchReader, BlockCache, Cursor, Entry,
-    format::{Block, Index, hash, validate},
+    format::{Block, Index, Pack, hash, validate},
 };
 use crate::engine::Batch;
 use anyhow::{Context, Result, ensure};
@@ -89,6 +89,7 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) store: Arc<dyn ObjectStore>,
     pub(super) reference: ObjectRef,
     pub(super) blocks: Fences<K, V>,
+    pub(super) packs: Arc<Vec<Pack>>,
     pub(super) rows: usize,
     pub(super) cache: Arc<BlockCache>,
 }
@@ -135,9 +136,12 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     pub(super) async fn upload_index(
         store: &Arc<dyn ObjectStore>,
         schema: &str,
+        packs: Vec<Pack>,
         blocks: Vec<Block<(K, V)>>,
+        limit: usize,
     ) -> Result<ObjectRef> {
-        let index = super::bounded::encode(&Index { schema: schema.to_owned(), blocks })?;
+        let index = super::bounded::encode(&Index { schema: schema.to_owned(), packs, blocks })?;
+        ensure!(index.len() <= limit, "streaming index exceeds byte budget");
         let reference = ObjectRef {
             path: format!("pgderive/batch/{}", hash(&index)),
             bytes: u64::try_from(index.len())?,
@@ -176,19 +180,26 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         ensure!(reference.schema == schema, "batch schema mismatch");
         let bytes = reference.index_bytes(&store).await?;
         let mut index: Index<K, V> = serde_json::from_slice(&bytes)?;
+        index.validate_storage()?;
         ensure!(index.schema == schema, "object schema mismatch");
         for (ordinal, block) in index.blocks.iter().enumerate() {
-            block.validate_address()?;
             ensure!(block.first <= block.last, "invalid block fences");
             if ordinal > 0 {
                 ensure!(index.blocks[ordinal - 1].last < block.first, "overlapping object fences");
             }
         }
-        for block in &mut index.blocks {
-            block.path = reference.child_path(&block.path);
+        for pack in &mut index.packs {
+            pack.path = reference.child_path(&pack.path);
         }
         let rows = super::format::row_count(&index.blocks)?;
-        Ok(Self { store, reference, blocks: Arc::new(index.blocks), rows, cache })
+        Ok(Self {
+            store,
+            reference,
+            blocks: Arc::new(index.blocks),
+            packs: Arc::new(index.packs),
+            rows,
+            cache,
+        })
     }
 
     /// Coarse trusted catalog reference for this immutable run.
@@ -202,10 +213,13 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     pub(crate) fn share_cache(&mut self, cache: Arc<BlockCache>) {
         self.cache = cache;
     }
-    /// Object containing a selected block; useful for integrity checks and reclamation.
+    /// Object path and exact compressed byte range containing a selected block.
     #[must_use]
-    pub fn block_path(&self, ordinal: usize) -> Option<&str> {
-        self.blocks.get(ordinal).map(|block| block.path.as_str())
+    pub fn block_range(&self, ordinal: usize) -> Option<(&str, std::ops::Range<u64>)> {
+        let block = self.blocks.get(ordinal)?;
+        let data = self.packs.get(block.pack)?;
+        let end = block.offset.checked_add(block.length)?;
+        (end <= data.bytes).then_some((data.path.as_str(), block.offset..end))
     }
 
     pub(crate) async fn tuple_weight(&self, tuple: &(K, V)) -> Result<i64> {
@@ -244,49 +258,48 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
 
     pub(super) async fn read(&self, ordinal: usize) -> Result<Arc<Vec<Entry<K, V>>>> {
         let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
+        let (path, range) = self.block_range(ordinal).context("invalid packed block range")?;
 
-        let rows =
-            if let Some(rows) = self.cache.get::<K, V>(&self.reference.schema, &block.hash)? {
-                rows
-            } else {
-                let path = &block.path;
-                let key = format!("json-zstd:{path}:{}:{}", block.length, block.hash);
-                let cached = match &self.cache.encoded {
-                    Some(cache) => cache.get(&key, &block.hash).await,
-                    None => None,
-                };
-                let bytes = if let Some(bytes) = cached {
-                    bytes
-                } else {
-                    let bytes = self
-                        .store
-                        .get_range(&Path::from(path.clone()), 0..block.length)
-                        .await?
-                        .to_vec();
-                    ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
-                    if self.cache.admits_encoded()
-                        && let Some(cache) = &self.cache.encoded
-                    {
-                        cache.insert(key, bytes.clone());
-                    }
-                    bytes
-                };
-                ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
-                let decoded = super::compression::decode(&bytes)?;
-                let mut rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
-                validate(&rows)?;
-                // JSON arrays do not carry a length hint. Do not retain their
-                // geometric deserialization spare capacity in the bounded cache.
-                rows.shrink_to_fit();
-                let rows = Arc::new(rows);
-                self.cache.insert(
-                    &self.reference.schema,
-                    block.hash.clone(),
-                    rows.clone(),
-                    decoded.len(),
-                )?;
-                rows
+        let rows = if let Some(rows) =
+            self.cache.get::<K, V>(&self.reference.schema, &block.hash)?
+        {
+            rows
+        } else {
+            let key =
+                format!("json-zstd-range:{path}:{}:{}:{}", block.offset, block.length, block.hash);
+            let cached = match &self.cache.encoded {
+                Some(cache) => cache.get(&key, &block.hash).await,
+                None => None,
             };
+            let bytes = if let Some(bytes) = cached {
+                bytes
+            } else {
+                let bytes = self.store.get_range(&Path::from(path), range).await?.to_vec();
+                ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
+                if self.cache.admits_encoded()
+                    && let Some(cache) = &self.cache.encoded
+                {
+                    cache.insert(key, bytes.clone());
+                }
+                bytes
+            };
+            ensure!(u64::try_from(bytes.len())? == block.length, "object range length mismatch");
+            ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
+            let decoded = super::compression::decode(&bytes)?;
+            let mut rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
+            validate(&rows)?;
+            // JSON arrays do not carry a length hint. Do not retain their
+            // geometric deserialization spare capacity in the bounded cache.
+            rows.shrink_to_fit();
+            let rows = Arc::new(rows);
+            self.cache.insert(
+                &self.reference.schema,
+                block.hash.clone(),
+                rows.clone(),
+                decoded.len(),
+            )?;
+            rows
+        };
         ensure!(
             rows.len() == block.rows
                 && rows.first().map(|row| &row.0) == Some(&block.first)

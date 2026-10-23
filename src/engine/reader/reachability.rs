@@ -14,11 +14,7 @@ impl ObjectRef {
         let bytes = self.index_bytes(store).await?;
         let index: Index<serde_json::Value, serde_json::Value> = serde_json::from_slice(&bytes)?;
         ensure!(index.schema == self.schema(), "invalid reachability root schema");
-        let mut paths = Vec::new();
-        for block in index.blocks {
-            block.validate_address()?;
-            paths.push(self.child_path(&block.path));
-        }
-        Ok(paths)
+        index.validate_storage()?;
+        Ok(index.packs.iter().map(|data| self.child_path(&data.path)).collect())
     }
 }

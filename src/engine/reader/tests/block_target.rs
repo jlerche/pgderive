@@ -40,7 +40,7 @@ async fn shared_writers_split_wide_groups_and_cold_reads_validate_every_block() 
     .await?;
     assert_eq!(snapshot.materialize().await?, batch);
     let last = object.blocks.len() - 1;
-    let path = object.block_path(last).context("last block missing")?;
+    let path = object.block_range(last).map(|(path, _)| path).context("last block missing")?;
     store.put(&Path::from(path), vec![0_u8; 3].into()).await?;
     assert!(object.read(last).await.is_err());
     Ok(())

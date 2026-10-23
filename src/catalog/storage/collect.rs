@@ -226,7 +226,7 @@ fn managed(path: &str, sealed: &BTreeSet<String>) -> bool {
     if !sealed.contains(namespace) {
         return false;
     }
-    let Some(hash) = relative.strip_prefix("batch/").or_else(|| relative.strip_prefix("block/"))
+    let Some(hash) = relative.strip_prefix("batch/").or_else(|| relative.strip_prefix("pack/"))
     else {
         return false;
     };

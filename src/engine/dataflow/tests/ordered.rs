@@ -80,7 +80,6 @@ async fn ordered_first_rejects_bad_clocks_weights_projection_state_and_work() ->
 #[tokio::test]
 async fn ordered_first_does_not_read_unselected_tail_after_cutoff() -> Result<()> {
     use crate::engine::reader::ObjectBatch;
-    use object_store::{ObjectStoreExt, path::Path};
     let store = Arc::new(InMemory::new());
     let inputs = Arrangement::new(store.clone(), "ordered-tail-input".into(), 1)?;
     let outputs = Arrangement::new(store.clone(), "ordered-tail-output".into(), 1)?;
@@ -102,8 +101,7 @@ async fn ordered_first_does_not_read_unselected_tail_after_cutoff() -> Result<()
     let reference = prior.manifest()?.objects[0].clone();
     let object =
         ObjectBatch::<i32, i32>::open(store.clone(), reference, "ordered-tail-input").await?;
-    let tail = object.block_path(1).ok_or_else(|| anyhow::anyhow!("missing tail block"))?;
-    store.delete(&Path::from(tail)).await?;
+    crate::engine::tests::store::corrupt_block(store.as_ref(), &object, 1).await?;
     let operator =
         OrderedSelection::first(Project::new(|key: &i32, value: &i32| Ok(Some((*key, *value)))));
     let delta = operator

@@ -55,7 +55,7 @@ mod tests {
             cache.clone(),
         )
         .await?;
-        assert_eq!(store.puts.load(Ordering::SeqCst), 3);
+        assert_eq!(store.puts.load(Ordering::SeqCst), 2);
         assert_eq!(store.reads.load(Ordering::SeqCst), 0);
         assert_eq!(fresh.cursor().await?.current().map(|(_, _, n)| n), Some(3));
         assert_eq!(store.reads.load(Ordering::SeqCst), 0);

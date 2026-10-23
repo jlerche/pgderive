@@ -20,15 +20,14 @@ async fn bounded_ranges_skip_disjoint_blocks_consolidate_and_retry() -> Result<(
         2,
     )?;
     for ordinal in [0, 1, 2, 7, 8, 9] {
-        store
-            .delete(&Path::from(object.block_path(ordinal).context("missing fixture block")?))
-            .await?;
+        crate::engine::tests::store::corrupt_block(store.as_ref(), &object, ordinal).await?;
     }
-    let failed = Path::from(object.block_path(5).context("missing fixture block")?);
+    let failed =
+        Path::from(object.block_range(5).map(|(path, _)| path).context("missing fixture block")?);
     let bytes = store.get(&failed).await?.bytes().await?;
     let mut cursor = trace.range_cursor(&3, &6).await?;
     assert_eq!(cursor.current(), Some((&3, &3, 2)));
-    store.delete(&failed).await?;
+    crate::engine::tests::store::corrupt_block(store.as_ref(), &object, 5).await?;
     assert!(cursor.advance().await.is_err());
     assert_eq!(cursor.current(), Some((&3, &3, 2)));
     store.put(&failed, bytes.into()).await?;

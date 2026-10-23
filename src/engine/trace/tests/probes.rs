@@ -48,9 +48,7 @@ async fn probes_skip_irrelevant_runs_and_stop_before_unrelated_blocks() -> Resul
         1,
     )?;
     for (object, ordinal) in [(&wide, 0), (&wide, 4), (&unrelated, 0)] {
-        store
-            .delete(&Path::from(object.block_path(ordinal).context("missing fixture block")?))
-            .await?;
+        crate::engine::tests::store::corrupt_block(store.as_ref(), object, ordinal).await?;
     }
     let snapshot = trace;
     assert_eq!(
@@ -111,9 +109,10 @@ async fn selected_block_failure_keeps_probe_position_and_can_retry() -> Result<(
     let mut trace = TraceSnapshot::empty();
     trace = trace.append_validated(Run::Object(data.clone()), 1)?;
     let mut cursor = trace.key_cursor(&7).await?;
-    let path = Path::from(data.block_path(1).context("missing fixture block")?);
+    let path =
+        Path::from(data.block_range(1).map(|(path, _)| path).context("missing fixture block")?);
     let bytes = store.get(&path).await?.bytes().await?;
-    store.delete(&path).await?;
+    crate::engine::tests::store::corrupt_block(store.as_ref(), &data, 1).await?;
     assert!(cursor.advance().await.is_err());
     assert_eq!(cursor.current(), Some((&7, &1, 1)));
     store.put(&path, bytes.into()).await?;
@@ -130,7 +129,7 @@ async fn affected_identity_validation_checks_final_weights_without_scanning_unre
     let prior =
         writer.stage(&writer.empty(), &TimedBatch { time: 1, batch: initial.clone() }).await?;
     let data = object(store.clone(), Arc::new(BlockCache::new(0, 0)), &initial, 1).await?;
-    store.delete(&Path::from(data.block_path(2).context("missing fixture block")?)).await?;
+    crate::engine::tests::store::corrupt_block(store.as_ref(), &data, 2).await?;
     let overflow = TimedBatch { time: 2, batch: Batch::from_updates([((1, 1), 1)])? };
     assert!(writer.stage(&prior, &overflow).await.is_err());
     assert_eq!(prior.time(), 1);
@@ -190,9 +189,9 @@ async fn grouped_probes_reuse_blocks_and_retry_without_losing_heads() -> Result<
         );
     }
     assert_eq!(cache.stats()?.misses, before.misses);
-    let path = Path::from(object.block_path(1).context("missing block")?);
+    let path = Path::from(object.block_range(1).map(|(path, _)| path).context("missing block")?);
     let bytes = store.get(&path).await?.bytes().await?;
-    store.delete(&path).await?;
+    crate::engine::tests::store::corrupt_block(store.as_ref(), &object, 1).await?;
     assert!(probes.cursor(&5).await.is_err());
     assert_eq!(rows(probes.cursor(&1).await?).await?, Batch::from_updates([((1, 1), 1)])?);
     store.put(&path, bytes.into()).await?;
@@ -211,7 +210,7 @@ async fn batched_tuple_validation_reads_each_selected_block_once() -> Result<()>
     let object = object(store.clone(), cache.clone(), &batch, 4).await?;
     let trace = TraceSnapshot::from_runs(vec![Run::Object(object.clone())], 1, 1)?;
     let delta = Batch::from_updates((0..16).map(|n| ((n / 8, n), -2)))?;
-    store.delete(&Path::from(object.block_path(5).context("missing block")?)).await?;
+    crate::engine::tests::store::corrupt_block(store.as_ref(), &object, 5).await?;
     let before = cache.stats()?.misses;
     trace.validate_bag_delta(&delta).await?;
     assert_eq!(cache.stats()?.misses - before, 4);

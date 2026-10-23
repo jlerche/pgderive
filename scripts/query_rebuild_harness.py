@@ -6,9 +6,8 @@ import pathlib
 import sys
 import urllib.request
 import urllib.error
-import hashlib
 
-from query_lifecycle_harness import configured, grouped, rejected
+from query_lifecycle_harness import configured, grouped, rejected, verify_packed_root
 from native_mv_oracle import expected as native_expected
 from worker_harness import Worker
 from harness_control import admin
@@ -61,12 +60,7 @@ def object_bytes(fixture, path):
 
 def verify_pins(fixture, roots):
     for root in roots:
-        content = object_bytes(fixture,root['path'])
-        index = content
-        assert hashlib.sha256(index).hexdigest() == root['hash']
-        for block in json.loads(index)['blocks']:
-            content = object_bytes(fixture,root['namespace']+'/'+block['path'])
-            assert hashlib.sha256(content).hexdigest() == block['hash']
+        verify_packed_root(root, lambda path: object_bytes(fixture, path))
 
 
 def verify_collected(fixture, roots):

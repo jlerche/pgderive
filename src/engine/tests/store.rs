@@ -2,27 +2,31 @@
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, memory::InMemory, path::Path,
+    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, memory::InMemory,
+    path::Path,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 #[derive(Debug, Default)]
 pub struct Store {
     inner: InMemory,
     pub(crate) puts: AtomicUsize,
     pub(crate) reads: AtomicUsize,
+    pub(crate) range_start: AtomicU64,
+    pub(crate) range_end: AtomicU64,
+    pub(crate) range_bytes: AtomicU64,
     pub(crate) active: AtomicUsize,
     pub(crate) peak: AtomicUsize,
-    pub(crate) fail_first: bool,
+    pub(crate) fail_at: Option<usize>,
     unpaced: bool,
 }
 impl Store {
     pub fn unpaced() -> Self {
         Self { unpaced: true, ..Self::default() }
     }
-    pub fn new(fail_first: bool) -> Self {
-        Self { fail_first, ..Self::default() }
+    pub fn new(fail_at: Option<usize>) -> Self {
+        Self { fail_at, ..Self::default() }
     }
 }
 impl std::fmt::Display for Store {
@@ -40,7 +44,7 @@ impl ObjectStore for Store {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         self.active.fetch_sub(1, Ordering::SeqCst);
-        if self.fail_first && call == 0 {
+        if self.fail_at == Some(call) {
             return Err(object_store::Error::Generic {
                 store: "upload-probe",
                 source: Box::new(std::io::Error::other("injected PUT failure")),
@@ -57,6 +61,11 @@ impl ObjectStore for Store {
     }
     async fn get_opts(&self, path: &Path, opts: GetOptions) -> Result<GetResult> {
         self.reads.fetch_add(1, Ordering::SeqCst);
+        if let Some(GetRange::Bounded(range)) = &opts.range {
+            self.range_start.store(range.start, Ordering::SeqCst);
+            self.range_end.store(range.end, Ordering::SeqCst);
+            self.range_bytes.fetch_add(range.end - range.start, Ordering::SeqCst);
+        }
         self.inner.get_opts(path, opts).await
     }
     fn delete_stream(
@@ -74,4 +83,23 @@ impl ObjectStore for Store {
     async fn copy_opts(&self, from: &Path, to: &Path, opts: CopyOptions) -> Result<()> {
         self.inner.copy_opts(from, to, opts).await
     }
+}
+
+/// Damage one authenticated range while leaving other pages in its pack intact.
+pub async fn corrupt_block<
+    K: crate::engine::reader::BatchData,
+    V: crate::engine::reader::BatchData,
+>(
+    store: &dyn ObjectStore,
+    object: &crate::engine::reader::ObjectBatch<K, V>,
+    ordinal: usize,
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    use object_store::ObjectStoreExt as _;
+    let (path, range) = object.block_range(ordinal).context("missing fixture block")?;
+    let path = Path::from(path);
+    let mut bytes = store.get(&path).await?.bytes().await?.to_vec();
+    *bytes.get_mut(usize::try_from(range.start)?).context("missing fixture range")? ^= 1;
+    store.put(&path, bytes.into()).await?;
+    Ok(())
 }

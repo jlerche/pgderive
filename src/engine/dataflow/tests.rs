@@ -114,7 +114,12 @@ async fn graph_preparations_are_atomic_stale_foreign_and_retryable() -> Result<(
         "integers-v1:left",
     )
     .await?;
-    let path = Path::from(object.block_path(0).ok_or_else(|| anyhow::anyhow!("missing block"))?);
+    let path = Path::from(
+        object
+            .block_range(0)
+            .map(|(path, _)| path)
+            .ok_or_else(|| anyhow::anyhow!("missing block"))?,
+    );
     let bytes = store.get(&path).await?.bytes().await?;
     store.delete(&path).await?;
     let empty = stream(2, [])?;

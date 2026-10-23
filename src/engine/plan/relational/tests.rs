@@ -277,7 +277,7 @@ async fn independent_uploads_overlap_and_failures_drain_without_state_advance() 
     use crate::engine::tests::store::Store;
     use std::sync::atomic::Ordering;
     for fail_first in [false, true] {
-        let store = Arc::new(Store::new(fail_first));
+        let store = Arc::new(Store::new(fail_first.then_some(0)));
         let settings = Settings {
             store: store.clone(),
             block_rows: 2,

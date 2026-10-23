@@ -47,7 +47,7 @@ async fn cold_manifest_reopen_does_not_accept_warm_cached_missing_or_corrupt_obj
     let manifest = state.manifest()?;
     let root = manifest.objects.first().context("missing root")?;
     let object = ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "ints").await?;
-    let path = Path::from(object.block_path(1).context("missing block")?);
+    let path = Path::from(object.block_range(1).map(|(path, _)| path).context("missing block")?);
     let bytes = store.get(&path).await?.bytes().await?;
     store.delete(&path).await?;
     assert!(writer.reopen(manifest.clone()).await.is_err());
@@ -149,7 +149,7 @@ async fn trusted_compaction_reads_each_cold_input_block_once_and_rejects_corrupt
     let manifest = state.manifest()?;
     let root = manifest.objects.first().context("missing root")?;
     let object = ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "once").await?;
-    let path = Path::from(object.block_path(3).context("missing block")?);
+    let path = Path::from(object.block_range(3).map(|(path, _)| path).context("missing block")?);
     store.put(&path, b"corrupt".to_vec().into()).await?;
     assert!(writer.compact(&state).await.is_err());
     assert_eq!(state.manifest()?, manifest);

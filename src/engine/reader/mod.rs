@@ -115,3 +115,7 @@ mod performance;
 #[cfg(test)]
 #[path = "tests/memory.rs"]
 mod memory_tests;
+
+#[cfg(test)]
+#[path = "tests/packing.rs"]
+mod packing_tests;

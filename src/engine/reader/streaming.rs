@@ -1,6 +1,6 @@
 use super::{
     BatchCursor, BatchData, BlockCache, Entry, ObjectBatch, ObjectRef, bounded,
-    format::{Block, Index, validate},
+    format::{Block, Pack, TARGET_OBJECT_BYTES, hash, header_bytes, pack_bytes, validate},
 };
 use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
@@ -63,6 +63,10 @@ struct Writer<K: BatchData, V: BatchData> {
     row_bytes: usize,
     blocks: Vec<Block<(K, V)>>,
     fence_bytes: usize,
+    header_bytes: usize,
+    payload: Vec<u8>,
+    packs: Vec<Pack>,
+    pack_bytes: usize,
     references: Vec<ObjectRef>,
     resident: Vec<ObjectBatch<K, V>>,
     cache: Option<Arc<BlockCache>>,
@@ -139,6 +143,10 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             row_bytes: 2,
             blocks: Vec::new(),
             fence_bytes: 0,
+            header_bytes: header_bytes(schema)?,
+            payload: Vec::new(),
+            packs: Vec::new(),
+            pack_bytes: pack_bytes()?,
             references: Vec::new(),
             resident: Vec::new(),
             previous: None,
@@ -160,8 +168,8 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         for batch in &mut writer.resident {
             if let Some(namespace) = namespace {
                 batch.reference = batch.reference.clone().qualify(namespace)?;
-                for block in Arc::make_mut(&mut batch.blocks) {
-                    block.path = batch.reference.child_path(&block.path);
+                for pack in Arc::make_mut(&mut batch.packs) {
+                    pack.path = batch.reference.child_path(&pack.path);
                 }
                 batch.store = store.clone();
             }
@@ -205,33 +213,42 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             return Ok(());
         }
         validate(&self.rows)?;
-        let encoded = bounded::encode(&self.rows)?;
-        ensure!(encoded.len() <= self.limits.block_bytes, "streaming block exceeds budget");
-        let encoded_bytes = encoded.len();
-        let (block, encoded) = super::format::encode_block::<(K, V), _>(&self.rows, &encoded)?;
-        let bytes = bounded::encode(&block)?.len();
-        let header =
-            bounded::encode(&Index::<K, V> { schema: self.schema.clone(), blocks: Vec::new() })?
-                .len();
-        ensure!(
-            header.checked_add(bytes).is_some_and(|bytes| bytes <= self.limits.index_bytes),
-            "streaming fence exceeds index budget"
-        );
-        let total = header
-            .checked_add(self.fence_bytes)
-            .and_then(|total| total.checked_add(bytes))
-            .and_then(|total| total.checked_add(self.blocks.len()))
-            .context("streaming index size overflow")?;
-        if self.blocks.len() == self.limits.index_blocks || total > self.limits.index_bytes {
+        let decoded = bounded::encode(&self.rows)?;
+        ensure!(decoded.len() <= self.limits.block_bytes, "streaming block exceeds budget");
+        let (mut block, encoded) = super::format::encode_block::<(K, V), _>(&self.rows, &decoded)?;
+        let first_fence = bounded::encode(&block)?.len();
+        let next =
+            self.payload.len().checked_add(encoded.len()).context("packed object size overflow")?;
+        let new_pack = !self.payload.is_empty() && next > TARGET_OBJECT_BYTES;
+        block.pack = self.packs.len() + usize::from(new_pack);
+        block.offset = if new_pack { 0 } else { u64::try_from(self.payload.len())? };
+        let mut bytes = bounded::encode(&block)?.len();
+        let minimum = self
+            .header_bytes
+            .checked_add(self.pack_bytes)
+            .and_then(|n| n.checked_add(first_fence))
+            .context("streaming fence size overflow")?;
+        ensure!(minimum <= self.limits.index_bytes, "streaming fence exceeds index budget");
+        if self.blocks.len() == self.limits.index_blocks
+            || self.index_size(bytes, block.pack + 1)? > self.limits.index_bytes
+        {
             self.flush_root().await?;
+            block.pack = 0;
+            block.offset = 0;
+            bytes = first_fence;
+        } else if new_pack {
+            self.flush_pack().await?;
         }
-        bounded::put(&self.store, &block.path, encoded).await?;
+        self.payload.extend_from_slice(&encoded);
+        // These immutable local computations cannot publish membership. Keeping
+        // them in the bounded cache avoids pinning every page until the pack PUT.
+        // Neither a reference nor durable progress escapes before both PUTs.
         if let Some(cache) = &self.cache {
             cache.insert(
                 &self.schema,
                 block.hash.clone(),
                 Arc::new(self.rows.clone()),
-                encoded_bytes,
+                decoded.len(),
             )?;
         }
         self.fence_bytes =
@@ -239,6 +256,30 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         self.blocks.push(block);
         self.rows.clear();
         self.row_bytes = 2;
+        Ok(())
+    }
+    fn index_size(&self, fence: usize, packs: usize) -> Result<usize> {
+        packs
+            .checked_mul(self.pack_bytes + 1)
+            .and_then(|n| n.checked_add(self.header_bytes))
+            .and_then(|n| n.checked_add(self.fence_bytes))
+            .and_then(|n| n.checked_add(fence))
+            .and_then(|n| n.checked_add(self.blocks.len()))
+            .context("streaming index size overflow")
+    }
+    async fn flush_pack(&mut self) -> Result<()> {
+        if self.payload.is_empty() {
+            return Ok(());
+        }
+        let bytes = std::mem::take(&mut self.payload);
+        let digest = hash(&bytes);
+        let pack = Pack {
+            path: format!("pgderive/pack/{digest}"),
+            bytes: u64::try_from(bytes.len())?,
+            hash: digest,
+        };
+        bounded::put(&self.store, &pack.path, bytes).await?;
+        self.packs.push(pack);
         Ok(())
     }
     async fn flush_root(&mut self) -> Result<()> {
@@ -249,9 +290,17 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             self.references.len() < self.limits.output_roots,
             "streaming output root limit exceeded"
         );
+        self.flush_pack().await?;
+        let packs = std::mem::take(&mut self.packs);
         let blocks = std::mem::take(&mut self.blocks);
-        let reference =
-            ObjectBatch::<K, V>::upload_index(&self.store, &self.schema, blocks.clone()).await?;
+        let reference = ObjectBatch::<K, V>::upload_index(
+            &self.store,
+            &self.schema,
+            packs.clone(),
+            blocks.clone(),
+            self.limits.index_bytes,
+        )
+        .await?;
         self.references.push(reference.clone());
         if let Some(cache) = &self.cache {
             self.resident.push(ObjectBatch {
@@ -259,6 +308,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
                 reference,
                 rows: super::format::row_count(&blocks)?,
                 blocks: Arc::new(blocks),
+                packs: Arc::new(packs),
                 cache: cache.clone(),
             });
         }

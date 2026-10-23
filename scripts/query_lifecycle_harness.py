@@ -18,6 +18,23 @@ from worker_harness import Worker, harness_arguments
 from harness_control import admin
 
 
+def verify_packed_root(root, get):
+    content = get(root['path'])
+    assert hashlib.sha256(content).hexdigest() == root['hash']
+    index = json.loads(content)
+    packs = []
+    for pack in index['packs']:
+        data = get(root['namespace']+'/'+pack['path'])
+        assert len(data) == pack['bytes']
+        assert hashlib.sha256(data).hexdigest() == pack['hash']
+        packs.append(data)
+    for block in index['blocks']:
+        start = block['offset']
+        data = packs[block['pack']][start:start+block['length']]
+        assert len(data) == block['length']
+        assert hashlib.sha256(data).hexdigest() == block['hash']
+
+
 def configured(fixture):
     return fixture.config()
 
@@ -153,13 +170,7 @@ def retire(command, fixture, config, validated):
     assert inspect(command, fixture, 'status', config)['state'] == 'dropped'
     assert 'query removal is pending or complete' in rejected(command, fixture, 'restart', config)
     for root in roots:
-        content = get(root['path'])
-        index_bytes = content
-        assert hashlib.sha256(index_bytes).hexdigest() == root['hash']
-        index = json.loads(index_bytes)
-        for block in index['blocks']:
-            child = get(root['namespace']+'/'+block['path'])
-            assert hashlib.sha256(child).hexdigest() == block['hash']
+        verify_packed_root(root, get)
     fixture.sql(f"UPDATE {fixture.name}.pgderive_protections SET active=false WHERE token='external-reader'")
     inspect(command, fixture, 'drop', config)
     for root in roots:

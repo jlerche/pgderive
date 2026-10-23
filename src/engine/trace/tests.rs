@@ -76,7 +76,12 @@ async fn missing_and_corrupt_objects_fail_closed_without_cursor_movement() -> Re
     let reference = ObjectBatch::write(store.clone(), &batch, "test", 1).await?;
     let object = ObjectBatch::open(store.clone(), reference.clone(), "test").await?;
     let mut cursor = object.cursor().await?;
-    let path = Path::from(object.block_path(1).ok_or_else(|| anyhow::anyhow!("missing block"))?);
+    let path = Path::from(
+        object
+            .block_range(1)
+            .map(|(path, _)| path)
+            .ok_or_else(|| anyhow::anyhow!("missing block"))?,
+    );
     let bytes = store.get(&path).await?.bytes().await?;
     store.delete(&path).await?;
     assert!(cursor.advance().await.is_err());
@@ -86,9 +91,7 @@ async fn missing_and_corrupt_objects_fail_closed_without_cursor_movement() -> Re
     store.put(&path, bytes.clone().into()).await?;
     cursor.advance().await?;
     assert_eq!(cursor.current(), Some((&2, &2, 1)));
-    let mut corrupted = bytes.to_vec();
-    corrupted[0] ^= 1;
-    store.put(&path, corrupted.into()).await?;
+    crate::engine::tests::store::corrupt_block(store.as_ref(), &object, 1).await?;
     assert!(cursor.seek_key(&2).await.is_err());
     let root = Path::from(reference.path());
     let index = store.get(&root).await?.bytes().await?;
