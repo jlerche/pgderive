@@ -163,29 +163,20 @@ async fn bootstrap(
         &config.replication.slot,
     )
     .await?;
-    let batch = crate::source::copy(&snapshot, &contract, config.execution).await?;
+    let compiled = settings.query.compile_bound(&snapshot, &contract).await?;
+    snapshot
+        .execute(
+            "SELECT pg_catalog.set_config('statement_timeout',$1,true)",
+            &[&format!("{}s", settings.startup_timeout_secs)],
+        )
+        .await?;
+    let input =
+        read_snapshot(&snapshot, &contract, compiled.relational(), config.execution).await?;
     snapshot.commit().await?;
     export.close().await?;
     // The preliminary registration must match the exact imported source layout.
     let compiled = settings.query.compile_bound(&session.client, &contract).await?;
-    let exact = relational::build_committed(
-        &contract,
-        &compiled,
-        &EngineSettings {
-            store: config
-                .object_store
-                .as_ref()
-                .context("missing storage")?
-                .build(&settings.object_prefix)?,
-            block_rows: settings.block_rows,
-            limits: config.execution,
-            encoded_cache: None,
-        },
-    )?;
-    ensure!(
-        exact.plan().identity() == query.plan().identity(),
-        "source changed while establishing snapshot"
-    );
+    verify_snapshot_plan(config, settings, &contract, &compiled, query)?;
     let token: String = session
         .client
         .query_one("SELECT pg_catalog.gen_random_uuid()::text", &[])
@@ -196,9 +187,7 @@ async fn bootstrap(
     super::drive::emit(
         &serde_json::json!({"event":"bootstrap_upload","slot":contract.slot,"boundary":boundary.to_string()}),
     )?;
-    let prepared = query
-        .prepare_protected(relational::inputs(&batch, compiled.relational(), 1)?, &protection)
-        .await?;
+    let prepared = query.prepare_protected(input, &protection).await?;
     let checkpoint = query.prepared_checkpoint(&prepared)?;
     let deltas = relational::deltas(&prepared.output().batch, compiled.output())?;
     let sink = compiled.sink(&settings.sink_table, settings.sink_output, &settings.sink_key)?;
@@ -216,12 +205,67 @@ async fn bootstrap(
         )
         .await?;
     query.commit(prepared)?;
+    release_bootstrap(&mut session.client, catalog, query, protection, &checkpoint).await
+}
+
+async fn read_snapshot(
+    snapshot: &tokio_postgres::Transaction<'_>,
+    contract: &Contract,
+    ir: &crate::compiler::relational::Relational,
+    limits: crate::engine::execution::Limits,
+) -> Result<crate::engine::execution::SealedInput<relational::Key, crate::transaction::Row>> {
+    let mut reader = crate::source::SnapshotReader::new(snapshot, contract, limits).await?;
+    let mut input = relational::Input::new(ir, limits)?;
+    let mut rows = 0_usize;
+    while let Some(batch) = reader.next(snapshot).await? {
+        rows = rows.checked_add(batch.updates.len()).context("snapshot row count overflow")?;
+        input.append(&batch, ir)?;
+        if rows.is_multiple_of(limits.resident_entries.saturating_mul(128)) {
+            super::drive::emit(&serde_json::json!({"event":"bootstrap_progress","rows":rows}))?;
+        }
+    }
+    input.seal(1)
+}
+
+fn verify_snapshot_plan(
+    config: &Config,
+    settings: &Settings,
+    contract: &Contract,
+    compiled: &crate::compiler::Compiled,
+    query: &relational::Query,
+) -> Result<()> {
+    let exact = relational::build_committed(
+        contract,
+        compiled,
+        &EngineSettings {
+            store: config
+                .object_store
+                .as_ref()
+                .context("missing storage")?
+                .build(&settings.object_prefix)?,
+            block_rows: settings.block_rows,
+            limits: config.execution,
+            encoded_cache: None,
+        },
+    )?;
+    ensure!(
+        exact.plan().identity() == query.plan().identity(),
+        "source changed while establishing snapshot"
+    );
+    Ok(())
+}
+
+async fn release_bootstrap(
+    sql: &mut tokio_postgres::Client,
+    catalog: &Catalog,
+    query: &relational::Query,
+    protection: crate::catalog::Protection,
+    checkpoint: &crate::engine::plan::Checkpoint,
+) -> Result<()> {
     // Activation establishes fence one; claiming validates the binding and allows
     // an exact authoritative release of bootstrap PUT protection.
-    let durable = catalog
-        .load_durable(&mut session.client, query.plan())
-        .await?
-        .context("activation disappeared")?;
-    let writer = catalog.claim(&mut session.client, query.plan(), durable.binding).await?;
-    protection.published(&mut session.client, &writer, query.plan(), &checkpoint).await
+    let durable =
+        catalog.load_durable(sql, query.plan()).await?.context("activation disappeared")?;
+    let writer = catalog.claim(sql, query.plan(), durable.binding).await?;
+    protection.published(sql, &writer, query.plan(), checkpoint).await
 }

@@ -164,7 +164,7 @@ mod tests {
             let input = Batch::from_updates((0..count).map(|id| {
                 ((vec![id.to_string(), "8000000000000000".into()].into(), Row::new()), 1)
             }))?;
-            let mut work = PartitionWork::for_test(usize::try_from(count)?);
+            let mut work = PartitionWork::new(usize::try_from(count)?);
             let groups = changes(&input, &mut work)?;
             assert_eq!(work.remaining_for_test(), 0);
             assert_eq!(groups.len(), usize::try_from(count)?);

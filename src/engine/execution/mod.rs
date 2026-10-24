@@ -1,11 +1,19 @@
 //! Bounded scratch consolidation; physical spill boundaries never narrow weights.
+mod capacity;
+mod input;
+mod levels;
 mod merge;
+pub use input::{OpenInput, SealedInput};
+mod sealed;
+pub use capacity::CapacityExceeded;
+pub(crate) use sealed::group;
+pub use sealed::{Sealed, SealedCursor};
 mod record;
 
 use crate::engine::{Batch, reader::BatchData};
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-use std::{collections::BTreeMap, fs::File, io::BufWriter, path::PathBuf};
+use std::{collections::BTreeMap, fs::File, io::BufWriter};
 use tempfile::TempDir;
 
 /// Explicit per-operator work limits. Byte budgets measure serialized records;
@@ -65,7 +73,7 @@ impl Limits {
         let entries = batch.iter().count();
         ensure!(
             entries <= self.output_entries && entries <= self.contributions,
-            "input entry limit exceeded"
+            CapacityExceeded("input entry limit exceeded")
         );
         batch.encoded_size(self.record_bytes, self.output_bytes)?;
         Ok(())
@@ -116,7 +124,9 @@ pub struct Consolidator<T: BatchData> {
     entries: BTreeMap<T, Resident>,
     bytes: usize,
     contributions: usize,
-    runs: Vec<PathBuf>,
+    runs: Vec<record::Run>,
+    levels: Vec<usize>,
+    next_run: u64,
     written: u64,
     failed: bool,
 }
@@ -136,6 +146,8 @@ impl<T: BatchData> Consolidator<T> {
             bytes: 0,
             contributions: 0,
             runs: Vec::new(),
+            levels: Vec::new(),
+            next_run: 0,
             written: 0,
             failed: false,
         })
@@ -153,7 +165,10 @@ impl<T: BatchData> Consolidator<T> {
         })
     }
     fn add_inner(&mut self, tuple: T, weight: BigInt) -> Result<()> {
-        ensure!(self.contributions < self.limits.contributions, "contribution limit exceeded");
+        ensure!(
+            self.contributions < self.limits.contributions,
+            CapacityExceeded("contribution limit exceeded")
+        );
         self.contributions += 1;
         let previous = self.entries.get(&tuple);
         let next = previous.map_or_else(|| weight.clone(), |old| &old.weight + &weight);
@@ -189,8 +204,8 @@ impl<T: BatchData> Consolidator<T> {
         if self.entries.is_empty() {
             return Ok(());
         }
-        ensure!(self.runs.len() < self.limits.spill_runs, "spill run limit exceeded");
-        let path = self.directory.path().join(format!("run-{}", self.runs.len()));
+        let path = self.next_path()?;
+        let before = self.written;
         let mut writer = BufWriter::new(File::create_new(&path)?);
         for (tuple, resident) in &self.entries {
             let bytes = record::encode(tuple, &resident.weight, self.limits.record_bytes)?;
@@ -198,7 +213,15 @@ impl<T: BatchData> Consolidator<T> {
                 record::write(&mut writer, &bytes, self.written, self.limits.scratch_bytes)?;
         }
         std::io::Write::flush(&mut writer)?;
-        self.runs.push(path);
+        drop(writer);
+        self.runs.push(record::Run {
+            path,
+            bytes: self.written.checked_sub(before).context("scratch byte count decreased")?,
+        });
+        self.levels.push(0);
+        if self.runs.len() > self.limits.spill_runs {
+            self.merge_level()?;
+        }
         self.entries.clear();
         self.bytes = 0;
         Ok(())
@@ -249,11 +272,11 @@ fn finish_rows<T: BatchData>(
     for row in rows {
         let (tuple, weight, record_bytes) = row?;
         count += 1;
-        ensure!(count <= limits.output_entries, "output entry limit exceeded");
+        ensure!(count <= limits.output_entries, CapacityExceeded("output entry limit exceeded"));
         bytes = bytes
             .checked_add(u64::try_from(record_bytes)?)
             .context("output byte count overflow")?;
-        ensure!(bytes <= limits.output_bytes, "output byte limit exceeded");
+        ensure!(bytes <= limits.output_bytes, CapacityExceeded("output byte limit exceeded"));
         visit(tuple, weight, record_bytes)?;
     }
     Ok(())
@@ -289,3 +312,51 @@ impl<K: BatchData, V: BatchData> Consolidator<(K, V)> {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+impl<K: BatchData, V: BatchData> Consolidator<(K, V)> {
+    /// Seal a complete logical edge without materializing its total payload.
+    ///
+    /// # Errors
+    /// Returns scratch, integrity, capacity or final coefficient errors.
+    pub fn seal(mut self) -> Result<Sealed<K, V>> {
+        if self.runs.is_empty() {
+            return Ok(self.finish_batch()?.into());
+        }
+        let result = self.seal_disk();
+        result.with_context(|| {
+            format!("scratch retained on failure: {}", self.directory.path().display())
+        })
+    }
+    fn seal_disk(&mut self) -> Result<Sealed<K, V>> {
+        self.spill()?;
+        let mut merge = merge::Merge::<(K, V)>::open(&self.runs, self.limits.record_bytes)?;
+        let path = self.directory.path().join("sealed");
+        let before = self.written;
+        let mut writer = BufWriter::new(File::create_new(&path)?);
+        let mut entries = 0_usize;
+        while let Some((tuple, weight)) = merge.next()? {
+            let checked = i64::try_from(weight)?;
+            let bytes = record::encode(&tuple, &BigInt::from(checked), self.limits.record_bytes)?;
+            self.written =
+                record::write(&mut writer, &bytes, self.written, self.limits.scratch_bytes)?;
+            entries = entries.checked_add(1).context("sealed entry count overflow")?;
+        }
+        std::io::Write::flush(&mut writer)?;
+        for run in &self.runs {
+            std::fs::remove_file(&run.path)?;
+        }
+        if entries == 0 {
+            self.directory.disable_cleanup(false);
+            return Ok(Batch::default().into());
+        }
+        let bytes = self.written.checked_sub(before).context("scratch byte count decreased")?;
+        let replacement = tempfile::Builder::new().prefix("pgderive-sealed-move-").tempdir()?;
+        let directory = std::mem::replace(&mut self.directory, replacement);
+        Ok(Sealed::scratch(
+            directory,
+            record::Run { path, bytes },
+            entries,
+            self.limits.record_bytes,
+        ))
+    }
+}

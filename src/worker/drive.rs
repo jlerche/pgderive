@@ -98,6 +98,14 @@ async fn retry(
                         &json!({"event":"diagnostic_failure","attempt":attempts,"error":format!("{diagnostic:#}")}),
                     )?,
                 }
+                if permanent(&error) {
+                    emit(
+                        &json!({"event":"capacity_exceeded","attempt":attempts,"error":format!("{error:#}")}),
+                    )?;
+                    return Err(error.context(
+                        "permanent capacity failure; source remains at authoritative progress",
+                    ));
+                }
                 metrics.retries =
                     metrics.retries.checked_add(1).context("worker retry metric overflow")?;
                 emit(&json!({"event":"retry","attempt":attempts,"error":format!("{error:#}")}))?;
@@ -117,6 +125,15 @@ async fn retry(
             }
         }
     }
+}
+fn permanent(error: &anyhow::Error) -> bool {
+    error.is::<crate::engine::execution::CapacityExceeded>()
+        || error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::StorageFull | std::io::ErrorKind::OutOfMemory
+            )
+        })
 }
 async fn attempt(
     config: &Config,
@@ -365,7 +382,9 @@ async fn publish(
     let mut phases = super::measurements::Phases::new(measured);
     let started = Instant::now();
     let time = open.query.time().checked_add(1).context("worker logical time overflow")?;
-    let input = relational::inputs(&transaction.batch, open.compiled.relational(), time)?;
+    let mut input = relational::Input::new(open.compiled.relational(), open.replication.execution)?;
+    input.append(&transaction.batch, open.compiled.relational())?;
+    let input = input.seal(time)?;
     phases.mark("inputs");
     let mut preparation = crate::timing::Profile::new(measured);
     let prepared = match open
@@ -383,7 +402,16 @@ async fn publish(
             preparation.mark("forced_maintenance");
             open.query
                 .prepare_memtable_profiled(input, open.settings.memtable_bytes, &mut preparation)
-                .await?
+                .await
+                .map_err(|error| {
+                    if error.is::<crate::engine::plan::relational::MemtableFull>() {
+                        error.context(crate::engine::execution::CapacityExceeded(
+                            "single logical input exceeds memtable capacity after checkpoint",
+                        ))
+                    } else {
+                        error
+                    }
+                })?
         }
         Err(error) => return Err(error),
     };
@@ -425,4 +453,18 @@ pub(super) fn emit(event: &Value) -> Result<()> {
     writeln!(output)?;
     output.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod retry_tests {
+    #[test]
+    fn resource_policy_and_exhausted_storage_are_permanent_but_transient_io_is_not() {
+        use std::io::{Error, ErrorKind};
+        let capacity =
+            anyhow::Error::new(crate::engine::execution::CapacityExceeded("test budget"))
+                .context("source");
+        assert!(super::permanent(&capacity));
+        assert!(super::permanent(&anyhow::Error::new(Error::from(ErrorKind::StorageFull))));
+        assert!(!super::permanent(&anyhow::Error::new(Error::from(ErrorKind::ConnectionReset))));
+    }
 }

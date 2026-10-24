@@ -49,7 +49,7 @@ async fn copy_checks(
     )
     .await?;
     snapshot.batch_execute(&format!("SET LOCAL ROLE {role}")).await?;
-    let error = crate::source::copy(&snapshot, &contract, config.execution)
+    let error = super::copy(&snapshot, &contract, config.execution)
         .await
         .err()
         .context("RLS silently filtered bootstrap rows")?;
@@ -64,12 +64,12 @@ async fn copy_checks(
     let snapshot = export.import(reader).await?;
     let limits = crate::engine::execution::Limits { record_bytes: 8, ..config.execution };
     ensure!(
-        crate::source::copy(&snapshot, &contract, limits).await.is_err(),
+        super::copy(&snapshot, &contract, limits).await.is_err(),
         "snapshot accepted oversize encoded row"
     );
     snapshot.rollback().await?;
     let snapshot = export.import(reader).await?;
-    let batch = crate::source::copy(&snapshot, &contract, config.execution).await?;
+    let batch = super::copy(&snapshot, &contract, config.execution).await?;
     ensure!(batch.updates.len() == 3, "privileged RLS bootstrap lost rows");
     for update in &batch.updates {
         let id =

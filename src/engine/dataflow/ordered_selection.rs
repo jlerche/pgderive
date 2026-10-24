@@ -1,5 +1,5 @@
 //! Retractable ordered selection counting row occurrences, including cutoff weights.
-use super::{Project, TimedBatch};
+use super::{PartitionWork, Project, TimedBatch};
 use crate::engine::{
     Batch,
     execution::{Consolidator, Limits},
@@ -9,6 +9,7 @@ use crate::engine::{
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 use std::{collections::BTreeMap, sync::Arc};
+type SelectionPrior<'a, K, V> = (&'a TraceSnapshot<K, V>, &'a TraceSnapshot<K, V>);
 type Selection<K, V> = dyn Fn(&K, &V, usize, Limits) -> Result<Option<(K, V)>> + Send + Sync;
 /// Retractable first K row occurrences per key in physical codec order.
 /// SQL callers bind explicit ordering and the codec to durable plan identity.
@@ -64,6 +65,20 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         output: &TraceSnapshot<K, V>,
         limits: Limits,
     ) -> Result<TimedBatch<Batch<K, V>>> {
+        let mut work = PartitionWork::new(limits.contributions);
+        let mut changes = Consolidator::new(limits)?;
+        self.accumulate(input, (prior, output), limits, (&mut work, &mut changes)).await?;
+        Ok(TimedBatch { time: input.time, batch: changes.finish_batch()? })
+    }
+    pub(crate) async fn accumulate(
+        &self,
+        input: &TimedBatch<Batch<K, V>>,
+        state: SelectionPrior<'_, K, V>,
+        limits: Limits,
+        resources: super::WorkOutput<'_, K, V>,
+    ) -> Result<()> {
+        let (work, changes) = resources;
+        let (prior, output) = state;
         ensure!(
             prior.time() == output.time() && prior.time().checked_add(1) == Some(input.time),
             "out-of-order top-k tick"
@@ -74,17 +89,13 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         for ((key, value), weight) in input.batch.iter() {
             groups.entry(key.clone()).or_default().insert(value.clone(), *weight);
         }
-        let mut progress = Progress {
-            remaining: limits.contributions,
-            changes: Consolidator::new(limits)?,
-            limits,
-        };
+        let mut progress = Progress { changes, work, limits };
         for (key, delta) in groups {
             let mut cursor = output.key_cursor(&key).await?;
             let mut retained = 0usize;
             while let Some((_, value, weight)) = cursor.current() {
                 if !self.first {
-                    charge(&mut progress.remaining)?;
+                    progress.work.charge(1)?;
                 }
                 ensure!(weight > 0, "negative retained top-k membership");
                 retained = retained
@@ -96,20 +107,20 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
             }
             self.selected(prior, &key, &delta, &mut progress).await?;
         }
-        Ok(TimedBatch { time: input.time, batch: progress.changes.finish_batch()? })
+        Ok(())
     }
     async fn selected(
         &self,
         prior: &TraceSnapshot<K, V>,
         key: &K,
         delta: &BTreeMap<V, i64>,
-        progress: &mut Progress<K, V>,
+        progress: &mut Progress<'_, K, V>,
     ) -> Result<()> {
         let mut cursor = prior.key_cursor(key).await?;
         let mut changed = delta.iter().peekable();
         let mut position = 0;
         while position < self.limit {
-            charge(&mut progress.remaining)?;
+            progress.work.charge(1)?;
             let old = cursor.current().map(|(_, value, weight)| (value.clone(), weight));
             let new = changed.peek().map(|(value, weight)| ((*value).clone(), **weight));
             let Some(value) = old
@@ -137,7 +148,7 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
             let count = usize::try_from(coefficient.min(BigInt::from(self.limit - position)))?;
             for _ in 0..count {
                 if !self.first {
-                    charge(&mut progress.remaining)?;
+                    progress.work.charge(1)?;
                 }
                 position += 1;
                 if let Some(selected) = (self.select)(key, &value, position, progress.limits)? {
@@ -152,12 +163,8 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         Ok(())
     }
 }
-struct Progress<K: BatchData, V: BatchData> {
-    changes: Consolidator<(K, V)>,
-    remaining: usize,
+struct Progress<'a, K: BatchData, V: BatchData> {
+    changes: &'a mut Consolidator<(K, V)>,
+    work: &'a mut PartitionWork,
     limits: Limits,
-}
-fn charge(work: &mut usize) -> Result<()> {
-    *work = work.checked_sub(1).context("top-k tick work limit exceeded")?;
-    Ok(())
 }

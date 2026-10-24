@@ -7,7 +7,7 @@ use crate::engine::{
         relational::{Operator, Relational},
     },
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use object_store::{ObjectStore, memory::InMemory};
 use std::sync::Arc;
 
@@ -122,16 +122,16 @@ async fn reopen(settings: &Settings, checkpoint: Checkpoint) -> Result<Query> {
 #[tokio::test]
 async fn join_budget_failure_retains_complete_query_root_and_can_retry() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let mut query = query(&settings(store, Limits { output_entries: 3, ..limits() }))?;
+    let mut query = query(&settings(store, Limits { contributions: 6, ..limits() }))?;
     let before = query.snapshot();
-    let left = stream(1, [((1, 1), 1), ((1, 2), 1)])?;
+    let left = stream(1, [((1, 1), 1), ((1, 2), 1), ((1, 5), 1), ((1, 6), 1)])?;
     let right = stream(1, [((1, 3), 1), ((1, 4), 1)])?;
-    assert!(
-        query
-            .prepare(TimedBatch { time: 1, batch: tag_batches(left.batch, right.batch.clone())? })
-            .await
-            .is_err()
-    );
+    let error = query
+        .prepare(TimedBatch { time: 1, batch: tag_batches(left.batch, right.batch.clone())? })
+        .await
+        .err()
+        .context("expected join contribution limit")?;
+    assert!(error.is::<crate::engine::execution::CapacityExceeded>(), "{error:#}");
     assert!(Arc::ptr_eq(&before, &query.snapshot()));
     assert_eq!(query.time(), 0);
     let prepared = query
@@ -303,5 +303,19 @@ async fn incompatible_checkpoint_memberships_fail_before_reopening() -> Result<(
     let mut incompatible = checkpoint;
     incompatible.arrangements[0].trace.version = 2;
     assert!(reopen(&settings, incompatible).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn sealed_join_intermediate_can_exceed_materialized_batch_entries() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut query = query(&settings(store, Limits { output_entries: 3, ..limits() }))?;
+    let left = stream(1, [((1, 1), 1), ((1, 2), 1)])?;
+    let right = stream(1, [((1, 3), 1), ((1, 4), 1)])?;
+    let prepared =
+        query.prepare(TimedBatch { time: 1, batch: tag_batches(left.batch, right.batch)? }).await?;
+    assert_eq!(prepared.output().batch, Batch::from_updates([((1, vec![4, 20]), 1)])?);
+    query.commit(prepared)?;
+    assert_eq!(query.time(), 1);
     Ok(())
 }

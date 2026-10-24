@@ -2,6 +2,7 @@
 mod circuit;
 mod flush;
 mod persistence;
+mod streamed;
 use super::{Binding, Engine, Plan, Settings, State};
 use crate::{
     catalog::Protection,
@@ -96,7 +97,8 @@ impl<K: BatchData, V: BatchData> State for RelationalState<K, V> {
 pub type Prepared<K, V> = PreparedGraph<RelationalState<K, V>, Batch<K, V>>;
 /// Unpublished equivalent physical state at the same logical boundary.
 pub type Compaction<K, V> = PreparedMaintenance<RelationalState<K, V>>;
-type Runtime<K, V> = Engine<RelationalState<K, V>, Vec<Batch<K, V>>, Batch<K, V>>;
+type Runtime<K, V> =
+    Engine<RelationalState<K, V>, Vec<crate::engine::execution::Sealed<K, V>>, Batch<K, V>>;
 struct Execution<K: BatchData, V: BatchData> {
     plan: Plan,
     operators: Arc<Operators<K, V>>,
@@ -234,13 +236,15 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     pub fn cache_stats(&self) -> Result<CacheStats> {
         self.execution.cache.stats()
     }
-    fn check_inputs(&self, input: &[Batch<K, V>]) -> Result<()> {
+    fn check_inputs(&self, input: &[crate::engine::execution::Sealed<K, V>]) -> Result<()> {
         ensure!(
             input.len() == self.plan().definition().sources.len(),
             "incomplete relational source tick"
         );
         for batch in input {
-            self.execution.limits.check_batch(batch)?;
+            if let Some(batch) = batch.resident() {
+                self.execution.limits.check_batch(batch)?;
+            }
         }
         Ok(())
     }
@@ -253,50 +257,74 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     ///
     /// # Errors
     /// Returns input, tick, resource, arithmetic, callback or object errors.
-    pub async fn prepare(&self, input: TimedBatch<Vec<Batch<K, V>>>) -> Result<Prepared<K, V>> {
+    pub async fn prepare<I: Into<crate::engine::execution::Sealed<K, V>>>(
+        &self,
+        input: TimedBatch<Vec<I>>,
+    ) -> Result<Prepared<K, V>> {
+        let input = TimedBatch {
+            time: input.time,
+            batch: input.batch.into_iter().map(Into::into).collect::<Vec<_>>(),
+        };
         self.check_inputs(&input.batch)?;
-        self.engine.prepare(input).await
+        let retained = input.batch.clone();
+        let result = self.engine.prepare(input).await;
+        Self::preserve_failed_input(&retained, result)
     }
     /// Stage immutable objects under a live managed upload protection.
     ///
     /// # Errors
     /// Returns reservation, input, tick, operator or storage errors.
-    pub async fn prepare_protected(
+    pub async fn prepare_protected<I: Into<crate::engine::execution::Sealed<K, V>>>(
         &self,
-        input: TimedBatch<Vec<Batch<K, V>>>,
+        input: TimedBatch<Vec<I>>,
         protection: &Protection,
     ) -> Result<Prepared<K, V>> {
+        let input = TimedBatch {
+            time: input.time,
+            batch: input.batch.into_iter().map(Into::into).collect::<Vec<_>>(),
+        };
         self.check_inputs(&input.batch)?;
         let execution = self.execution.clone();
         let namespace = protection.namespace()?;
-        self.engine
+        let retained = input.batch.clone();
+        let result = self
+            .engine
             .prepare_using(input, move |state, input| async move {
                 execution.evaluate(state, input, circuit::Staging::Objects(Some(namespace))).await
             })
-            .await
+            .await;
+        Self::preserve_failed_input(&retained, result)
     }
     /// Prepare a transaction in memory; retained source WAL supplies crash replay.
     ///
     /// # Errors
     /// Returns input, operator or resource limit failures without changing visibility.
-    pub(crate) async fn prepare_memtable(
+    pub(crate) async fn prepare_memtable<I: Into<crate::engine::execution::Sealed<K, V>>>(
         &self,
-        input: TimedBatch<Vec<Batch<K, V>>>,
+        input: TimedBatch<Vec<I>>,
         byte_limit: usize,
     ) -> Result<Prepared<K, V>> {
         self.prepare_memtable_profiled(input, byte_limit, &mut crate::timing::Profile::new(false))
             .await
     }
-    pub(crate) async fn prepare_memtable_profiled(
+    pub(crate) async fn prepare_memtable_profiled<
+        I: Into<crate::engine::execution::Sealed<K, V>>,
+    >(
         &self,
-        input: TimedBatch<Vec<Batch<K, V>>>,
+        input: TimedBatch<Vec<I>>,
         byte_limit: usize,
         profile: &mut crate::timing::Profile,
     ) -> Result<Prepared<K, V>> {
+        let input = TimedBatch {
+            time: input.time,
+            batch: input.batch.into_iter().map(Into::into).collect::<Vec<_>>(),
+        };
         self.check_inputs(&input.batch)?;
         let execution = self.execution.clone();
         profile.mark("input_validation");
-        self.engine
+        let retained = input.batch.clone();
+        let result = self
+            .engine
             .prepare_using(input, move |state, input| async move {
                 let (candidate, output) = execution
                     .evaluate_profiled(state, input, circuit::Staging::Memory, profile)
@@ -311,7 +339,19 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                 profile.mark("memory_accounting");
                 Ok((candidate, output))
             })
-            .await
+            .await;
+        Self::preserve_failed_input(&retained, result)
+    }
+    fn preserve_failed_input(
+        input: &[crate::engine::execution::Sealed<K, V>],
+        result: Result<Prepared<K, V>>,
+    ) -> Result<Prepared<K, V>> {
+        if result.as_ref().is_err_and(|error| !error.is::<MemtableFull>()) {
+            for batch in input {
+                batch.retain_failure();
+            }
+        }
+        result
     }
     /// Install a candidate after authoritative publication when used durably.
     ///

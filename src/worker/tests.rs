@@ -361,3 +361,5 @@ fn peer_changes() -> [weighted::Batch; 4] {
 }
 
 mod fast_replay;
+
+mod sealed_input;

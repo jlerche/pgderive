@@ -80,8 +80,9 @@ async fn recover_epoch(
         open.query.time().checked_add(1) == Some(boundary.time),
         "epoch replay logical time mismatch"
     );
-    let input =
-        relational::inputs(&epoch.transaction().batch, open.compiled.relational(), boundary.time)?;
+    let mut input = relational::Input::new(open.compiled.relational(), open.replication.execution)?;
+    input.append(&epoch.transaction().batch, open.compiled.relational())?;
+    let input = input.seal(boundary.time)?;
     let work = open.query.prepare_memtable(input, open.settings.memtable_bytes).await?;
     open.query.commit(work).map(|_| ())
 }

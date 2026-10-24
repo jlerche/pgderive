@@ -56,7 +56,10 @@ impl Relation {
         let bytes = values.iter().try_fold(0_usize, |total, value| {
             total.checked_add(value.map_or(0, str::len)).context("row byte count overflow")
         })?;
-        ensure!(bytes <= limit, "source row byte limit exceeded");
+        ensure!(
+            bytes <= limit,
+            crate::engine::execution::CapacityExceeded("source row byte limit exceeded")
+        );
         Ok(self
             .columns
             .iter()
@@ -204,9 +207,17 @@ impl Decoder {
             .pending_bytes
             .checked_add(u64::try_from(bytes)?)
             .context("transaction byte count overflow")?;
-        ensure!(next_bytes <= self.limits.output_bytes, "source transaction byte limit exceeded");
+        ensure!(
+            next_bytes <= self.limits.output_bytes,
+            crate::engine::execution::CapacityExceeded("source transaction byte limit exceeded")
+        );
         let (_, changes) = self.pending.as_mut().context("row outside BEGIN/COMMIT")?;
-        ensure!(changes.len() < limit, "transaction change limit exceeded; no rows acknowledged");
+        ensure!(
+            changes.len() < limit,
+            crate::engine::execution::CapacityExceeded(
+                "transaction change limit exceeded; no rows acknowledged"
+            )
+        );
         changes.push(change);
         self.pending_bytes = next_bytes;
         Ok(())

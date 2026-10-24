@@ -2,12 +2,13 @@ use super::record;
 use crate::engine::reader::BatchData;
 use anyhow::{Result, ensure};
 use num_bigint::BigInt;
-use std::{cmp::Reverse, collections::BinaryHeap, fs::File, io::BufReader, path::PathBuf};
+use std::{cmp::Reverse, collections::BinaryHeap, fs::File, io::BufReader};
 
 struct Run<T> {
     reader: BufReader<File>,
     weight: BigInt,
     previous: Option<T>,
+    bytes: u64,
 }
 pub(super) struct Merge<T: BatchData> {
     runs: Vec<Run<T>>,
@@ -15,13 +16,14 @@ pub(super) struct Merge<T: BatchData> {
     limit: usize,
 }
 impl<T: BatchData> Merge<T> {
-    pub(super) fn open(paths: &[PathBuf], limit: usize) -> Result<Self> {
+    pub(super) fn open(paths: &[record::Run], limit: usize) -> Result<Self> {
         let mut merge = Self { runs: Vec::new(), heap: BinaryHeap::new(), limit };
         for path in paths {
             merge.runs.push(Run {
-                reader: BufReader::new(File::open(path)?),
+                reader: BufReader::new(File::open(&path.path)?),
                 weight: BigInt::default(),
                 previous: None,
+                bytes: path.bytes,
             });
             merge.advance(merge.runs.len() - 1)?;
         }
@@ -29,7 +31,9 @@ impl<T: BatchData> Merge<T> {
     }
     fn advance(&mut self, ordinal: usize) -> Result<()> {
         let run = &mut self.runs[ordinal];
-        if let Some((tuple, weight)) = record::read::<T>(&mut run.reader, self.limit)? {
+        if let Some((tuple, weight)) =
+            record::read_complete::<T>(&mut run.reader, self.limit, run.bytes)?
+        {
             ensure!(
                 run.previous.as_ref().is_none_or(|previous| previous < &tuple),
                 "noncanonical scratch run"

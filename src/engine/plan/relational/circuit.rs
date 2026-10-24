@@ -3,7 +3,7 @@ use crate::engine::{
     Batch,
     dataflow::{Join, TimedBatch, Union},
     plan::{Kind, Node, Plan},
-    reader::BatchData,
+    reader::{BatchCursor as _, BatchData, BatchReader as _},
 };
 use anyhow::{Context, Result, ensure};
 use futures_util::{StreamExt as _, stream};
@@ -11,7 +11,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
-type Values<K, V> = BTreeMap<String, Arc<Batch<K, V>>>;
+type Values<K, V> = BTreeMap<String, Arc<crate::engine::execution::Sealed<K, V>>>;
 struct ValidatedValues<'a, K: BatchData, V: BatchData> {
     batches: Values<K, V>,
     bags: BTreeMap<String, crate::engine::trace::ValidatedBag<'a, K, V>>,
@@ -93,7 +93,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
     pub(super) async fn evaluate(
         &self,
         prior: Arc<RelationalState<K, V>>,
-        input: TimedBatch<Vec<Batch<K, V>>>,
+        input: TimedBatch<Vec<crate::engine::execution::Sealed<K, V>>>,
         staging: Staging<'_>,
     ) -> Result<(RelationalState<K, V>, Batch<K, V>)> {
         self.evaluate_profiled(prior, input, staging, &mut crate::timing::Profile::new(false)).await
@@ -101,7 +101,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
     pub(super) async fn evaluate_profiled(
         &self,
         prior: Arc<RelationalState<K, V>>,
-        input: TimedBatch<Vec<Batch<K, V>>>,
+        input: TimedBatch<Vec<crate::engine::execution::Sealed<K, V>>>,
         staging: Staging<'_>,
         profile: &mut crate::timing::Profile,
     ) -> Result<(RelationalState<K, V>, Batch<K, V>)> {
@@ -122,18 +122,35 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             let batch = match node.kind {
                 Kind::Source => sources.next().context("incomplete relational input")?,
                 Kind::Join | Kind::Union | Kind::Window => {
-                    self.evaluate_binary(node, &prior, &values.batches, input.time).await?
+                    if node.kind == Kind::Join {
+                        self.join_sealed(
+                            node,
+                            &prior,
+                            TimedBatch {
+                                time: input.time,
+                                batch: (
+                                    values.batches[&node.inputs[0]].as_ref(),
+                                    values.batches[&node.inputs[1]].as_ref(),
+                                ),
+                            },
+                        )
+                        .await?
+                    } else if node.kind == Kind::Union {
+                        self.union_sealed(
+                            values.batches[&node.inputs[0]].as_ref(),
+                            values.batches[&node.inputs[1]].as_ref(),
+                        )
+                        .await?
+                    } else {
+                        self.evaluate_binary(node, &prior, &values.batches, input.time)
+                            .await?
+                            .into()
+                    }
                 }
                 _ => {
                     let parent =
                         values.batches.get(&node.inputs[0]).context("missing unary input")?;
-                    self.evaluate_unary(
-                        node,
-                        &prior,
-                        TimedBatch { time: input.time, batch: Arc::clone(parent) },
-                    )
-                    .await?
-                    .batch
+                    self.unary_sealed(node, &prior, parent, input.time).await?
                 }
             };
             values.batches.insert(node.id.clone(), Arc::new(batch));
@@ -143,7 +160,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         profile.mark("stage_arrangements");
         let output =
             values.batches.remove(&self.plan.definition().outputs[0]).context("missing output")?;
-        Ok((candidate, Arc::unwrap_or_clone(output)))
+        Ok((candidate, output.materialize(self.limits).await?))
     }
     async fn validate_input_bag<'a>(
         &self,
@@ -159,6 +176,21 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             return Ok(());
         }
         let parent = values.batches.get(&node.inputs[0]).context("missing aggregate input")?;
+        let Some(parent) = parent.resident() else {
+            if self.source_statistics.contains(&node.id) {
+                let mut cursor = parent.cursor().await?;
+                while let Some((_, _, weight)) = cursor.current() {
+                    ensure!(
+                        matches!(weight, -1 | 1),
+                        "source-key proof requires unit tuple deltas"
+                    );
+                    cursor.advance().await?;
+                }
+            } else {
+                self.validate_sealed(self.prior(&node.inputs[0], prior)?, parent, true).await?;
+            }
+            return Ok(());
+        };
         if self.source_statistics.contains(&node.id) {
             ensure!(
                 parent.iter().all(|(_, weight)| matches!(weight, -1 | 1)),
@@ -222,8 +254,20 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         values: &Values<K, V>,
         time: u64,
     ) -> Result<Batch<K, V>> {
-        let left = values.get(&node.inputs[0]).context("missing left input")?.clone();
-        let right = values.get(&node.inputs[1]).context("missing right input")?.clone();
+        let left = Arc::new(
+            values
+                .get(&node.inputs[0])
+                .context("missing left input")?
+                .materialize(self.limits)
+                .await?,
+        );
+        let right = Arc::new(
+            values
+                .get(&node.inputs[1])
+                .context("missing right input")?
+                .materialize(self.limits)
+                .await?,
+        );
         let input = TimedBatch { time, batch: (left, right) };
         if node.kind == Kind::Union {
             return Ok(Union.evaluate(&input, self.limits)?.batch);
@@ -252,59 +296,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             .await?;
         Ok(operator.evaluate_with_limits(&joined, self.limits)?.batch)
     }
-    async fn evaluate_unary(
-        &self,
-        node: &Node,
-        prior: &RelationalState<K, V>,
-        input: TimedBatch<Arc<Batch<K, V>>>,
-    ) -> Result<TimedBatch<Batch<K, V>>> {
-        let operator = self.operators.get(&node.id).context("missing unary callback")?;
-        if let Operator::Project(operator) = operator {
-            return operator.evaluate_with_limits(&input, self.limits);
-        }
-        if let Operator::Group(operator) = operator {
-            return operator
-                .evaluate(&input, self.prior(&node.inputs[0], prior)?, self.limits)
-                .await;
-        }
-        let input = TimedBatch { time: input.time, batch: (*input.batch).clone() };
-        match operator {
-            Operator::Expand(operator) => operator.evaluate(&input, self.limits),
-            Operator::Ordered(operator) => {
-                operator
-                    .evaluate(
-                        &input,
-                        self.prior(&node.inputs[0], prior)?,
-                        self.prior(&node.id, prior)?,
-                        self.limits,
-                    )
-                    .await
-            }
-            Operator::Statistics(operator) => {
-                operator.evaluate(&input, self.prior(&node.id, prior)?, self.limits).await
-            }
-            Operator::IndexedStatistics(operator) => {
-                operator.evaluate(&input, self.prior(&node.id, prior)?, self.limits).await
-            }
-            Operator::Partition(operator) if operator.supports_retained_output() => {
-                operator
-                    .evaluate_retained(
-                        &input,
-                        self.prior(&node.inputs[0], prior)?,
-                        self.prior(&node.id, prior)?,
-                        self.limits,
-                    )
-                    .await
-            }
-            Operator::Partition(operator) => {
-                operator.evaluate(&input, self.prior(&node.inputs[0], prior)?, self.limits).await
-            }
-            Operator::Join(_) | Operator::Window(_) | Operator::Project(_) | Operator::Group(_) => {
-                anyhow::bail!("binary callback bound to unary node")
-            }
-        }
-    }
-    fn prior<'a>(
+    pub(super) fn prior<'a>(
         &self,
         node: &str,
         state: &'a RelationalState<K, V>,
@@ -322,7 +314,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         &self,
         node: &str,
         prior: &RelationalState<K, V>,
-        delta: TimedBatch<&Batch<K, V>>,
+        delta: TimedBatch<&crate::engine::execution::Sealed<K, V>>,
         policy: StagePolicy<'_, '_, K, V>,
     ) -> Result<Option<Replacement<K, V>>> {
         let StagePolicy { staging, proof } = policy;
@@ -336,6 +328,25 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             writer = writer.with_namespace(namespace);
         }
         let prior = &prior.entries.get(&member.id).context("missing prior state")?.trace;
+        let Some(batch) = delta.batch.resident() else {
+            self.validate_sealed(prior, delta.batch, false).await?;
+            if matches!(staging, Staging::Memory) {
+                let batch = delta.batch.materialize(self.limits).await?;
+                let trace = prior.append_validated(
+                    crate::engine::trace::Run::Memory(Arc::new(batch)),
+                    delta.time,
+                )?;
+                return Ok(Some((
+                    member.id.clone(),
+                    Entry { schema: member.schema.clone(), trace },
+                )));
+            }
+            let mut cursor = delta.batch.cursor().await?;
+            let runs = writer.upload_cursor(&mut cursor).await?;
+            let trace = prior.append_runs_validated(runs, delta.time)?;
+            return Ok(Some((member.id.clone(), Entry { schema: member.schema.clone(), trace })));
+        };
+        let delta = TimedBatch { time: delta.time, batch: batch.as_ref() };
         if let Some(proof) = proof {
             ensure!(proof.matches(prior, delta.batch), "validated batch boundary mismatch");
             ensure!(

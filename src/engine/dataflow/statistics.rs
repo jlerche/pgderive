@@ -3,14 +3,14 @@ mod ordered;
 use super::TimedBatch;
 use crate::engine::{
     Batch,
-    execution::{Consolidator, Limits},
+    execution::Limits,
     reader::BatchData,
     trace::{KeyProbes, TraceSnapshot},
     value::Decoded,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use num_bigint::BigInt;
-use std::{borrow::Borrow, collections::BTreeMap, sync::Arc};
+use std::{borrow::Borrow, sync::Arc};
 type Decode<V> = dyn Fn(&V) -> Result<Decoded<Vec<BigInt>>> + Send + Sync;
 type Measure<K, V> = dyn Fn(&K, &V) -> Result<Vec<BigInt>> + Send + Sync;
 type Encode<K, V> = dyn Fn(&K, &[BigInt]) -> Result<Option<V>> + Send + Sync;
@@ -79,51 +79,7 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order statistics tick");
         ensure!((1..=129).contains(&self.width), "statistics width unsupported");
         limits.check_batch(input.batch.borrow())?;
-        if self.width <= limits.resident_entries
-            && self
-                .width
-                .checked_mul(limits.record_bytes)
-                .is_some_and(|bytes| bytes <= limits.resident_bytes)
-        {
-            return self.evaluate_ordered(input, prior, limits).await;
-        }
-        let mut contributions = Consolidator::new(limits)?;
-        for ((key, row), weight) in input.batch.borrow().iter() {
-            let values = (self.measure)(key, row)?;
-            ensure!(values.len() == self.width, "statistics measure width mismatch");
-            for (column, value) in values.into_iter().enumerate() {
-                contributions.add((key.clone(), column), value * weight)?;
-            }
-        }
-        let mut totals = BTreeMap::<K, Vec<BigInt>>::new();
-        contributions.finish(|(key, column), value| {
-            let total = totals.entry(key).or_insert_with(|| vec![BigInt::from(0); self.width]);
-            *total.get_mut(column).context("statistics column out of range")? += value;
-            Ok(())
-        })?;
-        let mut changes = Consolidator::new(limits)?;
-        let mut probes = prior.probes();
-        for (key, mut total) in totals {
-            let before = read(&mut probes, &key).await?;
-            if let Some(before) = &before {
-                let values = (self.decode)(before)?;
-                ensure!(values.len() == self.width, "persisted statistics width mismatch");
-                for (total, value) in total.iter_mut().zip(values.iter()) {
-                    *total += value;
-                }
-            }
-            let after = (self.encode)(&key, &total)?;
-            if before == after {
-                continue;
-            }
-            if let Some(before) = before {
-                changes.add((key.clone(), before), -1)?;
-            }
-            if let Some(after) = after {
-                changes.add((key, after), 1)?;
-            }
-        }
-        Ok(TimedBatch { time: input.time, batch: changes.finish_batch()? })
+        self.evaluate_ordered(input, prior, limits).await
     }
 }
 async fn read<K: BatchData, V: BatchData>(

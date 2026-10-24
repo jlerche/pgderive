@@ -340,11 +340,24 @@ async fn snapshot_copy(
     sql.batch_execute(&format!("BEGIN; INSERT INTO {schema}.person VALUES(1001,'after snapshot'); UPDATE {schema}.person SET name='changed after snapshot' WHERE id=999; DELETE FROM {schema}.person WHERE id=1001; UPDATE {schema}.auction SET category=123 WHERE id=1; UPDATE {schema}.bid SET price=7 WHERE id=3; COMMIT")).await?;
     let model = source_state(&snapshot, schema).await?;
     ensure!(model == baseline, "snapshot copy included post-boundary writes");
-    let batch = crate::source::copy(&snapshot, &contract, config.execution).await?;
+    let batch = copy(&snapshot, &contract, config.execution).await?;
     snapshot.commit().await?;
     export.close().await?;
     drop(reader);
     task.await.context("snapshot SQL driver failed")??;
     super::evaluation::check(sql, &fixture.schema, &contract).await?;
     Ok((contract, model, batch))
+}
+
+async fn copy(
+    sql: &tokio_postgres::Transaction<'_>,
+    contract: &Contract,
+    limits: crate::engine::execution::Limits,
+) -> Result<crate::weighted::Batch> {
+    let mut reader = crate::source::SnapshotReader::new(sql, contract, limits).await?;
+    let mut output = crate::weighted::Batch { updates: Vec::new() };
+    while let Some(mut batch) = reader.next(sql).await? {
+        output.updates.append(&mut batch.updates);
+    }
+    Ok(output)
 }

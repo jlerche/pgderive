@@ -192,8 +192,8 @@ fn controller_bounds_exploration_and_uses_freshness_slack() -> Result<()> {
     assert_eq!(controller.decision(&epoch).reason, "amortized");
     Ok(())
 }
-#[test]
-fn epoch_union_keeps_full_tuple_identity_and_cancels_signed_rows() -> Result<()> {
+#[tokio::test]
+async fn epoch_union_keeps_full_tuple_identity_and_cancels_signed_rows() -> Result<()> {
     let contract = crate::worker::tests::contract();
     let compiled =
         crate::compiler::compile("SELECT id, auction, price FROM source.bid", &contract)?;
@@ -207,8 +207,9 @@ fn epoch_union_keeps_full_tuple_identity_and_cancels_signed_rows() -> Result<()>
         compiled.relational(),
         1,
     )?;
-    assert_eq!(input.batch[0].iter().count(), 1);
-    assert_eq!(input.batch[0].iter().next().map(|(_, w)| *w), Some(1));
+    let batch = input.batch[0].materialize(Limits::default()).await?;
+    assert_eq!(batch.iter().count(), 1);
+    assert_eq!(batch.iter().next().map(|(_, weight)| *weight), Some(1));
     Ok(())
 }
 

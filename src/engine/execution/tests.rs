@@ -251,3 +251,32 @@ fn occupied_spill_rechecks_the_new_representative_size() -> Result<()> {
     assert!(weights.finish_batch().is_err());
     Ok(())
 }
+
+#[test]
+fn intermediate_spill_truncation_fails_before_finalization() -> Result<()> {
+    use anyhow::Context as _;
+    use std::{fs::File, io::Read as _};
+    for fanin in [2, 128] {
+        for seal in [false, true] {
+            let mut builder = Consolidator::new(Limits { spill_runs: fanin, ..limits(1) })?;
+            for key in 0..20 {
+                builder.add((key, key), 1)?;
+            }
+            let directory = builder.directory.path().to_path_buf();
+            let run = builder.runs.first().context("fixture did not spill")?;
+            let mut length = [0; 4];
+            File::open(&run.path)?.read_exact(&mut length)?;
+            let first = 36 + u64::from(u32::from_le_bytes(length));
+            let boundary = if first < run.bytes { first } else { 0 };
+            std::fs::OpenOptions::new().write(true).open(&run.path)?.set_len(boundary)?;
+            if seal {
+                assert!(builder.seal().is_err());
+            } else {
+                assert!(builder.finish_batch().is_err());
+            }
+            assert!(directory.exists());
+            std::fs::remove_dir_all(directory)?;
+        }
+    }
+    Ok(())
+}

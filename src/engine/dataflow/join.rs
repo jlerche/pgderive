@@ -46,41 +46,39 @@ impl Join {
         priors: Priors<'_, K, L, R>,
         limits: Limits,
     ) -> Result<TimedBatch<Joined<K, L, R>>> {
+        let mut output = Consolidator::new(limits)?;
+        self.accumulate(inputs, priors, (limits, &mut output)).await?;
+        Ok(TimedBatch { time: inputs.0.time, batch: output.finish_batch()? })
+    }
+    pub(crate) async fn accumulate<
+        K: BatchData,
+        L: BatchData,
+        R: BatchData,
+        LB: Borrow<Batch<K, L>> + Sync,
+        RB: Borrow<Batch<K, R>> + Sync,
+    >(
+        &self,
+        inputs: Inputs<'_, LB, RB>,
+        priors: Priors<'_, K, L, R>,
+        resources: (Limits, &mut JoinWeights<K, L, R>),
+    ) -> Result<()> {
         let (left, right) = inputs;
         let (prior_left, prior_right) = priors;
+        let (limits, output) = resources;
         ensure!(
             left.time == right.time
                 && prior_left.time() == prior_right.time()
                 && prior_left.time().checked_add(1) == Some(left.time),
             "inconsistent join boundary"
         );
-        Ok(TimedBatch {
-            time: left.time,
-            batch: join_bounded(
-                left.batch.borrow(),
-                right.batch.borrow(),
-                prior_left,
-                prior_right,
-                limits,
-            )
-            .await?,
-        })
+        let left = left.batch.borrow();
+        let right = right.batch.borrow();
+        limits.check_batch(left)?;
+        limits.check_batch(right)?;
+        prior_join(left, prior_right, output, |left, right| (left.clone(), right.clone())).await?;
+        prior_join(right, prior_left, output, |right, left| (left.clone(), right.clone())).await?;
+        cross(left, right, output)
     }
-}
-async fn join_bounded<K: BatchData, L: BatchData, R: BatchData>(
-    left: &Batch<K, L>,
-    right: &Batch<K, R>,
-    prior_left: &TraceSnapshot<K, L>,
-    prior_right: &TraceSnapshot<K, R>,
-    limits: Limits,
-) -> Result<Joined<K, L, R>> {
-    limits.check_batch(left)?;
-    limits.check_batch(right)?;
-    let mut output = Consolidator::new(limits)?;
-    prior_join(left, prior_right, &mut output, |left, right| (left.clone(), right.clone())).await?;
-    prior_join(right, prior_left, &mut output, |right, left| (left.clone(), right.clone())).await?;
-    cross(left, right, &mut output)?;
-    output.finish_batch()
 }
 
 // Delta identities are ordered by key, then full value. Scan each selected prior

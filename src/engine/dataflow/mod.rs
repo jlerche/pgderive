@@ -106,3 +106,5 @@ mod indexed_statistics;
 pub use indexed_statistics::IndexedStatistics;
 mod binary;
 pub use binary::{Binary, BinaryFuture, BinaryInput};
+
+pub(crate) use partition::WorkOutput;

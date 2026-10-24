@@ -53,7 +53,7 @@ fn input(length: usize, weighted: bool) -> Result<Bag> {
     Bag::from_updates(updates)
 }
 fn run(spec: &Partition, bag: &Bag, sliding: bool) -> Result<(Bag, usize)> {
-    let mut work = PartitionWork::for_test(BUDGET);
+    let mut work = PartitionWork::new(BUDGET);
     let limits = Limits { contributions: BUDGET, ..Limits::default() };
     let frames = if sliding { Frames::new(spec) } else { Frames::scan() };
     let result = match &spec.mode {
@@ -107,7 +107,7 @@ fn sliding_large_prefix_has_linear_charged_work_and_identical_output() -> Result
 #[test]
 fn insufficient_work_budget_still_rejects() -> Result<()> {
     let spec = spec("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", false)?;
-    let mut work = PartitionWork::for_test(1);
+    let mut work = PartitionWork::new(1);
     assert!(evaluate(&spec, &input(10, false)?, (Limits::default(), &mut work)).is_err());
     Ok(())
 }

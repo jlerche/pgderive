@@ -39,3 +39,20 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Expand<K, V, A, B> 
         Ok(TimedBatch { time: input.time, batch: output.finish_batch()? })
     }
 }
+
+impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Expand<K, V, A, B> {
+    pub(crate) async fn evaluate_sealed(
+        &self,
+        input: &crate::engine::execution::Sealed<K, V>,
+        limits: Limits,
+    ) -> Result<crate::engine::execution::Sealed<A, B>> {
+        use crate::engine::reader::{BatchCursor as _, BatchReader as _};
+        let mut cursor = input.cursor().await?;
+        let mut output = Consolidator::new(limits)?;
+        while let Some((key, value, weight)) = cursor.current() {
+            (self.map)(key, value, &mut |tuple| output.add(tuple, weight))?;
+            cursor.advance().await?;
+        }
+        output.seal()
+    }
+}

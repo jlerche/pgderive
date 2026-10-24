@@ -66,7 +66,7 @@ async fn stopped_cursor_validates_changed_tail_and_ignores_hot_group_size() -> R
                 let first = after.next(work).await?;
                 assert_eq!(first, Some((0, 1)));
                 // Resource failure preserves cursor position for a retry.
-                let mut exhausted = PartitionWork::for_test(0);
+                let mut exhausted = PartitionWork::new(0);
                 assert!(after.next(&mut exhausted).await.is_err());
                 assert_eq!(after.next(work).await?, Some((1, 1)));
                 Batch::from_updates([])

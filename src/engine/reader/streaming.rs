@@ -186,7 +186,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         let bytes = bounded::encode(&row)?.len();
         ensure!(
             bytes.checked_add(2).is_some_and(|bytes| bytes <= self.limits.block_bytes),
-            "streaming row exceeds block byte limit"
+            crate::engine::execution::CapacityExceeded("streaming row exceeds block byte limit")
         );
         let comma = usize::from(!self.rows.is_empty());
         let next = self
@@ -288,7 +288,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         }
         ensure!(
             self.references.len() < self.limits.output_roots,
-            "streaming output root limit exceeded"
+            crate::engine::execution::CapacityExceeded("streaming output root limit exceeded")
         );
         self.flush_pack().await?;
         let packs = std::mem::take(&mut self.packs);

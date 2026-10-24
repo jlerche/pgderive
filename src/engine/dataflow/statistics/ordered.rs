@@ -19,7 +19,10 @@ struct Budget {
 }
 impl Budget {
     fn add<K: BatchData>(&mut self, key: &K, column: usize, value: &BigInt) -> Result<()> {
-        ensure!(self.contributions < self.limits.contributions, "contribution limit exceeded");
+        ensure!(
+            self.contributions < self.limits.contributions,
+            crate::engine::execution::CapacityExceeded("contribution limit exceeded")
+        );
         self.contributions += 1;
         weight_size(&(key, column), value, self.limits.record_bytes)?;
         Ok(())
@@ -29,7 +32,10 @@ impl Budget {
             values.iter().enumerate().filter(|(_, value)| **value != BigInt::default())
         {
             self.entries = self.entries.checked_add(1).context("output entry count overflow")?;
-            ensure!(self.entries <= self.limits.output_entries, "output entry limit exceeded");
+            ensure!(
+                self.entries <= self.limits.output_entries,
+                crate::engine::execution::CapacityExceeded("output entry limit exceeded")
+            );
             self.bytes = self
                 .bytes
                 .checked_add(u64::try_from(weight_size(
@@ -38,7 +44,10 @@ impl Budget {
                     self.limits.record_bytes,
                 )?)?)
                 .context("output byte count overflow")?;
-            ensure!(self.bytes <= self.limits.output_bytes, "output byte limit exceeded");
+            ensure!(
+                self.bytes <= self.limits.output_bytes,
+                crate::engine::execution::CapacityExceeded("output byte limit exceeded")
+            );
         }
         Ok(())
     }
@@ -50,28 +59,47 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         prior: &TraceSnapshot<K, S>,
         limits: Limits,
     ) -> Result<TimedBatch<Batch<K, S>>> {
-        let mut rows = input.batch.borrow().iter().peekable();
+        let sealed = crate::engine::execution::Sealed::from(input.batch.borrow().clone());
+        Ok(TimedBatch {
+            time: input.time,
+            batch: self.evaluate_sealed(&sealed, prior, limits).await?.materialize(limits).await?,
+        })
+    }
+    pub(crate) async fn evaluate_sealed(
+        &self,
+        input: &crate::engine::execution::Sealed<K, V>,
+        prior: &TraceSnapshot<K, S>,
+        limits: Limits,
+    ) -> Result<crate::engine::execution::Sealed<K, S>> {
+        use crate::engine::reader::{BatchCursor as _, BatchReader as _};
+        ensure!((1..=129).contains(&self.width), "statistics width unsupported");
+        let mut rows = input.cursor().await?;
         let mut budget = Budget { limits, contributions: 0, entries: 0, bytes: 0 };
         let mut changes = Consolidator::new(limits)?;
         let mut probes = prior.probes();
         let mut totals = vec![BigInt::default(); self.width];
-        while let Some(((key, _), _)) = rows.peek().copied() {
+        while let Some((key, _, _)) = rows.current() {
+            let key = key.clone();
             for total in &mut totals {
                 total.clone_from(&BigInt::default());
             }
-            while let Some(((found, row), weight)) = rows.next_if(|((found, _), _)| found == key) {
+            while let Some((found, row, weight)) = rows.current() {
+                if *found != key {
+                    break;
+                }
                 let values = (self.measure)(found, row)?;
                 ensure!(values.len() == self.width, "statistics measure width mismatch");
                 for (column, (total, value)) in totals.iter_mut().zip(values).enumerate() {
-                    *total += value * *weight;
-                    budget.add(key, column, total)?;
+                    *total += value * weight;
+                    budget.add(&key, column, total)?;
                 }
+                rows.advance().await?;
             }
-            budget.finish(key, &totals)?;
+            budget.finish(&key, &totals)?;
             if totals.iter().all(|value| *value == BigInt::default()) {
                 continue;
             }
-            let before = read(&mut probes, key).await?;
+            let before = read(&mut probes, &key).await?;
             if let Some(before) = &before {
                 let values = (self.decode)(before)?;
                 ensure!(values.len() == self.width, "persisted statistics width mismatch");
@@ -79,7 +107,7 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
                     *total += value;
                 }
             }
-            let after = (self.encode)(key, &totals)?;
+            let after = (self.encode)(&key, &totals)?;
             if before == after {
                 continue;
             }
@@ -90,6 +118,6 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
                 changes.add((key.clone(), after), 1)?;
             }
         }
-        Ok(TimedBatch { time: input.time, batch: changes.finish_batch()? })
+        changes.seal()
     }
 }

@@ -13,11 +13,7 @@ pub struct PartitionWork {
     remaining: usize,
 }
 impl PartitionWork {
-    pub(super) const fn new(remaining: usize) -> Self {
-        Self { remaining }
-    }
-    #[cfg(test)]
-    pub(crate) const fn for_test(remaining: usize) -> Self {
+    pub(crate) const fn new(remaining: usize) -> Self {
         Self { remaining }
     }
     #[cfg(test)]
@@ -29,11 +25,14 @@ impl PartitionWork {
     /// # Errors
     /// Rejects work exceeding the configured complete operator-tick budget.
     pub fn charge(&mut self, amount: usize) -> Result<()> {
-        self.remaining =
-            self.remaining.checked_sub(amount).context("partition tick work limit exceeded")?;
+        self.remaining = self.remaining.checked_sub(amount).context(
+            crate::engine::execution::CapacityExceeded("partition tick work limit exceeded"),
+        )?;
         Ok(())
     }
 }
+pub type WorkOutput<'a, K, V> = (&'a mut PartitionWork, &'a mut Consolidator<(K, V)>);
+type PartitionPrior<'a, K, V> = (&'a TraceSnapshot<K, V>, Option<&'a TraceSnapshot<K, V>>);
 type Transform<K, V> =
     dyn Fn(&K, &Batch<(), V>, &mut PartitionWork) -> Result<Batch<(), V>> + Send + Sync;
 /// Pure group transformation, differentiated at each complete input boundary.
@@ -93,8 +92,6 @@ impl<K: BatchData, V: BatchData> Partition<K, V> {
         output: &TraceSnapshot<K, V>,
         limits: Limits,
     ) -> Result<TimedBatch<Batch<K, V>>> {
-        ensure!(self.zero_preserving, "retained partition requires zero-preserving callback");
-        ensure!(prior.time() == output.time(), "partition prior trace times differ");
         self.evaluate_with_output(input, prior, Some(output), limits).await
     }
     /// Recompute only affected partitions and emit new output minus prior output.
@@ -116,16 +113,32 @@ impl<K: BatchData, V: BatchData> Partition<K, V> {
         retained: Option<&TraceSnapshot<K, V>>,
         limits: Limits,
     ) -> Result<TimedBatch<Batch<K, V>>> {
+        let mut work = PartitionWork::new(limits.contributions);
+        let mut output = Consolidator::new(limits)?;
+        self.accumulate(input, (prior, retained), limits, (&mut work, &mut output)).await?;
+        Ok(TimedBatch { time: input.time, batch: output.finish_batch()? })
+    }
+    pub(crate) async fn accumulate(
+        &self,
+        input: &TimedBatch<Batch<K, V>>,
+        state: PartitionPrior<'_, K, V>,
+        limits: Limits,
+        resources: WorkOutput<'_, K, V>,
+    ) -> Result<()> {
+        let (work, updates) = resources;
+        let (prior, retained) = state;
+        if let Some(output) = retained {
+            ensure!(self.zero_preserving, "retained partition requires zero-preserving callback");
+            ensure!(prior.time() == output.time(), "partition prior trace times differ");
+        }
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order partition tick");
         limits.check_batch(&input.batch)?;
         let mut changes = BTreeMap::<K, Vec<(((), V), i64)>>::new();
         for ((key, row), weight) in input.batch.iter() {
             changes.entry(key.clone()).or_default().push((((), row.clone()), *weight));
         }
-        let mut work = PartitionWork { remaining: limits.contributions };
-        let mut updates = Consolidator::new(limits)?;
         for (key, changes) in changes {
-            let before = read(prior, &key, limits, &mut work).await?;
+            let before = read(prior, &key, limits, work).await?;
             work.charge(changes.len())?;
             let after = Batch::from_updates(
                 before.iter().map(|(tuple, weight)| (tuple.clone(), *weight)).chain(changes),
@@ -136,16 +149,16 @@ impl<K: BatchData, V: BatchData> Partition<K, V> {
                 "negative partition row multiplicity"
             );
             let old_output = if let Some(retained) = retained {
-                let output = read(retained, &key, limits, &mut work).await?;
+                let output = read(retained, &key, limits, work).await?;
                 ensure!(
                     before.iter().next().is_some() || output.iter().next().is_none(),
                     "retained output for empty partition"
                 );
                 output
             } else {
-                (self.transform)(&key, &before, &mut work)?
+                (self.transform)(&key, &before, work)?
             };
-            let new_output = (self.transform)(&key, &after, &mut work)?;
+            let new_output = (self.transform)(&key, &after, work)?;
             for output in [&old_output, &new_output] {
                 limits.check_batch(output)?;
                 ensure!(
@@ -164,9 +177,7 @@ impl<K: BatchData, V: BatchData> Partition<K, V> {
                 updates.add((key.clone(), value.clone()), *weight)?;
             }
         }
-        let batch = updates.finish_batch()?;
-        limits.check_batch(&batch)?;
-        Ok(TimedBatch { time: input.time, batch })
+        Ok(())
     }
 }
 async fn read<K: BatchData, V: BatchData>(
@@ -183,7 +194,7 @@ async fn read<K: BatchData, V: BatchData>(
         ensure!(weight > 0, "negative prior partition multiplicity");
         ensure!(
             rows.len() < limits.output_entries && rows.len() < limits.contributions,
-            "partition entry limit exceeded"
+            crate::engine::execution::CapacityExceeded("partition entry limit exceeded")
         );
         bytes = bytes
             .checked_add(u64::try_from(crate::engine::execution::record_size(
@@ -191,7 +202,10 @@ async fn read<K: BatchData, V: BatchData>(
                 limits.record_bytes,
             )?)?)
             .context("partition byte overflow")?;
-        ensure!(bytes <= limits.output_bytes, "partition byte limit exceeded");
+        ensure!(
+            bytes <= limits.output_bytes,
+            crate::engine::execution::CapacityExceeded("partition byte limit exceeded")
+        );
         rows.insert(((), value.clone()), weight);
         cursor.advance().await?;
     }

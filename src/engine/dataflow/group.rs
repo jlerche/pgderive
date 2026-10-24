@@ -127,6 +127,19 @@ impl<K: BatchData, V: BatchData> Group<K, V> {
         prior: &TraceSnapshot<K, V>,
         limits: Limits,
     ) -> Result<TimedBatch<Batch<K, V>>> {
+        let mut work = PartitionWork::new(limits.contributions);
+        let mut output = Consolidator::new(limits)?;
+        self.accumulate(input, prior, limits, (&mut work, &mut output)).await?;
+        Ok(TimedBatch { time: input.time, batch: output.finish_batch()? })
+    }
+    pub(crate) async fn accumulate<B: Borrow<Batch<K, V>> + Sync>(
+        &self,
+        input: &TimedBatch<B>,
+        prior: &TraceSnapshot<K, V>,
+        limits: Limits,
+        resources: super::WorkOutput<'_, K, V>,
+    ) -> Result<()> {
+        let (work, output) = resources;
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order group tick");
         limits.check_batch(input.batch.borrow())?;
         prior.validate_bag_delta(input.batch.borrow()).await?;
@@ -134,19 +147,17 @@ impl<K: BatchData, V: BatchData> Group<K, V> {
         for ((key, value), weight) in input.batch.borrow().iter() {
             groups.entry(key.clone()).or_default().push((((), value.clone()), *weight));
         }
-        let mut work = PartitionWork::new(limits.contributions);
-        let mut output = Consolidator::new(limits)?;
         for (key, changes) in groups {
             work.charge(changes.len())?;
             let delta = Batch::from_updates(changes)?;
             let result =
-                (self.transform)(GroupInput { key: &key, delta: &delta, prior, limits }, &mut work)
+                (self.transform)(GroupInput { key: &key, delta: &delta, prior, limits }, work)
                     .await?;
             limits.check_batch(&result)?;
             for (((), value), weight) in result.iter() {
                 output.add((key.clone(), value.clone()), *weight)?;
             }
         }
-        Ok(TimedBatch { time: input.time, batch: output.finish_batch()? })
+        Ok(())
     }
 }

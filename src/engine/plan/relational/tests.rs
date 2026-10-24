@@ -177,7 +177,7 @@ async fn wrong_source_arity_rejects_before_any_staged_objects() -> Result<()> {
                 .execution
                 .evaluate(
                     query.snapshot(),
-                    TimedBatch { time: 1, batch },
+                    TimedBatch { time: 1, batch: batch.into_iter().map(Into::into).collect() },
                     super::circuit::Staging::Objects(None)
                 )
                 .await
@@ -356,3 +356,6 @@ async fn memtable_preserves_join_cross_terms_duplicates_and_flushes_to_reopenabl
     assert!(store.puts.load(Ordering::SeqCst) > 0);
     Ok(())
 }
+
+#[path = "tests/work_budget.rs"]
+mod work_budget;

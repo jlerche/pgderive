@@ -20,7 +20,7 @@ use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 pub(in crate::worker) type Key = crate::engine::value::Value<Vec<String>>;
-type Inputs = TimedBatch<Vec<Batch<Key, Row>>>;
+type Inputs = TimedBatch<Vec<crate::engine::execution::Sealed<Key, Row>>>;
 pub(in crate::worker) type Query = Circuit<Key, Row>;
 #[cfg(test)]
 pub(in crate::worker) fn build(
@@ -298,36 +298,59 @@ fn declared_plan(
         outputs: vec![output.clone()],
     })
 }
+pub(in crate::worker) struct Input {
+    pending: crate::engine::execution::OpenInput<Key, Row>,
+}
+impl Input {
+    pub(in crate::worker) fn new(
+        ir: &Relational,
+        limits: crate::engine::execution::Limits,
+    ) -> Result<Self> {
+        let count = ir.nodes.iter().filter(|node| matches!(node, Node::Source { .. })).count();
+        Ok(Self { pending: crate::engine::execution::OpenInput::new(count, limits)? })
+    }
+    pub(in crate::worker) fn append(
+        &mut self,
+        batch: &weighted::Batch,
+        ir: &Relational,
+    ) -> Result<()> {
+        for (ordinal, source) in ir
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                Node::Source { source, .. } => Some(*source),
+                _ => None,
+            })
+            .enumerate()
+        {
+            let relation = ir.sources.get(source).context("missing relational source")?;
+            for update in &batch.updates {
+                if update.tuple.schema == relation.schema && update.tuple.table == relation.table {
+                    let row = update
+                        .tuple
+                        .row
+                        .iter()
+                        .map(|(name, value)| (field(source, name), value.clone()))
+                        .collect();
+                    self.pending.push(ordinal, Key::new(), row, update.weight)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(in crate::worker) fn seal(self, time: u64) -> Result<Inputs> {
+        self.pending.seal(time)
+    }
+}
+#[cfg(test)]
 pub(in crate::worker) fn inputs(
     batch: &weighted::Batch,
     ir: &Relational,
     time: u64,
 ) -> Result<Inputs> {
-    let mut inputs = Vec::new();
-    for node in &ir.nodes {
-        if let Node::Source { source, .. } = node {
-            let relation = ir.sources.get(*source).context("missing relational source")?;
-            inputs.push(Batch::from_updates(
-                batch
-                    .updates
-                    .iter()
-                    .filter(|update| {
-                        update.tuple.schema == relation.schema
-                            && update.tuple.table == relation.table
-                    })
-                    .map(|update| {
-                        let row = update
-                            .tuple
-                            .row
-                            .iter()
-                            .map(|(name, value)| (field(*source, name), value.clone()))
-                            .collect();
-                        ((Key::new(), row), update.weight)
-                    }),
-            )?);
-        }
-    }
-    Ok(TimedBatch { time, batch: inputs })
+    let mut input = Input::new(ir, crate::engine::execution::Limits::default())?;
+    input.append(batch, ir)?;
+    input.seal(time)
 }
 pub(in crate::worker) fn deltas(batch: &Batch<Key, Row>, output: &Projected) -> Result<Deltas> {
     let updates = batch

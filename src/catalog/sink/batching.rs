@@ -37,7 +37,9 @@ pub(super) async fn apply(
         rows.iter().try_fold(0_u64, |total, (_, delta)| total.checked_add(delta.unsigned_abs()));
     ensure!(
         work.is_some_and(|count| count <= 1_000_000),
-        "result occurrence publication limit exceeded (1000000)"
+        crate::engine::execution::CapacityExceeded(
+            "result occurrence publication limit exceeded (1000000)"
+        )
     );
     if !sink.primary_key.is_empty() {
         return super::keyed::apply(tx, table, sink, rows).await;

@@ -185,16 +185,20 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         Ok(())
     }
     pub(crate) fn append_validated(&self, run: Run<K, V>, time: u64) -> Result<Self> {
+        self.append_runs_validated(vec![run], time)
+    }
+    pub(crate) fn append_runs_validated(&self, added: Vec<Run<K, V>>, time: u64) -> Result<Self> {
         ensure!(self.time.checked_add(1) == Some(time), "out-of-order trace tick");
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
-        let memory_bytes = self
-            .memory_bytes
-            .checked_add(memory_run_charge(&run)?)
-            .context("memtable charge overflow")?;
+        let memory_bytes = added.iter().try_fold(self.memory_bytes, |bytes, run| {
+            bytes.checked_add(memory_run_charge(run)?).context("memtable charge overflow")
+        })?;
         let mut runs = self.runs.clone();
         let mut spans = self.spans.clone();
-        spans.push(matches!(&run, Run::Memory(_)).then_some(memory::Span::new(time)));
-        runs.push(run);
+        for run in added {
+            spans.push(matches!(&run, Run::Memory(_)).then_some(memory::Span::new(time)));
+            runs.push(run);
+        }
         let mut next =
             Self { runs, spans, sealed_time: self.sealed_time, memory_bytes, generation, time };
         next.consolidate_memory()?;
