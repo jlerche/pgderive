@@ -1,4 +1,4 @@
-use super::{BatchData, Entry, ObjectBatch};
+use super::{BatchData, BlockCache, Entry, ObjectBatch};
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -26,7 +26,8 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
         Self { source: Source::Memory(rows.clone()), rows, block: 0, position: 0, end: None }
     }
 
-    pub(super) async fn object(batch: ObjectBatch<K, V>) -> Result<Self> {
+    pub(super) async fn object(mut batch: ObjectBatch<K, V>) -> Result<Self> {
+        batch.cache = BlockCache::cursor(batch.cache.clone());
         let rows =
             if batch.blocks.is_empty() { Arc::new(Vec::new()) } else { batch.read(0).await? };
         Ok(Self { source: Source::Object(batch), rows, block: 0, position: 0, end: None })

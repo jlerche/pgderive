@@ -23,16 +23,15 @@ async fn packed(store: &Arc<dyn ObjectStore>, size: usize) -> Result<Pack> {
     Ok(Pack { path, hash, bytes: u64::try_from(size)? })
 }
 #[tokio::test]
-async fn windows_coalesce_concurrent_reads_cross_boundaries_and_preserve_scan_policy() -> Result<()>
-{
+async fn windows_coalesce_concurrent_reads_cross_boundaries_and_evict() -> Result<()> {
     let store = Arc::new(crate::engine::tests::store::Store::unpaced());
     let remote: Arc<dyn ObjectStore> = store.clone();
     let width = u64::try_from(super::WINDOW_BYTES)?;
     let pack = packed(&remote, usize::try_from(width * 3 + 7)?).await?;
     let ranges = Ranges::new(super::WINDOW_BYTES * 2, 2);
     let (a, b) = tokio::try_join!(
-        ranges.read(&remote, &pack, width - 10..width + 20, true),
-        ranges.read(&remote, &pack, width - 5..width + 25, true)
+        ranges.read(&remote, &pack, width - 10..width + 20),
+        ranges.read(&remote, &pack, width - 5..width + 25)
     )?;
     assert_eq!(
         a,
@@ -40,21 +39,21 @@ async fn windows_coalesce_concurrent_reads_cross_boundaries_and_preserve_scan_po
     );
     assert_eq!(b.len(), 30);
     assert_eq!(store.reads.load(Ordering::SeqCst), 2);
-    ranges.read(&remote, &pack, width * 2..width * 3 + 7, true).await?;
+    ranges.read(&remote, &pack, width * 2..width * 3 + 7).await?;
     assert!(
         ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.bytes
             <= super::WINDOW_BYTES * 2
     );
     let before = store.reads.load(Ordering::SeqCst);
-    ranges.read(&remote, &pack, 0..10, false).await?;
-    ranges.read(&remote, &pack, 0..10, false).await?;
-    assert_eq!(store.reads.load(Ordering::SeqCst), before + 2);
+    ranges.read(&remote, &pack, 0..10).await?;
+    ranges.read(&remote, &pack, 0..10).await?;
+    assert_eq!(store.reads.load(Ordering::SeqCst), before + 1);
     ranges.invalidate(&pack, &(width * 2..pack.bytes))?;
-    assert!(ranges.read(&remote, &pack, pack.bytes - 1..pack.bytes + 1, true).await.is_err());
-    assert!(ranges.read(&remote, &pack, 5..5, true).await.is_err());
+    assert!(ranges.read(&remote, &pack, pack.bytes - 1..pack.bytes + 1).await.is_err());
+    assert!(ranges.read(&remote, &pack, 5..5).await.is_err());
     for limits in [(0, 4), (100, 0), (1, 1)] {
         let cache = Ranges::new(limits.0, limits.1);
-        assert_eq!(cache.read(&remote, &pack, 0..10, true).await?.len(), 10);
+        assert_eq!(cache.read(&remote, &pack, 0..10).await?.len(), 10);
     }
     Ok(())
 }
@@ -169,18 +168,89 @@ async fn canceled_or_failed_window_load_does_not_poison_singleflight() -> Result
         let ranges = ranges.clone();
         let remote = remote.clone();
         let pack = pack.clone();
-        tokio::spawn(async move { ranges.read(&remote, &pack, 0..10, true).await })
+        tokio::spawn(async move { ranges.read(&remote, &pack, 0..10).await })
     };
     while store.read_active.load(Ordering::SeqCst) == 0 {
         tokio::task::yield_now().await;
     }
     task.abort();
     assert!(task.await.is_err());
-    assert_eq!(ranges.read(&remote, &pack, 0..10, true).await?.len(), 10);
+    assert_eq!(ranges.read(&remote, &pack, 0..10).await?.len(), 10);
     let mut missing = pack.clone();
     missing.path = "missing".into();
-    assert!(ranges.read(&remote, &missing, 0..10, true).await.is_err());
+    assert!(ranges.read(&remote, &missing, 0..10).await.is_err());
     missing.path = pack.path;
-    assert_eq!(ranges.read(&remote, &missing, 0..10, true).await?.len(), 10);
+    assert_eq!(ranges.read(&remote, &missing, 0..10).await?.len(), 10);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_full_scan_coalesces_pages_without_foreground_admission() -> Result<()> {
+    for budget in [(0, 0), (16 * 1024 * 1024, 256)] {
+        let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+        let remote: Arc<dyn ObjectStore> = store.clone();
+        let batch =
+            Batch::from_updates((0..3000).map(|k| ((k, format!("{k:016x}").repeat(8)), 1)))?;
+        let reference = ObjectBatch::write(remote.clone(), &batch, "scan", 1).await?;
+        let foreground = Arc::new(BlockCache::new(budget.0, budget.1));
+        let object = ObjectBatch::<i64, String>::open_with_cache(
+            remote,
+            reference,
+            "scan",
+            if budget.0 == 0 { foreground.clone() } else { BlockCache::scan(foreground.clone()) },
+        )
+        .await?;
+        let before = store.reads.load(Ordering::SeqCst);
+        let before_bytes = store.range_bytes.load(Ordering::SeqCst);
+        let mut cursor = object.cursor().await?;
+        for ((key, value), weight) in batch.iter() {
+            assert_eq!(cursor.current(), Some((key, value, *weight)));
+            cursor.advance().await?;
+        }
+        assert!(cursor.current().is_none());
+        let reads = store.reads.load(Ordering::SeqCst) - before;
+        let bytes = store.range_bytes.load(Ordering::SeqCst) - before_bytes;
+        let expected = object.packs.iter().map(|p| p.bytes.div_ceil(256 * 1024)).sum::<u64>();
+        assert_eq!(u64::try_from(reads)?, expected);
+        assert_eq!(bytes, object.packs.iter().map(|p| p.bytes).sum::<u64>());
+        assert!(reads * 100 < object.blocks.len());
+        let stats = foreground.stats()?;
+        assert_eq!((stats.entries, stats.bytes), (0, 0));
+        if budget.0 == 0 {
+            assert_eq!(stats.decoded_rows, 3000);
+        } else {
+            assert_eq!((stats.hits, stats.misses, stats.decoded_bytes), (0, 0, 0));
+        }
+        println!(
+            "{}",
+            serde_json::json!({"pages":object.blocks.len(),"scan_gets":reads,"scan_bytes":bytes,"foreground_budget":budget.0})
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn scan_corruption_keeps_cursor_position_and_invalidates_private_window() -> Result<()> {
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let remote: Arc<dyn ObjectStore> = store.clone();
+    let batch = Batch::from_updates((0..10).map(|k| ((k, k), 1)))?;
+    let reference = ObjectBatch::write(remote.clone(), &batch, "scan-corruption", 1).await?;
+    let object =
+        ObjectBatch::<i64, i64>::open(remote.clone(), reference, "scan-corruption").await?;
+    let pack = object.packs.first().context("missing pack")?;
+    let path = Path::from(pack.path.clone());
+    let original = remote.get(&path).await?.bytes().await?;
+    let mut corrupt = original.to_vec();
+    corrupt[usize::try_from(object.blocks[1].offset)?] ^= 1;
+    remote.put(&path, corrupt.into()).await?;
+    let mut cursor = object.cursor().await?;
+    assert_eq!(cursor.current(), Some((&0, &0, 1)));
+    assert!(cursor.advance().await.is_err());
+    assert_eq!(cursor.current(), Some((&0, &0, 1)));
+    remote.put(&path, original.into()).await?;
+    let before = store.reads.load(Ordering::SeqCst);
+    cursor.advance().await?;
+    assert_eq!(cursor.current(), Some((&1, &1, 1)));
+    assert_eq!(store.reads.load(Ordering::SeqCst), before + 1);
     Ok(())
 }

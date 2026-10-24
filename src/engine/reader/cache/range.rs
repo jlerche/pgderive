@@ -1,4 +1,4 @@
-//! Bounded compressed windows amortize point reads without pinning decoded pages.
+//! Bounded compressed windows amortize reads without pinning decoded pages.
 use crate::engine::reader::format::Pack;
 use anyhow::{Context, Result, ensure};
 use object_store::{ObjectStore, ObjectStoreExt as _, path::Path};
@@ -44,12 +44,14 @@ impl Ranges {
             flights: std::array::from_fn(|_| tokio::sync::Mutex::new(())),
         }
     }
+    pub(super) fn scan() -> Self {
+        Self::new(WINDOW_BYTES, 1)
+    }
     pub(in crate::engine::reader) async fn read(
         &self,
         store: &Arc<dyn ObjectStore>,
         pack: &Pack,
         range: Range<u64>,
-        admit: bool,
     ) -> Result<Vec<u8>> {
         ensure!(range.start < range.end, "empty cached pack range");
         ensure!(range.end <= pack.bytes, "cached range exceeds pack");
@@ -66,15 +68,8 @@ impl Ranges {
             let start = position / width * width;
             let end = start.saturating_add(width).min(pack.bytes);
             let identity = (pack.path.clone(), pack.hash.clone(), start, pack.bytes);
-            let bytes = match self.get(&identity, admit)? {
+            let bytes = match self.get(&identity)? {
                 Some(bytes) => bytes,
-                None if !admit => {
-                    // Cold scans do not prefetch or pollute either cache tier.
-                    return Ok(store
-                        .get_range(&Path::from(pack.path.clone()), range)
-                        .await?
-                        .to_vec());
-                }
                 None => self.fetch(store, identity, end).await?,
             };
             let stop = range.end.min(end);
@@ -113,17 +108,13 @@ impl Ranges {
         drop(state);
         Ok(())
     }
-    fn get(&self, identity: &Identity, promote: bool) -> Result<Option<Arc<Vec<u8>>>> {
+    fn get(&self, identity: &Identity) -> Result<Option<Arc<Vec<u8>>>> {
         let mut state =
             self.state.lock().map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?;
-        if promote {
-            state.clock = state.clock.saturating_add(1);
-        }
+        state.clock = state.clock.saturating_add(1);
         let clock = state.clock;
         Ok(state.windows.get_mut(identity).map(|entry| {
-            if promote {
-                entry.accessed = clock;
-            }
+            entry.accessed = clock;
             entry.bytes.clone()
         }))
     }
@@ -138,7 +129,7 @@ impl Ranges {
         identity.hash(&mut hash);
         let stripe = usize::try_from(hash.finish() % u64::try_from(STRIPES)?)?;
         let _flight = self.flights[stripe].lock().await;
-        if let Some(bytes) = self.get(&identity, true)? {
+        if let Some(bytes) = self.get(&identity)? {
             return Ok(bytes);
         }
         let bytes = store.get_range(&Path::from(identity.0.clone()), identity.2..end).await?;

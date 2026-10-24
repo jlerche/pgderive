@@ -22,7 +22,7 @@ pub struct BlockCache {
     pub(super) ranges: Arc<range::Ranges>,
     parent: Option<Arc<Self>>,
     staged: bool,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
     pub(super) encoded: Option<Arc<super::EncodedCache>>,
 }
 #[derive(Debug, Default)]
@@ -69,17 +69,34 @@ impl BlockCache {
             ranges: Arc::new(range::Ranges::new(bytes / 4, entries)),
             parent: None,
             staged: false,
-            state: Mutex::new(State::default()),
+            state: Arc::new(Mutex::new(State::default())),
             encoded: None,
         }
     }
-    /// Reuse foreground blocks without admitting scan data or promoting its LRU.
+    /// Reuse foreground decoded blocks without admission or LRU promotion.
+    /// Each cold scan owns one private 256 KiB compressed window.
     pub(crate) fn scan(parent: Arc<Self>) -> Arc<Self> {
         let parent = parent.parent.clone().unwrap_or(parent);
         Arc::new(Self {
             encoded: parent.encoded.clone(),
-            ranges: parent.ranges.clone(),
+            ranges: Arc::new(range::Ranges::scan()),
             parent: Some(parent),
+            ..Self::new(0, 0)
+        })
+    }
+    pub(super) fn cursor(parent: Arc<Self>) -> Arc<Self> {
+        if parent.parent.is_some() {
+            return Self::scan(parent);
+        }
+        if parent.bytes > 0 && parent.entries > 0 {
+            return parent;
+        }
+        // A disabled decoded cache still needs bounded cold-scan read-ahead.
+        // Preserve its encoded admission policy; ordinary scans can warm Foyer.
+        Arc::new(Self {
+            encoded: parent.encoded.clone(),
+            ranges: Arc::new(range::Ranges::scan()),
+            state: parent.state.clone(),
             ..Self::new(0, 0)
         })
     }

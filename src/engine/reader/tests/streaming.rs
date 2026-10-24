@@ -285,8 +285,14 @@ async fn failed_merged_span_load_keeps_consolidated_position_for_retry() -> Resu
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let batch = Batch::from_updates([((1_i64, 1_i64), 2), ((2, 2), 3)])?;
     let root = ObjectBatch::write(store.clone(), &batch, "span-retry-v1", 1).await?;
-    let object =
-        ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "span-retry-v1").await?;
+    let cache = Arc::new(BlockCache::new(4096, 8));
+    let object = ObjectBatch::<i64, i64>::open_with_cache(
+        store.clone(),
+        root.clone(),
+        "span-retry-v1",
+        cache.clone(),
+    )
+    .await?;
     let path = Path::from(
         object
             .block_range(1)
@@ -297,7 +303,7 @@ async fn failed_merged_span_load_keeps_consolidated_position_for_retry() -> Resu
         store.clone(),
         Manifest { version: 1, time: 0, generation: 0, objects: vec![root] },
         "span-retry-v1",
-        Arc::new(BlockCache::new(0, 0)),
+        cache,
     )
     .await?;
     let mut cursor = prior.cursor().await?;

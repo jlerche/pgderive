@@ -84,15 +84,17 @@ async fn missing_and_corrupt_objects_fail_closed_without_cursor_movement() -> Re
     );
     let bytes = store.get(&path).await?.bytes().await?;
     store.delete(&path).await?;
+    // Already fetched immutable bytes remain valid after storage disappears.
+    cursor.advance().await?;
+    assert_eq!(cursor.current(), Some((&2, &2, 1)));
+    assert!(object.cursor().await.is_err());
+    store.put(&path, bytes.clone().into()).await?;
+    crate::engine::tests::store::corrupt_block(store.as_ref(), &object, 1).await?;
+    let mut cursor = object.cursor().await?;
     assert!(cursor.advance().await.is_err());
     assert_eq!(cursor.current(), Some((&1, &1, 1)));
     assert!(cursor.seek_key(&2).await.is_err());
     assert_eq!(cursor.current(), Some((&1, &1, 1)));
-    store.put(&path, bytes.clone().into()).await?;
-    cursor.advance().await?;
-    assert_eq!(cursor.current(), Some((&2, &2, 1)));
-    crate::engine::tests::store::corrupt_block(store.as_ref(), &object, 1).await?;
-    assert!(cursor.seek_key(&2).await.is_err());
     let root = Path::from(reference.path());
     let index = store.get(&root).await?.bytes().await?;
     store.delete(&root).await?;

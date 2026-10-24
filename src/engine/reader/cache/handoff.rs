@@ -1,7 +1,7 @@
 //! One bounded generated-output workspace, shared by every sibling upload.
 use super::BlockCache;
 use anyhow::{Context, Result, ensure};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 impl BlockCache {
     /// Reuse a sibling's workspace; never multiply the cap by arrangement count.
     /// Input scans still peek at foreground blocks without admission or LRU changes.
@@ -17,7 +17,7 @@ impl BlockCache {
             ranges: parent.ranges.clone(),
             parent: Some(parent),
             staged: true,
-            state: Mutex::default(),
+            state: Arc::default(),
         })
     }
     /// Generated pages are optional; avoid cloning them when retention is disabled

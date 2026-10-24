@@ -135,8 +135,7 @@ async fn oversized_full_compaction_preserves_hot_cache_and_admits_output_only_wh
 }
 
 #[tokio::test]
-async fn trusted_compaction_reads_each_cold_input_block_once_and_rejects_corruption() -> Result<()>
-{
+async fn trusted_compaction_coalesces_cold_pages_and_rejects_corruption() -> Result<()> {
     use std::sync::atomic::Ordering;
     let store = Arc::new(crate::engine::tests::store::Store::default());
     let writer = Arrangement::<i64, i64>::new(store.clone(), "once".into(), 1)?;
@@ -145,7 +144,7 @@ async fn trusted_compaction_reads_each_cold_input_block_once_and_rejects_corrupt
     let before = store.reads.load(Ordering::SeqCst);
     let compacted =
         writer.clone().with_namespace("pgderive/upload-v1/compaction-once").compact(&state).await?;
-    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 8);
+    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 1);
     assert_eq!(compacted.materialize().await?, state.materialize().await?);
     let manifest = state.manifest()?;
     let root = manifest.objects.first().context("missing root")?;
