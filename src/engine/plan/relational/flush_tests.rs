@@ -100,7 +100,13 @@ async fn failed_upload_drains_siblings_without_changing_local_state() -> Result<
     let mut query = Query::new(plan()?, operators(), &settings)?;
     tick(&mut query, 1, 2).await?;
     let before = query.snapshot();
+    let cache_before = query.cache_stats()?;
     assert!(freeze(&mut query).await?.upload().await.is_err());
+    let cache_after = query.cache_stats()?;
+    assert_eq!(
+        (cache_before.bytes, cache_before.entries),
+        (cache_after.bytes, cache_after.entries)
+    );
     assert_eq!(store.active.load(Ordering::SeqCst), 0);
     assert!(store.peak.load(Ordering::SeqCst) > 1);
     assert!(store.puts.load(Ordering::SeqCst) > 1);

@@ -4,7 +4,7 @@ use crate::{
     catalog::Protection,
     engine::{
         plan::{Checkpoint, checkpoint::DurableState},
-        reader::BatchData,
+        reader::{BatchData, BlockCache},
     },
 };
 use anyhow::{Context, Result, ensure};
@@ -41,8 +41,11 @@ impl<K: BatchData, V: BatchData> FrozenFlush<K, V> {
     pub async fn upload(self) -> Result<UploadedFlush<K, V>> {
         let execution = self.execution.clone();
         let namespace = self.namespace.clone();
+        let output_cache = BlockCache::output(execution.cache.clone());
+        let shared_output = output_cache.clone();
         let uploads = self.captured.entries.clone().into_iter().map(move |(id, entry)| {
             let execution = execution.clone();
+            let output_cache = shared_output.clone();
             let namespace = namespace.clone();
             async move {
                 let writer = execution
@@ -50,15 +53,20 @@ impl<K: BatchData, V: BatchData> FrozenFlush<K, V> {
                     .get(&id)
                     .context("missing flush writer")?
                     .clone()
-                    .with_namespace(&namespace);
+                    .with_namespace(&namespace)
+                    .with_cache(output_cache);
                 let entry =
                     Entry { schema: entry.schema, trace: writer.flush(&entry.trace).await? };
                 Ok::<_, anyhow::Error>((id, entry))
             }
         });
         let completed = stream::iter(uploads).buffer_unordered(8).collect::<Vec<_>>().await;
-        let state = RelationalState { entries: completed.into_iter().collect::<Result<_>>()? };
+        let mut state = RelationalState { entries: completed.into_iter().collect::<Result<_>>()? };
         let checkpoint = Checkpoint::new(&self.execution.plan, self.time, state.memberships()?)?;
+        output_cache.promote()?;
+        for entry in state.entries.values_mut() {
+            entry.trace.share_cache(&self.execution.cache);
+        }
         Ok(UploadedFlush { frozen: self, state, checkpoint })
     }
 }

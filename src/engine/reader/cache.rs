@@ -20,6 +20,7 @@ pub struct BlockCache {
     bytes: usize,
     entries: usize,
     parent: Option<Arc<Self>>,
+    staged: bool,
     state: Mutex<State>,
     pub(super) encoded: Option<Arc<super::EncodedCache>>,
 }
@@ -29,6 +30,7 @@ struct State {
     live: Vec<(Weak<Rows>, usize)>,
     stats: CacheStats,
     clock: u64,
+    overflowed: bool,
 }
 #[derive(Debug)]
 struct Cached {
@@ -56,7 +58,14 @@ impl BlockCache {
     /// Set decoded-charge and entry caps; either zero disables retention.
     #[must_use]
     pub fn new(bytes: usize, entries: usize) -> Self {
-        Self { bytes, entries, parent: None, state: Mutex::new(State::default()), encoded: None }
+        Self {
+            bytes,
+            entries,
+            parent: None,
+            staged: false,
+            state: Mutex::new(State::default()),
+            encoded: None,
+        }
     }
     /// Reuse foreground blocks without admitting scan data or promoting its LRU.
     pub(crate) fn scan(parent: Arc<Self>) -> Arc<Self> {
@@ -138,35 +147,66 @@ impl BlockCache {
             .and_then(|bytes| bytes.checked_add(encoded_bytes))
             .context("decoded cache charge overflow")?;
         let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
-        state.live.retain(|(rows, _)| rows.strong_count() > 0);
-        let rows: Arc<Rows> = rows;
-        state.live.push((Arc::downgrade(&rows), charge));
-        if charge > self.bytes || self.entries == 0 || self.bytes == 0 {
-            return Ok(());
-        }
         let identity = (ROW_CODEC, schema.to_owned(), hash, TypeId::of::<Vec<Entry<K, V>>>());
-        if state.blocks.contains_key(&identity) {
+        if self.staged {
+            if state.overflowed {
+                return Ok(());
+            }
+            if state.blocks.contains_key(&identity) {
+                return Ok(());
+            }
+            if charge > self.bytes
+                || state.stats.bytes > self.bytes - charge
+                || state.blocks.len() >= self.entries
+                || self.bytes == 0
+            {
+                state.blocks.clear();
+                state.live.clear();
+                state.stats.bytes = 0;
+                state.stats.entries = 0;
+                state.overflowed = true;
+                return Ok(());
+            }
+        }
+        state.admit(identity, rows, charge, (self.bytes, self.entries))
+    }
+}
+impl State {
+    fn admit(
+        &mut self,
+        identity: Identity,
+        rows: Arc<Rows>,
+        charge: usize,
+        limits: (usize, usize),
+    ) -> Result<()> {
+        self.live.retain(|(rows, _)| rows.strong_count() > 0);
+        self.live.push((Arc::downgrade(&rows), charge));
+        if charge > limits.0
+            || limits.1 == 0
+            || limits.0 == 0
+            || self.blocks.contains_key(&identity)
+        {
             return Ok(());
         }
-        while state.stats.bytes > self.bytes - charge || state.blocks.len() >= self.entries {
-            let oldest = state
+        while self.stats.bytes > limits.0 - charge || self.blocks.len() >= limits.1 {
+            let oldest = self
                 .blocks
                 .iter()
                 .min_by_key(|(_, entry)| entry.accessed)
                 .map(|(identity, _)| identity.clone())
                 .context("cache eviction without entries")?;
-            let evicted = state.blocks.remove(&oldest).context("cache eviction lost entry")?;
-            state.stats.bytes -= evicted.charge;
+            let evicted = self.blocks.remove(&oldest).context("cache eviction lost entry")?;
+            self.stats.bytes -= evicted.charge;
         }
-        state.clock = state.clock.saturating_add(1);
-        let clock = state.clock;
-        state.stats.bytes += charge;
-        state.blocks.insert(identity, Cached { rows, charge, accessed: clock });
-        state.stats.entries = state.blocks.len();
-        drop(state);
+        self.clock = self.clock.saturating_add(1);
+        self.stats.bytes += charge;
+        self.blocks.insert(identity, Cached { rows, charge, accessed: self.clock });
+        self.stats.entries = self.blocks.len();
         Ok(())
     }
 }
+
+mod handoff;
 
 #[cfg(test)]
 mod tests {

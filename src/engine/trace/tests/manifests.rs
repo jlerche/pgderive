@@ -102,7 +102,8 @@ async fn memory_and_invalid_logical_membership_cannot_be_recovered() -> Result<(
 }
 
 #[tokio::test]
-async fn full_compaction_preserves_hot_cache_and_admits_output_only_when_read() -> Result<()> {
+async fn oversized_full_compaction_preserves_hot_cache_and_admits_output_only_when_read()
+-> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let cache = Arc::new(BlockCache::new(4096, 1));
     let writer =
@@ -153,5 +154,37 @@ async fn trusted_compaction_reads_each_cold_input_block_once_and_rejects_corrupt
     store.put(&path, b"corrupt".to_vec().into()).await?;
     assert!(writer.compact(&state).await.is_err());
     assert_eq!(state.manifest()?, manifest);
+    Ok(())
+}
+
+#[tokio::test]
+async fn fitting_rewritten_checkpoint_pages_need_no_remote_reads_after_compaction() -> Result<()> {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let cache = Arc::new(BlockCache::new(16 * 1024, 16));
+    let writer =
+        Arrangement::<i64, i64>::new(store.clone(), "handoff".into(), 1)?.with_cache(cache.clone());
+    let initial = Batch::from_updates((0..8).map(|key| ((key, key), 1)))?;
+    let state = writer.stage(&writer.empty(), &TimedBatch { time: 1, batch: initial }).await?;
+    let replacement =
+        Batch::from_updates((0..8).flat_map(|key| [((key, key), -1), ((key, key + 100), 1)]))?;
+    let pending = state.append_validated(Run::Memory(Arc::new(replacement)), 2)?;
+    let compacted = writer.compact(&pending).await?;
+    assert_ne!(state.manifest()?.objects, compacted.manifest()?.objects);
+    let reads = store.reads.load(Ordering::SeqCst);
+    assert_eq!(
+        compacted.materialize().await?,
+        Batch::from_updates((0..8).map(|key| ((key, key + 100), 1)))?
+    );
+    assert_eq!(store.reads.load(Ordering::SeqCst), reads);
+    assert!(cache.stats()?.bytes <= 16 * 1024);
+    let cold = TraceSnapshot::<i64, i64>::reopen(
+        store,
+        compacted.manifest()?,
+        "handoff",
+        Arc::new(BlockCache::new(0, 0)),
+    )
+    .await?;
+    assert_eq!(cold.materialize().await?, compacted.materialize().await?);
     Ok(())
 }

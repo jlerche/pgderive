@@ -243,7 +243,9 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         // These immutable local computations cannot publish membership. Keeping
         // them in the bounded cache avoids pinning every page until the pack PUT.
         // Neither a reference nor durable progress escapes before both PUTs.
-        if let Some(cache) = &self.cache {
+        if let Some(cache) = &self.cache
+            && cache.retains_output()?
+        {
             cache.insert(
                 &self.schema,
                 block.hash.clone(),

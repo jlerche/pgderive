@@ -16,15 +16,19 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let mut input = self.clone();
         input.share_cache(&scan_cache);
         let mut cursor = input.cursor().await?;
-        let scan_writer = writer.clone().with_cache(scan_cache);
-        let runs = scan_writer.upload_cursor(&mut cursor).await?;
+        let output_cache = BlockCache::output(cache.clone());
+        let output_writer = writer.clone().with_cache(output_cache.clone());
+        let runs = output_writer.upload_cursor(&mut cursor).await?;
         // This private construction streams exactly the validated merged input.
         // Untrusted replacements still require replace_runs' equivalence check.
         let mut next = Self::from_runs(runs, generation, self.time)?;
+        if !std::sync::Arc::ptr_eq(&cache, &output_cache) {
+            output_cache.promote()?;
+        }
         next.share_cache(&cache);
         Ok(next)
     }
-    fn share_cache(&mut self, cache: &std::sync::Arc<BlockCache>) {
+    pub(crate) fn share_cache(&mut self, cache: &std::sync::Arc<BlockCache>) {
         for run in &mut self.runs {
             if let Run::Object(object) = run {
                 object.share_cache(cache.clone());

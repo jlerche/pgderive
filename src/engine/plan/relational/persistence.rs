@@ -3,7 +3,7 @@ use crate::{
     catalog::{Protection, Writer},
     engine::{
         plan::{Checkpoint, Membership},
-        reader::BatchData,
+        reader::{BatchData, BlockCache},
     },
 };
 use anyhow::{Context, Result, ensure};
@@ -118,13 +118,20 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     async fn prepare_compaction_scoped(&self, namespace: Option<&str>) -> Result<Compaction<K, V>> {
         let namespace = namespace.map(str::to_owned);
         let writers = self.execution.writers.clone();
+        let foreground = self.execution.cache.clone();
+        let output = BlockCache::output(foreground.clone());
         self.engine
             .prepare_maintenance(move |state| async move {
                 let uploads = state.entries.iter().map(|(id, entry)| {
                     let writers = &writers;
                     let namespace = namespace.as_deref();
+                    let output = output.clone();
                     async move {
-                        let writer = writers.get(id).context("missing compaction writer")?.clone();
+                        let writer = writers
+                            .get(id)
+                            .context("missing compaction writer")?
+                            .clone()
+                            .with_cache(output);
                         let writer = namespace.map_or_else(
                             || writer.clone(),
                             |scope| writer.clone().with_namespace(scope),
@@ -134,8 +141,13 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                 });
                 // Drain all uploads before returning any error; protection covers all of them.
                 let completed = stream::iter(uploads).buffer_unordered(8).collect::<Vec<_>>().await;
-                let entries = completed.into_iter().collect::<Result<_>>()?;
-                Ok(RelationalState { entries })
+                let mut state =
+                    RelationalState { entries: completed.into_iter().collect::<Result<_>>()? };
+                output.promote()?;
+                for entry in state.entries.values_mut() {
+                    entry.trace.share_cache(&foreground);
+                }
+                Ok(state)
             })
             .await
     }
