@@ -47,7 +47,7 @@ pub(super) fn statistics(contract: &Contract, ir: &Relational) -> Result<BTreeSe
                         matches!(
                             aggregate.function,
                             Function::Count | Function::Sum | Function::Average
-                        ) && aggregate.argument.as_ref().is_none_or(|argument| argument.oid != 1700)
+                        )
                     })
                 {
                     certified.insert(id.clone());

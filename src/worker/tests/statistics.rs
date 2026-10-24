@@ -72,15 +72,22 @@ async fn history(native_cache_bytes: usize) -> Result<()> {
 }
 #[tokio::test]
 async fn linear_statistics_update_large_group_under_delta_budget() -> Result<()> {
-    let native = contract();
+    for oid in [20, 1700] {
+        let mut native = contract();
+        native.relations[1].columns[2].oid = oid;
+        large_group_delta(&native).await?;
+    }
+    Ok(())
+}
+async fn large_group_delta(native: &crate::source::Contract) -> Result<()> {
     let compiled = compile(
         "SELECT b.auction,COUNT(*),SUM(b.price) FROM source.bid b GROUP BY b.auction",
-        &native,
+        native,
     )?;
     let ir = compiled.relational();
     let mut options = settings();
     options.block_rows = 64;
-    let mut query = relational::build(&native, &compiled, &options)?;
+    let mut query = relational::build(native, &compiled, &options)?;
     let source = (0..256)
         .map(|id| {
             row(&[
@@ -96,7 +103,7 @@ async fn linear_statistics_update_large_group_under_delta_budget() -> Result<()>
     let checkpoint = query.checkpoint()?;
     options.limits.contributions = 16;
     options.limits.resident_entries = 1;
-    query = relational::build(&native, &compiled, &options)?;
+    query = relational::build(native, &compiled, &options)?;
     query.restore_checkpoint(checkpoint).await?;
     let replacement = row(&[("id", Some("0")), ("auction", Some("1")), ("price", Some("1000"))]);
     let delta = batch(vec![("bid", source[0].clone(), -1), ("bid", replacement, 1)]);

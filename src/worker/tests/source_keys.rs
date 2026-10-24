@@ -94,7 +94,7 @@ fn complete_composite_keys_survive_rebinding_but_partial_keys_do_not() -> Result
         let compiled = compile(sql, &native)?;
         let plan = relational::committed_plan(&native, &compiled)?;
         assert_eq!(
-            plan.definition().revision.starts_with("source-key-statistics-v1:"),
+            plan.definition().revision.starts_with("source-key-statistics-v2:"),
             optimized,
             "{sql}"
         );
@@ -136,7 +136,7 @@ fn complete_composite_keys_survive_rebinding_but_partial_keys_do_not() -> Result
             relational::committed_plan(&native, &compiled)?
                 .definition()
                 .revision
-                .starts_with("source-key-statistics-v1:"),
+                .starts_with("source-key-statistics-v2:"),
             optimized
         );
     }
@@ -146,15 +146,23 @@ fn complete_composite_keys_survive_rebinding_but_partial_keys_do_not() -> Result
 
 #[tokio::test]
 async fn fixed_delta_cold_reads_do_not_grow_with_unrelated_source_rows() -> Result<()> {
-    let native = contract();
-    let compiled = compile(SQL, &native)?;
+    for oid in [20, 1700] {
+        let mut native = contract();
+        native.relations[1].columns[2].oid = oid;
+        let sql = if oid == 1700 { SQL.replace(",AVG(b.price)", "") } else { SQL.into() };
+        fixed_delta_reads(&native, &sql).await?;
+    }
+    Ok(())
+}
+async fn fixed_delta_reads(native: &crate::source::Contract, sql: &str) -> Result<()> {
+    let compiled = compile(sql, native)?;
     let mut options = settings();
     options.block_rows = 64;
     options.limits.cache_bytes = 0;
     options.limits.cache_entries = 0;
     let mut measurements = Vec::new();
     for rows in [64, 1024, 8192] {
-        let mut query = relational::build_committed(&native, &compiled, &options)?;
+        let mut query = relational::build_committed(native, &compiled, &options)?;
         let original = row(&[("id", Some("0")), ("auction", Some("0")), ("price", Some("1"))]);
         let initial = batch(
             (0..rows)
@@ -175,7 +183,7 @@ async fn fixed_delta_cold_reads_do_not_grow_with_unrelated_source_rows() -> Resu
             query.prepare(relational::inputs(&initial, compiled.relational(), 1)?).await?,
         )?;
         let checkpoint = query.checkpoint()?;
-        query = relational::build_committed(&native, &compiled, &options)?;
+        query = relational::build_committed(native, &compiled, &options)?;
         query.restore_checkpoint(checkpoint).await?;
         let delta = batch(vec![("bid", original, -1)]);
         let before = query.cache_stats()?.misses;

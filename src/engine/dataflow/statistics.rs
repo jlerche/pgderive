@@ -11,17 +11,15 @@ use crate::engine::{
 use anyhow::{Result, ensure};
 use num_bigint::BigInt;
 use std::{borrow::Borrow, sync::Arc};
-type Decode<V> = dyn Fn(&V) -> Result<Decoded<Vec<BigInt>>> + Send + Sync;
-type Measure<K, V> = dyn Fn(&K, &V) -> Result<Vec<BigInt>> + Send + Sync;
-type Encode<K, V> = dyn Fn(&K, &[BigInt]) -> Result<Option<V>> + Send + Sync;
+mod algebra;
+pub use algebra::Additive;
+use algebra::{Algebra, FoldState};
+type Create<K, V, S> = dyn Fn(Limits) -> Result<FoldState<K, V, S>> + Send + Sync;
 /// A linear map into exact additive statistics, followed by group finalization.
 /// Callers maintain valid full-tuple source bags; counts do not prove tuple validity.
 #[derive(Clone)]
 pub struct Statistics<K: BatchData, V: BatchData, S: BatchData = V> {
-    width: usize,
-    measure: Arc<Measure<K, V>>,
-    decode: Arc<Decode<S>>,
-    encode: Arc<Encode<K, S>>,
+    create: Arc<Create<K, V, S>>,
 }
 impl<K: BatchData, V: BatchData> Statistics<K, V> {
     /// Bind fixed-width exact statistics and their persisted state codec.
@@ -43,28 +41,19 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         decode: impl Fn(&S) -> Result<Vec<BigInt>> + Send + Sync + 'static,
         encode: impl Fn(&K, &[BigInt]) -> Result<Option<S>> + Send + Sync + 'static,
     ) -> Self {
-        Self {
-            width,
-            measure: Arc::new(measure),
-            decode: Arc::new(move |row| Ok(Decoded::transient(decode(row)?))),
-            encode: Arc::new(encode),
-        }
+        Self::with_algebra(width, measure, move |row| Ok(Decoded::transient(decode(row)?)), encode)
     }
-    /// Bind an immutable shared decoded accumulator, avoiding repeated decoding.
-    ///
-    /// This is the same linear operator and durable state contract as `with_measure`.
-    pub fn with_shared_decode(
+    /// Bind a reversible additive scalar algebra to the shared statistics traversal.
+    /// Its canonical persisted codec and all interpretation parameters must bind
+    /// the owning durable plan identity.
+    pub fn with_algebra<A: Additive>(
         width: usize,
-        measure: impl Fn(&K, &V) -> Result<Vec<BigInt>> + Send + Sync + 'static,
-        decode: impl Fn(&S) -> Result<Decoded<Vec<BigInt>>> + Send + Sync + 'static,
-        encode: impl Fn(&K, &[BigInt]) -> Result<Option<S>> + Send + Sync + 'static,
+        measure: impl Fn(&K, &V) -> Result<Vec<A>> + Send + Sync + 'static,
+        decode: impl Fn(&S) -> Result<Decoded<Vec<A>>> + Send + Sync + 'static,
+        encode: impl Fn(&K, &[A]) -> Result<Option<S>> + Send + Sync + 'static,
     ) -> Self {
-        Self {
-            width,
-            measure: Arc::new(measure),
-            decode: Arc::new(decode),
-            encode: Arc::new(encode),
-        }
+        let algebra = Arc::new(Algebra::new(width, measure, decode, encode));
+        Self { create: Arc::new(move |limits| algebra.create(limits)) }
     }
     /// Combine signed contributions with one prior statistic per changed group.
     ///
@@ -77,7 +66,6 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         limits: Limits,
     ) -> Result<TimedBatch<Batch<K, S>>> {
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order statistics tick");
-        ensure!((1..=129).contains(&self.width), "statistics width unsupported");
         limits.check_batch(input.batch.borrow())?;
         self.evaluate_ordered(input, prior, limits).await
     }

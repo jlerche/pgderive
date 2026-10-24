@@ -11,3 +11,14 @@ pub const fn sum(index: usize) -> usize {
 pub const fn width(aggregates: usize) -> usize {
     1 + aggregates * 2
 }
+
+/// Aggregate families with reversible exact sufficient statistics.
+pub const fn supports(aggregate: &super::Aggregate) -> bool {
+    matches!(
+        aggregate.function,
+        super::Function::Count
+            | super::Function::CountDistinct
+            | super::Function::Sum
+            | super::Function::Average
+    )
+}

@@ -14,41 +14,53 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 use std::{collections::BTreeMap, sync::Arc};
+mod scalar;
+use scalar::Scalar;
 pub(super) fn operator(spec: &Partition, budget: Arc<NativeBudget>) -> Statistics<Key, Row> {
     let width = width(spec.aggregates.len());
-    let codec = super::native::Integers::new("sql-linear-statistics-v1", width, budget.clone());
+    let codec = super::native::Vector::new("sql-additive-statistics-v2", width, budget.clone());
     let encoded_codec = codec.clone();
     let measured = spec.clone();
     let encoded = spec.clone();
-    Statistics::with_shared_decode(
+    Statistics::with_algebra(
         width,
         move |_, row| measure(&measured, row),
         move |row| decode(row, width, &codec),
         move |key, values| encode(&encoded, key, values, (&encoded_codec, &budget)),
     )
 }
-pub(super) fn measure(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
+fn measure(spec: &Partition, row: &Row) -> Result<Vec<Scalar>> {
     if let Some(values) = super::distinct_statistics::measure(spec, row)? {
-        return Ok(values);
+        return Ok(values.into_iter().map(Scalar::Integer).collect());
     }
-    let mut values = vec![BigInt::from(1)];
+    let mut values = vec![Scalar::Integer(1.into())];
     for aggregate in &spec.aggregates {
         if matches!(aggregate.function, Function::CountDistinct) {
-            values.extend([BigInt::from(0), BigInt::from(0)]);
+            values.extend([Scalar::default(), Scalar::default()]);
+            continue;
+        }
+        if scalar::numeric(aggregate) {
+            let value = match super::aggregate::contribution(aggregate, row)? {
+                Some(super::aggregate::Contribution::Value(text)) => {
+                    Some(crate::numeric::sum::Sum::measure(&text)?)
+                }
+                _ => None,
+            };
+            values.push(Scalar::Integer(i32::from(value.is_some()).into()));
+            values.push(Scalar::Numeric(value.unwrap_or_default()));
             continue;
         }
         let mut state = Linear::default();
         state.observe(aggregate, row, 1)?;
-        values.extend([state.count, state.sum]);
+        values.extend([Scalar::Integer(state.count), Scalar::Integer(state.sum)]);
     }
     Ok(values)
 }
-fn decode(
-    row: &Row,
-    width: usize,
-    codec: &super::native::Integers,
-) -> Result<Decoded<Vec<BigInt>>> {
-    codec.decode(row, |row| decode_fields(row, width, "missing persisted statistic"))
+pub(super) fn measure_integers(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
+    measure(spec, row)?.into_iter().map(|value| value.integer().cloned()).collect()
+}
+fn decode(row: &Row, width: usize, codec: &super::native::Vector) -> Result<Decoded<Vec<Scalar>>> {
+    codec.decode(row, |row| scalar::decode_fields(row, width))
 }
 pub(super) fn decode_fields(row: &Row, width: usize, missing: &'static str) -> Result<Vec<BigInt>> {
     (0..width)
@@ -65,27 +77,13 @@ pub(super) fn encode_fields(values: &[BigInt]) -> impl Iterator<Item = (String, 
     values.iter().enumerate().map(|(index, value)| (field(index), Some(value.to_string())))
 }
 
-fn validate(values: &[BigInt]) -> Result<bool> {
-    let rows = values.first().context("missing statistics row count")?;
-    ensure!(rows >= &BigInt::from(0), "negative statistics group multiplicity");
-    for pair in values[1..].chunks_exact(2) {
-        let count = &pair[0];
-        let sum = &pair[1];
-        ensure!(count >= &BigInt::from(0) && count <= rows, "invalid statistics non-NULL count");
-        ensure!(
-            count != &BigInt::from(0) || sum == &BigInt::from(0),
-            "statistics sum without contributions"
-        );
-    }
-    Ok(rows != &BigInt::from(0))
-}
 fn encode(
     spec: &Partition,
     key: &Key,
-    values: &[BigInt],
-    native: (&super::native::Integers, &Arc<NativeBudget>),
+    values: &[Scalar],
+    native: (&super::native::Vector, &Arc<NativeBudget>),
 ) -> Result<Option<Row>> {
-    if !validate(values)? {
+    if !scalar::validate(values)? {
         return Ok(None);
     }
     let Mode::Grouped { keys } = &spec.mode else {
@@ -99,20 +97,21 @@ fn encode(
         .map(|(column, value)| (column.name.clone(), value.clone()))
         .collect::<BTreeMap<String, Option<String>>>();
     let mut row: Row = row.into();
-    row.extend(encode_fields(values));
-    Ok(Some(native.0.retain(row, values)?))
+    let values = scalar::canonical(values)?;
+    row.extend(scalar::encode_fields(&values)?);
+    Ok(Some(native.0.retain(row, &values)?))
 }
 
 pub(super) fn finalize(spec: &Partition, budget: Arc<NativeBudget>) -> Project<Key, Row, Key, Row> {
     let spec = spec.clone();
-    let codec = super::native::Integers::new(
-        "sql-linear-statistics-v1",
+    let codec = super::native::Vector::new(
+        "sql-additive-statistics-v2",
         width(spec.aggregates.len()),
         budget,
     );
     Project::new(move |key: &Key, row: &Row| {
         let values = decode(row, width(spec.aggregates.len()), &codec)?;
-        ensure!(validate(&values)?, "empty retained statistics");
+        ensure!(scalar::validate(&values)?, "empty retained statistics");
         let Mode::Grouped { keys } = &spec.mode else {
             anyhow::bail!("statistics require grouped mode");
         };
@@ -128,7 +127,16 @@ pub(super) fn finalize(spec: &Partition, budget: Arc<NativeBudget>) -> Project<K
         for (index, aggregate) in spec.aggregates.iter().enumerate() {
             let count = &values[count(index)];
             let sum = &values[sum(index)];
-            let value = Linear { count: count.clone(), sum: sum.clone() }.result(aggregate)?;
+            let value = match sum {
+                Scalar::Numeric(sum) if scalar::numeric(aggregate) => {
+                    sum.result(count.integer()?)?
+                }
+                Scalar::Integer(sum) if !scalar::numeric(aggregate) => {
+                    Linear { count: count.integer()?.clone(), sum: sum.clone() }
+                        .result(aggregate)?
+                }
+                _ => anyhow::bail!("statistics scalar domain mismatch"),
+            };
             output.insert(aggregate.field.clone(), value);
         }
         Ok(Some((key.clone(), output)))

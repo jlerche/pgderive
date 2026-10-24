@@ -23,7 +23,7 @@ historical validation. Other consumers can still require an input arrangement;
 state requirements are combined across all consumers. When such an arrangement
 is retained, its append proof remains tied to the exact immutable trace and batch.
 
-The physical revision `source-key-statistics-v1` prevents reopening older layouts
+The physical revision `source-key-statistics-v2` prevents reopening older layouts
 as though they had this invariant. Existing affected registrations require an
 explicit `query rebuild`; there is no silent state migration or progress reset.
 Object publication, atomic PostgreSQL result/membership/progress publication,

@@ -251,7 +251,8 @@ fn declared_plan(
 ) -> Result<Plan> {
     contract.validate()?;
     let identity = format!("{:x}", Sha256::digest(serde_json::to_vec(&(contract, compiled))?));
-    let revision = if certified.is_empty() { "relational" } else { "source-key-statistics-v1" };
+    let revision =
+        if certified.is_empty() { "relational-additive-v2" } else { "source-key-statistics-v2" };
     let Some(Node::Output { id: output, .. }) = ir.nodes.last() else {
         anyhow::bail!("relational program must end in an output node");
     };

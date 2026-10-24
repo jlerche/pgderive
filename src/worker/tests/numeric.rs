@@ -165,3 +165,112 @@ async fn numeric_sum_retracts_highest_scale_and_special_inputs() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn mixed_numeric_statistics_keep_scale_null_filters_and_distinct_through_restart()
+-> Result<()> {
+    for bytes in [0, 1, 4 * 1024 * 1024] {
+        mixed_statistics_history(bytes).await?;
+    }
+    Ok(())
+}
+async fn mixed_statistics_history(native_cache_bytes: usize) -> Result<()> {
+    let native = numeric_contract();
+    let compiled = compile(
+        "SELECT auction,COUNT(*),COUNT(price),SUM(price),SUM(id),AVG(id),SUM(price) FILTER(WHERE id<2),COUNT(DISTINCT id) FROM source.bid GROUP BY auction",
+        &native,
+    )?;
+    assert_additive_graph(&compiled);
+    let mut options = settings();
+    options.limits.native_cache_bytes = native_cache_bytes;
+    options.limits.resident_entries = 1;
+    let mut query = relational::build(&native, &compiled, &options)?;
+    for (changes, expected) in mixed_changes().into_iter().zip(MIXED_EXPECTED) {
+        let changes = batch(changes);
+        let candidate = query
+            .prepare(relational::inputs(&changes, compiled.relational(), query.time() + 1)?)
+            .await?;
+        let positive = candidate.output().batch.iter().find(|(_, weight)| **weight > 0);
+        if let Some(expected) = expected {
+            let output = &positive.context("missing mixed statistic replacement")?.0.1;
+            for (column, value) in compiled.output().columns.iter().skip(1).zip(expected) {
+                assert_eq!(
+                    output
+                        .get(&column.column.name)
+                        .context("missing mixed output column")?
+                        .as_deref(),
+                    value
+                );
+            }
+        } else {
+            assert!(positive.is_none());
+        }
+        query.commit(candidate)?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
+    }
+    Ok(())
+}
+
+fn assert_additive_graph(compiled: &crate::compiler::Compiled) {
+    assert!(
+        compiled
+            .relational()
+            .nodes
+            .iter()
+            .any(|node| matches!(node, crate::compiler::relational::Node::Statistics { .. }))
+    );
+    assert!(
+        !compiled
+            .relational()
+            .nodes
+            .iter()
+            .any(|node| matches!(node, crate::compiler::relational::Node::Partition { .. }))
+    );
+}
+
+type MixedChanges = Vec<(&'static str, crate::transaction::Row, i64)>;
+fn mixed_changes() -> [MixedChanges; 5] {
+    let high = row(&[("id", Some("1")), ("auction", None), ("price", Some("1.2000"))]);
+    let low = row(&[("id", Some("2")), ("auction", None), ("price", Some("2.30"))]);
+    let null = row(&[("id", Some("3")), ("auction", None), ("price", None)]);
+    let replacement = row(&[("id", Some("1")), ("auction", None), ("price", Some("1.2"))]);
+    [
+        vec![("bid", high.clone(), 1), ("bid", low.clone(), 1), ("bid", null.clone(), 1)],
+        vec![("bid", high, -1), ("bid", replacement.clone(), 1)],
+        vec![("bid", replacement, -1)],
+        vec![("bid", low, -1)],
+        vec![("bid", null, -1)],
+    ]
+}
+type MixedExpected = Option<[Option<&'static str>; 7]>;
+const MIXED_EXPECTED: [MixedExpected; 5] = [
+    Some([
+        Some("3"),
+        Some("2"),
+        Some("3.5000"),
+        Some("6"),
+        Some("2.0000000000000000"),
+        Some("1.2000"),
+        Some("3"),
+    ]),
+    Some([
+        Some("3"),
+        Some("2"),
+        Some("3.50"),
+        Some("6"),
+        Some("2.0000000000000000"),
+        Some("1.2"),
+        Some("3"),
+    ]),
+    Some([
+        Some("2"),
+        Some("1"),
+        Some("2.30"),
+        Some("5"),
+        Some("2.5000000000000000"),
+        None,
+        Some("2"),
+    ]),
+    Some([Some("1"), Some("0"), None, Some("3"), Some("3.0000000000000000"), None, Some("1")]),
+    None,
+];

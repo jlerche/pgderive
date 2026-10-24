@@ -4,15 +4,16 @@ from worker_harness import run_cases
 import collections
 import decimal
 import json
+import os
 from partition_compiler_harness import PartitionFixture, qualify
-from native_mv_oracle import expected
+from native_mv_oracle import expected, binary_difference
 
 
 class NumericFixture(PartitionFixture):
     def __init__(self, output, window, mode=None):
         super().__init__(output, False)
         self.mode = mode
-        self.computed = mode == 'computed'
+        self.computed = mode in ('computed', 'sum-computed')
         self.sql(f'''ALTER TABLE {self.name}.bid ALTER COLUMN price TYPE numeric;
             UPDATE {self.name}.bid SET price=price/100.0;
             UPDATE {self.name}.bid SET price='NaN' WHERE id=1;
@@ -20,6 +21,9 @@ class NumericFixture(PartitionFixture):
             UPDATE {self.name}.bid SET price='-Infinity' WHERE id=3;
             UPDATE {self.name}.bid SET price=1.2000 WHERE id=4;
             UPDATE {self.name}.bid SET price=1.20 WHERE id=5''')
+        if mode in ('sum', 'sum-computed'):
+            self.query = self.query.replace('MIN(b.price) AS lo,MAX(b.price) AS hi,', '')
+            self.labels = ['auction', 'n', 'present', 'total', 'negative']
         if mode == 'group-key':
             self.query = f'SELECT b.price AS price,COUNT(*) AS n,COUNT(*) FILTER(WHERE b.price<0) AS negative FROM {self.name}.bid b GROUP BY b.price'
             self.labels = ['price', 'n', 'negative']
@@ -31,9 +35,27 @@ class NumericFixture(PartitionFixture):
                 f'FROM {self.name}.bid b',
                 f'FROM (SELECT b.auction AS auction,b.price * 1.20 + 0.30 - 0.10 AS price FROM {self.name}.bid b WHERE b.price<0 OR b.price>=0 OR b.price IS NULL) "B"')
 
+    def run_history(self, command, history):
+        # Exercise inverse transitions, including display-only changes and masked
+        # finite sums, through the same CDC/restart/oracle harness as other queries.
+        history.changes = [
+            f"INSERT INTO {self.name}.bid VALUES(900,900,1.2000),(901,900,2.30),(902,900,'Infinity'),(903,900,'-Infinity'),(904,900,'NaN')",
+            f"DELETE FROM {self.name}.bid WHERE id=904",
+            f"DELETE FROM {self.name}.bid WHERE id=903",
+            f"DELETE FROM {self.name}.bid WHERE id=900",
+            f"DELETE FROM {self.name}.bid WHERE id=902",
+            f"UPDATE {self.name}.bid SET price=2.30000 WHERE id=901",
+            f"UPDATE {self.name}.bid SET price=2.30 WHERE id=901",
+            f"DELETE FROM {self.name}.bid WHERE id=901",
+        ] + history.changes
+        super().run_history(command, history)
+
     def verify(self):
         native = expected(self, self.labels)
         self.verify_sql(native)
+        if self.mode in ('sum', 'sum-computed'):
+            assert binary_difference(self) == '0', 'numeric SUM scale/send representation differs'
+
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"), parse_float=decimal.Decimal)
         if self.mode == 'join-key':
             expected_memory = self.join_memory(source)
@@ -94,9 +116,12 @@ class NumericFixture(PartitionFixture):
                 total = sum(values, decimal.Decimal(0)) if values else None
             negative = sum(order(value) < (1, decimal.Decimal(0)) for value in values)
             result = [key, len(rows), len(values), total, ordered[0] if values else None, ordered[-1] if values else None, negative]
+            if self.mode in ('sum', 'sum-computed'):
+                result = [key, len(rows), len(values), total, negative]
             expected_memory[tuple(str(value) if isinstance(value, decimal.Decimal) and not value.is_finite() else value for value in result)] = 1
         return expected_memory
 
 if __name__ == '__main__':
-    run_cases(((mode, False, mode) for mode in ('native', 'computed', 'group-key', 'join-key')),
+    modes = ('sum', 'sum-computed') if os.environ.get('PGDERIVE_CHECK_PROFILE') == 'core' else ('native', 'computed', 'sum', 'sum-computed', 'group-key', 'join-key')
+    run_cases(((mode, False, mode) for mode in modes),
               qualify, fixture_class=NumericFixture)

@@ -452,10 +452,7 @@ fn nodes(
         return distinct::nodes(keys, spec, computed);
     }
     let linear = matches!(spec.mode, Mode::Grouped { .. })
-        && spec.aggregates.iter().all(|aggregate| {
-            aggregate.argument.as_ref().is_none_or(|arg| arg.oid != 1700)
-                && matches!(aggregate.function, Function::Count | Function::Sum | Function::Average)
-        });
+        && spec.aggregates.iter().all(crate::compiler::partition::statistics::supports);
     let aggregate = if linear {
         Node::Statistics {
             id: "statistics".into(),

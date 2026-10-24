@@ -11,12 +11,7 @@ pub(super) fn supports(spec: &Partition) -> bool {
             .aggregates
             .iter()
             .any(|aggregate| matches!(aggregate.function, Function::CountDistinct))
-        && spec.aggregates.iter().all(|aggregate| {
-            matches!(
-                aggregate.function,
-                Function::Count | Function::CountDistinct | Function::Sum | Function::Average
-            )
-        })
+        && spec.aggregates.iter().all(crate::compiler::partition::statistics::supports)
 }
 pub(super) fn nodes(keys: Vec<ColumnRef>, spec: Partition, computed: Vec<Computed>) -> Vec<Node> {
     let mut nodes = super::input_nodes(keys, computed);

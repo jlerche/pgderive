@@ -1,4 +1,4 @@
-use super::Integers;
+use super::Vector;
 use crate::{engine::value::NativeBudget, transaction::Row};
 use anyhow::{Context, Result};
 use num_bigint::BigInt;
@@ -11,10 +11,11 @@ fn normalized_integers_discard_arithmetic_capacity_before_retention() -> Result<
     let mut huge = BigInt::from(1) << 65_536;
     huge >>= 65_536;
     let budget = NativeBudget::new(1024);
-    let codec = Integers::new("integer-test-v1", 2, budget.clone());
+    let codec = Vector::new("integer-test-v1", 2, budget.clone());
     let cached = codec.retain(row(), &[huge, 0.into()])?;
     assert!(budget.used() > 0 && budget.used() <= 1024);
-    let decoded = codec.decode(&cached, |_| anyhow::bail!("normalized value was not retained"))?;
+    let decoded =
+        codec.decode::<BigInt>(&cached, |_| anyhow::bail!("normalized value was not retained"))?;
     assert_eq!(*decoded, vec![1.into(), 0.into()]);
     drop(cached);
     assert!(budget.used() > 0);
@@ -26,11 +27,11 @@ fn normalized_integers_discard_arithmetic_capacity_before_retention() -> Result<
 fn cold_and_exhausted_vectors_keep_identical_canonical_state() -> Result<()> {
     for bytes in [0, 1, 4096] {
         let budget = NativeBudget::new(bytes);
-        let codec = Integers::new("integer-test-v1", 2, budget.clone());
-        let cached = codec.retain(row(), &[1.into(), 0.into()])?;
+        let codec = Vector::new("integer-test-v1", 2, budget.clone());
+        let cached = codec.retain::<BigInt>(row(), &[1.into(), 0.into()])?;
         assert_eq!(cached, row());
         let cold: Row = serde_json::from_slice(&serde_json::to_vec(&cached)?)?;
-        let decoded = codec.decode(&cold, |row| {
+        let decoded = codec.decode::<BigInt>(&cold, |row| {
             ["stat_0", "stat_1"]
                 .into_iter()
                 .map(|field| {

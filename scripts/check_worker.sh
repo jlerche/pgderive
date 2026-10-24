@@ -49,7 +49,7 @@ PGDERIVE_S3_LATENCY_SCALE="$crash_scale" run_qualification crashes python3 scrip
 while read -r qualification script; do
     if [[ "$profile" == core ]]; then
         case "$qualification" in
-            keyed-sink|compiler|application|composition-matrix|sliding-extrema|prefix-window|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|postgres-support|computed-join|environment|aggregate-inputs|relational|partition|numeric|native|navigation|case) ;;
+            keyed-sink|compiler|application|composition-matrix|sliding-extrema|prefix-window|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|postgres-support|computed-join|environment|aggregate-inputs|relational|partition|numeric|circuit-numeric|native|navigation|case) ;;
             *) continue ;;
         esac
     fi
@@ -79,6 +79,7 @@ aggregate-inputs aggregate_inputs_compiler
 relational relational_compiler
 partition partition_compiler
 numeric numeric_compiler
+circuit-numeric circuit_numeric
 native native_compiler
 date-bin date_bin_compiler
 hopping hopping_compiler
@@ -117,7 +118,7 @@ if [[ "$profile" == core ]]; then
     python3 scripts/verify_worker_core.py "$output" "${worker[0]}" "${admin[0]}"
     exit 0
 fi
-for qualification in query-toast query-ordered-state query-expression query-expression-calendar query-native-join query-topk query-membership circuit-numeric; do
+for qualification in query-toast query-ordered-state query-expression query-expression-calendar query-native-join query-topk query-membership; do
     PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
         python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${worker[@]}"
 done
@@ -150,7 +151,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==374,results
+assert len(results)==376,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))

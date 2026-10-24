@@ -21,7 +21,7 @@ pub use join::Join;
 pub use partition::{Partition, PartitionWork};
 pub use project::Project;
 pub use runtime::{Graph, PreparedGraph, PreparedMaintenance, Unregistered};
-pub use statistics::Statistics;
+pub use statistics::{Additive, Statistics};
 pub use sum::{GroupSum, SumDelta, SumState};
 pub use union::Union;
 

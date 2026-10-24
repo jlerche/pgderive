@@ -1,5 +1,8 @@
 # Bounded ingestion scale validation
 
+This records the pre-optimization baseline. Updated numeric SUM results are in
+[numeric-sum-benchmark.md](numeric-sum-benchmark.md).
+
 The bounded-ingestion implementation passed independent code review and the common
 local gate: 464 Rust tests, live PostgreSQL harnesses, 97.39% production line
 coverage, clippy and dependency checks. A final-build PostgreSQL control forced

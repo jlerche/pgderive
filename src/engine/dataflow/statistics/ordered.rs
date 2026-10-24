@@ -3,55 +3,13 @@ use super::{Statistics, read};
 use crate::engine::{
     Batch,
     dataflow::TimedBatch,
-    execution::{Consolidator, Limits, weight_size},
+    execution::{Consolidator, Limits},
     reader::BatchData,
     trace::TraceSnapshot,
 };
-use anyhow::{Context, Result, ensure};
-use num_bigint::BigInt;
+use anyhow::Result;
 use std::borrow::Borrow;
 
-struct Budget {
-    limits: Limits,
-    contributions: usize,
-    entries: usize,
-    bytes: u64,
-}
-impl Budget {
-    fn add<K: BatchData>(&mut self, key: &K, column: usize, value: &BigInt) -> Result<()> {
-        ensure!(
-            self.contributions < self.limits.contributions,
-            crate::engine::execution::CapacityExceeded("contribution limit exceeded")
-        );
-        self.contributions += 1;
-        weight_size(&(key, column), value, self.limits.record_bytes)?;
-        Ok(())
-    }
-    fn finish<K: BatchData>(&mut self, key: &K, values: &[BigInt]) -> Result<()> {
-        for (column, value) in
-            values.iter().enumerate().filter(|(_, value)| **value != BigInt::default())
-        {
-            self.entries = self.entries.checked_add(1).context("output entry count overflow")?;
-            ensure!(
-                self.entries <= self.limits.output_entries,
-                crate::engine::execution::CapacityExceeded("output entry limit exceeded")
-            );
-            self.bytes = self
-                .bytes
-                .checked_add(u64::try_from(weight_size(
-                    &(key, column),
-                    value,
-                    self.limits.record_bytes,
-                )?)?)
-                .context("output byte count overflow")?;
-            ensure!(
-                self.bytes <= self.limits.output_bytes,
-                crate::engine::execution::CapacityExceeded("output byte limit exceeded")
-            );
-        }
-        Ok(())
-    }
-}
 impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
     pub(super) async fn evaluate_ordered<B: Borrow<Batch<K, V>> + Sync>(
         &self,
@@ -72,42 +30,28 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         limits: Limits,
     ) -> Result<crate::engine::execution::Sealed<K, S>> {
         use crate::engine::reader::{BatchCursor as _, BatchReader as _};
-        ensure!((1..=129).contains(&self.width), "statistics width unsupported");
+        let mut accumulator = (self.create)(limits)?;
         let mut rows = input.cursor().await?;
-        let mut budget = Budget { limits, contributions: 0, entries: 0, bytes: 0 };
         let mut changes = Consolidator::new(limits)?;
         let mut probes = prior.probes();
-        let mut totals = vec![BigInt::default(); self.width];
         while let Some((key, _, _)) = rows.current() {
             let key = key.clone();
-            for total in &mut totals {
-                total.clone_from(&BigInt::default());
-            }
+            accumulator.reset();
             while let Some((found, row, weight)) = rows.current() {
                 if *found != key {
                     break;
                 }
-                let values = (self.measure)(found, row)?;
-                ensure!(values.len() == self.width, "statistics measure width mismatch");
-                for (column, (total, value)) in totals.iter_mut().zip(values).enumerate() {
-                    *total += value * weight;
-                    budget.add(&key, column, total)?;
-                }
+                accumulator.observe(found, row, weight)?;
                 rows.advance().await?;
             }
-            budget.finish(&key, &totals)?;
-            if totals.iter().all(|value| *value == BigInt::default()) {
+            if !accumulator.finish_delta(&key)? {
                 continue;
             }
             let before = read(&mut probes, &key).await?;
             if let Some(before) = &before {
-                let values = (self.decode)(before)?;
-                ensure!(values.len() == self.width, "persisted statistics width mismatch");
-                for (total, value) in totals.iter_mut().zip(values.iter()) {
-                    *total += value;
-                }
+                accumulator.restore(before)?;
             }
-            let after = (self.encode)(&key, &totals)?;
+            let after = accumulator.encode(&key)?;
             if before == after {
                 continue;
             }

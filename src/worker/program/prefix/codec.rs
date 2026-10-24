@@ -8,7 +8,7 @@ use num_bigint::BigInt;
 pub(super) const fn width(spec: &Partition) -> usize {
     statistics::width(spec.aggregates.len())
 }
-pub(super) use super::super::statistics::measure;
+pub(super) use super::super::statistics::measure_integers as measure;
 pub(super) fn encode(values: &[BigInt]) -> Row {
     super::super::statistics::encode_fields(values).collect()
 }

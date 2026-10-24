@@ -37,7 +37,7 @@ async fn read(prior: &TraceSnapshot<Key, Row>, key: &Key) -> Result<Option<Row>>
     Ok(Some(row))
 }
 struct Summaries<'a> {
-    native: &'a crate::worker::program::native::Integers,
+    native: &'a crate::worker::program::native::Vector,
     prior: &'a TraceSnapshot<Key, Row>,
     changed: Replacements,
 }
@@ -112,7 +112,7 @@ pub(super) async fn evaluate<'a>(
     spec: &'a Partition,
     input: BinaryInput<'a, Key, Row>,
     work: &mut PartitionWork,
-    native: &'a crate::worker::program::native::Integers,
+    native: &'a crate::worker::program::native::Vector,
 ) -> Result<Batch<Key, Row>> {
     let starts = changes(input.left, work)?;
     let summaries =

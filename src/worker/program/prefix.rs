@@ -47,7 +47,7 @@ pub(super) fn statistics(
 ) -> IndexedStatistics<Key, Row> {
     let spec = spec.clone();
     let size = width(&spec);
-    let native = super::native::Integers::new("sql-prefix-statistics-v1", size, budget);
+    let native = super::native::Vector::new("sql-prefix-statistics-v1", size, budget);
     let expanded = native.clone();
     let measured = native.clone();
     let decoded = native.clone();
@@ -61,7 +61,7 @@ pub(super) fn statistics(
         }
         Ok(())
     });
-    let stats = Statistics::with_shared_decode(
+    let stats = Statistics::with_algebra(
         size,
         move |_, row| measured.decode(row, |row| decode(row, size)).map(|values| values.to_vec()),
         move |row| decoded.decode(row, |row| decode(row, size)),
@@ -73,7 +73,7 @@ pub(super) fn statistics(
     IndexedStatistics::new(expand, stats)
 }
 pub(super) fn window(spec: &Partition, budget: Arc<NativeBudget>) -> Binary<Key, Row> {
-    let native = super::native::Integers::new("sql-prefix-statistics-v1", width(spec), budget);
+    let native = super::native::Vector::new("sql-prefix-statistics-v1", width(spec), budget);
     let spec = spec.clone();
     Binary::new(move |input, work| {
         let spec = spec.clone();
