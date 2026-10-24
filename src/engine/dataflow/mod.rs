@@ -21,6 +21,7 @@ pub use join::Join;
 pub use partition::{Partition, PartitionWork};
 pub use project::Project;
 pub use runtime::{Graph, PreparedGraph, PreparedMaintenance, Unregistered};
+pub(crate) use statistics::StatisticsOutput;
 pub use statistics::{Additive, Statistics};
 pub use sum::{GroupSum, SumDelta, SumState};
 pub use union::Union;

@@ -24,11 +24,6 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             Operator::Expand(operator) => {
                 return operator.evaluate_sealed(input, self.limits).await;
             }
-            Operator::Statistics(operator) => {
-                return operator
-                    .evaluate_sealed(input, self.prior(&node.id, prior)?, self.limits)
-                    .await;
-            }
             // Prefix summaries can depend on several navigation keys. Keep their
             // complete logical input together under their explicit existing limit.
             Operator::IndexedStatistics(operator) => {

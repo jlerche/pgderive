@@ -15,6 +15,24 @@ mod algebra;
 pub use algebra::Additive;
 use algebra::{Algebra, FoldState};
 type Create<K, V, S> = dyn Fn(Limits) -> Result<FoldState<K, V, S>> + Send + Sync;
+/// A producer-validated replacement tied to its exact immutable prior and delta.
+/// Only statistics evaluation can construct this capability.
+pub struct StatisticsOutput<'a, K: BatchData, V: BatchData> {
+    prior: &'a TraceSnapshot<K, V>,
+    batch: Arc<crate::engine::execution::Sealed<K, V>>,
+}
+impl<K: BatchData, V: BatchData> StatisticsOutput<'_, K, V> {
+    pub(crate) const fn batch(&self) -> &Arc<crate::engine::execution::Sealed<K, V>> {
+        &self.batch
+    }
+    pub(crate) fn matches(
+        &self,
+        prior: &TraceSnapshot<K, V>,
+        batch: &crate::engine::execution::Sealed<K, V>,
+    ) -> bool {
+        std::ptr::eq(self.prior, prior) && std::ptr::eq(self.batch.as_ref(), batch)
+    }
+}
 /// A linear map into exact additive statistics, followed by group finalization.
 /// Callers maintain valid full-tuple source bags; counts do not prove tuple validity.
 #[derive(Clone)]

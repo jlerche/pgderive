@@ -35,10 +35,4 @@ impl<K: BatchData, V: BatchData> ValidatedBag<'_, K, V> {
     pub(crate) fn matches(&self, trace: &TraceSnapshot<K, V>, batch: &Batch<K, V>) -> bool {
         std::ptr::eq(self.trace, trace) && std::ptr::eq(self.batch.as_ref(), batch)
     }
-    pub(crate) const fn trace(&self) -> &TraceSnapshot<K, V> {
-        self.trace
-    }
-    pub(crate) const fn batch(&self) -> &Arc<Batch<K, V>> {
-        &self.batch
-    }
 }

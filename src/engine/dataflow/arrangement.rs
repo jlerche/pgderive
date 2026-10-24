@@ -110,17 +110,6 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         prior.validate_delta(delta.batch.borrow()).await?;
         prior.append_validated(self.upload(delta.batch.borrow()).await?, delta.time)
     }
-    pub(crate) async fn stage_bag(
-        &self,
-        proof: &crate::engine::trace::ValidatedBag<'_, K, V>,
-        time: u64,
-    ) -> Result<TraceSnapshot<K, V>> {
-        ensure!(
-            proof.trace().run_count() < crate::engine::trace::MAX_RUNS,
-            "arrangement run limit requires compaction"
-        );
-        proof.trace().append_validated(self.upload(proof.batch()).await?, time)
-    }
     /// Persist memory deltas while retaining existing immutable object runs.
     /// Periodically consolidate all state to bound merge fan-in.
     ///

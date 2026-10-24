@@ -138,8 +138,12 @@ async fn sealed_statistics_finalize_once_after_all_group_contributions() -> Resu
         1,
     )?;
     let work = Limits { output_entries: 64, ..limits() };
-    let result = operator.evaluate_sealed(&sealed.batch[0], &writer.empty(), work).await?;
-    assert_eq!(result.materialize(work).await?, Batch::from_updates([((7, vec![i64::MAX]), 1)])?);
+    let prior = writer.empty();
+    let result = operator.evaluate_sealed(&sealed.batch[0], &prior, work).await?;
+    assert_eq!(
+        result.batch().materialize(work).await?,
+        Batch::from_updates([((7, vec![i64::MAX]), 1)])?
+    );
     Ok(())
 }
 
@@ -205,5 +209,36 @@ async fn whole_record_truncation_is_not_clean_eof() -> Result<()> {
         assert!(path.exists());
         std::fs::remove_dir_all(path.parent().context("scratch parent missing")?)?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn statistics_handoff_proof_does_not_bypass_scratch_corruption_checks() -> Result<()> {
+    use crate::engine::dataflow::Arrangement;
+    use std::io::Write as _;
+    let writer = Arrangement::new(
+        Arc::new(object_store::memory::InMemory::new()),
+        "proof-corruption".into(),
+        1,
+    )?;
+    let prior = writer.empty();
+    let operator = crate::engine::dataflow::Statistics::new(
+        1,
+        |v: &i64| Ok(vec![num_bigint::BigInt::from(*v)]),
+        |v: &i64| Ok(vec![num_bigint::BigInt::from(*v)]),
+        |_: &i64, v| Ok(Some(i64::try_from(v[0].clone())?)),
+    );
+    let input = Sealed::from(Batch::from_updates((0..10).map(|key| ((key, 1_i64), 1)))?);
+    let proof =
+        operator.evaluate_sealed(&input, &prior, Limits { output_entries: 64, ..limits() }).await?;
+    let path = match &proof.batch().storage {
+        Storage::Scratch(owner) => owner.run.path.clone(),
+        Storage::Resident(_) => anyhow::bail!("proof fixture did not spill"),
+    };
+    std::fs::OpenOptions::new().write(true).truncate(true).open(&path)?.write_all(b"bad")?;
+    assert!(proof.batch().materialize(Limits::default()).await.is_err());
+    drop(proof);
+    assert!(path.exists());
+    std::fs::remove_dir_all(path.parent().context("missing scratch parent")?)?;
     Ok(())
 }

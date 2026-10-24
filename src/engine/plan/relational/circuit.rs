@@ -15,6 +15,7 @@ type Values<K, V> = BTreeMap<String, Arc<crate::engine::execution::Sealed<K, V>>
 struct ValidatedValues<'a, K: BatchData, V: BatchData> {
     batches: Values<K, V>,
     bags: BTreeMap<String, crate::engine::trace::ValidatedBag<'a, K, V>>,
+    statistics: BTreeMap<String, crate::engine::dataflow::StatisticsOutput<'a, K, V>>,
 }
 #[derive(Clone, Copy)]
 pub(super) enum Staging<'a> {
@@ -23,7 +24,11 @@ pub(super) enum Staging<'a> {
 }
 struct StagePolicy<'a, 'b, K: BatchData, V: BatchData> {
     staging: Staging<'a>,
-    proof: Option<&'a crate::engine::trace::ValidatedBag<'b, K, V>>,
+    proof: Option<Validation<'a, 'b, K, V>>,
+}
+enum Validation<'a, 'b, K: BatchData, V: BatchData> {
+    Bag(&'a crate::engine::trace::ValidatedBag<'b, K, V>),
+    Statistics(&'a crate::engine::dataflow::StatisticsOutput<'b, K, V>),
 }
 type Replacement<K, V> = (String, Entry<K, V>);
 pub(super) fn validate<K: BatchData, V: BatchData>(
@@ -110,7 +115,11 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             "incomplete relational input"
         );
         let mut sources = input.batch.into_iter();
-        let mut values = ValidatedValues { batches: BTreeMap::new(), bags: BTreeMap::new() };
+        let mut values = ValidatedValues {
+            batches: BTreeMap::new(),
+            bags: BTreeMap::new(),
+            statistics: BTreeMap::new(),
+        };
         for node in &self.plan.definition().nodes {
             self.validate_input_bag(node, &prior, &mut values).await?;
             if matches!(
@@ -119,33 +128,21 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             ) {
                 profile.mark("input_bag_validation");
             }
+            if let Some(Operator::Statistics(operator)) = self.operators.get(&node.id) {
+                let parent =
+                    values.batches.get(&node.inputs[0]).context("missing statistics input")?;
+                let result = operator
+                    .evaluate_sealed(parent, self.prior(&node.id, &prior)?, self.limits)
+                    .await?;
+                values.batches.insert(node.id.clone(), Arc::clone(result.batch()));
+                values.statistics.insert(node.id.clone(), result);
+                profile.operator(&node.id);
+                continue;
+            }
             let batch = match node.kind {
                 Kind::Source => sources.next().context("incomplete relational input")?,
                 Kind::Join | Kind::Union | Kind::Window => {
-                    if node.kind == Kind::Join {
-                        self.join_sealed(
-                            node,
-                            &prior,
-                            TimedBatch {
-                                time: input.time,
-                                batch: (
-                                    values.batches[&node.inputs[0]].as_ref(),
-                                    values.batches[&node.inputs[1]].as_ref(),
-                                ),
-                            },
-                        )
-                        .await?
-                    } else if node.kind == Kind::Union {
-                        self.union_sealed(
-                            values.batches[&node.inputs[0]].as_ref(),
-                            values.batches[&node.inputs[1]].as_ref(),
-                        )
-                        .await?
-                    } else {
-                        self.evaluate_binary(node, &prior, &values.batches, input.time)
-                            .await?
-                            .into()
-                    }
+                    self.binary_sealed(node, &prior, &values.batches, input.time).await?
                 }
                 _ => {
                     let parent =
@@ -161,6 +158,30 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         let output =
             values.batches.remove(&self.plan.definition().outputs[0]).context("missing output")?;
         Ok((candidate, output.materialize(self.limits).await?))
+    }
+    async fn binary_sealed(
+        &self,
+        node: &Node,
+        prior: &RelationalState<K, V>,
+        values: &Values<K, V>,
+        time: u64,
+    ) -> Result<crate::engine::execution::Sealed<K, V>> {
+        Ok(if node.kind == Kind::Join {
+            self.join_sealed(
+                node,
+                prior,
+                TimedBatch {
+                    time,
+                    batch: (values[&node.inputs[0]].as_ref(), values[&node.inputs[1]].as_ref()),
+                },
+            )
+            .await?
+        } else if node.kind == Kind::Union {
+            self.union_sealed(values[&node.inputs[0]].as_ref(), values[&node.inputs[1]].as_ref())
+                .await?
+        } else {
+            self.evaluate_binary(node, prior, values, time).await?.into()
+        })
     }
     async fn validate_input_bag<'a>(
         &self,
@@ -229,12 +250,21 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
                 continue;
             }
             let batch = values.batches.get(&node.id).context("missing staged output")?;
-            uploads.push(self.stage(
-                &node.id,
-                prior,
-                TimedBatch { time, batch: batch.as_ref() },
-                StagePolicy { staging, proof: values.bags.get(&node.id) },
-            ));
+            uploads.push(
+                self.stage(
+                    &node.id,
+                    prior,
+                    TimedBatch { time, batch: batch.as_ref() },
+                    StagePolicy {
+                        staging,
+                        proof: values
+                            .statistics
+                            .get(&node.id)
+                            .map(Validation::Statistics)
+                            .or_else(|| values.bags.get(&node.id).map(Validation::Bag)),
+                    },
+                ),
+            );
         }
         // Drain every in-flight upload even on failure before the caller can
         // release its upload protection. No candidate becomes visible here.
@@ -328,54 +358,45 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             writer = writer.with_namespace(namespace);
         }
         let prior = &prior.entries.get(&member.id).context("missing prior state")?.trace;
-        let Some(batch) = delta.batch.resident() else {
-            self.validate_sealed(prior, delta.batch, false).await?;
-            if matches!(staging, Staging::Memory) {
-                let batch = delta.batch.materialize(self.limits).await?;
-                let trace = prior.append_validated(
-                    crate::engine::trace::Run::Memory(Arc::new(batch)),
-                    delta.time,
-                )?;
-                return Ok(Some((
-                    member.id.clone(),
-                    Entry { schema: member.schema.clone(), trace },
-                )));
+        ensure!(prior.time().checked_add(1) == Some(delta.time), "out-of-order staged tick");
+        ensure!(
+            prior.run_count() < crate::engine::trace::MAX_RUNS,
+            "arrangement run limit requires checkpoint"
+        );
+        match proof {
+            Some(Validation::Statistics(proof)) => {
+                ensure!(proof.matches(prior, delta.batch), "statistics boundary mismatch");
             }
-            let mut cursor = delta.batch.cursor().await?;
-            let runs = writer.upload_cursor(&mut cursor).await?;
-            let trace = prior.append_runs_validated(runs, delta.time)?;
-            return Ok(Some((member.id.clone(), Entry { schema: member.schema.clone(), trace })));
-        };
-        let delta = TimedBatch { time: delta.time, batch: batch.as_ref() };
-        if let Some(proof) = proof {
-            ensure!(proof.matches(prior, delta.batch), "validated batch boundary mismatch");
-            ensure!(
-                prior.run_count() < crate::engine::trace::MAX_RUNS,
-                "arrangement run limit requires checkpoint"
-            );
-            let trace = match staging {
-                Staging::Objects(_) => writer.stage_bag(proof, delta.time).await?,
-                Staging::Memory => prior.append_validated(
-                    crate::engine::trace::Run::Memory(Arc::clone(proof.batch())),
-                    delta.time,
-                )?,
-            };
-            return Ok(Some((member.id.clone(), Entry { schema: member.schema.clone(), trace })));
+            Some(Validation::Bag(proof)) => ensure!(
+                delta.batch.resident().is_some_and(|batch| proof.matches(prior, batch)),
+                "validated batch boundary mismatch"
+            ),
+            None => {
+                if let Some(batch) = delta.batch.resident() {
+                    prior.validate_delta(batch).await?;
+                } else {
+                    self.validate_sealed(prior, delta.batch, false).await?;
+                }
+            }
         }
         let trace = match staging {
-            Staging::Objects(_) => writer.stage(prior, &delta).await?,
             Staging::Memory => {
-                ensure!(
-                    prior.run_count() < crate::engine::trace::MAX_RUNS,
-                    "memtable run limit requires checkpoint"
-                );
-                prior.validate_delta(delta.batch).await?;
-                prior.append_validated(
-                    crate::engine::trace::Run::Memory(Arc::new(delta.batch.clone())),
-                    delta.time,
-                )?
+                let batch = if let Some(batch) = delta.batch.resident() {
+                    Arc::clone(batch)
+                } else {
+                    Arc::new(delta.batch.materialize(self.limits).await?)
+                };
+                prior.append_validated(crate::engine::trace::Run::Memory(batch), delta.time)?
+            }
+            Staging::Objects(_) => {
+                let mut cursor = delta.batch.cursor().await?;
+                let runs = writer.upload_cursor(&mut cursor).await?;
+                prior.append_runs_validated(runs, delta.time)?
             }
         };
         Ok(Some((member.id.clone(), Entry { schema: member.schema.clone(), trace })))
     }
 }
+
+#[cfg(test)]
+mod tests;

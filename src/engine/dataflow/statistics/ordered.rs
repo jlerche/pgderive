@@ -1,5 +1,5 @@
 //! One bounded accumulator vector over the already grouped input delta.
-use super::{Statistics, read};
+use super::{Statistics, StatisticsOutput, read};
 use crate::engine::{
     Batch,
     dataflow::TimedBatch,
@@ -8,7 +8,7 @@ use crate::engine::{
     trace::TraceSnapshot,
 };
 use anyhow::Result;
-use std::borrow::Borrow;
+use std::{borrow::Borrow, sync::Arc};
 
 impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
     pub(super) async fn evaluate_ordered<B: Borrow<Batch<K, V>> + Sync>(
@@ -20,15 +20,20 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         let sealed = crate::engine::execution::Sealed::from(input.batch.borrow().clone());
         Ok(TimedBatch {
             time: input.time,
-            batch: self.evaluate_sealed(&sealed, prior, limits).await?.materialize(limits).await?,
+            batch: self
+                .evaluate_sealed(&sealed, prior, limits)
+                .await?
+                .batch()
+                .materialize(limits)
+                .await?,
         })
     }
-    pub(crate) async fn evaluate_sealed(
+    pub(crate) async fn evaluate_sealed<'a>(
         &self,
         input: &crate::engine::execution::Sealed<K, V>,
-        prior: &TraceSnapshot<K, S>,
+        prior: &'a TraceSnapshot<K, S>,
         limits: Limits,
-    ) -> Result<crate::engine::execution::Sealed<K, S>> {
+    ) -> Result<StatisticsOutput<'a, K, S>> {
         use crate::engine::reader::{BatchCursor as _, BatchReader as _};
         let mut accumulator = (self.create)(limits)?;
         let mut rows = input.cursor().await?;
@@ -62,6 +67,8 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
                 changes.add((key.clone(), after), 1)?;
             }
         }
-        changes.seal()
+        // Each affected key was absent or a unique unit state. Replacing exactly
+        // that value preserves full-tuple multiplicity; no second lookup is needed.
+        Ok(StatisticsOutput { prior, batch: Arc::new(changes.seal()?) })
     }
 }
