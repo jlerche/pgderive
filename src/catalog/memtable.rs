@@ -25,11 +25,7 @@ impl Writer {
         let boundary_guard = clock.lap();
         self.boundary.binding.source.lock_and_verify_layout(&tx).await?;
         let source_layout = clock.lap();
-        tx.execute(
-            &format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,xid=$5,published_time=$2 WHERE query_id=$1", self.catalog.schema),
-            &[&self.catalog.query, &i64::try_from(time)?, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid)],
-        ).await?;
-        self.journal_epoch(&tx, (time, progress, transactions)).await?;
+        self.record_epoch(&tx, (time, progress, transactions)).await?;
         let progress_time = clock.lap();
         let membership = boundary_guard + source_layout + progress_time;
         deltas.apply(&tx, &self.catalog, &self.boundary.binding.sink, (time, progress.end)).await?;

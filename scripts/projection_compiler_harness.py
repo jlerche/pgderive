@@ -57,7 +57,7 @@ def qualify(output, command, local=False):
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         proxy, port = commit_proxy(output/'sql-fault.jsonl', 'after', once=True,
-                                   marker='pgderive_progress SET commit_lsn')
+                                   marker='/* pgderive:epoch */')
         fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
         worker = fixture.start(command, 'first')
         ready = worker.event('ready')

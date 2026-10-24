@@ -91,7 +91,12 @@ pub(super) async fn execute(
             chunk.occurrences,
         );
     }
-    let affected = tx.execute(statement, &[&Value::Array(chunk.values)]).await?;
+    let affected = tx
+        .execute_typed(
+            statement,
+            &[(&Value::Array(chunk.values), tokio_postgres::types::Type::JSONB)],
+        )
+        .await?;
     ensure!(
         affected == chunk.occurrences,
         "result occurrence missing or destination DML suppressed"

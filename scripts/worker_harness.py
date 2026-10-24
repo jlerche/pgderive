@@ -278,7 +278,7 @@ def qualify(output, command, ticks, index=0, mode=None, target=None, kill=False,
         if mode:
             marker = {'journal': 'pgderive_worker_registration(query_id,',
                       'activation': 'pgderive_progress(query_id,binding',
-                      'publication': 'pgderive_progress SET commit_lsn'}[target]
+                      'publication': '/* pgderive:epoch */'}[target]
             proxy, port = commit_proxy(output/'sql-fault.jsonl', mode, once=True, marker=marker)
             fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
         worker = fixture.start(command, 'first')
