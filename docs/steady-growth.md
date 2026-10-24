@@ -122,3 +122,47 @@ Aggregates are in [the recorded samples](steady-growth-samples.json). Detailed
 traces, failed attempts and cleanup records remain under ignored
 `artifacts/benchmarks/steady-growth/` and `artifacts/fast-validation/steady-storage-accepted/`.
 The live demo was not changed by this work.
+
+
+## Retained-run probe overhead
+
+A later live observation showed processing p50 rising from 64 to 79 to 104 ms
+while achieved input fell from 831 to 778 to 655 changes/s. Preparation p50
+rose from 20 to 28 to 44 ms; publication stayed around 31–35 ms. This identifies
+preparation for investigation, not proof that growing table cardinality caused it.
+
+A controlled production `Statistics::evaluate` workload keeps 256 groups and
+256 contributions fixed while increasing retained update runs. Each run retracts
+the preceding state and adds its replacement, so probes must cancel complete
+weighted identities to find the one current statistic. The old path rebuilt its
+reader deduplication map for every key and cursor clones copied immutable object
+reference strings. Cursors now share their immutable reader descriptor, and probe
+construction builds the reader/occurrence mapping once per snapshot. Separate
+cursor positions, repeated run multiplicity, store/cache isolation, failed-read
+retry and cancellation boundaries remain unchanged. No state-format or durable
+publication change is required.
+
+Three alternating baseline/candidate repetitions, excluding the first timing in
+each case, gave these local medians:
+
+| Retained runs | Before ms | After ms |
+| ---: | ---: | ---: |
+| 1 | 0.327 | 0.235 |
+| 8 | 1.578 | 0.807 |
+| 32 | 8.028 | 3.389 |
+| 64 | 18.774 | 8.906 |
+
+Run the component measurement with:
+
+```sh
+cargo test --release --lib engine::trace::growth_tests::retained_run_statistics_churn -- --exact --ignored --nocapture
+```
+
+Every evaluation must match the exact expected weighted replacement and issue
+zero GETs/PUTs. This measures cached probe CPU/ownership cost, not remote freshness
+or a plateau as the whole dataset grows. Remaining cost still depends on retained
+run fan-in. An experimental tournament merger was slower and was removed rather
+than retained as another path. Detailed paired samples, the rejected experiment
+and live evidence are retained under ignored
+`artifacts/benchmarks/live-latency-debug/`. The candidate requires a separate live
+deployment comparison before claiming any live latency improvement.

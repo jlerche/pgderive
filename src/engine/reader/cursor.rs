@@ -5,7 +5,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 enum Source<K: BatchData, V: BatchData> {
     Memory(Arc<Vec<Entry<K, V>>>),
-    Object(ObjectBatch<K, V>),
+    Object(Arc<ObjectBatch<K, V>>),
 }
 
 /// Forward cursor over sorted full identities. A cursor pins immutable input.
@@ -30,7 +30,7 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
         batch.cache = BlockCache::cursor(batch.cache.clone());
         let rows =
             if batch.blocks.is_empty() { Arc::new(Vec::new()) } else { batch.read(0).await? };
-        Ok(Self { source: Source::Object(batch), rows, block: 0, position: 0, end: None })
+        Ok(Self { source: Source::Object(Arc::new(batch)), rows, block: 0, position: 0, end: None })
     }
 
     // Only reusable, unconsumed probe heads are passed as `previous`.
@@ -78,7 +78,7 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
             .map_or(0, |old| old.position.min(rows.len()));
         let position = crate::engine::search::advance(&rows, start, |row| row.0.0 < *key);
         Ok(Some(Self {
-            source: Source::Object(batch),
+            source: Source::Object(Arc::new(batch)),
             rows,
             block,
             position,
@@ -97,7 +97,7 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
         let rows = batch.read(block).await?;
         let position = rows.partition_point(|row| row.0.0 < *lower);
         Ok(Some(Self {
-            source: Source::Object(batch),
+            source: Source::Object(Arc::new(batch)),
             rows,
             block,
             position,
