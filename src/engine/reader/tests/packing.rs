@@ -100,7 +100,8 @@ async fn one_root_spans_bounded_packs_and_index_splits_reset_pack_offsets() -> R
     assert_eq!(store.puts.load(Ordering::SeqCst), object.packs.len() + 1);
     let target = u64::try_from(TARGET_OBJECT_BYTES)?;
     assert!(object.packs.iter().all(|pack| pack.bytes <= target));
-    let limits = WriteLimits { index_blocks: 3, ..WriteLimits::default() };
+    // Keep many forced index splits within the unchanged 128-root bound.
+    let limits = WriteLimits { index_blocks: 8, ..WriteLimits::default() };
     let roots =
         ObjectBatch::write_stream(store.clone(), &mut object.cursor().await?, "large-pack", limits)
             .await?;

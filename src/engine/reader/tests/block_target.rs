@@ -75,3 +75,28 @@ async fn soft_target_preserves_large_rows_empty_roots_and_hard_budgets() -> Resu
     assert!(empty.cursor().await?.current().is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn decode_counters_measure_cold_payloads_not_cache_hits() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let batch = Batch::from_updates([((1_i64, "a".to_owned()), 1), ((2, "b".to_owned()), 1)])?;
+    let reference = ObjectBatch::write(store.clone(), &batch, "decode-counters", 1).await?;
+    let cache = Arc::new(BlockCache::new(4096, 8));
+    let object = ObjectBatch::<i64, String>::open_with_cache(
+        store,
+        reference,
+        "decode-counters",
+        cache.clone(),
+    )
+    .await?;
+    let rows = object.read(0).await?;
+    let bytes = u64::try_from(bounded::encode(&*rows)?.len())?;
+    assert_eq!(cache.stats()?.decoded_bytes, bytes);
+    assert_eq!(cache.stats()?.decoded_rows, 1);
+    object.read(0).await?;
+    assert_eq!(cache.stats()?.decoded_bytes, bytes);
+    assert_eq!(cache.stats()?.decoded_rows, 1);
+    object.read(1).await?;
+    assert_eq!(cache.stats()?.decoded_rows, 2);
+    Ok(())
+}

@@ -48,7 +48,7 @@ def validate_report(path, cases):
         if (len(times) != len(measured) or any(type(t) is not int or t < 0 for t in times)
                 or any(type(row[key]) is not int or row[key] != count for key, count in counts.items())
                 or any(type(row[key]) is not int or row[key] < 0 for key in [
-                    'memtable_bytes', 'measured_cache_misses', 'measured_object_reads',
+                    'memtable_bytes', 'measured_cache_misses', 'measured_decoded_bytes', 'measured_decoded_rows', 'measured_object_reads',
                     'measured_object_puts', 'object_puts', 'stored_objects', 'stored_bytes'])
                 or row['measured_object_puts'] != 0):
             raise RuntimeError('Engine measurement/oracle coverage differs: ' + row['case'])

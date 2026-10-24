@@ -1,4 +1,5 @@
 use super::*;
+use crate::engine::reader::WriteLimits;
 use crate::engine::{
     dataflow::{Project, Statistics},
     execution::{Consolidator, Limits, Sealed},
@@ -73,10 +74,21 @@ async fn fixture(
     let remote: Arc<dyn object_store::ObjectStore> = store.clone();
     let execution = execution(remote.clone())?;
     let batch = Batch::from_updates((0..count).map(|key| ((key, value(key, 1)), 1)))?;
-    let reference = ObjectBatch::write(remote.clone(), &batch, "wide", 4096).await?;
-    let object =
-        ObjectBatch::open_with_cache(remote, reference, "wide", execution.cache.clone()).await?;
-    let trace = execution.writers["stats"].empty().append_validated(Run::Object(object), 1)?;
+    let roots = ObjectBatch::write_stream(
+        remote.clone(),
+        &mut batch.cursor().await?,
+        "wide",
+        WriteLimits::default(),
+    )
+    .await?;
+    let mut runs = Vec::new();
+    for root in roots {
+        runs.push(Run::Object(
+            ObjectBatch::open_with_cache(remote.clone(), root, "wide", execution.cache.clone())
+                .await?,
+        ));
+    }
+    let trace = execution.writers["stats"].empty().append_runs_validated(runs, 1)?;
     let state = RelationalState {
         entries: std::iter::once(("stats".into(), Entry { schema: "wide".into(), trace }))
             .collect(),
@@ -95,7 +107,15 @@ fn input(spill: bool) -> Result<Sealed<i64, String>> {
 #[tokio::test]
 async fn sf10_statistics_handoff_eliminates_second_decoding_for_resident_and_spilled_deltas()
 -> Result<()> {
+    use futures_util::TryStreamExt as _;
+    use object_store::ObjectStore as _;
+    let initialized = Instant::now();
     let (execution, prior, store) = fixture(100_000).await?;
+    let objects = store.list(None).try_collect::<Vec<_>>().await?;
+    println!(
+        "{}",
+        serde_json::json!({"fixture_us":initialized.elapsed().as_micros(),"objects":objects.len(),"puts":store.puts.load(Ordering::SeqCst),"index_bytes":objects.iter().filter(|o|o.location.as_ref().contains("/batch/")).map(|o|o.size).sum::<u64>(),"stored_bytes":objects.iter().map(|o|o.size).sum::<u64>()})
+    );
     for spill in [false, true] {
         let limits = if spill {
             Limits { resident_entries: 1, ..Limits::default() }
@@ -103,8 +123,20 @@ async fn sf10_statistics_handoff_eliminates_second_decoding_for_resident_and_spi
             Limits::default()
         };
         let operator = operator();
+        let lookup_before = execution.cache.stats()?;
+        let lookup_started = Instant::now();
         let output =
             operator.evaluate_sealed(&input(spill)?, prior.trace("stats")?, limits).await?;
+        let lookup_us = lookup_started.elapsed().as_micros();
+        let lookup_after = execution.cache.stats()?;
+        ensure!(
+            lookup_after.decoded_bytes - lookup_before.decoded_bytes <= 12 * 1024 * 1024,
+            "statistics lookup decoded too many unrelated bytes"
+        );
+        ensure!(
+            lookup_after.decoded_rows - lookup_before.decoded_rows <= 16_000,
+            "statistics lookup decoded too many unrelated rows"
+        );
         assert_eq!(output.batch().resident().is_none(), spill);
         let before = execution.cache.stats()?;
         let started = Instant::now();
@@ -146,7 +178,7 @@ async fn sf10_statistics_handoff_eliminates_second_decoding_for_resident_and_spi
         assert_eq!(generic.1.trace.time(), checked.1.trace.time());
         println!(
             "{}",
-            serde_json::json!({"spill":spill,"generic_stage_us":generic_us,"checked_stage_us":checked_us,"generic_decode_misses":decoded,"checked_decode_misses":0})
+            serde_json::json!({"lookup_us":lookup_us,"lookup_decoded_bytes":lookup_after.decoded_bytes-lookup_before.decoded_bytes,"lookup_decoded_rows":lookup_after.decoded_rows-lookup_before.decoded_rows,"spill":spill,"generic_stage_us":generic_us,"checked_stage_us":checked_us,"generic_decode_misses":decoded,"checked_decode_misses":0})
         );
     }
     Ok(())

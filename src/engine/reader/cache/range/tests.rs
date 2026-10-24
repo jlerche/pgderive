@@ -1,4 +1,5 @@
 use super::Ranges;
+use crate::engine::reader::{BatchReader as _, WriteLimits};
 use crate::engine::{
     Batch,
     dataflow::{Arrangement, Statistics, TimedBatch},
@@ -69,13 +70,23 @@ async fn amplification(enabled: bool) -> Result<(usize, u128)> {
     }
     let cache = Arc::new(cache);
     let batch = Batch::from_updates((0..100_000).map(|k| ((k, value(k, 1)), 1)))?;
-    let reference = ObjectBatch::write(remote.clone(), &batch, "wide-statistics", 4096).await?;
-    let object =
-        ObjectBatch::open_with_cache(remote.clone(), reference, "wide-statistics", cache.clone())
-            .await?;
+    let roots = ObjectBatch::write_stream(
+        remote.clone(),
+        &mut batch.cursor().await?,
+        "wide-statistics",
+        WriteLimits::default(),
+    )
+    .await?;
+    let mut runs = Vec::new();
+    for root in roots {
+        runs.push(Run::Object(
+            ObjectBatch::open_with_cache(remote.clone(), root, "wide-statistics", cache.clone())
+                .await?,
+        ));
+    }
     let trace = Arrangement::new(remote, "wide-statistics".into(), 4096)?
         .empty()
-        .append_validated(Run::Object(object), 1)?;
+        .append_runs_validated(runs, 1)?;
     let operator = Statistics::with_measure(
         1,
         |_, _: &i64| Ok(vec![BigInt::from(1)]),

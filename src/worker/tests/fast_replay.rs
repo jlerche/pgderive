@@ -131,6 +131,8 @@ async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<ser
     let mut elapsed = Vec::new();
     let mut measured_changes = 0;
     let mut cache_misses = 0;
+    let mut decoded_bytes = 0;
+    let mut decoded_rows = 0;
     let mut object_reads = 0;
     let mut object_puts = 0;
     let mut oracle_checks = 0;
@@ -158,7 +160,10 @@ async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<ser
             if step.measure {
                 elapsed.push(started.elapsed().as_nanos());
                 measured_changes += count;
-                cache_misses += query.cache_stats()?.misses - before.misses;
+                let after = query.cache_stats()?;
+                cache_misses += after.misses - before.misses;
+                decoded_bytes += after.decoded_bytes - before.decoded_bytes;
+                decoded_rows += after.decoded_rows - before.decoded_rows;
                 object_reads += store.reads.load(Ordering::SeqCst) - reads;
                 object_puts += store.puts.load(Ordering::SeqCst) - puts;
             }
@@ -180,7 +185,7 @@ async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<ser
     Ok(serde_json::json!({"case":case.name,"prepare_commit_ns":elapsed,
         "object_puts":store.puts.load(Ordering::SeqCst),"stored_objects":objects.len(),
         "stored_bytes":objects.iter().map(|object| object.size).sum::<u64>(),
-        "measured_object_reads":object_reads,"measured_object_puts":object_puts,
+        "measured_decoded_bytes":decoded_bytes,"measured_decoded_rows":decoded_rows,"measured_object_reads":object_reads,"measured_object_puts":object_puts,
         "oracle_checks":oracle_checks,"measured_weighted_updates":measured_changes,"measured_cache_misses":cache_misses,"output_groups":output.len(),
         "memtable_bytes":query.memtable_bytes()?,"logical_time":query.time()}))
 }

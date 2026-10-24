@@ -99,7 +99,7 @@ class CoverageTests(unittest.TestCase):
                  'logical_time':2, 'measured_weighted_updates':2, 'output_groups':1,
                  'measured_object_reads':1, 'measured_object_puts':0,
                  'object_puts':3, 'stored_objects':3, 'stored_bytes':128,
-                 'memtable_bytes':100, 'measured_cache_misses':0}
+                 'memtable_bytes':100, 'measured_cache_misses':0, 'measured_decoded_bytes':100, 'measured_decoded_rows':1}
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory)/'engine.json'
             with self.assertRaises(FileNotFoundError):
@@ -109,7 +109,7 @@ class CoverageTests(unittest.TestCase):
             for mutation in [{'prepare_commit_ns':[]}, {'prepare_commit_ns':[True]},
                              {'oracle_checks':0}, {'case':'wrong'}, {'logical_time':3},
                              {'measured_weighted_updates':0}, {'memtable_bytes':-1},
-                             {'measured_cache_misses':-1}, {'measured_object_reads':-1},
+                             {'measured_cache_misses':-1}, {'measured_decoded_bytes':-1}, {'measured_decoded_rows':-1}, {'measured_object_reads':-1},
                              {'measured_object_puts':1}, {'object_puts':-1},
                              {'stored_objects':-1}, {'stored_bytes':-1}]:
                 path.write_text(json.dumps([valid | mutation]))

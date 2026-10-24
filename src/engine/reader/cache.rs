@@ -54,6 +54,10 @@ pub struct CacheStats {
     pub hits: u64,
     /// Decoded-cache misses, served by Foyer or object storage before decoding.
     pub misses: u64,
+    /// Successful cold page payload bytes deserialized, excluding cache hits.
+    pub decoded_bytes: u64,
+    /// Successful cold page rows deserialized, including unrelated rows.
+    pub decoded_rows: u64,
 }
 impl BlockCache {
     /// Set decoded-charge and entry caps; either zero disables retention.
@@ -140,6 +144,13 @@ impl BlockCache {
         drop(state);
         rows.map(|rows| rows.downcast().map_err(|_| anyhow::anyhow!("cache type mismatch")))
             .transpose()
+    }
+    pub(super) fn record_decode(&self, bytes: usize, rows: usize) -> Result<()> {
+        let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
+        state.stats.decoded_bytes = state.stats.decoded_bytes.saturating_add(u64::try_from(bytes)?);
+        state.stats.decoded_rows = state.stats.decoded_rows.saturating_add(u64::try_from(rows)?);
+        drop(state);
+        Ok(())
     }
     pub(super) fn insert<K: BatchData, V: BatchData>(
         &self,

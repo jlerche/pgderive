@@ -60,18 +60,6 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
     pub async fn reopen(&self, manifest: Manifest) -> Result<TraceSnapshot<K, V>> {
         TraceSnapshot::reopen(self.store.clone(), manifest, &self.schema, self.cache.clone()).await
     }
-    async fn upload(&self, batch: &Batch<K, V>) -> Result<Run<K, V>> {
-        Ok(Run::Object(
-            ObjectBatch::write_resident(
-                self.store.clone(),
-                batch,
-                &self.schema,
-                (self.namespace.as_deref(), self.block_rows),
-                self.cache.clone(),
-            )
-            .await?,
-        ))
-    }
     pub(crate) async fn upload_flush(&self, batch: &Batch<K, V>) -> Result<Vec<Run<K, V>>> {
         let mut cursor = batch.cursor().await?;
         self.upload_cursor(&mut cursor).await
@@ -108,7 +96,7 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
             "arrangement run limit requires compaction"
         );
         prior.validate_delta(delta.batch.borrow()).await?;
-        prior.append_validated(self.upload(delta.batch.borrow()).await?, delta.time)
+        prior.append_runs_validated(self.upload_flush(delta.batch.borrow()).await?, delta.time)
     }
     /// Persist memory deltas while retaining existing immutable object runs.
     /// Periodically consolidate all state to bound merge fan-in.

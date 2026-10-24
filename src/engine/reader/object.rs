@@ -302,6 +302,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             let decoded = super::compression::decode(&bytes)?;
             let mut rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
             validate(&rows)?;
+            self.cache.record_decode(decoded.len(), rows.len())?;
             // JSON arrays do not carry a length hint. Do not retain their
             // geometric deserialization spare capacity in the bounded cache.
             rows.shrink_to_fit();
