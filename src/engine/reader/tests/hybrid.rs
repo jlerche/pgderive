@@ -78,7 +78,8 @@ async fn disk_hit_never_masks_missing_or_corrupt_durable_state() -> Result<()> {
     store.delete(&Path::from(child.clone())).await?;
     // Decoded retention is disabled, so this must come from the reopened disk cache.
     assert_eq!(object.cursor().await?.current().map(|(_, _, weight)| weight), Some(3));
-    let manifest = Manifest { version: 1, time: 0, generation: 0, objects: vec![reference] };
+    let manifest =
+        Manifest { version: 2, time: 0, generation: 0, cohorts: vec![1], objects: vec![reference] };
     assert!(
         TraceSnapshot::<i64, String>::reopen(
             store.clone(),

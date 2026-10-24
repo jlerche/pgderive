@@ -73,7 +73,13 @@ fn maintenance_keeps_singletons_and_requires_one_generation_for_replacements() -
         arrangements: vec![Membership {
             id: "output".into(),
             schema: "row".into(),
-            trace: Manifest { version: 1, time: 1, generation: 1, objects: vec![] },
+            trace: Manifest {
+                version: 2,
+                time: 1,
+                generation: 1,
+                objects: vec![],
+                cohorts: vec![],
+            },
         }],
     };
     super::maintenance::validate(&prior, &prior, &plan)?;
@@ -103,7 +109,7 @@ fn checkpoint_checksum_retains_run_order_multiplicity_and_numeric_limits() -> Re
     let first = root(&"a".repeat(64));
     let second = root(&"b".repeat(64));
     let encoded = json!({"version":1,"plan_identity":"plan","time":1,"arrangements":[{
-        "id":"rows","schema":"rows","trace":{"version":1,"time":1,"generation":1,
+        "id":"rows","schema":"rows","trace":{"version":2,"time":1,"generation":1,"cohorts":[3],
         "objects":[first.clone(),second,first]}}]});
     let checkpoint: Checkpoint = serde_json::from_value(encoded.clone())?;
     let digest = super::checkpoint_digest(&checkpoint)?;

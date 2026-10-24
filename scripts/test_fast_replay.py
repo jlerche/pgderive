@@ -118,3 +118,22 @@ class CoverageTests(unittest.TestCase):
             path.write_text('[]')
             with self.assertRaises(RuntimeError):
                 validate_report(path, cases)
+
+    def test_storage_growth_rejects_retained_state_rescans(self):
+        import tempfile
+        from fast_validation import validate_storage_growth
+        valid = [{'initial_rows':rows, 'changes':256, 'flush_ns':[1]*256,
+                  'weighted_bag_equal':True, 'reads':32, 'read_bytes':4096, 'puts':520, 'put_bytes':65536,
+                  'max_roots':20, 'final_roots':9} for rows in [2000,8000,32000,128000]]
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)/'storage.json'
+            path.write_text(json.dumps(valid))
+            validate_storage_growth(path)
+            for mutation in [{'changes':0}, {'flush_ns':[]}, {'weighted_bag_equal':False},
+                             {'read_bytes':2048**2}, {'read_bytes':16384}, {'put_bytes':220000}, {'put_bytes':1024**2}, {'reads':True}, {'puts':1000}, {'max_roots':128}]:
+                path.write_text(json.dumps([valid[0] | mutation, *valid[1:]]))
+                with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
+                    validate_storage_growth(path)
+            path.write_text('[]')
+            with self.assertRaises(RuntimeError):
+                validate_storage_growth(path)

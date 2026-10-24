@@ -36,7 +36,7 @@ pub(super) fn due(open: &Open, pending: bool, deadline: tokio::time::Instant) ->
     Ok(pending
         && open.checkpoint.is_none()
         && (tokio::time::Instant::now() >= deadline
-            || u64::try_from(open.query.run_count())? >= open.settings.maintenance_ticks))
+            || u64::try_from(open.query.unsealed_run_count())? >= open.settings.maintenance_ticks))
 }
 pub(super) async fn start(open: &mut Open) -> Result<()> {
     ensure!(open.checkpoint.is_none(), "checkpoint already in flight");

@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 pub struct Store {
     inner: InMemory,
     pub(crate) puts: AtomicUsize,
+    pub(crate) put_bytes: AtomicUsize,
     pub(crate) reads: AtomicUsize,
     pub(crate) range_start: AtomicU64,
     pub(crate) range_end: AtomicU64,
@@ -53,6 +54,7 @@ impl std::fmt::Display for Store {
 impl ObjectStore for Store {
     async fn put_opts(&self, path: &Path, data: PutPayload, opts: PutOptions) -> Result<PutResult> {
         let call = self.puts.fetch_add(1, Ordering::SeqCst);
+        self.put_bytes.fetch_add(data.content_length(), Ordering::SeqCst);
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(active, Ordering::SeqCst);
         if !self.unpaced {

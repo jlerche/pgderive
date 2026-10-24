@@ -50,15 +50,24 @@ memberships retain their full-tuple additive meaning. If a memory-only sum canno
 fit the persisted coefficient type, full-trace compaction handles cancellation
 against object state before narrowing.
 
-Uploads use byte-aware blocks and bounded root metadata. A nonzero delta triggers full compaction at eight existing
-object runs or, for nonempty retained state, when its distinct entry count exceeds
-half the retained physical row count. Counts are cached from resident fences at upload/open, including every
-repeated membership; the decision needs no object reads or fence scans. Canceling
-memory deltas simply disappear without reading or rewriting retained objects,
-even at eight runs. The complete candidate is bounded by the 128-run limit. A wide delta may produce multiple roots. Consolidating the
-memory delta requires additional memory proportional to retained memory input;
-this is bounded by the worker memtable setting, not a fixed-memory streaming
-merge. Periodic full compaction still runs in the checkpoint path.
+Uploads use byte-aware blocks and bounded root metadata. Manifest version 2
+records the consecutive object-root counts belonging to each logical upload run.
+Multipack output stays one logical run after restart. Old manifests require a
+rebuild; there is no compatibility fallback.
+
+A nonzero memory delta allows one size tier containing at least eight logical
+runs to be consolidated. Tiers use resident physical row counts, rounded down to
+powers of two; unrelated larger runs retain their exact membership. Canceling
+memory deltas disappear without reading retained objects. Selected-subset
+coefficient overflow specifically requires complete-trace consolidation so that
+cancellation with retained state happens before narrowing. I/O and integrity
+errors propagate.
+
+This removes the fixed eight-object full rewrite. Maintenance is amortized,
+not strictly constant: tier promotions do more work, and the 128-physical-root
+safety cap can still require full compaction. Consolidating memory requires
+additional memory proportional to retained memory input, bounded by the worker
+memtable setting. See [growth qualification](steady-growth.md).
 
 Publication remains: protected immutable PUTs, PostgreSQL checkpoint transaction,
 local installation, protection release, then acknowledgement of the durable

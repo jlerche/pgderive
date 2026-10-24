@@ -109,7 +109,7 @@ async fn one_root_spans_bounded_packs_and_index_splits_reset_pack_offsets() -> R
     let store: Arc<dyn object_store::ObjectStore> = store;
     let snapshot = TraceSnapshot::<i32, String>::reopen(
         store,
-        Manifest { version: 1, time: 0, generation: 0, objects: roots },
+        Manifest { version: 2, time: 0, generation: 0, cohorts: vec![roots.len()], objects: roots },
         "large-pack",
         Arc::new(BlockCache::new(0, 0)),
     )
@@ -150,7 +150,7 @@ async fn tight_index_byte_budget_rebinds_each_page_to_a_fresh_pack() -> Result<(
     }
     let snapshot = TraceSnapshot::<i32, (i32, String)>::reopen(
         store,
-        Manifest { version: 1, time: 0, generation: 0, objects: roots },
+        Manifest { version: 2, time: 0, generation: 0, cohorts: vec![roots.len()], objects: roots },
         "packing",
         Arc::new(BlockCache::new(0, 0)),
     )

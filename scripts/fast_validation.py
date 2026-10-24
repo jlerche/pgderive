@@ -12,6 +12,7 @@ import time
 from fast_replay import export, preloaded, traces
 from performance.common import ROOT, save, sha256
 
+STORAGE_GROWTH = 'engine::trace::growth_tests::fixed_change_checkpoint_growth'
 REPLAY = 'worker::tests::fast_replay::fast_replay'
 
 
@@ -52,6 +53,24 @@ def validate_report(path, cases):
                     'measured_object_puts', 'object_puts', 'stored_objects', 'stored_bytes'])
                 or row['measured_object_puts'] != 0):
             raise RuntimeError('Engine measurement/oracle coverage differs: ' + row['case'])
+
+
+def validate_storage_growth(path):
+    rows = json.loads(path.read_text())
+    if not isinstance(rows, list) or [row['initial_rows'] for row in rows] != [2000, 8000, 32000, 128000]:
+        raise RuntimeError('Storage growth sizes differ from qualification')
+    for row in rows:
+        times = row['flush_ns']
+        if (row['changes'] != 256 or row['weighted_bag_equal'] is not True
+                or len(times) != 256 or any(type(t) is not int or t < 0 for t in times)
+                or any(type(row[key]) is not int or row[key] < 0 for key in ['reads','read_bytes','puts','put_bytes'])
+                or row['reads'] > 256 or row['read_bytes'] > 64*1024 or row['put_bytes'] > 256*1024 or row['puts'] > 550
+                or not 0 < row['final_roots'] <= row['max_roots'] < 32):
+            raise RuntimeError('Fixed-change checkpoint work grew with retained state: ' + str(row['initial_rows']))
+    for key in ['reads', 'read_bytes', 'put_bytes']:
+        values = [row[key] for row in rows]
+        if max(values) > 2 * min(values):
+            raise RuntimeError('Checkpoint work scales with retained state: ' + key)
 
 
 def execute(command, output, name, environment=None):
@@ -107,7 +126,7 @@ def growth_limits(rows):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=pathlib.Path, required=True)
-    parser.add_argument('--mode', choices=['correctness', 'growth', 'integration'], default='correctness')
+    parser.add_argument('--mode', choices=['correctness', 'growth', 'storage-growth', 'integration'], default='correctness')
     parser.add_argument('--seeds', type=int, default=3)
     parser.add_argument('--state-rows', type=int, nargs='+', default=[1000, 8000, 32000])
     parser.add_argument('--repeats', type=int, default=3)
@@ -144,6 +163,20 @@ def main():
             for name in ['during-upload', 'after-commit', 'pressure', 'shutdown', 'timeout']:
                 if json.loads((directory/name/'result.json').read_text()).get('passed') is not True:
                     raise RuntimeError('Live checkpoint case did not pass: ' + name)
+        elif args.mode == 'storage-growth':
+            binary = test_binary(output, args.release)
+            report['steps'].append(json.loads((output / 'build.json').read_text()))
+            report['test_binary_sha256'] = sha256(pathlib.Path(binary))
+            report['steps'].append(execute([binary, 'engine::trace::tier_tests::', '--nocapture'], output, 'storage-correctness'))
+            validate_tests(output/'storage-correctness.log', {
+                'engine::trace::tier_tests::growing_tiny_flushes_never_rewrite_large_base',
+                'engine::trace::tier_tests::multipack_cohort_survives_tiny_flushes_and_restart',
+                'engine::trace::tier_tests::tier_subset_overflow_consolidates_only_complete_state',
+                'engine::trace::tier_tests::empty_cohorts_survive_growth_cancellation_and_cold_restore'})
+            env = dict(os.environ, PGDERIVE_STORAGE_GROWTH_REPORT=str(output / 'storage.json'))
+            report['steps'].append(execute([binary, STORAGE_GROWTH, '--exact', '--ignored', '--nocapture'], output, 'storage-growth', env))
+            validate_tests(output/'storage-growth.log', {STORAGE_GROWTH})
+            validate_storage_growth(output/'storage.json')
         else:
             binary = test_binary(output, args.release)
             report['steps'].append(json.loads((output / 'build.json').read_text()))

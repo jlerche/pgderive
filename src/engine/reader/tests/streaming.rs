@@ -83,7 +83,13 @@ async fn full_trace_compaction_consolidates_before_physical_splitting() -> Resul
     let b = ObjectBatch::write(store.clone(), &negative, schema, 1).await?;
     let prior = TraceSnapshot::<i64, i64>::reopen(
         store.clone(),
-        Manifest { version: 1, time: 1, generation: 1, objects: vec![a.clone(), a, b] },
+        Manifest {
+            version: 2,
+            time: 1,
+            generation: 1,
+            cohorts: vec![3],
+            objects: vec![a.clone(), a, b],
+        },
         schema,
         Arc::new(crate::engine::reader::BlockCache::new(0, 0)),
     )
@@ -197,7 +203,7 @@ async fn borrowed_spans_share_decodes_preserve_restrictions_and_stream_objects()
     .await?;
     let restored = TraceSnapshot::<i64, i64>::reopen(
         store,
-        Manifest { version: 1, time: 0, generation: 0, objects: roots },
+        Manifest { version: 2, time: 0, generation: 0, cohorts: vec![roots.len()], objects: roots },
         "span-v1",
         Arc::new(BlockCache::new(0, 0)),
     )
@@ -260,7 +266,7 @@ async fn merged_spans_stop_before_overlap_and_compaction_preserves_weights() -> 
     ];
     let prior = TraceSnapshot::<i64, i64>::reopen(
         store.clone(),
-        Manifest { version: 1, time: 0, generation: 0, objects: roots },
+        Manifest { version: 2, time: 0, generation: 0, cohorts: vec![roots.len()], objects: roots },
         "merge-span-v1",
         Arc::new(BlockCache::new(4096, 8)),
     )
@@ -301,7 +307,7 @@ async fn failed_merged_span_load_keeps_consolidated_position_for_retry() -> Resu
     );
     let prior = TraceSnapshot::<i64, i64>::reopen(
         store.clone(),
-        Manifest { version: 1, time: 0, generation: 0, objects: vec![root] },
+        Manifest { version: 2, time: 0, generation: 0, cohorts: vec![1], objects: vec![root] },
         "span-retry-v1",
         cache,
     )

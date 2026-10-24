@@ -119,29 +119,6 @@ async fn wide_memory_delta_uses_byte_bounded_blocks_and_cold_reopens() -> Result
 }
 
 #[tokio::test]
-async fn density_boundary_compacts_only_above_half_the_retained_rows() -> Result<()> {
-    let writer = Arrangement::<i64, i64>::new(Arc::new(InMemory::new()), "density-v1".into(), 2)?;
-    let base = writer
-        .stage(
-            &writer.empty(),
-            &TimedBatch { time: 1, batch: Batch::from_updates((0..4).map(|key| ((key, key), 2)))? },
-        )
-        .await?;
-    for entries in [2, 3] {
-        let delta = Batch::from_updates((0..entries).map(|key| ((key, key), -1)))?;
-        let pending = base.append_validated(Run::Memory(Arc::new(delta)), 2)?;
-        let flushed = writer.flush(&pending).await?;
-        assert_eq!(flushed.run_count(), if entries == 2 { 2 } else { 1 });
-        assert_eq!(flushed.materialize().await?, pending.materialize().await?);
-        assert_eq!(
-            writer.reopen(flushed.manifest()?).await?.materialize().await?,
-            pending.materialize().await?
-        );
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn canceling_memory_never_reads_eight_retained_runs() -> Result<()> {
     use crate::engine::reader::ObjectBatch;
     use anyhow::Context;

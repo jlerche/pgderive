@@ -1,0 +1,1542 @@
+{
+  "baseline_commit": "ffaca16f129b0fefc369c5fea9d15d52ac2eb211",
+  "scope": "Local controlled growth qualification; no live deployment or unbounded stability claim",
+  "storage_before": [
+    {
+      "changes": 256,
+      "final_roots": 1,
+      "initial_rows": 2000,
+      "max_roots": 8,
+      "put_bytes": 250478,
+      "puts": 512,
+      "read_bytes": 145382,
+      "reads": 256,
+      "weighted_bag_equal": true,
+      "flush_ms": {
+        "n": 256,
+        "p50": 0.006657,
+        "p95": 0.491307,
+        "p99": 0.692316,
+        "max": 0.778209
+      },
+      "flush_total_ms": 18.217126
+    },
+    {
+      "changes": 256,
+      "final_roots": 1,
+      "initial_rows": 8000,
+      "max_roots": 8,
+      "put_bytes": 575088,
+      "puts": 512,
+      "read_bytes": 441030,
+      "reads": 256,
+      "weighted_bag_equal": true,
+      "flush_ms": {
+        "n": 256,
+        "p50": 0.0078295,
+        "p95": 1.695951,
+        "p99": 2.057342,
+        "max": 2.314318
+      },
+      "flush_total_ms": 57.993974
+    },
+    {
+      "changes": 256,
+      "final_roots": 1,
+      "initial_rows": 32000,
+      "max_roots": 8,
+      "put_bytes": 1970432,
+      "puts": 512,
+      "read_bytes": 1692996,
+      "reads": 256,
+      "weighted_bag_equal": true,
+      "flush_ms": {
+        "n": 256,
+        "p50": 0.0099535,
+        "p95": 7.265632,
+        "p99": 7.365311,
+        "max": 7.397482
+      },
+      "flush_total_ms": 233.427497
+    },
+    {
+      "changes": 256,
+      "final_roots": 1,
+      "initial_rows": 128000,
+      "max_roots": 8,
+      "put_bytes": 7426101,
+      "puts": 512,
+      "read_bytes": 6556367,
+      "reads": 256,
+      "weighted_bag_equal": true,
+      "flush_ms": {
+        "n": 256,
+        "p50": 0.010759999999999999,
+        "p95": 29.824,
+        "p99": 30.74073,
+        "max": 31.264329
+      },
+      "flush_total_ms": 956.512772
+    }
+  ],
+  "storage_after": [
+    {
+      "changes": 256,
+      "final_roots": 12,
+      "initial_rows": 2000,
+      "max_roots": 18,
+      "put_bytes": 104743,
+      "puts": 518,
+      "read_bytes": 7617,
+      "reads": 248,
+      "weighted_bag_equal": true,
+      "flush_ms": {
+        "n": 256,
+        "p50": 0.008245,
+        "p95": 0.033233,
+        "p99": 0.071355,
+        "max": 0.081134
+      },
+      "flush_total_ms": 3.188209
+    },
+    {
+      "changes": 256,
+      "final_roots": 12,
+      "initial_rows": 8000,
+      "max_roots": 18,
+      "put_bytes": 104743,
+      "puts": 518,
+      "read_bytes": 7617,
+      "reads": 248,
+      "weighted_bag_equal": true,
+      "flush_ms": {
+        "n": 256,
+        "p50": 0.008381,
+        "p95": 0.032822,
+        "p99": 0.053311,
+        "max": 0.057098
+      },
+      "flush_total_ms": 3.027455
+    },
+    {
+      "changes": 256,
+      "final_roots": 12,
+      "initial_rows": 32000,
+      "max_roots": 18,
+      "put_bytes": 106279,
+      "puts": 518,
+      "read_bytes": 8076,
+      "reads": 248,
+      "weighted_bag_equal": true,
+      "flush_ms": {
+        "n": 256,
+        "p50": 0.009653499999999999,
+        "p95": 0.034515,
+        "p99": 0.057749,
+        "max": 0.058521
+      },
+      "flush_total_ms": 3.410054
+    },
+    {
+      "changes": 256,
+      "final_roots": 12,
+      "initial_rows": 128000,
+      "max_roots": 18,
+      "put_bytes": 107842,
+      "puts": 518,
+      "read_bytes": 8584,
+      "reads": 248,
+      "weighted_bag_equal": true,
+      "flush_ms": {
+        "n": 256,
+        "p50": 0.011011,
+        "p95": 0.048813,
+        "p99": 0.068229,
+        "max": 0.069411
+      },
+      "flush_total_ms": 4.290173
+    }
+  ],
+  "paced": {
+    "before_soak": {
+      "rows_per_second": 1000.3765769269229,
+      "source_changes": 179847,
+      "processing_ms": {
+        "n": 1531,
+        "p50": 3,
+        "p95": 9,
+        "p99": 13,
+        "max": 92
+      },
+      "received_to_sink_ms": {
+        "n": 1531,
+        "p50": 4,
+        "p95": 11,
+        "p99": 15,
+        "max": 135
+      },
+      "checkpoint_ms": {
+        "n": 32,
+        "p50": 181.8835,
+        "p95": 384.571,
+        "p99": 424.267,
+        "max": 424.267
+      },
+      "resource_peaks": {
+        "rss_bytes": 127213568,
+        "retained_wal_bytes": 7888632,
+        "journal_rows": 47,
+        "protection_rows": 9,
+        "pending_changes_after_marker": 87
+      },
+      "state_peak_bytes": 622927,
+      "state_peak_objects": 32,
+      "request_counts": {
+        "interval": null,
+        "attempts": 748,
+        "methods": {
+          "PUT": 135,
+          "HEAD": 272,
+          "GET": 334,
+          "POST": 7
+        },
+        "estimated_r2_classes": {
+          "class_a": 167,
+          "class_b": 574,
+          "unclassified": 7
+        },
+        "status_codes": {
+          "200": 446,
+          "206": 302
+        },
+        "transport_errors": 0,
+        "request_body_bytes": 1762902,
+        "response_body_bytes": 6661777,
+        "unknown_request_body_sizes": 0,
+        "scope": "All completed proxy attempts, including bootstrap, drain, GC and retries. Class estimates use HTTP method/listing flags; POST is unclassified because multipart versus bulk deletion is not recorded. Not a billing invoice."
+      }
+    },
+    "after_soak": {
+      "rows_per_second": 1000.1538118964573,
+      "source_changes": 179847,
+      "processing_ms": {
+        "n": 1506,
+        "p50": 3.0,
+        "p95": 11,
+        "p99": 15,
+        "max": 43
+      },
+      "received_to_sink_ms": {
+        "n": 1506,
+        "p50": 5.0,
+        "p95": 12,
+        "p99": 17,
+        "max": 366
+      },
+      "checkpoint_ms": {
+        "n": 32,
+        "p50": 175.00799999999998,
+        "p95": 260.716,
+        "p99": 277.819,
+        "max": 277.819
+      },
+      "resource_peaks": {
+        "rss_bytes": 112381952,
+        "retained_wal_bytes": 7508216,
+        "journal_rows": 47,
+        "protection_rows": 14,
+        "pending_changes_after_marker": 1001
+      },
+      "state_peak_bytes": 601784,
+      "state_peak_objects": 52,
+      "request_counts": {
+        "interval": null,
+        "attempts": 1271,
+        "methods": {
+          "PUT": 136,
+          "HEAD": 518,
+          "GET": 613,
+          "POST": 4
+        },
+        "estimated_r2_classes": {
+          "class_a": 168,
+          "class_b": 1099,
+          "unclassified": 4
+        },
+        "status_codes": {
+          "200": 690,
+          "206": 581
+        },
+        "transport_errors": 0,
+        "request_body_bytes": 1015074,
+        "response_body_bytes": 6391040,
+        "unknown_request_body_sizes": 0,
+        "scope": "All completed proxy attempts, including bootstrap, drain, GC and retries. Class estimates use HTTP method/listing flags; POST is unclassified because multipart versus bulk deletion is not recorded. Not a billing invoice."
+      }
+    }
+  },
+  "continuous": {
+    "candidate": {
+      "passed": true,
+      "source_changes": 180000,
+      "actual_rows_per_second": 1000.0,
+      "process_cpu_seconds": 7.239999999999999,
+      "oracle_equal": true,
+      "ack_safe": true,
+      "sink_visibility_ms": {
+        "n": 1159,
+        "p50": 11.696417001076043,
+        "p95": 26.0597929591313,
+        "p99": 29.43498396780342,
+        "max": 59.23714197706431
+      },
+      "windows": [
+        {
+          "start_seconds": 0,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 133,
+            "p50": 11.60971901845187,
+            "p95": 20.69261996075511,
+            "p99": 26.834618067368865,
+            "max": 27.4560950929299
+          },
+          "processing_ms": {
+            "n": 175,
+            "p50": 3,
+            "p95": 8,
+            "p99": 11,
+            "max": 12
+          },
+          "received_to_sink_ms": {
+            "n": 175,
+            "p50": 4,
+            "p95": 9,
+            "p99": 12,
+            "max": 12
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 157.073,
+            "p95": 213.922,
+            "p99": 213.922,
+            "max": 213.922
+          }
+        },
+        {
+          "start_seconds": 20,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 129,
+            "p50": 13.823694083839655,
+            "p95": 25.701530976220965,
+            "p99": 30.613188981078565,
+            "max": 31.30642301402986
+          },
+          "processing_ms": {
+            "n": 169,
+            "p50": 5,
+            "p95": 11,
+            "p99": 14,
+            "max": 15
+          },
+          "received_to_sink_ms": {
+            "n": 169,
+            "p50": 7,
+            "p95": 12,
+            "p99": 15,
+            "max": 15
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 133.499,
+            "p95": 170.398,
+            "p99": 170.398,
+            "max": 170.398
+          }
+        },
+        {
+          "start_seconds": 40,
+          "transactions": 199,
+          "source_changes": 19320,
+          "sink_visibility_ms": {
+            "n": 127,
+            "p50": 14.947875984944403,
+            "p95": 26.0597929591313,
+            "p99": 27.09733904339373,
+            "max": 59.23714197706431
+          },
+          "processing_ms": {
+            "n": 162,
+            "p50": 6.0,
+            "p95": 12,
+            "p99": 15,
+            "max": 42
+          },
+          "received_to_sink_ms": {
+            "n": 162,
+            "p50": 7.0,
+            "p95": 14,
+            "p99": 17,
+            "max": 42
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 213.80399999999997,
+            "p95": 252.817,
+            "p99": 252.817,
+            "max": 252.817
+          }
+        },
+        {
+          "start_seconds": 60,
+          "transactions": 197,
+          "source_changes": 20062,
+          "sink_visibility_ms": {
+            "n": 131,
+            "p50": 10.342418914660811,
+            "p95": 27.244479046203196,
+            "p99": 49.43517898209393,
+            "max": 56.196541991084814
+          },
+          "processing_ms": {
+            "n": 174,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 22,
+            "max": 43
+          },
+          "received_to_sink_ms": {
+            "n": 174,
+            "p50": 3.0,
+            "p95": 10,
+            "p99": 45,
+            "max": 46
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 148.282,
+            "p95": 162.029,
+            "p99": 162.029,
+            "max": 162.029
+          }
+        },
+        {
+          "start_seconds": 80,
+          "transactions": 194,
+          "source_changes": 20233,
+          "sink_visibility_ms": {
+            "n": 125,
+            "p50": 10.638069943524897,
+            "p95": 25.549598038196564,
+            "p99": 29.175861040130258,
+            "max": 29.969053925015032
+          },
+          "processing_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 11,
+            "max": 18
+          },
+          "received_to_sink_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 12,
+            "max": 19
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 183.016,
+            "p95": 259.535,
+            "p99": 259.535,
+            "max": 259.535
+          }
+        },
+        {
+          "start_seconds": 100,
+          "transactions": 198,
+          "source_changes": 19807,
+          "sink_visibility_ms": {
+            "n": 128,
+            "p50": 10.808097547851503,
+            "p95": 26.465935981832445,
+            "p99": 27.228962047956884,
+            "max": 27.849689009599388
+          },
+          "processing_ms": {
+            "n": 177,
+            "p50": 3,
+            "p95": 9,
+            "p99": 13,
+            "max": 14
+          },
+          "received_to_sink_ms": {
+            "n": 177,
+            "p50": 3,
+            "p95": 10,
+            "p99": 13,
+            "max": 14
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 185.87,
+            "p95": 215.318,
+            "p99": 215.318,
+            "max": 215.318
+          }
+        },
+        {
+          "start_seconds": 120,
+          "transactions": 192,
+          "source_changes": 20146,
+          "sink_visibility_ms": {
+            "n": 124,
+            "p50": 11.671835498418659,
+            "p95": 25.06402099970728,
+            "p99": 28.78063404932618,
+            "max": 29.43498396780342
+          },
+          "processing_ms": {
+            "n": 172,
+            "p50": 3.0,
+            "p95": 10,
+            "p99": 14,
+            "max": 14
+          },
+          "received_to_sink_ms": {
+            "n": 172,
+            "p50": 3.0,
+            "p95": 11,
+            "p99": 14,
+            "max": 14
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 171.87099999999998,
+            "p95": 241.39,
+            "p99": 241.39,
+            "max": 241.39
+          }
+        },
+        {
+          "start_seconds": 140,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 133,
+            "p50": 10.933230980299413,
+            "p95": 24.738213047385216,
+            "p99": 27.955161058343947,
+            "max": 29.593946994282305
+          },
+          "processing_ms": {
+            "n": 181,
+            "p50": 3,
+            "p95": 10,
+            "p99": 14,
+            "max": 15
+          },
+          "received_to_sink_ms": {
+            "n": 181,
+            "p50": 3,
+            "p95": 10,
+            "p99": 15,
+            "max": 15
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 161.496,
+            "p95": 183.838,
+            "p99": 183.838,
+            "max": 183.838
+          }
+        },
+        {
+          "start_seconds": 160,
+          "transactions": 200,
+          "source_changes": 19472,
+          "sink_visibility_ms": {
+            "n": 129,
+            "p50": 11.30103797186166,
+            "p95": 26.195066049695015,
+            "p99": 29.701420920901,
+            "max": 30.619049910455942
+          },
+          "processing_ms": {
+            "n": 180,
+            "p50": 3.0,
+            "p95": 10,
+            "p99": 13,
+            "max": 14
+          },
+          "received_to_sink_ms": {
+            "n": 180,
+            "p50": 4.0,
+            "p95": 10,
+            "p99": 14,
+            "max": 15
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 187.3265,
+            "p95": 251.998,
+            "p99": 251.998,
+            "max": 251.998
+          }
+        }
+      ],
+      "rss_first_bytes": 39067648,
+      "rss_final_bytes": 194543616
+    },
+    "baseline": {
+      "passed": true,
+      "source_changes": 180000,
+      "actual_rows_per_second": 1000.0,
+      "process_cpu_seconds": 7.38,
+      "oracle_equal": true,
+      "ack_safe": true,
+      "sink_visibility_ms": {
+        "n": 1159,
+        "p50": 11.857638950459659,
+        "p95": 25.04629408940673,
+        "p99": 28.220672043971717,
+        "max": 108.9533360209316
+      },
+      "windows": [
+        {
+          "start_seconds": 0,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 133,
+            "p50": 11.743662995286286,
+            "p95": 23.555092979222536,
+            "p99": 27.355142985470593,
+            "max": 27.706129010766745
+          },
+          "processing_ms": {
+            "n": 176,
+            "p50": 4.0,
+            "p95": 8,
+            "p99": 11,
+            "max": 12
+          },
+          "received_to_sink_ms": {
+            "n": 176,
+            "p50": 4.0,
+            "p95": 9,
+            "p99": 12,
+            "max": 12
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 158.712,
+            "p95": 216.33,
+            "p99": 216.33,
+            "max": 216.33
+          }
+        },
+        {
+          "start_seconds": 20,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 129,
+            "p50": 13.737861067056656,
+            "p95": 25.837530032731593,
+            "p99": 29.67425005044788,
+            "max": 29.750804998911917
+          },
+          "processing_ms": {
+            "n": 167,
+            "p50": 6,
+            "p95": 10,
+            "p99": 14,
+            "max": 18
+          },
+          "received_to_sink_ms": {
+            "n": 167,
+            "p50": 7,
+            "p95": 13,
+            "p99": 16,
+            "max": 18
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 146.595,
+            "p95": 184.073,
+            "p99": 184.073,
+            "max": 184.073
+          }
+        },
+        {
+          "start_seconds": 40,
+          "transactions": 199,
+          "source_changes": 19320,
+          "sink_visibility_ms": {
+            "n": 127,
+            "p50": 14.862883952446282,
+            "p95": 26.22147893998772,
+            "p99": 27.15451701078564,
+            "max": 28.017612057738006
+          },
+          "processing_ms": {
+            "n": 160,
+            "p50": 7.0,
+            "p95": 13,
+            "p99": 15,
+            "max": 16
+          },
+          "received_to_sink_ms": {
+            "n": 160,
+            "p50": 8.0,
+            "p95": 15,
+            "p99": 18,
+            "max": 19
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 232.00549999999998,
+            "p95": 244.872,
+            "p99": 244.872,
+            "max": 244.872
+          }
+        },
+        {
+          "start_seconds": 60,
+          "transactions": 197,
+          "source_changes": 20062,
+          "sink_visibility_ms": {
+            "n": 131,
+            "p50": 10.462336940690875,
+            "p95": 18.07901996653527,
+            "p99": 27.154829003848135,
+            "max": 57.68250999972224
+          },
+          "processing_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 8,
+            "p99": 10,
+            "max": 42
+          },
+          "received_to_sink_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 11,
+            "max": 42
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 148.3845,
+            "p95": 189.726,
+            "p99": 189.726,
+            "max": 189.726
+          }
+        },
+        {
+          "start_seconds": 80,
+          "transactions": 194,
+          "source_changes": 20233,
+          "sink_visibility_ms": {
+            "n": 125,
+            "p50": 10.510799009352922,
+            "p95": 22.95707503799349,
+            "p99": 27.273445040918887,
+            "max": 27.35563099849969
+          },
+          "processing_ms": {
+            "n": 177,
+            "p50": 3,
+            "p95": 9,
+            "p99": 12,
+            "max": 24
+          },
+          "received_to_sink_ms": {
+            "n": 177,
+            "p50": 4,
+            "p95": 10,
+            "p99": 12,
+            "max": 24
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 149.933,
+            "p95": 195.385,
+            "p99": 195.385,
+            "max": 195.385
+          }
+        },
+        {
+          "start_seconds": 100,
+          "transactions": 198,
+          "source_changes": 19807,
+          "sink_visibility_ms": {
+            "n": 128,
+            "p50": 11.49148802505806,
+            "p95": 25.752373971045017,
+            "p99": 45.40457611437887,
+            "max": 48.53402706794441
+          },
+          "processing_ms": {
+            "n": 175,
+            "p50": 3,
+            "p95": 8,
+            "p99": 13,
+            "max": 44
+          },
+          "received_to_sink_ms": {
+            "n": 175,
+            "p50": 3,
+            "p95": 8,
+            "p99": 44,
+            "max": 47
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 201.33749999999998,
+            "p95": 324.121,
+            "p99": 324.121,
+            "max": 324.121
+          }
+        },
+        {
+          "start_seconds": 120,
+          "transactions": 192,
+          "source_changes": 20146,
+          "sink_visibility_ms": {
+            "n": 124,
+            "p50": 11.554678028915077,
+            "p95": 23.128090077079833,
+            "p99": 26.658242102712393,
+            "max": 26.761488057672977
+          },
+          "processing_ms": {
+            "n": 172,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 11,
+            "max": 12
+          },
+          "received_to_sink_ms": {
+            "n": 172,
+            "p50": 4.0,
+            "p95": 10,
+            "p99": 12,
+            "max": 12
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 170.1345,
+            "p95": 219.069,
+            "p99": 219.069,
+            "max": 219.069
+          }
+        },
+        {
+          "start_seconds": 140,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 133,
+            "p50": 10.796230984851718,
+            "p95": 25.160444085486233,
+            "p99": 32.81211492139846,
+            "max": 36.218620953150094
+          },
+          "processing_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 14,
+            "max": 29
+          },
+          "received_to_sink_ms": {
+            "n": 176,
+            "p50": 4.0,
+            "p95": 9,
+            "p99": 29,
+            "max": 33
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 159.668,
+            "p95": 282.702,
+            "p99": 282.702,
+            "max": 282.702
+          }
+        },
+        {
+          "start_seconds": 160,
+          "transactions": 200,
+          "source_changes": 19472,
+          "sink_visibility_ms": {
+            "n": 129,
+            "p50": 11.66661106981337,
+            "p95": 24.028019048273563,
+            "p99": 30.723449075594544,
+            "max": 108.9533360209316
+          },
+          "processing_ms": {
+            "n": 178,
+            "p50": 3.0,
+            "p95": 10,
+            "p99": 12,
+            "max": 12
+          },
+          "received_to_sink_ms": {
+            "n": 178,
+            "p50": 4.0,
+            "p95": 10,
+            "p99": 12,
+            "max": 12
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 157.466,
+            "p95": 201.936,
+            "p99": 201.936,
+            "max": 201.936
+          }
+        }
+      ],
+      "rss_first_bytes": 36761600,
+      "rss_final_bytes": 203403264
+    }
+  },
+  "evidence": {
+    "storage_before": "artifacts/benchmarks/steady-growth/before-storage-v2.json",
+    "storage_after": "artifacts/fast-validation/steady-storage-accepted",
+    "paced_before": "artifacts/benchmarks/steady-growth/before-soak",
+    "paced_after": "artifacts/benchmarks/steady-growth/after-scheduler-soak",
+    "continuous": "artifacts/benchmarks/steady-growth/continuous",
+    "continuous_4_threads": "artifacts/benchmarks/steady-growth/continuous-4threads"
+  },
+  "continuous_4_threads": {
+    "candidate": {
+      "passed": true,
+      "actual_rows_per_second": 1000.0,
+      "oracle_equal": true,
+      "ack_safe": true,
+      "rss_first_bytes": 38789120,
+      "rss_final_bytes": 175050752,
+      "windows": [
+        {
+          "start_seconds": 0,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 133,
+            "p50": 11.56567397993058,
+            "p95": 20.91604797169566,
+            "p99": 27.17716700863093,
+            "max": 27.447890024632215
+          },
+          "processing_ms": {
+            "n": 178,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 12,
+            "max": 12
+          },
+          "received_to_sink_ms": {
+            "n": 178,
+            "p50": 4.0,
+            "p95": 9,
+            "p99": 12,
+            "max": 12
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 157.93,
+            "p95": 220.447,
+            "p99": 220.447,
+            "max": 220.447
+          }
+        },
+        {
+          "start_seconds": 20,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 129,
+            "p50": 14.81200905982405,
+            "p95": 26.465098024345934,
+            "p99": 30.495187966153026,
+            "max": 30.497892992570996
+          },
+          "processing_ms": {
+            "n": 170,
+            "p50": 5.0,
+            "p95": 12,
+            "p99": 14,
+            "max": 14
+          },
+          "received_to_sink_ms": {
+            "n": 170,
+            "p50": 7.0,
+            "p95": 13,
+            "p99": 14,
+            "max": 14
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 134.4185,
+            "p95": 173.166,
+            "p99": 173.166,
+            "max": 173.166
+          }
+        },
+        {
+          "start_seconds": 40,
+          "transactions": 199,
+          "source_changes": 19320,
+          "sink_visibility_ms": {
+            "n": 127,
+            "p50": 14.811657019890845,
+            "p95": 25.989818037487566,
+            "p99": 30.837025959044695,
+            "max": 54.148257011547685
+          },
+          "processing_ms": {
+            "n": 162,
+            "p50": 6.0,
+            "p95": 12,
+            "p99": 17,
+            "max": 41
+          },
+          "received_to_sink_ms": {
+            "n": 162,
+            "p50": 7.0,
+            "p95": 15,
+            "p99": 18,
+            "max": 42
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 212.582,
+            "p95": 254.012,
+            "p99": 254.012,
+            "max": 254.012
+          }
+        },
+        {
+          "start_seconds": 60,
+          "transactions": 197,
+          "source_changes": 20062,
+          "sink_visibility_ms": {
+            "n": 131,
+            "p50": 11.562529020011425,
+            "p95": 27.729345951229334,
+            "p99": 48.659101012162864,
+            "max": 55.5168209830299
+          },
+          "processing_ms": {
+            "n": 173,
+            "p50": 3,
+            "p95": 10,
+            "p99": 23,
+            "max": 42
+          },
+          "received_to_sink_ms": {
+            "n": 173,
+            "p50": 3,
+            "p95": 10,
+            "p99": 44,
+            "max": 45
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 147.6445,
+            "p95": 160.545,
+            "p99": 160.545,
+            "max": 160.545
+          }
+        },
+        {
+          "start_seconds": 80,
+          "transactions": 194,
+          "source_changes": 20233,
+          "sink_visibility_ms": {
+            "n": 125,
+            "p50": 11.482678004540503,
+            "p95": 26.48894500453025,
+            "p99": 30.26407107245177,
+            "max": 33.24905992485583
+          },
+          "processing_ms": {
+            "n": 175,
+            "p50": 3,
+            "p95": 9,
+            "p99": 12,
+            "max": 18
+          },
+          "received_to_sink_ms": {
+            "n": 175,
+            "p50": 3,
+            "p95": 10,
+            "p99": 13,
+            "max": 19
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 183.025,
+            "p95": 261.393,
+            "p99": 261.393,
+            "max": 261.393
+          }
+        },
+        {
+          "start_seconds": 100,
+          "transactions": 198,
+          "source_changes": 19807,
+          "sink_visibility_ms": {
+            "n": 128,
+            "p50": 10.675091994926333,
+            "p95": 25.822201976552606,
+            "p99": 29.765508021228015,
+            "max": 30.39422899018973
+          },
+          "processing_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 12,
+            "max": 13
+          },
+          "received_to_sink_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 13,
+            "max": 13
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 186.571,
+            "p95": 215.816,
+            "p99": 215.816,
+            "max": 215.816
+          }
+        },
+        {
+          "start_seconds": 120,
+          "transactions": 192,
+          "source_changes": 20146,
+          "sink_visibility_ms": {
+            "n": 124,
+            "p50": 11.357655981555581,
+            "p95": 27.17609901446849,
+            "p99": 31.020476948469877,
+            "max": 31.512359040789306
+          },
+          "processing_ms": {
+            "n": 174,
+            "p50": 3.0,
+            "p95": 10,
+            "p99": 12,
+            "max": 14
+          },
+          "received_to_sink_ms": {
+            "n": 174,
+            "p50": 4.0,
+            "p95": 10,
+            "p99": 17,
+            "max": 18
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 172.0855,
+            "p95": 242.515,
+            "p99": 242.515,
+            "max": 242.515
+          }
+        },
+        {
+          "start_seconds": 140,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 133,
+            "p50": 10.772421956062317,
+            "p95": 25.760505930520594,
+            "p99": 29.036686988547444,
+            "max": 29.4815810630098
+          },
+          "processing_ms": {
+            "n": 180,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 14,
+            "max": 14
+          },
+          "received_to_sink_ms": {
+            "n": 180,
+            "p50": 3.0,
+            "p95": 10,
+            "p99": 14,
+            "max": 15
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 160.531,
+            "p95": 183.828,
+            "p99": 183.828,
+            "max": 183.828
+          }
+        },
+        {
+          "start_seconds": 160,
+          "transactions": 200,
+          "source_changes": 19472,
+          "sink_visibility_ms": {
+            "n": 129,
+            "p50": 10.55235497187823,
+            "p95": 25.435360032133758,
+            "p99": 27.276690932922065,
+            "max": 27.808740036562085
+          },
+          "processing_ms": {
+            "n": 180,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 13,
+            "max": 13
+          },
+          "received_to_sink_ms": {
+            "n": 180,
+            "p50": 3.0,
+            "p95": 10,
+            "p99": 13,
+            "max": 13
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 185.906,
+            "p95": 245.667,
+            "p99": 245.667,
+            "max": 245.667
+          }
+        }
+      ]
+    },
+    "baseline": {
+      "passed": true,
+      "actual_rows_per_second": 1000.0,
+      "oracle_equal": true,
+      "ack_safe": true,
+      "rss_first_bytes": 41709568,
+      "rss_final_bytes": 189603840,
+      "windows": [
+        {
+          "start_seconds": 0,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 133,
+            "p50": 11.956425034441054,
+            "p95": 23.895065067335963,
+            "p99": 27.068921946920455,
+            "max": 28.38185103610158
+          },
+          "processing_ms": {
+            "n": 177,
+            "p50": 4,
+            "p95": 9,
+            "p99": 12,
+            "max": 12
+          },
+          "received_to_sink_ms": {
+            "n": 177,
+            "p50": 5,
+            "p95": 10,
+            "p99": 12,
+            "max": 13
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 164.421,
+            "p95": 216.018,
+            "p99": 216.018,
+            "max": 216.018
+          }
+        },
+        {
+          "start_seconds": 20,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 129,
+            "p50": 14.191902009770274,
+            "p95": 26.287171058356762,
+            "p99": 30.31892399303615,
+            "max": 31.735569005832076
+          },
+          "processing_ms": {
+            "n": 166,
+            "p50": 6.0,
+            "p95": 11,
+            "p99": 14,
+            "max": 16
+          },
+          "received_to_sink_ms": {
+            "n": 166,
+            "p50": 7.0,
+            "p95": 14,
+            "p99": 16,
+            "max": 16
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 146.505,
+            "p95": 183.937,
+            "p99": 183.937,
+            "max": 183.937
+          }
+        },
+        {
+          "start_seconds": 40,
+          "transactions": 199,
+          "source_changes": 19320,
+          "sink_visibility_ms": {
+            "n": 127,
+            "p50": 16.586331999860704,
+            "p95": 26.328529929742217,
+            "p99": 28.78044790122658,
+            "max": 28.878042940050364
+          },
+          "processing_ms": {
+            "n": 160,
+            "p50": 7.0,
+            "p95": 13,
+            "p99": 15,
+            "max": 15
+          },
+          "received_to_sink_ms": {
+            "n": 160,
+            "p50": 8.0,
+            "p95": 16,
+            "p99": 18,
+            "max": 18
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 233.426,
+            "p95": 243.833,
+            "p99": 243.833,
+            "max": 243.833
+          }
+        },
+        {
+          "start_seconds": 60,
+          "transactions": 197,
+          "source_changes": 20062,
+          "sink_visibility_ms": {
+            "n": 131,
+            "p50": 10.778823983855546,
+            "p95": 21.213783998973668,
+            "p99": 28.848808025941253,
+            "max": 61.67575798463076
+          },
+          "processing_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 8,
+            "p99": 11,
+            "max": 45
+          },
+          "received_to_sink_ms": {
+            "n": 176,
+            "p50": 4.0,
+            "p95": 8,
+            "p99": 11,
+            "max": 45
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 149.46099999999998,
+            "p95": 189.521,
+            "p99": 189.521,
+            "max": 189.521
+          }
+        },
+        {
+          "start_seconds": 80,
+          "transactions": 194,
+          "source_changes": 20233,
+          "sink_visibility_ms": {
+            "n": 125,
+            "p50": 11.440838105045259,
+            "p95": 25.914745987392962,
+            "p99": 27.200703974813223,
+            "max": 27.223035925999284
+          },
+          "processing_ms": {
+            "n": 177,
+            "p50": 3,
+            "p95": 10,
+            "p99": 12,
+            "max": 25
+          },
+          "received_to_sink_ms": {
+            "n": 177,
+            "p50": 4,
+            "p95": 10,
+            "p99": 13,
+            "max": 25
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 150.729,
+            "p95": 194.857,
+            "p99": 194.857,
+            "max": 194.857
+          }
+        },
+        {
+          "start_seconds": 100,
+          "transactions": 198,
+          "source_changes": 19807,
+          "sink_visibility_ms": {
+            "n": 128,
+            "p50": 11.780211993027478,
+            "p95": 26.019606040790677,
+            "p99": 53.001314983703196,
+            "max": 107.63781296554953
+          },
+          "processing_ms": {
+            "n": 172,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 14,
+            "max": 48
+          },
+          "received_to_sink_ms": {
+            "n": 172,
+            "p50": 4.0,
+            "p95": 10,
+            "p99": 48,
+            "max": 51
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 203.165,
+            "p95": 325.343,
+            "p99": 325.343,
+            "max": 325.343
+          }
+        },
+        {
+          "start_seconds": 120,
+          "transactions": 192,
+          "source_changes": 20146,
+          "sink_visibility_ms": {
+            "n": 124,
+            "p50": 11.69475045753643,
+            "p95": 20.897115929983556,
+            "p99": 27.067222981713712,
+            "max": 27.351622004061937
+          },
+          "processing_ms": {
+            "n": 173,
+            "p50": 3,
+            "p95": 10,
+            "p99": 10,
+            "max": 11
+          },
+          "received_to_sink_ms": {
+            "n": 173,
+            "p50": 3,
+            "p95": 10,
+            "p99": 12,
+            "max": 12
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 170.51749999999998,
+            "p95": 218.208,
+            "p99": 218.208,
+            "max": 218.208
+          }
+        },
+        {
+          "start_seconds": 140,
+          "transactions": 200,
+          "source_changes": 20320,
+          "sink_visibility_ms": {
+            "n": 133,
+            "p50": 10.82014199346304,
+            "p95": 25.72628203779459,
+            "p99": 37.582987919449806,
+            "max": 40.879757958464324
+          },
+          "processing_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 8,
+            "p99": 11,
+            "max": 28
+          },
+          "received_to_sink_ms": {
+            "n": 176,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 28,
+            "max": 31
+          },
+          "checkpoint_wall_ms": {
+            "n": 4,
+            "p50": 161.024,
+            "p95": 342.797,
+            "p99": 342.797,
+            "max": 342.797
+          }
+        },
+        {
+          "start_seconds": 160,
+          "transactions": 200,
+          "source_changes": 19472,
+          "sink_visibility_ms": {
+            "n": 129,
+            "p50": 11.883939034305513,
+            "p95": 26.589739019982517,
+            "p99": 28.270525042898953,
+            "max": 28.3475510077551
+          },
+          "processing_ms": {
+            "n": 178,
+            "p50": 3.0,
+            "p95": 9,
+            "p99": 11,
+            "max": 11
+          },
+          "received_to_sink_ms": {
+            "n": 178,
+            "p50": 4.0,
+            "p95": 10,
+            "p99": 11,
+            "max": 11
+          },
+          "checkpoint_wall_ms": {
+            "n": 3,
+            "p50": 158.423,
+            "p95": 202.049,
+            "p99": 202.049,
+            "max": 202.049
+          }
+        }
+      ]
+    }
+  },
+  "validation": {
+    "final_storage_result": "artifacts/fast-validation/steady-storage-empty-qualified/result.json",
+    "nonempty_request_byte_root_counts_unchanged_after_empty_fix": true,
+    "empty_anti_join_native_passed": true,
+    "gc_delete_crash_replay_target_passed": true
+  }
+}

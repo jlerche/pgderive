@@ -99,7 +99,7 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         prior.append_runs_validated(self.upload_flush(delta.batch.borrow()).await?, delta.time)
     }
     /// Persist memory deltas while retaining existing immutable object runs.
-    /// Periodically consolidate all state to bound merge fan-in.
+    /// Consolidate similarly sized logical runs to bound merge fan-in.
     ///
     /// # Errors
     /// Returns upload, compaction, arithmetic or run-limit failures.

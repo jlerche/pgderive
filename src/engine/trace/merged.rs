@@ -1,7 +1,16 @@
 use super::Run;
 use crate::engine::reader::{BatchCursor, BatchData, BatchReader, Cursor, Entry};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use num_bigint::BigInt;
+
+#[derive(Debug)]
+pub(super) struct CoefficientOverflow;
+impl std::fmt::Display for CoefficientOverflow {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("finalized weight exceeds i64 domain")
+    }
+}
+impl std::error::Error for CoefficientOverflow {}
 
 type UncontendedSpan<'a, K, V> = Option<(usize, &'a [Entry<K, V>])>;
 
@@ -49,8 +58,7 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
             }
             let tuple = (key.clone(), val.clone());
             if weight != BigInt::default() {
-                let weight =
-                    i64::try_from(weight).context("finalized weight exceeds i64 domain")?;
+                let weight = i64::try_from(weight).map_err(|_| CoefficientOverflow)?;
                 self.row = Some((tuple, weight));
                 return Ok(());
             }

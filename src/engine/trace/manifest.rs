@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// Manifest format version; currently one.
+    /// Manifest format version; currently two.
     pub version: u32,
     /// Last committed DBSP tick, independent of source LSN.
     pub time: u64,
@@ -17,6 +17,8 @@ pub struct Manifest {
     pub generation: u64,
     /// Ordered run references; repeated object paths retain run multiplicity.
     pub objects: Vec<ObjectRef>,
+    /// Number of consecutive roots in each logical upload run.
+    pub cohorts: Vec<usize>,
 }
 impl Manifest {
     /// Check coarse version, clock and exact codec identity before any object GET.
@@ -24,7 +26,13 @@ impl Manifest {
     /// # Errors
     /// Rejects unsupported format, invalid generation or mismatched object schemas.
     pub fn validate(&self, schema: &str) -> Result<()> {
-        ensure!(self.version == 1, "unsupported trace manifest version");
+        ensure!(self.version == 2, "unsupported trace manifest version");
+        ensure!(
+            self.cohorts.iter().all(|count| *count > 0)
+                && self.cohorts.iter().try_fold(0_usize, |sum, count| sum.checked_add(*count))
+                    == Some(self.objects.len()),
+            "invalid trace run cohorts"
+        );
         ensure!(self.generation >= self.time, "invalid trace manifest generation");
         ensure!(
             self.objects.iter().all(|object| object.schema() == schema),
@@ -47,7 +55,13 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
                 Run::Memory(_) => anyhow::bail!("memory run cannot be durably checkpointed"),
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Manifest { version: 1, time: self.time, generation: self.generation, objects })
+        Ok(Manifest {
+            version: 2,
+            time: self.time,
+            generation: self.generation,
+            objects,
+            cohorts: self.cohorts.clone(),
+        })
     }
     /// Reopen and cold-validate every referenced run and consolidated coefficient.
     /// Cached bytes from an old process cannot mask missing or corrupt storage.
@@ -66,6 +80,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             runs.push(Run::Object(ObjectBatch::open(store.clone(), reference, schema).await?));
         }
         let mut snapshot = Self::from_runs(runs, manifest.generation, manifest.time)?;
+        snapshot.cohorts = manifest.cohorts;
         snapshot.validate().await?;
         for run in &mut snapshot.runs {
             if let Run::Object(object) = run {

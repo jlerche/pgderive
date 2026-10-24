@@ -60,6 +60,7 @@ def object_kill(output, command, index, restoring, collecting=False):
     fixture.environment['PGDERIVE__OBJECT_STORE__ENDPOINT'] = f'http://127.0.0.1:{port}'
     try:
         if collecting:
+            fixture.environment['PGDERIVE__WORKER__MAINTENANCE_TICKS'] = '1'
             arm(gate, 'POST') # object_store batches GC via S3 DeleteObjects
             victim = fixture.start(command, 'victim')
             victim.event('ready')
@@ -70,6 +71,8 @@ def object_kill(output, command, index, restoring, collecting=False):
             for tick in range(64):
                 fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id={1 + tick % 3}')
                 victim.event('published', minimum_time=tick+2)
+                maintenance = victim.event('maintenance')
+                assert maintenance['time'] >= tick+2, 'checkpoint did not cover driven input'
                 if pathlib.Path(str(gate) + '.pending').exists():
                     break
             phase = {}

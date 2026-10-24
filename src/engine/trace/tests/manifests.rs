@@ -28,7 +28,7 @@ async fn manifest_reopen_preserves_repeated_run_multiplicity_and_physical_genera
     assert_eq!(reopened.generation(), 3);
     assert_eq!(reopened.materialize().await?, compacted.materialize().await?);
     let mut invalid = manifest.clone();
-    invalid.version = 2;
+    invalid.version = 1;
     assert!(writer.reopen(invalid).await.is_err());
     let mut invalid = manifest;
     invalid.generation = 1;
@@ -78,7 +78,8 @@ async fn memory_and_invalid_logical_membership_cannot_be_recovered() -> Result<(
     )
     .await?;
     let invalid = Manifest {
-        version: 1,
+        version: 2,
+        cohorts: vec![2],
         time: 1,
         generation: 1,
         objects: vec![reference.clone(), reference],
@@ -185,5 +186,21 @@ async fn fitting_rewritten_checkpoint_pages_need_no_remote_reads_after_compactio
     )
     .await?;
     assert_eq!(cold.materialize().await?, compacted.materialize().await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_cohorts_fail_before_opening_objects() -> Result<()> {
+    let writer = Arrangement::<i64, i64>::new(Arc::new(InMemory::new()), "cohorts".into(), 1)?;
+    let batch = Batch::from_updates([((1, 1), 1)])?;
+    let trace = writer.stage(&writer.empty(), &TimedBatch { time: 1, batch }).await?;
+    for cohorts in [vec![], vec![0, 1], vec![2], vec![usize::MAX, 1]] {
+        let mut manifest = trace.manifest()?;
+        manifest.cohorts = cohorts;
+        assert!(manifest.validate("cohorts").is_err());
+    }
+    let mut value = serde_json::to_value(trace.manifest()?)?;
+    value.as_object_mut().context("manifest object")?.remove("cohorts");
+    assert!(serde_json::from_value::<Manifest>(value).is_err());
     Ok(())
 }

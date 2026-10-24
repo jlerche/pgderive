@@ -301,7 +301,7 @@ async fn incompatible_checkpoint_memberships_fail_before_reopening() -> Result<(
     incompatible.arrangements[0].schema.push('x');
     assert!(reopen(&settings, incompatible).await.is_err());
     let mut incompatible = checkpoint;
-    incompatible.arrangements[0].trace.version = 2;
+    incompatible.arrangements[0].trace.version = 1;
     assert!(reopen(&settings, incompatible).await.is_err());
     Ok(())
 }

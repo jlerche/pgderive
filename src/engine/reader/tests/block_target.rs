@@ -33,7 +33,7 @@ async fn shared_writers_split_wide_groups_and_cold_reads_validate_every_block() 
     assert_eq!(roots, vec![root.clone()]);
     let snapshot = TraceSnapshot::<i64, (i32, String)>::reopen(
         store.clone(),
-        Manifest { version: 1, time: 0, generation: 0, objects: roots },
+        Manifest { version: 2, time: 0, generation: 0, cohorts: vec![roots.len()], objects: roots },
         "wide-group",
         Arc::new(BlockCache::new(0, 0)),
     )

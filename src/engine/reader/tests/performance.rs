@@ -82,7 +82,13 @@ async fn measure_merged(
 ) -> Result<()> {
     let right = right_batch()?;
     let right_root = ObjectBatch::write(store.clone(), &right, "perf-string-v1", 128).await?;
-    let manifest = Manifest { version: 1, time: 0, generation: 0, objects: vec![root, right_root] };
+    let manifest = Manifest {
+        version: 2,
+        time: 0,
+        generation: 0,
+        cohorts: vec![2],
+        objects: vec![root, right_root],
+    };
     let prior = TraceSnapshot::<i64, String>::reopen(
         store.clone(),
         manifest.clone(),

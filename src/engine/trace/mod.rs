@@ -5,6 +5,7 @@ mod memory;
 mod merged;
 mod probes;
 mod rebase;
+mod tiers;
 mod validation;
 use super::{
     Batch, BatchBuilder,
@@ -62,6 +63,8 @@ impl<K: BatchData, V: BatchData> BatchReader for Run<K, V> {
 pub struct TraceSnapshot<K: BatchData, V: BatchData> {
     runs: Vec<Run<K, V>>,
     spans: Vec<Option<memory::Span>>,
+    // Consecutive object-root counts per logical upload; memory runs are excluded.
+    cohorts: Vec<usize>,
     sealed_time: u64,
     memory_bytes: usize,
     generation: u64,
@@ -73,6 +76,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         Self {
             runs: Vec::new(),
             spans: Vec::new(),
+            cohorts: Vec::new(),
             sealed_time: 0,
             memory_bytes: 0,
             generation: 0,
@@ -104,7 +108,9 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             bytes.checked_add(memory_run_charge(run)?).context("memtable charge overflow")
         })?;
         let spans = vec![None; runs.len()];
-        Ok(Self { runs, spans, sealed_time: time, memory_bytes, generation, time })
+        let objects = runs.iter().filter(|run| matches!(run, Run::Object(_))).count();
+        let cohorts = if objects == 0 { Vec::new() } else { vec![objects] };
+        Ok(Self { runs, spans, cohorts, sealed_time: time, memory_bytes, generation, time })
     }
     pub(crate) fn into_runs(self) -> Vec<Run<K, V>> {
         self.runs
@@ -193,14 +199,26 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let memory_bytes = added.iter().try_fold(self.memory_bytes, |bytes, run| {
             bytes.checked_add(memory_run_charge(run)?).context("memtable charge overflow")
         })?;
+        let mut cohorts = self.cohorts.clone();
+        let objects = added.iter().filter(|run| matches!(run, Run::Object(_))).count();
+        if objects > 0 {
+            cohorts.push(objects);
+        }
         let mut runs = self.runs.clone();
         let mut spans = self.spans.clone();
         for run in added {
             spans.push(matches!(&run, Run::Memory(_)).then_some(memory::Span::new(time)));
             runs.push(run);
         }
-        let mut next =
-            Self { runs, spans, sealed_time: self.sealed_time, memory_bytes, generation, time };
+        let mut next = Self {
+            runs,
+            spans,
+            cohorts,
+            sealed_time: self.sealed_time,
+            memory_bytes,
+            generation,
+            time,
+        };
         next.consolidate_memory()?;
         ensure!(next.runs.len() <= MAX_RUNS, "arrangement run limit requires checkpoint");
         Ok(next)
@@ -274,3 +292,11 @@ mod accounting_tests;
 #[cfg(test)]
 #[path = "tests/flush.rs"]
 mod flush_tests;
+
+#[cfg(test)]
+#[path = "tests/tiers.rs"]
+mod tier_tests;
+
+#[cfg(test)]
+#[path = "tests/growth.rs"]
+mod growth_tests;
