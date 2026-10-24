@@ -1,5 +1,5 @@
 //! Reuse application trace/oracle exports; only the compiled engine is timed.
-use super::{build, program, settings};
+use super::{program, settings};
 use crate::{
     source::{Column, Contract, Relation},
     transaction::Row,
@@ -118,15 +118,54 @@ fn integrate(bag: &mut Bag, rows: &super::ProjectedBag) -> Result<()> {
     }
     Ok(())
 }
-async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<serde_json::Value> {
-    let native = native();
-    let compiled = crate::compiler::compile(&case.sql, &native)?;
+async fn bootstrap(
+    query: &program::relational::Query,
+    changes: &weighted::Batch,
+    ir: &crate::compiler::relational::Relational,
+    limits: crate::engine::execution::Limits,
+) -> Result<crate::engine::plan::relational::Prepared<program::relational::Key, Row>> {
+    let mut workspace = query.bootstrap_workspace(64 * 1024 * 1024)?;
+    for updates in changes.updates.chunks(limits.resident_entries.min(4096)) {
+        workspace
+            .append(program::relational::chunk(&weighted::Batch { updates: updates.to_vec() }, ir)?)
+            .await?;
+    }
+    query.prepare_bootstrap_unprotected(workspace).await
+}
+fn replay_settings(
+    limits: crate::engine::execution::Limits,
+) -> Result<crate::engine::plan::Settings> {
     let mut settings = settings();
     settings.block_rows = 4096;
     settings.limits = limits.validate()?;
+    Ok(settings)
+}
+async fn verify_snapshot(
+    query: &program::relational::Query,
+    compiled: &crate::compiler::Compiled,
+    expected: &Bag,
+) -> Result<()> {
+    let mut snapshot = Bag::new();
+    integrate(&mut snapshot, &super::projected_output(query, compiled).await?)?;
+    ensure!(&snapshot == expected, "replay snapshot differs from committed output");
+    Ok(())
+}
+async fn restart_committed(
+    query: &mut program::relational::Query,
+    native: &Contract,
+    compiled: &crate::compiler::Compiled,
+    settings: &crate::engine::plan::Settings,
+) -> Result<()> {
+    let replacement = program::relational::build_committed(native, compiled, settings)?;
+    super::restart_with(query, replacement).await
+}
+async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<serde_json::Value> {
+    let native = native();
+    let compiled = crate::compiler::compile(&case.sql, &native)?;
+    let mut settings = replay_settings(limits)?;
     let store = Arc::new(crate::engine::tests::store::Store::unpaced());
     settings.store = store.clone();
-    let mut query = build(&native, &compiled, &settings)?;
+    let mut query = program::relational::build_committed(&native, &compiled, &settings)?;
     let mut output = Bag::new();
     let mut elapsed = Vec::new();
     let mut measured_changes = 0;
@@ -136,27 +175,37 @@ async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<ser
     let mut object_reads = 0;
     let mut object_puts = 0;
     let mut oracle_checks = 0;
+    let mut bootstrap_metrics = (0, 0);
     for (index, step) in case.steps.into_iter().enumerate() {
         if step.restart {
             let compacted = query.prepare_compaction().await?;
             query.commit_compaction(compacted)?;
-            super::restart_relational(&mut query, &native, &compiled, &settings).await?;
+            restart_committed(&mut query, &native, &compiled, &settings).await?;
         } else {
             let count = step.updates.len();
-            let input = program::relational::inputs(
-                &changes(step.updates),
-                compiled.relational(),
-                query.time() + 1,
-            )?;
+            let changes = changes(step.updates);
+            let input = if index == 0 {
+                None
+            } else {
+                Some(program::relational::inputs(
+                    &changes,
+                    compiled.relational(),
+                    query.time() + 1,
+                )?)
+            };
             let before = query.cache_stats()?;
             let reads = store.reads.load(Ordering::SeqCst);
             let puts = store.puts.load(Ordering::SeqCst);
             let started = Instant::now();
-            let work = query
-                .prepare_memtable(input, 256 * 1024 * 1024)
-                .await
-                .with_context(|| format!("replay {} step {index}", case.name))?;
+            let work = if let Some(input) = input {
+                query.prepare_memtable(input, 256 * 1024 * 1024).await?
+            } else {
+                bootstrap(&query, &changes, compiled.relational(), limits).await?
+            };
             let delta = query.commit(work)?;
+            if index == 0 {
+                bootstrap_metrics = (started.elapsed().as_nanos(), count);
+            }
             if step.measure {
                 elapsed.push(started.elapsed().as_nanos());
                 measured_changes += count;
@@ -176,18 +225,18 @@ async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<ser
                 "replay {} step {index} differs from independent application oracle",
                 case.name
             );
-            let mut snapshot = Bag::new();
-            integrate(&mut snapshot, &super::projected_output(&query, &compiled).await?)?;
-            ensure!(snapshot == output, "replay {} snapshot differs at step {index}", case.name);
+            verify_snapshot(&query, &compiled, &output).await?;
         }
     }
     let objects = store.list(None).try_collect::<Vec<_>>().await?;
-    Ok(serde_json::json!({"case":case.name,"prepare_commit_ns":elapsed,
+    Ok(
+        serde_json::json!({"case":case.name,"bootstrap_ns":bootstrap_metrics.0,"bootstrap_rows":bootstrap_metrics.1,"prepare_commit_ns":elapsed,
         "object_puts":store.puts.load(Ordering::SeqCst),"stored_objects":objects.len(),
         "stored_bytes":objects.iter().map(|object| object.size).sum::<u64>(),
         "measured_decoded_bytes":decoded_bytes,"measured_decoded_rows":decoded_rows,"measured_object_reads":object_reads,"measured_object_puts":object_puts,
         "oracle_checks":oracle_checks,"measured_weighted_updates":measured_changes,"measured_cache_misses":cache_misses,"output_groups":output.len(),
-        "memtable_bytes":query.memtable_bytes()?,"logical_time":query.time()}))
+        "memtable_bytes":query.memtable_bytes()?,"logical_time":query.time()}),
+    )
 }
 #[tokio::test]
 async fn fast_replay() -> Result<()> {
@@ -217,7 +266,10 @@ fn parse(text: &str) -> Result<Suite> {
             "duplicate or empty replay name"
         );
         ensure!(
-            case.steps.first().is_some_and(|step| step.expected.is_some())
+            case.steps.first().is_some_and(|step| step.expected.is_some()
+                && !step.restart
+                && !step.measure
+                && step.updates.iter().all(|update| update.weight == 1))
                 && case.steps.last().is_some_and(|step| step.expected.is_some()),
             "initial/final oracle missing"
         );

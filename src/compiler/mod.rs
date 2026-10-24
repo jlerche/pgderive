@@ -74,7 +74,9 @@ impl Compiled {
 /// Rejects invalid/unsupported SQL, unresolved/ambiguous names and incompatible types.
 pub fn compile(sql: &str, contract: &Contract) -> Result<Compiled> {
     contract.validate()?;
-    bind::bind(parser::parse(sql)?, contract)
+    let mut compiled = bind::bind(parser::parse(sql)?, contract)?;
+    compiled.relational.bind_projection(contract)?;
+    Ok(compiled)
 }
 
 #[cfg(test)]

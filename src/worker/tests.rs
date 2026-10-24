@@ -245,9 +245,15 @@ async fn restart_relational(
     compiled: &crate::compiler::Compiled,
     options: &Settings,
 ) -> Result<()> {
-    let checkpoint = query.checkpoint()?;
-    *query = program::relational::build(native, compiled, options)?;
-    query.restore_checkpoint(checkpoint).await
+    restart_with(query, program::relational::build(native, compiled, options)?).await
+}
+async fn restart_with(
+    query: &mut program::relational::Query,
+    mut replacement: program::relational::Query,
+) -> Result<()> {
+    replacement.restore_checkpoint(query.checkpoint()?).await?;
+    *query = replacement;
+    Ok(())
 }
 
 fn build(
@@ -363,3 +369,4 @@ fn peer_changes() -> [weighted::Batch; 4] {
 mod fast_replay;
 
 mod sealed_input;
+mod streaming_bootstrap;

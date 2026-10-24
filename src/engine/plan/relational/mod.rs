@@ -1,5 +1,6 @@
 //! Durable acyclic source/project/join circuits with explicitly registered state.
 mod circuit;
+pub(crate) use circuit::bootstrap::Bootstrap;
 mod flush;
 mod persistence;
 mod streamed;
@@ -99,6 +100,7 @@ pub type Prepared<K, V> = PreparedGraph<RelationalState<K, V>, Batch<K, V>>;
 pub type Compaction<K, V> = PreparedMaintenance<RelationalState<K, V>>;
 type Runtime<K, V> =
     Engine<RelationalState<K, V>, Vec<crate::engine::execution::Sealed<K, V>>, Batch<K, V>>;
+#[derive(Clone)]
 struct Execution<K: BatchData, V: BatchData> {
     plan: Plan,
     operators: Arc<Operators<K, V>>,

@@ -1,3 +1,4 @@
+pub(super) mod bootstrap;
 use super::{Entry, Execution, Operator, Operators, RelationalState};
 use crate::engine::{
     Batch,
@@ -246,7 +247,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
     ) -> Result<RelationalState<K, V>> {
         let mut uploads = Vec::new();
         for node in &self.plan.definition().nodes {
-            if node.kind == Kind::Source {
+            if !self.plan.definition().arrangements.iter().any(|a| a.node == node.id) {
                 continue;
             }
             let batch = values.batches.get(&node.id).context("missing staged output")?;

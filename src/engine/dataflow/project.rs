@@ -52,11 +52,20 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Project<K, V, A, B>
         input: &crate::engine::execution::Sealed<K, V>,
         limits: Limits,
     ) -> Result<crate::engine::execution::Sealed<A, B>> {
+        self.evaluate_sealed_counted(input, limits, &mut 0).await
+    }
+    pub(crate) async fn evaluate_sealed_counted(
+        &self,
+        input: &crate::engine::execution::Sealed<K, V>,
+        limits: Limits,
+        contributions: &mut usize,
+    ) -> Result<crate::engine::execution::Sealed<A, B>> {
         use crate::engine::reader::{BatchCursor as _, BatchReader as _};
         let mut cursor = input.cursor().await?;
         let mut output = Consolidator::new(limits)?;
         while let Some((key, value, weight)) = cursor.current() {
             if let Some(tuple) = (self.map)(key, value)? {
+                crate::engine::execution::charge_contribution(contributions, limits.contributions)?;
                 output.add(tuple, weight)?;
             }
             cursor.advance().await?;

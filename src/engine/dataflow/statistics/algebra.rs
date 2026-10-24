@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 /// Exact signed addition. Intermediate values may contain negative counts;
 /// SQL validity and narrowing belong to complete-group finalization.
-pub trait Additive: Clone + Default + Serialize + Send + Sync + 'static {
+pub trait Additive:
+    Clone + Default + Serialize + serde::de::DeserializeOwned + Send + Sync + 'static
+{
     /// Add another scalar multiplied by a signed full-tuple coefficient.
     ///
     /// # Errors
@@ -44,10 +46,10 @@ type Decode<S, A> = dyn Fn(&S) -> Result<Decoded<Vec<A>>> + Send + Sync;
 type Encode<K, S, A> = dyn Fn(&K, &[A]) -> Result<Option<S>> + Send + Sync;
 pub(super) type FoldState<K, V, S> = Box<dyn Accumulator<K, V, S>>;
 pub(super) struct Algebra<K, V, S, A> {
-    width: usize,
-    measure: Arc<Measure<K, V, A>>,
+    pub(super) width: usize,
+    pub(super) measure: Arc<Measure<K, V, A>>,
     decode: Arc<Decode<S, A>>,
-    encode: Arc<Encode<K, S, A>>,
+    pub(super) encode: Arc<Encode<K, S, A>>,
 }
 impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Algebra<K, V, S, A> {
     pub(super) fn new(
@@ -68,7 +70,7 @@ impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Algebra<K, V, S, A> 
         Ok(Box::new(Fold {
             algebra: self.clone(),
             values: vec![A::default(); self.width],
-            budget: Budget { limits, contributions: 0, entries: 0, bytes: 0 },
+            budget: Budget::new(limits),
         }))
     }
 }
@@ -115,13 +117,16 @@ impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Accumulator<K, V, S>
         (self.algebra.encode)(key, &self.values)
     }
 }
-struct Budget {
+pub(super) struct Budget {
     limits: Limits,
     contributions: usize,
     entries: usize,
     bytes: u64,
 }
 impl Budget {
+    pub(super) const fn new(limits: Limits) -> Self {
+        Self { limits, contributions: 0, entries: 0, bytes: 0 }
+    }
     fn add<K: BatchData, A: Additive>(&mut self, key: &K, column: usize, value: &A) -> Result<()> {
         ensure!(
             self.contributions < self.limits.contributions,
@@ -131,7 +136,11 @@ impl Budget {
         value.record_size(&(key, column), self.limits.record_bytes)?;
         Ok(())
     }
-    fn finish<K: BatchData, A: Additive>(&mut self, key: &K, values: &[A]) -> Result<()> {
+    pub(super) fn finish<K: BatchData, A: Additive>(
+        &mut self,
+        key: &K,
+        values: &[A],
+    ) -> Result<()> {
         for (column, value) in values.iter().enumerate().filter(|(_, value)| !value.is_zero()) {
             self.entries = self.entries.checked_add(1).context("output entry count overflow")?;
             ensure!(

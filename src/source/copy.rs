@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use futures_util::TryStreamExt as _;
-use std::pin::Pin;
+use std::{collections::BTreeSet, pin::Pin};
 use tokio_postgres::{RowStream, Transaction};
 
 /// Bounded batches from one imported snapshot. PK uniqueness makes every native
@@ -14,6 +14,7 @@ use tokio_postgres::{RowStream, Transaction};
 pub struct SnapshotReader {
     contract: Contract,
     limits: Limits,
+    columns: Vec<Vec<super::Column>>,
     relation: usize,
     rows: Option<Pin<Box<RowStream>>>,
     pending: Option<Update>,
@@ -23,12 +24,42 @@ impl SnapshotReader {
     ///
     /// # Errors
     /// Returns contract, codec, resource or `PostgreSQL` errors.
-    pub async fn new(sql: &Transaction<'_>, contract: &Contract, limits: Limits) -> Result<Self> {
+    pub async fn new(
+        sql: &Transaction<'_>,
+        contract: &Contract,
+        projection: &[BTreeSet<String>],
+        limits: Limits,
+    ) -> Result<Self> {
         let limits = limits.validate()?;
         sql.batch_execute("SET LOCAL row_security=off; SET LOCAL search_path=pg_catalog; SET LOCAL DateStyle='ISO,MDY'; SET LOCAL TimeZone='UTC'; SET LOCAL IntervalStyle='iso_8601'; SET LOCAL extra_float_digits=3").await?;
         contract.validate()?;
         contract.verify(sql).await?;
-        Ok(Self { contract: contract.clone(), limits, relation: 0, rows: None, pending: None })
+        ensure!(projection.len() == contract.relations.len(), "snapshot projection count mismatch");
+        let columns = contract
+            .relations
+            .iter()
+            .zip(projection)
+            .map(|(relation, selected)| {
+                ensure!(
+                    selected.iter().all(|name| relation.columns.iter().any(|c| c.name == *name)),
+                    "unknown snapshot column"
+                );
+                Ok(relation
+                    .columns
+                    .iter()
+                    .filter(|c| !selected.is_empty() && (c.primary || selected.contains(&c.name)))
+                    .cloned()
+                    .collect())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            contract: contract.clone(),
+            limits,
+            columns,
+            relation: 0,
+            rows: None,
+            pending: None,
+        })
     }
     /// Read at most one resident-budget batch, retaining only one pending row.
     /// The protocol row stream applies backpressure without a FETCH utility tuplestore.
@@ -70,8 +101,15 @@ impl SnapshotReader {
     }
     async fn read(&mut self, sql: &Transaction<'_>) -> Result<Option<Update>> {
         while let Some(relation) = self.contract.relations.get(self.relation) {
+            if self.columns[self.relation].is_empty() {
+                self.relation += 1;
+                continue;
+            }
             if self.rows.is_none() {
-                self.rows = Some(Box::pin(open(sql, relation, self.limits.record_bytes).await?));
+                self.rows = Some(Box::pin(
+                    open(sql, relation, &self.columns[self.relation], self.limits.record_bytes)
+                        .await?,
+                ));
             }
             let stream = self.rows.as_mut().context("snapshot cursor missing")?;
             let Some(row) = stream.try_next().await? else {
@@ -79,10 +117,18 @@ impl SnapshotReader {
                 self.relation += 1;
                 continue;
             };
-            let encoded: serde_json::Value = row
-                .try_get::<_, Option<serde_json::Value>>(0)?
-                .context(CapacityExceeded("source snapshot row byte limit exceeded"))?;
-            let row: Row = serde_json::from_value(encoded)?;
+            ensure!(
+                row.try_get::<_, bool>(0)?,
+                CapacityExceeded("source snapshot row byte limit exceeded")
+            );
+            let row: Row = self.columns[self.relation]
+                .iter()
+                .enumerate()
+                .map(|(index, column)| {
+                    Ok((column.name.clone(), row.try_get::<_, Option<String>>(index + 1)?))
+                })
+                .collect::<Result<std::collections::BTreeMap<_, _>>>()?
+                .into();
             ensure!(
                 relation
                     .columns
@@ -103,23 +149,46 @@ impl SnapshotReader {
         Ok(None)
     }
 }
-async fn open(sql: &Transaction<'_>, relation: &Relation, limit: usize) -> Result<RowStream> {
-    let columns = relation
-        .columns
+async fn open(
+    sql: &Transaction<'_>,
+    relation: &Relation,
+    columns: &[super::Column],
+    limit: usize,
+) -> Result<RowStream> {
+    let expressions = columns
         .iter()
         .map(|column| {
             let name = super::contract::quote(&column.name);
             if column.oid == 16 {
-                format!(
-                    "CASE WHEN {name} IS NULL THEN NULL WHEN {name} THEN 't' ELSE 'f' END AS {name}"
-                )
+                format!("CASE WHEN {name} IS NULL THEN NULL WHEN {name} THEN 't' ELSE 'f' END")
             } else {
-                format!("{name}::pg_catalog.text AS {name}")
+                format!("{name}::pg_catalog.text")
             }
         })
+        .collect::<Vec<_>>();
+    let aliases = (0..expressions.len()).map(|index| format!("v{index}")).collect::<Vec<_>>();
+    let fields = expressions
+        .iter()
+        .zip(&aliases)
+        .map(|(expr, name)| format!("{expr} AS {name}"))
         .collect::<Vec<_>>()
         .join(",");
-    // Bound the encoded row on the server before transferring it to the client.
-    // A null sentinel makes oversize input fail rather than silently omitting a row.
-    sql.query_raw(&format!("SELECT CASE WHEN pg_catalog.octet_length(encoded::pg_catalog.text)<={limit} THEN encoded ELSE NULL END FROM (SELECT pg_catalog.to_jsonb(source_row) AS encoded FROM (SELECT {columns} FROM {}.{}) AS source_row) AS source_rows", super::contract::quote(&relation.schema),super::contract::quote(&relation.table)), std::iter::empty::<&str>()).await.map_err(Into::into)
+    let size = aliases
+        .iter()
+        .map(|name| format!("COALESCE(pg_catalog.octet_length({name})::bigint,0)"))
+        .collect::<Vec<_>>()
+        .join("+");
+    let values = aliases
+        .iter()
+        .map(|name| format!("CASE WHEN valid THEN {name} ELSE NULL END"))
+        .collect::<Vec<_>>()
+        .join(",");
+    // OFFSET 0 is a pipelined subquery boundary: prevent target-list pull-up
+    // from repeating every cast and the full size sum once per output column.
+    let query = format!(
+        "SELECT valid,{values} FROM (SELECT projected.*,({size})<={limit} AS valid FROM (SELECT {fields} FROM {}.{} OFFSET 0) projected OFFSET 0) guarded",
+        super::contract::quote(&relation.schema),
+        super::contract::quote(&relation.table)
+    );
+    sql.query_raw(&query, std::iter::empty::<&str>()).await.map_err(Into::into)
 }

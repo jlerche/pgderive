@@ -41,14 +41,14 @@ def validate_report(path, cases):
         steps = expected[row['case']]['steps']
         measured = [step for step in steps if step['measure']]
         times = row['prepare_commit_ns']
-        counts = {'oracle_checks': sum(step['expected'] is not None for step in steps),
+        counts = {'bootstrap_rows':len(steps[0]['updates']), 'oracle_checks': sum(step['expected'] is not None for step in steps),
                   'logical_time': sum(not step['restart'] for step in steps),
                   'measured_weighted_updates': sum(len(step['updates']) for step in measured),
                   'output_groups': len(steps[-1]['expected'])}
         if (len(times) != len(measured) or any(type(t) is not int or t < 0 for t in times)
                 or any(type(row[key]) is not int or row[key] != count for key, count in counts.items())
                 or any(type(row[key]) is not int or row[key] < 0 for key in [
-                    'memtable_bytes', 'measured_cache_misses', 'measured_decoded_bytes', 'measured_decoded_rows', 'measured_object_reads',
+                    'bootstrap_ns', 'memtable_bytes', 'measured_cache_misses', 'measured_decoded_bytes', 'measured_decoded_rows', 'measured_object_reads',
                     'measured_object_puts', 'object_puts', 'stored_objects', 'stored_bytes'])
                 or row['measured_object_puts'] != 0):
             raise RuntimeError('Engine measurement/oracle coverage differs: ' + row['case'])
@@ -97,9 +97,11 @@ def test_binary(output, release):
 
 def growth_limits(rows):
     # Preloading wide aggregate statistics can emit many identities per group.
-    # Raise only fixture output guards; cache, spill and per-update budgets stay real.
+    # Scale fixture output and total scratch guards for bounded bootstrap workspaces.
+    # Resident/cache/per-update budgets stay unchanged.
     return {'output_entries': max(250_000, rows * 16),
-            'output_bytes': max(64 * 1024 * 1024, rows * 4096)}
+            'output_bytes': max(64 * 1024 * 1024, rows * 4096),
+            'scratch_bytes': max(1024**3, rows * 128 * 1024)}
 
 
 def main():

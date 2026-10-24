@@ -170,8 +170,14 @@ async fn bootstrap(
             &[&format!("{}s", settings.startup_timeout_secs)],
         )
         .await?;
-    let input =
-        read_snapshot(&snapshot, &contract, compiled.relational(), config.execution).await?;
+    let input = read_snapshot(
+        &snapshot,
+        &contract,
+        compiled.relational(),
+        (config.execution, settings.memtable_bytes),
+        query,
+    )
+    .await?;
     snapshot.commit().await?;
     export.close().await?;
     // The preliminary registration must match the exact imported source layout.
@@ -187,7 +193,7 @@ async fn bootstrap(
     super::drive::emit(
         &serde_json::json!({"event":"bootstrap_upload","slot":contract.slot,"boundary":boundary.to_string()}),
     )?;
-    let prepared = query.prepare_protected(input, &protection).await?;
+    let prepared = query.prepare_bootstrap(input, &protection).await?;
     let checkpoint = query.prepared_checkpoint(&prepared)?;
     let deltas = relational::deltas(&prepared.output().batch, compiled.output())?;
     let sink = compiled.sink(&settings.sink_table, settings.sink_output, &settings.sink_key)?;
@@ -212,19 +218,31 @@ async fn read_snapshot(
     snapshot: &tokio_postgres::Transaction<'_>,
     contract: &Contract,
     ir: &crate::compiler::relational::Relational,
-    limits: crate::engine::execution::Limits,
-) -> Result<crate::engine::execution::SealedInput<relational::Key, crate::transaction::Row>> {
-    let mut reader = crate::source::SnapshotReader::new(snapshot, contract, limits).await?;
-    let mut input = relational::Input::new(ir, limits)?;
+    resources: (crate::engine::execution::Limits, usize),
+    query: &relational::Query,
+) -> Result<crate::engine::plan::relational::Bootstrap<relational::Key, crate::transaction::Row>> {
+    let (limits, budget) = resources;
+    let mut input = query.bootstrap_workspace(budget)?;
+    let limits = crate::engine::execution::Limits {
+        resident_bytes: limits.resident_bytes.min(input.input_limits().resident_bytes),
+        ..limits
+    };
+    let mut reader = crate::source::SnapshotReader::new(
+        snapshot,
+        contract,
+        &ir.source_columns(contract),
+        limits,
+    )
+    .await?;
     let mut rows = 0_usize;
     while let Some(batch) = reader.next(snapshot).await? {
         rows = rows.checked_add(batch.updates.len()).context("snapshot row count overflow")?;
-        input.append(&batch, ir)?;
+        input.append(relational::chunk(&batch, ir)?).await?;
         if rows.is_multiple_of(limits.resident_entries.saturating_mul(128)) {
             super::drive::emit(&serde_json::json!({"event":"bootstrap_progress","rows":rows}))?;
         }
     }
-    input.seal(1)
+    Ok(input)
 }
 
 fn verify_snapshot_plan(

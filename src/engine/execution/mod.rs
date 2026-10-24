@@ -110,6 +110,12 @@ pub(crate) fn weight_size(
     record::size(tuple, weight, limit)
 }
 
+pub(crate) fn charge_contribution(count: &mut usize, limit: usize) -> Result<()> {
+    ensure!(*count < limit, CapacityExceeded("contribution limit exceeded"));
+    *count += 1;
+    Ok(())
+}
+
 struct Resident {
     weight: BigInt,
     tuple_bytes: usize,
@@ -165,11 +171,7 @@ impl<T: BatchData> Consolidator<T> {
         })
     }
     fn add_inner(&mut self, tuple: T, weight: BigInt) -> Result<()> {
-        ensure!(
-            self.contributions < self.limits.contributions,
-            CapacityExceeded("contribution limit exceeded")
-        );
-        self.contributions += 1;
+        charge_contribution(&mut self.contributions, self.limits.contributions)?;
         let previous = self.entries.get(&tuple);
         let next = previous.map_or_else(|| weight.clone(), |old| &old.weight + &weight);
         let tuple_bytes = previous.map_or_else(

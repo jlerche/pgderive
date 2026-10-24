@@ -7,8 +7,8 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-use serde::Serialize;
-#[derive(Clone, Serialize)]
+use serde::{Deserialize, Serialize};
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) enum Scalar {
     Integer(BigInt),
     Numeric(Sum),

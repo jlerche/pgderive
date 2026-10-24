@@ -74,7 +74,10 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         })
         .collect();
     let output = crate::compiler::Projected { columns };
-    Ok(Compiled { result_columns: Vec::new(), relational: Relational { sources, nodes, output } })
+    Ok(Compiled {
+        result_columns: Vec::new(),
+        relational: Relational { sources, nodes, output, projection: Vec::new() },
+    })
 }
 fn correlated(name: &Name, scopes: &[Scope<'_>; 2]) -> Result<ColumnRef> {
     // The inner local relation shadows an unqualified outer column.

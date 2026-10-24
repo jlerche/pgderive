@@ -1,4 +1,5 @@
 //! Exact linear sufficient statistics over complete signed input ticks.
+mod bootstrap;
 mod ordered;
 use super::TimedBatch;
 use crate::engine::{
@@ -9,6 +10,9 @@ use crate::engine::{
     value::Decoded,
 };
 use anyhow::{Result, ensure};
+pub use bootstrap::SnapshotFold;
+pub type SnapshotFoldState<K, V, S> = Box<dyn SnapshotFold<K, V, S>>;
+type CreateSnapshot<K, V, S> = dyn Fn(Limits) -> Result<SnapshotFoldState<K, V, S>> + Send + Sync;
 use num_bigint::BigInt;
 use std::{borrow::Borrow, sync::Arc};
 mod algebra;
@@ -38,6 +42,7 @@ impl<K: BatchData, V: BatchData> StatisticsOutput<'_, K, V> {
 #[derive(Clone)]
 pub struct Statistics<K: BatchData, V: BatchData, S: BatchData = V> {
     create: Arc<Create<K, V, S>>,
+    snapshot: Arc<CreateSnapshot<K, V, S>>,
 }
 impl<K: BatchData, V: BatchData> Statistics<K, V> {
     /// Bind fixed-width exact statistics and their persisted state codec.
@@ -71,7 +76,16 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         encode: impl Fn(&K, &[A]) -> Result<Option<S>> + Send + Sync + 'static,
     ) -> Self {
         let algebra = Arc::new(Algebra::new(width, measure, decode, encode));
-        Self { create: Arc::new(move |limits| algebra.create(limits)) }
+        let snapshot = algebra.clone();
+        Self {
+            create: Arc::new(move |limits| algebra.create(limits)),
+            snapshot: Arc::new(move |limits| {
+                Ok(Box::new(bootstrap::Grouped::new(snapshot.clone(), limits)?))
+            }),
+        }
+    }
+    pub(crate) fn snapshot_fold(&self, limits: Limits) -> Result<SnapshotFoldState<K, V, S>> {
+        (self.snapshot)(limits)
     }
     /// Combine signed contributions with one prior statistic per changed group.
     ///

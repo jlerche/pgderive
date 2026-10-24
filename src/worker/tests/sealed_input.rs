@@ -58,13 +58,13 @@ async fn snapshot_chunks_and_transaction_chunks_have_identical_join_aggregate_st
         )]),
         batch(vec![("bid", row(&[("id", Some("2")), ("auction", Some("1")), ("price", None)]), 1)]),
     ];
-    let mut pending = relational::Input::new(compiled.relational(), options.limits)?;
+    let mut pending = streamed.bootstrap_workspace(64 * 1024 * 1024)?;
     let mut all = crate::weighted::Batch { updates: Vec::new() };
     for chunk in chunks {
-        pending.append(&chunk, compiled.relational())?;
+        pending.append(relational::chunk(&chunk, compiled.relational())?).await?;
         all.updates.extend(chunk.updates);
     }
-    let candidate = streamed.prepare(pending.seal(1)?).await?;
+    let candidate = streamed.prepare_bootstrap_unprotected(pending).await?;
     let reference = whole.prepare(relational::inputs(&all, compiled.relational(), 1)?).await?;
     assert_eq!(candidate.output().batch, reference.output().batch);
     streamed.commit(candidate)?;

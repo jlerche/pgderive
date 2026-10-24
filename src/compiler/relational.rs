@@ -1,4 +1,5 @@
 //! Resolved relational nodes lowered into executable durable circuits.
+mod projection;
 use super::{ColumnRef, Projected};
 use serde::Serialize;
 #[derive(Clone, Serialize)]
@@ -90,6 +91,7 @@ relational_nodes! {
 #[derive(Clone, Serialize)]
 pub struct Relational {
     pub(crate) sources: Vec<Source>,
+    pub(crate) projection: Vec<std::collections::BTreeSet<String>>,
     pub(crate) nodes: Vec<Node>,
     pub(crate) output: Projected,
 }

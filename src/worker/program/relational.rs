@@ -299,6 +299,48 @@ fn declared_plan(
         outputs: vec![output.clone()],
     })
 }
+fn visit_sources(
+    batch: &weighted::Batch,
+    ir: &Relational,
+    mut visit: impl FnMut(usize, Key, Row, i64) -> Result<()>,
+) -> Result<()> {
+    for (ordinal, source) in ir
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            Node::Source { source, .. } => Some(*source),
+            _ => None,
+        })
+        .enumerate()
+    {
+        let relation = ir.sources.get(source).context("missing relational source")?;
+        for update in &batch.updates {
+            if update.tuple.schema == relation.schema && update.tuple.table == relation.table {
+                let row = update
+                    .tuple
+                    .row
+                    .iter()
+                    .filter(|(name, _)| ir.projection[source].contains(*name))
+                    .map(|(name, value)| (field(source, name), value.clone()))
+                    .collect();
+                visit(ordinal, Key::new(), row, update.weight)?;
+            }
+        }
+    }
+    Ok(())
+}
+pub(in crate::worker) fn chunk(
+    batch: &weighted::Batch,
+    ir: &Relational,
+) -> Result<Vec<Batch<Key, Row>>> {
+    let count = ir.nodes.iter().filter(|n| matches!(n, Node::Source { .. })).count();
+    let mut rows = vec![Vec::new(); count];
+    visit_sources(batch, ir, |source, key, row, weight| {
+        rows[source].push(((key, row), weight));
+        Ok(())
+    })?;
+    rows.into_iter().map(Batch::from_updates).collect()
+}
 pub(in crate::worker) struct Input {
     pending: crate::engine::execution::OpenInput<Key, Row>,
 }
@@ -315,29 +357,9 @@ impl Input {
         batch: &weighted::Batch,
         ir: &Relational,
     ) -> Result<()> {
-        for (ordinal, source) in ir
-            .nodes
-            .iter()
-            .filter_map(|node| match node {
-                Node::Source { source, .. } => Some(*source),
-                _ => None,
-            })
-            .enumerate()
-        {
-            let relation = ir.sources.get(source).context("missing relational source")?;
-            for update in &batch.updates {
-                if update.tuple.schema == relation.schema && update.tuple.table == relation.table {
-                    let row = update
-                        .tuple
-                        .row
-                        .iter()
-                        .map(|(name, value)| (field(source, name), value.clone()))
-                        .collect();
-                    self.pending.push(ordinal, Key::new(), row, update.weight)?;
-                }
-            }
-        }
-        Ok(())
+        visit_sources(batch, ir, |source, key, row, weight| {
+            self.pending.push(source, key, row, weight)
+        })
     }
     pub(in crate::worker) fn seal(self, time: u64) -> Result<Inputs> {
         self.pending.seal(time)

@@ -51,6 +51,7 @@ pub(super) fn scope(tree: Tree, contract: &Contract) -> Result<Scope> {
     builder.nodes.push(Node::Output { id: "project".into(), input: edge.id });
     Ok(Scope {
         ir: Relational {
+            projection: Vec::new(),
             sources: builder.sources,
             nodes: builder.nodes,
             output: crate::compiler::Projected { columns },

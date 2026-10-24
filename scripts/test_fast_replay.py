@@ -50,10 +50,10 @@ class FastReplayTests(unittest.TestCase):
             {'table':'entry', 'kind':'delete', 'id':2}]}
         self.assertEqual(delta(source, transaction), [])
 
-    def test_growth_limits_scale_only_output_guards(self):
+    def test_growth_limits_scale_output_and_total_scratch_guards(self):
         from fast_validation import growth_limits
-        self.assertEqual(growth_limits(1000), {'output_entries':250000, 'output_bytes':67108864})
-        self.assertEqual(growth_limits(128000), {'output_entries':2048000, 'output_bytes':524288000})
+        self.assertEqual(growth_limits(1000), {'output_entries':250000, 'output_bytes':67108864, 'scratch_bytes':1073741824})
+        self.assertEqual(growth_limits(128000), {'output_entries':2048000, 'output_bytes':524288000, 'scratch_bytes':16777216000})
 
     def test_preload_excludes_setup_and_warmup_from_measurements(self):
         trace = preloaded(10, warmup=2, measured=3)
@@ -95,7 +95,7 @@ class CoverageTests(unittest.TestCase):
         cases = [{'name':'one', 'steps':[
             {'expected':[[['a'],1]], 'measure':False, 'restart':False, 'updates':[]},
             {'expected':[[['b'],1]], 'measure':True, 'restart':False, 'updates':[{},{}]}]}]
-        valid = {'case':'one', 'prepare_commit_ns':[123], 'oracle_checks':2,
+        valid = {'bootstrap_ns':100, 'bootstrap_rows':0, 'case':'one', 'prepare_commit_ns':[123], 'oracle_checks':2,
                  'logical_time':2, 'measured_weighted_updates':2, 'output_groups':1,
                  'measured_object_reads':1, 'measured_object_puts':0,
                  'object_puts':3, 'stored_objects':3, 'stored_bytes':128,
@@ -106,7 +106,7 @@ class CoverageTests(unittest.TestCase):
                 validate_report(path, cases)
             path.write_text(json.dumps([valid]))
             validate_report(path, cases)
-            for mutation in [{'prepare_commit_ns':[]}, {'prepare_commit_ns':[True]},
+            for mutation in [{'bootstrap_ns':-1}, {'bootstrap_rows':-1}, {'prepare_commit_ns':[]}, {'prepare_commit_ns':[True]},
                              {'oracle_checks':0}, {'case':'wrong'}, {'logical_time':3},
                              {'measured_weighted_updates':0}, {'memtable_bytes':-1},
                              {'measured_cache_misses':-1}, {'measured_decoded_bytes':-1}, {'measured_decoded_rows':-1}, {'measured_object_reads':-1},

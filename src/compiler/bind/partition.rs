@@ -139,7 +139,7 @@ fn build(
     attach_expansion(&mut nodes, parsed.expansion.as_ref())?;
     let predicates = source_predicate(parsed.predicate.clone(), resolve)?;
     let sources = context.sources;
-    let mut relational = Relational { sources, nodes, output };
+    let mut relational = Relational { sources, nodes, output, projection: Vec::new() };
     composition::lower_source_filter(&mut relational, predicates)?;
     super::boundary::finalize(&mut relational, &averages)?;
     Ok(Compiled { result_columns: Vec::new(), relational })

@@ -354,7 +354,17 @@ async fn copy(
     contract: &Contract,
     limits: crate::engine::execution::Limits,
 ) -> Result<crate::weighted::Batch> {
-    let mut reader = crate::source::SnapshotReader::new(sql, contract, limits).await?;
+    let mut reader = crate::source::SnapshotReader::new(
+        sql,
+        contract,
+        &contract
+            .relations
+            .iter()
+            .map(|r| r.columns.iter().map(|c| c.name.clone()).collect())
+            .collect::<Vec<_>>(),
+        limits,
+    )
+    .await?;
     let mut output = crate::weighted::Batch { updates: Vec::new() };
     while let Some(mut batch) = reader.next(sql).await? {
         output.updates.append(&mut batch.updates);
