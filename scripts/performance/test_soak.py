@@ -103,6 +103,7 @@ class SoakTests(unittest.TestCase):
             fixture=SoakFixture.__new__(SoakFixture)
             fixture.metrics_lock=threading.RLock()
             fixture.activity='steady';fixture.activities={'steady'};fixture.timings={}
+            fixture.latest={}
             fixture.s3_name='owned';fixture.objects=mock.Mock(return_value={'bytes':0,'objects':0})
             began,finished=threading.Event(),threading.Event()
             def phase():

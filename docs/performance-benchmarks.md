@@ -512,17 +512,32 @@ by the fast runner.
 ## Growing state and recovery qualification
 
 The separate soak runner keeps one aggregate circuit alive as source rows and
-output groups grow. The default is three hours at 1,000 row changes/s, with the
+output groups grow. The default duration is ten minutes at 1,000 row changes/s, with the
 same deterministic mix of single-statement autocommits and transactions through
 1,000 rows used by the comparison harness:
 
 ```sh
-python3 scripts/performance/soak.py \
+python3 scripts/performance/soak.py --qualification growth \
   --binary artifacts/package/bin/pgderive \
-  --output artifacts/performance/growth-recovery-001
+  --output artifacts/performance/steady-growth-001
 ```
 
-The producer continues committing through two worker SIGKILL/restarts. The second
+The required `--qualification` selects `growth`, `churn`, or `recovery`.
+Growth and churn never restart the worker. Growth uses signed non-NULL values,
+NULLs, retractions and updates to retained historical groups; churn holds source
+cardinality fixed. The soak source uses bigint quantities so SUM follows numeric
+statistics, matching the demo. There is no old NULL-only workload path.
+
+Growth/churn compare raw observations in early and late thirds after a declared
+warmup (120 seconds by default, a positive multiple of 30). Both intervals must
+sustain the offered rate and contain publications, checkpoints, marker samples
+and resources. Missing or invalid phase measurements fail the qualification.
+Gates bound latency, CPU/preparation/publication per change, RSS,
+backlog, request counts and transferred bytes. Growth additionally requires source
+rows to at least double between intervals. Physical state bytes may grow. A finite
+qualification covers this workload and state range, not arbitrary datasets.
+
+For recovery, the producer continues committing through two worker SIGKILL/restarts. The second
 crash follows a witnessed checkpoint PUT hold and newer foreground publication.
 A commit after confirmed worker death proves that ingestion continued before
 recovery began. Restarts retain the source slot, and unchanged seed result rows
@@ -530,7 +545,9 @@ must retain their CTIDs and xmin values. Every ten minutes and at input end, the
 runner pauses source writes at a complete transaction boundary and compares both
 bags with native SQL using bidirectional EXCEPT ALL. Final graceful shutdown must
 leave the durable checkpoint equal to published logical time with an empty epoch
-journal. ACK ordering is checked throughout.
+journal. Final verification also requires published progress to cover the last
+source transaction WAL fence, including unmarked transactions. ACK ordering is
+checked throughout.
 
 Sampling continues through verification, downtime, recovery and final checkpoint
 drain. Missing process measurements are recorded explicitly during witnessed
@@ -551,7 +568,7 @@ qualification limits, not promises for every query or data size.
 
 A short harness check uses `--duration 60 --state-rows 120 --groups 10
 --verify-seconds 15 --sample-seconds 5`. It exercises control flow and cleanup;
-it does not substitute for the three-hour qualification. Owned PostgreSQL and
+it is recovery-only and does not qualify a steady state. Owned PostgreSQL and
 object-store containers use 6 GiB and 8 GiB tmpfs limits, respectively. Failure
 preserves a database dump and object-store archive before cleanup. SIGTERM enters
 that cleanup path; SIGKILL of the runner or host failure cannot do so.

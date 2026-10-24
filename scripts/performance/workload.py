@@ -16,22 +16,30 @@ def operation(tick, args):
 
     The marker owns book 1. Other rows never enter it. Updates advance its
     monotonically increasing sum, allowing coalesced sink epochs to be observed.
-    Mixed traffic marks every third statement; unmarked transaction latency is unknown.
+    Mixed traffic marks every sixth statement after warmup; other updates visit retained groups. Unmarked transaction latency is unknown.
     """
     if args.workload == 'wide-updates':
         return ('UPDATE positions SET quantity=COALESCE(quantity,0)+1 WHERE id=%s',
                 (1 + (tick * 37) % (args.state_rows + 1),), True)
     if args.workload == 'updates' or tick % 3 == 1:
+        if args.workload == 'mixed' and tick % 6 == 4 and tick >= 10:
+            # Odd-ordinal inserts survive the paired deletes. Mix across their
+            # growing history without retaining a generator-side row cache.
+            index = ((tick * 2654435761) & 0xffffffff) % (tick // 6)
+            value = None if tick % 17 == 0 else tick % 401 - 200
+            return ('UPDATE positions SET quantity=%s WHERE id=%s',
+                    (value, args.state_rows + 3 + 2 * index), False)
         return ('UPDATE positions SET quantity=%s WHERE id=1', (tick,), True)
     ordinal = tick // 3
+    value = None if tick % 17 == 0 else tick % 401 - 200
     if tick % 3 == 2:
-        return ('INSERT INTO positions VALUES(%s,%s,NULL)',
-                (args.state_rows + 2 + ordinal, 2 + ordinal), False)
+        return ('INSERT INTO positions VALUES(%s,%s,%s)',
+                (args.state_rows + 2 + ordinal, 2 + ordinal, value), False)
     # Delete half the inserted rows: source state grows without a fixed cap.
     if ordinal % 2 == 1:
         return ('DELETE FROM positions WHERE id=%s', (args.state_rows + 2 + ordinal - 1,), False)
-    return ('INSERT INTO positions VALUES(%s,%s,NULL)',
-            (args.state_rows + 2 + ordinal + 1000000000, 2 + ordinal), False)
+    return ('INSERT INTO positions VALUES(%s,%s,%s)',
+            (args.state_rows + 2 + ordinal + 1000000000, 2 + ordinal, value), False)
 
 
 VARIED_SIZES = (1, 2, 1, 8, 1, 32, 1, 128, 1, 512, 1, 4, 1, 16, 1, 64, 1, 256, 1, 1000)

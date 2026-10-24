@@ -305,23 +305,29 @@ class SuiteTests(unittest.TestCase):
         args = types.SimpleNamespace(workload='mixed', state_rows=12000)
         ids = set(range(1, args.state_rows + 2))
         updates = inserts = deletes = 0
+        historical=set(); nonnull=0
         for tick in range(1, 10001):
             sql, params, marker = operation(tick, args)
             self.assertNotIn(';', sql)
             if sql.startswith('UPDATE'):
                 updates += 1
-                self.assertTrue(marker)
-                self.assertEqual(params, (tick,))
+                if marker:
+                    self.assertEqual(params,(tick,))
+                else:
+                    self.assertIn(params[1],ids); historical.add(params[1])
             elif sql.startswith('INSERT'):
                 inserts += 1
                 self.assertNotIn(params[0], ids)
                 ids.add(params[0]); self.assertGreater(params[1], 1)
+                nonnull += params[2] is not None
             else:
                 deletes += 1
                 self.assertIn(params[0], ids); ids.remove(params[0])
         self.assertGreater(inserts, deletes)
         self.assertGreater(deletes, 0)
         self.assertGreater(updates, 0)
+        self.assertGreater(len(historical),100)
+        self.assertGreater(nonnull,inserts*.9)
 
     def test_visible_before_client_ack_does_not_drop_marker(self):
         records, seen = [], {}

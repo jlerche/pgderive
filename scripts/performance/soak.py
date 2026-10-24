@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sustained growing state with live ingestion across witnessed worker crashes."""
+"""Constant-input growth, churn, and witnessed recovery qualification."""
 import argparse
 from collections import deque
 import gzip
@@ -18,6 +18,8 @@ import uuid
 from common import ROOT, QUERY, distribution, docker, process_stats, save, sha256, wait
 from fixture import Fixture
 from request_metrics import object_requests
+from metrics import lsn
+from steady import assess
 from workload import execute_transaction, transaction_size
 
 
@@ -69,6 +71,9 @@ class SoakFixture(Fixture):
         self.engine_reader.start(); self.readers.append(self.engine_reader)
 
     def start_pgderive(self):
+        # Match the live demo's bigint SUM / numeric statistics path.
+        with self.connect() as connection:
+            connection.execute('ALTER TABLE positions ALTER COLUMN quantity TYPE bigint')
         stderr = (self.directory / 'gate-proxy.stderr').open('w'); self.files.append(stderr)
         process = subprocess.Popen([sys.executable, '-u', str(ROOT/'scripts/s3_latency_proxy.py'),
             '--port', '0', '--scale', '0', '--gate', str(self.gate),
@@ -118,6 +123,7 @@ class Traffic:
         self.lock = threading.Lock()
         self.pending = deque()
         self.rows, self.commits, self.visible = 0, 0, 0
+        self.last_fence = None
         self.paused_seconds = 0
         self.latencies, self.errors = [], []
         self.threads = []
@@ -153,6 +159,7 @@ class Traffic:
                     record = execute_transaction(connection, self.args, self.rows+1, size)
                     with self.lock:
                         self.rows += size; self.commits += 1
+                        self.last_fence = record['source_wal_fence']
                         if record['marker']:
                             self.pending.append((record['marker_value'], record['commit'], self.rows))
                     log.write(json.dumps(record)+'\n')
@@ -160,7 +167,7 @@ class Traffic:
             self.done.set(); self.paused.set()
 
     def observe(self):
-        with self.fixture.connect() as connection:
+        with self.fixture.connect() as connection, gzip.open(self.fixture.directory/'observations.jsonl.gz','wt') as log:
             while not self.stop.is_set():
                 value = connection.execute('SELECT units FROM pgd.groups WHERE book_id=1').fetchone()[0]
                 after = time.monotonic()
@@ -168,11 +175,13 @@ class Traffic:
                     while self.pending and self.pending[0][0] <= value:
                         _, commit, self.visible = self.pending.popleft()
                         self.latencies.append(max(0,(after-commit)*1000))
+                        log.write(json.dumps({'commit':commit,'observed':after,'prefix_changes':self.visible})+'\n')
                 self.stop.wait(.01)
 
     def snapshot(self):
         with self.lock:
             result = {'source_changes':self.rows,'source_transactions':self.commits,
+                      'last_source_wal_fence':self.last_fence,
                       'visible_marker_prefix_changes':self.visible,
                       'pending_changes_after_marker':self.rows-self.visible,
                       'sink_visibility_ms':distribution(self.latencies)}
@@ -203,12 +212,13 @@ def boundary(fixture):
             (SELECT count(*) FROM pgd.pgderive_epoch_boundaries),
             (SELECT count(*) FROM pgd.pgderive_protections),
             (SELECT count(*) FROM pgd.pgderive_roots),s.slot_name,
-            s.confirmed_flush_lsn::text,p.checkpoint_lsn::text,p.end_lsn::text
+            s.confirmed_flush_lsn::text,p.checkpoint_lsn::text,p.end_lsn::text,
+            (SELECT count(*) FROM positions),(SELECT count(*) FROM pgd.groups)
             FROM pgd.pgderive_queries q JOIN pgd.pgderive_progress p USING(query_id)
             JOIN pgd.pgderive_worker_registration r USING(query_id)
             JOIN pg_replication_slots s ON s.slot_name=r.slot_name''').fetchone()
     return dict(zip(['checkpoint_time','published_time','ack_safe','retained_wal_bytes',
-                     'journal_rows','protection_rows','roots','slot','ack_lsn','checkpoint_lsn','end_lsn'],row))
+                     'journal_rows','protection_rows','roots','slot','ack_lsn','checkpoint_lsn','end_lsn','source_rows','groups'],row))
 
 
 def pending_boundary(fixture):
@@ -237,6 +247,7 @@ def verify(fixture, traffic):
         wait(traffic.paused.is_set, 20)
         wait(lambda:native_equal(fixture), 180)
         wait(lambda:traffic.pending_count()==0,30)
+        wait(lambda:lsn(boundary(fixture)['end_lsn'])>=lsn(traffic.last_fence),30)
         value = boundary(fixture)
         if not value['ack_safe']: raise AssertionError(value)
         with fixture.connect() as connection:
@@ -348,6 +359,8 @@ class Sampler:
             observed=time.monotonic()
         process = process_observation(self.fixture)
         value={'seconds':observed-self.started,**process,**traffic,
+               'cache':self.fixture.latest.get('cache'),
+               'memtable_bytes':self.fixture.latest.get('memtable_bytes'),
                **boundary(self.fixture),'physical':self.fixture.objects(),
                'object_backend_bytes':int(docker('exec',self.fixture.s3_name,'du','-sb','/data').split()[0]),
                **timings}
@@ -397,16 +410,17 @@ def qualify(args):
         'dependencies_sha256':{str(path.relative_to(ROOT)):sha256(path) for path in [*pathlib.Path(__file__).parent.glob('*.py'),ROOT/'scripts/s3_latency_proxy.py',ROOT/'worker.example.toml']},
         'binary_sha256':sha256(args.binary),
         'harness_sha256':sha256(pathlib.Path(__file__)), 'arguments':{key:str(value) if isinstance(value,pathlib.Path) else value for key,value in vars(args).items()},
-        'scope':'One growing aggregate circuit. Source ingestion continues across two SIGKILL/restarts. Native checks pause only source writes; storage latency proxy remains enabled.'})
+        'scope':'One aggregate circuit; qualification selects uninterrupted growth/churn or two witnessed crash boundaries. Native checks pause only source writes; storage latency proxy remains enabled.'})
     try:
         fixture.start()
         started = time.monotonic(); end = started+args.duration
         traffic = Traffic(fixture,args,started); fixture.mark_activity('steady'); traffic.start()
         sampler = Sampler(fixture,traffic,args,started); sampler.thread.start()
         next_verify, next_crash = started+args.verify_seconds, 0
+        crash_count = 2 if args.qualification == 'recovery' else 0
         while time.monotonic() < end:
             traffic.check(); now=time.monotonic()
-            if next_crash < 2 and now >= started+args.duration*(next_crash+1)/3:
+            if next_crash < crash_count and now >= started+args.duration*(next_crash+1)/3:
                 crashes.append(crash(fixture,traffic,upload=next_crash==1)); next_crash+=1
                 save(args.output/'crashes.json',crashes)
             if now >= next_verify:
@@ -415,6 +429,7 @@ def qualify(args):
             time.sleep(.05)
         wait(traffic.done.is_set,20)
         verifications.append({'seconds':time.monotonic()-started,**verify(fixture,traffic)})
+        save(args.output/'verifications.json',verifications)
         traffic.check(); traffic.finish()
         fixture.mark_activity('final-drain')
         fixture.expected_downtime.set()
@@ -426,7 +441,7 @@ def qualify(args):
         final=boundary(fixture)
         if fixture.worker.returncode != 0 or final['journal_rows'] != 0 or final['checkpoint_time'] != final['published_time']:
             raise AssertionError(final)
-        if len(crashes) != 2: raise AssertionError('Both crash boundaries must be witnessed')
+        if len(crashes) != crash_count: raise AssertionError('Requested crash boundaries were not witnessed')
         active_seconds=args.duration-traffic.paused_seconds
         if traffic.rows < args.rate*active_seconds*.98:
             raise AssertionError('Offered source rate was not sustained')
@@ -443,6 +458,13 @@ def qualify(args):
                 'object_backend_peak_bytes':max(row['object_backend_bytes'] for row in sampler.samples),
                 'state_peak_bytes':max(row['physical']['bytes'] for row in sampler.samples),
                 'state_peak_objects':max(row['physical']['objects'] for row in sampler.samples)}
+        if args.qualification != 'recovery':
+            result['steady']=assess(fixture.directory,sampler.samples,args,started)
+            save(args.output/'steady.json',result['steady'])
+            if not result['steady']['passed']:
+                result['passed']=False
+                save(args.output/'qualification.json',result)
+                raise AssertionError('Steady-state qualification failed: '+str(result['steady']['issues']))
         save(args.output/'qualification.json',result); success=True
     finally:
         errors=cleanup_owned(fixture,traffic,sampler,success)
@@ -481,12 +503,14 @@ def arguments():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary',type=pathlib.Path,required=True)
     parser.add_argument('--output',type=pathlib.Path,required=True)
-    parser.add_argument('--duration',type=float,default=10800)
+    parser.add_argument('--qualification',choices=['growth','churn','recovery'],required=True)
+    parser.add_argument('--duration',type=float,default=600)
     parser.add_argument('--rate',type=float,default=1000)
     parser.add_argument('--state-rows',type=int,default=12000)
     parser.add_argument('--groups',type=int,default=1000)
     parser.add_argument('--transaction-mix',choices=['autocommit','varied'],default='varied')
     parser.add_argument('--proxy-scale',type=float,default=1)
+    parser.add_argument('--warmup-seconds',type=int,default=120)
     parser.add_argument('--verify-seconds',type=float,default=600)
     parser.add_argument('--sample-seconds',type=float,default=30)
     parser.add_argument('--postgres-image',default='postgres:17')
@@ -497,9 +521,12 @@ def arguments():
     parser.add_argument('--max-pending-changes',type=int,default=60000)
     parser.add_argument('--max-steady-p50-ms',type=float,default=100)
     parser.add_argument('--max-steady-p95-ms',type=float,default=250)
-    args=parser.parse_args(); args.workload='mixed'
+    args=parser.parse_args(); args.workload='updates' if args.qualification=='churn' else 'mixed'
     for key in ['duration','rate','verify_seconds','sample_seconds','max_rss_bytes','max_wal_bytes','max_state_bytes','max_pending_changes','max_steady_p50_ms','max_steady_p95_ms','groups']:
         if not math.isfinite(getattr(args,key)) or getattr(args,key)<=0: parser.error(key+' must be finite and positive')
+    if args.warmup_seconds<30 or args.warmup_seconds%30: parser.error('warmup-seconds must be a positive multiple of 30')
+    if args.qualification!='recovery' and (args.duration < args.warmup_seconds+180 or args.duration%30):
+        parser.error('Steady qualification needs warmup plus 180s and complete 30s windows')
     if args.duration<30 or args.state_rows<0 or not math.isfinite(args.proxy_scale) or args.proxy_scale<0:
         parser.error('duration>=30, state-rows>=0 and proxy-scale>=0 required')
     if args.duration*args.rate/3+args.state_rows+1000000002 >= 2147483647:

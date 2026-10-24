@@ -1538,5 +1538,392 @@
     "nonempty_request_byte_root_counts_unchanged_after_empty_fix": true,
     "empty_anti_join_native_passed": true,
     "gc_delete_crash_replay_target_passed": true
+  },
+  "uninterrupted_local_qualification": {
+    "rust_commit": "4a20a2f",
+    "duration_seconds": 600,
+    "source_changes": 599614,
+    "source_transactions": 5908,
+    "final_source_rows": 211871,
+    "final_groups": 199872,
+    "final_logical_time": 4544,
+    "final_journal_rows": 0,
+    "assessment": {
+      "passed": false,
+      "issues": [
+        "cpu_ms_per_change exceeded its growth bound or lacked data",
+        "prepare_including_object_io_us_per_change exceeded its growth bound or lacked data",
+        "response_body_bytes_per_change exceeded its growth bound or lacked data"
+      ],
+      "qualification": "growth",
+      "warmup_seconds": 120,
+      "source_row_growth": 2.1352422409987373,
+      "parts": [
+        {
+          "interval": [
+            699791.251905416,
+            699941.251905416
+          ],
+          "observations": {
+            "epochs": 1131,
+            "resources": 10,
+            "markers": 787,
+            "checkpoints": 27
+          },
+          "changes_per_second": 1001.2933333333333,
+          "source_changes": 150194,
+          "processing_ms": {
+            "n": 1131,
+            "p50": 7,
+            "p95": 118,
+            "p99": 152,
+            "max": 168
+          },
+          "sink_visibility_ms": {
+            "n": 787,
+            "p50": 25.791530963033438,
+            "p95": 141.98382594622672,
+            "p99": 170.28849001508206,
+            "max": 180.8776530670002
+          },
+          "phase_us_per_change": {
+            "prepare_including_object_io": 171.67164486901453,
+            "publication": 21.431181064647888
+          },
+          "cpu_ms_per_change": 0.19272880093783867,
+          "peak_rss_bytes": 235741184,
+          "source_rows": [
+            52192,
+            57381,
+            62352,
+            67541,
+            72284,
+            77368,
+            82444,
+            87413,
+            92604,
+            97403
+          ],
+          "groups": [
+            40193,
+            45382,
+            50353,
+            55210,
+            60284,
+            65284,
+            70444,
+            75414,
+            80604,
+            85404
+          ],
+          "max_pending_changes": 1001,
+          "requests": {
+            "interval": [
+              699791.251905416,
+              699941.251905416
+            ],
+            "attempts": 1167,
+            "methods": {
+              "GET": 597,
+              "PUT": 108,
+              "HEAD": 458,
+              "POST": 4
+            },
+            "estimated_r2_classes": {
+              "class_b": 1027,
+              "class_a": 136,
+              "unclassified": 4
+            },
+            "status_codes": {
+              "206": 569,
+              "200": 598
+            },
+            "transport_errors": 0,
+            "request_body_bytes": 3201212,
+            "response_body_bytes": 16741169,
+            "unknown_request_body_sizes": 0,
+            "scope": "Completed proxy attempts in the specified monotonic interval. Class estimates use HTTP method/listing flags; POST is unclassified because multipart versus bulk deletion is not recorded. Not a billing invoice."
+          },
+          "request_classes_per_change": {
+            "class_a": 0.0009054955590769272,
+            "class_b": 0.00683782308214709
+          }
+        },
+        {
+          "interval": [
+            700121.251905416,
+            700271.251905416
+          ],
+          "observations": {
+            "epochs": 1130,
+            "resources": 10,
+            "markers": 790,
+            "checkpoints": 28
+          },
+          "changes_per_second": 999.0333333333333,
+          "source_changes": 149855,
+          "processing_ms": {
+            "n": 1130,
+            "p50": 8.0,
+            "p95": 150,
+            "p99": 200,
+            "max": 294
+          },
+          "sink_visibility_ms": {
+            "n": 790,
+            "p50": 27.831636951304972,
+            "p95": 183.0562970135361,
+            "p99": 225.071894004941,
+            "max": 302.90712194982916
+          },
+          "phase_us_per_change": {
+            "prepare_including_object_io": 223.86134097390584,
+            "publication": 21.773434317123833
+          },
+          "cpu_ms_per_change": 0.2441532495005288,
+          "peak_rss_bytes": 241721344,
+          "source_rows": [
+            162599,
+            167788,
+            172757,
+            177948,
+            182747,
+            187773,
+            192849,
+            197819,
+            203009,
+            207979
+          ],
+          "groups": [
+            150598,
+            155788,
+            160758,
+            165948,
+            170704,
+            175774,
+            180850,
+            185820,
+            191010,
+            195809
+          ],
+          "max_pending_changes": 1001,
+          "requests": {
+            "interval": [
+              700121.251905416,
+              700271.251905416
+            ],
+            "attempts": 1282,
+            "methods": {
+              "GET": 647,
+              "HEAD": 520,
+              "PUT": 112,
+              "POST": 3
+            },
+            "estimated_r2_classes": {
+              "class_b": 1139,
+              "class_a": 140,
+              "unclassified": 3
+            },
+            "status_codes": {
+              "206": 619,
+              "200": 663
+            },
+            "transport_errors": 0,
+            "request_body_bytes": 3043593,
+            "response_body_bytes": 33862397,
+            "unknown_request_body_sizes": 0,
+            "scope": "Completed proxy attempts in the specified monotonic interval. Class estimates use HTTP method/listing flags; POST is unclassified because multipart versus bulk deletion is not recorded. Not a billing invoice."
+          },
+          "request_classes_per_change": {
+            "class_a": 0.000934236428547596,
+            "class_b": 0.00760068065796937
+          }
+        }
+      ],
+      "checks": [
+        {
+          "metric": "processing_ms_p50",
+          "early": 7,
+          "late": 8.0,
+          "limit": 9.75,
+          "passed": true
+        },
+        {
+          "metric": "processing_ms_p95",
+          "early": 118,
+          "late": 150,
+          "limit": 178.0,
+          "passed": true
+        },
+        {
+          "metric": "sink_visibility_ms_p50",
+          "early": 25.791530963033438,
+          "late": 27.831636951304972,
+          "limit": 33.2394137037918,
+          "passed": true
+        },
+        {
+          "metric": "sink_visibility_ms_p95",
+          "early": 141.98382594622672,
+          "late": 183.0562970135361,
+          "limit": 213.97573891934007,
+          "passed": true
+        },
+        {
+          "metric": "cpu_ms_per_change",
+          "early": 0.19272880093783867,
+          "late": 0.2441532495005288,
+          "limit": 0.24101100117229834,
+          "passed": false
+        },
+        {
+          "metric": "max_pending_changes",
+          "early": 1001,
+          "late": 1001,
+          "limit": 2251.25,
+          "passed": true
+        },
+        {
+          "metric": "prepare_including_object_io_us_per_change",
+          "early": 171.67164486901453,
+          "late": 223.86134097390584,
+          "limit": 214.68955608626814,
+          "passed": false
+        },
+        {
+          "metric": "publication_us_per_change",
+          "early": 21.431181064647888,
+          "late": 21.773434317123833,
+          "limit": 26.88897633080986,
+          "passed": true
+        },
+        {
+          "metric": "peak_rss_bytes",
+          "early": 235741184,
+          "late": 241721344,
+          "limit": 276092518.40000004,
+          "passed": true
+        },
+        {
+          "metric": "class_a_per_change",
+          "early": 0.0009054955590769272,
+          "late": 0.000934236428547596,
+          "limit": 0.0011385425661929276,
+          "passed": true
+        },
+        {
+          "metric": "class_b_per_change",
+          "early": 0.00683782308214709,
+          "late": 0.00760068065796937,
+          "limit": 0.008553951970030631,
+          "passed": true
+        },
+        {
+          "metric": "attempts_per_change",
+          "early": 0.007769950863549809,
+          "late": 0.008554936438557271,
+          "limit": 0.011661599412671482,
+          "passed": true
+        },
+        {
+          "metric": "request_body_bytes_per_change",
+          "early": 21.313847423998297,
+          "late": 20.31025324480331,
+          "limit": 31.970777809114793,
+          "passed": true
+        },
+        {
+          "metric": "response_body_bytes_per_change",
+          "early": 111.46363370041414,
+          "late": 225.96774882386308,
+          "limit": 167.19545722373857,
+          "passed": false
+        }
+      ],
+      "scope": "Uninterrupted wall-clock qualification against local PostgreSQL and latency-injected object storage. Marker freshness is sampled; exact final native equality and WAL fence drain are checked separately. Finite covered range, not arbitrary-size proof.",
+      "reanalysis": {
+        "reason": "Reject missing or invalid phase metrics; original run had complete phase metrics. No bounds changed.",
+        "assessor_sha256": "e481677c6d4f42d8f04adeca801736e3febfe3b5029a6e203e9e6ced740d7ded",
+        "published_events": 4543,
+        "all_phases_present": true
+      }
+    }
+  },
+  "preloaded_local_sweep": {
+    "purpose": "Unpaced production preparation after cold restore; no network latency proxy, not live freshness or dynamic compaction proof",
+    "measured_updates_per_size": 64,
+    "warmup_updates": 16,
+    "oracle_and_coverage_passed": true,
+    "seconds_excluding_build": 48.65,
+    "cases": [
+      {
+        "case": "group-1000-0",
+        "output_groups": 1000,
+        "measured_cache_misses": 14,
+        "measured_decoded_bytes": 228163,
+        "measured_object_reads": 0,
+        "measured_object_puts": 0,
+        "stored_bytes": 56285,
+        "memtable_bytes": 257384,
+        "preparation_ms": {
+          "n": 64,
+          "p50": 0.209368,
+          "p95": 0.465454,
+          "p99": 0.891984,
+          "max": 0.891984
+        }
+      },
+      {
+        "case": "group-32000-0",
+        "output_groups": 32000,
+        "measured_cache_misses": 269,
+        "measured_decoded_bytes": 4386226,
+        "measured_object_reads": 0,
+        "measured_object_puts": 0,
+        "stored_bytes": 1788877,
+        "memtable_bytes": 263836,
+        "preparation_ms": {
+          "n": 64,
+          "p50": 0.666676,
+          "p95": 0.851387,
+          "p99": 1.506572,
+          "max": 1.506572
+        }
+      },
+      {
+        "case": "group-128000-0",
+        "output_groups": 128000,
+        "measured_cache_misses": 310,
+        "measured_decoded_bytes": 5058431,
+        "measured_object_reads": 16,
+        "measured_object_puts": 0,
+        "stored_bytes": 7191338,
+        "memtable_bytes": 264716,
+        "preparation_ms": {
+          "n": 64,
+          "p50": 0.8031655,
+          "p95": 1.087225,
+          "p99": 1.60052,
+          "max": 1.60052
+        }
+      },
+      {
+        "case": "group-262144-0",
+        "output_groups": 262144,
+        "measured_cache_misses": 320,
+        "measured_decoded_bytes": 5222673,
+        "measured_object_reads": 151,
+        "measured_object_puts": 0,
+        "stored_bytes": 14781615,
+        "memtable_bytes": 265376,
+        "preparation_ms": {
+          "n": 64,
+          "p50": 0.9033154999999999,
+          "p95": 1.186954,
+          "p99": 1.676565,
+          "max": 1.676565
+        }
+      }
+    ]
   }
 }

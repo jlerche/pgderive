@@ -65,7 +65,11 @@ Reuse `scripts/performance/soak.py` for 1k changes/s with mixed updates, inserts
 and deletes, half autocommit transactions and sizes through 1,000 rows. Its source
 and aggregate cardinality grow. Record processing and commit-to-sink distributions,
 backlog, CPU, RSS, physical object size, request counts and WAL retention. Native
-PostgreSQL comparisons and two witnessed crash/replay checks are mandatory.
+PostgreSQL comparisons and acknowledgement checks are mandatory. Select
+`--qualification growth` for an uninterrupted worker and `recovery` for the
+separate two witnessed crash/replay checks. Restarted workers cannot qualify RSS
+stability. The query uses bigint quantities, including signed non-NULL values,
+and updates retained historical groups as new groups appear.
 
 This short qualification is a regression check. A longer constant-input run and
 larger cold-state ranges are still necessary before claiming a long-term plateau.
@@ -166,3 +170,94 @@ than retained as another path. Detailed paired samples, the rejected experiment
 and live evidence are retained under ignored
 `artifacts/benchmarks/live-latency-debug/`. The candidate requires a separate live
 deployment comparison before claiming any live latency improvement.
+
+
+## Uninterrupted local qualification, 2026-10-24
+
+The stronger growth qualification **fails** on Rust commit `4a20a2f`.
+The worker applied 599,614 changes in 5,908 transactions over ten minutes at
+approximately 1,000 changes/s. Source rows grew from 12,001 to 211,871 and output
+groups to 199,872. The worker never restarted. PostgreSQL CDC, numeric SUM,
+keyed sink publication and the existing latency-injected object store were real;
+this is wall-clock integration, separate from accelerated component replay.
+The workload mixes inserts, deletes, signed/NULL quantities and historical updates,
+with half the transaction schedule using single-statement autocommits and sizes
+through 1,000 statements. Query shape, rate and cache limits remain fixed. This local profile uses the
+example configuration: a 16 MiB decoded-cache charge budget with a 256-entry cap,
+a compressed-window budget derived from it, and no optional Foyer encoded cache.
+It is a cold-working-set qualification, not an identical live deployment profile.
+
+After 120 seconds of warmup, the declared early interval is 120–270 seconds and
+the late interval is 450–600 seconds. Source rows more than double between their
+last samples (97,403 → 207,979). Metrics use raw publications and observed marker
+commits, rather than quantiles of sampled quantiles:
+
+| Metric | Early | Late | Growth gate |
+| --- | ---: | ---: | --- |
+| Accepted changes/s | 1,001.3 | 999.0 | Pass |
+| Processing p50 / p95 ms | 7 / 118 | 8 / 150 | Pass |
+| Commit-to-observed-sink p50 / p95 ms | 25.8 / 142.0 | 27.8 / 183.1 | Pass |
+| CPU ms/change | 0.193 | 0.244 | **Fail** |
+| Preparation µs/change, including object I/O | 171.7 | 223.9 | **Fail** |
+| Publication µs/change | 21.4 | 21.8 | Pass |
+| Peak RSS MiB | 224.8 | 230.5 | Pass |
+| Maximum changes after latest visible marker | 1,001 | 1,001 | Pass |
+| Estimated Class A requests/million changes | 905 | 934 | Pass |
+| Estimated Class B requests/million changes | 6,838 | 7,601 | Pass |
+| Uploaded bytes/change | 21.3 | 20.3 | Pass |
+| Downloaded bytes/change | 111.5 | 226.0 | **Fail** |
+
+The run passed native SQL equality and final WAL-fence drain before assessment;
+final durable and published logical times both reached 4,544 with no replay journal
+rows. ACK bounds held. No transport errors or unknown request sizes occurred.
+Final physical objects occupied 4,809,647 bytes. Owned PostgreSQL and object-store
+containers were removed, no Docker volumes were created, and failure evidence was
+retained under ignored `artifacts/benchmarks/steady-local/non-null-growth/`.
+A stopped NULL-only preflight is retained separately and is not qualification.
+
+The passing endpoint latency check is insufficient evidence of a plateau. The
+15-second processing medians rose as high as 17 ms between larger merges, then
+fell to 6–8 ms after a merge. CPU per change rose 27% and preparation rose 30%.
+Range-response bytes account for most of the download increase: 569 responses
+returned 16.30 MB early, versus 619 returning 33.40 MB late. Root GET response
+bytes stayed near 0.42–0.44 MB. This narrows the next investigation to page/range
+read amplification and retained-run processing; it does not by itself separate
+foreground probes from overlapping background compaction reads.
+
+The qualifier now rejects missing phase data and has independent synthetic
+regressions for latency, CPU, RSS, backlog, rate, cardinality, restarts, ACK bounds,
+checkpoint coverage and request accounting. The original raw run had all required
+phase fields; reanalysis with that stricter missing-data check gives the same
+three failed bounds. No threshold was relaxed after observing the failure.
+
+These results cover COUNT and numeric SUM over growing groups and historical
+updates. They do not cover joins, ordered aggregates, growing membership inside
+a hot group, future compaction tiers or the 128-root capacity boundary. A separate fixed-state churn control remains a useful diagnostic; this failed
+run cannot establish steady state or a live freshness SLO.
+
+
+The existing fast replay runner also tested cold-restored state sizes through
+262,144 groups, with 16 warmup updates and 64 measured historical updates at each
+size. All exact independent-oracle checks passed. The complete replay took 48.65
+seconds after compilation:
+
+| Groups | Preparation p50 / p95 ms | Measured object reads | Decoded bytes |
+| ---: | ---: | ---: | ---: |
+| 1,000 | 0.209 / 0.465 | 0 | 228,163 |
+| 32,000 | 0.667 / 0.851 | 0 | 4,386,226 |
+| 128,000 | 0.803 / 1.087 | 16 | 5,058,431 |
+| 262,144 | 0.903 / 1.187 | 151 | 5,222,673 |
+
+This is a different grouped application replay, with synthetic retained state and
+no network latency proxy. It demonstrates why fast CPU timings alone are
+insufficient: measured object reads increase sharply even while local preparation
+remains below a millisecond at the median. Its oracle and page/request counters
+complement the paced test. It does not reproduce the paced run's accumulated
+compaction history. Reproduce the sweep with:
+
+```sh
+python3 scripts/fast_validation.py --mode growth --release \
+  --state-rows 1000 32000 128000 262144 --repeats 1 \
+  --warmup 16 --updates 64 \
+  --output artifacts/benchmarks/steady-local/preloaded-growth-new
+```
