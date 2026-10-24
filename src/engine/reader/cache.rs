@@ -19,6 +19,7 @@ type Identity = (&'static str, String, String, TypeId);
 pub struct BlockCache {
     bytes: usize,
     entries: usize,
+    pub(super) ranges: Arc<range::Ranges>,
     parent: Option<Arc<Self>>,
     staged: bool,
     state: Mutex<State>,
@@ -61,6 +62,7 @@ impl BlockCache {
         Self {
             bytes,
             entries,
+            ranges: Arc::new(range::Ranges::new(bytes / 4, entries)),
             parent: None,
             staged: false,
             state: Mutex::new(State::default()),
@@ -70,7 +72,12 @@ impl BlockCache {
     /// Reuse foreground blocks without admitting scan data or promoting its LRU.
     pub(crate) fn scan(parent: Arc<Self>) -> Arc<Self> {
         let parent = parent.parent.clone().unwrap_or(parent);
-        Arc::new(Self { encoded: parent.encoded.clone(), parent: Some(parent), ..Self::new(0, 0) })
+        Arc::new(Self {
+            encoded: parent.encoded.clone(),
+            ranges: parent.ranges.clone(),
+            parent: Some(parent),
+            ..Self::new(0, 0)
+        })
     }
     pub(super) const fn admits_encoded(&self) -> bool {
         self.parent.is_none()
@@ -207,6 +214,7 @@ impl State {
 }
 
 mod handoff;
+mod range;
 
 #[cfg(test)]
 mod tests {

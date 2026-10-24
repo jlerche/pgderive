@@ -14,6 +14,7 @@ impl BlockCache {
             bytes: parent.bytes,
             entries: parent.entries,
             encoded: parent.encoded.clone(),
+            ranges: parent.ranges.clone(),
             parent: Some(parent),
             staged: true,
             state: Mutex::default(),

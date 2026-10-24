@@ -280,8 +280,16 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             let bytes = if let Some(bytes) = cached {
                 bytes
             } else {
-                let bytes = self.store.get_range(&Path::from(path), range).await?.to_vec();
-                ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
+                let pack = self.packs.get(block.pack).context("missing data pack")?;
+                let bytes = self
+                    .cache
+                    .ranges
+                    .read(&self.store, pack, range.clone(), self.cache.admits_encoded())
+                    .await?;
+                if hash(&bytes) != block.hash {
+                    self.cache.ranges.invalidate(pack, &range)?;
+                    anyhow::bail!("object block checksum mismatch");
+                }
                 if self.cache.admits_encoded()
                     && let Some(cache) = &self.cache.encoded
                 {

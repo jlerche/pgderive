@@ -232,6 +232,13 @@ async fn shared_decode_rechecks_fences_and_failed_span_load_retains_position() -
             .ok_or_else(|| anyhow::anyhow!("missing block"))?,
     );
     let original = store.get(&path).await?.bytes().await?;
+    // The first read may prefetch valid compressed bytes for the next page.
+    // Force that target cold before injecting the storage failure.
+    let block = &object.blocks[1];
+    object
+        .cache
+        .ranges
+        .invalidate(&object.packs[block.pack], &(block.offset..block.offset + block.length))?;
     store.put(&path, b"bad".to_vec().into()).await?;
     assert!(cursor.advance_span().await.is_err());
     assert_eq!(cursor.current(), Some((&1, &1, 1)));
@@ -296,6 +303,13 @@ async fn failed_merged_span_load_keeps_consolidated_position_for_retry() -> Resu
     let mut cursor = prior.cursor().await?;
     assert_eq!(cursor.current_span(), Some(&[((1, 1), 2)][..]));
     let original = store.get(&path).await?.bytes().await?;
+    // The first read may prefetch valid compressed bytes for the next page.
+    // Force that target cold before injecting the storage failure.
+    let block = &object.blocks[1];
+    object
+        .cache
+        .ranges
+        .invalidate(&object.packs[block.pack], &(block.offset..block.offset + block.length))?;
     store.put(&path, b"bad".to_vec().into()).await?;
     assert!(cursor.advance_span().await.is_err());
     assert_eq!(cursor.current(), Some((&1, &1, 2)));
