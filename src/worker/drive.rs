@@ -433,7 +433,7 @@ async fn publish(
     open.query.commit(prepared)?;
     phases.mark("local_completion");
     let cache = open.query.cache_stats()?;
-    let mut event = json!({"event":"published","time":time,"memtable_bytes":open.query.memtable_bytes()?,"end_lsn":transaction.end_lsn,"changes":transaction.changes.len(),"source_transactions":epoch.transactions(),"elapsed_ms":started.elapsed().as_millis(),"cache":{"bytes":cache.bytes,"entries":cache.entries,"live_bytes":cache.live_bytes,"pins":cache.pins,"hits":cache.hits,"misses":cache.misses,"filter_bytes":cache.filter_bytes,"filter_entries":cache.filter_entries,"filter_rejections":cache.filter_rejections,"filter_eviction_steps":cache.filter_eviction_steps,"io":{"foreground":cache.foreground_io,"scan":cache.scan_io},"merges":cache.merges,"decoded_bytes":cache.decoded_bytes,"decoded_rows":cache.decoded_rows}});
+    let mut event = json!({"event":"published","time":time,"memtable_bytes":open.query.memtable_bytes()?,"end_lsn":transaction.end_lsn,"changes":transaction.changes.len(),"source_transactions":epoch.transactions(),"elapsed_ms":started.elapsed().as_millis(),"cache":crate::worker::health::cache_diagnostics(&cache)});
     if let Some(phases) = phases.finish(epoch.decode_us())? {
         event["phases_us"] = phases;
         event["publication_us"] = serde_json::to_value(publication)?;

@@ -3,7 +3,7 @@ use super::{Identity, Planned, Ranges, ReadAhead, Window};
 use anyhow::{Context as _, Result, ensure};
 use std::sync::Arc;
 
-type Loaded = Vec<(Arc<Ranges>, Identity, Window)>;
+type Loaded = Arc<super::super::pins::Pinned>;
 pub(super) struct Group {
     ranges: Arc<Ranges>,
     windows: Vec<(Identity, Planned)>,
@@ -71,25 +71,8 @@ pub(super) fn missing_after(
 }
 impl Group {
     pub(super) async fn load(self) -> Result<Loaded> {
-        if self.windows.len() == 1 {
-            let (identity, window) = self.windows.into_iter().next().context("empty read group")?;
-            let bytes = if let Some(bytes) = window.bytes {
-                bytes
-            } else {
-                let end = identity
-                    .2
-                    .checked_add(u64::try_from(window.length)?)
-                    .context("prefetch end overflow")?;
-                let first = identity.2
-                    + u64::from(window.used.trailing_zeros())
-                        * u64::try_from(window.length)?.div_ceil(64);
-                self.ranges.fetch(&window.store, identity.clone(), end, &(first..first + 1)).await?
-            };
-            return Ok(vec![(
-                self.ranges,
-                identity,
-                Window { bytes, accessed: 0, used: window.used },
-            )]);
+        if let [(identity, Planned { bytes: Some(bytes), used, .. })] = self.windows.as_slice() {
+            return self.ranges.pin([(identity.clone(), Window::new(bytes.clone(), *used))].into());
         }
         self.load_contiguous().await
     }
@@ -103,9 +86,24 @@ impl Group {
             .collect::<Result<Vec<_>>>()?;
         stripes.sort_unstable();
         stripes.dedup();
+        #[cfg(test)]
+        let flight_start = tokio::time::Instant::now();
+        #[cfg(test)]
+        let stripe_count = stripes.len();
         let mut guards = Vec::new();
         for stripe in stripes {
             guards.push(self.ranges.flights[stripe].lock().await);
+        }
+        #[cfg(test)]
+        {
+            let mut state = self
+                .ranges
+                .state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?;
+            state.flight_wait_us += flight_start.elapsed().as_micros();
+            state.flight_groups += 1;
+            state.flight_stripes += stripe_count;
         }
         let mut loaded = Vec::new();
         for (identity, window) in &self.windows {
@@ -114,8 +112,8 @@ impl Group {
                 .state
                 .lock()
                 .map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?
-                .get(identity, &(identity.2..identity.2 + 1))?;
-            loaded.push(bytes.map(|bytes| Window { bytes, accessed: 0, used: window.used }));
+                .get_or_cover(identity, &(identity.2..identity.2 + 1))?;
+            loaded.push(bytes.map(|bytes| Window::new(bytes, window.used)));
         }
         let mut position = 0;
         while position < loaded.len() {
@@ -135,15 +133,19 @@ impl Group {
                 window.as_ref().context("missing coalesced window")?.clone(),
             )?;
         }
-        drop(guards);
-        self.windows
+        let windows = self
+            .windows
             .into_iter()
             .zip(loaded)
             .map(|((identity, _), window)| {
-                Ok((self.ranges.clone(), identity, window.context("missing coalesced window")?))
+                Ok((identity, window.context("missing coalesced window")?))
             })
-            .collect()
+            .collect::<Result<_>>()?;
+        let pin = self.ranges.pin(windows)?;
+        drop(guards);
+        Ok(pin)
     }
+
     async fn load_span(
         &self,
         span: std::ops::Range<usize>,
@@ -161,8 +163,7 @@ impl Group {
             let part = bytes
                 .get(start..start + window.length)
                 .context("coalesced window outside response")?;
-            loaded[index] =
-                Some(Window { bytes: Arc::new(part.to_vec()), accessed: 0, used: window.used });
+            loaded[index] = Some(Window::new(Arc::new(part.to_vec()), window.used));
         }
         Ok(())
     }

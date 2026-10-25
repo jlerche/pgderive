@@ -168,9 +168,6 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         for batch in &mut writer.resident {
             if let Some(namespace) = namespace {
                 batch.reference = batch.reference.clone().qualify(namespace)?;
-                for pack in Arc::make_mut(&mut batch.packs) {
-                    pack.path = batch.reference.child_path(&pack.path);
-                }
                 batch.store = store.clone();
             }
         }
@@ -216,21 +213,39 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         let decoded = bounded::encode(&self.rows)?;
         ensure!(decoded.len() <= self.limits.block_bytes, "streaming block exceeds budget");
         let (mut block, encoded) = super::format::encode_block::<(K, V), _>(&self.rows, &decoded)?;
-        let first_fence = bounded::encode(&block)?.len();
+        let first_fence = self.fence_charge(&block)?;
         let next =
             self.payload.len().checked_add(encoded.len()).context("packed object size overflow")?;
         let new_pack = !self.payload.is_empty() && next > TARGET_OBJECT_BYTES;
         block.pack = self.packs.len() + usize::from(new_pack);
         block.offset = if new_pack { 0 } else { u64::try_from(self.payload.len())? };
-        let mut bytes = bounded::encode(&block)?.len();
+        let mut bytes = self.fence_charge(&block)?;
         let minimum = self
             .header_bytes
             .checked_add(self.pack_bytes)
             .and_then(|n| n.checked_add(first_fence))
             .context("streaming fence size overflow")?;
-        ensure!(minimum <= self.limits.index_bytes, "streaming fence exceeds index budget");
-        if self.blocks.len() == self.limits.index_blocks
-            || self.index_size(bytes, block.pack + 1)? > self.limits.index_bytes
+        if minimum > self.limits.index_bytes {
+            let mut single = block.clone();
+            single.pack = 0;
+            single.offset = 0;
+            let digest = "0".repeat(64);
+            let pack = Pack {
+                path: format!("pgderive/pack/{digest}"),
+                bytes: u64::try_from(bounded::MAX_BYTES)?,
+                hash: digest,
+            };
+            let (root, packed) =
+                super::index::build(&self.schema, self.limits.index_bytes, &[pack], &[single])?;
+            ensure!(
+                bounded::encode(&root)?.len() <= self.limits.index_bytes
+                    && packed.len() <= self.limits.index_bytes,
+                crate::engine::execution::CapacityExceeded("streaming fence exceeds index budget")
+            );
+        }
+        if !self.blocks.is_empty()
+            && (self.blocks.len() == self.limits.index_blocks
+                || self.index_size(bytes, block.pack + 1)? > self.limits.index_bytes)
         {
             self.flush_root().await?;
             block.pack = 0;
@@ -259,6 +274,15 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         self.rows.clear();
         self.row_bytes = 2;
         Ok(())
+    }
+    fn fence_charge(&self, block: &Block<(K, V)>) -> Result<usize> {
+        // Leaf payload plus repeated boundary fences through the bounded tree.
+        bounded::encode(block)?
+            .len()
+            .checked_mul(3)
+            .and_then(|bytes| bytes.checked_add(self.pack_bytes))
+            .and_then(|bytes| bytes.checked_add(128))
+            .context("index fence charge overflow")
     }
     fn index_size(&self, fence: usize, packs: usize) -> Result<usize> {
         packs
@@ -295,23 +319,35 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         self.flush_pack().await?;
         let packs = std::mem::take(&mut self.packs);
         let blocks = std::mem::take(&mut self.blocks);
-        let reference = ObjectBatch::<K, V>::upload_index(
+        let (reference, mut index, head) = ObjectBatch::<K, V>::upload_index(
             &self.store,
             &self.schema,
-            packs.clone(),
-            blocks.clone(),
+            (packs.clone(), blocks.clone()),
             self.limits.index_bytes,
+            self.cache.as_deref(),
         )
         .await?;
         self.references.push(reference.clone());
         if let Some(cache) = &self.cache {
+            if index.pack.is_some()
+                && let (Some(address), Some(head)) = (&index.node, &head)
+            {
+                cache.index.insert(
+                    &address.hash,
+                    address.length,
+                    head.clone(),
+                    bounded::encode(head.as_ref())?.len(),
+                )?;
+            }
+            let head = if index.pack.is_none() { head } else { None };
+            index.inline = None;
             self.resident.push(ObjectBatch {
                 store: self.store.clone(),
                 reference,
                 rows: super::format::row_count(&blocks)?,
                 max_weight: blocks.iter().map(|block| block.max_weight).max().unwrap_or(0),
-                blocks: Arc::new(blocks),
-                packs: Arc::new(packs),
+                index: Arc::new(index),
+                head,
                 cache: cache.clone(),
             });
         }

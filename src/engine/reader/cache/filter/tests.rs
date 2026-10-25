@@ -155,13 +155,13 @@ async fn rejected_page_metadata_cannot_seed_or_reuse_an_exclusion() -> Result<()
     let root = ObjectBatch::write(store.clone(), &batch, "metadata", 1000).await?;
     let mut object =
         ObjectBatch::<i64, i64>::open_with_cache(store, root, "metadata", cache.clone()).await?;
-    Arc::make_mut(&mut object.blocks)[0].rows += 1;
+    object.test_block_mut(0)?.rows += 1;
     assert!(object.tuple_weight(&(3, 0)).await.is_err());
     assert_eq!(cache.stats()?.filter_entries, 0);
-    Arc::make_mut(&mut object.blocks)[0].rows -= 1;
+    object.test_block_mut(0)?.rows -= 1;
     object.read(0).await?;
     assert_eq!(object.tuple_weight(&(3, 0)).await?, 0);
-    Arc::make_mut(&mut object.blocks)[0].rows += 1;
+    object.test_block_mut(0)?.rows += 1;
     assert!(object.tuple_weight(&(3, 0)).await.is_err());
     Ok(())
 }
@@ -192,18 +192,27 @@ async fn cold_source_validation_overlaps_pages_without_extra_gets() -> Result<()
     let reference = ObjectBatch::write(store.clone(), &batch, "concurrent-weights", 1).await?;
     let object =
         ObjectBatch::<i64, i64>::open(store.clone(), reference, "concurrent-weights").await?;
+    let cache = object.cache.clone();
     let delta = Batch::from_updates((0..64_i64).step_by(2).map(|key| ((key, key), 1)))?;
     let trace = crate::engine::trace::TraceSnapshot::empty()
         .append_runs_validated(vec![crate::engine::trace::Run::Object(object)], 1)?;
     let before = store.reads.load(Ordering::SeqCst);
+    let cache_before = cache.stats()?;
     store.read_peak.store(0, Ordering::SeqCst);
     trace
         .validate_bag_delta(&Batch::from_updates(delta.iter().map(|(tuple, _)| (*tuple, 4)))?)
         .await?;
+    let after = cache.stats()?;
+    let expected = delta.iter().filter(|(tuple, _)| batch.weight(tuple) != 0).count();
+    assert_eq!(
+        after.foreground_io.gets - cache_before.foreground_io.gets,
+        u64::try_from(expected)?
+    );
     assert_eq!(
         store.reads.load(Ordering::SeqCst) - before,
-        delta.iter().filter(|(tuple, _)| batch.weight(tuple) != 0).count()
+        expected + usize::try_from(after.index_reads - cache_before.index_reads)?
     );
+
     assert!(store.read_peak.load(Ordering::SeqCst) > 1);
     assert!(store.read_peak.load(Ordering::SeqCst) <= crate::engine::reader::READ_CONCURRENCY);
     Ok(())
@@ -334,7 +343,7 @@ async fn failed_and_cancelled_prefetch_preserve_heads_and_retry() -> Result<()> 
     )?;
     let mut probes = trace.probes();
     assert_eq!(probes.cursor(&7).await?.current(), Some((&7, &7, 4)));
-    let path = Path::from(objects[1].block_range(0).context("missing retry page")?.0);
+    let path = Path::from(objects[1].block_range(0).await?.context("missing retry page")?.0);
     let bytes = store.get(&path).await?.bytes().await?;
     store.delete(&path).await?;
     assert!(probes.prefetch(&[&9, &10]).await.is_err());
@@ -346,7 +355,7 @@ async fn failed_and_cancelled_prefetch_preserve_heads_and_retry() -> Result<()> 
             .is_err()
     );
     assert_eq!(probes.cursor(&7).await?.current(), Some((&7, &7, 4)));
-    probes.prefetch(&[&9, &10]).await?;
+    let _read_ahead = probes.prefetch(&[&9, &10]).await?;
     assert_eq!(probes.cursor(&9).await?.current(), Some((&9, &9, 2)));
     assert_eq!(store.read_active.load(Ordering::SeqCst), 0);
     Ok(())
@@ -392,3 +401,29 @@ fn clock_eviction_work_is_amortized_and_replacements_remain_bounded() -> Result<
 }
 
 mod growth;
+
+#[tokio::test]
+async fn held_probe_heads_reference_synopses_before_clock_pressure() -> Result<()> {
+    let store = Arc::new(Store::unpaced());
+    let mut cache = BlockCache::new(64 * 1024, 1);
+    cache.filters =
+        Arc::new(Filters { bytes: 64 * 1024, entries: 2, state: std::sync::Mutex::default() });
+    let cache = Arc::new(cache);
+    let input = Batch::from_updates([((2_i64, 0_i64), 1), ((4, 0), 1)])?;
+    let reference = ObjectBatch::write(store.clone(), &input, "a-held", 4096).await?;
+    let object =
+        ObjectBatch::<i64, i64>::open_with_cache(store, reference, "a-held", cache.clone()).await?;
+    let trace = crate::engine::trace::TraceSnapshot::empty()
+        .append_runs_validated(vec![crate::engine::trace::Run::Object(object)], 1)?;
+    let mut probes = trace.probes();
+    assert_eq!(probes.cursor(&2).await?.current(), Some((&2, &0, 1)));
+    cache.insert("z-cold", "cold".into(), Arc::new(vec![((100_i64, 0_i64), 1)]), 16)?;
+    let _prepared = probes.prepare_key(&3).await?;
+    cache.insert("zz-pressure", "pressure".into(), Arc::new(vec![((200_i64, 0_i64), 1)]), 16)?;
+    let state = cache.filters.state.lock().map_err(|_| anyhow::anyhow!("filter lock poisoned"))?;
+    assert!(state.entries.keys().any(|identity| identity.1 == "a-held"));
+    assert!(!state.entries.keys().any(|identity| identity.1 == "z-cold"));
+    assert_eq!(state.rejected, 1);
+    drop(state);
+    Ok(())
+}

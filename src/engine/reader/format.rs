@@ -25,61 +25,15 @@ pub(super) struct Block<T> {
     pub(super) max_weight: u64,
     pub(super) hash: String,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Index<K, V> {
-    pub(super) schema: String,
-    pub(super) packs: Vec<Pack>,
-    pub(super) blocks: Vec<Block<(K, V)>>,
-}
-impl<K, V> Index<K, V> {
-    pub(super) fn validate_storage(&self) -> Result<()> {
-        if self.blocks.is_empty() {
-            ensure!(self.packs.is_empty(), "empty root retains data packs");
-            return Ok(());
-        }
-        for pack in &self.packs {
-            ensure!(
-                pack.bytes > 0
-                    && pack.bytes <= u64::try_from(super::compression::STORED_LIMIT)?
-                    && valid_hash(&pack.hash)
-                    && pack.path == format!("pgderive/pack/{}", pack.hash),
-                "invalid immutable pack address/size"
-            );
-        }
-        let mut ordinal = 0_usize;
-        let mut offset = 0_u64;
-        for block in &self.blocks {
-            block.validate_address()?;
-            if block.pack != ordinal {
-                let pack = self.packs.get(ordinal).context("missing packed data")?;
-                ensure!(
-                    block.pack == ordinal + 1 && offset == pack.bytes,
-                    "noncontiguous pack membership"
-                );
-                ordinal = block.pack;
-                offset = 0;
-            }
-            let pack = self.packs.get(ordinal).context("missing packed data")?;
-            ensure!(block.offset == offset, "noncontiguous packed block range");
-            offset = offset.checked_add(block.length).context("packed range overflow")?;
-            ensure!(offset <= pack.bytes, "packed block exceeds object size");
-        }
-        ensure!(
-            ordinal + 1 == self.packs.len()
-                && self.packs.get(ordinal).is_some_and(|pack| offset == pack.bytes),
-            "packed object contains unindexed bytes"
-        );
-        Ok(())
-    }
-}
 pub(super) fn header_bytes(schema: &str) -> Result<usize> {
-    super::bounded::encode(&Index::<(), ()> {
+    // Covers fixed root/address framing; tuple fences are charged separately.
+    super::bounded::encode(&super::index::Root::<()> {
         schema: schema.into(),
-        packs: Vec::new(),
-        blocks: Vec::new(),
+        pack: None,
+        node: None,
+        inline: None,
     })
-    .map(|bytes| bytes.len())
+    .map(|bytes| bytes.len() + 512)
 }
 pub(super) fn pack_bytes() -> Result<usize> {
     // Reserve the largest descriptor's decimal byte count before its digest is known.
@@ -94,7 +48,7 @@ pub(super) fn pack_bytes() -> Result<usize> {
 pub(super) fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-fn valid_hash(hash: &str) -> bool {
+pub(super) fn valid_hash(hash: &str) -> bool {
     hash.len() == 64
         && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
@@ -107,7 +61,7 @@ pub(super) fn validate<K: BatchData, V: BatchData>(rows: &[Entry<K, V>]) -> Resu
     Ok(())
 }
 impl<T> Block<T> {
-    fn validate_address(&self) -> Result<()> {
+    pub(super) fn validate_address(&self) -> Result<()> {
         ensure!(
             self.rows > 0
                 && self.rows <= 65_536
@@ -149,4 +103,17 @@ pub(super) fn encode_block<T: Clone, W: Borrow<i64>>(
         hash: hash(&encoded),
     };
     Ok((block, encoded))
+}
+
+impl Pack {
+    pub(super) fn validate(&self) -> Result<()> {
+        ensure!(
+            self.bytes > 0
+                && self.bytes <= u64::try_from(super::compression::STORED_LIMIT)?
+                && valid_hash(&self.hash)
+                && self.path == format!("pgderive/pack/{}", self.hash),
+            "invalid immutable pack address/size"
+        );
+        Ok(())
+    }
 }

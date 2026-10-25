@@ -8,6 +8,7 @@ use crate::engine::{
     trace::TraceSnapshot,
 };
 use anyhow::Result;
+use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use std::{borrow::Borrow, sync::Arc};
 
 impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
@@ -47,40 +48,89 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
                 && !crate::engine::reader::ReadAhead::ready(&plans)
                 && bytes < limits.resident_bytes
             {
-                let Some((key, delta)) = next_delta(&mut accumulator, &mut rows).await? else {
+                let group = gather_deltas(
+                    &mut accumulator,
+                    &mut rows,
+                    (limits.resident_entries - pending.len(), limits.resident_bytes),
+                    &mut bytes,
+                )
+                .await?;
+                if group.is_empty() {
                     break;
-                };
-                bytes = bytes
-                    .checked_add(delta.charge())
-                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<K>()))
-                    .ok_or_else(|| anyhow::anyhow!("statistics lookahead charge overflow"))?;
-                let admitted = probes.plan_key(&key, &mut plans)?;
-                pending.push((key, delta));
+                }
+                let probes = &probes;
+                let keys = group.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
+                // The byte target is soft by at most one READ_CONCURRENCY-sized
+                // metadata group; each resolved descriptor carries its charge.
+                let prepared = stream::iter(keys)
+                    .map(|key| async move { probes.prepare_key(&key).await })
+                    .buffered(crate::engine::reader::READ_CONCURRENCY)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                let mut admitted = true;
+                for ((key, delta), selected) in group.into_iter().zip(prepared) {
+                    bytes = bytes
+                        .checked_add(selected.charge()?)
+                        .ok_or_else(|| anyhow::anyhow!("statistics metadata charge overflow"))?;
+                    admitted &= probes.plan_key(&selected, &mut plans)?;
+                    pending.push((key, delta, selected));
+                }
                 if !admitted {
                     break;
                 }
             }
             // Only nonzero measured deltas are prefetched. No speculative errors
             // or reads for groups whose complete signed contribution cancels.
-            crate::engine::reader::ReadAhead::load(plans).await?;
-            for (key, delta) in pending {
-                let before = read(&mut probes, &key).await?;
+            let _read_ahead: crate::engine::reader::ReadGuard =
+                crate::engine::reader::ReadAhead::load(plans).await?;
+            for (key, delta, selected) in pending {
+                let before = read(probes.cursor_prepared(&selected).await?).await?;
                 let after = delta.apply(&key, before.as_ref())?;
-                if before == after {
-                    continue;
-                }
-                if let Some(before) = before {
-                    changes.add((key.clone(), before), -1)?;
-                }
-                if let Some(after) = after {
-                    changes.add((key, after), 1)?;
-                }
+                replace(&mut changes, key, before, after)?;
             }
         }
         // Each affected key was absent or a unique unit state. Replacing exactly
         // that value preserves full-tuple multiplicity; no second lookup is needed.
         Ok(StatisticsOutput { prior, batch: Arc::new(changes.seal()?) })
     }
+}
+
+fn replace<K: BatchData, S: BatchData>(
+    changes: &mut Consolidator<(K, S)>,
+    key: K,
+    before: Option<S>,
+    after: Option<S>,
+) -> Result<()> {
+    if before == after {
+        return Ok(());
+    }
+    if let Some(before) = before {
+        changes.add((key.clone(), before), -1)?;
+    }
+    if let Some(after) = after {
+        changes.add((key, after), 1)?;
+    }
+    Ok(())
+}
+
+async fn gather_deltas<K: BatchData, V: BatchData, S: BatchData>(
+    accumulator: &mut super::algebra::FoldState<K, V, S>,
+    rows: &mut crate::engine::execution::SealedCursor<K, V>,
+    capacity: (usize, usize),
+    bytes: &mut usize,
+) -> Result<Vec<(K, super::algebra::Delta<K, S>)>> {
+    let mut group = Vec::new();
+    while group.len() < crate::engine::reader::READ_CONCURRENCY.min(capacity.0)
+        && *bytes < capacity.1
+    {
+        let Some((key, delta)) = next_delta(accumulator, rows).await? else { break };
+        *bytes = bytes
+            .checked_add(delta.charge())
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<K>()))
+            .ok_or_else(|| anyhow::anyhow!("statistics lookahead charge overflow"))?;
+        group.push((key, delta));
+    }
+    Ok(group)
 }
 
 async fn next_delta<K: BatchData, V: BatchData, S: BatchData>(

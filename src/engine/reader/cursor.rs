@@ -1,4 +1,4 @@
-use super::{BatchData, BlockCache, Entry, ObjectBatch};
+use super::{BatchData, BlockCache, Entry, ObjectBatch, SelectedBlock};
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -29,8 +29,16 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
     pub(super) async fn object(mut batch: ObjectBatch<K, V>) -> Result<Self> {
         batch.cache = BlockCache::cursor(batch.cache.clone());
         let rows =
-            if batch.blocks.is_empty() { Arc::new(Vec::new()) } else { batch.read(0).await? };
+            if batch.block_count() == 0 { Arc::new(Vec::new()) } else { batch.read(0).await? };
         Ok(Self { source: Source::Object(Arc::new(batch)), rows, block: 0, position: 0, end: None })
+    }
+
+    #[cfg(test)]
+    pub(super) fn object_cache(&self) -> Option<&Arc<BlockCache>> {
+        match &self.source {
+            Source::Memory(_) => None,
+            Source::Object(batch) => Some(&batch.cache),
+        }
     }
 
     pub(crate) fn holds_block(&self, batch: &ObjectBatch<K, V>, block: usize) -> bool {
@@ -58,14 +66,14 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
         }
     }
 
-    pub(crate) async fn object_key_reusing(
+    pub(crate) async fn object_key_page(
         batch: ObjectBatch<K, V>,
         key: &K,
+        page: SelectedBlock<K, V>,
         previous: Option<&Self>,
     ) -> Result<Option<Self>> {
-        let Some(block) = batch.key_block(key) else {
-            return Ok(None);
-        };
+        batch.validate_page(&page)?;
+        let block = page.ordinal;
         let rows = match previous {
             Some(previous)
                 if previous.block == block
@@ -74,10 +82,10 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
                 previous.rows.clone()
             }
             _ => {
-                if !batch.may_contain_key(block, key)? {
+                if !batch.may_contain_page(&page, key)? {
                     return Ok(None);
                 }
-                batch.read(block).await?
+                batch.read_page(&page).await?
             }
         };
         let start = previous
@@ -99,8 +107,8 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
         lower: &K,
         upper: &K,
     ) -> Result<Option<Self>> {
-        let block = batch.blocks.partition_point(|block| block.last.0 < *lower);
-        if batch.blocks.get(block).is_none_or(|block| block.first.0 > *upper) {
+        let block = batch.seek_block(|last| last.0 < *lower).await?;
+        if block >= batch.block_count() || batch.leaf(block).await?.block.first.0 > *upper {
             return Ok(None);
         }
         let rows = batch.read(block).await?;
@@ -151,8 +159,11 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
     /// Returns corruption or GET errors without changing the prior position.
     pub async fn advance_span(&mut self) -> Result<()> {
         if let Source::Object(batch) = &self.source
-            && self.block + 1 < batch.blocks.len()
-            && self.end.as_ref().is_none_or(|key| batch.blocks[self.block + 1].first.0 <= *key)
+            && self.block + 1 < batch.block_count()
+            && {
+                let first = batch.leaf(self.block + 1).await?.block.first.0;
+                self.end.as_ref().is_none_or(|key| first <= *key)
+            }
         {
             let rows = batch.read(self.block + 1).await?;
             self.rows = rows;
@@ -174,9 +185,10 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
             return Ok(());
         }
         if let Source::Object(batch) = &self.source
-            && self.block + 1 < batch.blocks.len()
+            && self.block + 1 < batch.block_count()
         {
-            if self.end.as_ref().is_some_and(|key| batch.blocks[self.block + 1].first.0 > *key) {
+            let first = batch.leaf(self.block + 1).await?.block.first.0;
+            if self.end.as_ref().is_some_and(|key| first > *key) {
                 self.position = self.rows.len();
                 return Ok(());
             }
@@ -199,8 +211,8 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
         let (block, rows) = match &self.source {
             Source::Memory(rows) => (0, rows.clone()),
             Source::Object(batch) => {
-                let block = batch.blocks.partition_point(|block| block.last.0 < *key);
-                let rows = if block < batch.blocks.len() {
+                let block = batch.seek_block(|last| last.0 < *key).await?;
+                let rows = if block < batch.block_count() {
                     batch.read(block).await?
                 } else {
                     Arc::new(Vec::new())

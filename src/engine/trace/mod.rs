@@ -196,18 +196,25 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
                 batch.accumulate_weights(delta, &mut totals);
             }
         }
-        let pages = coefficient::Pages::new(&self.runs, &tuples).map(|page| async move {
-            let page = page?;
-            Ok::<_, anyhow::Error>((page.range, page.batch.read(page.ordinal).await?))
-        });
-        // One global pipeline covers sparse pages across runs as well as dense
-        // pages within a run. Only eight page jobs and one totals vector are live.
-        let mut reads = stream::iter(pages).buffered(crate::engine::reader::READ_CONCURRENCY);
-        while let Some((range, rows)) = reads.try_next().await? {
-            for position in range {
-                if let Ok(index) = rows.binary_search_by(|row| row.0.cmp(tuples[position])) {
-                    totals[position] += rows[index].1;
-                }
+        let mut pages = coefficient::Pages::new(&self.runs, &tuples);
+        loop {
+            let mut jobs = Vec::new();
+            while jobs.len() < crate::engine::reader::READ_CONCURRENCY {
+                let Some(page) = pages.next().await else {
+                    break;
+                };
+                jobs.push(page?);
+            }
+            if jobs.is_empty() {
+                break;
+            }
+            let mut reads = stream::iter(jobs)
+                .map(|page| async move {
+                    Ok::<_, anyhow::Error>((page.range, page.batch.read(page.ordinal).await?))
+                })
+                .buffered(crate::engine::reader::READ_CONCURRENCY);
+            while let Some((range, rows)) = reads.try_next().await? {
+                coefficient::accumulate(&rows, range, &tuples, &mut totals);
             }
         }
         for ((_, weight), total) in delta.iter().zip(totals) {

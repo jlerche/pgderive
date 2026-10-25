@@ -195,7 +195,7 @@ async fn point_prefetch_respects_encoded_cache_without_redundant_object_reads() 
     let trace = TraceSnapshot::empty().append_validated(Run::Object(cold), 1)?;
     let reads = store.reads.load(Ordering::SeqCst);
     let mut probes = trace.probes();
-    probes.prefetch(&[&1, &2]).await?;
+    let _read_ahead = probes.prefetch(&[&1, &2]).await?;
     assert_eq!(probes.cursor(&1).await?.current(), Some((&1, &7, 1)));
     assert_eq!(probes.cursor(&2).await?.current(), Some((&2, &8, 1)));
     assert_eq!(store.reads.load(Ordering::SeqCst), reads);

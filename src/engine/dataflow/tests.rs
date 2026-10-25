@@ -117,6 +117,7 @@ async fn graph_preparations_are_atomic_stale_foreign_and_retryable() -> Result<(
     let path = Path::from(
         object
             .block_range(0)
+            .await?
             .map(|(path, _)| path)
             .ok_or_else(|| anyhow::anyhow!("missing block"))?,
     );

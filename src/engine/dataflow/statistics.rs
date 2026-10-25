@@ -6,7 +6,7 @@ use crate::engine::{
     Batch,
     execution::Limits,
     reader::BatchData,
-    trace::{KeyProbes, TraceSnapshot},
+    trace::{KeyCursor, TraceSnapshot},
     value::Decoded,
 };
 use anyhow::{Result, ensure};
@@ -102,11 +102,7 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         self.evaluate_ordered(input, prior, limits).await
     }
 }
-async fn read<K: BatchData, V: BatchData>(
-    probes: &mut KeyProbes<K, V>,
-    key: &K,
-) -> Result<Option<V>> {
-    let mut cursor = probes.cursor(key).await?;
+async fn read<K: BatchData, V: BatchData>(mut cursor: KeyCursor<K, V>) -> Result<Option<V>> {
     let Some((_, value, weight)) = cursor.current() else {
         return Ok(None);
     };

@@ -22,17 +22,46 @@ def verify_packed_root(root, get):
     content = get(root['path'])
     assert hashlib.sha256(content).hexdigest() == root['hash']
     index = json.loads(content)
-    packs = []
-    for pack in index['packs']:
-        data = get(root['namespace']+'/'+pack['path'])
+    packs = {}
+
+    def load(pack):
+        path = root['namespace']+'/'+pack['path'] if root['namespace'] else pack['path']
+        if path in packs:
+            return packs[path]
+        data = get(path)
         assert len(data) == pack['bytes']
         assert hashlib.sha256(data).hexdigest() == pack['hash']
-        packs.append(data)
-    for block in index['blocks']:
-        start = block['offset']
-        data = packs[block['pack']][start:start+block['length']]
-        assert len(data) == block['length']
-        assert hashlib.sha256(data).hexdigest() == block['hash']
+        packs[path] = data
+        return data
+
+    def visit(node, data):
+        if 'Branch' in node:
+            for child in node['Branch']:
+                page(data, child)
+        else:
+            for leaf in node['Leaf']:
+                block = leaf['block']
+                payload = load(leaf['pack'])
+                part = payload[block['offset']:block['offset']+block['length']]
+                assert len(part) == block['length']
+                assert hashlib.sha256(part).hexdigest() == block['hash']
+
+    def page(data, address):
+        part = data[address['offset']:address['offset']+address['length']]
+        assert len(part) == address['length']
+        assert hashlib.sha256(part).hexdigest() == address['hash']
+        decoded = subprocess.check_output(['zstd', '--decompress', '--stdout', '--memory=8MB'],
+                                          input=part, stderr=subprocess.PIPE)
+        assert len(decoded) <= 8 * 1024**2
+        visit(json.loads(decoded), data)
+
+    if index['inline'] is not None:
+        assert index['pack'] is None and index['node'] is not None
+        visit(index['inline'], None)
+    elif index['pack'] is None:
+        assert index['node'] is None
+    else:
+        page(load(index['pack']), index['node'])
 
 
 def configured(fixture):

@@ -6,11 +6,13 @@ import os
 import re
 import pathlib
 import signal
+import shutil
 import subprocess
 import sys
 import time
 from fast_replay import export, preloaded, traces
 from fast_steady import TEST as STEADY_TEST, assess as assess_steady
+from fast_longevity import COLD_TEST, TEST as LONGEVITY_TEST, assess as assess_longevity
 from performance.common import ROOT, save, sha256
 
 STORAGE_GROWTH = 'engine::trace::growth_tests::fixed_change_checkpoint_growth'
@@ -130,7 +132,15 @@ def test_binary(output, release):
                 and item.get('target', {}).get('name') == 'pgderive' and item.get('executable')]
     if len(binaries) != 1:
         raise RuntimeError('Expected exactly one library test executable')
-    return binaries[0]
+    return freeze_binary(binaries[0], output)
+
+
+def freeze_binary(binary, output):
+    # Cargo can reuse one executable path across source checkouts. Freeze the
+    # built inode before another build replaces it, then hash and run this copy.
+    frozen = output / 'pgderive-tests'
+    shutil.copy2(binary, frozen)
+    return str(frozen)
 
 
 def growth_limits(rows):
@@ -145,7 +155,7 @@ def growth_limits(rows):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=pathlib.Path, required=True)
-    parser.add_argument('--mode', choices=['correctness', 'growth', 'storage-growth', 'steady', 'integration'], default='correctness')
+    parser.add_argument('--mode', choices=['correctness', 'growth', 'storage-growth', 'steady', 'cold', 'longevity', 'integration'], default='correctness')
     parser.add_argument('--seeds', type=int, default=3)
     parser.add_argument('--state-rows', type=int, nargs='+', default=[1000, 8000, 32000],
                         help='Growth replay sizes; steady mode uses its fixed 32k through 524k matrix')
@@ -183,16 +193,21 @@ def main():
             for name in ['during-upload', 'after-commit', 'pressure', 'shutdown', 'timeout']:
                 if json.loads((directory/name/'result.json').read_text()).get('passed') is not True:
                     raise RuntimeError('Live checkpoint case did not pass: ' + name)
-        elif args.mode == 'steady':
+        elif args.mode in ('steady', 'cold', 'longevity'):
             binary = test_binary(output, args.release)
             report['steps'].append(json.loads((output / 'build.json').read_text()))
             report['test_binary_sha256'] = sha256(pathlib.Path(binary))
-            report['steps'].append(execute([binary, STEADY_TEST, '--exact', '--ignored', '--nocapture'], output, 'steady-work'))
-            validate_tests(output/'steady-work.log', {STEADY_TEST})
-            assessment = assess_steady(output/'steady-work.log')
+            test = STEADY_TEST if args.mode == 'steady' else COLD_TEST if args.mode == 'cold' else LONGEVITY_TEST
+            report['steps'].append(execute([binary, test, '--exact', '--ignored', '--nocapture'], output, 'steady-work'))
+            validate_tests(output/'steady-work.log', {test})
+            assessment = (assess_steady(output/'steady-work.log') if args.mode == 'steady'
+                          else assess_longevity(output/'steady-work.log', cold=args.mode == 'cold'))
             save(output/'assessment.json', assessment)
-            if not assessment['non_regression'] or not assessment['component_plateau']:
-                raise RuntimeError('Cold-probe work has not qualified; see assessment.json. Do not infer worker steady state.')
+            passed = (assessment['non_regression'] and assessment['component_plateau']
+                      if args.mode == 'steady' else assessment['cold_capacity_passed']
+                      if args.mode == 'cold' else assessment['bounded_cold_regime'])
+            if not passed:
+                raise RuntimeError('Component work has not qualified; see assessment.json. Do not infer worker steady state.')
         elif args.mode == 'storage-growth':
             binary = test_binary(output, args.release)
             report['steps'].append(json.loads((output / 'build.json').read_text()))
@@ -218,22 +233,31 @@ def main():
                 'engine::reader::cache::filter::tests::rejected_page_metadata_cannot_seed_or_reuse_an_exclusion',
                 'engine::reader::cache::filter::tests::exclusions_survive_page_eviction_without_changing_weighted_identity',
                 'engine::reader::cache::filter::tests::clock_eviction_work_is_amortized_and_replacements_remain_bounded',
+                'engine::reader::cache::filter::tests::held_probe_heads_reference_synopses_before_clock_pressure',
                 'engine::reader::cache::filter::tests::cold_source_validation_overlaps_pages_without_extra_gets',
                 'engine::reader::cache::filter::tests::cold_statistics_overlap_keys_without_extra_gets',
                 'engine::reader::cache::filter::tests::cancelled_statistics_never_prefetch_unreadable_prior',
+                'engine::reader::cache::filter::tests::growth::stratified_keys_cover_the_full_relation_and_reject_overflow',
+                'engine::reader::cache::filter::tests::growth::compaction_range_kinds_use_authenticated_identity_not_shared_pack_prefix',
                 'engine::reader::cache::filter::tests::failed_and_cancelled_prefetch_preserve_heads_and_retry',
                 'engine::reader::cache::range::tests::sparse_pressure_reduces_unused_prefetch_without_increasing_gets',
                 'engine::reader::cache::range::tests::dense_pressure_retains_coalescing_and_read_origin_accounting',
+                'engine::reader::cache::range::tests::changing_width_never_retains_duplicate_compressed_covers',
+                'engine::reader::cache::range::tests::charged_windows_fit_small_cache_budgets',
                 'engine::reader::cache::range::prefetch::tests::reservations_are_atomic_charge_tails_and_reuse_old_widths',
                 'engine::reader::cache::range::prefetch::tests::overlapping_cold_runs_prefetch_all_windows_with_one_concurrency_bound',
                 'engine::reader::cache::range::prefetch::tests::cached_wide_covers_do_not_starve_sparse_readiness',
                 'engine::reader::cache::range::prefetch::tests::contiguous_misses_share_one_get_and_admit_before_waking_waiters',
                 'engine::reader::cache::range::prefetch::tests::raced_middle_window_is_not_downloaded_again',
                 'engine::reader::cache::range::prefetch::tests::cancelled_contiguous_load_releases_all_stripes_for_retry',
+                'engine::reader::cache::range::prefetch::tests::scoped_pins_survive_eviction_release_and_invalidate',
+                'engine::reader::cache::range::prefetch::tests::cancelled_partial_load_releases_registered_batches',
+                'engine::reader::cache::range::prefetch::tests::cached_groups_do_not_block_later_independent_misses',
                 'engine::reader::cache::range::prefetch::coalesce::tests::overlapping_covers_and_bridges_keep_readiness_equal_to_missing_groups'})
             report['steps'].append(execute([binary,'engine::dataflow::statistics::tests::','--nocapture'],output,'statistics-correctness'))
             validate_tests(output/'statistics-correctness.log', {
                 'engine::dataflow::statistics::tests::queued_statistics_preserve_oracle_and_cumulative_limits',
+                'engine::dataflow::statistics::tests::metadata_preparation_is_bounded_and_cancelled_groups_do_no_reads',
                 'engine::dataflow::statistics::tests::ordered_statistics_keep_contribution_and_intermediate_output_limits'})
             report['steps'].append(execute([binary,'engine::trace::probe_tests::','--nocapture'],output,'coefficient-correctness'))
             validate_tests(output/'coefficient-correctness.log', {
@@ -247,6 +271,25 @@ def main():
             validate_tests(output/'object-format.log', {
                 'engine::reader::object::tests::sole_format_rejects_old_layouts_and_plain_json',
                 'engine::reader::object::tests::declared_weight_bound_is_rechecked_for_cold_and_cached_rows'})
+            report['steps'].append(execute([binary,'engine::reader::index_page_tests::','--nocapture'],output,'index-paging'))
+            validate_tests(output/'index-paging.log', {
+                'engine::reader::index_page_tests::growing_indexes_keep_only_bounded_metadata_and_preserve_navigation',
+                'engine::reader::index_page_tests::authenticated_index_frames_reject_corruption_and_retry_safely',
+                'engine::reader::index_page_tests::failed_index_page_load_preserves_cursor_position',
+                'engine::reader::index_page_tests::wide_fences_remain_supported_without_resident_full_index',
+                'engine::reader::index_page_tests::foreign_selected_metadata_cannot_bypass_validation_through_head_reuse',
+                'engine::reader::index_page_tests::opaque_gc_and_typed_readers_agree_on_inline_struct_field_order',
+                'engine::reader::index_page_tests::coarse_fences_exclude_unrelated_runs_without_index_io',
+                'engine::reader::index_page_tests::generated_index_frames_are_reused_across_namespaces_and_cold_reopen_is_independent',
+                'engine::reader::index_page_tests::full_scans_leave_foreground_index_admission_and_geometry_unchanged',
+                'engine::reader::index_page_tests::warmed_typed_nodes_do_not_accept_a_wrong_authenticated_frame_length',
+                'engine::reader::index_page_tests::prepared_pages_recheck_synopses_learned_after_metadata_selection'})
+            frame_test = 'engine::reader::index::frames::tests::only_authenticated_frames_are_retained_under_weight_and_entry_caps'
+            report['steps'].append(execute([binary,frame_test,'--exact','--nocapture'],output,'index-frame-cache'))
+            validate_tests(output/'index-frame-cache.log', {frame_test})
+            report['steps'].append(execute([binary,'engine::reader::index::tests::','--nocapture'],output,'index-scan-navigation'))
+            validate_tests(output/'index-scan-navigation.log', {
+                'engine::reader::index::tests::scan_retains_parent_navigation_after_foreground_eviction'})
             report['steps'].append(execute([binary,'catalog::storage::collect::cache::','--nocapture'],output,'gc-dependencies'))
             validate_tests(output/'gc-dependencies.log', {
                 'catalog::storage::collect::cache::tests::verified_dependencies_are_reused_and_only_current_roots_are_marked',
@@ -289,6 +332,8 @@ def main():
         raise
     finally:
         save(output / 'result.json', report)
+        if report['passed']:
+            (output / 'pgderive-tests').unlink(missing_ok=True)
     print(json.dumps(report))
 
 

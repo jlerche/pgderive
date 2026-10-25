@@ -19,8 +19,8 @@ async fn shared_writers_split_wide_groups_and_cold_reads_validate_every_block() 
     let root = ObjectBatch::write(store.clone(), &batch, "wide-group", 4096).await?;
     let object =
         ObjectBatch::<i64, (i32, String)>::open(store.clone(), root.clone(), "wide-group").await?;
-    assert!(object.blocks.len() > 1);
-    for ordinal in 0..object.blocks.len() {
+    assert!(object.block_count() > 1);
+    for ordinal in 0..object.block_count() {
         assert!(bounded::encode(&*object.read(ordinal).await?)?.len() <= TARGET_BLOCK_BYTES);
     }
     let roots = ObjectBatch::write_stream(
@@ -39,8 +39,9 @@ async fn shared_writers_split_wide_groups_and_cold_reads_validate_every_block() 
     )
     .await?;
     assert_eq!(snapshot.materialize().await?, batch);
-    let last = object.blocks.len() - 1;
-    let path = object.block_range(last).map(|(path, _)| path).context("last block missing")?;
+    let last = object.block_count() - 1;
+    let path =
+        object.block_range(last).await?.map(|(path, _)| path).context("last block missing")?;
     store.put(&Path::from(path), vec![0_u8; 3].into()).await?;
     assert!(object.read(last).await.is_err());
     Ok(())
@@ -56,9 +57,12 @@ async fn soft_target_preserves_large_rows_empty_roots_and_hard_budgets() -> Resu
     ])?;
     let root = ObjectBatch::write(store.clone(), &batch, "large-rows", 4096).await?;
     let object = ObjectBatch::<i64, String>::open(store.clone(), root, "large-rows").await?;
-    assert_eq!(object.blocks.iter().map(|block| block.rows).collect::<Vec<_>>(), vec![1, 1, 1]);
+    assert_eq!(
+        object.test_blocks().await?.iter().map(|block| block.rows).collect::<Vec<_>>(),
+        vec![1, 1, 1]
+    );
     let mut actual = Vec::new();
-    for ordinal in 0..object.blocks.len() {
+    for ordinal in 0..object.block_count() {
         actual.extend(object.read(ordinal).await?.iter().cloned());
     }
     assert_eq!(Batch::from_updates(actual)?, batch);
@@ -71,7 +75,7 @@ async fn soft_target_preserves_large_rows_empty_roots_and_hard_budgets() -> Resu
     let root =
         ObjectBatch::write(store.clone(), &Batch::<i64, String>::default(), "empty", 4096).await?;
     let empty = ObjectBatch::<i64, String>::open(store, root, "empty").await?;
-    assert!(empty.blocks.is_empty());
+    assert!(empty.block_count() == 0);
     assert!(empty.cursor().await?.current().is_none());
     Ok(())
 }

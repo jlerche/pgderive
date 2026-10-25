@@ -1,6 +1,7 @@
 use super::{
     BatchData, BatchReader, BlockCache, Cursor, Entry,
-    format::{Block, Index, Pack, hash, validate},
+    format::{Block, Pack, hash, validate},
+    index::{Address, Leaf, Node, Root},
 };
 use crate::engine::Batch;
 use anyhow::{Context, Result, ensure};
@@ -81,18 +82,37 @@ impl ObjectRef {
     }
 }
 
-type Fences<K, V> = Arc<Vec<Block<(K, V)>>>;
+type Head<K, V> = Option<Arc<Node<(K, V)>>>;
+type IndexData<K, V> = (Vec<Pack>, Vec<Block<(K, V)>>);
+type IndexUpload<K, V> = (ObjectRef, Root<(K, V)>, Head<K, V>);
 
-/// Open immutable JSON+Zstd batch with resident object-local fences and lazy blocks.
+/// Open immutable JSON+Zstd batch with paged object-local indexes and lazy blocks.
 #[derive(Debug, Clone)]
 pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) store: Arc<dyn ObjectStore>,
     pub(super) reference: ObjectRef,
-    pub(super) blocks: Fences<K, V>,
-    pub(super) packs: Arc<Vec<Pack>>,
+    pub(super) index: Arc<Root<(K, V)>>,
+    pub(super) head: Head<K, V>,
     pub(super) rows: usize,
     pub(super) max_weight: u64,
     pub(super) cache: Arc<BlockCache>,
+}
+
+#[derive(Clone)]
+pub struct SelectedBlock<K: BatchData, V: BatchData> {
+    pub(crate) ordinal: usize,
+    owner: Arc<Root<(K, V)>>,
+    leaf: Leaf<(K, V)>,
+}
+
+impl<K: BatchData, V: BatchData> SelectedBlock<K, V> {
+    pub(crate) fn charge(&self) -> Result<usize> {
+        super::bounded::encode(&self.leaf)?
+            .len()
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .context("selected index page charge overflow")
+    }
 }
 
 pub struct WeightPage {
@@ -141,11 +161,36 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     pub(super) async fn upload_index(
         store: &Arc<dyn ObjectStore>,
         schema: &str,
-        packs: Vec<Pack>,
-        blocks: Vec<Block<(K, V)>>,
+        data: IndexData<K, V>,
         limit: usize,
-    ) -> Result<ObjectRef> {
-        let index = super::bounded::encode(&Index { schema: schema.to_owned(), packs, blocks })?;
+        cache: Option<&BlockCache>,
+    ) -> Result<IndexUpload<K, V>> {
+        let (packs, blocks) = data;
+        let (root, packed) = super::index::build(schema, limit, &packs, &blocks)?;
+        let head = if let Some(node) = &root.inline {
+            Some(Arc::new(node.clone()))
+        } else {
+            root.node
+                .as_ref()
+                .map(|address| {
+                    let start = usize::try_from(address.offset)?;
+                    let end = start
+                        .checked_add(usize::try_from(address.length)?)
+                        .context("index head range overflow")?;
+                    let bytes = packed.get(start..end).context("missing generated index head")?;
+                    Ok::<_, anyhow::Error>(Arc::new(serde_json::from_slice(
+                        &super::compression::decode(bytes)?,
+                    )?))
+                })
+                .transpose()?
+        };
+        if let Some(cache) = cache {
+            super::index::warm(&cache.index, &root, &packed)?;
+        }
+        if let Some(pack) = &root.pack {
+            super::bounded::put(store, &pack.path, packed).await?;
+        }
+        let index = super::bounded::encode(&root)?;
         ensure!(index.len() <= limit, "streaming index exceeds byte budget");
         let reference = ObjectRef {
             path: format!("pgderive/batch/{}", hash(&index)),
@@ -155,7 +200,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             namespace: None,
         };
         super::bounded::put(store, &reference.path, index).await?;
-        Ok(reference)
+        Ok((reference, root, head))
     }
 
     // Reachability scans use the same trusted size/hash boundary without decoding
@@ -184,29 +229,27 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     ) -> Result<Self> {
         ensure!(reference.schema == schema, "batch schema mismatch");
         let bytes = reference.index_bytes(&store).await?;
-        let mut index: Index<K, V> = serde_json::from_slice(&bytes)?;
-        index.validate_storage()?;
+        let mut index: Root<(K, V)> = serde_json::from_slice(&bytes)?;
         ensure!(index.schema == schema, "object schema mismatch");
-        for (ordinal, block) in index.blocks.iter().enumerate() {
-            ensure!(block.first <= block.last, "invalid block fences");
-            if ordinal > 0 {
-                ensure!(index.blocks[ordinal - 1].last < block.first, "overlapping object fences");
-            }
-        }
-        for pack in &mut index.packs {
-            pack.path = reference.child_path(&pack.path);
-        }
-        let rows = super::format::row_count(&index.blocks)?;
-        let max_weight = index.blocks.iter().map(|block| block.max_weight).max().unwrap_or(0);
-        Ok(Self {
+        index.validate()?;
+        let rows = index.node.as_ref().map_or(0, |node| node.rows);
+        let max_weight = index.node.as_ref().map_or(0, |node| node.max_weight);
+        let mut batch = Self {
             store,
             reference,
-            blocks: Arc::new(index.blocks),
-            packs: Arc::new(index.packs),
+            head: index.inline.take().map(Arc::new),
+            index: Arc::new(index),
             rows,
             max_weight,
             cache,
-        })
+        };
+        if let Some(address) = batch.index.node.clone() {
+            let node = batch.node(&address).await?;
+            if batch.index.pack.is_none() {
+                batch.head = Some(node);
+            }
+        }
+        Ok(batch)
     }
 
     /// Coarse trusted catalog reference for this immutable run.
@@ -229,36 +272,156 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             && Arc::ptr_eq(&self.cache, &other.cache)
     }
 
+    /// Estimated resident root and inline-node bytes; shared page cache is reported separately.
+    /// Cloned readers share this metadata. This is a charge estimate, not allocator RSS.
+    ///
+    /// # Errors
+    /// Returns an encoding or checked-size error.
+    pub fn resident_index_bytes(&self) -> Result<usize> {
+        let root = super::bounded::encode(self.index.as_ref())?.len();
+        let head = self
+            .head
+            .as_ref()
+            .map(|head| super::bounded::encode(head.as_ref()).map(|bytes| bytes.len()))
+            .transpose()?
+            .unwrap_or(0);
+        root.checked_add(head)
+            .and_then(|bytes| bytes.checked_mul(2))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .context("resident index charge overflow")
+    }
+    pub(crate) fn block_count(&self) -> usize {
+        self.index.node.as_ref().map_or(0, |node| node.blocks)
+    }
+    async fn node(&self, address: &Address<(K, V)>) -> Result<Arc<Node<(K, V)>>> {
+        let pack_bytes = self.index.pack.as_ref().map_or(address.length, |pack| pack.bytes);
+        if self.index.node.as_ref().is_some_and(|root| root.hash == address.hash)
+            && let Some(node) = &self.head
+        {
+            node.validate(address, pack_bytes)?;
+            return Ok(node.clone());
+        }
+        let pack = self.index.pack.as_ref().context("missing index pack")?;
+        if let Some(node) = self.cache.index.get(&address.hash, address.length)? {
+            node.validate(address, pack.bytes)?;
+            return Ok(node);
+        }
+        let _flight = self.cache.index.flight(&address.hash).await;
+        if let Some(node) = self.cache.index.get(&address.hash, address.length)? {
+            node.validate(address, pack.bytes)?;
+            return Ok(node);
+        }
+        address.validate(pack.bytes)?;
+        let mut qualified = pack.clone();
+        qualified.path = self.reference.child_path(&pack.path);
+        let range = address.offset..address.offset + address.length;
+        let bytes = self.cache.index.read(&self.store, &qualified, &address.hash, range).await?;
+        let decoded = super::compression::decode(&bytes)?;
+        let node: Arc<Node<(K, V)>> = Arc::new(serde_json::from_slice(&decoded)?);
+        node.validate(address, pack.bytes)?;
+        self.cache.index.insert(&address.hash, address.length, node.clone(), decoded.len())?;
+        Ok(node)
+    }
+    pub(super) async fn leaf(&self, ordinal: usize) -> Result<Leaf<(K, V)>> {
+        let mut address = self.index.node.as_ref().context("empty object index")?.clone();
+        ensure!(ordinal < address.blocks, "invalid block ordinal");
+        let mut relative = ordinal;
+        loop {
+            match self.node(&address).await?.as_ref() {
+                Node::Leaf(leaves) => {
+                    return leaves.get(relative).cloned().context("missing index leaf");
+                }
+                Node::Branch(children) => {
+                    address = super::index::ordinal_child(children, &mut relative)?;
+                }
+            }
+        }
+    }
+    pub(super) async fn seek_block(&self, before: impl Fn(&(K, V)) -> bool) -> Result<usize> {
+        let Some(root) = self.index.node.as_ref() else {
+            return Ok(0);
+        };
+        if before(&root.last) {
+            return Ok(root.blocks);
+        }
+        let mut address = root.clone();
+        let mut ordinal = 0_usize;
+        loop {
+            match self.node(&address).await?.as_ref() {
+                Node::Leaf(leaves) => {
+                    return Ok(ordinal + leaves.partition_point(|leaf| before(&leaf.block.last)));
+                }
+                Node::Branch(children) => {
+                    let Some(child) = super::index::seek_child(children, &before, &mut ordinal)
+                    else {
+                        return Ok(ordinal);
+                    };
+                    address = child;
+                }
+            }
+        }
+    }
     /// Object path and exact compressed byte range containing a selected block.
-    #[must_use]
-    pub fn block_range(&self, ordinal: usize) -> Option<(&str, std::ops::Range<u64>)> {
-        let block = self.blocks.get(ordinal)?;
-        let data = self.packs.get(block.pack)?;
-        let end = block.offset.checked_add(block.length)?;
-        (end <= data.bytes).then_some((data.path.as_str(), block.offset..end))
+    ///
+    /// # Errors
+    /// Returns authenticated index-page I/O or validation errors.
+    pub async fn block_range(
+        &self,
+        ordinal: usize,
+    ) -> Result<Option<(String, std::ops::Range<u64>)>> {
+        if ordinal >= self.block_count() {
+            return Ok(None);
+        }
+        let leaf = self.leaf(ordinal).await?;
+        let end =
+            leaf.block.offset.checked_add(leaf.block.length).context("block range overflow")?;
+        Ok(Some((self.reference.child_path(&leaf.pack.path), leaf.block.offset..end)))
     }
 
     pub(crate) async fn tuple_weight(&self, tuple: &(K, V)) -> Result<i64> {
-        let ordinal = self.blocks.partition_point(|block| block.last < *tuple);
-        let Some(_) = self.blocks.get(ordinal).filter(|block| block.first <= *tuple) else {
-            return Ok(0);
-        };
-        if !self.cache.may_contain_key(&self.reference.schema, &self.blocks[ordinal], &tuple.0)? {
+        if self.index.node.as_ref().is_none_or(|root| tuple < &root.first || tuple > &root.last) {
             return Ok(0);
         }
-        let rows = self.read(ordinal).await?;
+        let ordinal = self.seek_block(|last| last < tuple).await?;
+        if ordinal >= self.block_count() {
+            return Ok(0);
+        }
+        let leaf = self.leaf(ordinal).await?;
+        if leaf.block.first > *tuple {
+            return Ok(0);
+        }
+        if !self.cache.may_contain_key(&self.reference.schema, &leaf.block, &tuple.0)? {
+            return Ok(0);
+        }
+        let rows = self.read_leaf(&leaf).await?;
         Ok(rows.binary_search_by(|row| row.0.cmp(tuple)).ok().map_or(0, |index| rows[index].1))
     }
-    pub(crate) fn next_weight_page(
+    pub(crate) async fn next_weight_page(
         &self,
         tuples: &[&(K, V)],
         position: &mut usize,
     ) -> Result<Option<WeightPage>> {
+        let Some(root) = self.index.node.as_ref() else {
+            return Ok(None);
+        };
+        let remaining = tuples.get(*position..).context("invalid weight-page position")?;
+        *position += remaining.partition_point(|tuple| *tuple < &root.first);
         while *position < tuples.len() {
-            let ordinal = self.blocks.partition_point(|block| block.last < *tuples[*position]);
-            let Some(block) = self.blocks.get(ordinal) else { return Ok(None) };
+            if tuples[*position] > &root.last {
+                return Ok(None);
+            }
+            let ordinal = self.seek_block(|last| last < tuples[*position]).await?;
+            if ordinal >= self.block_count() {
+                return Ok(None);
+            }
+            let leaf = self.leaf(ordinal).await?;
+            let block = &leaf.block;
             if block.first > *tuples[*position]
-                || !self.may_contain_key(ordinal, &tuples[*position].0)?
+                || !self.cache.may_contain_key(
+                    &self.reference.schema,
+                    block,
+                    &tuples[*position].0,
+                )?
             {
                 *position += 1;
                 continue;
@@ -272,21 +435,49 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         }
         Ok(None)
     }
-    pub(crate) fn key_block(&self, key: &K) -> Option<usize> {
-        let ordinal = self.blocks.partition_point(|block| block.last.0 < *key);
-        self.blocks.get(ordinal).filter(|block| block.first.0 <= *key).map(|_| ordinal)
+    pub(crate) async fn key_page(&self, key: &K) -> Result<Option<SelectedBlock<K, V>>> {
+        if self.index.node.as_ref().is_none_or(|root| key < &root.first.0 || key > &root.last.0) {
+            return Ok(None);
+        }
+        let ordinal = self.seek_block(|last| last.0 < *key).await?;
+        if ordinal >= self.block_count() {
+            return Ok(None);
+        }
+        let leaf = self.leaf(ordinal).await?;
+        Ok((leaf.block.first.0 <= *key).then(|| SelectedBlock {
+            ordinal,
+            owner: self.index.clone(),
+            leaf,
+        }))
     }
-    pub(crate) fn may_contain_key(&self, ordinal: usize, key: &K) -> Result<bool> {
-        let block = self.blocks.get(ordinal).context("invalid filter block ordinal")?;
-        self.cache.may_contain_key(&self.reference.schema, block, key)
+    pub(crate) fn validate_page(&self, page: &SelectedBlock<K, V>) -> Result<()> {
+        ensure!(
+            Arc::ptr_eq(&self.index, &page.owner),
+            "selected page belongs to a different reader"
+        );
+        Ok(())
     }
-
-    pub(crate) fn reserve_prefetch(
+    pub(crate) fn may_contain_page(&self, page: &SelectedBlock<K, V>, key: &K) -> Result<bool> {
+        self.validate_page(page)?;
+        self.cache.may_contain_key(&self.reference.schema, &page.leaf.block, key)
+    }
+    pub(crate) fn reserve_page(
         &self,
-        ordinal: usize,
+        page: &SelectedBlock<K, V>,
         plans: &mut Vec<super::ReadAhead>,
     ) -> Result<bool> {
-        let block = self.blocks.get(ordinal).context("invalid prefetch block ordinal")?;
+        self.validate_page(page)?;
+        self.reserve_leaf(&page.leaf, plans)
+    }
+    pub(crate) async fn read_page(
+        &self,
+        page: &SelectedBlock<K, V>,
+    ) -> Result<Arc<Vec<Entry<K, V>>>> {
+        self.validate_page(page)?;
+        self.read_leaf(&page.leaf).await
+    }
+    fn reserve_leaf(&self, leaf: &Leaf<(K, V)>, plans: &mut Vec<super::ReadAhead>) -> Result<bool> {
+        let block = &leaf.block;
         if block.length > 256 * 1024 {
             return Ok(false);
         }
@@ -294,7 +485,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             return Ok(true);
         }
         if let Some(cache) = &self.cache.encoded
-            && cache.may_contain(&self.encoded_key(ordinal)?)
+            && cache.may_contain(&Self::encoded_key(block))
         {
             return Ok(true);
         }
@@ -308,22 +499,23 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 plans.push(plan);
                 plans.len() - 1
             };
-        let pack = self.packs.get(block.pack).context("missing prefetch pack")?;
+        let mut pack = leaf.pack.clone();
+        pack.path = self.reference.child_path(&pack.path);
         plans[index].reserve(
             &self.store,
-            pack,
+            &pack,
             block.offset
                 ..block.offset.checked_add(block.length).context("prefetch range overflow")?,
         )
     }
-    fn encoded_key(&self, ordinal: usize) -> Result<String> {
-        let block = self.blocks.get(ordinal).context("invalid encoded block ordinal")?;
-        Ok(format!("json-zstd-block:{}", block.hash))
+    fn encoded_key(block: &Block<(K, V)>) -> String {
+        format!("json-zstd-block:{}", block.hash)
     }
-    async fn encoded(&self, ordinal: usize) -> Result<Vec<u8>> {
-        let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
-        let (_, range) = self.block_range(ordinal).context("invalid packed block range")?;
-        let key = self.encoded_key(ordinal)?;
+    async fn encoded(&self, leaf: &Leaf<(K, V)>) -> Result<Vec<u8>> {
+        let block = &leaf.block;
+        let range =
+            block.offset..block.offset.checked_add(block.length).context("block range overflow")?;
+        let key = Self::encoded_key(block);
         let cached = match &self.cache.encoded {
             Some(cache) => cache.get(&key, &block.hash).await,
             None => None,
@@ -331,10 +523,11 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let bytes = if let Some(bytes) = cached {
             bytes
         } else {
-            let pack = self.packs.get(block.pack).context("missing data pack")?;
-            let bytes = self.cache.ranges.read(&self.store, pack, range.clone()).await?;
+            let mut pack = leaf.pack.clone();
+            pack.path = self.reference.child_path(&pack.path);
+            let bytes = self.cache.ranges.read(&self.store, &pack, range.clone()).await?;
             if hash(&bytes) != block.hash {
-                self.cache.ranges.invalidate(pack, &range)?;
+                self.cache.ranges.invalidate(&pack, &range)?;
                 anyhow::bail!("object block checksum mismatch");
             }
             if self.cache.admits_encoded()
@@ -349,14 +542,18 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         Ok(bytes)
     }
     pub(crate) async fn read(&self, ordinal: usize) -> Result<Arc<Vec<Entry<K, V>>>> {
-        let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
+        let leaf = self.leaf(ordinal).await?;
+        self.read_leaf(&leaf).await
+    }
+    async fn read_leaf(&self, leaf: &Leaf<(K, V)>) -> Result<Arc<Vec<Entry<K, V>>>> {
+        let block = &leaf.block;
 
         let rows =
             if let Some(rows) = self.cache.get::<K, V>(&self.reference.schema, &block.hash)? {
                 Self::check_rows(&rows, block)?;
                 rows
             } else {
-                let bytes = self.encoded(ordinal).await?;
+                let bytes = self.encoded(leaf).await?;
                 let decoded = super::compression::decode(&bytes)?;
                 let mut rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
                 validate(&rows)?;
@@ -421,4 +618,30 @@ pub(super) fn scoped_store(
         || store.clone(),
         |namespace| Arc::new(object_store::prefix::PrefixStore::new(store.clone(), namespace)),
     )
+}
+
+#[cfg(test)]
+impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
+    pub(super) async fn test_blocks(&self) -> Result<Vec<Block<(K, V)>>> {
+        let mut blocks = Vec::new();
+        for ordinal in 0..self.block_count() {
+            blocks.push(self.leaf(ordinal).await?.block);
+        }
+        Ok(blocks)
+    }
+    pub(super) async fn test_packs(&self) -> Result<Vec<Pack>> {
+        let mut packs = std::collections::BTreeMap::new();
+        for ordinal in 0..self.block_count() {
+            let leaf = self.leaf(ordinal).await?;
+            packs.insert(leaf.block.pack, leaf.pack);
+        }
+        Ok(packs.into_values().collect())
+    }
+    pub(super) fn test_block_mut(&mut self, ordinal: usize) -> Result<&mut Block<(K, V)>> {
+        let head = self.head.as_mut().context("missing test index head")?;
+        let Node::Leaf(leaves) = Arc::make_mut(head) else {
+            anyhow::bail!("test requires inline leaf");
+        };
+        Ok(&mut leaves.get_mut(ordinal).context("missing test leaf")?.block)
+    }
 }

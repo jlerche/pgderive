@@ -24,6 +24,12 @@ impl Default for GcLimits {
         Self { roots: 4096, objects: 262_144, metadata_bytes: 16 * 1024 * 1024 }
     }
 }
+impl GcLimits {
+    fn validate(self) -> Result<()> {
+        ensure!(self.roots > 0 && self.objects > 0 && self.metadata_bytes > 0, "invalid GC limits");
+        Ok(())
+    }
+}
 /// Physical collection result; logical/source progress is never modified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Collection {
@@ -59,10 +65,7 @@ impl Catalog {
         limits: GcLimits,
         cache: &mut GcCache,
     ) -> Result<Collection> {
-        ensure!(
-            limits.roots > 0 && limits.objects > 0 && limits.metadata_bytes > 0,
-            "invalid GC limits"
-        );
+        limits.validate()?;
         let mut tx = sql
             .build_transaction()
             .isolation_level(tokio_postgres::IsolationLevel::ReadCommitted)
@@ -84,7 +87,7 @@ impl Catalog {
             tx.rollback().await?;
             return Ok(Collection::UploadProtected);
         };
-        let retained = mark(&store, roots, limits, cache).await?;
+        let retained = cache.mark_snapshot(&store, roots, limits).await?;
         let sweep = candidates(&store, &retained, &sealed, limits.objects).await?;
         let deleted = sweep.candidates.len();
         delete_candidates(&store, sweep.candidates).await?;
@@ -183,25 +186,6 @@ async fn roots(tx: &Transaction<'_>, catalog: &Catalog, limit: usize) -> Result<
     }
     ensure!(roots.len() <= limit, "GC protected root limit exceeded");
     Ok(roots)
-}
-async fn mark(
-    store: &Arc<dyn ObjectStore>,
-    roots: Vec<ObjectRef>,
-    limits: GcLimits,
-    cache: &mut GcCache,
-) -> Result<BTreeSet<String>> {
-    cache.prepare(store, &roots, limits.metadata_bytes)?;
-    let mut retained = BTreeSet::new();
-    for root in roots {
-        let children = cache.dependencies(&root).await?;
-        retained.insert(root.path().into());
-        for child in children.iter() {
-            retained.insert(child.clone());
-            ensure!(retained.len() <= limits.objects, "GC mark limit exceeded");
-        }
-        ensure!(retained.len() <= limits.objects, "GC mark limit exceeded");
-    }
-    Ok(retained)
 }
 struct Sweep {
     candidates: Vec<Path>,

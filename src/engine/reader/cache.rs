@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
-pub use range::ReadAhead;
+pub use range::{ReadAhead, ReadGuard};
 
 type SharedRows<K, V> = Arc<Vec<Entry<K, V>>>;
 
@@ -27,6 +27,7 @@ pub struct BlockCache {
     staged: bool,
     state: Arc<Mutex<State>>,
     pub(super) encoded: Option<Arc<super::EncodedCache>>,
+    pub(super) index: Arc<super::index::Cache>,
 }
 #[derive(Debug, Default)]
 struct State {
@@ -75,15 +76,41 @@ pub struct CacheStats {
     pub scan_io: ReadStats,
     /// Successful compactions by floor(log2(input rows)), including signed rows.
     pub merges: Vec<u64>,
+    /// Combined foreground decoded-node and weighted encoded-frame charge.
+    /// Private scan workspace is separate.
+    pub index_bytes: usize,
+    /// Foreground retained authenticated decoded index nodes.
+    pub index_entries: usize,
+    /// Decoded index-node charges included in `index_bytes`.
+    pub index_decoded_bytes: usize,
+    /// Weighted foreground encoded-frame charge included in `index_bytes`.
+    pub index_encoded_bytes: usize,
+    /// Encoded authenticated index-frame count.
+    pub index_encoded_entries: usize,
+    /// Attempted index-page GETs, including private scan reads.
+    pub index_reads: u64,
+    /// Encoded bytes returned by index-page GETs, including private scans.
+    pub index_read_bytes: u64,
+    /// Requested compressed index-frame bytes, including cache hits and scans.
+    pub index_requested_bytes: u64,
 }
 impl BlockCache {
-    /// Set decoded-charge and entry caps; either zero disables retention.
+    /// Set decoded-charge and entry caps; either zero disables decoded retention.
+    /// Index navigation retains a shared bounded 8 MiB navigation budget when
+    /// decoded retention is disabled; enabled caches reserve bytes/4 for indexes.
     #[must_use]
     pub fn new(bytes: usize, entries: usize) -> Self {
         Self {
             bytes,
             entries,
-            ranges: Arc::new(range::Ranges::new(bytes / 4, entries)),
+            index: Arc::new(super::index::Cache::new(
+                if bytes == 0 || entries == 0 { super::bounded::MAX_BYTES } else { bytes / 4 },
+                if bytes == 0 || entries == 0 { 17 } else { entries },
+            )),
+            ranges: Arc::new(range::Ranges::new(
+                bytes / 4,
+                (bytes / 4 / range::MIN_WINDOW_BYTES).max(entries),
+            )),
             filters: Arc::new(filter::Filters::new(bytes, entries)),
             parent: None,
             staged: false,
@@ -91,13 +118,19 @@ impl BlockCache {
             encoded: None,
         }
     }
+    #[cfg(test)]
+    pub(crate) fn disable_index_retention(&mut self) {
+        self.index = Arc::new(super::index::Cache::new(0, 0));
+    }
     /// Reuse foreground decoded blocks without admission or LRU promotion.
-    /// Each cold scan owns one private 256 KiB compressed window.
+    /// Each cold scan owns bounded private data and index compressed windows;
+    /// index navigation additionally retains at most 256 KiB/17 decoded nodes.
     pub(crate) fn scan(parent: Arc<Self>) -> Arc<Self> {
         let parent = parent.parent.clone().unwrap_or(parent);
         Arc::new(Self {
+            index: Arc::new(super::index::Cache::scan(parent.index.clone())),
             encoded: parent.encoded.clone(),
-            ranges: Arc::new(range::Ranges::scan(&parent.ranges)),
+            ranges: Arc::new(range::Ranges::scan(parent.ranges.metrics.clone())),
             filters: parent.filters.clone(),
             parent: Some(parent),
             ..Self::new(0, 0)
@@ -113,8 +146,9 @@ impl BlockCache {
         // A disabled decoded cache still needs bounded cold-scan read-ahead.
         // Preserve its encoded admission policy; ordinary scans can warm Foyer.
         Arc::new(Self {
+            index: parent.index.clone(),
             encoded: parent.encoded.clone(),
-            ranges: Arc::new(range::Ranges::scan(&parent.ranges)),
+            ranges: Arc::new(range::Ranges::scan(parent.ranges.metrics.clone())),
             state: parent.state.clone(),
             ..Self::new(0, 0)
         })
@@ -178,6 +212,18 @@ impl BlockCache {
         ) = self.filters.stats()?;
         (counters.foreground_io, counters.scan_io, counters.merges) =
             self.ranges.metrics.snapshot();
+        let index = self.index.stats()?;
+        counters.index_bytes = index
+            .bytes
+            .checked_add(index.encoded_bytes)
+            .context("index cache byte sum overflow")?;
+        counters.index_entries = index.entries;
+        counters.index_decoded_bytes = index.bytes;
+        counters.index_encoded_bytes = index.encoded_bytes;
+        counters.index_encoded_entries = index.encoded_entries;
+        counters.index_reads = index.reads;
+        counters.index_read_bytes = index.read_bytes;
+        counters.index_requested_bytes = index.requested_bytes;
         Ok(counters)
     }
     pub(super) fn get<K: BatchData, V: BatchData>(
@@ -294,10 +340,10 @@ impl State {
 }
 
 mod filter;
-mod metrics;
+pub(in crate::engine::reader) mod metrics;
 pub use metrics::ReadStats;
 mod handoff;
-mod range;
+pub(super) mod range;
 
 #[cfg(test)]
 mod tests {

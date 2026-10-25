@@ -29,7 +29,7 @@ impl Reads {
     }
 }
 #[derive(Debug)]
-pub(super) struct Metrics {
+pub(in crate::engine::reader) struct Metrics {
     foreground: Reads,
     maintenance: Reads,
     merges: [AtomicU64; 64],
@@ -47,20 +47,29 @@ impl Metrics {
     const fn reads(&self, scan: bool) -> &Reads {
         if scan { &self.maintenance } else { &self.foreground }
     }
-    pub(super) fn requested(&self, scan: bool, bytes: u64) {
+    pub(in crate::engine::reader) fn requested(&self, scan: bool, bytes: u64) {
         self.reads(scan).requested.fetch_add(bytes, Ordering::Relaxed);
     }
-    pub(super) fn fetching(&self, scan: bool) {
+    pub(in crate::engine::reader) fn fetching(&self, scan: bool) {
         self.reads(scan).gets.fetch_add(1, Ordering::Relaxed);
     }
-    pub(super) fn fetched(&self, scan: bool, bytes: u64) {
+    pub(in crate::engine::reader) fn fetched(&self, scan: bool, bytes: u64) {
         self.reads(scan).fetched.fetch_add(bytes, Ordering::Relaxed);
     }
     pub(super) fn merged(&self, rows: usize) -> Result<()> {
         self.merges[usize::try_from(rows.max(1).ilog2())?].fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
-    pub(super) fn snapshot(&self) -> (ReadStats, ReadStats, Vec<u64>) {
+    pub(in crate::engine::reader) fn total_io(&self) -> ReadStats {
+        let foreground = self.foreground.snapshot();
+        let maintenance = self.maintenance.snapshot();
+        ReadStats {
+            requested_bytes: foreground.requested_bytes.saturating_add(maintenance.requested_bytes),
+            gets: foreground.gets.saturating_add(maintenance.gets),
+            fetched_bytes: foreground.fetched_bytes.saturating_add(maintenance.fetched_bytes),
+        }
+    }
+    pub(in crate::engine::reader) fn snapshot(&self) -> (ReadStats, ReadStats, Vec<u64>) {
         (
             self.foreground.snapshot(),
             self.maintenance.snapshot(),

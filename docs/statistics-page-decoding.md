@@ -68,10 +68,12 @@ The 16 KiB choice gives about 40% lower median and 53% fewer decoded bytes in th
 numeric workload, spending more index/compressed storage and two extra cold GETs.
 
 A smaller page does not remove all physical access costs. The entry cap can limit
-retained decoded bytes; larger indexes consume resident metadata; compressed
+retained decoded bytes; at the time of this measurement, larger indexes consumed
+resident metadata; compressed
 frames can grow and exceed the compressed-cache working set. Cold recovery and
 uncached scans can issue more page reads. Those costs must be reported separately
-from timed CDC. Bootstrap spill/merge work is unchanged. Evidence, trial binaries,
+from timed CDC. The current [paged-index design](steady-growth.md#continuous-operation-qualification)
+bounds navigation retention separately. Bootstrap spill/merge work is unchanged. Evidence, trial binaries,
 raw logs and the numeric suite generator are retained ignored under
 `artifacts/benchmarks/statistics-page-decode/`.
 

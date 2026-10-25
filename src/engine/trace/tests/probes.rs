@@ -109,8 +109,9 @@ async fn selected_block_failure_keeps_probe_position_and_can_retry() -> Result<(
     let mut trace = TraceSnapshot::empty();
     trace = trace.append_validated(Run::Object(data.clone()), 1)?;
     let mut cursor = trace.key_cursor(&7).await?;
-    let path =
-        Path::from(data.block_range(1).map(|(path, _)| path).context("missing fixture block")?);
+    let path = Path::from(
+        data.block_range(1).await?.map(|(path, _)| path).context("missing fixture block")?,
+    );
     let bytes = store.get(&path).await?.bytes().await?;
     crate::engine::tests::store::corrupt_block(store.as_ref(), &data, 1).await?;
     assert!(cursor.advance().await.is_err());
@@ -189,7 +190,8 @@ async fn grouped_probes_reuse_blocks_and_retry_without_losing_heads() -> Result<
         );
     }
     assert_eq!(cache.stats()?.misses, before.misses);
-    let path = Path::from(object.block_range(1).map(|(path, _)| path).context("missing block")?);
+    let path =
+        Path::from(object.block_range(1).await?.map(|(path, _)| path).context("missing block")?);
     let bytes = store.get(&path).await?.bytes().await?;
     crate::engine::tests::store::corrupt_block(store.as_ref(), &object, 1).await?;
     assert!(probes.cursor(&5).await.is_err());
@@ -268,9 +270,17 @@ async fn cold_run_heads_overlap_bounded_gets_and_cancel_without_advancing_probes
     let started = tokio::time::Instant::now();
     let actual = rows(snapshot.key_cursor(&1).await?).await?;
     assert_eq!(actual, Batch::from_updates((0..20).map(|n| ((1, n), 1)))?);
-    assert_eq!(store.read_peak.load(Ordering::SeqCst), 8);
+    assert_eq!(
+        store.read_peak.load(Ordering::SeqCst),
+        20.min(crate::engine::reader::READ_CONCURRENCY)
+    );
     assert_eq!(store.read_active.load(Ordering::SeqCst), 0);
-    assert_eq!(started.elapsed(), Duration::from_millis(30));
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_millis(
+            10 * 20_u64.div_ceil(u64::try_from(crate::engine::reader::READ_CONCURRENCY)?)
+        )
+    );
     let mut probes = snapshot.probes();
     let before = rows(probes.cursor(&1).await?).await?;
     assert!(tokio::time::timeout(Duration::from_millis(1), probes.cursor(&2)).await.is_err());
@@ -283,7 +293,12 @@ async fn cold_run_heads_overlap_bounded_gets_and_cancel_without_advancing_probes
         rows(probes.cursor(&2).await?).await?,
         Batch::from_updates((0..20).map(|n| ((2, n), -1)))?
     );
-    assert_eq!(started.elapsed(), Duration::from_millis(30));
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_millis(
+            10 * 20_u64.div_ceil(u64::try_from(crate::engine::reader::READ_CONCURRENCY)?)
+        )
+    );
     assert_eq!(store.read_active.load(Ordering::SeqCst), 0);
     Ok(())
 }
@@ -340,8 +355,16 @@ async fn coefficient_validation_overlaps_cold_runs_with_exact_cancellation() -> 
     let started = tokio::time::Instant::now();
     trace.validate_bag_delta(&delta).await?;
     assert_eq!(store.reads.load(Ordering::SeqCst) - before, 16);
-    assert_eq!(store.read_peak.load(Ordering::SeqCst), 8);
-    assert_eq!(started.elapsed(), Duration::from_millis(40));
+    assert_eq!(
+        store.read_peak.load(Ordering::SeqCst),
+        16.min(crate::engine::reader::READ_CONCURRENCY)
+    );
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_millis(
+            20 * 16_u64.div_ceil(u64::try_from(crate::engine::reader::READ_CONCURRENCY)?)
+        )
+    );
     assert!(trace.validate_bag_delta(&Batch::from_updates([((1, 1), -2)])?).await.is_err());
     let mut cancelled = Box::pin(trace.validate_bag_delta(&delta));
     assert!(futures_util::poll!(&mut cancelled).is_pending());

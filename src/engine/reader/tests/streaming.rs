@@ -5,7 +5,7 @@ use crate::engine::{
     reader::{BatchReader, ObjectBatch},
     trace::{Manifest, TraceSnapshot},
 };
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
 use std::sync::Arc;
 
@@ -31,8 +31,8 @@ async fn streamed_roots_preserve_full_identity_and_enforce_each_budget() -> Resu
         assert!(store.head(&Path::from(root.path())).await?.size <= 1024);
         let object =
             ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "i64-pair-v1").await?;
-        assert_eq!(object.blocks.len(), 1);
-        for block in object.blocks.iter() {
+        assert_eq!(object.block_count(), 1);
+        for block in &object.test_blocks().await? {
             assert!(block.length <= 128);
             assert!(block.rows <= 3);
         }
@@ -159,7 +159,7 @@ async fn closed_namespace_deletes_cannot_hit_recreated_equal_content() -> Result
     assert_eq!(cursor.current(), Some((&1, &2, 3)));
     cursor.advance().await?;
     assert!(cursor.current().is_none());
-    assert_eq!(object.block_range(0).map(|(path, _)| path), new_blocks.first().map(String::as_str));
+    assert_eq!(object.block_range(0).await?.map(|(path, _)| path), new_blocks.first().cloned());
     let roots = ObjectBatch::write_stream_namespaced(
         store.clone(),
         &mut batch.cursor().await?,
@@ -186,9 +186,10 @@ async fn borrowed_spans_share_decodes_preserve_restrictions_and_stream_objects()
     let second = object.cursor().await?;
     assert_eq!(first.current_span().as_ptr(), second.current_span().as_ptr());
     assert_eq!(cache.stats()?.pins, 2);
-    let mut restricted = Cursor::object_key_reusing(object.clone(), &1, None)
+    let page = object.key_page(&1).await?.ok_or_else(|| anyhow::anyhow!("missing key"))?;
+    let mut restricted = Cursor::object_key_page(object.clone(), &1, page, None)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("missing key"))?;
+        .context("missing restricted page")?;
     assert!(restricted.current_span().iter().all(|row| row.0.0 == 1));
     restricted.advance_span().await?;
     assert_eq!(restricted.current_span(), &[((1, 6), 1), ((1, 7), 1)]);
@@ -227,24 +228,21 @@ async fn shared_decode_rechecks_fences_and_failed_span_load_retains_position() -
     .await?;
     let mut cursor = object.cursor().await?;
     let mut wrong = object.clone();
-    let mut fences = (*wrong.blocks).clone();
-    fences[0].rows += 1;
-    wrong.blocks = Arc::new(fences);
+    wrong.test_block_mut(0)?.rows += 1;
     assert!(wrong.cursor().await.is_err());
     let path = Path::from(
         object
             .block_range(1)
+            .await?
             .map(|(path, _)| path)
             .ok_or_else(|| anyhow::anyhow!("missing block"))?,
     );
     let original = store.get(&path).await?.bytes().await?;
     // The first read may prefetch valid compressed bytes for the next page.
     // Force that target cold before injecting the storage failure.
-    let block = &object.blocks[1];
-    object
-        .cache
-        .ranges
-        .invalidate(&object.packs[block.pack], &(block.offset..block.offset + block.length))?;
+    let leaf = object.leaf(1).await?;
+    let block = &leaf.block;
+    object.cache.ranges.invalidate(&leaf.pack, &(block.offset..block.offset + block.length))?;
     store.put(&path, b"bad".to_vec().into()).await?;
     assert!(cursor.advance_span().await.is_err());
     assert_eq!(cursor.current(), Some((&1, &1, 1)));
@@ -302,6 +300,7 @@ async fn failed_merged_span_load_keeps_consolidated_position_for_retry() -> Resu
     let path = Path::from(
         object
             .block_range(1)
+            .await?
             .map(|(path, _)| path)
             .ok_or_else(|| anyhow::anyhow!("missing block"))?,
     );
@@ -317,11 +316,9 @@ async fn failed_merged_span_load_keeps_consolidated_position_for_retry() -> Resu
     let original = store.get(&path).await?.bytes().await?;
     // The first read may prefetch valid compressed bytes for the next page.
     // Force that target cold before injecting the storage failure.
-    let block = &object.blocks[1];
-    object
-        .cache
-        .ranges
-        .invalidate(&object.packs[block.pack], &(block.offset..block.offset + block.length))?;
+    let leaf = object.leaf(1).await?;
+    let block = &leaf.block;
+    object.cache.ranges.invalidate(&leaf.pack, &(block.offset..block.offset + block.length))?;
     store.put(&path, b"bad".to_vec().into()).await?;
     assert!(cursor.advance_span().await.is_err());
     assert_eq!(cursor.current(), Some((&1, &1, 2)));

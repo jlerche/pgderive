@@ -11,6 +11,7 @@ impl BlockCache {
         }
         let parent = parent.parent.clone().unwrap_or(parent);
         Arc::new(Self {
+            index: parent.index.clone(),
             bytes: parent.bytes,
             entries: parent.entries,
             encoded: parent.encoded.clone(),

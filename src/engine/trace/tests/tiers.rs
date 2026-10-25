@@ -17,7 +17,7 @@ async fn growing_tiny_flushes_never_rewrite_large_base() -> Result<()> {
     let mut trace = writer.flush(&pending).await?;
     let root = trace.manifest()?.objects[0].clone();
     let object = ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "tiers").await?;
-    let block = Path::from(object.block_range(0).context("missing block")?.0);
+    let block = Path::from(object.block_range(0).await?.context("missing block")?.0);
     let bytes = store.get(&block).await?.bytes().await?;
     store.delete(&block).await?;
     for time in 2..=257 {

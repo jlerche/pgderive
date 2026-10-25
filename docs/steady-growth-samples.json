@@ -2313,5 +2313,898 @@
       "native_soak_rerun": false,
       "native_soak_skipped_reason": "Fast component plateau check still fails"
     }
+  },
+  "cache_and_paged_index": {
+    "scope": "Bounded production component resources and controlled state growth; excludes full worker uptime and real freshness. First144cycle qualification before restored Bloom policy references. Failed trend checks retained.",
+    "baseline_commit": "5331cf7",
+    "metadata_comparison": {
+      "scope": "Same corrected stratified-256-v1 workload, independently frozen executables, window baseline versus exact compressed index frame candidate. Both configurations use LRU,32 local read jobs,256 flight stripes. Component virtual read latency only, not worker freshness.",
+      "cases": [
+        {
+          "base_rows": 2097152,
+          "changes_per_cycle": 4096,
+          "cycles": 4,
+          "window_baseline": {
+            "reads": {
+              "mean": 696.75,
+              "max": 759
+            },
+            "read_bytes": {
+              "mean": 4502592.75,
+              "max": 8448056
+            },
+            "index_reads": {
+              "mean": 0.0,
+              "max": 0
+            },
+            "index_read_bytes": {
+              "mean": 0.0,
+              "max": 0
+            },
+            "virtual_io_us": {
+              "mean": 1095000.0,
+              "max": 1160000
+            }
+          },
+          "exact_frame_candidate": {
+            "reads": {
+              "mean": 696.75,
+              "max": 759
+            },
+            "read_bytes": {
+              "mean": 4502592.75,
+              "max": 8448056
+            },
+            "index_reads": {
+              "mean": 0.0,
+              "max": 0
+            },
+            "index_read_bytes": {
+              "mean": 0.0,
+              "max": 0
+            },
+            "virtual_io_us": {
+              "mean": 1095000.0,
+              "max": 1160000
+            }
+          }
+        },
+        {
+          "base_rows": 4194304,
+          "changes_per_cycle": 4096,
+          "cycles": 4,
+          "window_baseline": {
+            "reads": {
+              "mean": 1081.75,
+              "max": 1196
+            },
+            "read_bytes": {
+              "mean": 28844809.75,
+              "max": 46316381
+            },
+            "index_reads": {
+              "mean": 350.0,
+              "max": 462
+            },
+            "index_read_bytes": {
+              "mean": 25679047.25,
+              "max": 42971031
+            },
+            "virtual_io_us": {
+              "mean": 4745000.0,
+              "max": 5100000
+            }
+          },
+          "exact_frame_candidate": {
+            "reads": {
+              "mean": 1013.25,
+              "max": 1035
+            },
+            "read_bytes": {
+              "mean": 3775645.0,
+              "max": 3975344
+            },
+            "index_reads": {
+              "mean": 281.5,
+              "max": 289
+            },
+            "index_read_bytes": {
+              "mean": 609882.5,
+              "max": 629994
+            },
+            "virtual_io_us": {
+              "mean": 2915000.0,
+              "max": 3000000
+            }
+          }
+        }
+      ]
+    },
+    "first_144_cycle_assessment": {
+      "workload_revision": "stratified-256-v1",
+      "scope": "Production statistics, signed validation, flush, compaction and GC marking on one live fixture; independent per-step oracle and cold reopen after each state size. Owned in-memory object retirement and process RSS include the oracle. No active-state restarts. Excludes CDC, sink, SQL GC liveness/protection barriers, real freshness and worker deadlines.",
+      "executed_changes": 589824,
+      "measured_changes": 458752,
+      "state_sizes": [
+        524288,
+        1048576,
+        2097152,
+        4194304
+      ],
+      "cycles_per_size": 36,
+      "cold_screen_only": false,
+      "warmup_cycles_per_size": 8,
+      "measured_cycles_per_size": 28,
+      "warmup_policy": "Eight declared warmup cycles per size; chosen after prior failed observations, fixed before this revised run. Absolute resource and service bounds apply to every cycle.",
+      "compactions": 144,
+      "logical_elapsed_seconds": 6221616,
+      "clock_schedule": "12 hours of virtual idle time after each 4096-change burst; this is not continuous 1000 changes/s for those days.",
+      "continuous_1000_changes_per_second_equivalent_seconds": 589.824,
+      "bounded_cold_regime": false,
+      "broad_transition_plateau_passed": false,
+      "cold_capacity_passed": false,
+      "full_worker_steady_state_proven": false,
+      "check_counts": {
+        "passed": 95,
+        "failed": 4
+      },
+      "absolute_resource_bounds": [
+        {
+          "metric": "cache_bytes",
+          "maximum": 9516574,
+          "limit": 16777216,
+          "passed": true
+        },
+        {
+          "metric": "cache_entries",
+          "maximum": 512,
+          "limit": 512,
+          "passed": true
+        },
+        {
+          "metric": "live_bytes",
+          "maximum": 9516574,
+          "limit": 33554432,
+          "passed": true
+        },
+        {
+          "metric": "pins",
+          "maximum": 0,
+          "limit": 512,
+          "passed": true
+        },
+        {
+          "metric": "filter_bytes",
+          "maximum": 4194204,
+          "limit": 4194304,
+          "passed": true
+        },
+        {
+          "metric": "filter_entries",
+          "maximum": 4229,
+          "limit": 8192,
+          "passed": true
+        },
+        {
+          "metric": "runs",
+          "maximum": 23,
+          "limit": 256,
+          "passed": true
+        },
+        {
+          "metric": "index_bytes",
+          "maximum": 4193518,
+          "limit": 4194304,
+          "passed": true
+        },
+        {
+          "metric": "index_entries",
+          "maximum": 24,
+          "limit": 512,
+          "passed": true
+        },
+        {
+          "metric": "index_decoded_bytes",
+          "maximum": 1048004,
+          "limit": 1048576,
+          "passed": true
+        },
+        {
+          "metric": "index_encoded_bytes",
+          "maximum": 3145697,
+          "limit": 3145728,
+          "passed": true
+        },
+        {
+          "metric": "index_encoded_entries",
+          "maximum": 1234,
+          "limit": 3072,
+          "passed": true
+        },
+        {
+          "metric": "foreground_read_peak",
+          "maximum": 32,
+          "limit": 32,
+          "passed": true
+        },
+        {
+          "metric": "resident_root_bytes",
+          "maximum": 47518,
+          "limit": 8388608,
+          "passed": true
+        },
+        {
+          "metric": "retirement_cache_bytes",
+          "maximum": 15870,
+          "limit": 16777216,
+          "passed": true
+        },
+        {
+          "metric": "retirement_rss_bytes",
+          "maximum": 1061531648,
+          "limit": 3221225472,
+          "passed": true
+        },
+        {
+          "metric": "retirement_peak_rss_bytes",
+          "maximum": 1144061952,
+          "limit": 3221225472,
+          "passed": true
+        },
+        {
+          "metric": "ranges_active_batches",
+          "maximum": 0,
+          "limit": 0,
+          "passed": true
+        },
+        {
+          "metric": "ranges_pinned_bytes",
+          "maximum": 0,
+          "limit": 0,
+          "passed": true
+        },
+        {
+          "metric": "ranges_pinned_windows",
+          "maximum": 0,
+          "limit": 0,
+          "passed": true
+        },
+        {
+          "metric": "ranges_resident_bytes",
+          "maximum": 4129188,
+          "limit": 4194304,
+          "passed": true
+        },
+        {
+          "metric": "ranges_resident_charge",
+          "maximum": 4194232,
+          "limit": 4194304,
+          "passed": true
+        },
+        {
+          "metric": "ranges_resident_windows",
+          "maximum": 871,
+          "limit": 1024,
+          "passed": true
+        }
+      ],
+      "failed_checks": [
+        {
+          "rows": 524288,
+          "metric": "compaction_reads_per_state_row",
+          "early": 4.6473027569086005e-05,
+          "late": 7.313790267146729e-05,
+          "limit": 5.809128446135751e-05,
+          "passed": false
+        },
+        {
+          "rows": 524288,
+          "metric": "compaction_read_bytes_per_state_row",
+          "early": 10.287884341142176,
+          "late": 14.141775691057315,
+          "limit": 12.85985542642772,
+          "passed": false
+        },
+        {
+          "rows": 2097152,
+          "metric": "index_reads",
+          "early": 26.857142857142858,
+          "late": 36.42857142857143,
+          "limit": 33.57142857142857,
+          "passed": false
+        },
+        {
+          "rows": 2097152,
+          "metric": "index_read_bytes",
+          "early": 60299.857142857145,
+          "late": 82215.57142857143,
+          "limit": 75374.82142857143,
+          "passed": false
+        }
+      ],
+      "failed_broad_transition_checks": [
+        {
+          "rows": 524288,
+          "metric": "reads",
+          "early": 569.5714285714286,
+          "late": 881.5714285714286,
+          "limit": 711.9642857142857,
+          "passed": false
+        },
+        {
+          "rows": 524288,
+          "metric": "virtual_io_us",
+          "early": 922857.1428571428,
+          "late": 1262857.142857143,
+          "limit": 1153571.4285714286,
+          "passed": false
+        },
+        {
+          "rows": 524288,
+          "metric": "data_reads",
+          "early": 563.5714285714286,
+          "late": 875.5714285714286,
+          "limit": 704.4642857142857,
+          "passed": false
+        },
+        {
+          "rows": 524288,
+          "metric": "compaction_reads_per_state_row",
+          "early": 4.178161838301217e-05,
+          "late": 7.313790267146729e-05,
+          "limit": 5.222702297876521e-05,
+          "passed": false
+        },
+        {
+          "rows": 524288,
+          "metric": "compaction_read_bytes_per_state_row",
+          "early": 9.256151287164956,
+          "late": 14.141775691057315,
+          "limit": 11.570189108956194,
+          "passed": false
+        },
+        {
+          "rows": 2097152,
+          "metric": "index_reads",
+          "early": 22.0,
+          "late": 36.42857142857143,
+          "limit": 27.5,
+          "passed": false
+        },
+        {
+          "rows": 2097152,
+          "metric": "index_read_bytes",
+          "early": 48851.42857142857,
+          "late": 82215.57142857143,
+          "limit": 61064.28571428572,
+          "passed": false
+        }
+      ]
+    },
+    "first_144_cycle_summary": [
+      {
+        "base_rows": 524288,
+        "final_state_rows": 598016,
+        "final_state_bytes": 6770898,
+        "maximum_foreground_virtual_io_us": 1300000,
+        "maximum_resident_root_bytes": 8228,
+        "maximum_gc_memo_bytes": 2760,
+        "maximum_rss_bytes": 239972352,
+        "maximum_peak_rss_bytes": 254472192
+      },
+      {
+        "base_rows": 1048576,
+        "final_state_rows": 1194146,
+        "final_state_bytes": 13197084,
+        "maximum_foreground_virtual_io_us": 1360000,
+        "maximum_resident_root_bytes": 14426,
+        "maximum_gc_memo_bytes": 4830,
+        "maximum_rss_bytes": 320024576,
+        "maximum_peak_rss_bytes": 320024576
+      },
+      {
+        "base_rows": 2097152,
+        "final_state_rows": 2314924,
+        "final_state_bytes": 24409022,
+        "maximum_foreground_virtual_io_us": 1720000,
+        "maximum_resident_root_bytes": 31784,
+        "maximum_gc_memo_bytes": 8970,
+        "maximum_rss_bytes": 568963072,
+        "maximum_peak_rss_bytes": 609542144
+      },
+      {
+        "base_rows": 4194304,
+        "final_state_rows": 4484520,
+        "final_state_bytes": 45093226,
+        "maximum_foreground_virtual_io_us": 3540000,
+        "maximum_resident_root_bytes": 47518,
+        "maximum_gc_memo_bytes": 15870,
+        "maximum_rss_bytes": 1061531648,
+        "maximum_peak_rss_bytes": 1144061952
+      }
+    ],
+    "storage_format": "Hard cutover to authenticated paged roots; existing views require rebuild.",
+    "selected_private_scan_fix": {
+      "workspace_bytes": 528384,
+      "decoded_bytes": 262144,
+      "encoded_window_and_metadata_bytes": 266240,
+      "comparison_scope": "Equal-work cold component comparison; metadata identities authenticated, no repeated data bytes; residual metadata repeats remain.",
+      "metadata_compaction_comparison": [
+        {
+          "rows": 2097152,
+          "cycle": 0,
+          "before": {
+            "bytes": 0,
+            "gets": 0,
+            "repeated_bytes": 0,
+            "unique_bytes": 0
+          },
+          "after": {
+            "bytes": 0,
+            "gets": 0,
+            "repeated_bytes": 0,
+            "unique_bytes": 0
+          },
+          "foreground_us": 1020000
+        },
+        {
+          "rows": 2097152,
+          "cycle": 1,
+          "before": {
+            "bytes": 5300225,
+            "gets": 39,
+            "repeated_bytes": 2629573,
+            "unique_bytes": 2670652
+          },
+          "after": {
+            "bytes": 5037473,
+            "gets": 37,
+            "repeated_bytes": 2366821,
+            "unique_bytes": 2670652
+          },
+          "foreground_us": 1080000
+        },
+        {
+          "rows": 2097152,
+          "cycle": 2,
+          "before": {
+            "bytes": 2920747,
+            "gets": 14,
+            "repeated_bytes": 262144,
+            "unique_bytes": 2658603
+          },
+          "after": {
+            "bytes": 2920747,
+            "gets": 14,
+            "repeated_bytes": 262144,
+            "unique_bytes": 2658603
+          },
+          "foreground_us": 1120000
+        },
+        {
+          "rows": 2097152,
+          "cycle": 3,
+          "before": {
+            "bytes": 4505890,
+            "gets": 28,
+            "repeated_bytes": 1836983,
+            "unique_bytes": 2668907
+          },
+          "after": {
+            "bytes": 3981003,
+            "gets": 24,
+            "repeated_bytes": 1312185,
+            "unique_bytes": 2668818
+          },
+          "foreground_us": 1160000
+        },
+        {
+          "rows": 4194304,
+          "cycle": 0,
+          "before": {
+            "bytes": 4776334,
+            "gets": 32,
+            "repeated_bytes": 2100546,
+            "unique_bytes": 2675788
+          },
+          "after": {
+            "bytes": 4513766,
+            "gets": 30,
+            "repeated_bytes": 1838402,
+            "unique_bytes": 2675364
+          },
+          "foreground_us": 2920000
+        },
+        {
+          "rows": 4194304,
+          "cycle": 1,
+          "before": {
+            "bytes": 8488071,
+            "gets": 49,
+            "repeated_bytes": 3151120,
+            "unique_bytes": 5336951
+          },
+          "after": {
+            "bytes": 7699422,
+            "gets": 43,
+            "repeated_bytes": 2362471,
+            "unique_bytes": 5336951
+          },
+          "foreground_us": 2860000
+        },
+        {
+          "rows": 4194304,
+          "cycle": 2,
+          "before": {
+            "bytes": 6904159,
+            "gets": 34,
+            "repeated_bytes": 1572864,
+            "unique_bytes": 5331295
+          },
+          "after": {
+            "bytes": 6379480,
+            "gets": 30,
+            "repeated_bytes": 1048576,
+            "unique_bytes": 5330904
+          },
+          "foreground_us": 3000000
+        },
+        {
+          "rows": 4194304,
+          "cycle": 3,
+          "before": {
+            "bytes": 7439003,
+            "gets": 41,
+            "repeated_bytes": 2100606,
+            "unique_bytes": 5338397
+          },
+          "after": {
+            "bytes": 6912829,
+            "gets": 36,
+            "repeated_bytes": 1574660,
+            "unique_bytes": 5338169
+          },
+          "foreground_us": 2880000
+        }
+      ],
+      "rejected_experiments": {
+        "selected": "private-index-handoff-cold",
+        "decision": "Keep parent-hit private decoded retention; revert both branch storage experiments entirely.",
+        "experiments": [
+          {
+            "path": "private-branch-frames-cold",
+            "comparison": "private-branch-frames-comparison.json",
+            "rejected_because": "Exact branch reads greatly increased object GET count and logical I/O time despite reducing bytes."
+          },
+          {
+            "path": "private-branch-windows-cold",
+            "comparison": "private-branch-windows-comparison.json",
+            "rejected_because": "Separate 32KiB branch windows reduced bytes and CPU wall time but increased total object GETs and logical I/O time; added structure not retained."
+          }
+        ],
+        "remaining": "The selected bounded private index scan window still rereads some metadata. This is an unresolved measured bottleneck, not a steady-state proof."
+      }
+    },
+    "final_selected_qualification": {
+      "binary_sha256": "8169e63833e250cd54703038d31e7658a5742b44e695451c08e9b5d3ede7c9d8",
+      "runtime_seconds": 517.2928243329516,
+      "assessment": {
+        "workload_revision": "stratified-256-v1",
+        "scope": "Production statistics, signed validation, flush, compaction and GC marking on one live fixture; independent per-step oracle and cold reopen after each state size. Owned in-memory object retirement and process RSS include the oracle. No active-state restarts. Excludes CDC, sink, SQL GC liveness/protection barriers, real freshness and worker deadlines.",
+        "executed_changes": 589824,
+        "measured_changes": 458752,
+        "state_sizes": [
+          524288,
+          1048576,
+          2097152,
+          4194304
+        ],
+        "cycles_per_size": 36,
+        "cold_screen_only": false,
+        "warmup_cycles_per_size": 8,
+        "measured_cycles_per_size": 28,
+        "warmup_policy": "Eight declared warmup cycles per size; chosen after prior failed observations, fixed before this revised run. Absolute resource and service bounds apply to every cycle.",
+        "compactions": 144,
+        "logical_elapsed_seconds": 6221612,
+        "clock_schedule": "12 hours of virtual idle time after each 4096-change burst; this is not continuous 1000 changes/s for those days.",
+        "continuous_1000_changes_per_second_equivalent_seconds": 589.824,
+        "bounded_cold_regime": false,
+        "broad_transition_plateau_passed": false,
+        "cold_capacity_passed": false,
+        "full_worker_steady_state_proven": false,
+        "check_counts": {
+          "passed": 95,
+          "failed": 4
+        },
+        "absolute_resource_bounds": [
+          {
+            "metric": "cache_bytes",
+            "maximum": 9516574,
+            "limit": 16777216,
+            "passed": true
+          },
+          {
+            "metric": "cache_entries",
+            "maximum": 512,
+            "limit": 512,
+            "passed": true
+          },
+          {
+            "metric": "live_bytes",
+            "maximum": 9516574,
+            "limit": 33554432,
+            "passed": true
+          },
+          {
+            "metric": "pins",
+            "maximum": 0,
+            "limit": 512,
+            "passed": true
+          },
+          {
+            "metric": "filter_bytes",
+            "maximum": 4194204,
+            "limit": 4194304,
+            "passed": true
+          },
+          {
+            "metric": "filter_entries",
+            "maximum": 4229,
+            "limit": 8192,
+            "passed": true
+          },
+          {
+            "metric": "runs",
+            "maximum": 23,
+            "limit": 256,
+            "passed": true
+          },
+          {
+            "metric": "index_bytes",
+            "maximum": 4193518,
+            "limit": 4194304,
+            "passed": true
+          },
+          {
+            "metric": "index_entries",
+            "maximum": 24,
+            "limit": 512,
+            "passed": true
+          },
+          {
+            "metric": "index_decoded_bytes",
+            "maximum": 1048004,
+            "limit": 1048576,
+            "passed": true
+          },
+          {
+            "metric": "index_encoded_bytes",
+            "maximum": 3145697,
+            "limit": 3145728,
+            "passed": true
+          },
+          {
+            "metric": "index_encoded_entries",
+            "maximum": 1234,
+            "limit": 3072,
+            "passed": true
+          },
+          {
+            "metric": "foreground_read_peak",
+            "maximum": 32,
+            "limit": 32,
+            "passed": true
+          },
+          {
+            "metric": "resident_root_bytes",
+            "maximum": 47518,
+            "limit": 8388608,
+            "passed": true
+          },
+          {
+            "metric": "retirement_cache_bytes",
+            "maximum": 15870,
+            "limit": 16777216,
+            "passed": true
+          },
+          {
+            "metric": "retirement_rss_bytes",
+            "maximum": 1068302336,
+            "limit": 3221225472,
+            "passed": true
+          },
+          {
+            "metric": "retirement_peak_rss_bytes",
+            "maximum": 1150554112,
+            "limit": 3221225472,
+            "passed": true
+          },
+          {
+            "metric": "ranges_active_batches",
+            "maximum": 0,
+            "limit": 0,
+            "passed": true
+          },
+          {
+            "metric": "ranges_pinned_bytes",
+            "maximum": 0,
+            "limit": 0,
+            "passed": true
+          },
+          {
+            "metric": "ranges_pinned_windows",
+            "maximum": 0,
+            "limit": 0,
+            "passed": true
+          },
+          {
+            "metric": "ranges_resident_bytes",
+            "maximum": 4129188,
+            "limit": 4194304,
+            "passed": true
+          },
+          {
+            "metric": "ranges_resident_charge",
+            "maximum": 4194232,
+            "limit": 4194304,
+            "passed": true
+          },
+          {
+            "metric": "ranges_resident_windows",
+            "maximum": 871,
+            "limit": 1024,
+            "passed": true
+          }
+        ],
+        "failed_checks": [
+          {
+            "rows": 524288,
+            "metric": "compaction_reads_per_state_row",
+            "early": 4.6473027569086005e-05,
+            "late": 7.313790267146729e-05,
+            "limit": 5.809128446135751e-05,
+            "passed": false
+          },
+          {
+            "rows": 524288,
+            "metric": "compaction_read_bytes_per_state_row",
+            "early": 10.287884341142176,
+            "late": 14.141775691057315,
+            "limit": 12.85985542642772,
+            "passed": false
+          },
+          {
+            "rows": 2097152,
+            "metric": "index_reads",
+            "early": 26.857142857142858,
+            "late": 36.42857142857143,
+            "limit": 33.57142857142857,
+            "passed": false
+          },
+          {
+            "rows": 2097152,
+            "metric": "index_read_bytes",
+            "early": 60299.857142857145,
+            "late": 82215.57142857143,
+            "limit": 75374.82142857143,
+            "passed": false
+          }
+        ],
+        "failed_broad_transition_checks": [
+          {
+            "rows": 524288,
+            "metric": "reads",
+            "early": 569.5714285714286,
+            "late": 881.5714285714286,
+            "limit": 711.9642857142857,
+            "passed": false
+          },
+          {
+            "rows": 524288,
+            "metric": "virtual_io_us",
+            "early": 922857.1428571428,
+            "late": 1262857.142857143,
+            "limit": 1153571.4285714286,
+            "passed": false
+          },
+          {
+            "rows": 524288,
+            "metric": "data_reads",
+            "early": 563.5714285714286,
+            "late": 875.5714285714286,
+            "limit": 704.4642857142857,
+            "passed": false
+          },
+          {
+            "rows": 524288,
+            "metric": "compaction_reads_per_state_row",
+            "early": 4.178161838301217e-05,
+            "late": 7.313790267146729e-05,
+            "limit": 5.222702297876521e-05,
+            "passed": false
+          },
+          {
+            "rows": 524288,
+            "metric": "compaction_read_bytes_per_state_row",
+            "early": 9.256151287164956,
+            "late": 14.141775691057315,
+            "limit": 11.570189108956194,
+            "passed": false
+          },
+          {
+            "rows": 2097152,
+            "metric": "index_reads",
+            "early": 22.0,
+            "late": 36.42857142857143,
+            "limit": 27.5,
+            "passed": false
+          },
+          {
+            "rows": 2097152,
+            "metric": "index_read_bytes",
+            "early": 48851.42857142857,
+            "late": 82215.57142857143,
+            "limit": 61064.28571428572,
+            "passed": false
+          }
+        ]
+      },
+      "summary": [
+        {
+          "base_rows": 524288,
+          "final_state_rows": 598016,
+          "final_physical_state_bytes": 6770898,
+          "maximum_foreground_virtual_io_us": 1300000,
+          "maximum_resident_root_bytes": 8228,
+          "maximum_gc_memo_bytes": 2760,
+          "maximum_peak_rss_bytes": 256884736,
+          "maximum_metadata_repeated_bytes_per_compaction": 1902872,
+          "maximum_data_repeated_bytes_per_compaction": 0
+        },
+        {
+          "base_rows": 1048576,
+          "final_state_rows": 1194146,
+          "final_physical_state_bytes": 13197084,
+          "maximum_foreground_virtual_io_us": 1360000,
+          "maximum_resident_root_bytes": 14426,
+          "maximum_gc_memo_bytes": 4830,
+          "maximum_peak_rss_bytes": 329105408,
+          "maximum_metadata_repeated_bytes_per_compaction": 4568098,
+          "maximum_data_repeated_bytes_per_compaction": 0
+        },
+        {
+          "base_rows": 2097152,
+          "final_state_rows": 2314924,
+          "final_physical_state_bytes": 24409022,
+          "maximum_foreground_virtual_io_us": 1720000,
+          "maximum_resident_root_bytes": 31784,
+          "maximum_gc_memo_bytes": 8970,
+          "maximum_peak_rss_bytes": 614907904,
+          "maximum_metadata_repeated_bytes_per_compaction": 8014973,
+          "maximum_data_repeated_bytes_per_compaction": 0
+        },
+        {
+          "base_rows": 4194304,
+          "final_state_rows": 4484520,
+          "final_physical_state_bytes": 45093226,
+          "maximum_foreground_virtual_io_us": 3540000,
+          "maximum_resident_root_bytes": 47518,
+          "maximum_gc_memo_bytes": 15870,
+          "maximum_peak_rss_bytes": 1150554112,
+          "maximum_metadata_repeated_bytes_per_compaction": 11203478,
+          "maximum_data_repeated_bytes_per_compaction": 0
+        }
+      ]
+    },
+    "final_selected_validation": {
+      "common_gate_passed": true,
+      "rust_tests_passed": 551,
+      "python_tests_passed": 123,
+      "production_line_coverage_percent": 97.31,
+      "fast_correctness_passed": true,
+      "independent_review": "No outstanding actionable correctness or durability findings; final evidence reviewed.",
+      "durability": "PUT before atomic PostgreSQL membership/results/progress publication, then slot acknowledgement; ordering unchanged.",
+      "full_steady_state_passed": false
+    }
   }
 }

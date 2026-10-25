@@ -479,3 +479,209 @@ and repeated fetched ranges; changing all cache budgets together would confound
 the result. Stripe contention may affect elapsed I/O rounds but cannot alone
 explain increased downloaded bytes. No wall-clock soak, push or deployment was
 performed after the failed fast plateau check.
+
+### Continuous operation qualification
+
+Periodic restarts are not a resource-management strategy. At a supported state
+size and fixed input rate, live reader pins, metadata and cached generations must
+stay bounded while compaction and GC keep up. Durable state may grow with source
+cardinality. Finite capacity limits still apply on fixed resources.
+
+Immutable indexes are now authenticated paged trees. Readers share coarse root
+descriptors and small inline leaves; lower nodes load on demand. Foreground
+metadata retains exact compressed frames by digest and length, rather than broad
+windows that mix dense branch reads with sparse leaf reads. Typed decoded nodes
+also include frame length and Rust type in their identity. Expected addresses,
+summary fences, row counts and coefficients still validate on reads. Corruption,
+failed reads and cancellation cannot advance a cursor or authorize a GC sweep.
+
+Generated frames warm the same bounded encoded cache without reading bytes back
+from storage. Leaf warming does not eagerly deserialize the generated leaves.
+Cache hits share immutable frame bytes. Identical authenticated content may be
+reused across upload namespaces; physical I/O and GC membership still use the
+qualified object paths. The former foreground metadata window tier and its
+namespace-seeding plumbing have been removed.
+
+Metadata receives one quarter of the configured decoded-data cache budget,
+split one quarter decoded and three quarters encoded. With the fixture's 16 MiB
+cache, metadata caps are 1 MiB decoded/512 nodes and 3 MiB encoded/3072 frames.
+Encoded admission charges payload and key/record metadata, rejects oversized
+entries, and reserves at least 1 KiB per entry to bound cardinality. These are
+resident charges, not allocator RSS or a global process limit. Ordinary readers
+and output wrappers share metadata caches. Disabling decoded-data retention still
+provides an 8 MiB navigation budget. Independent open calls can own independent
+caches.
+
+Scans peek at foreground decoded nodes without promotion and retain borrowed
+nodes in private scan storage using their existing charges. Each active scan has
+256 KiB/17 decoded navigation nodes and a 256 KiB metadata window with 4 KiB
+metadata allowance. The combined index workspace remains 516 KiB, in addition
+to the existing private data scan window. An 8,192-block regression measures the
+cursor's actual workspace, checks foreground non-pollution and catches
+branch/leaf ping-pong. All index GETs remain visible in shared counters.
+
+Foreground data windows use Foyer's weighted LRU policy, adapt between 4 and 256 KiB,
+and avoid retaining a wide cover and duplicate narrow slices. Scoped guards hold
+planned bytes through consumption independently of eviction. Their payload and
+entry caps are separate from resident cache charges; pin-map metadata adds bounded
+working storage. Dropping a batch releases its guards; corruption invalidates
+resident and pinned copies. Read-ahead completion is unordered, while prepared
+keys and tuple processing retain their required order.
+
+Read streams permit 32 concurrent jobs and use 256 flight stripes to reduce
+unrelated lock collisions. This is a local stream limit, not a global GET cap
+across readers/operators. Metadata lookahead may overshoot its soft target by one
+32-key group; concurrent response/decoder work is additional bounded transient
+memory. Resident byte budgets remain unchanged. Publication still orders all
+object PUTs before atomic PostgreSQL membership/results/progress publication,
+then source acknowledgement.
+
+This is a hard storage-format cutover: old non-paged roots are rejected. Rebuild
+existing views before deploying it. Large roots add one packed-index PUT, not one
+PUT per node. Leaves whose complete raw encoding fits 16 KiB remain inline without
+that PUT. The writer conservatively charges raw fences and ancestor summaries;
+its 8 MiB index pack, 4,096 fences, 128 output roots and 256 trace runs remain
+explicit capacity boundaries. Capacity errors are not retried indefinitely.
+
+The fast `cold` screen executes four full-compaction cycles at each of 2,097,152
+and 4,194,304 base rows. The `longevity` mode keeps the same live writer, trace and
+caches while growing through 524,288, 1,048,576, 2,097,152 and 4,194,304 base rows.
+Every step samples one checked rank in each of 256 strata across the full relation,
+plus paired gap keys. This is deterministic stratified traffic, not independent
+uniform random sampling. All changes actually execute against production
+statistics, signed validation, flush and compaction, with a per-step independent
+oracle and full streaming cold-reopen bag comparison after each size.
+
+```sh
+python3 scripts/fast_validation.py --mode cold --release \
+  --output artifacts/benchmarks/cold-capacity-next
+python3 scripts/fast_validation.py --mode longevity --release \
+  --output artifacts/benchmarks/cold-regime-next
+```
+
+The revised longevity protocol declares eight warmup cycles per size, then 28
+measured cycles: 144 compactions and 589,824 actual changes, including 458,752
+measured changes. The warmup policy was selected after earlier failed observations
+and fixed before this revised run. It cannot be extended after seeing a failure.
+No state or cache resets occur. Correctness, cache/pin bounds, RSS and absolute
+foreground service bounds apply to every warmup and measured cycle. Fixed
+measured cohorts 2..8 versus the last seven retain the 25% trend threshold. The
+broader comparison including warmup is reported separately; a cold-regime pass
+does not turn a cache-fit transition into a broad plateau. Historical failed
+112-cycle and warm-to-cold assessments remain failed in the retained evidence.
+
+Paused Tokio time injects 20 ms GET latency and advances twelve idle hours after
+each cycle, covering 72 days of clock range. **That is not 72 days of continuous
+traffic.** Executed traffic is about 590 seconds at 1,000 changes/s. This component
+has no worker source/sink timers; idle clock advancement adds no worker-deadline
+coverage. The useful endurance evidence is repeated actual state transitions,
+compactions and retirements without restarting the active fixture.
+
+The assessment checks actual physical state bytes, post-retirement RSS and Linux
+process peak RSS, as well as cache charges, released pins, object GET/PUT counts
+and bytes. Production GC marking authenticates the live dependency set; only this
+fixture's owned obsolete objects are deleted. A second mark must reuse bounded
+coarse metadata without extra GETs. Process RSS includes the independent oracle,
+allocator and in-memory object store, so it is not engine-only memory.
+
+A 4.096 s foreground virtual-I/O bound per 4096 changes is a necessary condition for
+1,000 changes/s, excluding CPU, bandwidth and sink work. Forced full compaction
+every 4096 changes stresses reclamation, not production scheduling; its cost is
+reported separately and compared per retained row. SQL GC protection/sweep races,
+CDC, sink publication, WAL retention, maintenance backlog and real freshness
+remain covered by other harnesses and operational monitoring. These component
+results do not prove arbitrary-size growing-state stability or multi-week worker
+uptime.
+
+
+The independently frozen window-versus-frame comparison uses the same corrected
+stratified workload, LRU policy, 32 local read jobs and 256 flight stripes on both
+sides. At 4,194,304 base rows, exact frames reduce mean metadata downloads from
+25.679 MB to 0.610 MB per 4096-change cycle, total downloads from 28.845 MB to
+3.776 MB, and foreground virtual read time from 4.745 s to 2.915 s. The maximum
+falls from 5.10 s to 3.00 s. At 2,097,152 rows both average 1.095 s because the
+metadata already fits. This isolates the metadata-cache replacement; it is not a
+comparison against the original commit or a measurement of worker freshness.
+
+The first exact-frame 144-cycle assessment completed in 495 seconds after
+compilation. All 589,824 changes matched the oracle, all cold reopens matched,
+and all absolute cache, pin, memory and foreground service bounds passed. Coarse
+resident roots stayed below 48 KiB, the GC dependency memo below 16 KiB and peak
+process RSS below 1.15 GB. The four measured foreground-I/O cohort means changed
+from 1.180 to 1.263 s, 1.297 to 1.291 s, 1.540 to 1.631 s and 3.300 to 3.386 s
+as base rows grew through the four sizes.
+
+**That assessment failed its complete trend gate.** At 524,288 base rows,
+compaction GETs/row rose 57% and bytes/row rose 37%; at 2,097,152 rows, index GETs
+rose from 26.86 to 36.43 and index bytes from 60.3 to 82.2 kB per cycle. Physical
+state also grew during each size, so the next diagnostic records actual scan
+coverage and compressed input size to distinguish repeated reads from changing
+compression and cache coverage. The broad warm-to-cold comparison also failed.
+The failed result is retained and does not qualify whole-worker steady state.
+
+
+Fast correctness also caught a performance regression during this change. Prepared
+metadata originally skipped the Bloom lookup when a decoded head was reusable.
+That removed CLOCK reference touches, so useful synopses stopped surviving
+eviction. Preparation now always consults the existing validated synopsis, and a
+new data load rechecks it because earlier keys may have learned a filter after
+preparation. A verified same-page head can still be reused. Both changes preserve
+full weighted run multiplicity. The unchanged sparse-decoding gate passes again:
+filtered/baseline decode ratios are 0.458, 0.525 and 0.527 at 32k, 128k and 262k
+rows, versus 0.458, 0.744 and 0.845 in the rejected version. Reducing preparation
+to eight keys did not fix the regression and that test-only experiment was removed.
+
+
+Physical compaction diagnostics now classify ranges by authenticated qualified
+index-pack identity, with metadata GETs/bytes independently checked against the
+production index counters. Data and index objects share the `/pack/` prefix;
+the earlier prefix-based split was invalid and is explicitly marked unusable in
+the retained evidence. Whole-range totals and oracle results remain valid.
+Correct classification shows no repeated data-page bytes in the cold screen;
+the repeated bytes belong to metadata navigation.
+
+The selected additional fix retains a borrowed foreground node in the scan's
+existing private decoded cache, using the same immutable Arc and charge. It
+survives foreground eviction without promoting or enlarging that cache. At four
+million base rows, metadata compaction GETs across four cycles fall from
+32/49/34/41 to 30/43/30/36, with unchanged foreground timing and memory budgets.
+Metadata repeats fall but remain nonzero (about 1.05–2.36 MB per cycle in this
+screen). The targeted eviction regression and unchanged full weighted oracles
+cover the handoff.
+
+Two alternatives were measured and removed entirely. Exact private branch frames
+saved bytes but greatly increased GETs and virtual I/O. Separate coalesced branch
+windows also saved bytes/CPU but increased total compaction GETs by 6% at four
+million rows, with a corresponding 6% virtual-I/O increase. The selected reader
+keeps the simpler 256 KiB decoded plus 260 KiB encoded private index workspace.
+Remaining metadata navigation rereads are an explicit follow-up, not a reason to
+restart the process periodically or a completed steady-state proof.
+
+
+The final selected source repeated all 144 compactions in 517 seconds after
+compilation. Its executable hash matches the final fast-correctness run. All
+589,824 executed changes, cold reopens, retirement checks and absolute bounds
+passed. Final cardinality was 4,484,520 rows with 45,093,226 physical state bytes;
+coarse resident roots peaked at 47,518 bytes and process peak RSS at about 1.16 GB.
+Maximum foreground virtual I/O was 1.30, 1.36, 1.72 and 3.54 seconds per
+4096-change cycle at the four base sizes. The strict trend assessment still
+failed the same four checks reported above, so neither the cold-regime nor broad
+plateau gate is claimed to pass. Bounds remained fixed; no restart or active
+cache reset was used to achieve those results.
+
+The next focused change should carry bounded forward index-navigation state
+through a scan instead of relying on repeated root-to-leaf ordinal lookups to
+hit a cache. It must preserve failure-atomic cursor positions, wide-fence limits,
+weighted identity and GC/publication ordering. The retained physical range
+counters provide a fast rejection test for that work. Whole-worker operation for
+continuous days remains unqualified by this component run.
+
+
+The final selected source passed `./scripts/check.sh`: 551 Rust tests, 123 Python
+tests, sequential PostgreSQL core replay/crash/publication/lifecycle/rebuild
+checks, strict Clippy/rustfmt/file-length rules and dependency checks. Production
+line coverage is 97.31%. The common gate covers the final handoff fix; code
+fingerprints did not change during that run. Owned PostgreSQL fixtures used tmpfs
+and were removed; datasets, results and rejected experiments remain ignored.
+Independent review found no outstanding actionable correctness/durability issue.
+This common-gate pass does not override the four failed performance trend checks.

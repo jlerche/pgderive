@@ -79,6 +79,7 @@ async fn missing_and_corrupt_objects_fail_closed_without_cursor_movement() -> Re
     let path = Path::from(
         object
             .block_range(1)
+            .await?
             .map(|(path, _)| path)
             .ok_or_else(|| anyhow::anyhow!("missing block"))?,
     );
@@ -225,7 +226,7 @@ async fn malformed_manifest_limits_fail_before_reading_rows() -> Result<()> {
     let path = Path::from(reference.path());
     let bytes = store.get(&path).await?.bytes().await?;
     let mut index: serde_json::Value = serde_json::from_slice(&bytes)?;
-    index["blocks"][0]["rows"] = serde_json::json!(65_537);
+    index["inline"]["Leaf"][0]["block"]["rows"] = serde_json::json!(65_537);
     let malformed = serde_json::to_vec(&index)?;
     store.put(&path, malformed.clone().into()).await?;
     let mut descriptor = serde_json::to_value(&reference)?;

@@ -1,12 +1,13 @@
 //! Fallible readers over immutable canonical memory and object batches.
 mod bounded;
-pub(crate) const READ_CONCURRENCY: usize = 8;
+pub(crate) const READ_CONCURRENCY: usize = 32;
 mod cache;
 mod compression;
 mod cursor;
 mod format;
 mod hybrid;
 pub use hybrid::{CacheConfig, EncodedCache};
+mod index;
 mod object;
 mod reachability;
 mod streaming;
@@ -15,11 +16,11 @@ pub use streaming::WriteLimits;
 
 use super::Batch;
 use anyhow::Result;
-pub(crate) use cache::ReadAhead;
 pub use cache::{BlockCache, CacheStats, ReadStats};
+pub(crate) use cache::{ReadAhead, ReadGuard};
 pub use cursor::Cursor;
-pub(crate) use object::valid_namespace;
 pub use object::{ObjectBatch, ObjectRef};
+pub(crate) use object::{SelectedBlock, valid_namespace};
 use serde::{Serialize, de::DeserializeOwned};
 use std::future::Future;
 
@@ -128,3 +129,7 @@ mod memory_tests;
 #[cfg(test)]
 #[path = "tests/packing.rs"]
 mod packing_tests;
+
+#[cfg(test)]
+#[path = "tests/index_pages.rs"]
+mod index_page_tests;

@@ -114,3 +114,59 @@ async fn queued_statistics_preserve_oracle_and_cumulative_limits() -> Result<()>
     }
     Ok(())
 }
+
+#[tokio::test(start_paused = true)]
+async fn metadata_preparation_is_bounded_and_cancelled_groups_do_no_reads() -> Result<()> {
+    use crate::engine::{
+        reader::{BlockCache, ObjectBatch},
+        tests::store::Store,
+        trace::{Run, TraceSnapshot},
+    };
+    use std::sync::atomic::Ordering;
+    let mut store = Store::unpaced();
+    store.read_delay = std::time::Duration::from_millis(20);
+    let store = Arc::new(store);
+    let initial = Batch::from_updates((0..512_i64).map(|key| ((Some(key), vec![1, 1, key]), 1)))?;
+    let root = ObjectBatch::write(store.clone(), &initial, "metadata-stats", 1).await?;
+    let input = TimedBatch {
+        time: 2,
+        batch: Batch::from_updates((0..32_i64).map(|n| ((Some(n * 16), (n, Some(1))), 1)))?,
+    };
+    let expected = Batch::from_updates((0..32_i64).flat_map(|n| {
+        let key = n * 16;
+        [((Some(key), vec![1, 1, key]), -1), ((Some(key), vec![2, 2, key + 1]), 1)]
+    }))?;
+    for entries in [1, 64] {
+        let mut cache = BlockCache::new(16 * 1024 * 1024, 512);
+        // Force genuinely cold metadata jobs independently of window retention.
+        cache.disable_index_retention();
+        let cache = Arc::new(cache);
+        let object =
+            ObjectBatch::open_with_cache(store.clone(), root.clone(), "metadata-stats", cache)
+                .await?;
+        let prior = TraceSnapshot::empty().append_runs_validated(vec![Run::Object(object)], 1)?;
+        store.read_peak.store(0, Ordering::SeqCst);
+        let output = aggregate()
+            .evaluate(&input, &prior, Limits { resident_entries: entries, ..Limits::default() })
+            .await?;
+        assert_eq!(output.batch, expected);
+        let peak = store.read_peak.load(Ordering::SeqCst);
+        assert!(peak <= crate::engine::reader::READ_CONCURRENCY.min(entries));
+        if entries > 1 {
+            assert!(peak > 1);
+        }
+        let cancelled = TimedBatch {
+            time: 2,
+            batch: Batch::from_updates((0..32_i64).flat_map(|n| {
+                [((Some(n * 16), (0, Some(3))), -1), ((Some(n * 16), (1, Some(3))), 1)]
+            }))?,
+        };
+        let before = store.reads.load(Ordering::SeqCst);
+        assert_eq!(
+            aggregate().evaluate(&cancelled, &prior, Limits::default()).await?.batch,
+            Batch::default()
+        );
+        assert_eq!(store.reads.load(Ordering::SeqCst), before);
+    }
+    Ok(())
+}

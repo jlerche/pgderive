@@ -1,6 +1,6 @@
 //! Bounded run-head reuse for affected-key probes at one immutable boundary.
 use super::{KeyCursor, MergedCursor, Run, TraceSnapshot};
-use crate::engine::reader::{BatchData, Cursor};
+use crate::engine::reader::{BatchData, Cursor, SelectedBlock};
 use anyhow::{Context as _, Result};
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use std::collections::BTreeMap;
@@ -18,6 +18,32 @@ pub struct KeyProbes<K: BatchData, V: BatchData> {
     slots: Vec<usize>,
     heads: Vec<Option<Cursor<K, V>>>,
     current: Option<LastProbe<K, V>>,
+}
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "resolved probes are internal capabilities, not public engine APIs"
+)]
+pub(crate) struct PreparedKey<K: BatchData, V: BatchData> {
+    key: K,
+    pages: Vec<Option<SelectedBlock<K, V>>>,
+}
+impl<K: BatchData, V: BatchData> PreparedKey<K, V> {
+    pub(crate) fn charge(&self) -> Result<usize> {
+        let key = serde_json::to_vec(&self.key)?
+            .len()
+            .checked_mul(2)
+            .context("prepared key heap charge overflow")?;
+        let initial = self
+            .pages
+            .capacity()
+            .checked_mul(std::mem::size_of::<Option<SelectedBlock<K, V>>>())
+            .and_then(|slots| slots.checked_add(key))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .context("prepared key slot charge overflow")?;
+        self.pages.iter().flatten().try_fold(initial, |total, page| {
+            total.checked_add(page.charge()?).context("prepared key charge overflow")
+        })
+    }
 }
 struct LastProbe<K: BatchData, V: BatchData> {
     key: K,
@@ -49,30 +75,43 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         let heads = vec![None; runs.len()];
         Self { runs, slots, heads, current: None }
     }
-    // Reserve in key order; missing windows determine when the I/O batch is ready.
+    pub(crate) async fn prepare_key(&self, key: &K) -> Result<PreparedKey<K, V>> {
+        let mut pages = Vec::with_capacity(self.runs.len());
+        for run in &self.runs {
+            let page = if let Run::Object(batch) = run {
+                let Some(page) = batch.key_page(key).await? else {
+                    pages.push(None);
+                    continue;
+                };
+                batch.may_contain_page(&page, key)?.then_some(page)
+            } else {
+                None
+            };
+            pages.push(page);
+        }
+        Ok(PreparedKey { key: key.clone(), pages })
+    }
+    // Reserve resolved pages in original key order; no second navigation lookup.
     pub(crate) fn plan_key(
         &self,
-        key: &K,
+        key: &PreparedKey<K, V>,
         plans: &mut Vec<crate::engine::reader::ReadAhead>,
     ) -> Result<bool> {
         let mut admitted = true;
-        for (index, run) in self.runs.iter().enumerate() {
-            let Run::Object(batch) = run else { continue };
-            let Some(block) = batch.key_block(key) else { continue };
-            if !batch.may_contain_key(block, key)?
-                || self.heads[index].as_ref().is_some_and(|head| head.holds_block(batch, block))
+        for (index, (run, page)) in self.runs.iter().zip(&key.pages).enumerate() {
+            let (Run::Object(batch), Some(page)) = (run, page) else { continue };
+            if !self.heads[index].as_ref().is_some_and(|head| head.holds_block(batch, page.ordinal))
             {
-                continue;
+                admitted &= batch.reserve_page(page, plans)?;
             }
-            admitted &= batch.reserve_prefetch(block, plans)?;
         }
         Ok(admitted)
     }
     #[cfg(test)]
-    pub(crate) async fn prefetch(&self, keys: &[&K]) -> Result<()> {
+    pub(crate) async fn prefetch(&self, keys: &[&K]) -> Result<crate::engine::reader::ReadGuard> {
         let mut plans = Vec::new();
         for key in keys {
-            self.plan_key(key, &mut plans)?;
+            self.plan_key(&self.prepare_key(key).await?, &mut plans)?;
         }
         crate::engine::reader::ReadAhead::load(plans).await
     }
@@ -86,23 +125,35 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         {
             return Ok(previous.cursor.clone());
         }
+        let prepared = self.prepare_key(key).await?;
+        self.cursor_prepared(&prepared).await
+    }
+    pub(crate) async fn cursor_prepared(
+        &mut self,
+        prepared: &PreparedKey<K, V>,
+    ) -> Result<KeyCursor<K, V>> {
+        let key = &prepared.key;
         let requests = self
             .runs
             .iter()
             .zip(&self.heads)
-            .map(|(run, head)| (run.clone(), head.clone(), key.clone()))
+            .zip(&prepared.pages)
+            .map(|((run, head), page)| (run.clone(), head.clone(), key.clone(), page.clone()))
             .collect::<Vec<_>>();
         let selected = stream::iter(requests)
-            .map(|(run, head, key)| async move {
+            .map(|(run, head, key, page)| async move {
                 match run {
                     Run::Memory(batch) => Ok(Some(Cursor::memory_key_reusing(
                         batch.shared_entries(),
                         &key,
                         head.as_ref(),
                     ))),
-                    Run::Object(batch) => {
-                        Cursor::object_key_reusing(batch, &key, head.as_ref()).await
-                    }
+                    Run::Object(batch) => match page {
+                        Some(page) => {
+                            Cursor::object_key_page(batch, &key, page, head.as_ref()).await
+                        }
+                        None => Ok(None),
+                    },
                 }
             })
             .buffered(READ_CONCURRENCY)

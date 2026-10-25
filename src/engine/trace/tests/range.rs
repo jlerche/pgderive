@@ -22,8 +22,9 @@ async fn bounded_ranges_skip_disjoint_blocks_consolidate_and_retry() -> Result<(
     for ordinal in [0, 1, 2, 7, 8, 9] {
         crate::engine::tests::store::corrupt_block(store.as_ref(), &object, ordinal).await?;
     }
-    let failed =
-        Path::from(object.block_range(5).map(|(path, _)| path).context("missing fixture block")?);
+    let failed = Path::from(
+        object.block_range(5).await?.map(|(path, _)| path).context("missing fixture block")?,
+    );
     let bytes = store.get(&failed).await?.bytes().await?;
     let mut cursor = trace.range_cursor(&3, &6).await?;
     assert_eq!(cursor.current(), Some((&3, &3, 2)));

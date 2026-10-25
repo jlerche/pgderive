@@ -24,13 +24,13 @@ async fn one_pack_put_cold_reads_only_the_selected_authenticated_range() -> Resu
     let store = Arc::new(Store::unpaced());
     let batch = batch()?;
     let root = ObjectBatch::write(store.clone(), &batch, "packing", 4096).await?;
-    assert_eq!(store.puts.load(Ordering::SeqCst), 2);
+    assert_eq!(store.puts.load(Ordering::SeqCst), 3);
     assert_eq!(store.reads.load(Ordering::SeqCst), 0);
     let object = ObjectBatch::<i32, (i32, String)>::open(store.clone(), root, "packing").await?;
-    assert_eq!(object.packs.len(), 1);
-    assert!(object.blocks.len() > 2);
-    let (_, range) = object.block_range(1).context("missing middle page")?;
-    let pack = object.packs.first().context("missing pack")?;
+    assert_eq!(object.test_packs().await?.len(), 1);
+    assert!(object.block_count() > 2);
+    let (_, range) = object.block_range(1).await?.context("missing middle page")?;
+    let pack = object.test_packs().await?.first().cloned().context("missing pack")?;
     assert!(range.start > 0 && range.end < pack.bytes);
     let reads = store.reads.load(Ordering::SeqCst);
     let requested = store.range_bytes.load(Ordering::SeqCst);
@@ -46,7 +46,7 @@ async fn one_pack_put_cold_reads_only_the_selected_authenticated_range() -> Resu
 #[tokio::test]
 async fn pack_and_index_failures_never_return_membership_and_retry_cached_rows_exactly()
 -> Result<()> {
-    for fail_at in [0, 1] {
+    for fail_at in [0, 1, 2] {
         let mut store = Store::unpaced();
         store.fail_at = Some(fail_at);
         let store = Arc::new(store);
@@ -69,9 +69,14 @@ async fn pack_and_index_failures_never_return_membership_and_retry_cached_rows_e
         assert!(
             !objects.iter().any(|object| object.location.as_ref().starts_with("pgderive/batch/"))
         );
-        let object =
-            ObjectBatch::write_resident(store.clone(), &batch, "packing", (None, 4096), cache)
-                .await?;
+        let object = ObjectBatch::write_resident(
+            store.clone(),
+            &batch,
+            "packing",
+            (None, 4096),
+            cache.clone(),
+        )
+        .await?;
         let reads = store.reads.load(Ordering::SeqCst);
         let mut cursor = object.cursor().await?;
         let mut actual = Vec::new();
@@ -80,7 +85,9 @@ async fn pack_and_index_failures_never_return_membership_and_retry_cached_rows_e
             cursor.advance().await?;
         }
         assert_eq!(Batch::from_updates(actual)?, batch);
-        assert_eq!(store.reads.load(Ordering::SeqCst), reads);
+        let metadata_reads = cache.stats()?.index_reads;
+        assert!(store.reads.load(Ordering::SeqCst) - reads <= usize::try_from(metadata_reads)?);
+        assert_eq!(cache.stats()?.foreground_io.gets + cache.stats()?.scan_io.gets, 0);
     }
     Ok(())
 }
@@ -96,10 +103,10 @@ async fn one_root_spans_bounded_packs_and_index_splits_reset_pack_offsets() -> R
     let root = ObjectBatch::write(store.clone(), &batch, "large-pack", 4096).await?;
     let object =
         ObjectBatch::<i32, String>::open(store.clone(), root.clone(), "large-pack").await?;
-    assert!(object.packs.len() > 1);
-    assert_eq!(store.puts.load(Ordering::SeqCst), object.packs.len() + 1);
+    assert!(object.test_packs().await?.len() > 1);
+    assert_eq!(store.puts.load(Ordering::SeqCst), object.test_packs().await?.len() + 2);
     let target = u64::try_from(TARGET_OBJECT_BYTES)?;
-    assert!(object.packs.iter().all(|pack| pack.bytes <= target));
+    assert!(object.test_packs().await?.iter().all(|pack| pack.bytes <= target));
     // Keep many forced index splits within the unchanged 128-root bound.
     let limits = WriteLimits { index_blocks: 8, ..WriteLimits::default() };
     let roots =
@@ -125,24 +132,24 @@ async fn tight_index_byte_budget_rebinds_each_page_to_a_fresh_pack() -> Result<(
     let root = ObjectBatch::write(store.clone(), &expected, "packing", 4096).await?;
     let object = ObjectBatch::<i32, (i32, String)>::open(store.clone(), root, "packing").await?;
     let mut fence_bytes = 0;
-    for original in object.blocks.iter() {
+    for original in &object.test_blocks().await? {
         let mut block = original.clone();
         block.pack = 0;
         block.offset = 0;
         fence_bytes = fence_bytes.max(bounded::encode(&block)?.len());
     }
     let index_bytes = header_bytes("packing")? + pack_bytes()? + fence_bytes + 2;
-    let limits = WriteLimits { index_bytes, ..WriteLimits::default() };
+    let limits = WriteLimits { index_bytes, index_blocks: 1, ..WriteLimits::default() };
     let roots =
         ObjectBatch::write_stream(store.clone(), &mut object.cursor().await?, "packing", limits)
             .await?;
-    assert_eq!(roots.len(), object.blocks.len());
+    assert_eq!(roots.len(), object.block_count());
     for root in &roots {
         let packed =
             ObjectBatch::<i32, (i32, String)>::open(store.clone(), root.clone(), "packing").await?;
-        assert_eq!(packed.blocks.len(), 1);
-        assert_eq!(packed.blocks[0].pack, 0);
-        assert_eq!(packed.blocks[0].offset, 0);
+        assert_eq!(packed.block_count(), 1);
+        assert_eq!(packed.leaf(0).await?.block.pack, 0);
+        assert_eq!(packed.leaf(0).await?.block.offset, 0);
         assert!(
             store.head(&object_store::path::Path::from(root.path())).await?.size
                 <= u64::try_from(index_bytes)?

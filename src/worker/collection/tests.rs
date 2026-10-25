@@ -11,7 +11,7 @@ async fn cancelling_wait_retains_owned_task_and_shutdown_drains_it() -> Result<(
     let (send, recv) = oneshot::channel();
     let task = tokio::spawn(async move {
         recv.await?;
-        Ok(Collection::Collected { retained: 1, deleted: 0 })
+        Ok((Collection::Collected { retained: 1, deleted: 0 }, 0))
     });
     let mut collector = Collector { task: Some(task), session: None };
     assert!(timeout(Duration::from_millis(1), collector.completed()).await.is_err());
@@ -32,7 +32,7 @@ async fn collection_failure_is_consumed_once() -> Result<()> {
     assert!(collector.completed().await.is_err());
     assert!(collector.task.is_none());
     collector.drain().await?;
-    let task = tokio::spawn(std::future::pending::<Result<Collection>>());
+    let task = tokio::spawn(std::future::pending::<Result<(Collection, usize)>>());
     task.abort();
     collector.task = Some(task);
     assert!(collector.completed().await.is_err());
@@ -56,7 +56,7 @@ async fn dropping_collector_aborts_owned_task() -> Result<()> {
     let task = tokio::spawn(async move {
         let _finished = Finished(Some(finished));
         let _closed = started.send(());
-        std::future::pending::<Result<Collection>>().await
+        std::future::pending::<Result<(Collection, usize)>>().await
     });
     let collector = Collector { task: Some(task), session: None };
     ready.await?;

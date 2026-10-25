@@ -1,5 +1,5 @@
 //! Reserve actual shared windows, rather than charging a maximum window per page.
-use super::{Identity, Pack, Ranges, Window};
+use super::{Identity, Pack, Ranges, ReadGuard, Window};
 use anyhow::{Context as _, Result, ensure};
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use object_store::ObjectStore;
@@ -64,7 +64,9 @@ impl ReadAhead {
             {
                 self.planning_steps += 1;
             }
-            let (identity, mut window) = self.cover(store, pack, position)?;
+            let Some((identity, mut window)) = self.cover(store, pack, position)? else {
+                return Ok(false);
+            };
             let end = identity
                 .2
                 .checked_add(u64::try_from(window.length)?)
@@ -109,14 +111,14 @@ impl ReadAhead {
         store: &Arc<dyn ObjectStore>,
         pack: &Pack,
         position: u64,
-    ) -> Result<(Identity, Planned)> {
+    ) -> Result<Option<(Identity, Planned)>> {
         let mut identities = Vec::new();
         for width in self.ranges.widths().into_iter().rev() {
             let width = u64::try_from(width)?;
             let identity =
                 (pack.path.clone(), pack.hash.clone(), position / width * width, pack.bytes, width);
             if let Some(window) = self.windows.get(&identity) {
-                return Ok((
+                return Ok(Some((
                     identity,
                     Planned {
                         store: window.store.clone(),
@@ -124,7 +126,7 @@ impl ReadAhead {
                         length: window.length,
                         used: window.used,
                     },
-                ));
+                )));
             }
             identities.push(identity);
         }
@@ -132,21 +134,24 @@ impl ReadAhead {
             self.ranges.state.lock().map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?;
         for identity in identities {
             if let Some(window) = state.windows.get(&identity) {
-                return self.cached_cover(store, position, identity, window);
+                return self.cached_cover(store, position, identity, window).map(Some);
             }
         }
         drop(state);
-        let start = position / self.width * self.width;
-        let end = start.saturating_add(self.width).min(pack.bytes);
-        Ok((
-            (pack.path.clone(), pack.hash.clone(), start, pack.bytes, self.width),
+        let Some(width) = self.ranges.fitting_width(pack, position, self.width)? else {
+            return Ok(None);
+        };
+        let start = position / width * width;
+        let end = start.saturating_add(width).min(pack.bytes);
+        Ok(Some((
+            (pack.path.clone(), pack.hash.clone(), start, pack.bytes, width),
             Planned {
                 store: store.clone(),
                 bytes: None,
                 length: usize::try_from(end - start)?,
                 used: 0,
             },
-        ))
+        )))
     }
     fn cached_cover(
         &self,
@@ -188,18 +193,13 @@ impl ReadAhead {
         plans.iter().map(|plan| plan.missing).sum::<usize>()
             >= crate::engine::reader::READ_CONCURRENCY
     }
-    pub(crate) async fn load(plans: Vec<Self>) -> Result<()> {
-        let loaded = stream::iter(coalesce::groups(plans)?)
+    pub(crate) async fn load(plans: Vec<Self>) -> Result<ReadGuard> {
+        let pins = stream::iter(coalesce::groups(plans)?)
             .map(coalesce::Group::load)
-            .buffered(crate::engine::reader::READ_CONCURRENCY)
+            .buffer_unordered(crate::engine::reader::READ_CONCURRENCY)
             .try_collect::<Vec<_>>()
             .await?;
-        // All requested windows fit together. Re-admit pinned cached covers that
-        // another planned fetch may have evicted before its turn completed.
-        for (ranges, identity, window) in loaded.into_iter().flatten() {
-            ranges.retain(identity, window)?;
-        }
-        Ok(())
+        Ok(ReadGuard { _pins: pins })
     }
 }
 

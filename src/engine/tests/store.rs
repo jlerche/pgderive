@@ -6,7 +6,15 @@ use object_store::{
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, memory::InMemory,
     path::Path,
 };
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
+};
+
+pub type RangeRequests = BTreeMap<(String, u64, u64), usize>;
 
 #[derive(Debug, Default)]
 pub struct Store {
@@ -24,6 +32,7 @@ pub struct Store {
     pub(crate) read_delay: std::time::Duration,
     pub(crate) read_active: AtomicUsize,
     pub(crate) read_peak: AtomicUsize,
+    range_history: Option<Mutex<RangeRequests>>,
 }
 struct InFlight<'a>(&'a AtomicUsize);
 impl<'a> InFlight<'a> {
@@ -40,6 +49,31 @@ impl Drop for InFlight<'_> {
 impl Store {
     pub fn unpaced() -> Self {
         Self { unpaced: true, ..Self::default() }
+    }
+    pub(crate) fn record_ranges(&mut self) {
+        self.range_history = Some(Mutex::default());
+    }
+    pub(crate) fn take_ranges(&self) -> anyhow::Result<RangeRequests> {
+        let Some(history) = &self.range_history else { return Ok(BTreeMap::new()) };
+        let mut history = history.lock().map_err(|_| anyhow::anyhow!("range history poisoned"))?;
+        Ok(std::mem::take(&mut *history))
+    }
+    fn record_range(&self, path: &Path, range: &std::ops::Range<u64>) -> Result<()> {
+        let Some(history) = &self.range_history else { return Ok(()) };
+        let mut history = history.lock().map_err(|_| object_store::Error::Generic {
+            store: "range-probe",
+            source: Box::new(std::io::Error::other("range history poisoned")),
+        })?;
+        let key = (path.to_string(), range.start, range.end);
+        if history.len() >= 65536 && !history.contains_key(&key) {
+            return Err(object_store::Error::Generic {
+                store: "range-probe",
+                source: Box::new(std::io::Error::other("range history capacity exceeded")),
+            });
+        }
+        *history.entry(key).or_default() += 1;
+        drop(history);
+        Ok(())
     }
     pub fn new(fail_at: Option<usize>) -> Self {
         Self { fail_at, ..Self::default() }
@@ -79,6 +113,7 @@ impl ObjectStore for Store {
     async fn get_opts(&self, path: &Path, opts: GetOptions) -> Result<GetResult> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         if let Some(GetRange::Bounded(range)) = &opts.range {
+            self.record_range(path, range)?;
             self.range_start.store(range.start, Ordering::SeqCst);
             self.range_end.store(range.end, Ordering::SeqCst);
             self.range_bytes.fetch_add(range.end - range.start, Ordering::SeqCst);
@@ -117,10 +152,25 @@ pub async fn corrupt_block<
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
     use object_store::ObjectStoreExt as _;
-    let (path, range) = object.block_range(ordinal).context("missing fixture block")?;
+    let (path, range) = object.block_range(ordinal).await?.context("missing fixture block")?;
     let path = Path::from(path);
     let mut bytes = store.get(&path).await?.bytes().await?.to_vec();
     *bytes.get_mut(usize::try_from(range.start)?).context("missing fixture range")? ^= 1;
     store.put(&path, bytes.into()).await?;
     Ok(())
+}
+
+/// Total requested bytes and interval union; callers retain the original keys privately.
+pub fn range_totals(requests: &RangeRequests) -> anyhow::Result<(u64, u64)> {
+    let mut total = 0_u64;
+    let mut unique = 0_u64;
+    let mut prior: Option<(&str, u64)> = None;
+    for ((path, start, end), count) in requests {
+        total += u64::try_from(*count)? * (end - start);
+        let covered =
+            prior.filter(|(old, _)| *old == path).map_or(*start, |(_, end)| end.max(*start));
+        unique += end.saturating_sub(covered);
+        prior = Some((path, covered.max(*end)));
+    }
+    Ok((total, unique))
 }

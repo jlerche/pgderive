@@ -7,6 +7,23 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio_postgres::GenericClient;
 
+// Keep publication and idle heartbeat accounting identical.
+pub(super) fn cache_diagnostics(cache: &crate::engine::reader::CacheStats) -> Value {
+    json!({
+        "bytes":cache.bytes,"entries":cache.entries,"live_bytes":cache.live_bytes,
+        "pins":cache.pins,"hits":cache.hits,"misses":cache.misses,
+        "filter_bytes":cache.filter_bytes,"filter_entries":cache.filter_entries,
+        "filter_rejections":cache.filter_rejections,"filter_eviction_steps":cache.filter_eviction_steps,
+        "io":{"foreground":cache.foreground_io,"scan":cache.scan_io},
+        "merges":cache.merges,"decoded_bytes":cache.decoded_bytes,"decoded_rows":cache.decoded_rows,
+        "index_bytes":cache.index_bytes,"index_entries":cache.index_entries,
+        "index_decoded_bytes":cache.index_decoded_bytes,
+        "index_encoded_bytes":cache.index_encoded_bytes,"index_encoded_entries":cache.index_encoded_entries,
+        "index_reads":cache.index_reads,"index_read_bytes":cache.index_read_bytes,
+        "index_requested_bytes":cache.index_requested_bytes
+    })
+}
+
 /// Worker observation intervals and physical WAL alert thresholds.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]

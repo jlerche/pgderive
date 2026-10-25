@@ -76,7 +76,7 @@ impl MvpFixture {
         .await?;
         for path in [
             reference.path(),
-            object.block_range(0).map(|(path, _)| path).context("missing output block")?,
+            &object.block_range(0).await?.map(|(path, _)| path).context("missing output block")?,
         ] {
             let path = Path::from(path);
             let bytes = recovery.store.get(&path).await?.bytes().await?;

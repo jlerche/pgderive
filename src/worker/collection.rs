@@ -13,10 +13,12 @@ use tokio::{
     time::{Duration, timeout},
 };
 
+type CollectionTask = JoinHandle<Result<(Collection, usize)>>;
+
 #[derive(Default)]
 pub(super) struct Collector {
     session: Option<Arc<Mutex<CollectionSession>>>,
-    task: Option<JoinHandle<Result<Collection>>>,
+    task: Option<CollectionTask>,
 }
 struct CollectionSession {
     sql: Session,
@@ -49,8 +51,9 @@ impl Collector {
                 let CollectionSession { sql, roots } = &mut *session;
                 let result =
                     catalog.collect(&mut sql.client, store, GcLimits::default(), roots).await;
+                let cache_bytes = roots.resident_bytes();
                 drop(session);
-                result
+                result.map(|collection| (collection, cache_bytes))
             })
             .await
             .context("worker background collection timed out")?
@@ -65,9 +68,10 @@ impl Collector {
         };
         let result = task.await;
         self.task = None;
-        let collection = result.context("worker background collection task failed")??;
+        let (collection, cache_bytes) =
+            result.context("worker background collection task failed")??;
         super::drive::emit(
-            &serde_json::json!({"event":"collection","collection":format!("{collection:?}")}),
+            &serde_json::json!({"event":"collection","collection":format!("{collection:?}"),"gc_cache_bytes":cache_bytes}),
         )
     }
     pub(super) async fn drain(&mut self) -> Result<()> {

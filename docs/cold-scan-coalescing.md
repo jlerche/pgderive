@@ -76,11 +76,13 @@ PK-validation and snapshot/LSN handoff semantics. A replacement should remove th
 old path rather than retain a compatibility fallback. No such change is included
 in the scan-coalescing benchmark.
 
-Arrangement indexes currently use resident first/last full-tuple fences, without
+At the time of this measurement, arrangement indexes used resident first/last full-tuple fences, without
 Bloom filters. Key-appropriate filters could reduce negative point lookups inside
 many overlapping run ranges. They do not accelerate full scans or snapshot row
 encoding; evaluate them with negative-probe workloads and equality-consistent
-hashing before adding a storage-format feature.
+hashing before adding a storage-format feature. The current paged-index and
+bounded Bloom-cache design supersedes that implementation; see
+[continuous operation qualification](steady-growth.md#continuous-operation-qualification).
 
 RisingWave checkout was fast-forwarded to
 `1c69fba082ea181ac97ef487f6e341c95bb68493` for the follow-up investigation. Its

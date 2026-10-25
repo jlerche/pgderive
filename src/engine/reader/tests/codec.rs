@@ -1,5 +1,4 @@
 use super::{ObjectBatch, ObjectRef, hash};
-use crate::engine::reader::BatchReader as _;
 use anyhow::Result;
 use object_store::{ObjectStore, ObjectStoreExt as _, memory::InMemory, path::Path};
 use std::sync::Arc;
@@ -28,8 +27,10 @@ async fn sole_format_rejects_old_layouts_and_plain_json() -> Result<()> {
     }]});
     store.put(&Path::from(child), data.into()).await?;
     let reference = root(&store, serde_json::to_vec(&index)?).await?;
-    let object = ObjectBatch::<i64, i64>::open(store.clone(), reference.clone(), "tuple").await?;
-    assert!(object.cursor().await.is_err());
+    assert!(
+        ObjectBatch::<i64, i64>::open(store.clone(), reference.clone(), "tuple").await.is_err()
+    );
+    assert!(reference.dependencies(&store).await.is_err());
     for version in [1, 2, 3] {
         let mut old = index.clone();
         old["version"] = version.into();
@@ -79,58 +80,38 @@ async fn malformed_packed_ranges_fail_open_and_gc_dependency_discovery() -> Resu
     let index: serde_json::Value = serde_json::from_slice(&bytes)?;
     let mut invalid = Vec::new();
     for (field, value) in [
-        ("offset", 1_u64),
+        ("offset", u64::MAX),
         ("length", 0),
         ("rows", 65_537),
         ("max_weight", 0),
         ("max_weight", u64::MAX),
     ] {
         let mut bad = index.clone();
-        bad["blocks"][0][field] = value.into();
+        bad["inline"]["Leaf"][0]["block"][field] = value.into();
+        invalid.push(bad);
+    }
+    for (field, value) in [("path", "../unmanaged"), ("hash", "invalid")] {
+        let mut bad = index.clone();
+        bad["inline"]["Leaf"][0]["pack"][field] = value.into();
         invalid.push(bad);
     }
     let mut bad = index.clone();
-    bad["blocks"][1]["offset"] = 0.into();
+    bad["node"]["max_weight"] = 0.into();
     invalid.push(bad);
     let mut bad = index.clone();
-    bad["blocks"][1]["offset"] = u64::MAX.into();
-    invalid.push(bad);
-    let mut bad = index.clone();
-    bad["blocks"][0]["hash"] = "invalid".into();
-    invalid.push(bad);
-    let mut bad = index.clone();
-    bad["packs"][0]["bytes"] = (16 * 1024 * 1024).into();
-    invalid.push(bad);
-    let mut bad = index.clone();
-    bad["packs"][0]["path"] = "../unmanaged".into();
-    invalid.push(bad);
-    let mut bad = index.clone();
-    bad["packs"][0]["hash"] = "invalid".into();
-    invalid.push(bad);
-    let mut bad = index.clone();
-    bad["packs"] = serde_json::Value::Null;
-    invalid.push(bad);
-    let mut bad = index.clone();
-    bad["blocks"] = serde_json::json!([]);
-    invalid.push(bad);
-    let mut bad = index.clone();
-    bad["blocks"][0]["pack"] = 1.into();
-    invalid.push(bad);
-    let mut bad = index.clone();
-    bad["blocks"][1]["pack"] = u64::MAX.into();
-    invalid.push(bad);
-    let mut bad = index.clone();
-    bad["packs"]
-        .as_array_mut()
-        .ok_or_else(|| anyhow::anyhow!("missing packs"))?
-        .push(index["packs"][0].clone());
+    bad["inline"] = serde_json::Value::Null;
     invalid.push(bad);
     let mut bad = index;
-    bad["packs"][0]["bytes"] =
-        (bad["packs"][0]["bytes"].as_u64().ok_or_else(|| anyhow::anyhow!("missing size"))? + 1)
-            .into();
+    bad["node"] = serde_json::Value::Null;
     invalid.push(bad);
-    for index in invalid {
+    for mut index in invalid {
+        // Recompute the inline identity so malformed authenticated structure reaches
+        // the structural checks, rather than failing only the checksum boundary.
+        if index["inline"].is_object() && index["node"].is_object() {
+            let encoded = serde_json::to_vec(&index["inline"])?;
+            index["node"]["hash"] = hash(&encoded).into();
+            index["node"]["length"] = u64::try_from(encoded.len())?.into();
+        }
         let reference = root(&store, serde_json::to_vec(&index)?).await?;
         assert!(
             ObjectBatch::<i32, i32>::open(store.clone(), reference.clone(), "tuple").await.is_err()
@@ -158,14 +139,14 @@ async fn declared_weight_bound_is_rechecked_for_cold_and_cached_rows() -> Result
         Arc::new(BlockCache::new(4096, 4)),
     )
     .await?;
-    Arc::make_mut(&mut object.blocks)[0].max_weight = 1;
+    object.test_block_mut(0)?.max_weight = 1;
     assert!(object.read(0).await.is_err());
     assert_eq!(object.cache.stats()?.entries, 0);
     assert_eq!(object.cache.stats()?.filter_entries, 0);
-    Arc::make_mut(&mut object.blocks)[0].max_weight = 7;
+    object.test_block_mut(0)?.max_weight = 7;
     object.read(0).await?;
     assert_eq!(object.tuple_weight(&(2, 0)).await?, 0);
-    Arc::make_mut(&mut object.blocks)[0].max_weight = 8;
+    object.test_block_mut(0)?.max_weight = 8;
     assert!(object.tuple_weight(&(2, 0)).await.is_err());
     assert!(object.read(0).await.is_err());
     Ok(())

@@ -28,7 +28,7 @@ async fn windows_coalesce_concurrent_reads_cross_boundaries_and_evict() -> Resul
     let remote: Arc<dyn ObjectStore> = store.clone();
     let width = u64::try_from(super::WINDOW_BYTES)?;
     let pack = packed(&remote, usize::try_from(width * 3 + 7)?).await?;
-    let ranges = Ranges::new(super::WINDOW_BYTES * 2, 2);
+    let ranges = Ranges::new((super::WINDOW_BYTES + 4096) * 2, 2);
     let (a, b) = tokio::try_join!(
         ranges.read(&remote, &pack, width - 10..width + 20),
         ranges.read(&remote, &pack, width - 5..width + 25)
@@ -101,12 +101,12 @@ async fn amplification(enabled: bool) -> Result<(usize, u128)> {
         time: 2,
         batch: Batch::from_updates((0..513).map(|n| (((n * 193) % 100_000, 0_i64), 1)))?,
     };
-    let before = store.reads.load(Ordering::SeqCst);
+    let before = cache.stats()?.foreground_io.gets;
     let started = Instant::now();
     let output = operator.evaluate(&input, &trace, Limits::default()).await?;
     // This is the same full-identity coefficient validation used by staging.
     trace.validate_delta(&output.batch).await?;
-    let reads = store.reads.load(Ordering::SeqCst) - before;
+    let reads = usize::try_from(cache.stats()?.foreground_io.gets - before)?;
     let elapsed = started.elapsed().as_millis();
     let expected = Batch::from_updates((0..513).flat_map(|n| {
         let k = (n * 193) % 100_000;
@@ -122,7 +122,7 @@ async fn sf10_cold_statistics_and_staging_amortize_gets_without_more_decoded_cac
     let after = amplification(true).await?;
     println!(
         "{}",
-        serde_json::json!({"baseline_gets":before.0,"coalesced_gets":after.0,"baseline_ms":before.1,"coalesced_ms":after.1})
+        serde_json::json!({"baseline_data_gets":before.0,"coalesced_data_gets":after.0,"baseline_ms":before.1,"coalesced_ms":after.1})
     );
     ensure!(
         before.0 > 500 && after.0 * 10 < before.0,
@@ -144,19 +144,19 @@ async fn corrupt_prefetched_page_is_rejected_and_repaired_storage_can_retry() ->
         Arc::new(BlockCache::new(4096, 1)),
     )
     .await?;
-    let pack = object.packs.first().context("missing pack")?;
+    let pack = object.test_packs().await?.first().cloned().context("missing pack")?;
     let path = Path::from(pack.path.clone());
     let original = remote.get(&path).await?.bytes().await?;
     let mut corrupt = original.to_vec();
-    let offset = usize::try_from(object.blocks[1].offset)?;
+    let offset = usize::try_from(object.leaf(1).await?.block.offset)?;
     corrupt[offset] ^= 1;
     remote.put(&path, corrupt.into()).await?;
     assert_eq!(object.read(0).await?[0].0, (0, 0));
     assert!(object.read(1).await.is_err());
     remote.put(&path, original.into()).await?;
-    let before = store.reads.load(Ordering::SeqCst);
+    let before = object.cache.stats()?.foreground_io.gets;
     assert_eq!(object.read(1).await?[0].0, (1, 1));
-    assert_eq!(store.reads.load(Ordering::SeqCst), before + 1);
+    assert_eq!(object.cache.stats()?.foreground_io.gets, before + 1);
     Ok(())
 }
 #[tokio::test(start_paused = true)]
@@ -203,20 +203,20 @@ async fn cold_full_scan_coalesces_pages_without_foreground_admission() -> Result
             if budget.0 == 0 { foreground.clone() } else { BlockCache::scan(foreground.clone()) },
         )
         .await?;
-        let before = store.reads.load(Ordering::SeqCst);
-        let before_bytes = store.range_bytes.load(Ordering::SeqCst);
+        let before = foreground.stats()?.scan_io;
         let mut cursor = object.cursor().await?;
         for ((key, value), weight) in batch.iter() {
             assert_eq!(cursor.current(), Some((key, value, *weight)));
             cursor.advance().await?;
         }
         assert!(cursor.current().is_none());
-        let reads = store.reads.load(Ordering::SeqCst) - before;
-        let bytes = store.range_bytes.load(Ordering::SeqCst) - before_bytes;
-        let expected = object.packs.iter().map(|p| p.bytes.div_ceil(256 * 1024)).sum::<u64>();
+        let reads = usize::try_from(foreground.stats()?.scan_io.gets - before.gets)?;
+        let bytes = foreground.stats()?.scan_io.fetched_bytes - before.fetched_bytes;
+        let expected =
+            object.test_packs().await?.iter().map(|p| p.bytes.div_ceil(256 * 1024)).sum::<u64>();
         assert_eq!(u64::try_from(reads)?, expected);
-        assert_eq!(bytes, object.packs.iter().map(|p| p.bytes).sum::<u64>());
-        assert!(reads * 100 < object.blocks.len());
+        assert_eq!(bytes, object.test_packs().await?.iter().map(|p| p.bytes).sum::<u64>());
+        assert!(reads * 100 < object.block_count());
         let stats = foreground.stats()?;
         assert_eq!((stats.entries, stats.bytes), (0, 0));
         if budget.0 == 0 {
@@ -226,7 +226,7 @@ async fn cold_full_scan_coalesces_pages_without_foreground_admission() -> Result
         }
         println!(
             "{}",
-            serde_json::json!({"pages":object.blocks.len(),"scan_gets":reads,"scan_bytes":bytes,"foreground_budget":budget.0})
+            serde_json::json!({"pages":object.block_count(),"scan_gets":reads,"scan_bytes":bytes,"foreground_budget":budget.0})
         );
     }
     Ok(())
@@ -240,21 +240,21 @@ async fn scan_corruption_keeps_cursor_position_and_invalidates_private_window() 
     let reference = ObjectBatch::write(remote.clone(), &batch, "scan-corruption", 1).await?;
     let object =
         ObjectBatch::<i64, i64>::open(remote.clone(), reference, "scan-corruption").await?;
-    let pack = object.packs.first().context("missing pack")?;
+    let pack = object.test_packs().await?.first().cloned().context("missing pack")?;
     let path = Path::from(pack.path.clone());
     let original = remote.get(&path).await?.bytes().await?;
     let mut corrupt = original.to_vec();
-    corrupt[usize::try_from(object.blocks[1].offset)?] ^= 1;
+    corrupt[usize::try_from(object.leaf(1).await?.block.offset)?] ^= 1;
     remote.put(&path, corrupt.into()).await?;
     let mut cursor = object.cursor().await?;
     assert_eq!(cursor.current(), Some((&0, &0, 1)));
     assert!(cursor.advance().await.is_err());
     assert_eq!(cursor.current(), Some((&0, &0, 1)));
     remote.put(&path, original.into()).await?;
-    let before = store.reads.load(Ordering::SeqCst);
+    let before = object.cache.stats()?.scan_io.gets;
     cursor.advance().await?;
     assert_eq!(cursor.current(), Some((&1, &1, 1)));
-    assert_eq!(store.reads.load(Ordering::SeqCst), before + 1);
+    assert_eq!(object.cache.stats()?.scan_io.gets, before + 1);
     Ok(())
 }
 
@@ -310,15 +310,21 @@ async fn dense_pressure_retains_coalescing_and_read_origin_accounting() -> Resul
         ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width,
         super::WINDOW_BYTES
     );
-    let scans = Ranges::scan(&ranges);
-    scans.read(&remote, &pack, 0..1024).await?;
+    let scans = Ranges::scan(ranges.metrics.clone());
+    for start in (0..pack.bytes).step_by(1024) {
+        scans.read(&remote, &pack, start..start + 1024).await?;
+    }
     let (foreground, scan, _) = ranges.metrics.snapshot();
     assert_eq!(foreground.gets, 4);
     assert_eq!(foreground.fetched_bytes, pack.bytes);
     assert_eq!(foreground.requested_bytes, pack.bytes);
-    assert_eq!(scan.gets, 1);
-    assert_eq!(scan.requested_bytes, 1024);
-    assert_eq!(scan.fetched_bytes, u64::try_from(super::WINDOW_BYTES)?);
+    assert_eq!(scan.gets, 4);
+    assert_eq!(scan.requested_bytes, pack.bytes);
+    assert_eq!(scan.fetched_bytes, pack.bytes);
+    let total = ranges.metrics.total_io();
+    assert_eq!(total.gets, 8);
+    assert_eq!(total.requested_bytes, pack.bytes * 2);
+    assert_eq!(total.fetched_bytes, pack.bytes * 2);
     Ok(())
 }
 
@@ -330,11 +336,11 @@ async fn non_power_of_two_budget_uses_one_ladder_for_sparse_to_dense_transitions
     let ranges = Ranges::new(100_000, 4);
     {
         let mut state = ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
-        for expected in [65536, 32768, 16384, 16384] {
+        for expected in [65536, 32768, 16384, 8192, 4096, 4096] {
             ranges.adapt(&mut state, 0);
             assert_eq!(state.width, expected);
         }
-        for expected in [32768, 65536, 100_000, 100_000] {
+        for expected in [8192, 16384, 32768, 65536, 100_000, 100_000] {
             ranges.adapt(&mut state, 64);
             assert_eq!(state.width, expected);
         }
@@ -349,5 +355,75 @@ async fn non_power_of_two_budget_uses_one_ladder_for_sparse_to_dense_transitions
         cache.read(&remote, &pack, 10..20).await?;
         assert_eq!(store.reads.load(Ordering::SeqCst) - before, 1);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn charged_windows_fit_small_cache_budgets() -> Result<()> {
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let remote: Arc<dyn ObjectStore> = store.clone();
+    let pack = packed(&remote, super::WINDOW_BYTES).await?;
+    let budget = 64 * 1024;
+    let ranges = Ranges::new(budget, 4);
+    ranges.read(&remote, &pack, 10..20).await?;
+    ranges.read(&remote, &pack, 10..20).await?;
+    assert_eq!(store.reads.load(Ordering::SeqCst), 1);
+    let state = ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
+    assert_eq!(state.windows.len(), 1);
+    assert_eq!(state.bytes, 32 * 1024);
+    assert!(state.policy.usage() <= budget);
+    drop(state);
+    Ok(())
+}
+
+#[tokio::test]
+async fn changing_width_never_retains_duplicate_compressed_covers() -> Result<()> {
+    use super::{Identity, Window};
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let remote: Arc<dyn ObjectStore> = store.clone();
+    let pack = packed(&remote, super::WINDOW_BYTES * 2).await?;
+    let ranges = Ranges::new(super::WINDOW_BYTES + 4096, 32);
+    ranges.read(&remote, &pack, 0..1).await?;
+    let narrow = super::MIN_WINDOW_BYTES;
+    let key: Identity = (
+        pack.path.clone(),
+        pack.hash.clone(),
+        u64::try_from(narrow * 2)?,
+        pack.bytes,
+        u64::try_from(narrow)?,
+    );
+    let before = store.reads.load(Ordering::SeqCst);
+    let start = key.2;
+    let cached = ranges
+        .fetch(&remote, key.clone(), start + u64::try_from(narrow)?, &(start..start + 1))
+        .await?;
+    assert_eq!(cached.len(), narrow);
+    assert_eq!(store.reads.load(Ordering::SeqCst), before);
+    ranges.retain(key, Window::new(Arc::new(vec![0; narrow]), 1 << 63))?;
+    {
+        let state = ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
+        assert_eq!(state.windows.len(), 1);
+        assert_eq!(state.bytes, super::WINDOW_BYTES);
+        assert_eq!(
+            state.windows.values().next().context("missing wide cover")?.used,
+            1 | (1 << ((narrow * 2) / (super::WINDOW_BYTES / 64)))
+                | (1 << ((narrow * 3 - 1) / (super::WINDOW_BYTES / 64)))
+        );
+        drop(state);
+    }
+    ranges.invalidate(&pack, &(0..pack.bytes))?;
+    ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width = narrow;
+    for offset in [0, narrow] {
+        let start = u64::try_from(offset)?;
+        ranges.read(&remote, &pack, start..start + 1).await?;
+    }
+    assert_eq!(ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.windows.len(), 2);
+    let key =
+        (pack.path.clone(), pack.hash.clone(), 0, pack.bytes, u64::try_from(super::WINDOW_BYTES)?);
+    ranges.retain(key, Window::new(Arc::new(vec![0; super::WINDOW_BYTES]), 1))?;
+    let state = ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
+    assert_eq!(state.windows.len(), 1);
+    assert_eq!(state.bytes, super::WINDOW_BYTES);
+    drop(state);
     Ok(())
 }

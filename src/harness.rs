@@ -57,7 +57,7 @@ pub async fn run_harness(config: Config) -> Result<()> {
     );
     let (mut sql, connection) = connect(&config).await?;
     let fixture = Fixture::prepare(&mut sql, &config).await?;
-    let result = execute(&mut sql, &fixture, config).await;
+    let result = Box::pin(execute(&mut sql, &fixture, config)).await;
     let cleanup = if result.is_ok() {
         fixture.cleanup(&sql).await
     } else {
