@@ -396,3 +396,86 @@ cost, with unchanged qualification bounds. Request classes are proxy estimates,
 not billing measurements. The compact aggregate evidence is in
 [steady-growth-samples.json](steady-growth-samples.json); private run evidence and
 all failed runs remain under ignored artifacts. Nothing was pushed or deployed.
+
+### Fast cold-probe qualification
+
+Use `python3 scripts/fast_validation.py --mode steady --release --output PATH`
+with a new ignored output directory before scheduling another native soak.
+The fixed matrix carries production arrangements and their bounded caches through
+32k, 64k, 128k, 262k and 524k rows, with two complete compactions per size and
+ordinary tiered flushes between them. Each cycle executes 4,096 affected-key
+changes, checks every statistics result against an independent map, and cold
+reopens the final weighted bag. It reuses the existing statistics operator,
+arrangement writer, test store, compaction counters and fast-validation runner.
+
+Tokio time is paused. Injected 20 ms reads advance virtual time without waiting
+20 ms on the wall clock. The report separates virtual elapsed I/O time from
+wall runtime and records full-compaction costs separately from the measured
+post-compaction probes and tiered flushes. The fixed forced-compaction cadence
+is a cache-generation stress test, not the worker's checkpoint scheduling policy.
+This matrix is not paced source traffic and does not simulate CDC, sink commits,
+physical GC, CPU scheduling, memory/RSS or end-to-end freshness. It quickly
+rejects growing storage/operator work; a pass only qualifies that component and
+covered range. Full-worker steady state still needs separate evidence.
+
+The runner saves `assessment.json` and `result.json` even when work continues to
+grow. It requires no GET/byte regression against the control, at most 5% more decoding
+or virtual elapsed I/O, and no more than 25% growth in
+reads, bytes, decoding and virtual I/O per change between the largest two sizes.
+Missing, duplicate or malformed case evidence fails. Wall timing is diagnostic,
+not a noisy regression threshold. Do not weaken a failed bound or turn an
+improvement against the control into a plateau claim.
+
+### Coalescing adjacent cold windows
+
+Prefetch now combines exactly contiguous missing windows from the same immutable
+pack and store into one GET. It never bridges unread gaps. The readiness count
+tracks missing contiguous spans instead of individual windows, allowing bounded
+lookahead to fill useful I/O requests under the existing byte/entry and pending
+operator budgets. At most eight groups load concurrently. Coalesced groups acquire
+the ordinary singleflight stripes in sorted unique order, recheck resident
+windows, fetch only still-missing spans and admit them before releasing locks.
+A concurrently filled middle window splits the request rather than being fetched
+again. Cancellation releases the guards and leaves probe heads unchanged.
+
+The optional Foyer encoded-cache key now uses the compressed page content hash,
+so an unchanged page remains reusable after moving to a different pack or offset.
+Length, digest, canonical order, fences and coefficient checks still apply.
+Neither change alters PUT, SQL publication or WAL acknowledgement ordering.
+
+The final matrix ran in about 11 seconds after compilation. At 524,288 rows the two
+cycles reduced GETs from 449 to 161 (64%) and fetched bytes from 10.83 MB to
+9.18 MB (15%). Virtual elapsed read time fell from 3.58 to 2.52 seconds; diagnostic
+wall time for measured probe/flush work was about 0.2 seconds in both cases. Full-compaction
+work was unchanged and is reported separately. At 262,144 rows GETs fell from
+170 to 24 without fetching extra bytes. Every size passed the control
+non-regression check, and all per-step and cold-reopen bag comparisons passed.
+
+The component plateau gate still failed: candidate GETs rose from 24 to 161
+between the largest sizes; downloaded bytes/change rose from 552 to 1,121 and
+virtual elapsed I/O rose from 56 to 308 us/change. Decoded bytes/change stayed
+within its growth bound. Larger working sets still cause cold positive probes
+and increasing I/O rounds. This fast rejection deliberately blocks another
+wall-clock soak; neither component nor whole-worker steady state is qualified.
+Two earlier synopsis-retention experiments and a weak window-content index were
+rejected by this same fast matrix and removed from production code. Their private
+evidence is retained. The surviving changes are contiguous-read coalescing and
+the content-based optional encoded-cache key.
+
+The final common gate passed with 97.36% production line coverage, including
+sequential PostgreSQL replay, crash, publication and acknowledgement checks.
+Independent review approved the ready implementation. It also caught a
+singleflight admission race; the corrected implementation admits loaded windows
+before releasing their stripes. A later overlap regression verifies readiness
+against actual request groups when cached wide covers interrupt adjacent misses.
+All failed experiments and qualification results remain in ignored artifacts.
+
+The strongest remaining lead is compressed-cache pressure: the fixture retains
+4 MiB of windows, while its second 524k-row compaction reads about 4.27 MB. The
+corresponding 262k-row compaction reads about 2.14 MB. This suggests eviction and
+repeated range fetches, not proof that all additional probes are unavoidable.
+The next diagnostic should vary only compressed-cache capacity and count unique
+and repeated fetched ranges; changing all cache budgets together would confound
+the result. Stripe contention may affect elapsed I/O rounds but cannot alone
+explain increased downloaded bytes. No wall-clock soak, push or deployment was
+performed after the failed fast plateau check.

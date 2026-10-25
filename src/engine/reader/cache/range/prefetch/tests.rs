@@ -45,10 +45,10 @@ async fn reservations_are_atomic_charge_tails_and_reuse_old_widths() -> Result<(
     assert_eq!(plan.windows.len(), 3);
     assert!(plan.reserve(&remote, &pack, width * 2..width * 3)?);
     ReadAhead::load(vec![plan]).await?;
-    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 4);
+    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 2);
     assert_eq!(ranges.read(&remote, &pack, width - 10..width + 20).await?.len(), 30);
     assert_eq!(ranges.read(&remote, &pack, width * 4..pack.bytes).await?.len(), 7);
-    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 4);
+    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 2);
     assert!(ReadAhead::new(Arc::new(Ranges::new(0, 1)))?.is_none());
     assert!(ReadAhead::new(Arc::new(Ranges::new(1, 0)))?.is_none());
     let mut tiny = ReadAhead::new(Arc::new(Ranges::new(1, 1)))?.context("missing tiny planner")?;
@@ -125,17 +125,20 @@ async fn overlapping_cold_runs_prefetch_all_windows_with_one_concurrency_bound()
             .evaluate(&input, &trace, Limits { resident_entries: entries, ..Limits::default() })
             .await?;
         assert_eq!(result.batch, expected);
-        assert_eq!(store.reads.load(Ordering::SeqCst) - reads, expected_windows.len());
+        let requests = store.reads.load(Ordering::SeqCst) - reads;
+        assert!(requests <= expected_windows.len());
         assert!(store.read_peak.load(Ordering::SeqCst) <= crate::engine::reader::READ_CONCURRENCY);
         if entries == 1 {
+            assert_eq!(requests, expected_windows.len());
             assert!(started.elapsed() >= Duration::from_millis(160));
         } else {
+            assert!(requests < expected_windows.len());
             assert!(store.read_peak.load(Ordering::SeqCst) > 2);
             assert!(started.elapsed() < Duration::from_millis(160));
         }
         println!(
             "{}",
-            serde_json::json!({"overlapping_runs": 2, "keys": keys.len(), "window_entries": entries, "gets": expected_windows.len(), "logical_ms": started.elapsed().as_millis(), "peak_reads": store.read_peak.load(Ordering::SeqCst)})
+            serde_json::json!({"overlapping_runs": 2, "keys": keys.len(), "window_entries": entries, "gets": requests, "logical_ms": started.elapsed().as_millis(), "peak_reads": store.read_peak.load(Ordering::SeqCst)})
         );
     }
     Ok(())
@@ -194,5 +197,89 @@ async fn cached_wide_covers_do_not_starve_sparse_readiness() -> Result<()> {
     ReadAhead::load(vec![plan]).await?;
     assert_eq!(odd.read(&remote, &pack, 99_999..100_000).await?, vec![u8::try_from(99_999 % 251)?]);
     assert_eq!(store.reads.load(Ordering::SeqCst) - before, 1);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn contiguous_misses_share_one_get_and_admit_before_waking_waiters() -> Result<()> {
+    let mut probe = Store::unpaced();
+    probe.read_delay = Duration::from_millis(20);
+    let probe = Arc::new(probe);
+    let store: Arc<dyn ObjectStore> = probe.clone();
+    let pack = packed(&store, MIN_WINDOW_BYTES * 4).await?;
+    let ranges = Arc::new(Ranges::new(MIN_WINDOW_BYTES * 4, 4));
+    ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width = MIN_WINDOW_BYTES;
+    let mut plan = ReadAhead::new(ranges.clone())?.context("missing read ahead")?;
+    let width = u64::try_from(MIN_WINDOW_BYTES)?;
+    for index in [0, 2, 1, 3] {
+        assert!(plan.reserve(&store, &pack, index * width..index * width + 1)?);
+    }
+    assert_eq!(plan.missing, 1);
+    let before = probe.reads.load(Ordering::SeqCst);
+    let bytes = probe.range_bytes.load(Ordering::SeqCst);
+    let loading = ReadAhead::load(vec![plan]);
+    let waiter = async {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        ranges.read(&store, &pack, width..width + 1).await
+    };
+    let (loaded, response) = tokio::join!(loading, waiter);
+    loaded?;
+    assert_eq!(response?.len(), 1);
+    assert_eq!(probe.reads.load(Ordering::SeqCst) - before, 1);
+    assert_eq!(probe.range_bytes.load(Ordering::SeqCst) - bytes, width * 4);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn raced_middle_window_is_not_downloaded_again() -> Result<()> {
+    let probe = Arc::new(Store::unpaced());
+    let store: Arc<dyn ObjectStore> = probe.clone();
+    let pack = packed(&store, MIN_WINDOW_BYTES * 3).await?;
+    let ranges = Arc::new(Ranges::new(MIN_WINDOW_BYTES * 3, 3));
+    ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width = MIN_WINDOW_BYTES;
+    let width = u64::try_from(MIN_WINDOW_BYTES)?;
+    let mut plan = ReadAhead::new(ranges.clone())?.context("missing read ahead")?;
+    assert!(plan.reserve(&store, &pack, 0..pack.bytes)?);
+    ranges.read(&store, &pack, width..width + 1).await?;
+    let before = probe.reads.load(Ordering::SeqCst);
+    let bytes = probe.range_bytes.load(Ordering::SeqCst);
+    ReadAhead::load(vec![plan]).await?;
+    assert_eq!(probe.reads.load(Ordering::SeqCst) - before, 2);
+    assert_eq!(probe.range_bytes.load(Ordering::SeqCst) - bytes, width * 2);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_contiguous_load_releases_all_stripes_for_retry() -> Result<()> {
+    let mut probe = Store::unpaced();
+    probe.read_delay = Duration::from_millis(20);
+    let probe = Arc::new(probe);
+    let store: Arc<dyn ObjectStore> = probe.clone();
+    let pack = packed(&store, MIN_WINDOW_BYTES * 4).await?;
+    let ranges = Arc::new(Ranges::new(MIN_WINDOW_BYTES * 4, 4));
+    ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width = MIN_WINDOW_BYTES;
+    for timeout in [true, false] {
+        let mut plan = ReadAhead::new(ranges.clone())?.context("missing read ahead")?;
+        assert!(plan.reserve(&store, &pack, 0..pack.bytes)?);
+        if timeout {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(5), ReadAhead::load(vec![plan]))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(probe.read_active.load(Ordering::SeqCst), 0);
+            assert!(
+                ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.windows.is_empty()
+            );
+        } else {
+            ReadAhead::load(vec![plan]).await?;
+            let reads = probe.reads.load(Ordering::SeqCst);
+            assert_eq!(
+                ranges.read(&store, &pack, 0..pack.bytes).await?.len(),
+                usize::try_from(pack.bytes)?
+            );
+            assert_eq!(probe.reads.load(Ordering::SeqCst), reads);
+        }
+    }
     Ok(())
 }

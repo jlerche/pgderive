@@ -177,9 +177,17 @@ async fn point_prefetch_respects_encoded_cache_without_redundant_object_reads() 
     .await?;
     let mut cursor = warm.cursor().await?;
     cursor.advance().await?;
+    let repacked = ObjectBatch::write(
+        store.clone(),
+        &Batch::from_updates([((0_i64, 6_i64), 1), ((1, 7), 1), ((2, 8), 1)])?,
+        "prefetch-encoded",
+        1,
+    )
+    .await?;
+    assert_ne!(repacked, reference);
     let cold = ObjectBatch::<i64, i64>::open_with_cache(
         store.clone(),
-        reference,
+        repacked,
         "prefetch-encoded",
         Arc::new(BlockCache::new(16 * 1024 * 1024, 256).with_encoded(Some(encoded.clone()))),
     )

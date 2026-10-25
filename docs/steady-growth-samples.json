@@ -2090,5 +2090,228 @@
       "scope": "All completed proxy attempts, including bootstrap, drain, GC and retries. Class estimates use HTTP method/listing flags; POST is unclassified because multipart versus bulk deletion is not recorded. Not a billing invoice."
     },
     "cleanup_errors": []
+  },
+  "cold_probe_coalescing_2026_10_24": {
+    "control": "Same production code with contiguous-read coalescing disabled only in test instrumentation",
+    "scope": "Unpaced production statistics, validation, flush and compaction with paused Tokio I/O; cold reopen and independent weighted-bag oracle after every cycle. Excludes source CDC, sink publication, GC, CPU scheduling and real freshness.",
+    "runtime_seconds": 10.816249313065782,
+    "component_plateau": false,
+    "non_regression": true,
+    "full_worker_steady_state_proven": false,
+    "comparisons": [
+      {
+        "rows": 32000,
+        "control": {
+          "changes": 8192,
+          "reads": 22,
+          "read_bytes": 666250,
+          "decoded_bytes": 32537864,
+          "virtual_io_us": 420000,
+          "wall_us": 95700,
+          "filter_bytes": 1479819,
+          "filter_entries": 1496,
+          "compactions": 2,
+          "compaction_reads": 1,
+          "compaction_read_bytes": 226658,
+          "compaction_wall_us": 51764
+        },
+        "candidate": {
+          "changes": 8192,
+          "reads": 21,
+          "read_bytes": 666250,
+          "decoded_bytes": 32537864,
+          "virtual_io_us": 420000,
+          "wall_us": 98205,
+          "filter_bytes": 1479819,
+          "filter_entries": 1496,
+          "compactions": 2,
+          "compaction_reads": 1,
+          "compaction_read_bytes": 226658,
+          "compaction_wall_us": 62129
+        },
+        "reads_not_worse": true,
+        "bytes_not_worse": true,
+        "decode_not_worse": true,
+        "virtual_io_not_worse": true
+      },
+      {
+        "rows": 64000,
+        "control": {
+          "changes": 8192,
+          "reads": 25,
+          "read_bytes": 1333520,
+          "decoded_bytes": 49245990,
+          "virtual_io_us": 420000,
+          "wall_us": 135319,
+          "filter_bytes": 4193644,
+          "filter_entries": 4238,
+          "compactions": 2,
+          "compaction_reads": 5,
+          "compaction_read_bytes": 861643,
+          "compaction_wall_us": 107885
+        },
+        "candidate": {
+          "changes": 8192,
+          "reads": 21,
+          "read_bytes": 1333520,
+          "decoded_bytes": 49245990,
+          "virtual_io_us": 420000,
+          "wall_us": 136917,
+          "filter_bytes": 4193644,
+          "filter_entries": 4238,
+          "compactions": 2,
+          "compaction_reads": 5,
+          "compaction_read_bytes": 861643,
+          "compaction_wall_us": 108604
+        },
+        "reads_not_worse": true,
+        "bytes_not_worse": true,
+        "decode_not_worse": true,
+        "virtual_io_not_worse": true
+      },
+      {
+        "rows": 128000,
+        "control": {
+          "changes": 8192,
+          "reads": 28,
+          "read_bytes": 2391163,
+          "decoded_bytes": 48456888,
+          "virtual_io_us": 420000,
+          "wall_us": 153243,
+          "filter_bytes": 4194179,
+          "filter_entries": 4238,
+          "compactions": 2,
+          "compaction_reads": 8,
+          "compaction_read_bytes": 1694072,
+          "compaction_wall_us": 216172
+        },
+        "candidate": {
+          "changes": 8192,
+          "reads": 20,
+          "read_bytes": 2391163,
+          "decoded_bytes": 48456888,
+          "virtual_io_us": 400000,
+          "wall_us": 150212,
+          "filter_bytes": 4194179,
+          "filter_entries": 4238,
+          "compactions": 2,
+          "compaction_reads": 8,
+          "compaction_read_bytes": 1694072,
+          "compaction_wall_us": 218593
+        },
+        "reads_not_worse": true,
+        "bytes_not_worse": true,
+        "decode_not_worse": true,
+        "virtual_io_not_worse": true
+      },
+      {
+        "rows": 262144,
+        "control": {
+          "changes": 8192,
+          "reads": 170,
+          "read_bytes": 4522373,
+          "decoded_bytes": 56119412,
+          "virtual_io_us": 1120000,
+          "wall_us": 174031,
+          "filter_bytes": 4194233,
+          "filter_entries": 4235,
+          "compactions": 2,
+          "compaction_reads": 14,
+          "compaction_read_bytes": 3272389,
+          "compaction_wall_us": 431789
+        },
+        "candidate": {
+          "changes": 8192,
+          "reads": 24,
+          "read_bytes": 4522373,
+          "decoded_bytes": 56119412,
+          "virtual_io_us": 460000,
+          "wall_us": 173768,
+          "filter_bytes": 4194233,
+          "filter_entries": 4235,
+          "compactions": 2,
+          "compaction_reads": 14,
+          "compaction_read_bytes": 3272389,
+          "compaction_wall_us": 426751
+        },
+        "reads_not_worse": true,
+        "bytes_not_worse": true,
+        "decode_not_worse": true,
+        "virtual_io_not_worse": true
+      },
+      {
+        "rows": 524288,
+        "control": {
+          "changes": 8192,
+          "reads": 449,
+          "read_bytes": 10830723,
+          "decoded_bytes": 67357072,
+          "virtual_io_us": 3580000,
+          "wall_us": 202976,
+          "filter_bytes": 4193654,
+          "filter_entries": 4232,
+          "compactions": 2,
+          "compaction_reads": 27,
+          "compaction_read_bytes": 6469249,
+          "compaction_wall_us": 869888
+        },
+        "candidate": {
+          "changes": 8192,
+          "reads": 161,
+          "read_bytes": 9179642,
+          "decoded_bytes": 67373318,
+          "virtual_io_us": 2520000,
+          "wall_us": 211089,
+          "filter_bytes": 4193716,
+          "filter_entries": 4232,
+          "compactions": 2,
+          "compaction_reads": 27,
+          "compaction_read_bytes": 6469249,
+          "compaction_wall_us": 873685
+        },
+        "reads_not_worse": true,
+        "bytes_not_worse": true,
+        "decode_not_worse": true,
+        "virtual_io_not_worse": true
+      }
+    ],
+    "checks": [
+      {
+        "metric": "reads_per_change",
+        "early": 0.0029296875,
+        "late": 0.0196533203125,
+        "limit": 0.003662109375,
+        "passed": false
+      },
+      {
+        "metric": "read_bytes_per_change",
+        "early": 552.0474853515625,
+        "late": 1120.561767578125,
+        "limit": 690.0593566894531,
+        "passed": false
+      },
+      {
+        "metric": "decoded_bytes_per_change",
+        "early": 6850.51416015625,
+        "late": 8224.281982421875,
+        "limit": 8563.142700195312,
+        "passed": true
+      },
+      {
+        "metric": "virtual_io_us_per_change",
+        "early": 56.15234375,
+        "late": 307.6171875,
+        "limit": 70.1904296875,
+        "passed": false
+      }
+    ],
+    "binary_sha256": "c622a00e8531b163cfe208c2b3a58478d72d1083cddaf8bfe938c8c09b047dfe",
+    "validation": {
+      "common_gate_passed": true,
+      "production_line_coverage_percent": 97.36,
+      "independent_review": "approved",
+      "native_soak_rerun": false,
+      "native_soak_skipped_reason": "Fast component plateau check still fails"
+    }
   }
 }

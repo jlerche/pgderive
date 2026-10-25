@@ -32,6 +32,8 @@ struct State {
 pub(in crate::engine::reader) struct Ranges {
     bytes: usize,
     entries: usize,
+    #[cfg(test)]
+    coalesce: bool,
     pub(super) metrics: Arc<super::metrics::Metrics>,
     scan: bool,
     state: Mutex<State>,
@@ -50,6 +52,8 @@ impl Ranges {
         Self {
             bytes,
             entries,
+            #[cfg(test)]
+            coalesce: true,
             metrics: Arc::default(),
             scan: false,
             state: Mutex::new(State { width: bytes.min(WINDOW_BYTES), ..State::default() }),
@@ -58,6 +62,27 @@ impl Ranges {
     }
     pub(super) fn scan(parent: &Self) -> Self {
         Self { metrics: parent.metrics.clone(), scan: true, ..Self::new(WINDOW_BYTES, 1) }
+    }
+    #[cfg(test)]
+    pub(in crate::engine::reader) const fn disable_coalescing(&mut self) {
+        self.coalesce = false;
+    }
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "the instance flag exists only for the paired test control"
+        )
+    )]
+    const fn coalesces(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.coalesce
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
     }
     pub(in crate::engine::reader) async fn read(
         &self,
@@ -182,10 +207,7 @@ impl Ranges {
         end: u64,
         requested: &Range<u64>,
     ) -> Result<Arc<Vec<u8>>> {
-        use std::hash::{Hash as _, Hasher as _};
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        identity.hash(&mut hash);
-        let stripe = usize::try_from(hash.finish() % u64::try_from(STRIPES)?)?;
+        let stripe = Self::stripe(&identity)?;
         let _flight = self.flights[stripe].lock().await;
         let cached = self
             .state
@@ -205,6 +227,12 @@ impl Ranges {
         window.mark(identity.2, requested)?;
         self.retain(identity, window)?;
         Ok(bytes)
+    }
+    fn stripe(identity: &Identity) -> Result<usize> {
+        use std::hash::{Hash as _, Hasher as _};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        identity.hash(&mut hash);
+        Ok(usize::try_from(hash.finish() % u64::try_from(STRIPES)?)?)
     }
     fn retain(&self, identity: Identity, mut window: Window) -> Result<()> {
         let mut state =

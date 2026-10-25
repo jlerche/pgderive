@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from fast_replay import export, preloaded, traces
+from fast_steady import TEST as STEADY_TEST, assess as assess_steady
 from performance.common import ROOT, save, sha256
 
 STORAGE_GROWTH = 'engine::trace::growth_tests::fixed_change_checkpoint_growth'
@@ -144,9 +145,10 @@ def growth_limits(rows):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=pathlib.Path, required=True)
-    parser.add_argument('--mode', choices=['correctness', 'growth', 'storage-growth', 'integration'], default='correctness')
+    parser.add_argument('--mode', choices=['correctness', 'growth', 'storage-growth', 'steady', 'integration'], default='correctness')
     parser.add_argument('--seeds', type=int, default=3)
-    parser.add_argument('--state-rows', type=int, nargs='+', default=[1000, 8000, 32000])
+    parser.add_argument('--state-rows', type=int, nargs='+', default=[1000, 8000, 32000],
+                        help='Growth replay sizes; steady mode uses its fixed 32k through 524k matrix')
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--warmup', type=int, default=8, help='Growth warmup updates after cold restore')
     parser.add_argument('--updates', type=int, default=32, help='Growth measured updates per case')
@@ -181,6 +183,16 @@ def main():
             for name in ['during-upload', 'after-commit', 'pressure', 'shutdown', 'timeout']:
                 if json.loads((directory/name/'result.json').read_text()).get('passed') is not True:
                     raise RuntimeError('Live checkpoint case did not pass: ' + name)
+        elif args.mode == 'steady':
+            binary = test_binary(output, args.release)
+            report['steps'].append(json.loads((output / 'build.json').read_text()))
+            report['test_binary_sha256'] = sha256(pathlib.Path(binary))
+            report['steps'].append(execute([binary, STEADY_TEST, '--exact', '--ignored', '--nocapture'], output, 'steady-work'))
+            validate_tests(output/'steady-work.log', {STEADY_TEST})
+            assessment = assess_steady(output/'steady-work.log')
+            save(output/'assessment.json', assessment)
+            if not assessment['non_regression'] or not assessment['component_plateau']:
+                raise RuntimeError('Cold-probe work has not qualified; see assessment.json. Do not infer worker steady state.')
         elif args.mode == 'storage-growth':
             binary = test_binary(output, args.release)
             report['steps'].append(json.loads((output / 'build.json').read_text()))
@@ -214,7 +226,11 @@ def main():
                 'engine::reader::cache::range::tests::dense_pressure_retains_coalescing_and_read_origin_accounting',
                 'engine::reader::cache::range::prefetch::tests::reservations_are_atomic_charge_tails_and_reuse_old_widths',
                 'engine::reader::cache::range::prefetch::tests::overlapping_cold_runs_prefetch_all_windows_with_one_concurrency_bound',
-                'engine::reader::cache::range::prefetch::tests::cached_wide_covers_do_not_starve_sparse_readiness'})
+                'engine::reader::cache::range::prefetch::tests::cached_wide_covers_do_not_starve_sparse_readiness',
+                'engine::reader::cache::range::prefetch::tests::contiguous_misses_share_one_get_and_admit_before_waking_waiters',
+                'engine::reader::cache::range::prefetch::tests::raced_middle_window_is_not_downloaded_again',
+                'engine::reader::cache::range::prefetch::tests::cancelled_contiguous_load_releases_all_stripes_for_retry',
+                'engine::reader::cache::range::prefetch::coalesce::tests::overlapping_covers_and_bridges_keep_readiness_equal_to_missing_groups'})
             report['steps'].append(execute([binary,'engine::dataflow::statistics::tests::','--nocapture'],output,'statistics-correctness'))
             validate_tests(output/'statistics-correctness.log', {
                 'engine::dataflow::statistics::tests::queued_statistics_preserve_oracle_and_cumulative_limits',

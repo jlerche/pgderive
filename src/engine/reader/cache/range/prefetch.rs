@@ -5,6 +5,8 @@ use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use object_store::ObjectStore;
 use std::{collections::BTreeMap, ops::Range, sync::Arc};
 
+mod coalesce;
+
 pub struct ReadAhead {
     ranges: Arc<Ranges>,
     width: u64,
@@ -14,6 +16,7 @@ pub struct ReadAhead {
     #[cfg(test)]
     planning_steps: usize,
 }
+#[cfg_attr(test, derive(Clone))]
 struct Planned {
     store: Arc<dyn ObjectStore>,
     bytes: Option<Arc<Vec<u8>>>,
@@ -81,15 +84,25 @@ impl ReadAhead {
         }
         self.bytes += bytes;
         for (identity, window) in pending {
-            if let Some(existing) = self.windows.get_mut(&identity) {
-                existing.used |= window.used;
-            } else {
-                self.missing += usize::from(window.bytes.is_none());
-                self.windows.insert(identity, window);
-            }
+            self.admit_plan(identity, window)?;
         }
         self.ranges.metrics.requested(self.ranges.scan, requested.end - requested.start);
         Ok(true)
+    }
+    fn admit_plan(&mut self, identity: Identity, window: Planned) -> Result<()> {
+        if let Some(existing) = self.windows.get_mut(&identity) {
+            existing.used |= window.used;
+            return Ok(());
+        }
+        self.missing = if self.ranges.coalesces() {
+            coalesce::missing_after(&self.windows, &identity, &window, self.missing)?
+        } else {
+            self.missing
+                .checked_add(usize::from(window.bytes.is_none()))
+                .context("missing-window count overflow")?
+        };
+        self.windows.insert(identity, window);
+        Ok(())
     }
     fn cover(
         &self,
@@ -176,40 +189,14 @@ impl ReadAhead {
             >= crate::engine::reader::READ_CONCURRENCY
     }
     pub(crate) async fn load(plans: Vec<Self>) -> Result<()> {
-        let requests = plans
-            .into_iter()
-            .flat_map(|plan| {
-                plan.windows
-                    .into_iter()
-                    .map(move |(identity, window)| (plan.ranges.clone(), identity, window))
-            })
-            .collect::<Vec<_>>();
-        let loaded = stream::iter(requests)
-            .map(|(ranges, identity, window)| async move {
-                let bytes = if let Some(bytes) = window.bytes {
-                    bytes
-                } else {
-                    let end = identity
-                        .2
-                        .checked_add(u64::try_from(window.length)?)
-                        .context("prefetch end overflow")?;
-                    let first = identity.2
-                        + u64::from(window.used.trailing_zeros())
-                            * u64::try_from(window.length)?.div_ceil(64);
-                    ranges.fetch(&window.store, identity.clone(), end, &(first..first + 1)).await?
-                };
-                Ok::<_, anyhow::Error>((
-                    ranges,
-                    identity,
-                    Window { bytes, accessed: 0, used: window.used },
-                ))
-            })
+        let loaded = stream::iter(coalesce::groups(plans)?)
+            .map(coalesce::Group::load)
             .buffered(crate::engine::reader::READ_CONCURRENCY)
             .try_collect::<Vec<_>>()
             .await?;
         // All requested windows fit together. Re-admit pinned cached covers that
         // another planned fetch may have evicted before its turn completed.
-        for (ranges, identity, window) in loaded {
+        for (ranges, identity, window) in loaded.into_iter().flatten() {
             ranges.retain(identity, window)?;
         }
         Ok(())

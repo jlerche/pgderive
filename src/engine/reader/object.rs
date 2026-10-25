@@ -318,8 +318,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     }
     fn encoded_key(&self, ordinal: usize) -> Result<String> {
         let block = self.blocks.get(ordinal).context("invalid encoded block ordinal")?;
-        let (path, _) = self.block_range(ordinal).context("invalid encoded block range")?;
-        Ok(format!("json-zstd-range:{path}:{}:{}:{}", block.offset, block.length, block.hash))
+        Ok(format!("json-zstd-block:{}", block.hash))
     }
     async fn encoded(&self, ordinal: usize) -> Result<Vec<u8>> {
         let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
