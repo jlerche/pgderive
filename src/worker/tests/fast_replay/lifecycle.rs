@@ -10,6 +10,15 @@ use std::time::Duration;
 type Key = program::relational::Key;
 type Input = TimedBatch<Vec<Sealed<Key, Row>>>;
 type Pending = tokio::task::JoinHandle<Result<UploadedFlush<Key, Row>>>;
+
+pub(super) fn process_cpu_ticks() -> Result<u64> {
+    let text = std::fs::read_to_string("/proc/self/stat")?;
+    let (_, fields) = text.rsplit_once(") ").context("missing process stat fields")?;
+    let mut fields = fields.split_whitespace().skip(11);
+    let user = fields.next().context("missing process user CPU")?.parse::<u64>()?;
+    let system = fields.next().context("missing process system CPU")?.parse::<u64>()?;
+    user.checked_add(system).context("process CPU overflow")
+}
 #[derive(Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Config {
@@ -38,6 +47,7 @@ pub(super) struct Report {
     pub capacity_flushes: usize,
     pub restarts: usize,
     pub maintenance_ns: u128,
+    pub cpu_ticks: u64,
     pub maximum_runs: usize,
     pub maximum_memtable_bytes: usize,
     pub samples: Vec<serde_json::Value>,
@@ -147,10 +157,16 @@ impl Lifecycle {
         &mut self,
         query: &program::relational::Query,
         prepare_ns: u128,
+        cpu_started: u64,
     ) -> Result<()> {
+        let elapsed = process_cpu_ticks()?.checked_sub(cpu_started).context("CPU regressed")?;
+        self.report.cpu_ticks =
+            self.report.cpu_ticks.checked_add(elapsed).context("replay CPU overflow")?;
         let cache = query.cache_stats()?;
         self.report.samples.push(serde_json::json!({
             "logical_ms":self.report.logical_ms,"source_rows":self.report.source_rows,"prepare_ns":prepare_ns,
+            "installed_checkpoints":self.report.retirement.len(),"upload_pending":self.pending.is_some(),
+            "cpu_ticks":self.report.cpu_ticks,
             "runs":query.run_count(),"memtable_bytes":query.memtable_bytes()?,"maintenance_ns":self.report.maintenance_ns,
             "cache":crate::worker::health::cache_diagnostics(&cache),
             "gets":self.store.reads.load(Ordering::SeqCst),

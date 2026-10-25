@@ -234,6 +234,7 @@ async fn run(
             let before = query.cache_stats()?;
             let reads = store.reads.load(Ordering::SeqCst);
             let puts = store.puts.load(Ordering::SeqCst);
+            let cpu_started = lifecycle::process_cpu_ticks()?;
             let started = Instant::now();
             let work =
                 prepare_tick(&mut query, &changes, compiled.relational(), limits, &mut lifecycle)
@@ -258,7 +259,7 @@ async fn run(
                 let prior_ms = lifecycle.report.logical_ms;
                 lifecycle.committed(&mut query, step.source_rows).await?;
                 lifecycle.advance(prior_ms).await;
-                lifecycle.observe(&query, prepare_ns)?;
+                lifecycle.observe(&query, prepare_ns, cpu_started)?;
             }
         }
         oracle_checks += check_expected(&output, step.expected, &case.name, index)?;

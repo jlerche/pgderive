@@ -784,3 +784,129 @@ strict formatting/lints/dependency checks and 97.32% production line coverage.
 All 18 additional SQL replay cases and storage-growth work bounds passed.
 The owned PostgreSQL fixture used tmpfs and was removed after the gate.
 The failed steady-state trend assessments remain failed and retained.
+
+
+## Cycle-aligned SQL cache and history matrix, 2026-10-25
+
+The SQL endurance fixture now separates fixed-cardinality churn from uniform
+state growth. Fixed churn balances deletes with reinsertion of the same identity
+inside its source transaction. A diagnostic hot-prefix variant appends cold rows
+and restricts existing-row updates to a declared prefix; this variant uses
+updates/inserts rather than the uniform variant's delete mix. All variants reuse
+the application generator, independent oracle, bounded bootstrap and production
+freeze/upload/rebase/retirement path. They do not restart active state or force
+full compaction to clear history.
+
+Qualification now compares installed natural-merge intervals instead of arbitrary
+epoch quarters. Endpoints have no pending upload. Four natural intervals are
+warmup; four early and four late intervals retain their merge-size histograms.
+The largest observed merge tier must also have four post-warmup installed
+boundaries, allowing two disjoint complete periods to be compared. Too few
+largest-tier periods fails coverage. This prevents many small merges from
+qualifying a case that has barely exercised its largest maintenance work.
+The existing 25% trend bounds remain unchanged. Cache resource bounds now follow
+the configured byte/entry budgets. Historical assessments remain historical;
+they are not retroactively turned into passes by changing comparison windows.
+
+The main matrix used 2k, 32k, 128k and 262,144 initial rows, each with both fixed
+and growing state, 512 epochs, one row per aggregate group, a 16 MiB decoded
+cache and 512 entries. Full independent output checks ran every 64 epochs and
+at the end, followed by a separate cold reopen. A 384-epoch fixed-state control
+used a 4 MiB cache. A 768-epoch fixed-state run repeated the largest tier, and a
+512-epoch growth control kept existing-row activity within 4,096 identities.
+These are deliberately different cache/workload profiles from historical
+64 MiB / 4,096-entry demo-shaped tests.
+
+All 12 executions passed the independent output and cold-recovery checks,
+executing 5,893,274 affected source operations, 1,146 checkpoints and 620 natural
+merges. These totals include an exact repeat described below. Actual source work
+paces logical time at 1k/s; no idle-day jumps are used. Each size/mode owns a
+separate fixture; these totals do not describe a single uninterrupted worker.
+
+The decisive 768-epoch fixed-state comparison spans epochs 185–370 and 555–740.
+Each period executes 185,000 affected operations and has exactly the same merge
+histogram: ten merges in row-count bucket 15, four in 16, four in 17 and two in
+19. Thus this comparison includes repeated large maintenance work, not just
+small checkpoints.
+
+| Equivalent complete periods, 262,144 fixed rows | Early | Late | Change |
+| --- | ---: | ---: | ---: |
+| Preparation, ms per 1k affected operations | 248.80 | 257.01 | +3.3% |
+| Component CPU, ms per 1k affected operations | 290.65 | 300.05 | +3.2% |
+| Decoded bytes per operation | 16,329 | 16,358 | +0.2% |
+| All object-read bytes per operation | 153.31 | 226.60 | +47.8% |
+| Foreground GETs per 1k operations | 0.205 | 0.573 | +178.9% |
+| Foreground fetched bytes per operation | 52.01 | 119.99 | +130.7% |
+
+CPU/preparation and logical decoding work were stable in these matched periods,
+but read-byte and foreground-I/O bounds failed. Shorter 512-epoch fixed tests at
+2k and 32k passed all checks. The 128k fixed case failed maintenance elapsed time.
+The 262k 512-epoch screen passed cost checks but lacked repeated largest-tier
+coverage; the longer test exposed I/O growth. Neither screen qualifies the
+larger-state overall plateau.
+
+The 4 MiB control kept 262,144 rows constant. Preparation was approximately
+764–773 ms per 1k operations and CPU 802–824 ms. Total GETs rose from 21.2 to
+60.4 per 1k operations; transferred bytes rose from 3.13 to 4.30 kB per operation.
+Its largest-tier repetition was insufficient and its comparison windows contained
+different merge-size mixes. This is a retained cold-read regression signal,
+not proof of unlimited growth. It leaves little local processing headroom at
+1k/s before real storage and sink delays are included.
+
+The hot-prefix growth control increased rows from 262,144 to 313,344 while
+restricting existing-row updates to 4,096 identities. Preparation rose from
+194 to 247 ms per 1k operations, CPU from 215 to 271 ms, and decoded bytes from
+12.15 to 14.53 kB per operation. It failed cost and largest-tier coverage checks.
+A bounded set of logical identities is therefore not sufficient to guarantee a
+bounded block working set in this fixture. Initial patterned values becoming
+varied signed/NULL values can also change compression; that factor is not
+isolated by this experiment and does not override failures.
+
+Inspection found a concrete locality concern: group keys use canonical JSON
+strings and their canonical lexicographic ordering. A static illustration with
+4,096-row blocks places the first 4,096 integer identities in every block of a
+262k-key or 313k-key relation. This is not an inventory of actual packed
+statistics pages, but it explains why a numerically small hot prefix must not
+be assumed physically contiguous. The next investigation should measure actual
+hot-key page fanout and distinguish block decoding/cache admission from
+range-read geometry, before choosing a bounded point-statistics cache or changing
+physical key layout. Each group in this query has only one row; decoding roughly
+100 rows per affected operation reflects page-level work rather than large
+aggregate groups.
+
+One initial 262k growing run overlapped release compilation and showed a 56%
+CPU increase. The exact recorded trace and frozen binary were repeated without
+compilation: CPU changed from 306 to 316 ms per 1k operations and preparation
+from 269 to 279 ms. The contaminated result is retained and excluded from CPU
+attribution. Foreground-I/O and insufficient-tier-coverage failures remained.
+
+CPU ticks cover preparation, output integration and maintenance, excluding
+explicit full-oracle comparisons. Preparation is measured separately; neither
+number is source-to-sink freshness. Fixture RSS includes the serialized input,
+expected results and in-memory object store; it is not worker-only RSS. All
+configured cache/resource bounds passed. CDC, PostgreSQL publication, SQL GC
+protection/sweep barriers, real object-store latency and continuous weekly
+operation remain outside this component qualification. The demo remains paused.
+
+Reproduce a full-tier fixed-state case with the standard entry point:
+
+```sh
+python3 scripts/fast_validation.py --mode endurance --release \
+  --state-rows 262144 --updates 768 --endurance-shape fixed \
+  --group-width 1 --oracle-interval 64 --cache-mib 16 \
+  --output artifacts/fast-validation/fixed-full-tier-new
+```
+
+Use `--cache-mib 4 --updates 384` for the shorter cold-demand screen. Use
+`--endurance-shape growing --hot-rows 4096 --updates 512` for the hot-prefix
+growth diagnostic. These commands can exit nonzero on the retained performance
+or coverage failures while all semantic checks pass. Raw traces, frozen binaries,
+metrics, final assessments and rejected measurements are retained under ignored
+`artifacts/benchmarks/cycle-state-matrix-20261025/`.
+
+Independent ready-to-commit review found no actionable issue. The final
+`./scripts/check.sh` gate passed 559 Rust tests, 133 Python tests, the sequential
+PostgreSQL regression harnesses, strict formatting/lints/dependency checks and
+97.32% production line coverage. Its owned PostgreSQL fixture used tmpfs and was
+removed. Replay inputs were verified and compressed; results and frozen
+binaries remain ignored. These checks do not override failed performance gates.

@@ -87,11 +87,16 @@ def preloaded(rows, *, measured=32, warmup=8):
             'initial': initial, 'history': history}
 
 
-def endurance(rows, epochs, *, batch_rows=1000):
+def endurance(rows, epochs, *, batch_rows=1000, growing=True, group_width=12,
+              oracle_interval=16, hot_rows=None):
     """Reuse the source model and full oracle, without resetting active engine state."""
+    if min(rows, epochs, batch_rows, group_width, oracle_interval) < 1:
+        raise ValueError('Positive endurance dimensions required')
+    if hot_rows is not None and not 1 <= hot_rows <= rows:
+        raise ValueError('Hot working set must fit initial rows')
     trace = preloaded(rows, warmup=0, measured=0)
     for row in trace['initial']['entry']:
-        row['account_id'] = 1 + (row['id'] - 1) // 12
+        row['account_id'] = 1 + (row['id'] - 1) // group_width
     spec = query('linear', 0)
     source = state(trace['initial'])
     steps = [{'updates':[{'table': table,'row':text(row),'weight':1}
@@ -102,23 +107,32 @@ def endurance(rows, epochs, *, batch_rows=1000):
     for epoch in range(epochs):
         operations = []
         for index in range(batch_rows):
+            if len(operations) >= batch_rows:
+                break
             if index % 10 == 0:
-                row = {'id':next_id,'account_id':1+(next_id-1)//12,'amount':rng.randrange(-2500,2501)}
-                next_id += 1
+                key = next_id if growing else 1 + rng.randrange(hot_rows or rows)
+                row = {'id':key,'account_id':1+(key-1)//group_width,'amount':rng.randrange(-2500,2501)}
+                if growing:
+                    next_id += 1
+                elif len(operations) + 2 <= batch_rows:
+                    operations.append({'table':'entry','kind':'delete','id':key})
                 operations.append({'table':'entry','kind':'upsert','row':row})
                 continue
-            key = 1 + rng.randrange(next_id - 1)
+            key = 1 + rng.randrange(hot_rows or next_id - 1)
             old = source['entry'].get(key)
             if old is None:
                 continue
-            if index % 13 == 0:
+            if growing and hot_rows is None and index % 13 == 0:
                 operations.append({'table':'entry','kind':'delete','id':key})
             else:
                 row = dict(old, amount=None if index % 17 == 0 else rng.randrange(-2500,2501))
                 operations.append({'table':'entry','kind':'upsert','row':row})
         updates, affected = delta(source, {'rollback':False,'operations':operations})
-        steps.append({'updates':updates,'expected':bag(spec,source) if epoch%16==15 else None,
+        steps.append({'updates':updates,'expected':bag(spec,source) if (epoch+1)%oracle_interval==0 else None,
                       'source_rows':affected,'measure':True,'restart':False})
     steps[-1]['expected'] = bag(spec,source)
-    return {'name':f'linear-endurance-{rows}-{epochs}', 'sql':spec['sql'].format(schema='source'),
+    mode = 'growing' if growing else 'fixed'
+    if hot_rows is not None:
+        mode += f'-hot-{hot_rows}'
+    return {'name':f'linear-endurance-{mode}-{rows}-{epochs}', 'sql':spec['sql'].format(schema='source'),
             'steps':steps}

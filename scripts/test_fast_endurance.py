@@ -33,14 +33,61 @@ class EnduranceTests(unittest.TestCase):
         self.assertTrue(any(change['weight'] < 0 for change in changes))
         self.assertTrue(any(change['weight'] > 0 for change in changes))
 
+    def test_fixed_churn_preserves_live_identity_domain_and_checks_oracles(self):
+        case = endurance(200, 32, batch_rows=40, growing=False,
+                         group_width=1, oracle_interval=8)
+        live = {}
+        for step in case['steps']:
+            self.assertLessEqual(step['source_rows'], 40)
+            for change in step['updates']:
+                if change['table'] != 'entry':
+                    continue
+                key = change['row']['id']
+                if change['weight'] == -1:
+                    self.assertEqual(live.pop(key), change['row'])
+                else:
+                    self.assertNotIn(key, live)
+                    live[key] = change['row']
+            self.assertEqual(set(live), {str(key) for key in range(1, 201)})
+        self.assertEqual(sum(step['expected'] is not None for step in case['steps']), 5)
+        self.assertFalse(any(step['restart'] for step in case['steps']))
+        self.assertTrue(any(change['row'].get('amount') is None
+                            for step in case['steps'][1:] for change in step['updates']))
+        for keyword in ('rows','epochs','batch_rows','group_width','oracle_interval'):
+            arguments = dict(rows=200, epochs=32, batch_rows=40, group_width=1, oracle_interval=8)
+            arguments[keyword] = 0
+            with self.assertRaises(ValueError):
+                endurance(**arguments)
+
+    def test_growing_hot_working_set_leaves_retained_cold_rows_untouched(self):
+        case = endurance(200, 32, batch_rows=40, growing=True, hot_rows=5,
+                         group_width=1, oracle_interval=8)
+        for step in case['steps'][1:]:
+            self.assertEqual(step['source_rows'], 40)
+            for change in step['updates']:
+                key = int(change['row']['id'])
+                self.assertTrue(key <= 5 or key > 200)
+                if change['weight'] < 0:
+                    self.assertLessEqual(key, 5)
+        self.assertEqual(len(case['steps'][-1]['expected']), 328)
+        for size in (0, 201):
+            with self.assertRaises(ValueError):
+                endurance(200, 32, hot_rows=size)
+
     def test_assessment_rejects_cost_growth_restarts_and_missing_cycles(self):
         samples = []
         for index in range(128):
             samples.append(dict(source_rows=index*1000, prepare_ns=1000, gets=index,
                                 read_bytes=index*100, puts=index, put_bytes=index*100,
                                 maintenance_ns=index*1000,
-                                cache=dict(bytes=1, live_bytes=1, index_bytes=1,
-                                           filter_bytes=1, pins=0, merges=[4])))
+                                cpu_ticks=index*2, installed_checkpoints=index//4,
+                                upload_pending=False,
+                                cache=dict(bytes=1, entries=1, live_bytes=1, index_bytes=1,
+                                           filter_bytes=1, pins=0, merges=[index//8],
+                                           hits=index, misses=index, decoded_bytes=index,
+                                           decoded_rows=index, index_reads=index,
+                                           index_read_bytes=index, index_requested_bytes=index,
+                                           io={'foreground':{'gets':index,'fetched_bytes':index}})))
         report = dict(case='synthetic-assessment-only', cold_reopen_equal=True,
                       lifecycle=dict(samples=samples, source_rows=127000, logical_ms=127000,
                                      restarts=0, checkpoints=25, rebased_uploads=24,
@@ -48,9 +95,9 @@ class EnduranceTests(unittest.TestCase):
                                      retirement=[dict(rss_bytes=1024)]))
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory)/'engine.json'
-            def check(value):
+            def check(value, cache_mib=64):
                 path.write_text(json.dumps([value]))
-                return assess(path)['qualified']
+                return assess(path, cache_bytes=cache_mib*1024**2, cache_entries=512)['qualified']
             self.assertTrue(check(report))
             growing = copy.deepcopy(report)
             for sample in growing['lifecycle']['samples'][96:]:
@@ -59,6 +106,14 @@ class EnduranceTests(unittest.TestCase):
             oversized = copy.deepcopy(report)
             oversized['lifecycle']['samples'][-1]['cache']['bytes'] = 65*1024**2
             self.assertFalse(check(oversized))
+            self.assertFalse(check(oversized, cache_mib=16))
+            self.assertTrue(check(oversized, cache_mib=128))
+            sixteen = copy.deepcopy(report)
+            sixteen['lifecycle']['samples'][-1]['cache']['bytes'] = 16*1024**2+1
+            self.assertFalse(check(sixteen, cache_mib=16))
+            entries = copy.deepcopy(report)
+            entries['lifecycle']['samples'][-1]['cache']['entries'] = 513
+            self.assertFalse(check(entries))
             for field, value in [('restarts', 1), ('checkpoints', 1)]:
                 invalid = copy.deepcopy(report)
                 invalid['lifecycle'][field] = value

@@ -188,6 +188,11 @@ def main():
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--warmup', type=int, default=8, help='Growth warmup updates after cold restore')
     parser.add_argument('--updates', type=int, default=32, help='Growth measured updates per case')
+    parser.add_argument('--endurance-shape', choices=['growing','fixed'], default='growing')
+    parser.add_argument('--group-width', type=int, default=12, help='Endurance source rows per group')
+    parser.add_argument('--oracle-interval', type=int, default=16, help='Endurance full-oracle cadence')
+    parser.add_argument('--cache-mib', type=int, default=64, help='Endurance decoded cache budget')
+    parser.add_argument('--hot-rows', type=int, help='Endurance existing-row working set; appended rows stay cold')
     parser.add_argument('--release', action='store_true')
     parser.add_argument('--replay', type=pathlib.Path)
     parser.add_argument('--worker', type=pathlib.Path)
@@ -198,6 +203,10 @@ def main():
         parser.error('Endurance requires at least 128 epochs for fixed comparison windows')
     if args.warmup < 0 or args.updates < 1:
         parser.error('Nonnegative warmup and positive measured updates required')
+    if min(args.group_width, args.oracle_interval, args.cache_mib) < 1:
+        parser.error('Positive endurance group width, oracle interval and cache MiB required')
+    if args.hot_rows is not None and not 1 <= args.hot_rows <= min(args.state_rows):
+        parser.error('Hot working set must fit every initial state size')
     output = args.output.resolve()
     if output.exists():
         parser.error('Output must be new; previous evidence is retained')
@@ -334,7 +343,10 @@ def main():
                 validate_sparse_growth(output/'sparse-growth.log')
 
             if args.mode == 'endurance':
-                cases = [endurance(rows, args.updates) for rows in args.state_rows]
+                cases = [endurance(rows, args.updates, growing=args.endurance_shape=='growing',
+                                   group_width=args.group_width, oracle_interval=args.oracle_interval,
+                                   hot_rows=args.hot_rows)
+                         for rows in args.state_rows]
             elif args.mode == 'growth':
                 cases = []
                 for rows in args.state_rows:
@@ -351,7 +363,7 @@ def main():
             suite = output / 'replay.json'
             limits = growth_limits(max(args.state_rows)) if args.mode in ('growth','endurance') else {}
             if args.mode == 'endurance':
-                limits.update(cache_bytes=64*1024**2, cache_entries=4096)
+                limits.update(cache_bytes=args.cache_mib*1024**2, cache_entries=512)
             suite.write_text(json.dumps({'version': 2, 'limits': limits, 'lifecycle': LIFECYCLE, 'cases': cases}, ensure_ascii=False, separators=(',', ':')) + '\n')
             report['trace_sha256'] = sha256(suite)
             env = dict(os.environ, PGDERIVE_FAST_REPLAY=str(suite), PGDERIVE_FAST_REPORT=str(output / 'engine.json'))
@@ -360,7 +372,8 @@ def main():
             validate_report(output/'engine.json', cases)
             if args.mode == 'endurance':
                 from fast_endurance import assess
-                assessment = assess(output/'engine.json')
+                assessment = assess(output/'engine.json', cache_bytes=args.cache_mib*1024**2,
+                                    cache_entries=512)
                 save(output/'assessment.json', assessment)
                 if not assessment['qualified']:
                     raise RuntimeError('Endurance bounds or trends failed; see assessment.json')
