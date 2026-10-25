@@ -15,7 +15,7 @@ use std::{
     time::Instant,
 };
 
-async fn packed(store: &Arc<dyn ObjectStore>, size: usize) -> Result<Pack> {
+pub(super) async fn packed(store: &Arc<dyn ObjectStore>, size: usize) -> Result<Pack> {
     let bytes = (0..size).map(|i| u8::try_from(i % 251)).collect::<Result<Vec<_>, _>>()?;
     let hash = crate::engine::reader::format::hash(&bytes);
     let path = format!("pgderive/pack/{hash}");
@@ -57,8 +57,18 @@ async fn windows_coalesce_concurrent_reads_cross_boundaries_and_evict() -> Resul
     }
     Ok(())
 }
-fn value(key: i64, count: i64) -> String {
+pub(super) fn value(key: i64, count: i64) -> String {
     format!("{count}:{}", format!("{key:016x}").repeat(48))
+}
+pub(super) fn statistics() -> Statistics<i64, i64, String> {
+    Statistics::with_measure(
+        1,
+        |_, _: &i64| Ok(vec![BigInt::from(1)]),
+        |s: &String| {
+            Ok(vec![BigInt::from(s.split(':').next().context("missing count")?.parse::<i64>()?)])
+        },
+        |k, v| Ok(Some(value(*k, i64::try_from(v[0].clone())?))),
+    )
 }
 async fn amplification(enabled: bool) -> Result<(usize, u128)> {
     let store = Arc::new(crate::engine::tests::store::Store::unpaced());
@@ -86,14 +96,7 @@ async fn amplification(enabled: bool) -> Result<(usize, u128)> {
     let trace = Arrangement::new(remote, "wide-statistics".into(), 4096)?
         .empty()
         .append_runs_validated(runs, 1)?;
-    let operator = Statistics::with_measure(
-        1,
-        |_, _: &i64| Ok(vec![BigInt::from(1)]),
-        |s: &String| {
-            Ok(vec![BigInt::from(s.split(':').next().context("missing count")?.parse::<i64>()?)])
-        },
-        |k, v| Ok(Some(value(*k, i64::try_from(v[0].clone())?))),
-    );
+    let operator = statistics();
     let input = TimedBatch {
         time: 2,
         batch: Batch::from_updates((0..513).map(|n| (((n * 193) % 100_000, 0_i64), 1)))?,
@@ -252,5 +255,99 @@ async fn scan_corruption_keeps_cursor_position_and_invalidates_private_window() 
     cursor.advance().await?;
     assert_eq!(cursor.current(), Some((&1, &1, 1)));
     assert_eq!(store.reads.load(Ordering::SeqCst), before + 1);
+    Ok(())
+}
+
+async fn sparse_windows(adaptive: bool) -> Result<(usize, u64)> {
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let remote: Arc<dyn ObjectStore> = store.clone();
+    let pack = packed(&remote, super::WINDOW_BYTES * 64).await?;
+    let mut ranges = Ranges::new(super::WINDOW_BYTES * 2, 2);
+    ranges.scan = !adaptive;
+    let before = store.reads.load(Ordering::SeqCst);
+    let bytes = store.range_bytes.load(Ordering::SeqCst);
+    for n in 0..96 {
+        let start = u64::try_from((n % 64) * super::WINDOW_BYTES + 123)?;
+        let result = ranges.read(&remote, &pack, start..start + 1024).await?;
+        assert_eq!(
+            result,
+            (start..start + 1024).map(|i| u8::try_from(i % 251)).collect::<Result<Vec<_>, _>>()?
+        );
+    }
+    Ok((
+        store.reads.load(Ordering::SeqCst) - before,
+        store.range_bytes.load(Ordering::SeqCst) - bytes,
+    ))
+}
+#[tokio::test]
+async fn sparse_pressure_reduces_unused_prefetch_without_increasing_gets() -> Result<()> {
+    let before = sparse_windows(false).await?;
+    let after = sparse_windows(true).await?;
+    assert_eq!(before.0, 96);
+    assert_eq!(after.0, before.0);
+    assert!(
+        after.1 * 8 < before.1,
+        "sparse prefetch bytes did not shrink: {before:?} -> {after:?}"
+    );
+    println!(
+        "{}",
+        serde_json::json!({"fixed_gets":before.0,"adaptive_gets":after.0,"fixed_bytes":before.1,"adaptive_bytes":after.1})
+    );
+    Ok(())
+}
+#[tokio::test]
+async fn dense_pressure_retains_coalescing_and_read_origin_accounting() -> Result<()> {
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let remote: Arc<dyn ObjectStore> = store.clone();
+    let pack = packed(&remote, super::WINDOW_BYTES * 4).await?;
+    let ranges = Ranges::new(super::WINDOW_BYTES * 2, 2);
+    let before = store.reads.load(Ordering::SeqCst);
+    for start in (0..pack.bytes).step_by(1024) {
+        ranges.read(&remote, &pack, start..start + 1024).await?;
+    }
+    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 4);
+    assert_eq!(
+        ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width,
+        super::WINDOW_BYTES
+    );
+    let scans = Ranges::scan(&ranges);
+    scans.read(&remote, &pack, 0..1024).await?;
+    let (foreground, scan, _) = ranges.metrics.snapshot();
+    assert_eq!(foreground.gets, 4);
+    assert_eq!(foreground.fetched_bytes, pack.bytes);
+    assert_eq!(foreground.requested_bytes, pack.bytes);
+    assert_eq!(scan.gets, 1);
+    assert_eq!(scan.requested_bytes, 1024);
+    assert_eq!(scan.fetched_bytes, u64::try_from(super::WINDOW_BYTES)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn non_power_of_two_budget_uses_one_ladder_for_sparse_to_dense_transitions() -> Result<()> {
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let remote: Arc<dyn ObjectStore> = store.clone();
+    let pack = packed(&remote, 300_000).await?;
+    let ranges = Ranges::new(100_000, 4);
+    {
+        let mut state = ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
+        for expected in [65536, 32768, 16384, 16384] {
+            ranges.adapt(&mut state, 0);
+            assert_eq!(state.width, expected);
+        }
+        for expected in [32768, 65536, 100_000, 100_000] {
+            ranges.adapt(&mut state, 64);
+            assert_eq!(state.width, expected);
+        }
+        drop(state);
+    }
+    for width in ranges.widths() {
+        let cache = Ranges::new(100_000, 4);
+        cache.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width = width;
+        let before = store.reads.load(Ordering::SeqCst);
+        cache.read(&remote, &pack, 10..20).await?;
+        cache.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width = 100_000;
+        cache.read(&remote, &pack, 10..20).await?;
+        assert_eq!(store.reads.load(Ordering::SeqCst) - before, 1);
+    }
     Ok(())
 }

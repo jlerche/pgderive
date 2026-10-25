@@ -15,6 +15,7 @@ impl BlockCache {
             entries: parent.entries,
             encoded: parent.encoded.clone(),
             ranges: parent.ranges.clone(),
+            filters: Arc::new(super::filter::Filters::new(parent.bytes, parent.entries)),
             parent: Some(parent),
             staged: true,
             state: Arc::default(),
@@ -58,6 +59,7 @@ impl BlockCache {
             foreground.admit(identity, entry.rows, entry.charge, (parent.bytes, parent.entries))?;
         }
         drop(foreground);
+        self.filters.promote(&parent.filters)?;
         Ok(())
     }
 }

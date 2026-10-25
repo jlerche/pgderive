@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
-from soak import Sampler, SoakFixture, cleanup_owned, interrupted, pending_boundary, process_observation, validate_sample
+from soak import FreshnessExceeded, Sampler, SoakFixture, cleanup_owned, interrupted, pending_boundary, process_observation, validate_sample
 
 
 class SoakTests(unittest.TestCase):
@@ -123,6 +123,23 @@ class SoakTests(unittest.TestCase):
             self.assertTrue(finished.is_set())
             self.assertEqual(sampler.samples[0]['activities'],['steady'])
             self.assertEqual(fixture.take_timings()['activities'],['native-check','steady'])
+
+    def test_freshness_failure_is_retained_while_later_cycles_continue(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture=mock.Mock();fixture.metrics_lock=threading.RLock();fixture.latest={}
+            fixture.take_timings.return_value={};fixture.objects.return_value={}
+            latency={'n':20,'p50':99,'p95':251}
+            traffic=mock.Mock();traffic.snapshot.return_value={'sink_visibility_ms':latency}
+            args=types.SimpleNamespace(output=pathlib.Path(directory))
+            sampler=Sampler(fixture,traffic,args,0)
+            with mock.patch('soak.process_observation',return_value={}),mock.patch('soak.boundary',return_value={}), \
+                 mock.patch('soak.docker',return_value='123 /data'),mock.patch('soak.validate_sample',side_effect=FreshnessExceeded('budget')):
+                sampler.capture();sampler.capture()
+            self.assertEqual(len(sampler.samples),2)
+            self.assertEqual(len(sampler.freshness_failures),2)
+            evidence=json.loads((args.output/'freshness-failures.json').read_text())
+            self.assertEqual(evidence[0]['latency'],latency)
+            traffic.stop.set.assert_not_called()
 
     def test_sigterm_enters_exception_cleanup_path(self):
         with self.assertRaises(InterruptedError): interrupted(signal.SIGTERM,None)

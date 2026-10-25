@@ -216,7 +216,7 @@ async fn batched_tuple_validation_reads_each_selected_block_once() -> Result<()>
     assert_eq!(cache.stats()?.misses - before, 4);
     assert!(trace.validate_bag_delta(&Batch::from_updates([((0, 1), -3)])?).await.is_err());
     assert!(trace.validate_bag_delta(&Batch::from_updates([((0, 99), -1)])?).await.is_err());
-    assert!(trace.validate_delta(&Batch::from_updates([((2, 23), 1)])?).await.is_err());
+    assert!(trace.validate_bag_delta(&Batch::from_updates([((2, 23), 1)])?).await.is_err());
     trace.validate_bag_delta(&Batch::from_updates([((0, 1), -2)])?).await?;
     let trace = TraceSnapshot::from_runs(
         vec![
@@ -311,5 +311,42 @@ async fn concurrent_fetches_deduplicate_storage_without_deduplicating_run_weight
     crate::engine::tests::store::corrupt_block(other.as_ref(), &damaged, 0).await?;
     let trace = TraceSnapshot::from_runs(vec![Run::Object(data), Run::Object(damaged)], 1, 1)?;
     assert!(trace.key_cursor(&1).await.is_err());
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn coefficient_validation_overlaps_cold_runs_with_exact_cancellation() -> Result<()> {
+    use std::{sync::atomic::Ordering, time::Duration};
+    let mut store = crate::engine::tests::store::Store::unpaced();
+    store.read_delay = Duration::from_millis(20);
+    let store = Arc::new(store);
+    let cache = Arc::new(BlockCache::new(0, 0));
+    let mut runs = Vec::new();
+    for index in 0..16_i64 {
+        let weight = if index < 8 { i64::MAX } else { -i64::MAX };
+        let batch = Batch::from_updates([((1, 1), weight), ((2, index), 1)])?;
+        runs.push(Run::Object(object(store.clone(), cache.clone(), &batch, 2).await?));
+    }
+    runs.push(Run::Memory(Arc::new(Batch::from_updates([((1, 1), 1)])?)));
+    let delta = Batch::from_updates([((1, 1), -1)])?;
+    let serial_started = tokio::time::Instant::now();
+    for run in &runs {
+        TraceSnapshot::from_runs(vec![run.clone()], 1, 1)?.validate_delta(&delta).await?;
+    }
+    assert_eq!(serial_started.elapsed(), Duration::from_millis(320));
+    let trace = TraceSnapshot::from_runs(runs, 1, 1)?;
+    let before = store.reads.load(Ordering::SeqCst);
+    store.read_peak.store(0, Ordering::SeqCst);
+    let started = tokio::time::Instant::now();
+    trace.validate_bag_delta(&delta).await?;
+    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 16);
+    assert_eq!(store.read_peak.load(Ordering::SeqCst), 8);
+    assert_eq!(started.elapsed(), Duration::from_millis(40));
+    assert!(trace.validate_bag_delta(&Batch::from_updates([((1, 1), -2)])?).await.is_err());
+    let mut cancelled = Box::pin(trace.validate_bag_delta(&delta));
+    assert!(futures_util::poll!(&mut cancelled).is_pending());
+    drop(cancelled);
+    assert_eq!(store.read_active.load(Ordering::SeqCst), 0);
+    trace.validate_bag_delta(&delta).await?;
     Ok(())
 }

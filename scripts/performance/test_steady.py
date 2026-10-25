@@ -17,11 +17,13 @@ class SteadyTests(unittest.TestCase):
         for second in range(600):
             events.append({'event':'published','_observed_at':1000+second+.1,
                            'elapsed_ms':2,'changes':1000,
-                           'phases_us':{'prepare_including_object_io':500,'publication':100}})
+                           'phases_us':{'prepare_including_object_io':500,'publication':100},
+                           'cache':{'io':{origin:{'requested_bytes':second*100,'gets':second,'fetched_bytes':second*200} for origin in ['foreground','scan']}}})
             commits.append({'commit':1000+second+.05,'source_changes':1000})
             observed.append({'commit':1000+second+.05,'observed':1000+second+.055})
             if second%5==0:
-                events.append({'event':'maintenance','_observed_at':1000+second+.2})
+                counts=[0]*64;counts[16]=second//50
+                events.append({'event':'maintenance','_observed_at':1000+second+.2,'time':second,'merges':counts})
                 requests.append({'ordinal':second,'completed_monotonic':1000+second+.2,
                                  'method':'PUT','listing':False,'status':200,
                                  'request_body_bytes':128,'response_body_bytes':0})
@@ -69,17 +71,20 @@ class SteadyTests(unittest.TestCase):
                 self.assertFalse(assess(root,samples,args,1000)['passed'])
 
     def test_latency_preparation_and_request_regressions_fail(self):
-        for fault in ['latency','preparation','missing-phase','negative-phase','requests','transport','unknown','no-checkpoints']:
+        for fault in ['latency','preparation','missing-phase','negative-phase','missing-io','missing-merges','one-cycle','requests','transport','unknown','no-checkpoints']:
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as temporary:
                 root=pathlib.Path(temporary);samples,args=self.fixture(root)
                 events=[json.loads(line) for line in (root/'events-0.jsonl').read_text().splitlines()]
                 requests=[json.loads(line) for line in (root/'proxy.jsonl').read_text().splitlines()]
                 for row in events:
+                    if fault=='missing-merges' and row['event']=='maintenance':row.pop('merges')
+                    if fault=='one-cycle' and row['event']=='maintenance':row['merges']=[0]*16+[1]+[0]*47
                     if row['_observed_at']<1450:continue
                     if fault=='latency' and row['event']=='published':row['elapsed_ms']=100
                     if fault=='preparation' and row['event']=='published':row['phases_us']['prepare_including_object_io']*=10
                     if fault=='missing-phase' and row['event']=='published':row['phases_us'].pop('publication')
                     if fault=='negative-phase' and row['event']=='published':row['phases_us']['publication']=-1
+                    if fault=='missing-io' and row['event']=='published':row.pop('cache')
                 if fault=='no-checkpoints':events=[row for row in events if row['event']!='maintenance']
                 for row in requests:
                     if row['completed_monotonic']<1450:continue

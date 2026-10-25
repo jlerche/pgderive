@@ -26,3 +26,12 @@ Sink transactions between checkpoints use retained source WAL as described in
 [memtable replay](memtable-replay.md). Parallel uploads do not introduce
 background durability. Tests count requests, verify overlap, inject PUT failure,
 require every stage to drain, and retain cold missing-root rejection.
+
+
+Immutable block descriptors include a required maximum absolute canonical tuple
+weight. The hashed index authenticates this writer-generated summary alongside
+its fences. Readers reject malformed summaries and verify them before decoded
+cache admission. Trace validation can use the conservative sum of run maxima to
+prove signed coefficients fit without fetching old payloads. This does not prove
+bag nonnegativity. Existing nonempty indexes without this field are rejected;
+rebuild existing views before upgrading. No compatibility reader is retained.

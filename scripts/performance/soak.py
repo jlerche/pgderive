@@ -116,6 +116,10 @@ class SoakFixture(Fixture):
             return result
 
 
+class FreshnessExceeded(RuntimeError):
+    """Recorded qualification failure; continue gathering later-cycle evidence."""
+
+
 class Traffic:
     def __init__(self, fixture, args, started):
         self.fixture, self.args, self.started = fixture, args, started
@@ -323,7 +327,7 @@ def validate_sample(sample, args):
     latency=sample.get('sink_visibility_ms')
     if sample['activities']==['steady'] and latency is not None and latency['n']>=20:
         if latency['p50']>args.max_steady_p50_ms or latency['p95']>args.max_steady_p95_ms:
-            raise RuntimeError('Steady source-commit-to-sink freshness budget exceeded')
+            raise FreshnessExceeded('Steady source-commit-to-sink freshness budget exceeded')
 
 
 def process_observation(fixture):
@@ -348,6 +352,7 @@ class Sampler:
         self.fixture, self.traffic, self.args, self.started = fixture, traffic, args, started
         self.stop = threading.Event()
         self.samples = []
+        self.freshness_failures = []
         self.thread = threading.Thread(target=lambda:traffic.guard(self.run),daemon=True)
 
     def capture(self):
@@ -367,7 +372,11 @@ class Sampler:
         self.samples.append(value)
         with (self.args.output/'samples.jsonl').open('a') as stream:
             stream.write(json.dumps(value)+'\n')
-        validate_sample(value,self.args)
+        try:
+            validate_sample(value,self.args)
+        except FreshnessExceeded:
+            self.freshness_failures.append({'seconds':value['seconds'], 'latency':value['sink_visibility_ms']})
+            save(self.args.output/'freshness-failures.json',self.freshness_failures)
 
     def run(self):
         while not self.stop.is_set():
@@ -447,7 +456,7 @@ def qualify(args):
             raise AssertionError('Offered source rate was not sustained')
         steady_windows=sum(row['activities']==['steady'] and row['sink_visibility_ms'] is not None and row['sink_visibility_ms']['n']>=20 for row in sampler.samples)
         if steady_windows<3: raise AssertionError('Need at least three steady visibility windows')
-        result={'passed':True,'duration_seconds':time.monotonic()-started,
+        result={'passed':not sampler.freshness_failures,'freshness_failures':sampler.freshness_failures,'duration_seconds':time.monotonic()-started,
                 'source_changes':traffic.rows,'source_transactions':traffic.commits,
                 'paused_seconds':traffic.paused_seconds,'active_source_rows_per_second':traffic.rows/(args.duration-traffic.paused_seconds),
                 'crashes':crashes,'verifications':verifications,'final':final,
@@ -465,7 +474,10 @@ def qualify(args):
                 result['passed']=False
                 save(args.output/'qualification.json',result)
                 raise AssertionError('Steady-state qualification failed: '+str(result['steady']['issues']))
-        save(args.output/'qualification.json',result); success=True
+        save(args.output/'qualification.json',result)
+        if sampler.freshness_failures:
+            raise AssertionError('Freshness budgets exceeded; all windows and cost growth retained for diagnosis')
+        success=True
     finally:
         errors=cleanup_owned(fixture,traffic,sampler,success)
         if errors and success: raise RuntimeError(errors)

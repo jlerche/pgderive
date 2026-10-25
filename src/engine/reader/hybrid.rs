@@ -67,6 +67,12 @@ impl CacheConfig {
     }
 }
 impl EncodedCache {
+    // An approximate presence check only suppresses speculative object reads.
+    // The ordinary read still verifies cached payload integrity or fetches it.
+    pub(super) fn may_contain(&self, key: &str) -> bool {
+        self.cache.contains(key)
+    }
+
     pub(super) async fn get(&self, key: &str, digest: &str) -> Option<Vec<u8>> {
         let entry = self.cache.get(key).await.ok().flatten()?;
         if hash(entry.value()) != digest {

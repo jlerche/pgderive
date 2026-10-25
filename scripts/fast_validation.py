@@ -73,6 +73,24 @@ def validate_storage_growth(path):
             raise RuntimeError('Checkpoint work scales with retained state: ' + key)
 
 
+def validate_sparse_growth(path):
+    rows=[json.loads(line) for line in path.read_text().splitlines() if line.startswith('{')]
+    if any(type(row.get(key)) is not int or row[key]<0 for row in rows for key in ['rows','iteration','ns','decoded_bytes','decoded_rows','reads','read_bytes','filter_rejections','filter_bytes']):
+        raise RuntimeError('Invalid sparse growth counters')
+    if any(type(row.get('filtered')) is not bool for row in rows):raise RuntimeError('Invalid sparse growth configuration')
+    expected={(size,enabled,index) for size in [2000,32000,128000,262144] for enabled in [False,True] for index in range(4)}
+    if {(row['rows'],row['filtered'],row['iteration']) for row in rows}!=expected or len(rows)!=len(expected):
+        raise RuntimeError('Sparse growth case coverage missing')
+    for size in [2000,32000,128000,262144]:
+        totals={enabled:{key:sum(row[key] for row in rows if row['rows']==size and row['filtered']==enabled)
+                         for key in ['decoded_bytes','reads','read_bytes']} for enabled in [False,True]}
+        before,after=totals[False],totals[True]
+        for key in ['reads','read_bytes']:
+            if after[key]>before[key]*1.25+1:raise RuntimeError('Sparse synopsis increased storage work: '+str(size))
+        if size>=32000 and after['decoded_bytes']>before['decoded_bytes']*.7:
+            raise RuntimeError('Sparse decode amplification did not improve: '+str(size))
+
+
 def execute(command, output, name, environment=None):
     started = time.monotonic()
     with (output / (name + '.log')).open('w') as log:
@@ -183,6 +201,51 @@ def main():
             report['test_binary_sha256'] = sha256(pathlib.Path(binary))
             report['steps'].append(execute([binary, 'virtual_', '--nocapture'], output, 'virtual-time'))
             validate_tests(output/'virtual-time.log', VIRTUAL_TESTS)
+            report['steps'].append(execute([binary,'engine::reader::cache::','--nocapture'],output,'cache-correctness'))
+            validate_tests(output/'cache-correctness.log', {
+                'engine::reader::cache::filter::tests::rejected_page_metadata_cannot_seed_or_reuse_an_exclusion',
+                'engine::reader::cache::filter::tests::exclusions_survive_page_eviction_without_changing_weighted_identity',
+                'engine::reader::cache::filter::tests::clock_eviction_work_is_amortized_and_replacements_remain_bounded',
+                'engine::reader::cache::filter::tests::cold_source_validation_overlaps_pages_without_extra_gets',
+                'engine::reader::cache::filter::tests::cold_statistics_overlap_keys_without_extra_gets',
+                'engine::reader::cache::filter::tests::cancelled_statistics_never_prefetch_unreadable_prior',
+                'engine::reader::cache::filter::tests::failed_and_cancelled_prefetch_preserve_heads_and_retry',
+                'engine::reader::cache::range::tests::sparse_pressure_reduces_unused_prefetch_without_increasing_gets',
+                'engine::reader::cache::range::tests::dense_pressure_retains_coalescing_and_read_origin_accounting',
+                'engine::reader::cache::range::prefetch::tests::reservations_are_atomic_charge_tails_and_reuse_old_widths',
+                'engine::reader::cache::range::prefetch::tests::overlapping_cold_runs_prefetch_all_windows_with_one_concurrency_bound',
+                'engine::reader::cache::range::prefetch::tests::cached_wide_covers_do_not_starve_sparse_readiness'})
+            report['steps'].append(execute([binary,'engine::dataflow::statistics::tests::','--nocapture'],output,'statistics-correctness'))
+            validate_tests(output/'statistics-correctness.log', {
+                'engine::dataflow::statistics::tests::queued_statistics_preserve_oracle_and_cumulative_limits',
+                'engine::dataflow::statistics::tests::ordered_statistics_keep_contribution_and_intermediate_output_limits'})
+            report['steps'].append(execute([binary,'engine::trace::probe_tests::','--nocapture'],output,'coefficient-correctness'))
+            validate_tests(output/'coefficient-correctness.log', {
+                'engine::trace::probe_tests::batched_tuple_validation_reads_each_selected_block_once',
+                'engine::trace::probe_tests::coefficient_validation_overlaps_cold_runs_with_exact_cancellation'})
+            report['steps'].append(execute([binary,'engine::trace::weight_bound_tests::','--nocapture'],output,'weight-bounds'))
+            validate_tests(output/'weight-bounds.log', {
+                'engine::trace::weight_bound_tests::signed_certificate_skips_cold_pages_but_never_proves_bag_validity',
+                'engine::trace::weight_bound_tests::uncertain_bounds_preserve_duplicates_cancellation_minimum_and_overflow'})
+            report['steps'].append(execute([binary,'engine::reader::object::tests::','--nocapture'],output,'object-format'))
+            validate_tests(output/'object-format.log', {
+                'engine::reader::object::tests::sole_format_rejects_old_layouts_and_plain_json',
+                'engine::reader::object::tests::declared_weight_bound_is_rechecked_for_cold_and_cached_rows'})
+            report['steps'].append(execute([binary,'catalog::storage::collect::cache::','--nocapture'],output,'gc-dependencies'))
+            validate_tests(output/'gc-dependencies.log', {
+                'catalog::storage::collect::cache::tests::verified_dependencies_are_reused_and_only_current_roots_are_marked',
+                'catalog::storage::collect::cache::tests::reference_store_failures_and_budget_changes_never_reuse_unverified_paths',
+                'catalog::storage::collect::cache::tests::repeated_wide_index_marking_has_bounded_network_work',
+                'catalog::storage::collect::cache::tests::admission_eviction_keeps_complete_marks_with_a_one_entry_budget'})
+            encoded='engine::reader::hybrid::tests::point_prefetch_respects_encoded_cache_without_redundant_object_reads'
+            report['steps'].append(execute([binary,encoded,'--exact','--nocapture'],output,'encoded-prefetch'))
+            validate_tests(output/'encoded-prefetch.log',{encoded})
+            if args.mode=='correctness':
+                sparse='engine::reader::cache::filter::tests::sparse_statistics_growth'
+                report['steps'].append(execute([binary,sparse,'--exact','--ignored','--nocapture'],output,'sparse-growth'))
+                validate_tests(output/'sparse-growth.log',{sparse})
+                validate_sparse_growth(output/'sparse-growth.log')
+
             if args.mode == 'growth':
                 cases = []
                 for rows in args.state_rows:

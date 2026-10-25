@@ -122,13 +122,13 @@ async fn oversized_full_compaction_preserves_hot_cache_and_admits_output_only_wh
     assert_eq!(compacted.time(), state.time());
     assert_eq!(compacted.generation(), state.generation() + 1);
     let delta = Batch::from_updates([((31, 31), -1)])?;
-    state.validate_delta(&delta).await?;
+    state.validate_bag_delta(&delta).await?;
     assert_eq!(cache.stats()?.misses, before.misses);
     let delta = Batch::from_updates([((0, 0), -1)])?;
-    compacted.validate_delta(&delta).await?;
+    compacted.validate_bag_delta(&delta).await?;
     let loaded = cache.stats()?;
     assert_eq!(loaded.misses, before.misses + 1);
-    compacted.validate_delta(&delta).await?;
+    compacted.validate_bag_delta(&delta).await?;
     assert_eq!(cache.stats()?.misses, loaded.misses);
     assert!(cache.stats()?.hits > loaded.hits);
     assert_eq!(compacted.materialize().await?, state.materialize().await?);

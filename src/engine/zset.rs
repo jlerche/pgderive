@@ -6,6 +6,7 @@ use std::sync::{Arc, OnceLock};
 #[derive(Debug, Clone)]
 pub struct ZSet<T: Ord> {
     entries: Arc<Vec<(T, i64)>>,
+    max_weight: u64,
     pub(super) sizing: Arc<OnceLock<super::batch_size::BatchSize>>,
 }
 
@@ -17,7 +18,7 @@ impl<T: Ord> PartialEq for ZSet<T> {
 impl<T: Ord> Eq for ZSet<T> {}
 impl<T: Ord> Default for ZSet<T> {
     fn default() -> Self {
-        Self { entries: Arc::new(Vec::new()), sizing: Arc::new(OnceLock::new()) }
+        Self { entries: Arc::new(Vec::new()), max_weight: 0, sizing: Arc::new(OnceLock::new()) }
     }
 }
 
@@ -39,7 +40,15 @@ impl<T: Ord + Clone> ZSet<T> {
     pub(crate) fn from_canonical(entries: Vec<(T, i64)>) -> Result<Self> {
         ensure!(entries.iter().all(|(_, weight)| *weight != 0), "zero canonical weight");
         ensure!(entries.windows(2).all(|pair| pair[0].0 < pair[1].0), "noncanonical batch order");
-        Ok(Self { entries: Arc::new(entries), sizing: Arc::new(OnceLock::new()) })
+        Ok(Self::finalized(entries))
+    }
+
+    fn finalized(entries: Vec<(T, i64)>) -> Self {
+        let max_weight = entries.iter().map(|(_, weight)| weight.unsigned_abs()).max().unwrap_or(0);
+        Self { entries: Arc::new(entries), max_weight, sizing: Arc::new(OnceLock::new()) }
+    }
+    pub(crate) const fn max_weight(&self) -> u64 {
+        self.max_weight
     }
 
     /// Iterate in deterministic tuple order.
@@ -89,12 +98,13 @@ impl<T: Ord + Clone> ZSet<T> {
             }
         }
         next.extend(prior.cloned());
+        self.max_weight = next.iter().map(|(_, weight)| weight.unsigned_abs()).max().unwrap_or(0);
         self.entries = Arc::new(next);
         self.sizing = Arc::new(OnceLock::new());
         Ok(())
     }
 
     pub(super) fn from_accumulator(weights: Accumulator<T>) -> Result<Self> {
-        Ok(Self { entries: Arc::new(weights.finish()?), sizing: Arc::new(OnceLock::new()) })
+        Ok(Self::finalized(weights.finish()?))
     }
 }

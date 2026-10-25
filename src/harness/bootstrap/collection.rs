@@ -20,7 +20,8 @@ pub(super) async fn check(
     let expected = pinned.trace("output")?.materialize().await?;
     compact(sql, graph, writer, recovery, "gc-second").await?;
     let limits = GcLimits::default();
-    let result = catalog.collect(sql, recovery.store.clone(), limits).await?;
+    let mut dependencies = crate::catalog::GcCache::default();
+    let result = catalog.collect(sql, recovery.store.clone(), limits, &mut dependencies).await?;
     ensure!(result != Collection::UploadProtected, "GC unexpectedly blocked by upload");
     graph.restore_checkpoint(old).await?;
     ensure!(
@@ -35,7 +36,7 @@ pub(super) async fn check(
     );
     drop(pinned);
     reader.reader_finished(sql).await?;
-    let result = catalog.collect(sql, recovery.store.clone(), limits).await?;
+    let result = catalog.collect(sql, recovery.store.clone(), limits, &mut dependencies).await?;
     collected(result, true)?;
     abandoned_and_ledger(sql, catalog, graph, writer, recovery).await?;
     ensure!(
@@ -96,12 +97,17 @@ async fn abandoned(
     let orphan_data = recovery.store.get(&Path::from(root.path())).await?.bytes().await?.to_vec();
     let limits = GcLimits::default();
     ensure!(
-        catalog.collect(sql, recovery.store.clone(), limits).await? == Collection::UploadProtected,
+        catalog
+            .collect(sql, recovery.store.clone(), limits, &mut crate::catalog::GcCache::default())
+            .await?
+            == Collection::UploadProtected,
         "GC swept unresolved uploads"
     );
     let before = fence_abandoned(sql, catalog, writer, graph.plan(), &checkpoint).await?;
     rejected_sweep(sql, catalog, graph, recovery, root.path()).await?;
-    let result = catalog.collect(sql, recovery.store.clone(), limits).await?;
+    let result = catalog
+        .collect(sql, recovery.store.clone(), limits, &mut crate::catalog::GcCache::default())
+        .await?;
     collected(result, true)?;
     ensure!(
         recovery.store.head(&Path::from(root.path())).await.is_err(),
@@ -139,7 +145,12 @@ async fn rejected_sweep(
     let limits = GcLimits::default();
     ensure!(
         catalog
-            .collect(sql, recovery.store.clone(), GcLimits { objects: 1, ..limits })
+            .collect(
+                sql,
+                recovery.store.clone(),
+                GcLimits { objects: 1, ..limits },
+                &mut crate::catalog::GcCache::default()
+            )
             .await
             .is_err(),
         "GC ignored metadata budget"
@@ -150,7 +161,10 @@ async fn rejected_sweep(
     let path = Path::from(current.path());
     let original = recovery.store.get(&path).await?.bytes().await?;
     recovery.store.delete(&path).await?;
-    let rejected = catalog.collect(sql, recovery.store.clone(), limits).await.is_err();
+    let rejected = catalog
+        .collect(sql, recovery.store.clone(), limits, &mut crate::catalog::GcCache::default())
+        .await
+        .is_err();
     let orphan_retained = recovery.store.head(&Path::from(orphan)).await.is_ok();
     recovery.store.put(&path, original.into()).await?;
     ensure!(rejected && orphan_retained, "missing committed root allowed destructive sweep");
@@ -166,7 +180,14 @@ async fn late_put(
 ) -> Result<()> {
     let path = Path::from(path);
     recovery.store.put(&path, bytes.into()).await?;
-    let collected = catalog.collect(sql, recovery.store.clone(), GcLimits::default()).await?;
+    let collected = catalog
+        .collect(
+            sql,
+            recovery.store.clone(),
+            GcLimits::default(),
+            &mut crate::catalog::GcCache::default(),
+        )
+        .await?;
     ensure!(
         matches!(collected,Collection::Collected {deleted,..} if deleted>0),
         "fenced late PUT was no longer collectible"

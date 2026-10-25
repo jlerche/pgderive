@@ -309,6 +309,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
                 store: self.store.clone(),
                 reference,
                 rows: super::format::row_count(&blocks)?,
+                max_weight: blocks.iter().map(|block| block.max_weight).max().unwrap_or(0),
                 blocks: Arc::new(blocks),
                 packs: Arc::new(packs),
                 cache: cache.clone(),

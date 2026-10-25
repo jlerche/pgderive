@@ -9,7 +9,7 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::Client;
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, std::hash::Hash, Serialize, Deserialize)]
 struct Native(Option<String>, Option<String>, Option<Vec<Option<String>>>, Option<String>);
 fn native(number: &str, id: &str) -> Native {
     Native(

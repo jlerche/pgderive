@@ -87,3 +87,30 @@ async fn ordered_statistics_keep_contribution_and_intermediate_output_limits() -
     assert_eq!(output.batch, Batch::from_updates([((Some(0), vec![1, 1, 2]), 1)])?);
     Ok(())
 }
+
+#[tokio::test]
+async fn queued_statistics_preserve_oracle_and_cumulative_limits() -> Result<()> {
+    let writer = Arrangement::new(Arc::new(InMemory::new()), "queued-stats".into(), 4)?;
+    let input = TimedBatch {
+        time: 1,
+        batch: Batch::from_updates((0..32_i64).map(|key| ((Some(key), (key, Some(key))), 1)))?,
+    };
+    let expected = Batch::from_updates((0..32_i64).map(|key| ((Some(key), vec![1, 1, key]), 1)))?;
+    for entries in [1, 4096] {
+        let output = aggregate()
+            .evaluate(
+                &input,
+                &writer.empty(),
+                Limits { resident_entries: entries, ..Limits::default() },
+            )
+            .await?;
+        assert_eq!(output.batch, expected);
+        for limits in [
+            Limits { contributions: 64, ..Limits::default() },
+            Limits { output_entries: 64, ..Limits::default() },
+        ] {
+            assert!(aggregate().evaluate(&input, &writer.empty(), limits).await.is_err());
+        }
+    }
+    Ok(())
+}

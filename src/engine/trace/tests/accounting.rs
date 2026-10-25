@@ -12,7 +12,7 @@ use std::sync::{
 };
 
 static SERIALIZATIONS: AtomicUsize = AtomicUsize::new(0);
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, std::hash::Hash, Deserialize)]
 struct Measured(i64);
 impl Serialize for Measured {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {

@@ -58,7 +58,7 @@ mod tests {
     fn cloned_batches_share_exact_serialization_work() -> Result<()> {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static CALLS: AtomicUsize = AtomicUsize::new(0);
-        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, std::hash::Hash)]
         struct Counted(u64);
         impl serde::Serialize for Counted {
             fn serialize<S: serde::Serializer>(

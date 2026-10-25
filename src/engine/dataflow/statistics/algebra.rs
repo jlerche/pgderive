@@ -75,11 +75,8 @@ impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Algebra<K, V, S, A> 
     }
 }
 pub(super) trait Accumulator<K, V, S>: Send {
-    fn reset(&mut self);
     fn observe(&mut self, key: &K, row: &V, weight: i64) -> Result<()>;
-    fn finish_delta(&mut self, key: &K) -> Result<bool>;
-    fn restore(&mut self, row: &S) -> Result<()>;
-    fn encode(&self, key: &K) -> Result<Option<S>>;
+    fn finish_delta(&mut self, key: &K) -> Result<Option<Delta<K, S>>>;
 }
 struct Fold<K, V, S, A> {
     algebra: Arc<Algebra<K, V, S, A>>,
@@ -89,9 +86,6 @@ struct Fold<K, V, S, A> {
 impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Accumulator<K, V, S>
     for Fold<K, V, S, A>
 {
-    fn reset(&mut self) {
-        self.values.fill(A::default());
-    }
     fn observe(&mut self, key: &K, row: &V, weight: i64) -> Result<()> {
         let values = (self.algebra.measure)(key, row)?;
         ensure!(values.len() == self.values.len(), "statistics measure width mismatch");
@@ -101,22 +95,51 @@ impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Accumulator<K, V, S>
         }
         Ok(())
     }
-    fn finish_delta(&mut self, key: &K) -> Result<bool> {
+    fn finish_delta(&mut self, key: &K) -> Result<Option<Delta<K, S>>> {
+        let before = self.budget.bytes;
         self.budget.finish(key, &self.values)?;
-        Ok(!self.values.iter().all(Additive::is_zero))
-    }
-    fn restore(&mut self, row: &S) -> Result<()> {
-        let values = (self.algebra.decode)(row)?;
-        ensure!(values.len() == self.values.len(), "persisted statistics width mismatch");
-        for (total, value) in self.values.iter_mut().zip(values.iter()) {
-            total.add_scaled(value, 1)?;
+        if self.values.iter().all(Additive::is_zero) {
+            self.values.fill(A::default());
+            return Ok(None);
         }
-        Ok(())
+        let serialized = usize::try_from(self.budget.bytes - before)?;
+        let charge = self
+            .values
+            .capacity()
+            .checked_mul(std::mem::size_of::<A>())
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Pending<K, V, S, A>>()))
+            .and_then(|bytes| bytes.checked_add(serialized))
+            .ok_or_else(|| anyhow::anyhow!("statistics pending charge overflow"))?;
+        let values = std::mem::replace(&mut self.values, vec![A::default(); self.algebra.width]);
+        Ok(Some(Box::new(Pending { algebra: self.algebra.clone(), values, charge })))
     }
-    fn encode(&self, key: &K) -> Result<Option<S>> {
+}
+pub(super) type Delta<K, S> = Box<dyn Finalize<K, S>>;
+pub(super) trait Finalize<K, S>: Send {
+    fn charge(&self) -> usize;
+    fn apply(self: Box<Self>, key: &K, before: Option<&S>) -> Result<Option<S>>;
+}
+struct Pending<K, V, S, A> {
+    algebra: Arc<Algebra<K, V, S, A>>,
+    values: Vec<A>,
+    charge: usize,
+}
+impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Finalize<K, S> for Pending<K, V, S, A> {
+    fn charge(&self) -> usize {
+        self.charge
+    }
+    fn apply(mut self: Box<Self>, key: &K, before: Option<&S>) -> Result<Option<S>> {
+        if let Some(row) = before {
+            let values = (self.algebra.decode)(row)?;
+            ensure!(values.len() == self.values.len(), "persisted statistics width mismatch");
+            for (total, value) in self.values.iter_mut().zip(values.iter()) {
+                total.add_scaled(value, 1)?;
+            }
+        }
         (self.algebra.encode)(key, &self.values)
     }
 }
+
 pub(super) struct Budget {
     limits: Limits,
     contributions: usize,

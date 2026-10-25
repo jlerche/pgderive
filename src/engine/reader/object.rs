@@ -91,9 +91,14 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) blocks: Fences<K, V>,
     pub(super) packs: Arc<Vec<Pack>>,
     pub(super) rows: usize,
+    pub(super) max_weight: u64,
     pub(super) cache: Arc<BlockCache>,
 }
 
+pub struct WeightPage {
+    pub(crate) ordinal: usize,
+    pub(crate) range: std::ops::Range<usize>,
+}
 impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     /// Write in a unique upload namespace and return a globally readable root.
     /// Never reuse the namespace after its durable upload reservation closes.
@@ -192,12 +197,14 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             pack.path = reference.child_path(&pack.path);
         }
         let rows = super::format::row_count(&index.blocks)?;
+        let max_weight = index.blocks.iter().map(|block| block.max_weight).max().unwrap_or(0);
         Ok(Self {
             store,
             reference,
             blocks: Arc::new(index.blocks),
             packs: Arc::new(index.packs),
             rows,
+            max_weight,
             cache,
         })
     }
@@ -206,6 +213,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     #[must_use]
     pub const fn reference(&self) -> &ObjectRef {
         &self.reference
+    }
+    pub(crate) const fn max_weight(&self) -> u64 {
+        self.max_weight
     }
     pub(crate) const fn row_count(&self) -> usize {
         self.rows
@@ -233,91 +243,153 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let Some(_) = self.blocks.get(ordinal).filter(|block| block.first <= *tuple) else {
             return Ok(0);
         };
+        if !self.cache.may_contain_key(&self.reference.schema, &self.blocks[ordinal], &tuple.0)? {
+            return Ok(0);
+        }
         let rows = self.read(ordinal).await?;
         Ok(rows.binary_search_by(|row| row.0.cmp(tuple)).ok().map_or(0, |index| rows[index].1))
     }
-    pub(crate) async fn accumulate_weights(
+    pub(crate) fn next_weight_page(
         &self,
-        delta: &Batch<K, V>,
-        totals: &mut [num_bigint::BigInt],
-    ) -> Result<()> {
-        let mut loaded = None;
-        for ((tuple, _), total) in delta.iter().zip(totals) {
-            let ordinal = self.blocks.partition_point(|block| block.last < *tuple);
-            if self.blocks.get(ordinal).is_none_or(|block| block.first > *tuple) {
+        tuples: &[&(K, V)],
+        position: &mut usize,
+    ) -> Result<Option<WeightPage>> {
+        while *position < tuples.len() {
+            let ordinal = self.blocks.partition_point(|block| block.last < *tuples[*position]);
+            let Some(block) = self.blocks.get(ordinal) else { return Ok(None) };
+            if block.first > *tuples[*position]
+                || !self.may_contain_key(ordinal, &tuples[*position].0)?
+            {
+                *position += 1;
                 continue;
             }
-            if loaded.as_ref().is_none_or(|(block, _)| *block != ordinal) {
-                loaded = Some((ordinal, self.read(ordinal).await?));
+            let start = *position;
+            *position += 1;
+            while *position < tuples.len() && *tuples[*position] <= block.last {
+                *position += 1;
             }
-            let (_, rows) = loaded.as_ref().context("missing selected tuple block")?;
-            if let Ok(index) = rows.binary_search_by(|row| row.0.cmp(tuple)) {
-                *total += rows[index].1;
-            }
+            return Ok(Some(WeightPage { ordinal, range: start..*position }));
         }
-        Ok(())
+        Ok(None)
     }
-    pub(super) fn key_block(&self, key: &K) -> Option<usize> {
+    pub(crate) fn key_block(&self, key: &K) -> Option<usize> {
         let ordinal = self.blocks.partition_point(|block| block.last.0 < *key);
         self.blocks.get(ordinal).filter(|block| block.first.0 <= *key).map(|_| ordinal)
     }
+    pub(crate) fn may_contain_key(&self, ordinal: usize, key: &K) -> Result<bool> {
+        let block = self.blocks.get(ordinal).context("invalid filter block ordinal")?;
+        self.cache.may_contain_key(&self.reference.schema, block, key)
+    }
 
-    pub(super) async fn read(&self, ordinal: usize) -> Result<Arc<Vec<Entry<K, V>>>> {
-        let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
-        let (path, range) = self.block_range(ordinal).context("invalid packed block range")?;
-
-        let rows = if let Some(rows) =
-            self.cache.get::<K, V>(&self.reference.schema, &block.hash)?
+    pub(crate) fn reserve_prefetch(
+        &self,
+        ordinal: usize,
+        plans: &mut Vec<super::ReadAhead>,
+    ) -> Result<bool> {
+        let block = self.blocks.get(ordinal).context("invalid prefetch block ordinal")?;
+        if block.length > 256 * 1024 {
+            return Ok(false);
+        }
+        if self.cache.peek::<K, V>(&self.reference.schema, &block.hash)?.is_some() {
+            return Ok(true);
+        }
+        if let Some(cache) = &self.cache.encoded
+            && cache.may_contain(&self.encoded_key(ordinal)?)
         {
-            rows
-        } else {
-            let key =
-                format!("json-zstd-range:{path}:{}:{}:{}", block.offset, block.length, block.hash);
-            let cached = match &self.cache.encoded {
-                Some(cache) => cache.get(&key, &block.hash).await,
-                None => None,
-            };
-            let bytes = if let Some(bytes) = cached {
-                bytes
+            return Ok(true);
+        }
+        let index =
+            if let Some(index) = plans.iter().position(|plan| plan.shares(&self.cache.ranges)) {
+                index
             } else {
-                let pack = self.packs.get(block.pack).context("missing data pack")?;
-                let bytes = self.cache.ranges.read(&self.store, pack, range.clone()).await?;
-                if hash(&bytes) != block.hash {
-                    self.cache.ranges.invalidate(pack, &range)?;
-                    anyhow::bail!("object block checksum mismatch");
-                }
-                if self.cache.admits_encoded()
-                    && let Some(cache) = &self.cache.encoded
-                {
-                    cache.insert(key, bytes.clone());
-                }
-                bytes
+                let Some(plan) = super::ReadAhead::new(self.cache.ranges.clone())? else {
+                    return Ok(false);
+                };
+                plans.push(plan);
+                plans.len() - 1
             };
-            ensure!(u64::try_from(bytes.len())? == block.length, "object range length mismatch");
-            ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
-            let decoded = super::compression::decode(&bytes)?;
-            let mut rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
-            validate(&rows)?;
-            self.cache.record_decode(decoded.len(), rows.len())?;
-            // JSON arrays do not carry a length hint. Do not retain their
-            // geometric deserialization spare capacity in the bounded cache.
-            rows.shrink_to_fit();
-            let rows = Arc::new(rows);
-            self.cache.insert(
-                &self.reference.schema,
-                block.hash.clone(),
-                rows.clone(),
-                decoded.len(),
-            )?;
-            rows
+        let pack = self.packs.get(block.pack).context("missing prefetch pack")?;
+        plans[index].reserve(
+            &self.store,
+            pack,
+            block.offset
+                ..block.offset.checked_add(block.length).context("prefetch range overflow")?,
+        )
+    }
+    fn encoded_key(&self, ordinal: usize) -> Result<String> {
+        let block = self.blocks.get(ordinal).context("invalid encoded block ordinal")?;
+        let (path, _) = self.block_range(ordinal).context("invalid encoded block range")?;
+        Ok(format!("json-zstd-range:{path}:{}:{}:{}", block.offset, block.length, block.hash))
+    }
+    async fn encoded(&self, ordinal: usize) -> Result<Vec<u8>> {
+        let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
+        let (_, range) = self.block_range(ordinal).context("invalid packed block range")?;
+        let key = self.encoded_key(ordinal)?;
+        let cached = match &self.cache.encoded {
+            Some(cache) => cache.get(&key, &block.hash).await,
+            None => None,
         };
+        let bytes = if let Some(bytes) = cached {
+            bytes
+        } else {
+            let pack = self.packs.get(block.pack).context("missing data pack")?;
+            let bytes = self.cache.ranges.read(&self.store, pack, range.clone()).await?;
+            if hash(&bytes) != block.hash {
+                self.cache.ranges.invalidate(pack, &range)?;
+                anyhow::bail!("object block checksum mismatch");
+            }
+            if self.cache.admits_encoded()
+                && let Some(cache) = &self.cache.encoded
+            {
+                cache.insert(key, bytes.clone());
+            }
+            bytes
+        };
+        ensure!(u64::try_from(bytes.len())? == block.length, "object range length mismatch");
+        ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
+        Ok(bytes)
+    }
+    pub(crate) async fn read(&self, ordinal: usize) -> Result<Arc<Vec<Entry<K, V>>>> {
+        let block = self.blocks.get(ordinal).context("invalid block ordinal")?;
+
+        let rows =
+            if let Some(rows) = self.cache.get::<K, V>(&self.reference.schema, &block.hash)? {
+                Self::check_rows(&rows, block)?;
+                rows
+            } else {
+                let bytes = self.encoded(ordinal).await?;
+                let decoded = super::compression::decode(&bytes)?;
+                let mut rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
+                validate(&rows)?;
+                Self::check_rows(&rows, block)?;
+                self.cache.record_decode(decoded.len(), rows.len())?;
+                // JSON arrays do not carry a length hint. Do not retain their
+                // geometric deserialization spare capacity in the bounded cache.
+                rows.shrink_to_fit();
+                let rows = Arc::new(rows);
+                self.cache.insert(
+                    &self.reference.schema,
+                    block.hash.clone(),
+                    rows.clone(),
+                    decoded.len(),
+                )?;
+                rows
+            };
+        Ok(rows)
+    }
+    fn check_rows(rows: &[Entry<K, V>], block: &Block<(K, V)>) -> Result<()> {
         ensure!(
             rows.len() == block.rows
                 && rows.first().map(|row| &row.0) == Some(&block.first)
                 && rows.last().map(|row| &row.0) == Some(&block.last),
             "block fences/count mismatch"
         );
-        Ok(rows)
+        ensure!(
+            rows.iter().map(|(_, weight)| weight.unsigned_abs()).max().unwrap_or(0)
+                == block.max_weight,
+            "block weight bound mismatch"
+        );
+        Ok(())
     }
 }
 

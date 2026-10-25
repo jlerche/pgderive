@@ -261,3 +261,138 @@ python3 scripts/fast_validation.py --mode growth --release \
   --warmup 16 --updates 64 \
   --output artifacts/benchmarks/steady-local/preloaded-growth-new
 ```
+
+
+## Bounded cold reads
+
+Historical immutable pages now retain bounded, negative-only Bloom filters after
+their decoded rows leave the cache. Filters are admitted only after page identity,
+checksum, canonical ordering and complete fences have been verified. A negative
+answer avoids a page read; a positive answer still uses the ordinary verified
+full-tuple weighted lookup. Filters are disposable process memory and do not
+change the durable format. A CLOCK policy bounds eviction work without scanning
+the filter cache on every admission. Staged filters remain private until promotion;
+private scans do not populate the foreground filter cache.
+
+Compressed foreground windows adapt between 16 and 256 KiB (or the smaller
+configured cache cap) using the fraction
+actually requested before eviction. Sparse probes shrink windows; dense use can
+expand them. Private scans retain their larger windows. Cached windows remain
+readable across width changes, including partial tail windows.
+
+Additive statistics collect ordered nonzero group deltas until their planned
+distinct missing windows fill the existing eight-read concurrency limit, a window
+cannot fit, or existing resident entry/byte limits require draining. Reservations
+charge the actual union of windows and pin cached covers. This avoids both
+serial cold reads across overlapping runs and charging an entire maximum window
+for every tiny page. Pending scalar vectors and structural storage are charged
+in addition to serialized payload; these are resource estimates, not an RSS bound.
+Cancelled deltas never trigger speculative reads. Foyer encoded-cache hits also
+suppress optional object prefetch. All fetched pages still pass the ordinary
+checksum, decoding, fence and multiplicity checks before use. Source coefficient
+validation lazily selects pages across all immutable runs under one global
+concurrency bound. It retains one exact totals vector, including memory-run
+contributions and duplicate object occurrences, and checks coefficient overflow
+and bag nonnegativity only after every contribution has been accumulated.
+
+The durable sequence remains object PUT, one PostgreSQL transaction publishing
+membership/results/progress, then source acknowledgement. This work adds no
+checkpoint objects or publication step. Separate foreground/scan byte and GET
+counters identify amplification, and completed merge histograms let qualification
+require multiple distinct checkpoints merging at least 65,536 input rows.
+
+Fast checks cover cancellation and retry, corrupted pages, duplicate reader
+occurrences, exact weighted results, cumulative aggregate limits, cache promotion,
+sparse and dense window pressure, and paired increasing-state workloads. Timing
+is diagnostic; deterministic work and correctness bounds gate the fast suite.
+A paced integration run must additionally pass freshness, cost-growth, native
+PostgreSQL equality and acknowledgement checks. Freshness violations are retained
+while the run continues collecting later compaction cycles, and fail the final
+qualification; thresholds are unchanged.
+
+
+### Avoiding coefficient-validation reads
+
+Each immutable block index now records the maximum absolute canonical tuple
+weight. An opened object retains the maximum of its blocks; a memory batch
+computes its maximum once when finalized. Summing these maxima across every
+reader occurrence and the delta gives a conservative triangle bound. When it
+is at most `i64::MAX`, signed coefficient validation needs no old page reads.
+Uncertain bounds still require exact full-tuple accumulation; intermediate
+`BigInt` values preserve cancellation and narrowing occurs only at the end.
+Nonnegative-bag validation always uses exact coefficients. Duplicate occurrences
+and the unsigned magnitude of `i64::MIN` are included.
+
+The summary is safety-critical writer metadata, authenticated by the existing
+root-index digest, with the same trusted-writer provenance as its tuple fences.
+The writer derives it from canonical weights. Opening validates its domain, and
+ordinary page reads compare it with decoded weights, including decoded-cache
+hits. It does not establish integrity of unread payloads or replace required
+reads for computation.
+
+This is a hard object-index cutover: nonempty block descriptors require the
+weight summary. Existing views require rebuilding before using this version;
+there is no old-format adapter. The live demo has not been upgraded.
+
+Prefetch also narrows an older cached wide window to a bounded copied compressed
+slice when the current smaller aligned window is completely covered. This
+prevents hot wide covers from consuming the entire lookahead budget before
+eight missing windows are planned. Non-nested widths retain the original cover,
+and every copied slice is charged. No storage request is needed for those slices.
+
+
+### Physical collection metadata
+
+Each collector session memoizes fully verified immutable root-to-pack dependencies
+under the existing GC metadata budget. Every collection still builds its live set
+from the current SQL snapshot, including active reader protections. Dependencies
+for absent or changed references are discarded, and store identity is retained
+explicitly. Limits still precede destructive requests. The cache stores pack paths,
+not tuple fences, and does not establish liveness or replace integrity scrubbing.
+Cache misses retain the existing hash, schema, layout and address verification.
+Dependency discovery discards tuple-fence values during JSON parsing because
+physical collection only needs the pack descriptors.
+
+A fast production mark regression repeats collection ten times over a 1,134,750-byte
+index. Downloads fall from 11,347,500 to 1,134,750 bytes while the memoized dependency
+entry charges 582 bytes. Root removal, reader-pin release, changed references,
+store isolation, failed reads and cache-budget pressure remain correctness gates.
+
+
+### Read-amplification qualification, October 24
+
+Fast correctness and growth validation passed through 262,144 groups before the
+20-minute uninterrupted native run. The common gate passed with 97.39% production
+line coverage. Independent review covered the implementation and its safety
+boundaries. The native run used local PostgreSQL and latency-injected object
+storage, processing 1,199,567 changes at 1,000.09 changes/s. Source rows grew from
+32,001 to 431,856 and output groups reached 399,857. Three distinct checkpoints
+each witnessed two merges of at least 65,536 input rows. Native equality passed
+at 10 and 20 minutes, acknowledgement ordering remained safe, and the final
+journal drained to zero. Owned Docker fixtures were removed without errors.
+
+Comparing the preregistered early and late six-minute windows:
+
+| Metric | Early | Late | Growth gate |
+| --- | ---: | ---: | --- |
+| Processing p50 / p95 | 3 / 51 ms | 4 / 71 ms | pass |
+| Sampled sink visibility p50 / p95 | 14.45 / 76.72 ms | 16.28 / 90.61 ms | pass |
+| Preparation including object I/O | 65.84 us/change | 93.43 us/change | fail |
+| CPU | 0.0963 ms/change | 0.1146 ms/change | pass |
+| Peak RSS | 247.4 MiB | 283.6 MiB | pass |
+| Estimated Class A per million changes | 927 | 929 | pass |
+| Estimated Class B per million changes | 1,294 | 2,085 | fail |
+| Downloaded bytes/change | 35.98 | 63.32 | fail |
+
+There were no sampled freshness violations, but the overall qualification failed.
+This is an improvement in read amplification and removal of the observed latency
+cliff, not proof of steady state. The preceding run without GC dependency reuse
+downloaded 160.02 to 497.13 bytes/change and used 7,527 to 10,577 estimated Class B
+operations per million changes. With reuse, remaining foreground range GETs still
+increased from 194 to 910 per million changes, while private scan GETs held at
+355 to 356. Foreground fetched bytes increased from 11.15 to 33.75 per change.
+The next investigation is this residual growing cold-probe demand and preparation
+cost, with unchanged qualification bounds. Request classes are proxy estimates,
+not billing measurements. The compact aggregate evidence is in
+[steady-growth-samples.json](steady-growth-samples.json); private run evidence and
+all failed runs remain under ignored artifacts. Nothing was pushed or deployed.

@@ -2,7 +2,7 @@ mod collect;
 mod protections;
 use super::Catalog;
 use anyhow::{Context, Result};
-pub use collect::{Collection, GcLimits};
+pub use collect::{Collection, GcCache, GcLimits};
 pub use protections::Protection;
 use tokio_postgres::Transaction;
 

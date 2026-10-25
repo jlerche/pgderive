@@ -6,6 +6,8 @@ use std::{
     sync::{Arc, Mutex, Weak},
 };
 
+pub use range::ReadAhead;
+
 type SharedRows<K, V> = Arc<Vec<Entry<K, V>>>;
 
 type Rows = dyn Any + Send + Sync;
@@ -20,6 +22,7 @@ pub struct BlockCache {
     bytes: usize,
     entries: usize,
     pub(super) ranges: Arc<range::Ranges>,
+    filters: Arc<filter::Filters>,
     parent: Option<Arc<Self>>,
     staged: bool,
     state: Arc<Mutex<State>>,
@@ -58,6 +61,20 @@ pub struct CacheStats {
     pub decoded_bytes: u64,
     /// Successful cold page rows deserialized, including unrelated rows.
     pub decoded_rows: u64,
+    /// Resident negative-key synopsis charges, separate from decoded pages.
+    pub filter_bytes: usize,
+    /// Resident page-key synopses.
+    pub filter_entries: usize,
+    /// Key probes excluded without reading or decoding a page.
+    pub filter_rejections: u64,
+    /// CLOCK candidates examined while making room for new key synopses.
+    pub filter_eviction_steps: u64,
+    /// Foreground compressed-page requests and returned range work.
+    pub foreground_io: ReadStats,
+    /// Private scan requests and returned range work.
+    pub scan_io: ReadStats,
+    /// Successful compactions by floor(log2(input rows)), including signed rows.
+    pub merges: Vec<u64>,
 }
 impl BlockCache {
     /// Set decoded-charge and entry caps; either zero disables retention.
@@ -67,6 +84,7 @@ impl BlockCache {
             bytes,
             entries,
             ranges: Arc::new(range::Ranges::new(bytes / 4, entries)),
+            filters: Arc::new(filter::Filters::new(bytes, entries)),
             parent: None,
             staged: false,
             state: Arc::new(Mutex::new(State::default())),
@@ -79,7 +97,8 @@ impl BlockCache {
         let parent = parent.parent.clone().unwrap_or(parent);
         Arc::new(Self {
             encoded: parent.encoded.clone(),
-            ranges: Arc::new(range::Ranges::scan()),
+            ranges: Arc::new(range::Ranges::scan(&parent.ranges)),
+            filters: parent.filters.clone(),
             parent: Some(parent),
             ..Self::new(0, 0)
         })
@@ -95,7 +114,7 @@ impl BlockCache {
         // Preserve its encoded admission policy; ordinary scans can warm Foyer.
         Arc::new(Self {
             encoded: parent.encoded.clone(),
-            ranges: Arc::new(range::Ranges::scan()),
+            ranges: Arc::new(range::Ranges::scan(&parent.ranges)),
             state: parent.state.clone(),
             ..Self::new(0, 0)
         })
@@ -103,7 +122,7 @@ impl BlockCache {
     pub(super) const fn admits_encoded(&self) -> bool {
         self.parent.is_none()
     }
-    fn peek<K: BatchData, V: BatchData>(
+    pub(super) fn peek<K: BatchData, V: BatchData>(
         &self,
         schema: &str,
         hash: &str,
@@ -115,6 +134,23 @@ impl BlockCache {
         drop(state);
         rows.map(|rows| rows.downcast().map_err(|_| anyhow::anyhow!("cache type mismatch")))
             .transpose()
+    }
+    fn filter_identity<K: BatchData, V: BatchData>(schema: &str, hash: &str) -> Identity {
+        (ROW_CODEC, schema.into(), hash.into(), TypeId::of::<Vec<Entry<K, V>>>())
+    }
+    pub(super) fn may_contain_key<K: BatchData, V: BatchData>(
+        &self,
+        schema: &str,
+        block: &super::format::Block<(K, V)>,
+        key: &K,
+    ) -> Result<bool> {
+        if !self.filters.enabled() {
+            return Ok(true);
+        }
+        self.filters.contains(&Self::filter_identity::<K, V>(schema, &block.hash), key, block)
+    }
+    pub(crate) fn record_merge(&self, rows: usize) -> Result<()> {
+        self.ranges.metrics.merged(rows)
     }
     /// Attach a shared Foyer cache for encoded immutable blocks.
     #[must_use]
@@ -134,6 +170,14 @@ impl BlockCache {
         let references: usize = state.live.iter().map(|(rows, _)| rows.strong_count()).sum();
         counters.pins = references.saturating_sub(state.blocks.len());
         drop(state);
+        (
+            counters.filter_bytes,
+            counters.filter_entries,
+            counters.filter_rejections,
+            counters.filter_eviction_steps,
+        ) = self.filters.stats()?;
+        (counters.foreground_io, counters.scan_io, counters.merges) =
+            self.ranges.metrics.snapshot();
         Ok(counters)
     }
     pub(super) fn get<K: BatchData, V: BatchData>(
@@ -200,8 +244,16 @@ impl BlockCache {
                 state.stats.bytes = 0;
                 state.stats.entries = 0;
                 state.overflowed = true;
+                self.filters.clear()?;
                 return Ok(());
             }
+        }
+        if self.bytes > 0
+            && self.entries > 0
+            && (self.parent.is_none() || self.staged)
+            && !rows.is_empty()
+        {
+            self.filters.remember(Self::filter_identity::<K, V>(schema, &identity.2), &rows)?;
         }
         state.admit(identity, rows, charge, (self.bytes, self.entries))
     }
@@ -241,6 +293,9 @@ impl State {
     }
 }
 
+mod filter;
+mod metrics;
+pub use metrics::ReadStats;
 mod handoff;
 mod range;
 
@@ -256,6 +311,7 @@ mod tests {
         for hash in ["a", "b"] {
             cache.insert("s", hash.into(), Arc::new(vec![((1_i64, 2_i64), 1)]), 8)?;
         }
+        let before_filters = cache.stats()?.filter_entries;
         let scan = BlockCache::scan(cache.clone());
         assert!(scan.get::<i64, i64>("s", "a")?.is_some());
         assert!(scan.get::<i64, i64>("s", "missing")?.is_none());
@@ -269,6 +325,7 @@ mod tests {
         assert!(cache.get::<i64, i64>("s", "a")?.is_none());
         assert!(cache.get::<i64, i64>("s", "b")?.is_some());
         assert!(cache.get::<i64, i64>("s", "cold")?.is_none());
+        assert_eq!(cache.stats()?.filter_entries, before_filters + 1);
         assert!(!scan.admits_encoded());
         assert!(cache.admits_encoded());
         drop(cold);

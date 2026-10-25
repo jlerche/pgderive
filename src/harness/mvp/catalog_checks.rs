@@ -52,7 +52,14 @@ pub(super) async fn corrupt_membership(
         ensure!(changed == 1, "missing metadata corruption target");
         expect_failure(catalog.load_durable(sql, plan).await, expected)?;
         expect_failure(
-            catalog.collect(sql, store.clone(), crate::catalog::GcLimits::default()).await,
+            catalog
+                .collect(
+                    sql,
+                    store.clone(),
+                    crate::catalog::GcLimits::default(),
+                    &mut crate::catalog::GcCache::default(),
+                )
+                .await,
             expected,
         )?;
         for member in &before.stored.checkpoint.arrangements {

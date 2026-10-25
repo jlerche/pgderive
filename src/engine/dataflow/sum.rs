@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 
 /// Object-persisted sufficient statistics for SQL bag GROUP BY SUM semantics.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, std::hash::Hash, Serialize, Deserialize)]
 pub struct SumState {
     /// Total multiplicity, including NULL measures; distinguishes zero from absence.
     pub rows: i64,

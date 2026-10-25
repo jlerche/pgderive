@@ -140,6 +140,11 @@ impl<T: Ord> Ord for Value<T> {
         (**self).cmp(&**other)
     }
 }
+impl<T: std::hash::Hash> std::hash::Hash for Value<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.canonical().hash(state);
+    }
+}
 impl<T: Serialize> Serialize for Value<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         self.canonical().serialize(serializer)

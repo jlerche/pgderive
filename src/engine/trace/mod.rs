@@ -1,4 +1,5 @@
 //! Immutable trace generations, weighted merging and pinned membership.
+mod coefficient;
 mod flush;
 mod manifest;
 mod memory;
@@ -170,17 +171,43 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         i64::try_from(weight).context("final trace coefficient overflow")
     }
     pub(crate) async fn validate_delta(&self, delta: &Batch<K, V>) -> Result<()> {
+        // Authenticated writer summaries provide a sufficient triangle bound.
+        // Uncertain bounds require exact identity lookup; bag validity always does.
+        let bound = self.runs.iter().fold(u128::from(delta.max_weight()), |total, run| {
+            total.saturating_add(u128::from(match run {
+                Run::Memory(batch) => batch.max_weight(),
+                Run::Object(batch) => batch.max_weight(),
+            }))
+        });
+        if bound <= u128::try_from(i64::MAX)? {
+            return Ok(());
+        }
         self.validate_coefficients(delta, false).await
     }
     pub(crate) async fn validate_bag_delta(&self, delta: &Batch<K, V>) -> Result<()> {
         self.validate_coefficients(delta, true).await
     }
     async fn validate_coefficients(&self, delta: &Batch<K, V>, nonnegative: bool) -> Result<()> {
+        use futures_util::{StreamExt as _, TryStreamExt as _, stream};
         let mut totals = vec![num_bigint::BigInt::from(0); delta.iter().count()];
+        let tuples = delta.iter().map(|(tuple, _)| tuple).collect::<Vec<_>>();
         for run in &self.runs {
-            match run {
-                Run::Memory(batch) => batch.accumulate_weights(delta, &mut totals),
-                Run::Object(batch) => batch.accumulate_weights(delta, &mut totals).await?,
+            if let Run::Memory(batch) = run {
+                batch.accumulate_weights(delta, &mut totals);
+            }
+        }
+        let pages = coefficient::Pages::new(&self.runs, &tuples).map(|page| async move {
+            let page = page?;
+            Ok::<_, anyhow::Error>((page.range, page.batch.read(page.ordinal).await?))
+        });
+        // One global pipeline covers sparse pages across runs as well as dense
+        // pages within a run. Only eight page jobs and one totals vector are live.
+        let mut reads = stream::iter(pages).buffered(crate::engine::reader::READ_CONCURRENCY);
+        while let Some((range, rows)) = reads.try_next().await? {
+            for position in range {
+                if let Ok(index) = rows.binary_search_by(|row| row.0.cmp(tuples[position])) {
+                    totals[position] += rows[index].1;
+                }
             }
         }
         for ((_, weight), total) in delta.iter().zip(totals) {
@@ -300,3 +327,7 @@ mod tier_tests;
 #[cfg(test)]
 #[path = "tests/growth.rs"]
 mod growth_tests;
+
+#[cfg(test)]
+#[path = "tests/weight_bounds.rs"]
+mod weight_bound_tests;

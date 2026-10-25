@@ -22,6 +22,7 @@ pub(super) struct Block<T> {
     pub(super) last: T,
     pub(super) length: u64,
     pub(super) rows: usize,
+    pub(super) max_weight: u64,
     pub(super) hash: String,
 }
 #[derive(Serialize, Deserialize)]
@@ -114,6 +115,10 @@ impl<T> Block<T> {
                 && self.length <= u64::try_from(super::compression::STORED_LIMIT)?,
             "invalid immutable block size"
         );
+        ensure!(
+            self.max_weight > 0 && self.max_weight <= i64::MIN.unsigned_abs(),
+            "invalid immutable weight bound"
+        );
         ensure!(valid_hash(&self.hash), "invalid immutable block checksum");
         Ok(())
     }
@@ -124,7 +129,7 @@ pub(super) fn row_count<T>(blocks: &[Block<T>]) -> Result<usize> {
     })
 }
 type EncodedBlock<T> = (Block<T>, Vec<u8>);
-pub(super) fn encode_block<T: Clone, W>(
+pub(super) fn encode_block<T: Clone, W: Borrow<i64>>(
     rows: &[(impl Borrow<T>, W)],
     decoded: &[u8],
 ) -> Result<EncodedBlock<T>> {
@@ -136,6 +141,11 @@ pub(super) fn encode_block<T: Clone, W>(
         last: rows.last().context("empty immutable block")?.0.borrow().clone(),
         length: u64::try_from(encoded.len())?,
         rows: rows.len(),
+        max_weight: rows
+            .iter()
+            .map(|(_, weight)| weight.borrow().unsigned_abs())
+            .max()
+            .unwrap_or(0),
         hash: hash(&encoded),
     };
     Ok((block, encoded))

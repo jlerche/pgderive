@@ -105,8 +105,7 @@ fn input(spill: bool) -> Result<Sealed<i64, String>> {
     changes.seal()
 }
 #[tokio::test]
-async fn sf10_statistics_handoff_eliminates_second_decoding_for_resident_and_spilled_deltas()
--> Result<()> {
+async fn sf10_statistics_handoff_and_weight_bounds_avoid_revalidation() -> Result<()> {
     use futures_util::TryStreamExt as _;
     use object_store::ObjectStore as _;
     let initialized = Instant::now();
@@ -169,7 +168,7 @@ async fn sf10_statistics_handoff_eliminates_second_decoding_for_resident_and_spi
         let checked_us = started.elapsed().as_micros();
         assert_eq!(execution.cache.stats()?.misses, before.misses);
         assert_eq!(store.reads.load(Ordering::SeqCst), reads);
-        ensure!(decoded > 500, "fixture did not reproduce repeated decoding");
+        assert_eq!(decoded, 0, "signed weight certificate should avoid revalidation reads");
         let expected = Batch::from_updates((0..513).flat_map(|n| {
             let key = n * 193;
             [((key, value(key, 1)), -1), ((key, value(key, 2)), 1)]

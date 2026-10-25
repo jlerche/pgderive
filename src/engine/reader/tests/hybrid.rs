@@ -140,3 +140,57 @@ async fn canceled_close_keeps_shutdown_owned() -> Result<()> {
     reopened.close().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn point_prefetch_respects_encoded_cache_without_redundant_object_reads() -> Result<()> {
+    use crate::engine::{
+        Batch,
+        reader::{BatchReader as _, BlockCache, ObjectBatch},
+        tests::store::Store,
+        trace::{Run, TraceSnapshot},
+    };
+    use std::sync::{Arc, atomic::Ordering};
+    let directory = tempfile::tempdir()?;
+    let encoded = Arc::new(
+        CacheConfig {
+            directory: directory.path().into(),
+            memory_bytes: 1024 * 1024,
+            disk_bytes: 64 * 1024 * 1024,
+        }
+        .open()
+        .await?,
+    );
+    let store = Arc::new(Store::unpaced());
+    let reference = ObjectBatch::write(
+        store.clone(),
+        &Batch::from_updates([((1_i64, 7_i64), 1), ((2, 8), 1)])?,
+        "prefetch-encoded",
+        1,
+    )
+    .await?;
+    let warm = ObjectBatch::<i64, i64>::open_with_cache(
+        store.clone(),
+        reference.clone(),
+        "prefetch-encoded",
+        Arc::new(BlockCache::new(0, 0).with_encoded(Some(encoded.clone()))),
+    )
+    .await?;
+    let mut cursor = warm.cursor().await?;
+    cursor.advance().await?;
+    let cold = ObjectBatch::<i64, i64>::open_with_cache(
+        store.clone(),
+        reference,
+        "prefetch-encoded",
+        Arc::new(BlockCache::new(16 * 1024 * 1024, 256).with_encoded(Some(encoded.clone()))),
+    )
+    .await?;
+    let trace = TraceSnapshot::empty().append_validated(Run::Object(cold), 1)?;
+    let reads = store.reads.load(Ordering::SeqCst);
+    let mut probes = trace.probes();
+    probes.prefetch(&[&1, &2]).await?;
+    assert_eq!(probes.cursor(&1).await?.current(), Some((&1, &7, 1)));
+    assert_eq!(probes.cursor(&2).await?.current(), Some((&2, &8, 1)));
+    assert_eq!(store.reads.load(Ordering::SeqCst), reads);
+    encoded.close().await?;
+    Ok(())
+}

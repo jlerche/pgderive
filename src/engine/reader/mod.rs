@@ -1,5 +1,6 @@
 //! Fallible readers over immutable canonical memory and object batches.
 mod bounded;
+pub(crate) const READ_CONCURRENCY: usize = 8;
 mod cache;
 mod compression;
 mod cursor;
@@ -14,7 +15,8 @@ pub use streaming::WriteLimits;
 
 use super::Batch;
 use anyhow::Result;
-pub use cache::{BlockCache, CacheStats};
+pub(crate) use cache::ReadAhead;
+pub use cache::{BlockCache, CacheStats, ReadStats};
 pub use cursor::Cursor;
 pub(crate) use object::valid_namespace;
 pub use object::{ObjectBatch, ObjectRef};
@@ -24,9 +26,16 @@ use std::future::Future;
 /// Data accepted by the initial JSON run codec. Rust Ord defines physical order.
 ///
 /// Serde must round-trip identity/order; schema IDs must identify the exact types
-/// and their semantics. The initial codec is not SQL's general tuple codec.
-pub trait BatchData: Ord + Clone + Serialize + DeserializeOwned + Send + Sync + 'static {}
-impl<T> BatchData for T where T: Ord + Clone + Serialize + DeserializeOwned + Send + Sync + 'static {}
+/// and their semantics. Hash must agree with Eq; hashes are only used in resident
+/// cache synopses and are never persisted. The initial codec is not SQL's general tuple codec.
+pub trait BatchData:
+    Ord + std::hash::Hash + Clone + Serialize + DeserializeOwned + Send + Sync + 'static
+{
+}
+impl<T> BatchData for T where
+    T: Ord + std::hash::Hash + Clone + Serialize + DeserializeOwned + Send + Sync + 'static
+{
+}
 
 /// Canonical weighted entry, retaining both navigation key and full value.
 pub type Entry<K, V> = ((K, V), i64);

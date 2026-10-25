@@ -14,9 +14,12 @@ fn complete_handoff_refreshes_existing_output_before_evicting_unrelated_pages() 
     insert(&staged, "s", "a", 1)?;
     insert(&staged, "s", "c", 1)?;
     assert!(parent.peek::<i64, i64>("s", "c")?.is_none());
+    assert_eq!(parent.stats()?.filter_entries, 2);
+    assert_eq!(staged.stats()?.filter_entries, 2);
     staged.promote()?;
     assert!(parent.peek::<i64, i64>("s", "a")?.is_some());
     assert!(parent.peek::<i64, i64>("s", "c")?.is_some());
+    assert_eq!(parent.stats()?.filter_entries, 3);
     assert!(parent.peek::<i64, i64>("s", "b")?.is_none());
     assert!(parent.promote().is_err());
     Ok(())
@@ -34,11 +37,12 @@ fn sibling_schemas_share_one_budget_and_oversized_outputs_never_evict_foreground
         insert(&staged, "later", "four", 1)?;
         assert!(!staged.retains_output()?);
         assert_eq!(staged.stats()?.entries, 0);
+        assert_eq!(staged.stats()?.filter_entries, 0);
         staged.promote()?;
         let after = parent.stats()?;
         assert_eq!(
-            (before.bytes, before.entries, before.hits, before.misses),
-            (after.bytes, after.entries, after.hits, after.misses)
+            (before.bytes, before.entries, before.hits, before.misses, before.filter_entries),
+            (after.bytes, after.entries, after.hits, after.misses, after.filter_entries)
         );
     }
     Ok(())

@@ -144,7 +144,7 @@ fn canonical_handoff_rejects_invalid_order_and_zero_weights() -> Result<()> {
 fn resident_handoff_reuses_tuple_sizes_without_reserializing_rows() -> Result<()> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static CALLS: AtomicUsize = AtomicUsize::new(0);
-    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, std::hash::Hash, serde::Deserialize)]
     struct Counted(String);
     impl serde::Serialize for Counted {
         fn serialize<S: serde::Serializer>(
@@ -220,6 +220,11 @@ impl PartialEq for Representative {
     }
 }
 impl Eq for Representative {}
+impl std::hash::Hash for Representative {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
 impl PartialOrd for Representative {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))

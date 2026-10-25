@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 // JSON native scalars; the ordered, resolved native layout disambiguates text/UUID.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, std::hash::Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Cell {
     Boolean(bool),

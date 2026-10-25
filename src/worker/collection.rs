@@ -2,7 +2,7 @@
 use super::sql::Session;
 use crate::{
     Config,
-    catalog::{Catalog, Collection, GcLimits},
+    catalog::{Catalog, Collection, GcCache, GcLimits},
 };
 use anyhow::{Context, Result};
 use object_store::ObjectStore;
@@ -15,13 +15,20 @@ use tokio::{
 
 #[derive(Default)]
 pub(super) struct Collector {
-    session: Option<Arc<Mutex<Session>>>,
+    session: Option<Arc<Mutex<CollectionSession>>>,
     task: Option<JoinHandle<Result<Collection>>>,
+}
+struct CollectionSession {
+    sql: Session,
+    roots: GcCache,
 }
 impl Collector {
     pub(super) async fn connect(config: &Config) -> Result<Self> {
         Ok(Self {
-            session: Some(Arc::new(Mutex::new(Session::connect(config).await?))),
+            session: Some(Arc::new(Mutex::new(CollectionSession {
+                sql: Session::connect(config).await?,
+                roots: GcCache::default(),
+            }))),
             task: None,
         })
     }
@@ -39,7 +46,11 @@ impl Collector {
         self.task = Some(tokio::spawn(async move {
             timeout(Duration::from_secs(seconds), async move {
                 let mut session = session.lock().await;
-                catalog.collect(&mut session.client, store, GcLimits::default()).await
+                let CollectionSession { sql, roots } = &mut *session;
+                let result =
+                    catalog.collect(&mut sql.client, store, GcLimits::default(), roots).await;
+                drop(session);
+                result
             })
             .await
             .context("worker background collection timed out")?

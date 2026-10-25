@@ -6,6 +6,37 @@ from common import distribution, growth_intervals
 from request_metrics import object_requests
 
 
+def read_work(selected):
+    if len(selected)<2:return None
+    changes=sum(row['changes'] for row in selected[1:])
+    result={}
+    for origin in ['foreground','scan']:
+        result[origin]={}
+        for key in ['requested_bytes','gets','fetched_bytes']:
+            values=[row.get('cache',{}).get('io',{}).get(origin,{}).get(key) for row in selected]
+            if any(type(value) is not int or value<0 for value in values):return None
+            if any(a>b for a,b in zip(values,values[1:])):return None
+            result[origin][key+'_per_change']=(values[-1]-values[0])/max(1,changes)
+    return result
+
+
+def compactions(events,begin,end):
+    prior=None;witness=[]
+    for row in events:
+        if row['event']!='maintenance' or not begin<=row['_observed_at']<end:continue
+        counts=row.get('merges')
+        if (not isinstance(counts,list) or len(counts)!=64 or
+            any(type(value) is not int or value<0 for value in counts)):return None
+        if prior is None:
+            prior=counts;continue
+        if any(value<old for value,old in zip(counts,prior)):return None
+        if sum(counts[16:])>sum(prior[16:]):
+            witness.append({'time':row['time'],'at':row['_observed_at'],
+                            'merges_at_least_65536_rows':sum(counts[16:])-sum(prior[16:])})
+        prior=counts
+    return witness
+
+
 def interval(events, commits, visible, samples, requests, begin, end):
     selected = [row for row in events if row['event']=='published' and begin<=row['_observed_at']<end]
     resource = [row for row in samples if begin<=row['at']<end and row['activities']==['steady']]
@@ -21,7 +52,7 @@ def interval(events, commits, visible, samples, requests, begin, end):
     cpu = ((resource[-1]['cpu_seconds']-resource[0]['cpu_seconds'])*1000 /
            max(1,resource[-1]['source_changes']-resource[0]['source_changes'])) if len(resource)>1 else None
     return {'interval':[begin,end],'observations':{'epochs':len(selected),'resources':len(resource),'markers':len(sink),'checkpoints':sum(row['event']=='maintenance' and begin<=row['_observed_at']<end for row in events)},
-            'changes_per_second':changes/(end-begin),'source_changes':changes,
+            'changes_per_second':changes/(end-begin),'source_changes':changes,'range_io_per_change':read_work(selected),
             'processing_ms':distribution([row['elapsed_ms'] for row in selected]),
             'sink_visibility_ms':distribution(sink),'phase_us_per_change':phases,
             'cpu_ms_per_change':cpu,'peak_rss_bytes':max((row['rss_bytes'] for row in resource),default=None),
@@ -52,6 +83,10 @@ def assess(directory, samples, args, started):
         if part['requests']['methods'].get('PUT',0)==0: issues.append(f'Interval {number} lacks checkpoint upload evidence')
         if part['requests']['transport_errors'] or part['requests']['unknown_request_body_sizes']:
             issues.append(f'Interval {number} has incomplete or failed storage attempts')
+        if part['range_io_per_change'] is None:issues.append(f'Interval {number} lacks valid read-origin accounting')
+    cycles=compactions(events,started,started+args.duration)
+    if args.qualification=='growth' and (cycles is None or len({row['time'] for row in cycles})<2):
+        issues.append('Fewer than two checkpoints witnessed completed merges of at least 65536 input rows')
     early,late=parts
     checks=[]
     def bound(name,before,after,ratio,absolute):
@@ -78,5 +113,5 @@ def assess(directory, samples, args, started):
     if args.qualification=='growth' and (growth is None or growth<2): issues.append('Source rows did not at least double between qualified intervals')
     if args.qualification=='churn' and first!=last: issues.append('Constant-state control changed source cardinality')
     return {'passed':not issues,'issues':issues,'qualification':args.qualification,'warmup_seconds':args.warmup_seconds,
-            'source_row_growth':growth,'parts':parts,'checks':checks,
+            'source_row_growth':growth,'compaction_witnesses':cycles,'parts':parts,'checks':checks,
             'scope':'Uninterrupted wall-clock qualification against local PostgreSQL and latency-injected object storage. Marker freshness is sampled; exact final native equality and WAL fence drain are checked separately. Finite covered range, not arbitrary-size proof.'}

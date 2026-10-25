@@ -11,7 +11,7 @@ mod read;
 mod recovery;
 pub use recovery::{Durable, Resolution};
 mod storage;
-pub use storage::{Collection, GcLimits, Protection};
+pub use storage::{Collection, GcCache, GcLimits, Protection};
 mod sink;
 mod write;
 pub use position::{Lsn, Progress};

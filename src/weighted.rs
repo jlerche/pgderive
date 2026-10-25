@@ -3,7 +3,7 @@ use crate::transaction::{Change, Operation, Row};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, std::hash::Hash, Serialize, Deserialize)]
 pub struct Tuple {
     pub(super) schema: String,
     pub(super) table: String,

@@ -6,7 +6,7 @@ use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use std::collections::BTreeMap;
 
 // Limit simultaneous selected-run GETs, including oversized single-row pages.
-pub(super) const READ_CONCURRENCY: usize = 8;
+pub(super) use crate::engine::reader::READ_CONCURRENCY;
 
 /// Key probes retaining one reusable verified head per distinct reader.
 ///
@@ -48,6 +48,33 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         }
         let heads = vec![None; runs.len()];
         Self { runs, slots, heads, current: None }
+    }
+    // Reserve in key order; missing windows determine when the I/O batch is ready.
+    pub(crate) fn plan_key(
+        &self,
+        key: &K,
+        plans: &mut Vec<crate::engine::reader::ReadAhead>,
+    ) -> Result<bool> {
+        let mut admitted = true;
+        for (index, run) in self.runs.iter().enumerate() {
+            let Run::Object(batch) = run else { continue };
+            let Some(block) = batch.key_block(key) else { continue };
+            if !batch.may_contain_key(block, key)?
+                || self.heads[index].as_ref().is_some_and(|head| head.holds_block(batch, block))
+            {
+                continue;
+            }
+            admitted &= batch.reserve_prefetch(block, plans)?;
+        }
+        Ok(admitted)
+    }
+    #[cfg(test)]
+    pub(crate) async fn prefetch(&self, keys: &[&K]) -> Result<()> {
+        let mut plans = Vec::new();
+        for key in keys {
+            self.plan_key(key, &mut plans)?;
+        }
+        crate::engine::reader::ReadAhead::load(plans).await
     }
     /// Pin a fresh exact-key cursor, reusing verified blocks across affected keys.
     ///

@@ -92,6 +92,7 @@ pub(super) async fn complete(open: &mut Open, uploaded: Uploaded) -> Result<()> 
         "published_time":open.query.time(),"epoch":open.writer.epoch(),
         "previous_runs":pending.runs,"collection":"background","upload":"background"});
     if open.settings.phase_metrics {
+        event["merges"] = serde_json::to_value(open.query.cache_stats()?.merges)?;
         event["elapsed_us"] = serde_json::to_value(pending.started.elapsed().as_micros())?;
     }
     super::drive::emit(&event)

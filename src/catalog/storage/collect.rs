@@ -6,6 +6,9 @@ use object_store::{ObjectStore, path::Path};
 use std::{collections::BTreeSet, sync::Arc};
 use tokio_postgres::{Client, Transaction};
 
+mod cache;
+pub use cache::GcCache;
+
 /// Limits bound coarse catalog/mark/list metadata before any destructive request.
 #[derive(Debug, Clone, Copy)]
 pub struct GcLimits {
@@ -40,6 +43,8 @@ impl Catalog {
     /// Collect exclusively within a store namespace owned by this catalog schema.
     /// A bounded SQL snapshot captures live roots and sealed namespaces; mark,
     /// list and DELETE run without holding the publication lifecycle lock.
+    /// The caller may retain verified immutable dependencies in a bounded cache;
+    /// cached dependencies never establish liveness or scrub unchanged objects.
     /// Every concurrent uploader must reserve before PUT; readers must pin before
     /// opening roots. All publications use the same lifecycle barrier. Unknown
     /// object names are retained. Never run against a shared unmanaged namespace.
@@ -52,6 +57,7 @@ impl Catalog {
         sql: &mut Client,
         store: Arc<dyn ObjectStore>,
         limits: GcLimits,
+        cache: &mut GcCache,
     ) -> Result<Collection> {
         ensure!(
             limits.roots > 0 && limits.objects > 0 && limits.metadata_bytes > 0,
@@ -78,7 +84,7 @@ impl Catalog {
             tx.rollback().await?;
             return Ok(Collection::UploadProtected);
         };
-        let retained = mark(&store, roots, limits.objects).await?;
+        let retained = mark(&store, roots, limits, cache).await?;
         let sweep = candidates(&store, &retained, &sealed, limits.objects).await?;
         let deleted = sweep.candidates.len();
         delete_candidates(&store, sweep.candidates).await?;
@@ -181,17 +187,19 @@ async fn roots(tx: &Transaction<'_>, catalog: &Catalog, limit: usize) -> Result<
 async fn mark(
     store: &Arc<dyn ObjectStore>,
     roots: Vec<ObjectRef>,
-    limit: usize,
+    limits: GcLimits,
+    cache: &mut GcCache,
 ) -> Result<BTreeSet<String>> {
+    cache.prepare(store, &roots, limits.metadata_bytes)?;
     let mut retained = BTreeSet::new();
     for root in roots {
-        let children = root.dependencies(store).await?;
+        let children = cache.dependencies(&root).await?;
         retained.insert(root.path().into());
-        for child in children {
-            retained.insert(child);
-            ensure!(retained.len() <= limit, "GC mark limit exceeded");
+        for child in children.iter() {
+            retained.insert(child.clone());
+            ensure!(retained.len() <= limits.objects, "GC mark limit exceeded");
         }
-        ensure!(retained.len() <= limit, "GC mark limit exceeded");
+        ensure!(retained.len() <= limits.objects, "GC mark limit exceeded");
     }
     Ok(retained)
 }

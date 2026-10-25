@@ -31,7 +31,9 @@ async fn paused(
     let (recovery, stale) = input;
     let (sql, collector) = sessions;
     let store = Arc::new(super::paused::Store::new(recovery.store.clone()));
-    let collection = catalog.collect(collector, store.clone(), GcLimits::default());
+    let mut dependencies = crate::catalog::GcCache::default();
+    let collection =
+        catalog.collect(collector, store.clone(), GcLimits::default(), &mut dependencies);
     tokio::pin!(collection);
     tokio::select! {
         result = &mut collection => { result?; anyhow::bail!("GC did not pause during marking"); }
@@ -88,7 +90,12 @@ async fn paused(
 async fn competing(sql: &mut Client, catalog: &Catalog, recovery: &Recovery) -> Result<()> {
     let result = timeout(
         Duration::from_secs(5),
-        catalog.collect(sql, recovery.store.clone(), GcLimits::default()),
+        catalog.collect(
+            sql,
+            recovery.store.clone(),
+            GcLimits::default(),
+            &mut crate::catalog::GcCache::default(),
+        ),
     )
     .await
     .context("concurrent collection waited on object I/O")??;

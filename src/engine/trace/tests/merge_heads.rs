@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static CLONES: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, std::hash::Hash, Serialize, Deserialize)]
 struct Counted(i64);
 
 impl Clone for Counted {

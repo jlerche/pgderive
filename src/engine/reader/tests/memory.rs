@@ -9,7 +9,7 @@ use std::{
 static CLONES: AtomicUsize = AtomicUsize::new(0);
 static COMPARISONS: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, std::hash::Hash, Serialize, Deserialize)]
 struct Counted(i64);
 impl Clone for Counted {
     fn clone(&self) -> Self {

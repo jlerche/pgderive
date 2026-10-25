@@ -1925,5 +1925,170 @@
         }
       }
     ]
+  },
+  "read_amplification_2026_10_24": {
+    "scope": "Uninterrupted wall-clock qualification against local PostgreSQL and latency-injected object storage. Marker freshness is sampled; exact final native equality and WAL fence drain are checked separately. Finite covered range, not arbitrary-size proof.",
+    "passed": false,
+    "duration_seconds": 1201.4663636370096,
+    "source_changes": 1199567,
+    "active_changes_per_second": 1000.0906816320987,
+    "final_source_rows": 431856,
+    "final_groups": 399857,
+    "native_equal": true,
+    "ack_safe": true,
+    "final_journal_rows": 0,
+    "freshness_failures": 0,
+    "large_compaction_checkpoints": 3,
+    "checks": [
+      {
+        "metric": "processing_ms_p50",
+        "early": 3.0,
+        "late": 4.0,
+        "limit": 4.75,
+        "passed": true
+      },
+      {
+        "metric": "processing_ms_p95",
+        "early": 51,
+        "late": 71,
+        "limit": 77.5,
+        "passed": true
+      },
+      {
+        "metric": "sink_visibility_ms_p50",
+        "early": 14.446862041950226,
+        "late": 16.275054425932467,
+        "limit": 19.058577552437782,
+        "passed": true
+      },
+      {
+        "metric": "sink_visibility_ms_p95",
+        "early": 76.71528705395758,
+        "late": 90.61304200440645,
+        "limit": 116.07293058093637,
+        "passed": true
+      },
+      {
+        "metric": "cpu_ms_per_change",
+        "early": 0.0962556050578889,
+        "late": 0.11457038264953723,
+        "limit": 0.12041950632236112,
+        "passed": true
+      },
+      {
+        "metric": "max_pending_changes",
+        "early": 1001,
+        "late": 1001,
+        "limit": 2251.25,
+        "passed": true
+      },
+      {
+        "metric": "prepare_including_object_io_us_per_change",
+        "early": 65.84277452474755,
+        "late": 93.42755579528614,
+        "limit": 82.40346815593443,
+        "passed": false
+      },
+      {
+        "metric": "publication_us_per_change",
+        "early": 21.854790838948627,
+        "late": 21.614906176059254,
+        "limit": 27.418488548685787,
+        "passed": true
+      },
+      {
+        "metric": "peak_rss_bytes",
+        "early": 259411968,
+        "late": 297402368,
+        "limit": 302130380.8,
+        "passed": true
+      },
+      {
+        "metric": "class_a_per_change",
+        "early": 0.0009273218445375468,
+        "late": 0.0009286445126562569,
+        "limit": 0.0011619326784643176,
+        "passed": true
+      },
+      {
+        "metric": "class_b_per_change",
+        "early": 0.0012938083220194515,
+        "late": 0.0020852795942880023,
+        "limit": 0.0016200407753166983,
+        "passed": false
+      },
+      {
+        "metric": "attempts_per_change",
+        "early": 0.0022461178809307647,
+        "late": 0.003038947462075715,
+        "limit": 0.0033719571941885312,
+        "passed": true
+      },
+      {
+        "metric": "request_body_bytes_per_change",
+        "early": 26.730149343239574,
+        "late": 31.068861492948976,
+        "limit": 40.09522679523215,
+        "passed": true
+      },
+      {
+        "metric": "response_body_bytes_per_change",
+        "early": 35.97603955832827,
+        "late": 63.31860847902487,
+        "limit": 53.96406211786519,
+        "passed": false
+      }
+    ],
+    "range_io_per_change": [
+      {
+        "foreground": {
+          "requested_bytes_per_change": 378.40938041401984,
+          "gets_per_change": 0.00019434942916796234,
+          "fetched_bytes_per_change": 11.15316678512727
+        },
+        "scan": {
+          "requested_bytes_per_change": 12.24850073297499,
+          "gets_per_change": 0.00035538181333570254,
+          "fetched_bytes_per_change": 14.160774177068989
+        }
+      },
+      {
+        "foreground": {
+          "requested_bytes_per_change": 471.02889870834275,
+          "gets_per_change": 0.0009104805499636643,
+          "fetched_bytes_per_change": 33.746039966476495
+        },
+        "scan": {
+          "requested_bytes_per_change": 14.516442944611041,
+          "gets_per_change": 0.00035639605625489,
+          "fetched_bytes_per_change": 15.318985607724885
+        }
+      }
+    ],
+    "request_counts": {
+      "interval": null,
+      "attempts": 2994,
+      "methods": {
+        "PUT": 904,
+        "HEAD": 454,
+        "GET": 1606,
+        "POST": 30
+      },
+      "estimated_r2_classes": {
+        "class_a": 1126,
+        "class_b": 1838,
+        "unclassified": 30
+      },
+      "status_codes": {
+        "200": 1610,
+        "206": 1384
+      },
+      "transport_errors": 0,
+      "request_body_bytes": 33907680,
+      "response_body_bytes": 52411601,
+      "unknown_request_body_sizes": 0,
+      "scope": "All completed proxy attempts, including bootstrap, drain, GC and retries. Class estimates use HTTP method/listing flags; POST is unclassified because multipart versus bulk deletion is not recorded. Not a billing invoice."
+    },
+    "cleanup_errors": []
   }
 }

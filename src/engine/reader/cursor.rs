@@ -33,6 +33,10 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
         Ok(Self { source: Source::Object(Arc::new(batch)), rows, block: 0, position: 0, end: None })
     }
 
+    pub(crate) fn holds_block(&self, batch: &ObjectBatch<K, V>, block: usize) -> bool {
+        self.block == block && matches!(&self.source, Source::Object(old) if old.same_reader(batch))
+    }
+
     // Only reusable, unconsumed probe heads are passed as `previous`.
     pub(crate) fn memory_key_reusing(
         rows: Arc<Vec<Entry<K, V>>>,
@@ -69,7 +73,12 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
             {
                 previous.rows.clone()
             }
-            _ => batch.read(block).await?,
+            _ => {
+                if !batch.may_contain_key(block, key)? {
+                    return Ok(None);
+                }
+                batch.read(block).await?
+            }
         };
         let start = previous
             .filter(|old| {

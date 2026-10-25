@@ -80,8 +80,14 @@ pub(super) async fn collected(
         .context("removal requires durable object storage")?
         .build(&settings.object_prefix)?;
     let catalog = crate::catalog::Catalog::new(&settings.catalog_schema, &settings.query_id)?;
-    let collection =
-        catalog.collect(&mut session.client, store, crate::catalog::GcLimits::default()).await?;
+    let collection = catalog
+        .collect(
+            &mut session.client,
+            store,
+            crate::catalog::GcLimits::default(),
+            &mut crate::catalog::GcCache::default(),
+        )
+        .await?;
     Ok(
         json!({"version":1,"query_id":settings.query_id,"state":"dropped","collection":format!("{collection:?}")}),
     )

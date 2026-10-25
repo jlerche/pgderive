@@ -14,20 +14,41 @@ pub(super) async fn check(
 ) -> Result<()> {
     let protection = writer.protect_upload(sql, "gc-empty-finished").await?;
     protection.published(sql, writer, graph.plan(), &graph.checkpoint()?).await?;
-    catalog.collect(sql, recovery.store.clone(), GcLimits::default()).await?;
+    catalog
+        .collect(
+            sql,
+            recovery.store.clone(),
+            GcLimits::default(),
+            &mut crate::catalog::GcCache::default(),
+        )
+        .await?;
     let reused = writer.protect_upload(sql, "gc-empty-finished").await?;
     let namespace = reused.namespace()?.to_owned();
     let unknown = Path::from(format!("{namespace}/unknown-format"));
     recovery.store.put(&unknown, b"owned unknown fixture".to_vec().into()).await?;
     reused.published(sql, writer, graph.plan(), &graph.checkpoint()?).await?;
-    catalog.collect(sql, recovery.store.clone(), GcLimits::default()).await?;
+    catalog
+        .collect(
+            sql,
+            recovery.store.clone(),
+            GcLimits::default(),
+            &mut crate::catalog::GcCache::default(),
+        )
+        .await?;
     recovery.store.head(&unknown).await?;
     ensure!(
         writer.protect_upload(sql, "gc-empty-finished").await.is_err(),
         "unknown namespace contents lost ledger"
     );
     recovery.store.delete(&unknown).await?;
-    catalog.collect(sql, recovery.store.clone(), GcLimits::default()).await?;
+    catalog
+        .collect(
+            sql,
+            recovery.store.clone(),
+            GcLimits::default(),
+            &mut crate::catalog::GcCache::default(),
+        )
+        .await?;
     let reused = writer.protect_upload(sql, "gc-empty-finished").await?;
     reused.published(sql, writer, graph.plan(), &graph.checkpoint()?).await?;
     stale_handle(sql, catalog, graph, writer, recovery).await
@@ -47,11 +68,25 @@ async fn stale_handle(
         writer.seal_fenced_recovery(sql, graph.plan()).await? == 1,
         "old private recovery pin not sealed"
     );
-    catalog.collect(sql, recovery.store.clone(), GcLimits::default()).await?;
+    catalog
+        .collect(
+            sql,
+            recovery.store.clone(),
+            GcLimits::default(),
+            &mut crate::catalog::GcCache::default(),
+        )
+        .await?;
     let current = catalog.protect_checkpoint(sql, graph.plan(), "gc-token-generation").await?;
     ensure!(old.reader_finished(sql).await.is_err(), "stale handle closed reused token");
     // The new protection remains active and can close exactly its own generation.
     current.reader_finished(sql).await?;
-    catalog.collect(sql, recovery.store.clone(), GcLimits::default()).await?;
+    catalog
+        .collect(
+            sql,
+            recovery.store.clone(),
+            GcLimits::default(),
+            &mut crate::catalog::GcCache::default(),
+        )
+        .await?;
     Ok(())
 }
