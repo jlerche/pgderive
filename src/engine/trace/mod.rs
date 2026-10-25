@@ -4,6 +4,7 @@ mod flush;
 mod manifest;
 mod memory;
 mod merged;
+mod overlap;
 mod probes;
 mod rebase;
 mod tiers;

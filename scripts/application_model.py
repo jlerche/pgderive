@@ -29,6 +29,7 @@ def render(recipe, parameter, frame):
     source = '{schema}'
     templates = {
         'projection': f'SELECT reverse(label) AS label,COALESCE(abs(cohort),0)+{parameter} AS bucket FROM {source}.account WHERE id>={parameter}',
+        'linear': 'SELECT account_id AS group_key,COUNT(*) AS rows,SUM(amount) AS total FROM {schema}.entry GROUP BY account_id',
         'group': f'SELECT account_id AS group_key,COUNT(*) AS rows,COUNT(abs(amount)) AS present,COUNT(DISTINCT abs(amount)) AS unique_amounts,SUM(abs(amount)) AS total FROM {source}.entry WHERE amount IS NULL OR amount>={-parameter} GROUP BY account_id',
         'join': f'SELECT a.label AS label,b.amount AS amount FROM {source}.account a JOIN {source}.entry b ON abs(a.cohort)=abs(b.account_id) WHERE b.amount IS NULL OR b.amount>={-parameter}',
         'left': f'SELECT a.label AS label,b.amount AS amount FROM {source}.account a LEFT JOIN {source}.entry b ON a.id=b.account_id WHERE b.amount IS NULL OR b.amount>={-parameter}',
@@ -111,7 +112,7 @@ def expected(spec, source):
     if recipe == 'projection':
         return collections.Counter((row['label'][::-1] if row['label'] is not None else None,
                                     abs(row['cohort'] or 0)+parameter) for row in accounts if row['id']>=parameter)
-    if recipe in ('group','derived','window'):
+    if recipe in ('group','linear','derived','window'):
         return grouped(spec,entries)
     result = collections.Counter()
     for a in accounts:
@@ -137,6 +138,9 @@ def grouped(spec, entries):
         if recipe == 'group':
             prices = [abs(row['amount']) for row in rows if row['amount'] is not None]
             result[(key,len(rows),len(prices),len(set(prices)),sum(prices) if prices else None)] += 1
+        elif recipe == 'linear':
+            prices = [row['amount'] for row in rows if row['amount'] is not None]
+            result[(key,len(rows),sum(prices) if prices else None)] += 1
         elif recipe == 'derived':
             if len(rows)>=parameter:
                 result[(key,len(rows))] += 1

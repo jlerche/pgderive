@@ -74,6 +74,9 @@ fn select_tier<K: BatchData, V: BatchData>(
     runs: &[Run<K, V>],
     cohorts: &[usize],
 ) -> Result<Vec<bool>> {
+    if let Some(selected) = super::overlap::select(runs, cohorts)? {
+        return Ok(selected);
+    }
     let mut tiers = Vec::with_capacity(cohorts.len());
     let mut counts = vec![0_usize; usize::try_from(usize::BITS)?];
     let mut offset = 0_usize;

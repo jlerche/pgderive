@@ -669,8 +669,8 @@ failed the same four checks reported above, so neither the cold-regime nor broad
 plateau gate is claimed to pass. Bounds remained fixed; no restart or active
 cache reset was used to achieve those results.
 
-The next focused change should carry bounded forward index-navigation state
-through a scan instead of relying on repeated root-to-leaf ordinal lookups to
+At that checkpoint, the proposed next change was bounded forward index-navigation
+state through a scan instead of relying on repeated root-to-leaf ordinal lookups to
 hit a cache. It must preserve failure-atomic cursor positions, wide-fence limits,
 weighted identity and GC/publication ordering. The retained physical range
 counters provide a fast rejection test for that work. Whole-worker operation for
@@ -685,3 +685,102 @@ fingerprints did not change during that run. Owned PostgreSQL fixtures used tmpf
 and were removed; datasets, results and rejected experiments remain ignored.
 Independent review found no outstanding actionable correctness/durability issue.
 This common-gate pass does not override the four failed performance trend checks.
+
+## Authenticated navigation and overlapping history
+
+Immutable index nodes now retain their validated contents in an authenticated
+handle. Construction validates the encoded node and its structural summary.
+Reuse checks the caller's hash, encoded length, fences, row/block counts, weight
+bound, depth and pack placement against that handle. It does not walk and
+resummarize the node for every key. The handle is charged to the bounded index
+cache, including its retained summary. Inline roots, fetched pages and warmed
+uploads use the same constructor. This changes neither the persisted format nor
+publication and acknowledgement ordering.
+
+Checkpoint consolidation also considers overlapping logical key ranges across
+size tiers. At least four overlapping cohorts can be merged when no selected
+cohort holds more than half of the selected physical rows. Dominant bases are
+excluded; multipack cohorts remain indivisible. This bounds relative row work,
+not compressed bytes or PUT count. Coarse key envelopes can overestimate overlap
+for sparse data. Existing size-tier consolidation still handles nonoverlapping
+runs, and complete-state overflow handling preserves signed full-tuple identity.
+
+The fast SQL replay now uses bounded ingestion and the production
+freeze/upload/rebase path. A captured prefix is uploaded while a later
+transaction commits, then installed with that newer suffix preserved. It retires
+unreachable objects using the production mark kernel in an exclusively owned
+fixture store. It does not simulate PostgreSQL GC protection/sweep barriers.
+Independent integrated output checks run throughout; physical output verification
+uses a separate cold query after the measured interval. Active endurance state
+is never periodically restarted or fully compacted to reset its history.
+
+```sh
+python3 scripts/fast_validation.py --mode endurance --release \
+  --state-rows 32000 128000 --updates 256 \
+  --output artifacts/fast-validation/endurance-new
+```
+
+Each epoch contains up to 1,000 mixed source operations, including inserts,
+updates, deletes, NULLs and signed aggregate inputs. Repeated operations on one
+key retain their intermediate old/new tuples. Original affected operations pace
+the logical clock at 1,000/s; missing deletes count zero, unchanged updates count
+one. Source transactions remain indivisible. Checkpoint scheduling uses the
+same 64 MiB memtable, five-second interval and 16-tick limit as the paused demo.
+The test records foreground plus maintenance requests, bytes, cache charges,
+run count and process RSS, and compares fixed early/late windows. It is an
+unpaced component qualification, excluding CDC and PostgreSQL sink latency.
+The separate `longevity` mode stresses larger state and virtual idle-time expiry;
+its reported logical days are not days of continuously executed traffic.
+
+### Paired component results, 2026-10-25
+
+With identical corrected lifecycle fixtures on `417d0fc` and this implementation,
+256 epochs produced these local preparation measurements:
+
+| Initial source rows | Preparation p50, before / after | Preparation p95, before / after | Maximum runs, before / after | PUTs, before / after |
+| ---: | ---: | ---: | ---: | ---: |
+| 32,000 | 98.56 / 31.01 ms | 168.33 / 44.08 ms | 12 / 7 | 200 / 198 |
+| 128,000 | 153.55 / 50.69 ms | 351.28 / 76.85 ms | 17 / 6 | 258 / 258 |
+
+Each side consumed the same source transactions and passed the independent
+oracles and final cold-state equality check. Request counters include bootstrap
+through the last measured epoch. The 128k candidate passed all declared trend
+and resource checks. The 32k candidate failed the maintenance elapsed-time trend check:
+502 to 782 ns per affected operation, above its fixed 25% allowance. The baseline
+also failed that check. Neither small absolute cost nor a baseline failure turns
+a candidate failure into a pass.
+
+An additional uninterrupted 512-epoch candidate replay executed 437,901 and
+485,517 affected operations from 64k and 262,144 starting rows. It completed 80
+and 86 checkpoints, respectively, with maximum run counts seven and six and
+cold-state equality. Preparation p50 was 38.21 and 45.30 ms. These tests **did not
+qualify the declared overall plateau**: maintenance elapsed time per affected operation
+rose beyond 25% at both sizes, and GETs per operation rose 27% at 64k. At 64k,
+the fixed comparison windows contained 110 versus 126 GETs and the same 108
+PUTs, while maintenance elapsed time was 88 versus 161 ms. Preparation, transferred bytes,
+PUTs and all absolute resource limits passed. These observations demonstrate a
+substantial preparation improvement, not a complete steady-state proof.
+
+Detailed inputs, paired results, failed assessments and larger-state evidence
+are retained under ignored `artifacts/benchmarks/authenticated-overlap/`.
+The demo remains paused; this implementation has not been deployed.
+
+The larger-state lifecycle check completed 144 compactions and 589,824 executed
+changes, ending at 4,484,520 state rows and about 45.1 MB of physical state.
+All independent results, cold reopens, retirement checks and absolute resource
+bounds passed without an active-state restart. Resident coarse roots peaked at
+49,562 charged bytes, total index cache charge stayed below 4 MiB, and sampled
+process RSS peaked at about 1.07 GB. Virtual idle intervals advanced the clock
+across 72 days; actual executed traffic is only about 590 seconds at 1k changes/s.
+The four previously observed strict growth checks still failed: normalized
+compaction GETs/bytes at 524k starting rows, and foreground index GETs/bytes at
+2M starting rows. This slice improves cached preparation but does not resolve
+that separate cold navigation/scan amplification. No weekly continuous-traffic
+or unrestricted steady-state claim follows from these results.
+
+The final implementation passed independent review and `./scripts/check.sh`:
+559 Rust tests, 126 Python tests, sequential PostgreSQL integration checks,
+strict formatting/lints/dependency checks and 97.32% production line coverage.
+All 18 additional SQL replay cases and storage-growth work bounds passed.
+The owned PostgreSQL fixture used tmpfs and was removed after the gate.
+The failed steady-state trend assessments remain failed and retained.

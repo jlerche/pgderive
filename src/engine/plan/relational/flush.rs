@@ -78,7 +78,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     pub async fn freeze_flush(&mut self, protection: &Protection) -> Result<FrozenFlush<K, V>> {
         self.capture_flush(protection.namespace()?.to_owned()).await
     }
-    async fn capture_flush(&mut self, namespace: String) -> Result<FrozenFlush<K, V>> {
+    pub(crate) async fn capture_flush(&mut self, namespace: String) -> Result<FrozenFlush<K, V>> {
         let sealed = self
             .engine
             .prepare_maintenance(|state| async move {

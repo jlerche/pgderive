@@ -5,7 +5,7 @@ import json
 import pathlib
 import unittest
 from application_model import apply, state
-from fast_replay import bag, delta, export, preloaded, text, traces
+from fast_replay import LIFECYCLE, bag, delta, export, preloaded, text, traces
 
 
 def snapshot(source):
@@ -22,7 +22,7 @@ class FastReplayTests(unittest.TestCase):
 
     def test_exported_default_fixture_is_reproducible(self):
         actual = json.loads((pathlib.Path(__file__).parents[1]/'tests/fixtures/fast-replay.json').read_text())
-        self.assertEqual(actual, {'version': 1, 'limits': {}, 'cases': [export(t) for t in traces([1], transactions=8)]})
+        self.assertEqual(actual, {'version': 2, 'limits': {}, 'lifecycle': LIFECYCLE, 'cases': [export(t) for t in traces([1], transactions=8)]})
 
     def test_weighted_changes_match_independent_full_snapshot_difference(self):
         for trace in traces(range(3)):
@@ -36,7 +36,7 @@ class FastReplayTests(unittest.TestCase):
                 expected = snapshot(separate)
                 expected.subtract(before)
                 actual = collections.Counter()
-                for change in delta(source, transaction):
+                for change in delta(source, transaction)[0]:
                     actual[change['table'], tuple(sorted(change['row'].items()))] += change['weight']
                 self.assertEqual({k:v for k,v in actual.items() if v}, {k:v for k,v in expected.items() if v})
                 self.assertEqual(source, separate)
@@ -48,7 +48,12 @@ class FastReplayTests(unittest.TestCase):
             {'table':'entry', 'kind':'upsert', 'row':{'id':1, 'account_id':None, 'amount':2}},
             {'table':'entry', 'kind':'upsert', 'row':{'id':2, 'account_id':1, 'amount':3}},
             {'table':'entry', 'kind':'delete', 'id':2}]}
-        self.assertEqual(delta(source, transaction), [])
+        changes, affected = delta(source, transaction)
+        self.assertEqual(affected, 4)
+        summed = collections.Counter()
+        for change in changes:
+            summed[tuple(sorted(change['row'].items()))] += change['weight']
+        self.assertFalse(any(summed.values()))
 
     def test_growth_limits_scale_output_and_total_scratch_guards(self):
         from fast_validation import growth_limits
@@ -93,11 +98,11 @@ class CoverageTests(unittest.TestCase):
         import tempfile
         from fast_validation import validate_report
         cases = [{'name':'one', 'steps':[
-            {'expected':[[['a'],1]], 'measure':False, 'restart':False, 'updates':[]},
-            {'expected':[[['b'],1]], 'measure':True, 'restart':False, 'updates':[{},{}]}]}]
+            {'source_rows':0, 'expected':[[['a'],1]], 'measure':False, 'restart':False, 'updates':[]},
+            {'source_rows':1, 'expected':[[['b'],1]], 'measure':True, 'restart':False, 'updates':[{'table':'entry','row':{'id':'1'}},{'table':'entry','row':{'id':'1'}}]}]}]
         valid = {'bootstrap_ns':100, 'bootstrap_rows':0, 'case':'one', 'prepare_commit_ns':[123], 'oracle_checks':2,
                  'logical_time':2, 'measured_weighted_updates':2, 'output_groups':1,
-                 'measured_object_reads':1, 'measured_object_puts':0,
+                 'measured_object_reads':1, 'measured_object_puts':0, 'cold_reopen_equal':True, 'lifecycle': {'logical_ms':1,'source_rows':1,'checkpoints':1,'rebased_uploads':0,'capacity_flushes':0,'maintenance_ns':0,'maximum_runs':1,'maximum_memtable_bytes':100,'restarts':0,'samples':[dict.fromkeys(('logical_ms','source_rows','prepare_ns','maintenance_ns','gets','read_bytes','puts','put_bytes','runs','memtable_bytes'),1)],'retirement':[dict.fromkeys(('gets','read_bytes','cache_bytes','deleted_objects','state_objects','state_bytes','rss_bytes','peak_rss_bytes','virtual_io_us','wall_us'),0)]},
                  'object_puts':3, 'stored_objects':3, 'stored_bytes':128,
                  'memtable_bytes':100, 'measured_cache_misses':0, 'measured_decoded_bytes':100, 'measured_decoded_rows':1}
         with tempfile.TemporaryDirectory() as directory:
@@ -110,8 +115,8 @@ class CoverageTests(unittest.TestCase):
                              {'oracle_checks':0}, {'case':'wrong'}, {'logical_time':3},
                              {'measured_weighted_updates':0}, {'memtable_bytes':-1},
                              {'measured_cache_misses':-1}, {'measured_decoded_bytes':-1}, {'measured_decoded_rows':-1}, {'measured_object_reads':-1},
-                             {'measured_object_puts':1}, {'object_puts':-1},
-                             {'stored_objects':-1}, {'stored_bytes':-1}]:
+                             {'measured_object_puts':-1}, {'object_puts':-1},
+                             {'stored_objects':-1}, {'stored_bytes':-1}, {'cold_reopen_equal':False}, {'lifecycle':{}}]:
                 path.write_text(json.dumps([valid | mutation]))
                 with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
                     validate_report(path, cases)

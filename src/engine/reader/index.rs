@@ -6,7 +6,9 @@ use super::{
 use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+mod authenticated;
 mod frames;
+pub(super) use authenticated::Authenticated;
 
 const FANOUT: usize = 32;
 pub(super) const PAGE_BYTES: usize = bounded::MAX_BYTES;
@@ -355,11 +357,11 @@ impl Cache {
         let stripe = hasher.finish().to_le_bytes()[0] & 15;
         self.flights[usize::from(stripe)].lock().await
     }
-    pub(super) fn get<T: Send + Sync + 'static>(
+    pub(super) fn get<T: Ord + Clone + Serialize + Send + Sync + 'static>(
         &self,
         hash: &str,
         length: u64,
-    ) -> Result<Option<std::sync::Arc<Node<T>>>> {
+    ) -> Result<Option<std::sync::Arc<Authenticated<T>>>> {
         if let Some(parent) = &self.parent
             && let Some(entry) = parent.peek::<T>(hash, length)?
         {
@@ -392,14 +394,14 @@ impl Cache {
         drop(state);
         Ok(found)
     }
-    pub(super) fn insert<T: Send + Sync + 'static>(
+    pub(super) fn insert<T: Ord + Clone + Serialize + Send + Sync + 'static>(
         &self,
         hash: &str,
         length: u64,
-        node: std::sync::Arc<Node<T>>,
+        node: std::sync::Arc<Authenticated<T>>,
         encoded: usize,
     ) -> Result<()> {
-        let slots = match node.as_ref() {
+        let slots = match node.node() {
             Node::Leaf(entries) => entries.capacity().checked_mul(std::mem::size_of::<Leaf<T>>()),
             Node::Branch(entries) => {
                 entries.capacity().checked_mul(std::mem::size_of::<Address<T>>())
@@ -409,7 +411,7 @@ impl Cache {
         let charge = encoded
             .checked_mul(2)
             .and_then(|n| n.checked_add(slots))
-            .and_then(|n| n.checked_add(std::mem::size_of::<Node<T>>()))
+            .and_then(|n| n.checked_add(node.charge()))
             .context("index cache charge overflow")?;
         self.retain(hash, length, std::any::TypeId::of::<T>(), Cached { node, charge, accessed: 0 })
     }
@@ -559,6 +561,8 @@ pub(super) fn warm<K: BatchData, V: BatchData>(
         if let Node::Branch(children) = node.as_ref() {
             pending.extend(children.iter().cloned());
         }
+        let pack_bytes = root.pack.as_ref().context("missing generated index pack")?.bytes;
+        let node = std::sync::Arc::new(Authenticated::new(node, &address, pack_bytes)?);
         cache.insert(&address.hash, address.length, node, decoded.len())?;
     }
     Ok(())
@@ -615,13 +619,29 @@ mod tests {
     use super::*;
     #[test]
     fn scan_retains_parent_navigation_after_foreground_eviction() -> Result<()> {
-        let parent = std::sync::Arc::new(Cache::new(4096, 1));
-        let node = std::sync::Arc::new(Node::<u64>::Leaf(Vec::new()));
+        let parent = std::sync::Arc::new(Cache::new(16384, 1));
+        let child = |value| Address {
+            offset: value,
+            length: 1,
+            hash: "0".repeat(64),
+            first: value,
+            last: value,
+            blocks: 1,
+            rows: 1,
+            max_weight: 1,
+            depth: 0,
+        };
+        let raw = std::sync::Arc::new(Node::Branch(vec![child(0), child(1)]));
+        let mut address = raw.summary()?;
+        address.offset = 2;
+        address.length = 1;
+        address.hash = "0".repeat(64);
+        let node = std::sync::Arc::new(Authenticated::new(raw, &address, 3)?);
         parent.insert("old", 1, node.clone(), 32)?;
         let scan = Cache::scan(parent.clone());
         let initial = scan.get::<u64>("old", 1)?.context("missing shared navigation")?;
         assert!(std::sync::Arc::ptr_eq(&initial, &node));
-        parent.insert("new", 1, std::sync::Arc::new(Node::<u64>::Leaf(Vec::new())), 32)?;
+        parent.insert("new", 1, node.clone(), 32)?;
         assert!(parent.get::<u64>("old", 1)?.is_none());
         let retained = scan.get::<u64>("old", 1)?.context("lost private navigation")?;
         assert!(std::sync::Arc::ptr_eq(&retained, &node));

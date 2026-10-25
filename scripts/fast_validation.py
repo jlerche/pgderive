@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
-from fast_replay import export, preloaded, traces
+from fast_replay import LIFECYCLE, endurance, export, preloaded, traces
 from fast_steady import TEST as STEADY_TEST, assess as assess_steady
 from fast_longevity import COLD_TEST, TEST as LONGEVITY_TEST, assess as assess_longevity
 from performance.common import ROOT, save, sha256
@@ -54,8 +54,34 @@ def validate_report(path, cases):
                 or any(type(row[key]) is not int or row[key] < 0 for key in [
                     'bootstrap_ns', 'memtable_bytes', 'measured_cache_misses', 'measured_decoded_bytes', 'measured_decoded_rows', 'measured_object_reads',
                     'measured_object_puts', 'object_puts', 'stored_objects', 'stored_bytes'])
-                or row['measured_object_puts'] != 0):
+                or not isinstance(row.get('lifecycle'), dict) or row.get('cold_reopen_equal') is not True):
             raise RuntimeError('Engine measurement/oracle coverage differs: ' + row['case'])
+        validate_lifecycle(row['lifecycle'], steps)
+
+
+def validate_lifecycle(report, steps):
+    fields = ('logical_ms','source_rows','checkpoints','rebased_uploads','capacity_flushes',
+              'maintenance_ns','maximum_runs','maximum_memtable_bytes','restarts')
+    if (any(type(report.get(key)) is not int or report[key] < 0 for key in fields)
+            or report['checkpoints'] < 1
+            or report['rebased_uploads'] > report['checkpoints']
+            or report['restarts'] != sum(step['restart'] for step in steps)
+            or not isinstance(report.get('samples'), list)
+            or len(report['samples']) != sum(not step['restart'] for step in steps[1:])
+            or not isinstance(report.get('retirement'), list)
+            or len(report['retirement']) != report['checkpoints']):
+        raise RuntimeError('Invalid checkpoint lifecycle evidence')
+    source_rows = sum(step['source_rows'] for step in steps[1:] if not step['restart'])
+    if report['source_rows'] != source_rows or report['logical_ms'] != source_rows:
+        raise RuntimeError('Logical pacing differs from executed source rows at 1000/s')
+    for sample in report['samples']:
+        if any(type(sample.get(key)) is not int or sample[key] < 0 for key in
+               ('logical_ms','source_rows','prepare_ns','maintenance_ns','gets','read_bytes','puts','put_bytes','runs','memtable_bytes')):
+            raise RuntimeError('Invalid per-epoch lifecycle sample')
+    for retirement in report['retirement']:
+        if any(type(retirement.get(key)) is not int or retirement[key] < 0 for key in
+               ('gets','read_bytes','cache_bytes','deleted_objects','state_objects','state_bytes','rss_bytes','peak_rss_bytes','virtual_io_us','wall_us')):
+            raise RuntimeError('Invalid fixture retirement evidence')
 
 
 def validate_storage_growth(path):
@@ -155,7 +181,7 @@ def growth_limits(rows):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=pathlib.Path, required=True)
-    parser.add_argument('--mode', choices=['correctness', 'growth', 'storage-growth', 'steady', 'cold', 'longevity', 'integration'], default='correctness')
+    parser.add_argument('--mode', choices=['correctness', 'growth', 'storage-growth', 'steady', 'cold', 'longevity', 'endurance', 'integration'], default='correctness')
     parser.add_argument('--seeds', type=int, default=3)
     parser.add_argument('--state-rows', type=int, nargs='+', default=[1000, 8000, 32000],
                         help='Growth replay sizes; steady mode uses its fixed 32k through 524k matrix')
@@ -168,6 +194,8 @@ def main():
     args = parser.parse_args()
     if args.seeds < 1 or args.repeats < 1 or any(not 1 <= rows <= 262144 for rows in args.state_rows):
         parser.error('Positive seeds/repeats and state rows in [1,262144] required')
+    if args.mode == 'endurance' and args.updates < 128:
+        parser.error('Endurance requires at least 128 epochs for fixed comparison windows')
     if args.warmup < 0 or args.updates < 1:
         parser.error('Nonnegative warmup and positive measured updates required')
     output = args.output.resolve()
@@ -305,7 +333,9 @@ def main():
                 validate_tests(output/'sparse-growth.log',{sparse})
                 validate_sparse_growth(output/'sparse-growth.log')
 
-            if args.mode == 'growth':
+            if args.mode == 'endurance':
+                cases = [endurance(rows, args.updates) for rows in args.state_rows]
+            elif args.mode == 'growth':
                 cases = []
                 for rows in args.state_rows:
                     for repeat in range(args.repeats):
@@ -319,13 +349,21 @@ def main():
                 for index, trace in enumerate(raw):
                     save(output / f'application-trace-{index}.json', trace)
             suite = output / 'replay.json'
-            limits = growth_limits(max(args.state_rows)) if args.mode == 'growth' else {}
-            suite.write_text(json.dumps({'version': 1, 'limits': limits, 'cases': cases}, ensure_ascii=False, separators=(',', ':')) + '\n')
+            limits = growth_limits(max(args.state_rows)) if args.mode in ('growth','endurance') else {}
+            if args.mode == 'endurance':
+                limits.update(cache_bytes=64*1024**2, cache_entries=4096)
+            suite.write_text(json.dumps({'version': 2, 'limits': limits, 'lifecycle': LIFECYCLE, 'cases': cases}, ensure_ascii=False, separators=(',', ':')) + '\n')
             report['trace_sha256'] = sha256(suite)
             env = dict(os.environ, PGDERIVE_FAST_REPLAY=str(suite), PGDERIVE_FAST_REPORT=str(output / 'engine.json'))
             report['steps'].append(execute([binary, REPLAY, '--exact', '--nocapture'], output, 'engine-replay', env))
             validate_tests(output/'engine-replay.log', {REPLAY})
             validate_report(output/'engine.json', cases)
+            if args.mode == 'endurance':
+                from fast_endurance import assess
+                assessment = assess(output/'engine.json')
+                save(output/'assessment.json', assessment)
+                if not assessment['qualified']:
+                    raise RuntimeError('Endurance bounds or trends failed; see assessment.json')
         report['passed'] = True
     except BaseException as error:
         report['error'] = repr(error)

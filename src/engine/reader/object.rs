@@ -1,7 +1,7 @@
 use super::{
     BatchData, BatchReader, BlockCache, Cursor, Entry,
     format::{Block, Pack, hash, validate},
-    index::{Address, Leaf, Node, Root},
+    index::{Address, Authenticated, Leaf, Node, Root},
 };
 use crate::engine::Batch;
 use anyhow::{Context, Result, ensure};
@@ -82,7 +82,7 @@ impl ObjectRef {
     }
 }
 
-type Head<K, V> = Option<Arc<Node<(K, V)>>>;
+type Head<K, V> = Option<Arc<Authenticated<(K, V)>>>;
 type IndexData<K, V> = (Vec<Pack>, Vec<Block<(K, V)>>);
 type IndexUpload<K, V> = (ObjectRef, Root<(K, V)>, Head<K, V>);
 
@@ -184,6 +184,13 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 })
                 .transpose()?
         };
+        let head = head
+            .map(|node| {
+                let address = root.node.as_ref().context("missing generated node address")?;
+                let pack_bytes = root.pack.as_ref().map_or(address.length, |pack| pack.bytes);
+                Ok::<_, anyhow::Error>(Arc::new(Authenticated::new(node, address, pack_bytes)?))
+            })
+            .transpose()?;
         if let Some(cache) = cache {
             super::index::warm(&cache.index, &root, &packed)?;
         }
@@ -234,20 +241,22 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         index.validate()?;
         let rows = index.node.as_ref().map_or(0, |node| node.rows);
         let max_weight = index.node.as_ref().map_or(0, |node| node.max_weight);
-        let mut batch = Self {
-            store,
-            reference,
-            head: index.inline.take().map(Arc::new),
-            index: Arc::new(index),
-            rows,
-            max_weight,
-            cache,
-        };
+        let head = index
+            .inline
+            .take()
+            .map(|node| {
+                let address = index.node.as_ref().context("missing inline address")?;
+                Ok::<_, anyhow::Error>(Arc::new(Authenticated::new(
+                    Arc::new(node),
+                    address,
+                    address.length,
+                )?))
+            })
+            .transpose()?;
+        let batch =
+            Self { store, reference, head, index: Arc::new(index), rows, max_weight, cache };
         if let Some(address) = batch.index.node.clone() {
-            let node = batch.node(&address).await?;
-            if batch.index.pack.is_none() {
-                batch.head = Some(node);
-            }
+            batch.node(&address).await?;
         }
         Ok(batch)
     }
@@ -259,6 +268,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     }
     pub(crate) const fn max_weight(&self) -> u64 {
         self.max_weight
+    }
+    pub(crate) fn key_bounds(&self) -> Option<(&K, &K)> {
+        self.index.node.as_ref().map(|node| (&node.first.0, &node.last.0))
     }
     pub(crate) const fn row_count(&self) -> usize {
         self.rows
@@ -282,12 +294,13 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let head = self
             .head
             .as_ref()
-            .map(|head| super::bounded::encode(head.as_ref()).map(|bytes| bytes.len()))
+            .map(|head| super::bounded::encode(head.node()).map(|bytes| bytes.len()))
             .transpose()?
             .unwrap_or(0);
         root.checked_add(head)
             .and_then(|bytes| bytes.checked_mul(2))
             .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .and_then(|bytes| bytes.checked_add(self.head.as_ref().map_or(0, |head| head.charge())))
             .context("resident index charge overflow")
     }
     pub(crate) fn block_count(&self) -> usize {
@@ -298,18 +311,15 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         if self.index.node.as_ref().is_some_and(|root| root.hash == address.hash)
             && let Some(node) = &self.head
         {
-            node.validate(address, pack_bytes)?;
-            return Ok(node.clone());
+            return node.checked(address, pack_bytes);
         }
         let pack = self.index.pack.as_ref().context("missing index pack")?;
         if let Some(node) = self.cache.index.get(&address.hash, address.length)? {
-            node.validate(address, pack.bytes)?;
-            return Ok(node);
+            return node.checked(address, pack.bytes);
         }
         let _flight = self.cache.index.flight(&address.hash).await;
         if let Some(node) = self.cache.index.get(&address.hash, address.length)? {
-            node.validate(address, pack.bytes)?;
-            return Ok(node);
+            return node.checked(address, pack.bytes);
         }
         address.validate(pack.bytes)?;
         let mut qualified = pack.clone();
@@ -318,8 +328,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let bytes = self.cache.index.read(&self.store, &qualified, &address.hash, range).await?;
         let decoded = super::compression::decode(&bytes)?;
         let node: Arc<Node<(K, V)>> = Arc::new(serde_json::from_slice(&decoded)?);
-        node.validate(address, pack.bytes)?;
-        self.cache.index.insert(&address.hash, address.length, node.clone(), decoded.len())?;
+        let authenticated = Arc::new(Authenticated::new(node, address, pack.bytes)?);
+        let node = authenticated.checked(address, pack.bytes)?;
+        self.cache.index.insert(&address.hash, address.length, authenticated, decoded.len())?;
         Ok(node)
     }
     pub(super) async fn leaf(&self, ordinal: usize) -> Result<Leaf<(K, V)>> {
@@ -639,7 +650,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     }
     pub(super) fn test_block_mut(&mut self, ordinal: usize) -> Result<&mut Block<(K, V)>> {
         let head = self.head.as_mut().context("missing test index head")?;
-        let Node::Leaf(leaves) = Arc::make_mut(head) else {
+        let Node::Leaf(leaves) = Arc::make_mut(head).test_node_mut() else {
             anyhow::bail!("test requires inline leaf");
         };
         Ok(&mut leaves.get_mut(ordinal).context("missing test leaf")?.block)

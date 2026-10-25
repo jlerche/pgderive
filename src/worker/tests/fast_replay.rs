@@ -15,12 +15,15 @@ use std::{
     time::Instant,
 };
 
+mod lifecycle;
+
 type Cells = Vec<Option<String>>;
 type Bag = BTreeMap<Cells, i64>;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Suite {
     version: u32,
+    lifecycle: lifecycle::Config,
     limits: crate::engine::execution::Limits,
     cases: Vec<Case>,
 }
@@ -35,6 +38,7 @@ struct Case {
 #[serde(deny_unknown_fields)]
 struct Step {
     updates: Vec<Update>,
+    source_rows: u64,
     expected: Option<Vec<(Cells, i64)>>,
     measure: bool,
     restart: bool,
@@ -159,7 +163,49 @@ async fn restart_committed(
     let replacement = program::relational::build_committed(native, compiled, settings)?;
     super::restart_with(query, replacement).await
 }
-async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<serde_json::Value> {
+async fn verify_cold(
+    query: &program::relational::Query,
+    native: &Contract,
+    compiled: &crate::compiler::Compiled,
+    settings: &crate::engine::plan::Settings,
+    expected: &Bag,
+) -> Result<()> {
+    let mut cold = program::relational::build_committed(native, compiled, settings)?;
+    cold.restore_checkpoint(query.checkpoint()?).await?;
+    verify_snapshot(&cold, compiled, expected).await
+}
+async fn prepare_tick(
+    query: &mut program::relational::Query,
+    changes: &weighted::Batch,
+    ir: &crate::compiler::relational::Relational,
+    limits: crate::engine::execution::Limits,
+    lifecycle: &mut lifecycle::Lifecycle,
+) -> Result<crate::engine::plan::relational::Prepared<program::relational::Key, Row>> {
+    if query.time() == 0 {
+        bootstrap(query, changes, ir, limits).await
+    } else {
+        let input = program::relational::inputs(changes, ir, query.time() + 1)?;
+        lifecycle.prepare(query, input).await
+    }
+}
+fn check_expected(
+    output: &Bag,
+    expected: Option<Vec<(Cells, i64)>>,
+    case: &str,
+    index: usize,
+) -> Result<usize> {
+    let Some(expected) = expected else { return Ok(0) };
+    ensure!(
+        output == &expected.into_iter().collect::<Bag>(),
+        "replay {case} step {index} differs from independent application oracle"
+    );
+    Ok(1)
+}
+async fn run(
+    case: Case,
+    limits: crate::engine::execution::Limits,
+    config: lifecycle::Config,
+) -> Result<serde_json::Value> {
     let native = native();
     let compiled = crate::compiler::compile(&case.sql, &native)?;
     let mut settings = replay_settings(limits)?;
@@ -167,6 +213,7 @@ async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<ser
     settings.store = store.clone();
     let mut query = program::relational::build_committed(&native, &compiled, &settings)?;
     let mut output = Bag::new();
+    let mut lifecycle = lifecycle::Lifecycle::new(config, store.clone());
     let mut elapsed = Vec::new();
     let mut measured_changes = 0;
     let mut cache_misses = 0;
@@ -178,31 +225,21 @@ async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<ser
     let mut bootstrap_metrics = (0, 0);
     for (index, step) in case.steps.into_iter().enumerate() {
         if step.restart {
-            let compacted = query.prepare_compaction().await?;
-            query.commit_compaction(compacted)?;
+            lifecycle.report.restarts += 1;
+            lifecycle.flush(&mut query).await?;
             restart_committed(&mut query, &native, &compiled, &settings).await?;
         } else {
             let count = step.updates.len();
             let changes = changes(step.updates);
-            let input = if index == 0 {
-                None
-            } else {
-                Some(program::relational::inputs(
-                    &changes,
-                    compiled.relational(),
-                    query.time() + 1,
-                )?)
-            };
             let before = query.cache_stats()?;
             let reads = store.reads.load(Ordering::SeqCst);
             let puts = store.puts.load(Ordering::SeqCst);
             let started = Instant::now();
-            let work = if let Some(input) = input {
-                query.prepare_memtable(input, 256 * 1024 * 1024).await?
-            } else {
-                bootstrap(&query, &changes, compiled.relational(), limits).await?
-            };
+            let work =
+                prepare_tick(&mut query, &changes, compiled.relational(), limits, &mut lifecycle)
+                    .await?;
             let delta = query.commit(work)?;
+            let prepare_ns = started.elapsed().as_nanos();
             if index == 0 {
                 bootstrap_metrics = (started.elapsed().as_nanos(), count);
             }
@@ -217,20 +254,20 @@ async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<ser
                 object_puts += store.puts.load(Ordering::SeqCst) - puts;
             }
             integrate(&mut output, &super::projected_batch(&delta.batch, &compiled)?)?;
+            if index > 0 {
+                let prior_ms = lifecycle.report.logical_ms;
+                lifecycle.committed(&mut query, step.source_rows).await?;
+                lifecycle.advance(prior_ms).await;
+                lifecycle.observe(&query, prepare_ns)?;
+            }
         }
-        if let Some(expected) = step.expected {
-            oracle_checks += 1;
-            ensure!(
-                output == expected.into_iter().collect::<Bag>(),
-                "replay {} step {index} differs from independent application oracle",
-                case.name
-            );
-            verify_snapshot(&query, &compiled, &output).await?;
-        }
+        oracle_checks += check_expected(&output, step.expected, &case.name, index)?;
     }
+    lifecycle.flush(&mut query).await?;
+    verify_cold(&query, &native, &compiled, &settings, &output).await?;
     let objects = store.list(None).try_collect::<Vec<_>>().await?;
     Ok(
-        serde_json::json!({"case":case.name,"bootstrap_ns":bootstrap_metrics.0,"bootstrap_rows":bootstrap_metrics.1,"prepare_commit_ns":elapsed,
+        serde_json::json!({"case":case.name,"cold_reopen_equal":true,"lifecycle":lifecycle.report,"bootstrap_ns":bootstrap_metrics.0,"bootstrap_rows":bootstrap_metrics.1,"prepare_commit_ns":elapsed,
         "object_puts":store.puts.load(Ordering::SeqCst),"stored_objects":objects.len(),
         "stored_bytes":objects.iter().map(|object| object.size).sum::<u64>(),
         "measured_decoded_bytes":decoded_bytes,"measured_decoded_rows":decoded_rows,"measured_object_reads":object_reads,"measured_object_puts":object_puts,
@@ -238,7 +275,7 @@ async fn run(case: Case, limits: crate::engine::execution::Limits) -> Result<ser
         "memtable_bytes":query.memtable_bytes()?,"logical_time":query.time()}),
     )
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn fast_replay() -> Result<()> {
     let text = if let Some(path) = std::env::var_os("PGDERIVE_FAST_REPLAY") {
         std::fs::read_to_string(path)?
@@ -248,7 +285,7 @@ async fn fast_replay() -> Result<()> {
     let suite = parse(&text)?;
     let mut reports = Vec::new();
     for case in suite.cases {
-        reports.push(run(case, suite.limits).await?);
+        reports.push(run(case, suite.limits, suite.lifecycle).await?);
     }
     if let Some(path) = std::env::var_os("PGDERIVE_FAST_REPORT") {
         std::fs::write(path, serde_json::to_vec_pretty(&reports)?)?;
@@ -258,7 +295,8 @@ async fn fast_replay() -> Result<()> {
 
 fn parse(text: &str) -> Result<Suite> {
     let suite: Suite = serde_json::from_str(text)?;
-    ensure!(suite.version == 1 && !suite.cases.is_empty(), "invalid fast replay suite");
+    ensure!(suite.version == 2 && !suite.cases.is_empty(), "invalid fast replay suite");
+    suite.lifecycle.validate()?;
     let mut names = BTreeSet::new();
     for case in &suite.cases {
         ensure!(
@@ -276,7 +314,10 @@ fn parse(text: &str) -> Result<Suite> {
         for step in &case.steps {
             ensure!(
                 !step.restart
-                    || (step.updates.is_empty() && !step.measure && step.expected.is_some()),
+                    || (step.updates.is_empty()
+                        && step.source_rows == 0
+                        && !step.measure
+                        && step.expected.is_some()),
                 "invalid restart step"
             );
             if let Some(expected) = &step.expected {
@@ -290,12 +331,15 @@ fn parse(text: &str) -> Result<Suite> {
     }
     Ok(suite)
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn wrong_oracle_is_rejected() -> Result<()> {
     let mut suite = parse(include_str!("../../../tests/fixtures/fast-replay.json"))?;
     let mut case = suite.cases.remove(0);
     case.steps.last_mut().context("fixture missing steps")?.expected = Some(vec![]);
-    let error = run(case, suite.limits).await.err().context("wrong oracle unexpectedly passed")?;
+    let error = run(case, suite.limits, suite.lifecycle)
+        .await
+        .err()
+        .context("wrong oracle unexpectedly passed")?;
     assert!(error.to_string().contains("independent application oracle"));
     Ok(())
 }
@@ -309,5 +353,82 @@ fn missing_coverage_is_rejected() -> Result<()> {
     let mut value: serde_json::Value = serde_json::from_str(text)?;
     value["cases"][0]["steps"][0]["expected"] = serde_json::Value::Null;
     assert!(parse(&value.to_string()).is_err());
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn upload_rebases_newer_join_transactions_without_compacting_restart() -> Result<()> {
+    let suite = parse(include_str!("../../../tests/fixtures/fast-replay.json"))?;
+    let case = suite
+        .cases
+        .into_iter()
+        .find(|case| case.name.starts_with("join-"))
+        .context("missing join fixture")?;
+    let report =
+        run(case, suite.limits, lifecycle::Config { checkpoint_interval_ms: 1, ..suite.lifecycle })
+            .await?;
+    assert!(report["lifecycle"]["rebased_uploads"].as_u64().context("missing rebases")? > 0);
+    assert!(report["cold_reopen_equal"].as_bool().context("missing cold check")?);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn capacity_flushes_use_bounded_ingestion_and_preserve_exact_results() -> Result<()> {
+    let update = |id: i32, amount: i32, weight| Update {
+        table: "entry".into(),
+        row: [
+            ("id".into(), Some(id.to_string())),
+            ("account_id".into(), Some(id.to_string())),
+            ("amount".into(), Some(amount.to_string())),
+        ]
+        .into_iter()
+        .collect(),
+        weight,
+    };
+    let expected = |changed: i32| {
+        (1..=64)
+            .map(|key| {
+                (
+                    vec![
+                        Some(key.to_string()),
+                        Some("1".into()),
+                        Some(i32::from(key <= changed).to_string()),
+                    ],
+                    1,
+                )
+            })
+            .collect()
+    };
+    let mut steps = vec![Step {
+        source_rows: 0,
+        updates: (1..=64).map(|key| update(key, 0, 1)).collect(),
+        expected: Some(expected(0)),
+        measure: false,
+        restart: false,
+    }];
+    for key in 1..=32 {
+        steps.push(Step {
+            source_rows: 1,
+            updates: vec![update(key, 0, -1), update(key, 1, 1)],
+            expected: (key == 32).then(|| expected(32)),
+            measure: true,
+            restart: false,
+        });
+    }
+    let suite = parse(include_str!("../../../tests/fixtures/fast-replay.json"))?;
+    let report = run(
+        Case {
+            name: "capacity".into(),
+            sql: "SELECT account_id,COUNT(*),SUM(amount) FROM source.entry GROUP BY account_id"
+                .into(),
+            steps,
+        },
+        suite.limits,
+        lifecycle::Config { memtable_bytes: 4096, ..suite.lifecycle },
+    )
+    .await?;
+    assert!(
+        report["lifecycle"]["capacity_flushes"].as_u64().context("missing capacity count")? > 0
+    );
     Ok(())
 }

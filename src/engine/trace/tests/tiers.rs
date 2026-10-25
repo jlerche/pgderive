@@ -110,3 +110,42 @@ async fn empty_cohorts_survive_growth_cancellation_and_cold_restore() -> Result<
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn overlapping_replacements_consolidate_across_tiers_without_extra_puts() -> Result<()> {
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let writer = Arrangement::new(store.clone(), "overlap-history".into(), 4096)?;
+    let mut values = vec![0_i64; 128];
+    let base = Batch::from_updates((0..128).map(|key| ((key, 0_i64), 1)))?;
+    let mut trace =
+        writer.flush(&writer.empty().append_validated(Run::Memory(Arc::new(base)), 1)?).await?;
+    for time in 2..=129_u64 {
+        let count = [16, 32, 48, 64, 128][usize::try_from(time)? % 5];
+        let mut updates = Vec::new();
+        for (key, value) in values.iter_mut().enumerate().take(count) {
+            let key = i64::try_from(key)?;
+            updates.push(((key, *value), -1));
+            *value = i64::try_from(time)?;
+            updates.push(((key, *value), 1));
+        }
+        let pending =
+            trace.append_validated(Run::Memory(Arc::new(Batch::from_updates(updates)?)), time)?;
+        trace = writer.flush(&pending).await?;
+        assert!(trace.cohorts.len() <= 6, "time {time}, cohorts {:?}", trace.cohorts);
+        let expected = Batch::from_updates(
+            values
+                .iter()
+                .enumerate()
+                .map(|(key, value)| Ok(((i64::try_from(key)?, *value), 1)))
+                .collect::<Result<Vec<_>>>()?,
+        )?;
+        assert_eq!(trace.materialize().await?, expected);
+        if time % 16 == 0 {
+            let cold = writer.reopen(trace.manifest()?).await?;
+            assert_eq!(cold.materialize().await?, expected);
+        }
+    }
+    assert!(store.puts.load(Ordering::SeqCst) <= 3 * 129);
+    Ok(())
+}

@@ -94,7 +94,7 @@ async fn failed_index_page_load_preserves_cursor_position() -> Result<()> {
         .index
         .get::<(i64, i64)>(&address.hash, address.length)?
         .context("missing cached root")?;
-    let Node::Branch(children) = node.as_ref() else {
+    let Node::Branch(children) = node.node() else {
         anyhow::bail!("expected index branch");
     };
     let offset = usize::try_from(children.get(1).context("missing next index leaf")?.offset)?;

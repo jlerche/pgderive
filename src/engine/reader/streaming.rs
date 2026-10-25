@@ -336,7 +336,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
                     &address.hash,
                     address.length,
                     head.clone(),
-                    bounded::encode(head.as_ref())?.len(),
+                    bounded::encode(head.node())?.len(),
                 )?;
             }
             let head = if index.pack.is_none() { head } else { None };

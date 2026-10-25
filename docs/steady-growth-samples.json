@@ -3206,5 +3206,637 @@
       "durability": "PUT before atomic PostgreSQL membership/results/progress publication, then slot acknowledgement; ordering unchanged.",
       "full_steady_state_passed": false
     }
+  },
+  "authenticated_navigation_and_overlap": {
+    "date": "2026-10-25",
+    "paired": {
+      "baseline": "417d0fc",
+      "scope": "Same current test-only lifecycle and exact source suites, previous versus current production implementation. Counters include bootstrap through final measured epoch; exclude final cold verification. Unpaced owned-store preparation elapsed-time comparison, not cloud/PG freshness.",
+      "cases": [
+        {
+          "case": "linear-endurance-32000-256",
+          "before": {
+            "prepare_p50_ms": 98.5592765,
+            "prepare_p95_ms": 168.33135,
+            "maximum_runs": 12,
+            "checkpoints": 40,
+            "source_rows": 219129,
+            "gets": 200,
+            "puts": 200,
+            "read_bytes": 711735,
+            "put_bytes": 4632689,
+            "rss_bytes": 1104191488,
+            "cold_reopen_equal": true
+          },
+          "after": {
+            "prepare_p50_ms": 31.0113585,
+            "prepare_p95_ms": 44.077409,
+            "maximum_runs": 7,
+            "checkpoints": 40,
+            "source_rows": 219129,
+            "gets": 198,
+            "puts": 198,
+            "read_bytes": 659990,
+            "put_bytes": 4208066,
+            "rss_bytes": 1066270720,
+            "cold_reopen_equal": true
+          }
+        },
+        {
+          "case": "linear-endurance-128000-256",
+          "before": {
+            "prepare_p50_ms": 153.5478135,
+            "prepare_p95_ms": 351.281032,
+            "maximum_runs": 17,
+            "checkpoints": 43,
+            "source_rows": 242591,
+            "gets": 293,
+            "puts": 258,
+            "read_bytes": 639821,
+            "put_bytes": 7632555,
+            "rss_bytes": 1097052160,
+            "cold_reopen_equal": true
+          },
+          "after": {
+            "prepare_p50_ms": 50.694581,
+            "prepare_p95_ms": 76.854296,
+            "maximum_runs": 6,
+            "checkpoints": 43,
+            "source_rows": 242591,
+            "gets": 300,
+            "puts": 258,
+            "read_bytes": 669916,
+            "put_bytes": 7675786,
+            "rss_bytes": 1058791424,
+            "cold_reopen_equal": true
+          }
+        }
+      ]
+    },
+    "first_assessment": {
+      "scope": "Production SQL, bounded ingestion, freeze/upload/rebase and owned-store GC marking. Virtual time paces actually executed source rows at 1000/s; no active-state restart. Includes maintenance I/O. Excludes CDC, PG publication, SQL GC barriers and cloud timings. Finite qualification, not arbitrary-size weekly production proof.",
+      "cases": [
+        {
+          "case": "linear-endurance-32000-256",
+          "executed_source_rows": 219129,
+          "logical_ms": 219129,
+          "checkpoints": 40,
+          "rebased_uploads": 39,
+          "cold_reopen_equal": true,
+          "checks": [
+            {
+              "metric": "gets_per_row",
+              "early": 0.0010028078620136383,
+              "late": 0.0009100469179744378,
+              "limit": 0.0012535098275170478,
+              "passed": true
+            },
+            {
+              "metric": "read_bytes_per_row",
+              "early": 3.045217518141706,
+              "late": 3.2710524187024754,
+              "limit": 3.8065218976771327,
+              "passed": true
+            },
+            {
+              "metric": "puts_per_row",
+              "early": 0.0010028078620136383,
+              "late": 0.0009100469179744378,
+              "limit": 0.0012535098275170478,
+              "passed": true
+            },
+            {
+              "metric": "put_bytes_per_row",
+              "early": 20.49314444079787,
+              "late": 22.32783934638408,
+              "limit": 25.616430550997336,
+              "passed": true
+            },
+            {
+              "metric": "maintenance_ns_per_row",
+              "early": 501.7737483134595,
+              "late": 782.4607668662029,
+              "limit": 627.2171853918244,
+              "passed": false
+            },
+            {
+              "metric": "prepare_ns_per_row",
+              "early": 36668.25947197608,
+              "late": 38895.96456883999,
+              "limit": 45835.3243399701,
+              "passed": true
+            },
+            {
+              "metric": "bytes",
+              "maximum": 67091423,
+              "limit": 67108864,
+              "passed": true
+            },
+            {
+              "metric": "live_bytes",
+              "maximum": 67091423,
+              "limit": 134217728,
+              "passed": true
+            },
+            {
+              "metric": "index_bytes",
+              "maximum": 2893078,
+              "limit": 16777216,
+              "passed": true
+            },
+            {
+              "metric": "filter_bytes",
+              "maximum": 2392005,
+              "limit": 16777216,
+              "passed": true
+            },
+            {
+              "metric": "pins",
+              "maximum": 0,
+              "limit": 512,
+              "passed": true
+            },
+            {
+              "metric": "maximum_runs",
+              "maximum": 7,
+              "limit": 32,
+              "passed": true
+            },
+            {
+              "metric": "maximum_memtable_bytes",
+              "maximum": 4465462,
+              "limit": 67108864,
+              "passed": true
+            },
+            {
+              "metric": "fixture_rss_bytes",
+              "maximum": 1066270720,
+              "limit": 3221225472,
+              "passed": true
+            },
+            {
+              "metric": "late_component_service_ns_per_row",
+              "maximum": 39678.4253357062,
+              "limit": 1000000,
+              "passed": true
+            },
+            {
+              "metric": "compactions",
+              "minimum": 4,
+              "actual": 26,
+              "passed": true
+            },
+            {
+              "metric": "cold_reopen_equal",
+              "passed": true
+            },
+            {
+              "metric": "rebased_uploads",
+              "minimum": 1,
+              "actual": 39,
+              "passed": true
+            }
+          ],
+          "qualified": false
+        },
+        {
+          "case": "linear-endurance-128000-256",
+          "executed_source_rows": 242591,
+          "logical_ms": 242591,
+          "checkpoints": 43,
+          "rebased_uploads": 42,
+          "cold_reopen_equal": true,
+          "checks": [
+            {
+              "metric": "gets_per_row",
+              "early": 0.001292846250745873,
+              "late": 0.001253111022155699,
+              "limit": 0.0016160578134323412,
+              "passed": true
+            },
+            {
+              "metric": "read_bytes_per_row",
+              "early": 2.9088377643704835,
+              "late": 2.9924813338670657,
+              "limit": 3.6360472054631043,
+              "passed": true
+            },
+            {
+              "metric": "puts_per_row",
+              "early": 0.0010939468275542,
+              "late": 0.0010442591851297493,
+              "limit": 0.00136743353444275,
+              "passed": true
+            },
+            {
+              "metric": "put_bytes_per_row",
+              "early": 32.6656997944706,
+              "late": 34.97230972727431,
+              "limit": 40.832124743088244,
+              "passed": true
+            },
+            {
+              "metric": "maintenance_ns_per_row",
+              "early": 951.3925445866207,
+              "late": 1121.9691595453992,
+              "limit": 1189.240680733276,
+              "passed": true
+            },
+            {
+              "metric": "prepare_ns_per_row",
+              "early": 56209.90983226149,
+              "late": 54421.1587796091,
+              "limit": 70262.38729032686,
+              "passed": true
+            },
+            {
+              "metric": "bytes",
+              "maximum": 67107471,
+              "limit": 67108864,
+              "passed": true
+            },
+            {
+              "metric": "live_bytes",
+              "maximum": 67107471,
+              "limit": 134217728,
+              "passed": true
+            },
+            {
+              "metric": "index_bytes",
+              "maximum": 4786371,
+              "limit": 16777216,
+              "passed": true
+            },
+            {
+              "metric": "filter_bytes",
+              "maximum": 5178143,
+              "limit": 16777216,
+              "passed": true
+            },
+            {
+              "metric": "pins",
+              "maximum": 0,
+              "limit": 512,
+              "passed": true
+            },
+            {
+              "metric": "maximum_runs",
+              "maximum": 6,
+              "limit": 32,
+              "passed": true
+            },
+            {
+              "metric": "maximum_memtable_bytes",
+              "maximum": 5477432,
+              "limit": 67108864,
+              "passed": true
+            },
+            {
+              "metric": "fixture_rss_bytes",
+              "maximum": 1058791424,
+              "limit": 3221225472,
+              "passed": true
+            },
+            {
+              "metric": "late_component_service_ns_per_row",
+              "maximum": 55543.127939154496,
+              "limit": 1000000,
+              "passed": true
+            },
+            {
+              "metric": "compactions",
+              "minimum": 4,
+              "actual": 28,
+              "passed": true
+            },
+            {
+              "metric": "cold_reopen_equal",
+              "passed": true
+            },
+            {
+              "metric": "rebased_uploads",
+              "minimum": 1,
+              "actual": 42,
+              "passed": true
+            }
+          ],
+          "qualified": true
+        }
+      ],
+      "qualified": false
+    },
+    "longer_assessment": {
+      "scope": "Production SQL, bounded ingestion, freeze/upload/rebase and owned-store GC marking. Virtual time paces actually executed source rows at 1000/s; no active-state restart. Includes maintenance I/O. Excludes CDC, PG publication, SQL GC barriers and cloud timings. Finite qualification, not arbitrary-size weekly production proof.",
+      "cases": [
+        {
+          "case": "linear-endurance-64000-512",
+          "executed_source_rows": 437901,
+          "logical_ms": 437901,
+          "checkpoints": 80,
+          "rebased_uploads": 79,
+          "cold_reopen_equal": true,
+          "checks": [
+            {
+              "metric": "gets_per_row",
+              "early": 0.0009960880904085771,
+              "late": 0.0012673888771538068,
+              "limit": 0.0012451101130107215,
+              "passed": false
+            },
+            {
+              "metric": "read_bytes_per_row",
+              "early": 3.8947768762677484,
+              "late": 2.5330879024714084,
+              "limit": 4.8684710953346855,
+              "passed": true
+            },
+            {
+              "metric": "puts_per_row",
+              "early": 0.000977977397855694,
+              "late": 0.0010863333232746914,
+              "limit": 0.0012224717473196176,
+              "passed": true
+            },
+            {
+              "metric": "put_bytes_per_row",
+              "early": 29.07924333526514,
+              "late": 29.9280605932587,
+              "limit": 36.34905416908143,
+              "passed": true
+            },
+            {
+              "metric": "maintenance_ns_per_row",
+              "early": 799.3580393364242,
+              "late": 1620.0993089713027,
+              "limit": 999.1975491705302,
+              "passed": false
+            },
+            {
+              "metric": "prepare_ns_per_row",
+              "early": 42790.81650246305,
+              "late": 52554.25238138346,
+              "limit": 53488.52062807881,
+              "passed": true
+            },
+            {
+              "metric": "bytes",
+              "maximum": 67108799,
+              "limit": 67108864,
+              "passed": true
+            },
+            {
+              "metric": "live_bytes",
+              "maximum": 67108799,
+              "limit": 134217728,
+              "passed": true
+            },
+            {
+              "metric": "index_bytes",
+              "maximum": 4923590,
+              "limit": 16777216,
+              "passed": true
+            },
+            {
+              "metric": "filter_bytes",
+              "maximum": 7211893,
+              "limit": 16777216,
+              "passed": true
+            },
+            {
+              "metric": "pins",
+              "maximum": 0,
+              "limit": 512,
+              "passed": true
+            },
+            {
+              "metric": "maximum_runs",
+              "maximum": 7,
+              "limit": 32,
+              "passed": true
+            },
+            {
+              "metric": "maximum_memtable_bytes",
+              "maximum": 5062269,
+              "limit": 67108864,
+              "passed": true
+            },
+            {
+              "metric": "fixture_rss_bytes",
+              "maximum": 2266836992,
+              "limit": 3221225472,
+              "passed": true
+            },
+            {
+              "metric": "late_component_service_ns_per_row",
+              "maximum": 54174.351690354764,
+              "limit": 1000000,
+              "passed": true
+            },
+            {
+              "metric": "compactions",
+              "minimum": 4,
+              "actual": 52,
+              "passed": true
+            },
+            {
+              "metric": "cold_reopen_equal",
+              "passed": true
+            },
+            {
+              "metric": "rebased_uploads",
+              "minimum": 1,
+              "actual": 79,
+              "passed": true
+            }
+          ],
+          "qualified": false
+        },
+        {
+          "case": "linear-endurance-262144-512",
+          "executed_source_rows": 485517,
+          "logical_ms": 485517,
+          "checkpoints": 86,
+          "rebased_uploads": 85,
+          "cold_reopen_equal": true,
+          "checks": [
+            {
+              "metric": "gets_per_row",
+              "early": 0.0012083648439811922,
+              "late": 0.0012654087184078232,
+              "limit": 0.0015104560549764902,
+              "passed": true
+            },
+            {
+              "metric": "read_bytes_per_row",
+              "early": 3.7898678196823727,
+              "late": 4.179180152882033,
+              "limit": 4.7373347746029655,
+              "passed": true
+            },
+            {
+              "metric": "puts_per_row",
+              "early": 0.001035741294841022,
+              "late": 0.0010846360443495628,
+              "limit": 0.0012946766185512775,
+              "passed": true
+            },
+            {
+              "metric": "put_bytes_per_row",
+              "early": 45.80511623318976,
+              "late": 53.435679360925555,
+              "limit": 57.256395291487195,
+              "passed": true
+            },
+            {
+              "metric": "maintenance_ns_per_row",
+              "early": 1311.7078058724887,
+              "late": 1679.2917757041525,
+              "limit": 1639.634757340611,
+              "passed": false
+            },
+            {
+              "metric": "prepare_ns_per_row",
+              "early": 49526.16766678723,
+              "late": 53874.053809999314,
+              "limit": 61907.70958348404,
+              "passed": true
+            },
+            {
+              "metric": "bytes",
+              "maximum": 67108785,
+              "limit": 67108864,
+              "passed": true
+            },
+            {
+              "metric": "live_bytes",
+              "maximum": 67108785,
+              "limit": 134217728,
+              "passed": true
+            },
+            {
+              "metric": "index_bytes",
+              "maximum": 5834542,
+              "limit": 16777216,
+              "passed": true
+            },
+            {
+              "metric": "filter_bytes",
+              "maximum": 15567123,
+              "limit": 16777216,
+              "passed": true
+            },
+            {
+              "metric": "pins",
+              "maximum": 0,
+              "limit": 512,
+              "passed": true
+            },
+            {
+              "metric": "maximum_runs",
+              "maximum": 6,
+              "limit": 32,
+              "passed": true
+            },
+            {
+              "metric": "maximum_memtable_bytes",
+              "maximum": 5825065,
+              "limit": 67108864,
+              "passed": true
+            },
+            {
+              "metric": "fixture_rss_bytes",
+              "maximum": 2248413184,
+              "limit": 3221225472,
+              "passed": true
+            },
+            {
+              "metric": "late_component_service_ns_per_row",
+              "maximum": 55553.345585703464,
+              "limit": 1000000,
+              "passed": true
+            },
+            {
+              "metric": "compactions",
+              "minimum": 4,
+              "actual": 56,
+              "passed": true
+            },
+            {
+              "metric": "cold_reopen_equal",
+              "passed": true
+            },
+            {
+              "metric": "rebased_uploads",
+              "minimum": 1,
+              "actual": 85,
+              "passed": true
+            }
+          ],
+          "qualified": false
+        }
+      ],
+      "qualified": false
+    },
+    "longevity": {
+      "executed_changes": 589824,
+      "compactions": 144,
+      "logical_elapsed_seconds": 6221613,
+      "clock_schedule": "12 hours of virtual idle time after each 4096-change burst; this is not continuous 1000 changes/s for those days.",
+      "bounded_cold_regime": false,
+      "full_worker_steady_state_proven": false,
+      "failed_checks": [
+        {
+          "rows": 524288,
+          "metric": "compaction_reads_per_state_row",
+          "early": 4.6473027569086005e-05,
+          "late": 7.313790267146729e-05,
+          "limit": 5.809128446135751e-05,
+          "passed": false
+        },
+        {
+          "rows": 524288,
+          "metric": "compaction_read_bytes_per_state_row",
+          "early": 10.287884341142176,
+          "late": 14.141775691057315,
+          "limit": 12.85985542642772,
+          "passed": false
+        },
+        {
+          "rows": 2097152,
+          "metric": "index_reads",
+          "early": 26.857142857142858,
+          "late": 36.42857142857143,
+          "limit": 33.57142857142857,
+          "passed": false
+        },
+        {
+          "rows": 2097152,
+          "metric": "index_read_bytes",
+          "early": 60299.857142857145,
+          "late": 82215.57142857143,
+          "limit": 75374.82142857143,
+          "passed": false
+        }
+      ],
+      "absolute_limits_passed": true,
+      "maximum_state_rows": 4484520,
+      "maximum_state_bytes": 45101678,
+      "maximum_rss_bytes": 1070342144,
+      "maximum_resident_root_bytes": 49562,
+      "maximum_index_bytes": 4191730
+    },
+    "independent_review": "No outstanding correctness or durability blockers; qualification failures retained.",
+    "validation": {
+      "common_gate_passed": true,
+      "rust_tests_passed": 559,
+      "python_tests_passed": 126,
+      "production_line_coverage_percent": 97.32,
+      "sql_replay_cases": 18,
+      "storage_growth_passed": true,
+      "independent_review": "No outstanding correctness or durability blockers.",
+      "disposable_postgres_removed": true,
+      "deployed": false,
+      "full_steady_state_passed": false
+    }
   }
 }
