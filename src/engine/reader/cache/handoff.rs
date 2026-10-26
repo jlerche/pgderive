@@ -16,6 +16,7 @@ impl BlockCache {
             entries: parent.entries,
             encoded: parent.encoded.clone(),
             ranges: parent.ranges.clone(),
+            points: parent.points.clone(),
             filters: Arc::new(super::filter::Filters::new(parent.bytes, parent.entries)),
             parent: Some(parent),
             staged: true,

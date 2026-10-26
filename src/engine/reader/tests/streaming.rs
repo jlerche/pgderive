@@ -187,9 +187,14 @@ async fn borrowed_spans_share_decodes_preserve_restrictions_and_stream_objects()
     assert_eq!(first.current_span().as_ptr(), second.current_span().as_ptr());
     assert_eq!(cache.stats()?.pins, 2);
     let page = object.key_page(&1).await?.ok_or_else(|| anyhow::anyhow!("missing key"))?;
-    let mut restricted = Cursor::object_key_page(object.clone(), &1, page, None)
-        .await?
-        .context("missing restricted page")?;
+    let mut restricted = Cursor::object_key_page(
+        object.clone(),
+        &crate::engine::reader::KeyIdentity::new(&1)?,
+        page,
+        None,
+    )
+    .await?
+    .context("missing restricted page")?;
     assert!(restricted.current_span().iter().all(|row| row.0.0 == 1));
     restricted.advance_span().await?;
     assert_eq!(restricted.current_span(), &[((1, 6), 1), ((1, 7), 1)]);

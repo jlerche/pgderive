@@ -201,6 +201,15 @@ fn check_expected(
     );
     Ok(1)
 }
+fn configure_diagnostics(query: &program::relational::Query) -> Result<()> {
+    if std::env::var_os("PGDERIVE_TEST_PAGE_PROBES").is_some() {
+        query.test_cache().enable_page_probes();
+    }
+    if let Ok(width) = std::env::var("PGDERIVE_TEST_RANGE_WIDTH") {
+        query.test_cache().fix_range_width(width.parse()?)?;
+    }
+    Ok(())
+}
 async fn run(
     case: Case,
     limits: crate::engine::execution::Limits,
@@ -212,6 +221,7 @@ async fn run(
     let store = Arc::new(crate::engine::tests::store::Store::unpaced());
     settings.store = store.clone();
     let mut query = program::relational::build_committed(&native, &compiled, &settings)?;
+    configure_diagnostics(&query)?;
     let mut output = Bag::new();
     let mut lifecycle = lifecycle::Lifecycle::new(config, store.clone());
     let mut elapsed = Vec::new();
@@ -228,6 +238,7 @@ async fn run(
             lifecycle.report.restarts += 1;
             lifecycle.flush(&mut query).await?;
             restart_committed(&mut query, &native, &compiled, &settings).await?;
+            configure_diagnostics(&query)?;
         } else {
             let count = step.updates.len();
             let changes = changes(step.updates);

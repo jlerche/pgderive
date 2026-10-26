@@ -258,14 +258,12 @@ async fn scan_corruption_keeps_cursor_position_and_invalidates_private_window() 
     Ok(())
 }
 
-async fn sparse_windows(adaptive: bool) -> Result<(usize, u64)> {
+#[tokio::test]
+async fn sparse_pressure_keeps_request_geometry_and_bounded_overfetch() -> Result<()> {
     let store = Arc::new(crate::engine::tests::store::Store::unpaced());
     let remote: Arc<dyn ObjectStore> = store.clone();
     let pack = packed(&remote, super::WINDOW_BYTES * 64).await?;
-    let mut ranges = Ranges::new(super::WINDOW_BYTES * 2, 2);
-    ranges.scan = !adaptive;
-    let before = store.reads.load(Ordering::SeqCst);
-    let bytes = store.range_bytes.load(Ordering::SeqCst);
+    let ranges = Ranges::new(super::WINDOW_BYTES * 2, 2);
     for n in 0..96 {
         let start = u64::try_from((n % 64) * super::WINDOW_BYTES + 123)?;
         let result = ranges.read(&remote, &pack, start..start + 1024).await?;
@@ -274,25 +272,9 @@ async fn sparse_windows(adaptive: bool) -> Result<(usize, u64)> {
             (start..start + 1024).map(|i| u8::try_from(i % 251)).collect::<Result<Vec<_>, _>>()?
         );
     }
-    Ok((
-        store.reads.load(Ordering::SeqCst) - before,
-        store.range_bytes.load(Ordering::SeqCst) - bytes,
-    ))
-}
-#[tokio::test]
-async fn sparse_pressure_reduces_unused_prefetch_without_increasing_gets() -> Result<()> {
-    let before = sparse_windows(false).await?;
-    let after = sparse_windows(true).await?;
-    assert_eq!(before.0, 96);
-    assert_eq!(after.0, before.0);
-    assert!(
-        after.1 * 8 < before.1,
-        "sparse prefetch bytes did not shrink: {before:?} -> {after:?}"
-    );
-    println!(
-        "{}",
-        serde_json::json!({"fixed_gets":before.0,"adaptive_gets":after.0,"fixed_bytes":before.1,"adaptive_bytes":after.1})
-    );
+    assert_eq!(store.reads.load(Ordering::SeqCst), 96);
+    assert_eq!(store.range_bytes.load(Ordering::SeqCst), u64::try_from(super::WINDOW_BYTES * 96)?);
+    assert!(ranges.snapshot()?.0 <= super::WINDOW_BYTES * 2);
     Ok(())
 }
 #[tokio::test]
@@ -329,23 +311,11 @@ async fn dense_pressure_retains_coalescing_and_read_origin_accounting() -> Resul
 }
 
 #[tokio::test]
-async fn non_power_of_two_budget_uses_one_ladder_for_sparse_to_dense_transitions() -> Result<()> {
+async fn non_power_of_two_budget_uses_one_ladder_for_covering_windows() -> Result<()> {
     let store = Arc::new(crate::engine::tests::store::Store::unpaced());
     let remote: Arc<dyn ObjectStore> = store.clone();
     let pack = packed(&remote, 300_000).await?;
     let ranges = Ranges::new(100_000, 4);
-    {
-        let mut state = ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
-        for expected in [65536, 32768, 16384, 8192, 4096, 4096] {
-            ranges.adapt(&mut state, 0);
-            assert_eq!(state.width, expected);
-        }
-        for expected in [8192, 16384, 32768, 65536, 100_000, 100_000] {
-            ranges.adapt(&mut state, 64);
-            assert_eq!(state.width, expected);
-        }
-        drop(state);
-    }
     for width in ranges.widths() {
         let cache = Ranges::new(100_000, 4);
         cache.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width = width;
@@ -364,7 +334,7 @@ async fn charged_windows_fit_small_cache_budgets() -> Result<()> {
     let remote: Arc<dyn ObjectStore> = store.clone();
     let pack = packed(&remote, super::WINDOW_BYTES).await?;
     let budget = 64 * 1024;
-    let ranges = Ranges::new(budget, 4);
+    let ranges = Ranges::new(budget, 1);
     ranges.read(&remote, &pack, 10..20).await?;
     ranges.read(&remote, &pack, 10..20).await?;
     assert_eq!(store.reads.load(Ordering::SeqCst), 1);
@@ -383,6 +353,7 @@ async fn changing_width_never_retains_duplicate_compressed_covers() -> Result<()
     let remote: Arc<dyn ObjectStore> = store.clone();
     let pack = packed(&remote, super::WINDOW_BYTES * 2).await?;
     let ranges = Ranges::new(super::WINDOW_BYTES + 4096, 32);
+    ranges.fix_width(super::WINDOW_BYTES)?;
     ranges.read(&remote, &pack, 0..1).await?;
     let narrow = super::MIN_WINDOW_BYTES;
     let key: Identity = (
@@ -394,21 +365,14 @@ async fn changing_width_never_retains_duplicate_compressed_covers() -> Result<()
     );
     let before = store.reads.load(Ordering::SeqCst);
     let start = key.2;
-    let cached = ranges
-        .fetch(&remote, key.clone(), start + u64::try_from(narrow)?, &(start..start + 1))
-        .await?;
+    let cached = ranges.fetch(&remote, key.clone(), start + u64::try_from(narrow)?).await?;
     assert_eq!(cached.len(), narrow);
     assert_eq!(store.reads.load(Ordering::SeqCst), before);
-    ranges.retain(key, Window::new(Arc::new(vec![0; narrow]), 1 << 63))?;
+    ranges.retain(key, Window::new(Arc::new(vec![0; narrow])))?;
     {
         let state = ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
         assert_eq!(state.windows.len(), 1);
         assert_eq!(state.bytes, super::WINDOW_BYTES);
-        assert_eq!(
-            state.windows.values().next().context("missing wide cover")?.used,
-            1 | (1 << ((narrow * 2) / (super::WINDOW_BYTES / 64)))
-                | (1 << ((narrow * 3 - 1) / (super::WINDOW_BYTES / 64)))
-        );
         drop(state);
     }
     ranges.invalidate(&pack, &(0..pack.bytes))?;
@@ -420,10 +384,35 @@ async fn changing_width_never_retains_duplicate_compressed_covers() -> Result<()
     assert_eq!(ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.windows.len(), 2);
     let key =
         (pack.path.clone(), pack.hash.clone(), 0, pack.bytes, u64::try_from(super::WINDOW_BYTES)?);
-    ranges.retain(key, Window::new(Arc::new(vec![0; super::WINDOW_BYTES]), 1))?;
+    ranges.retain(key, Window::new(Arc::new(vec![0; super::WINDOW_BYTES])))?;
     let state = ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
     assert_eq!(state.windows.len(), 1);
     assert_eq!(state.bytes, super::WINDOW_BYTES);
     drop(state);
+    Ok(())
+}
+
+#[tokio::test]
+async fn fractional_budget_keeps_prefetch_and_cached_cover_on_the_same_ladder() -> Result<()> {
+    let store = Arc::new(crate::engine::tests::store::Store::unpaced());
+    let remote: Arc<dyn ObjectStore> = store.clone();
+    let pack = packed(&remote, super::WINDOW_BYTES * 2).await?;
+    for budget in [1024 * 1024, 1280 * 1024] {
+        let ranges = Arc::new(Ranges::new(budget, 512));
+        ranges.read(&remote, &pack, 123..124).await?;
+        let before = store.reads.load(Ordering::SeqCst);
+        let mut plan = super::ReadAhead::new(ranges.clone())?.context("missing plan")?;
+        assert!(plan.reserve(&remote, &pack, 123..124)?);
+        let _guard = super::ReadAhead::load(vec![plan]).await?;
+        ranges.read(&remote, &pack, 123..124).await?;
+        assert_eq!(store.reads.load(Ordering::SeqCst), before);
+        let state = ranges.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
+        assert!(ranges.widths().contains(&state.width));
+        for identity in state.windows.keys() {
+            assert!(ranges.widths().contains(&usize::try_from(identity.4)?));
+        }
+        assert!(state.policy.usage() <= budget);
+        drop(state);
+    }
     Ok(())
 }

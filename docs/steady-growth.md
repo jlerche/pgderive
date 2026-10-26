@@ -910,3 +910,148 @@ PostgreSQL regression harnesses, strict formatting/lints/dependency checks and
 97.32% production line coverage. Its owned PostgreSQL fixture used tmpfs and was
 removed. Replay inputs were verified and compressed; results and frozen
 binaries remain ignored. These checks do not override failed performance gates.
+
+
+## Hot-key fanout and compressed read windows
+
+An instrumented hot-prefix control found about 808 distinct keys per epoch
+selecting 745 pages early and 890 late. Mean pages per key increased from 2.77
+to 3.84; selected compressed bytes increased from about 480 kB to 619 kB. These
+are Bloom-positive first-page candidates, including decoded-cache hits and
+excluding continuation pages. Numeric identity locality does not establish
+physical page locality.
+
+Cross-epoch interval accounting found that 262.3 MB of 266.7 MB fetched in the
+original cold control's late window had already been fetched in earlier epochs.
+Totals reconcile with foreground read-byte counters. This does not prove a
+replacement bug: its 1 MiB compressed cache faces several megabytes of reads per
+epoch, and compressed physical state changes despite a fixed logical row count.
+A constant-entropy control and demand accesses including hits would be needed to
+quantify an ideal policy's avoidable reads. A finite warm-to-cold transition does
+not itself imply indefinite growth or a need for periodic restarts.
+
+Two changes address measured amplification. First, the reader caches complete
+signed key slices from authenticated immutable objects. Identity includes root
+content, serialized-key SHA-256 and Rust row type. A slice includes every
+value/weight for one key in that object. Admission is safe only when the selected
+first-reaching page ends beyond the key, or is the final page. Equal-last-key
+nonfinal pages are conservatively skipped; spanning keys keep the existing
+cursor path. Repeated object occurrences retain their original multiplicity.
+
+Admission happens in the page-read branch, preserving cheap whole-page cursor
+head reuse. Complete-key hits bypass index navigation and unrelated tuple
+decoding without displacing those heads. Full scans cannot use or admit key
+entries. Different compaction roots have different identities. This is optional
+derived memory; object publication, PostgreSQL atomic result/progress publication
+and source acknowledgement ordering are unchanged.
+
+Second, compressed-window geometry now depends on the cache budget rather than
+evicted-window byte density. Removing hot demands through key reuse made the
+old density policy shrink windows from 256 KiB to mostly 4 KiB: an exact-budget
+hot control used almost nine times as many GETs despite fetching fewer bytes.
+A fixed 256 KiB control removed that regression but doubled cold read bytes.
+A 64 KiB control retained more independent locations while adjacent cells still
+coalesced into larger GETs, avoiding both failures.
+
+Window sizing divides the byte budget by the smaller of 16 and the entry cap,
+then rounds down onto the existing 4–256 KiB alignment ladder. Small budgets
+still account for metadata before retaining a window. Sixteen is an
+empirical allocation target, not a guaranteed resident count or theoretical
+optimum. A 1 MiB compressed budget selects 64 KiB cells; a 4 MiB budget selects
+256 KiB cells. Single-window scan caches retain wide coalesced reads. The old
+density adaptation and utilization bookkeeping have been removed, rather than
+kept as an alternate policy. Page format, packing and read-ahead readiness remain
+unchanged. A fractional-budget regression verifies that prefetch and cache lookup
+use reachable aligned identities and reuse covers without extra reads.
+
+The key cache reserves an additional quarter of the decoded-page byte budget.
+At 16 MiB decoded capacity, modeled page/index/range/filter/key caps total 32 MiB
+rather than the previous 28 MiB. Key entries charge at least 512 bytes and at
+most 64 KiB. Prepared probes charge owned cached slices to their workspace target,
+with each key's allowance split across runs. Evicted slices retained by active
+probes are separate from resident cache counters. Charges follow the existing
+decoded size model and are not exact recursive heap or RSS bounds.
+
+Fair-memory controls retain the old implementation with a 20 MiB decoded budget
+and 1,024 entries, allowing its full page budget to fill, against the new 16 MiB
+configuration. Smaller-budget controls also compare the new 4 MiB configuration
+against old 4 MiB and 5 MiB configurations. A bounded key cache is a locality
+tradeoff; its extra memory is not uniformly better than allocating more bytes to
+other caches. Preserve these controls when evaluating cache defaults.
+
+Frozen binaries execute recorded traces sequentially. Known overlap with another
+checkout's compilation was preserved and excluded from CPU qualification.
+Opt-in test diagnostics retain page fanout, range lengths and cross-epoch physical
+intervals; expensive page probes are disabled for CPU comparisons. Rejected cache
+policy, range coalescing and smaller-page experiments remain in ignored evidence,
+without their production implementations.
+
+These component tests exercise production computation, checkpoints, rebasing,
+GC marking and independent oracle/cold-reopen equality. They exclude PostgreSQL
+CDC/publication, SQL GC barriers, real object-store latency and sink freshness.
+Fixture RSS includes input, expected results and an in-memory object store.
+The demo remains paused. Results, input datasets, frozen binaries and failure
+evidence are under `artifacts/benchmarks/cold-read-20261025/`.
+
+
+The final paired matrix uses the existing high-cardinality `COUNT(*)`/`SUM(amount)`
+query grouped by `account_id`, initially one source row per group. All cases
+start at 262,144 rows. Hot cases grow to 313,344 rows while updates to existing
+identities target 4,096 keys. This isolates reader/statistics work; it is not a
+measurement of the deployed demo or all query shapes. CPU is component process
+CPU per 1,000 affected change operations, excluding explicit oracle comparisons.
+
+| Final binary, late comparison window | CPU ms/1k, before → after | Foreground GETs/1k | Fetched bytes/change |
+| --- | ---: | ---: | ---: |
+| Hot, 16 MiB decoded cache | 271.43 → 139.29 | 0.20 → 0.20 | 15.97 → 15.97 |
+| Hot, 4 MiB decoded cache | 429.43 → 377.57 | 7.16 → 6.77 | 1,707.15 → 1,707.45 |
+| Uniform cold, 4 MiB decoded cache | 827.08 → 815.69 | 57.83 → 21.12 | 4,103.23 → 3,854.37 |
+
+The 16 MiB hot case reduces CPU by 48.7% and decoding by 78.9%. The cold case
+reduces foreground GETs by 63.5% and transferred bytes by 6.1%, with CPU roughly
+unchanged. The smaller hot case reduces CPU by 12.1% without the earlier GET
+regression. PUT counts are unchanged for each recorded trace, oracle and cold
+reopen checks pass, and configured resource caps pass. No compiler overlap was
+observed by the final runs' one-second process monitor.
+
+The larger-memory old control fills its 20 MiB page cache (853 entries peak) and
+still takes 266.14 ms per 1k changes in the hot late window, versus 139.29 with
+the new 16 MiB configuration. The smaller fair-memory control is less favorable:
+the old 5 MiB configuration takes 305 ms per 1k changes and 4.66 foreground GETs
+per 1k, beating the new 4 MiB configuration. The additional key-cache budget is
+therefore a measured locality tradeoff, not a universal allocation improvement.
+
+
+The growing hot cases still fail within-run cost trends: CPU rises from
+78.31 to 139.29 ms/1k in the 16 MiB case, and from 189.69 to 377.57 ms/1k
+in the 4 MiB case. Decoding in the larger-cache case rises from 527 to 3,059
+bytes/change. These are paired late-window improvements, not stable growing-state
+CPU behavior. Maintenance mixes differ and repeated largest-tier coverage is
+insufficient in these shorter cases; this comparison does not isolate the cause
+of their remaining growth.
+
+The final 768-epoch fixed-state replay has repeated largest-tier coverage with
+matched complete compaction windows. Early-to-late CPU is 291.78 → 294.32 ms
+per 1k operations (+0.9%); preparation is 250.62 → 253.19 ms (+1.0%); decoding
+is 16,064 → 16,110 bytes/change (+0.3%). Foreground reads still increase from
+0.205 to 0.589 GETs/1k and 52.01 to 117.26 bytes/change. All four final cases
+therefore retain `qualified: false`: the full-tier case fails I/O-growth checks,
+and shorter screens also lack repeated largest-tier coverage. Paired performance
+improvements do not establish an overall plateau or weekly restart-free operation.
+
+All four cases pass oracle equality, cold reopen and configured resource bounds.
+They execute 2,176,000 measured source changes and install 437 checkpoints in
+about 704 seconds total, without active-state restarts. Peak retained cache charge
+is approximately 26.7 MiB for the 16 MiB hot case and 29.1 MiB for the full-tier
+fixed case; the key cache stays within 4 MiB (1 MiB for smaller configurations).
+These retained charges exclude evicted entries still owned by bounded workspaces
+and are not RSS. Fixture RSS stays below its 3 GiB cap, reaching about 2.69 GiB
+in the full-tier case.
+
+Current independent implementation and report review found no actionable issue.
+The current `./scripts/check.sh` core gate passes 565 Rust tests, 133 Python tests,
+the sequential live PostgreSQL harnesses, formatting/lints/dependency checks and
+97.16% production line coverage. Its owned PostgreSQL fixture used tmpfs and was
+removed. Frozen final-binary checks additionally pass 87 reader tests and 12
+trace-probe tests. The ready-source hash manifest is unchanged across these
+checks and performance replays. These checks do not override failed growth gates.

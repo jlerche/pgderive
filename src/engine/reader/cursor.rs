@@ -68,10 +68,11 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
 
     pub(crate) async fn object_key_page(
         batch: ObjectBatch<K, V>,
-        key: &K,
+        identity: &super::KeyIdentity<K>,
         page: SelectedBlock<K, V>,
         previous: Option<&Self>,
     ) -> Result<Option<Self>> {
+        let key = identity.key();
         batch.validate_page(&page)?;
         let block = page.ordinal;
         let rows = match previous {
@@ -85,7 +86,9 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
                 if !batch.may_contain_page(&page, key)? {
                     return Ok(None);
                 }
-                batch.read_page(&page).await?
+                let rows = batch.read_page(&page).await?;
+                batch.remember_key(&page, identity, &rows)?;
+                rows
             }
         };
         let start = previous

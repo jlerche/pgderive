@@ -218,6 +218,7 @@ async fn cached_wide_covers_do_not_starve_sparse_readiness() -> Result<()> {
     assert_eq!(store.reads.load(Ordering::SeqCst) - before, 8);
     let before = store.reads.load(Ordering::SeqCst);
     let odd = Arc::new(Ranges::new(100_000, 8));
+    odd.fix_width(100_000)?;
     odd.read(&remote, &pack, 99_999..100_000).await?;
     odd.state.lock().map_err(|_| anyhow::anyhow!("poisoned"))?.width = 65_536;
     let mut plan = ReadAhead::new(odd.clone())?.context("missing odd planner")?;

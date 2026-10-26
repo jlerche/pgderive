@@ -44,7 +44,7 @@ impl Ranges {
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?
-            .get_or_cover(&identity, requested)?
+            .get_or_cover(&identity)?
             .context("pinned read was not admitted")?;
         Ok(Some((identity.2, bytes)))
     }

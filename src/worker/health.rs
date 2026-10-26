@@ -11,6 +11,7 @@ use tokio_postgres::GenericClient;
 pub(super) fn cache_diagnostics(cache: &crate::engine::reader::CacheStats) -> Value {
     json!({
         "bytes":cache.bytes,"entries":cache.entries,"live_bytes":cache.live_bytes,
+        "point_bytes":cache.point_bytes,"point_entries":cache.point_entries,"point_hits":cache.point_hits,
         "pins":cache.pins,"hits":cache.hits,"misses":cache.misses,
         "filter_bytes":cache.filter_bytes,"filter_entries":cache.filter_entries,
         "filter_rejections":cache.filter_rejections,"filter_eviction_steps":cache.filter_eviction_steps,

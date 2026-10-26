@@ -418,7 +418,7 @@ async fn held_probe_heads_reference_synopses_before_clock_pressure() -> Result<(
     let mut probes = trace.probes();
     assert_eq!(probes.cursor(&2).await?.current(), Some((&2, &0, 1)));
     cache.insert("z-cold", "cold".into(), Arc::new(vec![((100_i64, 0_i64), 1)]), 16)?;
-    let _prepared = probes.prepare_key(&3).await?;
+    let _prepared = probes.prepare_key(&3, 128 * 1024).await?;
     cache.insert("zz-pressure", "pressure".into(), Arc::new(vec![((200_i64, 0_i64), 1)]), 16)?;
     let state = cache.filters.state.lock().map_err(|_| anyhow::anyhow!("filter lock poisoned"))?;
     assert!(state.entries.keys().any(|identity| identity.1 == "a-held"));

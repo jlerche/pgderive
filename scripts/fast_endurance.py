@@ -20,6 +20,7 @@ def assess(path, *, cache_bytes, cache_entries):
                        'passed':cycles['largest_tier_repeat_coverage']})
         caps = {'bytes':cache_bytes, 'live_bytes':2*cache_bytes,
                 'index_bytes':cache_bytes//4, 'filter_bytes':cache_bytes//4,
+                'point_bytes':cache_bytes//4, 'point_entries':cache_bytes//4//512,
                 'entries':cache_entries, 'pins':512}
         checks.extend({'metric':key, 'maximum':max(s['cache'][key] for s in samples),
                        'limit':limit, 'passed':all(s['cache'][key] <= limit for s in samples)}

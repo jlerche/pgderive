@@ -23,6 +23,7 @@ pub struct BlockCache {
     entries: usize,
     pub(super) ranges: Arc<range::Ranges>,
     filters: Arc<filter::Filters>,
+    pub(super) points: Arc<points::Points>,
     parent: Option<Arc<Self>>,
     staged: bool,
     state: Arc<Mutex<State>>,
@@ -46,6 +47,12 @@ struct Cached {
 /// Cache counters. Charges exclude allocator overhead and cannot bound RSS.
 #[derive(Debug, Clone, Default)]
 pub struct CacheStats {
+    /// Resident complete immutable key slices, separate from full decoded pages.
+    pub point_bytes: usize,
+    /// Retained key slices; each has at least a 512-byte charge.
+    pub point_entries: usize,
+    /// Complete-key cache hits, avoiding data and index page reads.
+    pub point_hits: u64,
     /// Retained decoded block charges (vector capacity plus encoded payload).
     pub bytes: usize,
     /// Number of retained decoded blocks.
@@ -95,7 +102,21 @@ pub struct CacheStats {
     pub index_requested_bytes: u64,
 }
 impl BlockCache {
+    #[cfg(test)]
+    pub(crate) fn enable_page_probes(&self) {
+        self.ranges.enable_probes();
+    }
+    #[cfg(test)]
+    pub(crate) fn range_diagnostics(&self) -> Result<serde_json::Value> {
+        self.ranges.take_diagnostics()
+    }
+    #[cfg(test)]
+    pub(crate) fn fix_range_width(&self, width: usize) -> Result<()> {
+        self.ranges.fix_width(width)
+    }
+
     /// Set decoded-charge and entry caps; either zero disables decoded retention.
+    /// Complete-key reuse reserves an additional bytes/4, like index navigation.
     /// Index navigation retains a shared bounded 8 MiB navigation budget when
     /// decoded retention is disabled; enabled caches reserve bytes/4 for indexes.
     #[must_use]
@@ -112,6 +133,7 @@ impl BlockCache {
                 (bytes / 4 / range::MIN_WINDOW_BYTES).max(entries),
             )),
             filters: Arc::new(filter::Filters::new(bytes, entries)),
+            points: Arc::new(points::Points::new(if entries == 0 { 0 } else { bytes / 4 })),
             parent: None,
             staged: false,
             state: Arc::new(Mutex::new(State::default())),
@@ -130,6 +152,7 @@ impl BlockCache {
         Arc::new(Self {
             index: Arc::new(super::index::Cache::scan(parent.index.clone())),
             encoded: parent.encoded.clone(),
+            points: parent.points.clone(),
             ranges: Arc::new(range::Ranges::scan(parent.ranges.metrics.clone())),
             filters: parent.filters.clone(),
             parent: Some(parent),
@@ -148,10 +171,14 @@ impl BlockCache {
         Arc::new(Self {
             index: parent.index.clone(),
             encoded: parent.encoded.clone(),
+            points: parent.points.clone(),
             ranges: Arc::new(range::Ranges::scan(parent.ranges.metrics.clone())),
             state: parent.state.clone(),
             ..Self::new(0, 0)
         })
+    }
+    pub(super) const fn admits_points(&self) -> bool {
+        self.parent.is_none() || self.staged
     }
     pub(super) const fn admits_encoded(&self) -> bool {
         self.parent.is_none()
@@ -212,6 +239,7 @@ impl BlockCache {
         ) = self.filters.stats()?;
         (counters.foreground_io, counters.scan_io, counters.merges) =
             self.ranges.metrics.snapshot();
+        (counters.point_bytes, counters.point_entries, counters.point_hits) = self.points.stats();
         let index = self.index.stats()?;
         counters.index_bytes = index
             .bytes
@@ -341,6 +369,7 @@ impl State {
 
 mod filter;
 pub(in crate::engine::reader) mod metrics;
+pub(super) mod points;
 pub use metrics::ReadStats;
 mod handoff;
 pub(super) mod range;

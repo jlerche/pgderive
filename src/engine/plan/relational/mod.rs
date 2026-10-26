@@ -238,6 +238,10 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     pub fn cache_stats(&self) -> Result<CacheStats> {
         self.execution.cache.stats()
     }
+    #[cfg(test)]
+    pub(crate) fn test_cache(&self) -> &Arc<BlockCache> {
+        &self.execution.cache
+    }
     fn check_inputs(&self, input: &[crate::engine::execution::Sealed<K, V>]) -> Result<()> {
         ensure!(
             input.len() == self.plan().definition().sources.len(),

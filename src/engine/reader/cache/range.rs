@@ -9,6 +9,8 @@ use std::{
 };
 
 mod pins;
+#[cfg(test)]
+mod probes;
 pub use pins::ReadGuard;
 mod prefetch;
 pub use prefetch::ReadAhead;
@@ -17,18 +19,21 @@ const WINDOW_BYTES: usize = 256 * 1024;
 const STRIPES: usize = 256;
 pub(super) const MIN_WINDOW_BYTES: usize = 4 * 1024;
 const WIDTH_LEVELS: usize = 7;
+// Keep cells for independent run probes; adjacent cells still share one GET.
+const TARGET_WINDOWS: usize = 16;
 type Identity = (String, String, u64, u64, u64);
 type CachedRange = (u64, Arc<Vec<u8>>);
 #[derive(Clone)]
 struct Window {
     bytes: Arc<Vec<u8>>,
-    used: u64,
 }
 struct State {
     windows: BTreeMap<Identity, Window>,
     bytes: usize,
     policy: foyer::Cache<Identity, usize>,
     width: usize,
+    #[cfg(test)]
+    probes: probes::Probes,
     pins: Vec<Weak<pins::Pinned>>,
     #[cfg(test)]
     fetched: BTreeMap<(String, u64, u64), usize>,
@@ -44,6 +49,8 @@ pub(in crate::engine::reader) struct Ranges {
     entries: usize,
     #[cfg(test)]
     coalesce: bool,
+    #[cfg(test)]
+    probe_enabled: std::sync::atomic::AtomicBool,
     pub(in crate::engine::reader) metrics: Arc<super::metrics::Metrics>,
     scan: bool,
     state: Mutex<State>,
@@ -64,6 +71,8 @@ impl Ranges {
             entries,
             #[cfg(test)]
             coalesce: true,
+            #[cfg(test)]
+            probe_enabled: std::sync::atomic::AtomicBool::new(false),
             metrics: Arc::default(),
             scan: false,
             state: Mutex::new(State::new(bytes, entries)),
@@ -137,7 +146,7 @@ impl Ranges {
                 let start = position / width * width;
                 let end = start.saturating_add(width).min(pack.bytes);
                 let identity = (pack.path.clone(), pack.hash.clone(), start, pack.bytes, width);
-                (start, self.fetch(store, identity, end, &requested).await?)
+                (start, self.fetch(store, identity, end).await?)
             };
             let stop = range.end.min(start + u64::try_from(bytes.len())?);
             result.extend_from_slice(
@@ -187,9 +196,40 @@ impl Ranges {
         Ok(())
     }
     #[cfg(test)]
+    pub(in crate::engine::reader) fn enable_probes(&self) {
+        self.probe_enabled.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(in crate::engine::reader) fn record_probe<K: super::BatchData, V: super::BatchData>(
+        &self,
+        schema: &str,
+        pack: &str,
+        leaf: &crate::engine::reader::index::Leaf<(K, V)>,
+        key: &K,
+    ) -> Result<()> {
+        if !self.probe_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(());
+        }
+        self.state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?
+            .probes
+            .record(schema, pack, leaf, key)
+    }
+    #[cfg(test)]
+    pub(in crate::engine::reader) fn fix_width(&self, width: usize) -> Result<()> {
+        ensure!(self.widths().contains(&width), "invalid test window width");
+        let mut state =
+            self.state.lock().map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?;
+        state.width = width;
+        drop(state);
+        Ok(())
+    }
+    #[cfg(test)]
     pub(in crate::engine::reader) fn take_diagnostics(&self) -> Result<serde_json::Value> {
         let mut state =
             self.state.lock().map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?;
+        let probes = state.probes.take();
         let fetched = std::mem::take(&mut state.fetched);
         let flight_wait_us = std::mem::take(&mut state.flight_wait_us);
         let flight_groups = std::mem::take(&mut state.flight_groups);
@@ -208,7 +248,14 @@ impl Ranges {
         }
         drop(state);
         let (total, unique) = crate::engine::tests::store::range_totals(&fetched)?;
+        let mut lengths = BTreeMap::<u64, usize>::new();
+        for ((_, start, end), count) in &fetched {
+            *lengths.entry(end - start).or_default() += count;
+        }
         Ok(serde_json::json!({
+            "probes":probes,
+            "range_lengths": lengths,
+            "fetched_ranges": fetched.iter().map(|((path, start, end), count)| (path, start, end, count)).collect::<Vec<_>>(),
             "active_batches": active_batches,
             "pinned_bytes": pinned_bytes,
             "pinned_windows": pinned_windows,
@@ -239,28 +286,7 @@ impl Ranges {
         Ok(None)
     }
     fn widths(&self) -> [usize; WIDTH_LEVELS] {
-        let mut widths = [self.bytes.min(MIN_WINDOW_BYTES); WIDTH_LEVELS];
-        for index in 1..widths.len() {
-            widths[index] = widths[index - 1].saturating_mul(2).min(self.bytes.min(WINDOW_BYTES));
-        }
-        widths
-    }
-    fn adapt(&self, state: &mut State, used: u32) {
-        if used < 16 {
-            state.width = self
-                .widths()
-                .into_iter()
-                .filter(|width| *width < state.width)
-                .max()
-                .unwrap_or_else(|| self.bytes.min(MIN_WINDOW_BYTES));
-        } else if used > 48 {
-            state.width = self
-                .widths()
-                .into_iter()
-                .filter(|width| *width > state.width)
-                .min()
-                .unwrap_or_else(|| self.bytes.min(WINDOW_BYTES));
-        }
+        window_widths(self.bytes)
     }
     async fn load(
         &self,
@@ -287,7 +313,7 @@ impl Ranges {
             let width = u64::try_from(width)?;
             let start = requested.start / width * width;
             let identity = (pack.path.clone(), pack.hash.clone(), start, pack.bytes, width);
-            if let Some(bytes) = state.get(&identity, requested)? {
+            if let Some(bytes) = state.get(&identity) {
                 return Ok(Some((start, bytes)));
             }
         }
@@ -298,7 +324,6 @@ impl Ranges {
         store: &Arc<dyn ObjectStore>,
         identity: Identity,
         end: u64,
-        requested: &Range<u64>,
     ) -> Result<Arc<Vec<u8>>> {
         let stripe = Self::stripe(&identity)?;
         let _flight = self.flights[stripe].lock().await;
@@ -306,7 +331,7 @@ impl Ranges {
             .state
             .lock()
             .map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?
-            .get_or_cover(&identity, requested)?;
+            .get_or_cover(&identity)?;
         if let Some(bytes) = cached {
             return Ok(bytes);
         }
@@ -316,9 +341,7 @@ impl Ranges {
             "cached pack range length mismatch"
         );
         let bytes = Arc::new(bytes);
-        let mut window = Window::new(bytes.clone(), 0);
-        window.mark(identity.2, requested)?;
-        self.retain(identity, window)?;
+        self.retain(identity, Window::new(bytes.clone()))?;
         Ok(bytes)
     }
     fn stripe(identity: &Identity) -> Result<usize> {
@@ -333,11 +356,10 @@ impl Ranges {
         }
         let mut state =
             self.state.lock().map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?;
-        if let Some(existing) = state.windows.get_mut(&identity) {
-            existing.used |= window.used;
+        if state.windows.contains_key(&identity) {
             return Ok(());
         }
-        // Adaptive planning may slice a resident wider window. Retain its
+        // Budget-fitting planning may slice a resident wider window. Retain its
         // coverage once; charging both copies can evict useful bytes at the cap.
         if state.covered(&identity, &window)? {
             return Ok(());
@@ -346,26 +368,27 @@ impl Ranges {
         drop(state.policy.insert(identity.clone(), window.bytes.len()));
         state.bytes += window.bytes.len();
         state.windows.insert(identity, window);
-        let mut evicted = Vec::new();
+        let mut evicted = 0;
         let policy = state.policy.clone();
         state.windows.retain(|key, window| {
             if policy.contains(key) {
                 return true;
             }
-            evicted.push((window.bytes.len(), window.used.count_ones()));
+            evicted += window.bytes.len();
             false
         });
-        for (bytes, used) in evicted {
-            state.bytes -= bytes;
-            // Unused write-side seeds and speculative prefetches provide no
-            // demand-density sample. Adapt only after a range was requested.
-            if !self.scan && used > 0 {
-                self.adapt(&mut state, used);
-            }
-        }
+        state.bytes -= evicted;
         drop(state);
         Ok(())
     }
+}
+
+fn window_widths(bytes: usize) -> [usize; WIDTH_LEVELS] {
+    let mut widths = [bytes.min(MIN_WINDOW_BYTES); WIDTH_LEVELS];
+    for index in 1..widths.len() {
+        widths[index] = widths[index - 1].saturating_mul(2).min(bytes.min(WINDOW_BYTES));
+    }
+    widths
 }
 
 impl Window {
@@ -381,33 +404,19 @@ impl Window {
             )
             .saturating_add(256)
     }
-    const fn new(bytes: Arc<Vec<u8>>, used: u64) -> Self {
-        Self { bytes, used }
-    }
-    fn merge_usage(&mut self, start: u64, other_start: u64, other: &Self) -> Result<()> {
-        let end = other_start + u64::try_from(other.bytes.len())?;
-        let unit = u64::try_from(other.bytes.len())?.div_ceil(64);
-        for bit in 0..64 {
-            let first = other_start + bit * unit;
-            if other.used & (1_u64 << bit) != 0 && first < end {
-                self.mark(start, &(first..(first + unit).min(end)))?;
-            }
-        }
-        Ok(())
-    }
-    fn mark(&mut self, start: u64, requested: &Range<u64>) -> Result<()> {
-        let length = u64::try_from(self.bytes.len())?;
-        let unit = length.div_ceil(64);
-        let first = (requested.start - start) / unit;
-        let end = (requested.end.min(start + length) - start).div_ceil(unit).min(64);
-        ensure!(first < end && end <= 64, "invalid cached demand range");
-        self.used |= (u64::MAX << first) & (u64::MAX >> (64 - end));
-        Ok(())
+    const fn new(bytes: Arc<Vec<u8>>) -> Self {
+        Self { bytes }
     }
 }
 impl State {
     fn new(bytes: usize, entries: usize) -> Self {
         let minimum = bytes.div_ceil(entries.max(1)).max(1);
+        let target = (bytes / entries.clamp(1, TARGET_WINDOWS)).max(MIN_WINDOW_BYTES);
+        let width = window_widths(bytes)
+            .into_iter()
+            .rev()
+            .find(|width| *width <= target)
+            .unwrap_or_else(|| bytes.min(MIN_WINDOW_BYTES));
         let policy = foyer::Cache::builder(bytes.max(1))
             .with_shards(1)
             .with_eviction_config(foyer::LruConfig::default())
@@ -419,7 +428,9 @@ impl State {
             windows: BTreeMap::new(),
             bytes: 0,
             policy,
-            width: bytes.min(WINDOW_BYTES),
+            width,
+            #[cfg(test)]
+            probes: probes::Probes::default(),
             pins: Vec::new(),
             #[cfg(test)]
             fetched: BTreeMap::new(),
@@ -431,14 +442,13 @@ impl State {
             flight_stripes: 0,
         }
     }
-    fn covered(&mut self, identity: &Identity, window: &Window) -> Result<bool> {
+    fn covered(&self, identity: &Identity, window: &Window) -> Result<bool> {
         let end = identity.2 + u64::try_from(window.bytes.len())?;
-        for (key, existing) in &mut self.windows {
+        for (key, existing) in &self.windows {
             if same_pack(key, identity)
                 && key.2 <= identity.2
                 && key.2 + u64::try_from(existing.bytes.len())? >= end
             {
-                existing.merge_usage(key.2, identity.2, window)?;
                 return Ok(true);
             }
         }
@@ -461,22 +471,12 @@ impl State {
         self.bytes -= removed;
         Ok(())
     }
-    fn get(&mut self, identity: &Identity, requested: &Range<u64>) -> Result<Option<Arc<Vec<u8>>>> {
+    fn get(&self, identity: &Identity) -> Option<Arc<Vec<u8>>> {
         drop(self.policy.get(identity));
-        self.windows
-            .get_mut(identity)
-            .map(|entry| {
-                entry.mark(identity.2, requested)?;
-                Ok(entry.bytes.clone())
-            })
-            .transpose()
+        self.windows.get(identity).map(|entry| entry.bytes.clone())
     }
-    fn get_or_cover(
-        &mut self,
-        identity: &Identity,
-        requested: &Range<u64>,
-    ) -> Result<Option<Arc<Vec<u8>>>> {
-        if let Some(bytes) = self.get(identity, requested)? {
+    fn get_or_cover(&self, identity: &Identity) -> Result<Option<Arc<Vec<u8>>>> {
+        if let Some(bytes) = self.get(identity) {
             return Ok(Some(bytes));
         }
 
@@ -490,13 +490,12 @@ impl State {
             let stop = usize::try_from(end - key.2)?;
             return Ok(Some(Arc::new(window.bytes[start..stop].to_vec())));
         }
-        for (key, entry) in &mut self.windows {
+        for (key, entry) in &self.windows {
             if same_pack(key, identity)
                 && key.2 <= identity.2
                 && key.2 + u64::try_from(entry.bytes.len())? >= end
             {
                 drop(self.policy.get(key));
-                entry.mark(key.2, requested)?;
                 if key.2 == identity.2 && u64::try_from(entry.bytes.len())? == end - identity.2 {
                     return Ok(Some(entry.bytes.clone()));
                 }

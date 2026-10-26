@@ -16,6 +16,7 @@ pub use streaming::WriteLimits;
 
 use super::Batch;
 use anyhow::Result;
+pub(crate) use cache::points::{KeyIdentity, PointRows};
 pub use cache::{BlockCache, CacheStats, ReadStats};
 pub(crate) use cache::{ReadAhead, ReadGuard};
 pub use cursor::Cursor;
@@ -133,3 +134,7 @@ mod packing_tests;
 #[cfg(test)]
 #[path = "tests/index_pages.rs"]
 mod index_page_tests;
+
+#[cfg(test)]
+#[path = "tests/points.rs"]
+mod point_tests;

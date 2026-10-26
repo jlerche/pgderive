@@ -61,9 +61,17 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
                 let probes = &probes;
                 let keys = group.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
                 // The byte target is soft by at most one READ_CONCURRENCY-sized
-                // metadata group; each resolved descriptor carries its charge.
+                // metadata group plus one resident budget of optional key-slice pins.
+                // Each key spends its allowance across all selected runs.
                 let prepared = stream::iter(keys)
-                    .map(|key| async move { probes.prepare_key(&key).await })
+                    .map(|key| async move {
+                        probes
+                            .prepare_key(
+                                &key,
+                                limits.resident_bytes / crate::engine::reader::READ_CONCURRENCY,
+                            )
+                            .await
+                    })
                     .buffered(crate::engine::reader::READ_CONCURRENCY)
                     .try_collect::<Vec<_>>()
                     .await?;

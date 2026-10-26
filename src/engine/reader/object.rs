@@ -446,6 +446,37 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         }
         Ok(None)
     }
+    pub(crate) fn cached_key(
+        &self,
+        key: &super::KeyIdentity<K>,
+        allowance: usize,
+    ) -> Result<Option<super::PointRows<K, V>>> {
+        if !self.cache.admits_points() {
+            return Ok(None);
+        }
+        self.cache.points.get(&self.reference.hash, key, allowance)
+    }
+    pub(super) fn remember_key(
+        &self,
+        page: &SelectedBlock<K, V>,
+        key: &super::KeyIdentity<K>,
+        rows: &[Entry<K, V>],
+    ) -> Result<()> {
+        self.validate_page(page)?;
+        // A singleton page already has exact-key granularity. Skipping it also
+        // avoids reserializing oversized single rows for optional admission.
+        if !self.cache.admits_points() || page.leaf.block.rows == 1 {
+            return Ok(());
+        }
+        // seek_block selected the first page whose last key reaches this key.
+        // An equal last key may continue on another page: never cache a prefix.
+        if page.ordinal + 1 != self.block_count() && page.leaf.block.last.0 <= *key.key() {
+            return Ok(());
+        }
+        let start = rows.partition_point(|row| row.0.0 < *key.key());
+        let end = start + rows[start..].partition_point(|row| row.0.0 == *key.key());
+        self.cache.points.insert(&self.reference.hash, key, &rows[start..end])
+    }
     pub(crate) async fn key_page(&self, key: &K) -> Result<Option<SelectedBlock<K, V>>> {
         if self.index.node.as_ref().is_none_or(|root| key < &root.first.0 || key > &root.last.0) {
             return Ok(None);
@@ -470,7 +501,17 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     }
     pub(crate) fn may_contain_page(&self, page: &SelectedBlock<K, V>, key: &K) -> Result<bool> {
         self.validate_page(page)?;
-        self.cache.may_contain_key(&self.reference.schema, &page.leaf.block, key)
+        let present = self.cache.may_contain_key(&self.reference.schema, &page.leaf.block, key)?;
+        #[cfg(test)]
+        if present {
+            self.cache.ranges.record_probe(
+                &self.reference.schema,
+                &self.reference.child_path(&page.leaf.pack.path),
+                &page.leaf,
+                key,
+            )?;
+        }
+        Ok(present)
     }
     pub(crate) fn reserve_page(
         &self,

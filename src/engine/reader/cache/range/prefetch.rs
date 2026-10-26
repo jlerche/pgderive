@@ -21,7 +21,6 @@ struct Planned {
     store: Arc<dyn ObjectStore>,
     bytes: Option<Arc<Vec<u8>>>,
     length: usize,
-    used: u64,
 }
 impl ReadAhead {
     pub(in crate::engine::reader) fn new(ranges: Arc<Ranges>) -> Result<Option<Self>> {
@@ -64,14 +63,13 @@ impl ReadAhead {
             {
                 self.planning_steps += 1;
             }
-            let Some((identity, mut window)) = self.cover(store, pack, position)? else {
+            let Some((identity, window)) = self.cover(store, pack, position)? else {
                 return Ok(false);
             };
             let end = identity
                 .2
                 .checked_add(u64::try_from(window.length)?)
                 .context("prefetch window overflow")?;
-            window.used |= usage(identity.2, window.length, &(position..requested.end.min(end)))?;
             if !self.windows.contains_key(&identity) && !pending.contains_key(&identity) {
                 entries += 1;
                 bytes = bytes.checked_add(window.length).context("prefetch charge overflow")?;
@@ -92,8 +90,7 @@ impl ReadAhead {
         Ok(true)
     }
     fn admit_plan(&mut self, identity: Identity, window: Planned) -> Result<()> {
-        if let Some(existing) = self.windows.get_mut(&identity) {
-            existing.used |= window.used;
+        if self.windows.contains_key(&identity) {
             return Ok(());
         }
         self.missing = if self.ranges.coalesces() {
@@ -124,7 +121,6 @@ impl ReadAhead {
                         store: window.store.clone(),
                         bytes: window.bytes.clone(),
                         length: window.length,
-                        used: window.used,
                     },
                 )));
             }
@@ -145,12 +141,7 @@ impl ReadAhead {
         let end = start.saturating_add(width).min(pack.bytes);
         Ok(Some((
             (pack.path.clone(), pack.hash.clone(), start, pack.bytes, width),
-            Planned {
-                store: store.clone(),
-                bytes: None,
-                length: usize::try_from(end - start)?,
-                used: 0,
-            },
+            Planned { store: store.clone(), bytes: None, length: usize::try_from(end - start)? },
         )))
     }
     fn cached_cover(
@@ -176,7 +167,7 @@ impl ReadAhead {
             let length = bytes.len();
             return Ok((
                 (identity.0, identity.1, start, identity.3, self.width),
-                Planned { store: store.clone(), bytes: Some(Arc::new(bytes)), length, used: 0 },
+                Planned { store: store.clone(), bytes: Some(Arc::new(bytes)), length },
             ));
         }
         Ok((
@@ -185,7 +176,6 @@ impl ReadAhead {
                 store: store.clone(),
                 bytes: Some(window.bytes.clone()),
                 length: window.bytes.len(),
-                used: window.used,
             },
         ))
     }
@@ -201,13 +191,6 @@ impl ReadAhead {
             .await?;
         Ok(ReadGuard { _pins: pins })
     }
-}
-
-fn usage(start: u64, length: usize, requested: &Range<u64>) -> Result<u64> {
-    let unit = u64::try_from(length)?.div_ceil(64);
-    let first = (requested.start - start) / unit;
-    let last = (requested.end - 1 - start) / unit;
-    Ok((first..=last).fold(0, |mask, bit| mask | (1_u64 << bit)))
 }
 
 #[cfg(test)]

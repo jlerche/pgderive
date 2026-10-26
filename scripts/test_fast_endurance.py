@@ -85,7 +85,7 @@ class EnduranceTests(unittest.TestCase):
                                 cache=dict(bytes=1, entries=1, live_bytes=1, index_bytes=1,
                                            filter_bytes=1, pins=0, merges=[index//8],
                                            hits=index, misses=index, decoded_bytes=index,
-                                           decoded_rows=index, index_reads=index,
+                                           decoded_rows=index, point_bytes=0, point_entries=0, index_reads=index,
                                            index_read_bytes=index, index_requested_bytes=index,
                                            io={'foreground':{'gets':index,'fetched_bytes':index}})))
         report = dict(case='synthetic-assessment-only', cold_reopen_equal=True,

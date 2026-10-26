@@ -137,11 +137,25 @@ async fn foreign_selected_metadata_cannot_bypass_validation_through_head_reuse()
     let first =
         ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "selected-owner").await?;
     let page = first.key_page(&1).await?.context("missing selected page")?;
-    let head = Cursor::object_key_page(first, &1, page.clone(), None)
-        .await?
-        .context("missing reusable head")?;
+    let head = Cursor::object_key_page(
+        first,
+        &crate::engine::reader::KeyIdentity::new(&1)?,
+        page.clone(),
+        None,
+    )
+    .await?
+    .context("missing reusable head")?;
     let other = ObjectBatch::<i64, i64>::open(store, root, "selected-owner").await?;
-    assert!(Cursor::object_key_page(other, &1, page, Some(&head)).await.is_err());
+    assert!(
+        Cursor::object_key_page(
+            other,
+            &crate::engine::reader::KeyIdentity::new(&1)?,
+            page,
+            Some(&head)
+        )
+        .await
+        .is_err()
+    );
     assert_eq!(head.current(), Some((&1, &2, 3)));
     Ok(())
 }
@@ -342,12 +356,30 @@ async fn prepared_pages_recheck_synopses_learned_after_metadata_selection() -> R
     object.read(0).await?;
     cache.insert("other", "evict".into(), Arc::new(vec![((10_i64, 0_i64), 1)]), 16)?;
     let before = cache.stats()?;
-    assert!(Cursor::object_key_page(object.clone(), &3, selected, None).await?.is_none());
+    assert!(
+        Cursor::object_key_page(
+            object.clone(),
+            &crate::engine::reader::KeyIdentity::new(&3)?,
+            selected,
+            None
+        )
+        .await?
+        .is_none()
+    );
     let after = cache.stats()?;
     assert_eq!(after.decoded_bytes, before.decoded_bytes);
     assert_eq!(after.foreground_io.gets, before.foreground_io.gets);
     assert_eq!(after.filter_rejections, before.filter_rejections + 1);
     let present = object.key_page(&4).await?.context("missing present page")?;
-    assert!(Cursor::object_key_page(object, &4, present, None).await?.is_some());
+    assert!(
+        Cursor::object_key_page(
+            object,
+            &crate::engine::reader::KeyIdentity::new(&4)?,
+            present,
+            None
+        )
+        .await?
+        .is_some()
+    );
     Ok(())
 }

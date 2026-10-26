@@ -167,6 +167,7 @@ impl Lifecycle {
             "logical_ms":self.report.logical_ms,"source_rows":self.report.source_rows,"prepare_ns":prepare_ns,
             "installed_checkpoints":self.report.retirement.len(),"upload_pending":self.pending.is_some(),
             "cpu_ticks":self.report.cpu_ticks,
+            "compressed_cache":query.test_cache().range_diagnostics()?,
             "runs":query.run_count(),"memtable_bytes":query.memtable_bytes()?,"maintenance_ns":self.report.maintenance_ns,
             "cache":crate::worker::health::cache_diagnostics(&cache),
             "gets":self.store.reads.load(Ordering::SeqCst),

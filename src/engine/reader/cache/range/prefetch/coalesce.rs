@@ -71,8 +71,8 @@ pub(super) fn missing_after(
 }
 impl Group {
     pub(super) async fn load(self) -> Result<Loaded> {
-        if let [(identity, Planned { bytes: Some(bytes), used, .. })] = self.windows.as_slice() {
-            return self.ranges.pin([(identity.clone(), Window::new(bytes.clone(), *used))].into());
+        if let [(identity, Planned { bytes: Some(bytes), .. })] = self.windows.as_slice() {
+            return self.ranges.pin([(identity.clone(), Window::new(bytes.clone()))].into());
         }
         self.load_contiguous().await
     }
@@ -106,14 +106,14 @@ impl Group {
             state.flight_stripes += stripe_count;
         }
         let mut loaded = Vec::new();
-        for (identity, window) in &self.windows {
+        for (identity, _) in &self.windows {
             let bytes = self
                 .ranges
                 .state
                 .lock()
                 .map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?
-                .get_or_cover(identity, &(identity.2..identity.2 + 1))?;
-            loaded.push(bytes.map(|bytes| Window::new(bytes, window.used)));
+                .get_or_cover(identity)?;
+            loaded.push(bytes.map(Window::new));
         }
         let mut position = 0;
         while position < loaded.len() {
@@ -163,7 +163,7 @@ impl Group {
             let part = bytes
                 .get(start..start + window.length)
                 .context("coalesced window outside response")?;
-            loaded[index] = Some(Window::new(Arc::new(part.to_vec()), window.used));
+            loaded[index] = Some(Window::new(Arc::new(part.to_vec())));
         }
         Ok(())
     }
@@ -194,7 +194,6 @@ mod tests {
                 store: store.clone(),
                 bytes: cached.then(|| Arc::new(vec![0; 100_000])),
                 length: usize::try_from(length)?,
-                used: 1,
             };
             plan.admit_plan(identity, window)?;
             let snapshot = ReadAhead {
