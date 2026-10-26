@@ -40,10 +40,6 @@ pub(super) fn due(open: &Open, pending: bool, deadline: tokio::time::Instant) ->
 }
 pub(super) async fn start(open: &mut Open) -> Result<()> {
     ensure!(open.checkpoint.is_none(), "checkpoint already in flight");
-    super::consolidation::before_checkpoint(open).await?;
-    super::operation::run(open.settings.health.operation_timeout_secs, reserve(open)).await
-}
-async fn reserve(open: &mut Open) -> Result<()> {
     let protection = open
         .writer
         .protect_upload(
@@ -74,10 +70,6 @@ pub(super) async fn ready(pending: &mut Option<Pending>) -> Result<Uploaded> {
     result.context("checkpoint upload task failed")?
 }
 pub(super) async fn complete(open: &mut Open, uploaded: Uploaded) -> Result<()> {
-    super::operation::run(open.settings.health.operation_timeout_secs, install(open, uploaded))
-        .await
-}
-async fn install(open: &mut Open, uploaded: Uploaded) -> Result<()> {
     let mut pending = open.checkpoint.take().context("checkpoint completion without upload")?;
     let checkpoint = uploaded.checkpoint();
     let prepared = open.query.prepare_uploaded_flush(&uploaded).await?;

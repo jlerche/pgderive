@@ -95,8 +95,6 @@ async fn maximum_uploaded_roots_plus_bounded_suffix_rebases_and_flushes() -> Res
     assert_eq!(rebased.run_count(), 132);
     assert_eq!(rebased.materialize().await?, current.materialize().await?);
     let next = writer.flush(&rebased).await?;
-    assert!(next.run_count() <= super::super::MAX_RUNS);
-    let next = writer.consolidate(&next).await?;
     assert!(next.run_count() <= 128);
     assert_eq!(next.materialize().await?, current.materialize().await?);
     Ok(())
@@ -144,42 +142,7 @@ async fn expanding_prefix_keeps_room_for_unmergeable_suffix_runs() -> Result<()>
     assert_eq!(rebased.unsealed_run_count(), 120);
     assert_eq!(rebased.materialize().await?, current.materialize().await?);
     let next = writer.flush(&rebased).await?;
-    assert!(next.run_count() <= super::super::MAX_RUNS);
-    let next = writer.consolidate(&next).await?;
     assert!(next.run_count() <= 128);
     assert_eq!(next.materialize().await?, current.materialize().await?);
-    Ok(())
-}
-
-#[tokio::test]
-async fn independent_checkpoint_reserves_maximum_roots_and_unmergeable_suffix() -> Result<()> {
-    let store = Arc::new(InMemory::new());
-    let writer = Arrangement::new(store.clone(), "headroom".into(), 16)?;
-    let root =
-        ObjectBatch::write(store.clone(), &Batch::from_updates([((1, 1), -1)])?, "headroom", 16)
-            .await?;
-    let object = ObjectBatch::open(store, root, "headroom").await?;
-    let base = TraceSnapshot::from_runs(vec![Run::Object(object.clone()); 128], 1, 1)?;
-    assert!(!base.consolidation_due()?); // One irreducible multipack cohort.
-    assert_eq!(writer.consolidate(&base).await?.manifest()?, base.manifest()?);
-    let memory = append(&base, 1)?.seal_memory();
-    let mut flushed = TraceSnapshot::from_runs(vec![Run::Object(object); 256], 3, 2)?;
-    flushed.cohorts = vec![128, 128];
-    // Membership values are synthetic here; the owned uploader proves weighted
-    // equivalence. This isolates the worst-case physical scheduling headroom.
-    let mut current = memory.clone();
-    for index in 0..120 {
-        current = current.append_validated(
-            Run::Memory(Arc::new(Batch::from_updates([
-                ((index, 0), i64::MAX),
-                ((index + 1, 0), i64::MAX),
-            ])?)),
-            current.time() + 1,
-        )?;
-    }
-    let rebased = current.rebase_flushed(&memory, &flushed)?;
-    assert_eq!(rebased.run_count(), 376);
-    assert_eq!(rebased.unsealed_run_count(), 120);
-    assert!(rebased.run_count() <= super::super::MAX_RUNS);
     Ok(())
 }

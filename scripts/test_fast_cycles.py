@@ -16,7 +16,7 @@ class CycleTests(unittest.TestCase):
             result.append(dict(source_rows=index*1000, prepare_ns=10000, gets=index,
                                read_bytes=index*100, puts=index, put_bytes=index*50,
                                maintenance_ns=index*1000, installed_checkpoints=index//5,
-                               upload_pending=False, consolidation_pending=False, consolidations=index//10, cpu_ticks=index*2, cache=cache))
+                               upload_pending=False, cpu_ticks=index*2, cache=cache))
         return result
 
     def test_compares_complete_natural_intervals_without_preload(self):
@@ -46,7 +46,7 @@ class CycleTests(unittest.TestCase):
         for sample in pending:
             sample['upload_pending'] = True
         self.assertEqual(boundary_indices(pending), [])
-        for key in ('installed_checkpoints', 'consolidations'):
+        for key in ('installed_checkpoints',):
             invalid = copy.deepcopy(samples)
             invalid[-1][key] = 0
             with self.assertRaises(ValueError):
@@ -79,15 +79,3 @@ class CycleTests(unittest.TestCase):
         failures = {check['metric'] for check in result['checks'] if not check['passed']}
         self.assertIn('cpu_ns_per_row', failures)
         self.assertIn('gets_per_row', failures)
-
-    def test_pending_background_merge_is_not_an_installed_cycle(self):
-        samples = self.samples()
-        for index in range(10, 15):
-            samples[index]['consolidation_pending'] = True
-            samples[index]['consolidations'] = 0
-        boundaries = boundary_indices(samples)
-        self.assertNotIn(10, boundaries)
-        self.assertIn(15, boundaries)
-        # An intervening delta checkpoint must not credit unfinished merge work.
-        samples[15]['consolidation_pending'] = True
-        self.assertNotIn(15, boundary_indices(samples))

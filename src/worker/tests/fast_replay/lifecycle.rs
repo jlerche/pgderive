@@ -3,17 +3,13 @@ use super::*;
 use crate::engine::{
     dataflow::TimedBatch,
     execution::Sealed,
-    plan::{
-        Checkpoint,
-        relational::{MemtableFull, Prepared, UploadedConsolidation, UploadedFlush},
-    },
+    plan::relational::{MemtableFull, Prepared, UploadedFlush},
 };
 use serde::Serialize;
 use std::time::Duration;
 type Key = program::relational::Key;
 type Input = TimedBatch<Vec<Sealed<Key, Row>>>;
 type Pending = tokio::task::JoinHandle<Result<UploadedFlush<Key, Row>>>;
-type Consolidating = tokio::task::JoinHandle<Result<UploadedConsolidation<Key, Row>>>;
 
 pub(super) fn process_cpu_ticks() -> Result<u64> {
     let text = std::fs::read_to_string("/proc/self/stat")?;
@@ -47,9 +43,6 @@ pub(super) struct Report {
     pub logical_ms: u64,
     pub source_rows: u64,
     pub checkpoints: usize,
-    pub consolidations: usize,
-    pub checkpoint_ns: u128,
-    pub consolidation_ns: u128,
     pub rebased_uploads: usize,
     pub capacity_flushes: usize,
     pub restarts: usize,
@@ -64,17 +57,12 @@ pub(super) struct Lifecycle {
     config: Config,
     captured_ms: u64,
     pending: Option<Pending>,
-    consolidation: Option<Consolidating>,
-    durable: Option<Checkpoint>,
     pub report: Report,
     store: Arc<crate::engine::tests::store::Store>,
     gc: crate::catalog::GcCache,
 }
 impl Drop for Lifecycle {
     fn drop(&mut self) {
-        if let Some(task) = self.consolidation.take() {
-            task.abort();
-        }
         if let Some(task) = self.pending.take() {
             task.abort();
         }
@@ -86,8 +74,6 @@ impl Lifecycle {
             config,
             captured_ms: 0,
             pending: None,
-            consolidation: None,
-            durable: None,
             report: Report::default(),
             store,
             gc: crate::catalog::GcCache::default(),
@@ -97,77 +83,23 @@ impl Lifecycle {
         if let Some(task) = self.pending.take() {
             let uploaded = task.await??;
             self.report.rebased_uploads += usize::from(query.time() > uploaded.checkpoint().time);
-            let work = query.prepare_uploaded_flush(&uploaded).await?;
-            query.commit_compaction(work)?;
-            self.durable = Some(uploaded.checkpoint().clone());
-            drop(uploaded);
-            self.retire().await?;
-        }
-        Ok(())
-    }
-    async fn retire(&mut self) -> Result<()> {
-        // Live upload reservations block production GC. Do the same while an
-        // owned consolidation can still read its captured input or write output.
-        if self.consolidation.is_none() {
-            let roots = self
-                .durable
-                .as_ref()
-                .context("missing replay checkpoint")?
+            let roots = uploaded
+                .checkpoint()
                 .arrangements
                 .iter()
                 .flat_map(|member| member.trace.objects.clone())
                 .collect();
-            let mut record =
-                crate::engine::tests::retire::retire(&self.store, roots, &mut self.gc).await?;
-            record["installed_checkpoints"] = serde_json::to_value(self.report.checkpoints)?;
-            record["consolidations"] = serde_json::to_value(self.report.consolidations)?;
-            record["logical_time"] = serde_json::to_value(
-                self.durable.as_ref().context("missing replay checkpoint")?.time,
-            )?;
-            self.report.retirement.push(record);
-        }
-        Ok(())
-    }
-    async fn consolidate(
-        &mut self,
-        query: &mut program::relational::Query,
-        drain: bool,
-    ) -> Result<()> {
-        if self.consolidation.as_ref().is_some_and(|task| drain || task.is_finished()) {
-            let started = Instant::now();
-            let task = self.consolidation.take().context("missing replay consolidation")?;
-            let uploaded = task.await??;
-            let prior = self.durable.as_ref().context("missing replay checkpoint")?;
-            let (work, checkpoint) = query.prepare_uploaded_consolidation(&uploaded, prior).await?;
+            let work = query.prepare_uploaded_flush(&uploaded).await?;
             query.commit_compaction(work)?;
-            self.durable = Some(checkpoint);
-            self.report.consolidations += 1;
-            self.report.consolidation_ns += started.elapsed().as_nanos();
-            self.retire().await?;
-        }
-        Ok(())
-    }
-    fn start_consolidation(&mut self, query: &program::relational::Query) -> Result<()> {
-        let Some(checkpoint) = &self.durable else {
-            return Ok(());
-        };
-        if self.consolidation.is_none() && query.consolidation_due(checkpoint)? {
-            let namespace = format!(
-                "pgderive/upload-v1/replay-consolidation-{}-{}",
-                query.time(),
-                self.report.consolidations
+            drop(uploaded);
+            self.report.retirement.push(
+                crate::engine::tests::retire::retire(&self.store, roots, &mut self.gc).await?,
             );
-            let frozen = query.capture_consolidation(checkpoint, namespace)?;
-            self.consolidation = Some(tokio::spawn(frozen.upload()));
         }
         Ok(())
     }
     async fn capture(&mut self, query: &mut program::relational::Query) -> Result<()> {
         ensure!(self.pending.is_none(), "replay upload already pending");
-        while self.durable.as_ref().is_some_and(super::super::super::consolidation::must_drain) {
-            self.start_consolidation(query)?;
-            self.consolidate(query, true).await?;
-        }
         let namespace = format!("pgderive/upload-v1/replay-{}", query.time());
         self.pending = Some(tokio::spawn(query.capture_flush(namespace).await?.upload()));
         self.captured_ms = self.report.logical_ms;
@@ -177,11 +109,8 @@ impl Lifecycle {
     pub(super) async fn flush(&mut self, query: &mut program::relational::Query) -> Result<()> {
         let started = Instant::now();
         self.install(query).await?;
-        self.consolidate(query, true).await?;
         self.capture(query).await?;
         self.install(query).await?;
-        self.start_consolidation(query)?;
-        self.consolidate(query, true).await?;
         self.report.maintenance_ns += started.elapsed().as_nanos();
         Ok(())
     }
@@ -216,11 +145,6 @@ impl Lifecycle {
         let started = Instant::now();
         // Ingestion committed after capture before installing this exact prefix.
         self.install(query).await?;
-        self.report.checkpoint_ns += started.elapsed().as_nanos();
-        let pressure =
-            self.durable.as_ref().is_some_and(super::super::super::consolidation::must_drain);
-        self.consolidate(query, pressure).await?;
-        self.start_consolidation(query)?;
         if elapsed >= self.config.checkpoint_interval_ms
             || query.unsealed_run_count() >= self.config.maintenance_ticks
         {
@@ -241,9 +165,7 @@ impl Lifecycle {
         let cache = query.cache_stats()?;
         self.report.samples.push(serde_json::json!({
             "logical_ms":self.report.logical_ms,"source_rows":self.report.source_rows,"prepare_ns":prepare_ns,
-            "installed_checkpoints":self.report.checkpoints - usize::from(self.pending.is_some()),
-            "consolidations":self.report.consolidations,"consolidation_pending":self.consolidation.is_some(),
-            "checkpoint_ns":self.report.checkpoint_ns,"consolidation_ns":self.report.consolidation_ns,"upload_pending":self.pending.is_some(),
+            "installed_checkpoints":self.report.retirement.len(),"upload_pending":self.pending.is_some(),
             "cpu_ticks":self.report.cpu_ticks,
             "compressed_cache":query.test_cache().range_diagnostics()?,
             "runs":query.run_count(),"memtable_bytes":query.memtable_bytes()?,"maintenance_ns":self.report.maintenance_ns,
@@ -255,13 +177,7 @@ impl Lifecycle {
         }));
         Ok(())
     }
-    pub(super) const fn is_quiescent(&self) -> bool {
-        self.pending.is_none() && self.consolidation.is_none()
-    }
     pub(super) async fn advance(&self, prior_ms: u64) {
         tokio::time::advance(Duration::from_millis(self.report.logical_ms - prior_ms)).await;
     }
 }
-
-#[cfg(test)]
-mod tests;

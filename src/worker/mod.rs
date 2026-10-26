@@ -2,7 +2,6 @@
 mod admin;
 mod checkpoint;
 mod collection;
-mod consolidation;
 mod drive;
 mod epoch;
 pub use epoch::Policy as EpochPolicy;
@@ -12,7 +11,6 @@ mod replay;
 pub use health::Policy as HealthPolicy;
 mod measurements;
 mod open;
-mod operation;
 mod program;
 mod registration;
 mod results;
@@ -36,7 +34,7 @@ pub use spec::{QueryDefinition, Settings};
 pub async fn run(config: Config) -> Result<()> {
     config.validate()?;
     let settings = config.worker.clone().context("configuration requires a worker section")?;
-    Box::pin(drive::run(config, settings)).await
+    drive::run(config, settings).await
 }
 
 #[cfg(test)]

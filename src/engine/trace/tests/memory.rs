@@ -100,9 +100,6 @@ async fn hard_fan_in_bound_retains_original_state_on_error() -> Result<()> {
     let trace = TraceSnapshot::from_runs(vec![Run::Object(object); super::super::MAX_RUNS], 1, 1)?;
     assert!(append(&trace, 2, 1).is_err());
     assert_eq!(trace.run_count(), super::super::MAX_RUNS);
-    assert_eq!(
-        trace.materialize().await?,
-        Batch::from_updates([((1, 1), i64::try_from(super::super::MAX_RUNS)?)])?
-    );
+    assert_eq!(trace.materialize().await?, Batch::from_updates([((1, 1), 256)])?);
     Ok(())
 }

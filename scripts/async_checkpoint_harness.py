@@ -4,7 +4,6 @@ import json
 import pathlib
 import signal
 from worker_harness import Fixture, harness_arguments
-from consolidation_harness import case as consolidation_case
 from worker_crash_harness import arm, proxy, wait_for
 
 
@@ -206,8 +205,6 @@ def qualify(output, command):
     memory_pressure(output/'pressure', command)
     case(output/'shutdown', command, False, shutdown=True)
     upload_timeout(output/'timeout', command)
-    consolidation_case(output/'consolidation', command, False)
-    consolidation_case(output/'consolidation-failure', command, True)
 
 
 if __name__ == '__main__':

@@ -17,18 +17,16 @@ def boundary_indices(samples):
     boundaries = []
     installed = 0
     merges = 0
-    previous = (0, 0, 0)
+    previous_installed = 0
+    previous_merges = 0
     for index, sample in enumerate(samples):
-        checkpoints = sample['installed_checkpoints']
-        count = sample['consolidations']
+        count = sample['installed_checkpoints']
         total = sum(sample['cache']['merges'])
-        current = (checkpoints, count, total)
-        if any(after < before for before, after in zip(previous, current, strict=True)):
-            raise ValueError('Checkpoint, consolidation or merge counter regressed')
-        previous = current
-        if (count > installed and not sample['upload_pending']
-                and not sample['consolidation_pending']):
-            if total > merges:
+        if count < previous_installed or total < previous_merges:
+            raise ValueError('Checkpoint or merge counter regressed')
+        previous_installed, previous_merges = count, total
+        if count > installed and not sample['upload_pending']:
+            if not boundaries or total > merges:
                 boundaries.append(index)
                 merges = total
             installed = count
@@ -92,7 +90,7 @@ def assess_cycles(report, *, warmup=4, width=4):
                 largest_merge_tier=tier, largest_tier_boundary_epochs=largest,
                 largest_tier_repeat_coverage=len(largest)>=4,
                 largest_tier_windows=largest_windows,
-                scope='Intervals end after consolidation installation with no pending checkpoint or consolidation; '
+                scope='Intervals end after checkpoint installation with no pending upload; '
                       'natural merges across all arrangements, not forced full compaction. '
                       'Merge-size histograms retain unequal work across tiers. CPU covers preparation, '
                       'output integration and maintenance, excluding explicit oracle comparisons. '

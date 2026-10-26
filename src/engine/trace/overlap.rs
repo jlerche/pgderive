@@ -8,7 +8,13 @@ struct Cohort<'a, K> {
     bounds: Option<(&'a K, &'a K)>,
 }
 impl<K: BatchData, V: BatchData> Run<K, V> {
-    fn key_bounds(&self) -> Option<(&K, &K)> {
+    pub(super) fn row_count(&self) -> usize {
+        match self {
+            Self::Object(batch) => batch.row_count(),
+            Self::Memory(batch) => batch.iter().count(),
+        }
+    }
+    pub(super) fn key_bounds(&self) -> Option<(&K, &K)> {
         match self {
             Self::Object(batch) => batch.key_bounds(),
             Self::Memory(batch) => {
@@ -24,10 +30,7 @@ fn describe<K: BatchData, V: BatchData>(runs: &[Run<K, V>]) -> Result<Cohort<'_,
     let mut rows = 0_usize;
     let mut bounds: Option<(&K, &K)> = None;
     for run in runs {
-        let count = match run {
-            Run::Object(batch) => batch.row_count(),
-            Run::Memory(batch) => batch.iter().count(),
-        };
+        let count = run.row_count();
         rows = rows.checked_add(count).context("overlap cohort row count overflow")?;
         if let Some((first, last)) = run.key_bounds() {
             bounds = Some(

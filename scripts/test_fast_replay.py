@@ -102,7 +102,7 @@ class CoverageTests(unittest.TestCase):
             {'source_rows':1, 'expected':[[['b'],1]], 'measure':True, 'restart':False, 'updates':[{'table':'entry','row':{'id':'1'}},{'table':'entry','row':{'id':'1'}}]}]}]
         valid = {'bootstrap_ns':100, 'bootstrap_rows':0, 'case':'one', 'prepare_commit_ns':[123], 'oracle_checks':2,
                  'logical_time':2, 'measured_weighted_updates':2, 'output_groups':1,
-                 'measured_object_reads':1, 'measured_object_puts':0, 'cold_reopen_equal':True, 'maintenance_quiescent':True, 'lifecycle': {'logical_ms':1,'source_rows':1,'checkpoints':1,'rebased_uploads':0,'capacity_flushes':0,'maintenance_ns':0,'maximum_runs':1,'maximum_memtable_bytes':100,'restarts':0,'consolidations':0,'checkpoint_ns':0,'consolidation_ns':0,'samples':[dict.fromkeys(('logical_ms','source_rows','prepare_ns','maintenance_ns','gets','read_bytes','puts','put_bytes','runs','memtable_bytes','installed_checkpoints','consolidations','checkpoint_ns','consolidation_ns'),1) | {'upload_pending':False,'consolidation_pending':False}],'retirement':[dict.fromkeys(('gets','read_bytes','cache_bytes','deleted_objects','state_objects','state_bytes','rss_bytes','peak_rss_bytes','virtual_io_us','wall_us'),0) | {'installed_checkpoints':1,'consolidations':0,'logical_time':2,'state_objects':3,'state_bytes':128}]},
+                 'measured_object_reads':1, 'measured_object_puts':0, 'cold_reopen_equal':True, 'lifecycle': {'logical_ms':1,'source_rows':1,'checkpoints':1,'rebased_uploads':0,'capacity_flushes':0,'maintenance_ns':0,'maximum_runs':1,'maximum_memtable_bytes':100,'restarts':0,'samples':[dict.fromkeys(('logical_ms','source_rows','prepare_ns','maintenance_ns','gets','read_bytes','puts','put_bytes','runs','memtable_bytes'),1)],'retirement':[dict.fromkeys(('gets','read_bytes','cache_bytes','deleted_objects','state_objects','state_bytes','rss_bytes','peak_rss_bytes','virtual_io_us','wall_us'),0)]},
                  'object_puts':3, 'stored_objects':3, 'stored_bytes':128,
                  'memtable_bytes':100, 'measured_cache_misses':0, 'measured_decoded_bytes':100, 'measured_decoded_rows':1}
         with tempfile.TemporaryDirectory() as directory:
@@ -111,23 +111,12 @@ class CoverageTests(unittest.TestCase):
                 validate_report(path, cases)
             path.write_text(json.dumps([valid]))
             validate_report(path, cases)
-            deferred = json.loads(json.dumps(valid))
-            deferred['lifecycle']['checkpoints'] = 2
-            deferred['lifecycle']['consolidations'] = 1
-            deferred['lifecycle']['retirement'][-1]['installed_checkpoints'] = 2
-            deferred['lifecycle']['retirement'][-1]['consolidations'] = 1
-            path.write_text(json.dumps([deferred]))
-            validate_report(path, cases) # GC can defer checkpoints during a protected merge.
-            deferred['lifecycle']['retirement'] = valid['lifecycle']['retirement']
-            path.write_text(json.dumps([deferred]))
-            with self.assertRaises(RuntimeError):
-                validate_report(path, cases)
             for mutation in [{'bootstrap_ns':-1}, {'bootstrap_rows':-1}, {'prepare_commit_ns':[]}, {'prepare_commit_ns':[True]},
                              {'oracle_checks':0}, {'case':'wrong'}, {'logical_time':3},
                              {'measured_weighted_updates':0}, {'memtable_bytes':-1},
                              {'measured_cache_misses':-1}, {'measured_decoded_bytes':-1}, {'measured_decoded_rows':-1}, {'measured_object_reads':-1},
                              {'measured_object_puts':-1}, {'object_puts':-1},
-                             {'stored_objects':-1}, {'stored_bytes':-1}, {'cold_reopen_equal':False}, {'lifecycle':{}}, {'maintenance_quiescent':False}]:
+                             {'stored_objects':-1}, {'stored_bytes':-1}, {'cold_reopen_equal':False}, {'lifecycle':{}}]:
                 path.write_text(json.dumps([valid | mutation]))
                 with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
                     validate_report(path, cases)

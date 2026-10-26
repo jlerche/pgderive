@@ -10,6 +10,7 @@ mod probes;
 mod rebase;
 mod tiers;
 mod validation;
+mod window;
 use super::{
     Batch, BatchBuilder,
     reader::{BatchData, BatchReader, Cursor, ObjectBatch},
@@ -23,12 +24,8 @@ pub(crate) use validation::ValidatedBag;
 
 // Bound merge fan-in across durable roots and immutable memory chunks.
 // Normal memory fan-in grows logarithmically; unmergeable coefficient subsets
-// still consume this explicit budget. Individual uploads remain capped at 128
-// roots; independent consolidation prevents accumulated roots exhausting this bound.
-// 128 durable base roots + 128 new checkpoint roots + 120 memory suffix runs
-// = 376. Reserve eight additional heads before forcing foreground drain.
-pub(crate) const MAX_RUNS: usize = 384;
-pub(crate) const CONSOLIDATION_ROOTS: usize = 112;
+// still consume this explicit budget. Durable outputs remain capped at 128 roots.
+pub(crate) const MAX_RUNS: usize = 256;
 
 /// One immutable run, in memory or in object storage.
 #[derive(Debug, Clone)]
@@ -373,3 +370,7 @@ mod weight_bound_tests;
 #[cfg(test)]
 #[path = "tests/logical_cache.rs"]
 mod logical_cache_tests;
+
+#[cfg(test)]
+#[path = "tests/windows.rs"]
+mod window_tests;

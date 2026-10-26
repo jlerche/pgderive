@@ -4,8 +4,8 @@ use super::bounded_work;
 fn replay_budget_counts_all_epochs_since_durable_checkpoint() {
     assert!(!bounded_work(140, 12, 4096, 1));
     assert!(bounded_work(140, 12, 4097, 1));
-    assert!(bounded_work(376, 1, 10, 9));
-    assert!(!bounded_work(375, 1, 10, 9));
+    assert!(bounded_work(248, 1, 10, 9));
+    assert!(!bounded_work(247, 1, 10, 9));
     assert!(!bounded_work(121, 119, 1000, 1));
     assert!(bounded_work(122, 120, 1001, 1));
 }

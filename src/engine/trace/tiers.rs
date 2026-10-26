@@ -1,40 +1,54 @@
 //! Size-tiered logical runs; a multipack upload remains one run across restart.
 use super::{Run, TraceSnapshot};
-use crate::engine::reader::BatchData;
+use crate::engine::{Batch, reader::BatchData};
 use anyhow::{Context, Result, ensure};
+use std::sync::Arc;
 
 const TIER_FAN_IN: usize = 8;
 
 impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
-    pub(crate) fn consolidation_due(&self) -> Result<bool> {
-        Ok((self.run_count() >= super::CONSOLIDATION_ROOTS && self.cohorts.len() > 1)
-            || select_tier(&self.runs, &self.cohorts)?.contains(&true))
-    }
-    pub(crate) async fn consolidate_tiers(
+    pub(super) async fn flush_tier(
         &self,
         writer: &crate::engine::dataflow::Arrangement<K, V>,
+        delta: Batch<K, V>,
     ) -> Result<Self> {
-        ensure!(!self.has_memory(), "consolidation requires durable input");
-        let runs = &self.runs;
-        let selected = if runs.len() >= super::CONSOLIDATION_ROOTS && self.cohorts.len() > 1 {
-            vec![true; self.cohorts.len()]
-        } else {
-            select_tier(runs, &self.cohorts)?
-        };
-        if !selected.contains(&true) {
-            return Ok(self.clone());
+        let mut runs = self
+            .runs
+            .iter()
+            .filter(|run| matches!(run, Run::Object(_)))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut cohorts = self.cohorts.clone();
+        let changed = delta.iter().next().is_some();
+        if changed {
+            runs.push(Run::Memory(Arc::new(delta)));
+            cohorts.push(1);
         }
+        let selected =
+            if changed { select_tier(&runs, &cohorts)? } else { vec![false; cohorts.len()] };
+        let selected = super::window::restrict(&runs, &cohorts, &selected)?;
         let mut retained = Vec::new();
         let mut retained_cohorts = Vec::new();
         let mut merging = Vec::new();
         let mut offset = 0_usize;
-        for (count, selected) in self.cohorts.iter().copied().zip(selected) {
-            let cohort = &runs[offset..offset + count];
-            if selected {
-                merging.extend_from_slice(cohort);
-            } else {
-                retained_cohorts.push(count);
-                retained.extend_from_slice(cohort);
+        for count in cohorts {
+            let mut kept = 0_usize;
+            for (run, selected) in
+                runs[offset..offset + count].iter().zip(&selected[offset..offset + count])
+            {
+                if *selected {
+                    merging.push(run.clone());
+                } else if let Run::Memory(batch) = run {
+                    let uploaded = writer.upload_flush(batch).await?;
+                    kept += uploaded.len();
+                    retained.extend(uploaded);
+                } else {
+                    kept += 1;
+                    retained.push(run.clone());
+                }
+            }
+            if kept > 0 {
+                retained_cohorts.push(kept);
             }
             offset += count;
         }
@@ -52,7 +66,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
                 retained.extend(compacted.runs);
             }
         }
-        if retained.len() > super::MAX_RUNS {
+        if retained.len() > 128 {
             return writer.compact(self).await;
         }
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
@@ -77,10 +91,7 @@ fn select_tier<K: BatchData, V: BatchData>(
         let end = offset.checked_add(*count).context("trace cohort count overflow")?;
         let cohort = runs.get(offset..end).context("invalid trace run cohorts")?;
         let rows = cohort.iter().try_fold(0_usize, |total, run| {
-            let rows = match run {
-                Run::Object(object) => object.row_count(),
-                Run::Memory(batch) => batch.iter().count(),
-            };
+            let rows = run.row_count();
             total.checked_add(rows).context("flush row count overflow")
         })?;
         // Empty results have a real immutable root. Charge one scheduling unit

@@ -31,7 +31,7 @@ async fn fixed_change_checkpoint_growth() -> Result<()> {
             oracle.apply(&delta)?;
             let pending = trace.append_validated(Run::Memory(Arc::new(delta)), time)?;
             let started = Instant::now();
-            trace = writer.consolidate(&writer.flush(&pending).await?).await?;
+            trace = writer.flush(&pending).await?;
             elapsed.push(started.elapsed().as_nanos());
             max_roots = max_roots.max(trace.run_count());
         }

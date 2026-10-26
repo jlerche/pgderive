@@ -60,7 +60,7 @@ async fn subset_overflow_cancels_against_retained_object_state() -> Result<()> {
     let pending = append(&append(&base, 2, i64::MAX)?, 3, i64::MAX)?;
     let flushed = writer.flush(&pending).await?;
     assert_eq!(flushed.materialize().await?, Batch::from_updates([((1, 1), i64::MAX)])?);
-    assert_eq!(flushed.run_count(), 3);
+    assert_eq!(flushed.run_count(), 1);
     Ok(())
 }
 
@@ -69,7 +69,7 @@ async fn repeated_flushes_keep_merge_fan_in_bounded() -> Result<()> {
     let writer = Arrangement::<i64, i64>::new(Arc::new(InMemory::new()), "flush-v1".into(), 1)?;
     let mut trace = writer.empty();
     for time in 1..=24 {
-        trace = writer.consolidate(&writer.flush(&append(&trace, time, 1)?).await?).await?;
+        trace = writer.flush(&append(&trace, time, 1)?).await?;
         assert!(trace.run_count() <= 8);
         assert_eq!(
             trace.materialize().await?,

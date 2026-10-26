@@ -101,18 +101,12 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         prior.append_runs_validated(self.upload_flush(delta.batch.borrow()).await?, delta.time)
     }
     /// Persist memory deltas while retaining existing immutable object runs.
+    /// Consolidate similarly sized logical runs to bound merge fan-in.
     ///
     /// # Errors
-    /// Returns upload, arithmetic or run-limit failures.
+    /// Returns upload, compaction, arithmetic or run-limit failures.
     pub async fn flush(&self, prior: &TraceSnapshot<K, V>) -> Result<TraceSnapshot<K, V>> {
         prior.flush_memory(self).await
-    }
-    /// Consolidate selected durable cohorts independently of delta checkpointing.
-    ///
-    /// # Errors
-    /// Rejects memory input or failed reads, uploads and weighted arithmetic.
-    pub async fn consolidate(&self, prior: &TraceSnapshot<K, V>) -> Result<TraceSnapshot<K, V>> {
-        prior.consolidate_tiers(self).await
     }
     /// Upload equivalent consolidated state without advancing logical time.
     ///

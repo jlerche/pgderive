@@ -284,7 +284,7 @@ async fn run(
     verify_cold(&query, &native, &compiled, &settings, &output).await?;
     let objects = store.list(None).try_collect::<Vec<_>>().await?;
     Ok(
-        serde_json::json!({"case":case.name,"cold_reopen_equal":true,"maintenance_quiescent":lifecycle.is_quiescent(),"lifecycle":lifecycle.report,"bootstrap_ns":bootstrap_metrics.0,"bootstrap_rows":bootstrap_metrics.1,"prepare_commit_ns":elapsed,
+        serde_json::json!({"case":case.name,"cold_reopen_equal":true,"lifecycle":lifecycle.report,"bootstrap_ns":bootstrap_metrics.0,"bootstrap_rows":bootstrap_metrics.1,"prepare_commit_ns":elapsed,
         "object_puts":store.puts.load(Ordering::SeqCst),"stored_objects":objects.len(),
         "stored_bytes":objects.iter().map(|object| object.size).sum::<u64>(),
         "measured_decoded_bytes":decoded_bytes,"measured_decoded_rows":decoded_rows,"measured_object_reads":object_reads,"measured_object_puts":object_puts,

@@ -20,7 +20,7 @@ use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 pub(in crate::worker) type Key = crate::engine::value::Value<Vec<String>>;
-pub(in crate::worker) type Inputs = TimedBatch<Vec<crate::engine::execution::Sealed<Key, Row>>>;
+type Inputs = TimedBatch<Vec<crate::engine::execution::Sealed<Key, Row>>>;
 pub(in crate::worker) type Query = Circuit<Key, Row>;
 #[cfg(test)]
 pub(in crate::worker) fn build(
