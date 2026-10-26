@@ -109,7 +109,7 @@ class EnduranceTests(unittest.TestCase):
                                 read_bytes=index*100, puts=index, put_bytes=index*100,
                                 maintenance_ns=index*1000,
                                 cpu_ticks=index*2, installed_checkpoints=index//4,
-                                upload_pending=False,
+                                upload_pending=False, consolidations=index//8, consolidation_pending=False,
                                 cache=dict(bytes=1, entries=1, live_bytes=1, index_bytes=1,
                                            filter_bytes=1, pins=0, merges=[index//8],
                                            hits=index, misses=index, decoded_bytes=index,

@@ -1270,3 +1270,145 @@ merge tests. The remaining investigation is larger compaction/scan work and
 run/cohort fan-in, using the existing preparation profiler to distinguish engine
 phases from fixture integration. Extra immutable cold state is acceptable;
 repeatedly reading and rewriting it needs measured justification.
+
+## Independent durable flushing and consolidation (2026-10-26)
+
+Delta checkpoint uploads no longer select tiers, compact the full trace, or read
+retained object pages. They persist canonical memory deltas and retain existing
+ordered object membership. An overflowing memory-only coefficient subset is
+persisted as separate canonical runs; cancellation with durable state is handled
+by the normal weighted readers. The cumulative new-root budget is 128 per
+arrangement per checkpoint, including that overflow case. Exceeding it is an
+explicit capacity error, not an implicit old-state scan or retry loop.
+
+The worker owns at most one streaming consolidation job independently of its
+checkpoint uploader. Consolidation reuses the existing overlap/size-tier policy
+and streaming writer, with one arrangement workspace at a time. It pins the
+exact authoritative input checkpoint and reserves a separate upload namespace.
+Both durable protections survive failure. Newer delta checkpoints can overtake
+the job because they retain its exact ordered object prefix, including repeated
+references. Adoption verifies that prefix, preserves newer object cohorts and
+memory spans, and inherits the current logical cache lineage.
+
+Completed consolidation publishes through the existing fenced `Writer::maintain`
+operation at the current durable checkpoint time. Its candidate excludes newer
+memory state; the separate runtime candidate retains that memory. PostgreSQL
+commits equivalent physical membership before runtime installation or protection
+release. This operation changes neither source progress nor sink rows and does
+not advance logical-slot acknowledgement. The public serialized/untrusted
+compaction API still requires its existing cold equivalence checks; only the
+private owned in-process capability uses the trusted streaming result.
+
+Root pressure drains consolidation before starting an optional newer-suffix
+checkpoint. One 128-root durable cohort plus a 128-root new upload and 120 newer
+memory runs require 376 live heads, so the explicit runtime ceiling is 384.
+Pressure starts at 112 durable roots with multiple cohorts; one irreducible
+multipack cohort does not repeatedly schedule a no-benefit rewrite. A ready job
+is serviced before another urgent checkpoint can mask it indefinitely. Whole
+streaming jobs do not inherit a foreground operation wall timeout; object requests
+and physical publication retain their operation limits. Cancellation retains
+non-quiescent upload protection and private reader pins for fenced recovery.
+
+The deterministic cold-job test holds consolidation on ten-minute logical read
+latency while two newer checkpoints complete without retained-object reads or
+logical-clock advancement. Adoption preserves those durable suffixes and another
+uncheckpointed transaction, then cold reopening and replay reproduce exact
+weighted output. Boundary tests cover 376 heads, duplicate root multiplicity,
+signed memory overflow, foreign/recovered runtimes and task cancellation. The
+live PostgreSQL harness witnesses both active protections, unchanged progress and
+sink tuple identities across physical publication, and injected publication
+failure with retained protections followed by fenced recovery and native-SQL
+comparison.
+
+The fast replay harness uses these same production capabilities, tracks installed
+consolidation separately, and excludes pending consolidation from completed-cycle
+boundaries. This separation does not reduce the total merge work by itself, nor
+establish I/O priority for checkpoints. Independently persisting a delta before
+merging it can add PUTs compared with combining both operations in one upload.
+Throughput, maintenance debt and request costs still require measurement across
+complete natural cycles. No deployment or weekly production qualification is
+implied by the architecture change.
+
+Headroom is enforced inside checkpoint startup as well as in the consume loop.
+A forced memtable flush can finish an older upload and immediately request a
+newer checkpoint; it must first clear any durable debt that upload introduced.
+An older prefix merge may leave newer cohorts over the bound, so this drain
+repeats against fresh authoritative membership. The direct forced-capture test
+starts with 128 durable cohorts, holds an older eight-cohort job for two logical
+hours, appends memory, and requires both the old installation and a fresh pressure
+consolidation before another upload. Exact aggregate and cold-oracle checks pass
+in approximately 0.31 seconds of debug execution.
+
+Foreground timeouts now surround individual preparation and SQL publication
+operations, not a parent future that also includes a consolidation debt wait.
+Checkpoint reservation, upload and installation remain bounded; physical
+consolidation reservation and installation are bounded separately from the
+streaming merge. A final replay report must prove both task slots quiescent and
+match the last GC observation's installed checkpoint/consolidation counters,
+logical time and physical inventory against the cold-verified final state.
+
+Final optimized component evidence is retained under the ignored
+`artifacts/benchmarks/independent-maintenance-20261026/` directory. Fresh baseline
+and candidate binaries both use release optimization level 3, with frozen Cargo
+artifact records and SHA-256 identities. All four timed runs record zero compiler
+overlap. The earlier candidate measured before the forced-headroom correction is
+retained separately and excluded from these comparisons.
+
+| Reused workload | Executed changes | Baseline → new CPU | Baseline → new PUTs | Baseline → new sampled GETs |
+| --- | ---: | ---: | ---: | ---: |
+| 524,288 starting groups, growing hot set | 1,024,000 | 47.60 → 49.22 CPU seconds | 1,094 → 1,394 | 1,415 → 1,784 |
+| Million-row grouped source, growing hot set | 4,096,000 | 57.03 → 57.70 CPU seconds | 3,325 → 4,325 | 3,350 → 4,359 |
+
+CPU includes preparation, output integration and maintenance during observed
+source changes, excluding explicit oracle comparisons. PUTs include bootstrap
+and final drain; sampled GETs/read bytes stop before final drain and cold
+verification. These are component requests against the controlled in-memory
+store, not live R2 billing measurements. The candidate's child processes finish
+in about 85 and 88 wall seconds after compilation. Actual source work at 1,000
+changes per logical second represents about 17 and 68 logical minutes.
+
+Accumulated preparation time changes by -0.4% and -1.5%; total measured CPU increases 3.4% and
+1.2%. PUTs increase 27.4% and 30.1%, sampled GETs 26.1% and 30.1%, and sampled
+read bytes 10.2% and 22.2%. Independent delta persistence has a real request cost;
+this slice is checkpoint isolation, not a throughput or request-amplification
+improvement. Both final object inventories match their baselines exactly:
+10,176,629 bytes / 36 objects and 2,080,100 bytes / 35 objects. Maximum observed
+run count remains ten. Sampled fixture RSS stays within the unchanged 3 GiB
+limit; it includes fixture data and is not an isolated-worker RSS measurement.
+
+The candidate installs 205 checkpoints / 60 consolidation jobs and 820 checkpoints
+/ 250 consolidation jobs. The updated cycle checker recognizes 59 and 249 complete
+installed consolidation intervals, never a still-pending background result.
+Both cases retain `qualified: false`: repeated largest-tier coverage is still
+insufficient. The first case also fails read-byte growth (10.31 → 18.93 bytes per
+change). The longer case fails preparation growth (8.99 → 11.67 ms per 1,000
+changes), maintenance elapsed growth (0.197 → 0.262 ms per 1,000 changes), and
+strict zero-baseline cache-miss/decoding checks. Those failures remain visible;
+short windows with unequal merge histories do not establish a permanent trend.
+No arbitrary-size plateau or weekly restart-free claim follows from these runs.
+
+Checkpoint-containing maintenance turns also improve modestly in this component
+harness: p50/p99 move from 5.606/8.493 to 5.121/7.262 ms for the first case, and
+from 1.185/2.109 to 1.095/1.748 ms for the longer case. These unpaced,
+single-threaded turns include capture, bookkeeping and GC; candidate turns can
+also adopt a completed consolidation. They exclude final drain and do not measure
+PostgreSQL publication, real object-store latency or end-to-end freshness. Neither
+timed workload reaches root pressure (maximum ten runs); the forced-pressure
+logical-clock regression separately checks safe debt draining. Raw distributions
+are retained in `coordinator-latency.json`. These modest reductions do not offset
+or invalidate the measured request-cost increase.
+
+The final common `./scripts/check.sh` gate passes 595 Rust tests, 135 Python tests,
+149 live worker results plus rebuild, formatting, Clippy and dependency checks,
+with 97.12% production line coverage. The isolated tmpfs PostgreSQL fixture is
+removed. Independent ready-code, timeout/headroom and validation reviews find no
+remaining blocker. The live protected-publication case witnesses five physical
+publications; the injected-failure case retains both protections, recovers, and
+witnesses one successful physical publication without changing source progress
+or sink tuple identities. No push, deployment or demo restart was performed.
+
+The next architecture work remains bounded key-range consolidation and maintenance
+resource scheduling. Whole-cohort merging still scales with selected retained
+state; independently scheduling it does not remove that work. Request costs also
+need reduction before using this experiment as the default for a continuously
+running cost-constrained demo.

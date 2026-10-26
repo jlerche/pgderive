@@ -23,7 +23,11 @@ async fn growing_tiny_flushes_never_rewrite_large_base() -> Result<()> {
     for time in 2..=257 {
         let key = 65536 + i64::try_from(time)?;
         let delta = Batch::from_updates([((key, key), 1)])?;
-        trace = writer.flush(&trace.append_validated(Run::Memory(Arc::new(delta)), time)?).await?;
+        trace = writer
+            .consolidate(
+                &writer.flush(&trace.append_validated(Run::Memory(Arc::new(delta)), time)?).await?,
+            )
+            .await?;
         assert_eq!(trace.manifest()?.objects[0], root);
         assert!(trace.cohorts.len() < 32);
         assert_eq!(trace.unsealed_run_count(), 0);
@@ -53,7 +57,11 @@ async fn multipack_cohort_survives_tiny_flushes_and_restart() -> Result<()> {
     let base = trace.manifest()?.objects;
     for time in 2..=65 {
         let delta = Batch::from_updates([((0, 0), 1)])?;
-        trace = writer.flush(&trace.append_validated(Run::Memory(Arc::new(delta)), time)?).await?;
+        trace = writer
+            .consolidate(
+                &writer.flush(&trace.append_validated(Run::Memory(Arc::new(delta)), time)?).await?,
+            )
+            .await?;
         assert_eq!(&trace.manifest()?.objects[..8], base.as_slice());
         trace = TraceSnapshot::reopen(
             store.clone(),
@@ -87,7 +95,7 @@ async fn tier_subset_overflow_consolidates_only_complete_state() -> Result<()> {
     }
     let delta = Batch::from_updates([((9, 9), 1)])?;
     let pending = trace.append_validated(Run::Memory(Arc::new(delta)), 9)?;
-    let flushed = writer.flush(&pending).await?;
+    let flushed = writer.consolidate(&writer.flush(&pending).await?).await?;
     assert_eq!(flushed.materialize().await?, pending.materialize().await?);
     assert_eq!(flushed.cohorts.len(), 1);
     assert_eq!(flushed.tuple_weight(&(1, 1)).await?, i64::MAX);
@@ -104,7 +112,11 @@ async fn empty_cohorts_survive_growth_cancellation_and_cold_restore() -> Result<
         let weight = if time % 2 == 1 { 1 } else { -1 };
         let delta = Batch::from_updates([((1, 1), weight)])?;
         oracle.apply(&delta)?;
-        trace = writer.flush(&trace.append_validated(Run::Memory(Arc::new(delta)), time)?).await?;
+        trace = writer
+            .consolidate(
+                &writer.flush(&trace.append_validated(Run::Memory(Arc::new(delta)), time)?).await?,
+            )
+            .await?;
         trace = writer.reopen(trace.manifest()?).await?;
         assert_eq!(trace.materialize().await?, oracle);
     }
@@ -131,7 +143,7 @@ async fn overlapping_replacements_consolidate_across_tiers_without_extra_puts() 
         }
         let pending =
             trace.append_validated(Run::Memory(Arc::new(Batch::from_updates(updates)?)), time)?;
-        trace = writer.flush(&pending).await?;
+        trace = writer.consolidate(&writer.flush(&pending).await?).await?;
         assert!(trace.cohorts.len() <= 6, "time {time}, cohorts {:?}", trace.cohorts);
         let expected = Batch::from_updates(
             values

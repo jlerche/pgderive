@@ -1,5 +1,6 @@
 //! Durable acyclic source/project/join circuits with explicitly registered state.
 mod circuit;
+mod consolidation;
 pub(crate) use circuit::bootstrap::Bootstrap;
 mod flush;
 mod persistence;
@@ -18,6 +19,7 @@ use crate::{
     },
 };
 use anyhow::{Context, Result, ensure};
+pub(crate) use consolidation::UploadedConsolidation;
 pub use flush::{FrozenFlush, UploadedFlush};
 use std::{
     collections::{BTreeMap, BTreeSet},

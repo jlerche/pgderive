@@ -1,3 +1,4 @@
+mod preparation;
 use super::{open::Open, program::relational, spec::Settings, sql::Session};
 use crate::{Config, catalog::Progress};
 use anyhow::{Context, Result, ensure};
@@ -168,8 +169,7 @@ async fn attempt(
             result = health.failed() => result,
         }
     }.await;
-    let cancelled = super::checkpoint::cancel(&mut open).await;
-    let result = crate::outcome::combine(result, cancelled, "checkpoint upload cancellation");
+    let result = cancel_maintenance(&mut open, result).await;
     let shutdown = timeout(Duration::from_secs(10), stream.shutdown())
         .await
         .context("worker replication shutdown timed out")
@@ -192,6 +192,13 @@ async fn attempt(
     record_finished(ticket, &open, settings, attempts, &result).await?;
     result?;
     Ok((open.query.time(), open.writer.end().to_string()))
+}
+
+async fn cancel_maintenance(open: &mut Open, result: Result<()>) -> Result<()> {
+    let checkpoint = super::checkpoint::cancel(open).await;
+    let result = crate::outcome::combine(result, checkpoint, "checkpoint upload cancellation");
+    let consolidation = super::consolidation::cancel(open).await;
+    crate::outcome::combine(result, consolidation, "consolidation cancellation")
 }
 
 async fn record_finished(
@@ -244,19 +251,18 @@ async fn consume(
         let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
         let pending = durable.checkpoint_end < durable.end;
         let stopping = count.0.stopping(settings, *stop.borrow());
+        if super::consolidation::service(open, &durable.stored.checkpoint, stopping).await? {
+            continue;
+        }
         if stopping || super::checkpoint::must_drain(open, pending, durable.stored.checkpoint.time)
         {
             count.1.record(open, "maintenance")?;
-            timeout(
-                Duration::from_secs(settings.health.operation_timeout_secs),
-                maintain(open, count.0),
-            )
-            .await
-            .context("worker checkpoint timed out; recover retained WAL")??;
+            maintain(open, count.0).await?;
             stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
             deadline = tokio::time::Instant::now() + interval;
             count.1.record(open, "ready")?;
             if stopping {
+                super::consolidation::finish(open).await?;
                 return Ok(());
             }
             continue;
@@ -287,12 +293,7 @@ async fn consume(
             deadline = tokio::time::Instant::now() + interval;
         }
         count.1.record(open, "publishing")?;
-        timeout(
-            Duration::from_secs(settings.health.operation_timeout_secs),
-            publish_group(open, stream, transaction, &mut epochs, (settings, stop, count.0)),
-        )
-        .await
-        .context("worker publication timed out; recover retained WAL without ACK")??;
+        publish_group(open, stream, transaction, &mut epochs, (settings, stop, count.0)).await?;
         count.1.record(open, "ready")?;
     }
 }
@@ -310,16 +311,18 @@ async fn next_event(
     timer: (tokio::time::Instant, bool),
 ) -> Result<Event> {
     let (stop, metrics) = control;
-    let seconds = open.settings.health.operation_timeout_secs;
     tokio::select! {
         signal=stop.changed() => {signal.context("worker stop monitor closed")?; Ok(Event::Wake)}
         ()=tokio::time::sleep_until(timer.0), if timer.1 && open.checkpoint.is_none() => Ok(Event::Wake),
         uploaded=super::checkpoint::ready(&mut open.checkpoint) => {
-            timeout(Duration::from_secs(seconds), super::checkpoint::complete(open, uploaded?))
-                .await.context("checkpoint publication timed out")??;
+            super::checkpoint::complete(open, uploaded?).await?;
             metrics.maintenance = metrics.maintenance.checked_add(1).context("maintenance counter overflow")?;
             stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
             Ok(Event::Checkpoint)
+        }
+        uploaded=super::consolidation::ready(&mut open.consolidation), if open.checkpoint.is_none() => {
+            super::consolidation::complete(open, uploaded?).await?;
+            Ok(Event::Wake)
         }
         collection=open.collector.completed() => {collection?; Ok(Event::Wake)}
         transaction=epochs.collector.recv(stream) => Ok(Event::Transaction(transaction?)),
@@ -387,48 +390,22 @@ async fn publish(
     let input = input.seal(time)?;
     phases.mark("inputs");
     let mut preparation = crate::timing::Profile::new(measured);
-    let prepared = match open
-        .query
-        .prepare_memtable_profiled(input.clone(), open.settings.memtable_bytes, &mut preparation)
-        .await
-    {
-        Ok(work) => work,
-        Err(error) if error.is::<crate::engine::plan::relational::MemtableFull>() => {
-            preparation.mark("failed_preparation_tail");
-            emit(
-                &json!({"event":"checkpoint_backpressure","reason":"memtable_bytes", "time":open.query.time(),"checkpoint_in_flight":open.checkpoint.is_some()}),
-            )?;
-            maintain(open, metrics).await?;
-            preparation.mark("forced_maintenance");
-            open.query
-                .prepare_memtable_profiled(input, open.settings.memtable_bytes, &mut preparation)
-                .await
-                .map_err(|error| {
-                    if error.is::<crate::engine::plan::relational::MemtableFull>() {
-                        error.context(crate::engine::execution::CapacityExceeded(
-                            "single logical input exceeds memtable capacity after checkpoint",
-                        ))
-                    } else {
-                        error
-                    }
-                })?
-        }
-        Err(error) => return Err(error),
-    };
+    let prepared = preparation::run(open, input, metrics, &mut preparation).await?;
     preparation.mark("candidate_validation");
     phases.mark("prepare_including_object_io");
     let deltas = relational::deltas(&prepared.output().batch, open.compiled.output())?;
     let progress = Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
     phases.mark("finalize");
-    let publication = open
-        .writer
-        .publish_epoch(
+    let publication = super::operation::run(
+        open.settings.health.operation_timeout_secs,
+        open.writer.publish_epoch(
             &mut open.session.client,
             open.query.plan(),
             (time, &progress, &deltas, epoch.transactions()),
             measured,
-        )
-        .await?;
+        ),
+    )
+    .await?;
     phases.mark("publication");
     open.query.commit(prepared)?;
     phases.mark("local_completion");

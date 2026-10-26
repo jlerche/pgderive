@@ -1,45 +1,37 @@
 //! Size-tiered logical runs; a multipack upload remains one run across restart.
 use super::{Run, TraceSnapshot};
-use crate::engine::{Batch, reader::BatchData};
+use crate::engine::reader::BatchData;
 use anyhow::{Context, Result, ensure};
-use std::sync::Arc;
 
 const TIER_FAN_IN: usize = 8;
 
 impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
-    pub(super) async fn flush_tier(
+    pub(crate) fn consolidation_due(&self) -> Result<bool> {
+        Ok((self.run_count() >= super::CONSOLIDATION_ROOTS && self.cohorts.len() > 1)
+            || select_tier(&self.runs, &self.cohorts)?.contains(&true))
+    }
+    pub(crate) async fn consolidate_tiers(
         &self,
         writer: &crate::engine::dataflow::Arrangement<K, V>,
-        delta: Batch<K, V>,
     ) -> Result<Self> {
-        let mut runs = self
-            .runs
-            .iter()
-            .filter(|run| matches!(run, Run::Object(_)))
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut cohorts = self.cohorts.clone();
-        let changed = delta.iter().next().is_some();
-        if changed {
-            runs.push(Run::Memory(Arc::new(delta)));
-            cohorts.push(1);
+        ensure!(!self.has_memory(), "consolidation requires durable input");
+        let runs = &self.runs;
+        let selected = if runs.len() >= super::CONSOLIDATION_ROOTS && self.cohorts.len() > 1 {
+            vec![true; self.cohorts.len()]
+        } else {
+            select_tier(runs, &self.cohorts)?
+        };
+        if !selected.contains(&true) {
+            return Ok(self.clone());
         }
-        let selected =
-            if changed { select_tier(&runs, &cohorts)? } else { vec![false; cohorts.len()] };
         let mut retained = Vec::new();
         let mut retained_cohorts = Vec::new();
         let mut merging = Vec::new();
         let mut offset = 0_usize;
-        for (count, selected) in cohorts.into_iter().zip(selected) {
+        for (count, selected) in self.cohorts.iter().copied().zip(selected) {
             let cohort = &runs[offset..offset + count];
             if selected {
                 merging.extend_from_slice(cohort);
-            } else if let [Run::Memory(batch)] = cohort {
-                let uploaded = writer.upload_flush(batch).await?;
-                if !uploaded.is_empty() {
-                    retained_cohorts.push(uploaded.len());
-                    retained.extend(uploaded);
-                }
             } else {
                 retained_cohorts.push(count);
                 retained.extend_from_slice(cohort);
@@ -60,7 +52,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
                 retained.extend(compacted.runs);
             }
         }
-        if retained.len() > 128 {
+        if retained.len() > super::MAX_RUNS {
             return writer.compact(self).await;
         }
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;

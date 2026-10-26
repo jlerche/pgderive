@@ -53,11 +53,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     pub(crate) async fn flush_memory(&self, writer: &Arrangement<K, V>) -> Result<Self> {
         ensure!(self.run_count() <= super::MAX_RUNS, "flush input run limit exceeded");
         if !self.has_memory() {
-            return if self.run_count() > 128 {
-                writer.compact(self).await
-            } else {
-                Ok(self.clone())
-            };
+            return Ok(self.clone());
         }
         let mut memory = BatchBuilder::default();
         for run in &self.runs {
@@ -65,12 +61,58 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
                 memory.extend(batch);
             }
         }
-        let Ok(delta) = memory.finish() else {
-            // A subset may overflow i64 even though cancellation with retained
-            // objects makes the complete trace representable. Narrow only the
-            // complete trace in this case.
-            return writer.compact(self).await;
-        };
-        self.flush_tier(writer, delta).await
+        let mut runs = self
+            .runs
+            .iter()
+            .filter(|run| matches!(run, Run::Object(_)))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut cohorts = self.cohorts.clone();
+        let mut remaining = crate::engine::reader::WriteLimits::default().output_roots;
+        // A memory subset can overflow even when cancellation with durable state
+        // makes the whole trace valid. Upload its canonical runs separately;
+        // checkpointing must never scan old objects to resolve that cancellation.
+        match memory.finish() {
+            Ok(delta) => {
+                append_upload(writer, &delta, &mut runs, &mut cohorts, &mut remaining).await?;
+            }
+            Err(_) => {
+                for run in &self.runs {
+                    if let Run::Memory(batch) = run {
+                        append_upload(writer, batch, &mut runs, &mut cohorts, &mut remaining)
+                            .await?;
+                    }
+                }
+            }
+        }
+        ensure!(runs.len() <= super::MAX_RUNS, "checkpoint root limit requires consolidation");
+        let generation = self.generation.checked_add(1).context("trace generation overflow")?;
+        let mut next = Self::from_runs(runs, generation, self.time)?;
+        next.cohorts = cohorts;
+        next.logical_cache.clone_from(&self.logical_cache);
+        Ok(next)
     }
+}
+async fn append_upload<K: BatchData, V: BatchData>(
+    writer: &Arrangement<K, V>,
+    batch: &crate::engine::Batch<K, V>,
+    runs: &mut Vec<Run<K, V>>,
+    cohorts: &mut Vec<usize>,
+    remaining: &mut usize,
+) -> Result<()> {
+    if batch.iter().next().is_some() {
+        let uploaded = writer.upload_flush(batch).await?;
+        ensure!(
+            uploaded.len() <= *remaining,
+            crate::engine::execution::CapacityExceeded(
+                "checkpoint memory output exceeds root budget"
+            )
+        );
+        *remaining -= uploaded.len();
+        if !uploaded.is_empty() {
+            cohorts.push(uploaded.len());
+            runs.extend(uploaded);
+        }
+    }
+    Ok(())
 }

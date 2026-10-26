@@ -54,14 +54,21 @@ def validate_report(path, cases):
                 or any(type(row[key]) is not int or row[key] < 0 for key in [
                     'bootstrap_ns', 'memtable_bytes', 'measured_cache_misses', 'measured_decoded_bytes', 'measured_decoded_rows', 'measured_object_reads',
                     'measured_object_puts', 'object_puts', 'stored_objects', 'stored_bytes'])
-                or not isinstance(row.get('lifecycle'), dict) or row.get('cold_reopen_equal') is not True):
+                or not isinstance(row.get('lifecycle'), dict) or row.get('cold_reopen_equal') is not True
+                or row.get('maintenance_quiescent') is not True):
             raise RuntimeError('Engine measurement/oracle coverage differs: ' + row['case'])
         validate_lifecycle(row['lifecycle'], steps)
+        final = row['lifecycle']['retirement'][-1]
+        if (final['logical_time'] != row['logical_time']
+                or final['state_objects'] != row['stored_objects']
+                or final['state_bytes'] != row['stored_bytes']):
+            raise RuntimeError('Final collection differs from cold-verified durable state')
 
 
 def validate_lifecycle(report, steps):
     fields = ('logical_ms','source_rows','checkpoints','rebased_uploads','capacity_flushes',
-              'maintenance_ns','maximum_runs','maximum_memtable_bytes','restarts')
+              'maintenance_ns','maximum_runs','maximum_memtable_bytes','restarts',
+              'consolidations','checkpoint_ns','consolidation_ns')
     if (any(type(report.get(key)) is not int or report[key] < 0 for key in fields)
             or report['checkpoints'] < 1
             or report['rebased_uploads'] > report['checkpoints']
@@ -69,19 +76,26 @@ def validate_lifecycle(report, steps):
             or not isinstance(report.get('samples'), list)
             or len(report['samples']) != sum(not step['restart'] for step in steps[1:])
             or not isinstance(report.get('retirement'), list)
-            or len(report['retirement']) != report['checkpoints']):
+            or not 0 < len(report['retirement']) <= report['checkpoints'] + report['consolidations']):
         raise RuntimeError('Invalid checkpoint lifecycle evidence')
     source_rows = sum(step['source_rows'] for step in steps[1:] if not step['restart'])
     if report['source_rows'] != source_rows or report['logical_ms'] != source_rows:
         raise RuntimeError('Logical pacing differs from executed source rows at 1000/s')
     for sample in report['samples']:
         if any(type(sample.get(key)) is not int or sample[key] < 0 for key in
-               ('logical_ms','source_rows','prepare_ns','maintenance_ns','gets','read_bytes','puts','put_bytes','runs','memtable_bytes')):
+               ('logical_ms','source_rows','prepare_ns','maintenance_ns','gets','read_bytes','puts','put_bytes','runs','memtable_bytes',
+                'installed_checkpoints','consolidations','checkpoint_ns','consolidation_ns')):
             raise RuntimeError('Invalid per-epoch lifecycle sample')
+        if any(type(sample.get(key)) is not bool for key in ('upload_pending','consolidation_pending')):
+            raise RuntimeError('Invalid pending maintenance evidence')
     for retirement in report['retirement']:
         if any(type(retirement.get(key)) is not int or retirement[key] < 0 for key in
-               ('gets','read_bytes','cache_bytes','deleted_objects','state_objects','state_bytes','rss_bytes','peak_rss_bytes','virtual_io_us','wall_us')):
+               ('gets','read_bytes','cache_bytes','deleted_objects','state_objects','state_bytes','rss_bytes','peak_rss_bytes','virtual_io_us','wall_us','installed_checkpoints','consolidations','logical_time')):
             raise RuntimeError('Invalid fixture retirement evidence')
+    final = report['retirement'][-1]
+    if (final['installed_checkpoints'] != report['checkpoints']
+            or final['consolidations'] != report['consolidations']):
+        raise RuntimeError('Missing final maintenance collection evidence')
 
 
 def validate_storage_growth(path):
