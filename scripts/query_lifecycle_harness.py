@@ -16,6 +16,7 @@ from native_compiler_harness import NativeFixture
 from native_mv_oracle import expected as native_expected
 from worker_harness import Worker, harness_arguments
 from harness_control import admin
+from gc_fixture import paged_garbage, empty_inventory
 
 
 def verify_packed_root(root, get):
@@ -165,7 +166,7 @@ def qualify(output, command, factory):
             'oracles': 'native materialized view EXCEPT ALL and independent memory',
             'history': 'bootstrap NULL update simultaneous inputs delete cold restart',
         })+'\n')
-        retire(command, fixture, config, validated)
+        retire(command, fixture, config, validated, paged=factory is grouped)
         fixture.sql(f'DROP PUBLICATION {fixture.name}; DROP SCHEMA {fixture.name} CASCADE')
     except BaseException:
         fixture.preserve()
@@ -173,7 +174,7 @@ def qualify(output, command, factory):
 
 
 
-def retire(command, fixture, config, validated):
+def retire(command, fixture, config, validated, *, paged):
     def source_rows():
         result = []
         for relation in validated['source']['relations']:
@@ -191,8 +192,10 @@ def retire(command, fixture, config, validated):
     def get(path):
         with urllib.request.urlopen(f'{endpoint}/pgderive-mvp-tests/{fixture.name}/{path}', timeout=10) as response:
             return response.read()
+    if paged:
+        paged_garbage(fixture)
     retired = inspect(command, fixture, 'drop', config)
-    assert retired['state'] == 'dropped'
+    assert retired['state'] == 'dropped' and retired['collection_passes_complete'] is True
     assert source_rows() == before, 'drop mutated source rows'
     assert fixture.sql(f"SELECT count(*) FROM {fixture.name}.pgderive_queries").strip() == '0'
     assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
@@ -201,13 +204,15 @@ def retire(command, fixture, config, validated):
     for root in roots:
         verify_packed_root(root, get)
     fixture.sql(f"UPDATE {fixture.name}.pgderive_protections SET active=false WHERE token='external-reader'")
-    inspect(command, fixture, 'drop', config)
+    assert inspect(command, fixture, 'drop', config)['collection_passes_complete'] is True
     for root in roots:
         try:
             get(root['path'])
             raise AssertionError('released retired root was not collected')
         except urllib.error.HTTPError as error:
             assert error.code == 404
+    if paged:
+        empty_inventory(fixture, fixture.name)
 
 
 def namespace_race(output, command):
@@ -272,7 +277,13 @@ def namespace_race(output, command):
         assert fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_worker_registration').strip() == '1'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '1'
         (output/'qualification.json').write_text(json.dumps({'contending_creates':2,'registered':1,'physical_slots':1})+'\n')
-        fixture.cleanup()
+        index = workers.index(winner)
+        retired = inspect(command, fixture, 'drop', output/f'create-{index}.toml')
+        assert retired['collection_passes_complete'] is True, retired
+        prefix = fixture.name+('_other' if index else '')
+        empty_inventory(fixture, prefix)
+        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
+        fixture.sql(f'DROP PUBLICATION {fixture.name}; DROP SCHEMA {fixture.name} CASCADE')
     except BaseException:
         fixture.preserve()
         raise

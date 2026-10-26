@@ -176,3 +176,15 @@ pub fn range_totals(requests: &RangeRequests) -> anyhow::Result<(u64, u64)> {
     }
     Ok((total, unique))
 }
+
+#[async_trait]
+impl crate::storage::PageStore for Store {
+    async fn page(
+        &self,
+        prefix: &str,
+        token: Option<String>,
+        limit: usize,
+    ) -> Result<object_store::list::PaginatedListResult> {
+        crate::storage::PageStore::page(&self.inner, prefix, token, limit).await
+    }
+}

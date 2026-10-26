@@ -56,10 +56,13 @@ pub(super) fn evaluate(
         row.remove(SIDE);
         for field in &spec.right_fields {
             let value = selected
-                .map(|right| right.get(field).context("missing right lookup field").cloned())
+                .map(|right| right.get(&field.name).context("missing right lookup field").cloned())
                 .transpose()?
                 .flatten();
-            ensure!(row.insert(field.clone(), value).is_none(), "duplicate lookup output field");
+            ensure!(
+                row.insert(field.name.clone(), value).is_none(),
+                "duplicate lookup output field"
+            );
         }
         // LIMIT 1 selects one occurrence; right multiplicity does not multiply output.
         outputs.add(((), row), *weight)?;

@@ -7,9 +7,11 @@ progress.
 
 `ready` requires activated progress, an active compatible slot, a recent heartbeat,
 current writer fence and live ownership lock, and the worker's `ready` phase.
-Publication and maintenance report busy phases and therefore temporarily report
-`ready=false`. Supervision must distinguish busy from failed rather than restart
-a worker on every false observation. The final stopped/failed state is written
+Publication and forced checkpoint drains report busy phases and temporarily
+report `ready=false`. Background checkpoint uploads and GC can run while the
+foreground phase remains `ready`; upload deadlines and maintenance debt still
+bound admission. Supervision must distinguish busy from failed rather than
+restart a worker on every false observation. The final stopped/failed state is written
 before releasing ownership. If diagnostics themselves fail, ownership and fence
 observations still prevent a stale heartbeat from establishing readiness.
 
@@ -132,7 +134,7 @@ one for final output materialization. GC acquires before its SQL mutex/transacti
 Cursors and cache pages do not own permits that they would need to acquire again
 to make progress. Cancellation releases admission through owned RAII permits.
 
-`execution.object_requests` (default 16, range 1..=256) configures the existing
+`execution.object_requests` (default 16, range 1..=256) configures one
 object-store API limiter around the query's scoped store. Foreground, bootstrap,
 recovery, checkpoint and GC share the same wrapper Arc. GET-body and LIST-stream
 lifetimes retain admission until consumed or dropped; bulk deletion still uses
@@ -154,3 +156,66 @@ compressed cache pins, native caches, transport/runtime buffers and allocator
 retention have lifetimes beyond an active permit. Existing encoded-record,
 contribution, scratch, cache and memtable limits remain necessary. This slice
 controls concurrency amplification without claiming a whole-process byte cap.
+
+
+## Incremental physical collection
+
+Each collection turn requests one global `pgderive/` page, at most 1,000 objects
+by default (`GcLimits::page_objects`, valid 1..=1000). It never lists each upload
+namespace separately. The pinned S3 adapter supplies an opaque continuation token;
+no filename ordering is assumed. Ordinary object requests and stateless pages use
+one scoped semaphore because the upstream `LimitStore` does not expose paginated
+listing. GET/LIST/delete streams retain admission; a completed page releases it.
+Coalesced range reads and batched deletes still delegate to the underlying store.
+Multipart uploads are explicitly unsupported; the engine uses bounded ordinary PUTs.
+
+The coarse `pgderive_gc` row records the sweep generation, continuation token and
+whether a pass remains open. It is physical metadata, unrelated to source LSN or
+DBSP logical time. Every turn marks a fresh authoritative checkpoint/pin snapshot.
+It deletes only unmarked canonical objects in sealed upload namespaces, then
+commits cursor and survivor metadata together. A failed or cancelled page can
+repeat already completed deletes. Cursor state never advances on a failed delete.
+The collector holds its advisory transaction lock throughout, releasing the
+publication lifecycle lock before object I/O and reacquiring it for metadata.
+
+Retirement candidates are exactly the namespaces already sealed and proven
+quiescent at pass start. Namespace-level survivor markers accumulate through all
+pages. Only a completed pass can retire candidate ledgers with no survivors.
+Unknown objects retain their ledger. An upload closing during the pass, or a
+fenced upload receiving its writes-finished proof later, must wait for a new
+pass. Fencing alone never proves writes have finished. Late writes behind a
+cursor remain collectible on later passes. The S3-compatible service must provide
+complete listing/continuation for objects stable throughout a pass, including
+when already returned objects are deleted; the live SeaweedFS adapter exercises
+that behavior. There is no token-expiration reset fallback: service errors remain
+visible and the durable token stays unchanged.
+
+Collection events expose structured `collection` status with `scanned`, `deleted`,
+`pass_complete`, `generation`, `retired_namespaces` and `retained`. The current
+cadence remains one collection turn after checkpoint installation. Cursor progress
+alone does not establish that GC service can keep up with an offered workload.
+
+The physical inventory no longer has a total-object listing ceiling. The mark and
+coarse ledger snapshot remain bounded by 4,096 roots, 262,144 reachable objects or
+sealed ledger entries, and 16 MiB of encoded catalog/protection/namespace metadata.
+A continuation token is capped at 16 KiB separately. This is not a total RSS cap,
+and mark work still depends on current live dependencies. See
+[production qualification](production-qualification.md) for the remaining gates.
+
+This is a development catalog hard cut. Existing catalogs lack the new GC columns
+and are rejected with a rebuild instruction. Recreate the owned query catalog and
+rebuild its views before running this version against old state. No migration,
+legacy collector or automatic destructive reset is provided. The paused demo has
+not been changed.
+
+Explicit `query drop` drains the current sweep and one fresh complete pass using
+these same bounded turns, sharing one dependency cache and scoped store. This
+also applies to repeating drop after the logical state is already `dropped`.
+Rebuild performs one opportunistic turn because its resumed worker continues GC.
+`collection_passes_complete` is false if another collector or unresolved active
+upload prevents draining; repeat drop after resolving that condition. Completed
+passes do not imply unknown objects or live reader pins were removed, and fenced
+nonquiescent ledgers still need a writes-finished proof. The returned `collection`
+statistics describe the final turn, not the command's aggregate deletion count.
+Only individual turns are bounded; concurrent namespace growth can extend total
+drop duration. Cancelling the command preserves committed per-page progress.

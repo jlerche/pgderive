@@ -6,7 +6,7 @@ use crate::{
     source::{Contract, Export},
 };
 use anyhow::{Context, Result, ensure};
-use object_store::ObjectStore;
+
 use std::sync::Arc;
 
 pub(super) struct Open {
@@ -19,7 +19,7 @@ pub(super) struct Open {
     pub(super) query: relational::Query,
     pub(super) compiled: crate::compiler::Compiled,
     pub(super) writer: Writer,
-    pub(super) store: Arc<dyn ObjectStore>,
+    pub(super) store: Arc<dyn crate::storage::PageStore>,
     pub(super) nonce: String,
     pub(super) replication: Config,
 }

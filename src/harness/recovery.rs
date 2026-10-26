@@ -1,7 +1,7 @@
 use super::{mvp, source_state};
 use crate::{Config, catalog::Catalog};
 use anyhow::{Context, Result, ensure};
-use object_store::ObjectStore;
+
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tokio::process::Command;
@@ -11,7 +11,7 @@ pub(super) const QUERY: &str = "atomic_grouped";
 #[derive(Clone)]
 pub(super) struct Recovery {
     pub(super) config: Config,
-    pub(super) store: Arc<dyn ObjectStore>,
+    pub(super) store: Arc<dyn crate::storage::PageStore>,
     pub(super) prefix: Option<String>,
 }
 /// Independently recovered coarse catalog/state summary from the live fixture.

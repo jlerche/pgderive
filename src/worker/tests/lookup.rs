@@ -27,6 +27,15 @@ fn native(oid: u32) -> crate::source::Contract {
             collation: 0,
         });
     }
+    native.relations[1].columns.push(crate::source::Column {
+        position: 5,
+        name: "unused".into(),
+        oid: 25,
+        modifier: -1,
+        nullable: true,
+        primary: false,
+        collation: 0,
+    });
     native
 }
 fn oracle(left: &State, right: &State, inclusive: bool) -> Result<Bag> {
@@ -138,6 +147,14 @@ async fn strict_predecessor_retracts_and_restores() -> Result<()> {
 fn lookup_resolution_normalizes_correlations_and_rejects_unsupported_sql() -> Result<()> {
     let native = native(1114);
     let compiled = compile(SQL, &native)?;
+    assert!(!compiled.relational().projection[1].contains("unused"));
+    assert_eq!(
+        serde_json::to_vec(&compiled)?,
+        serde_json::to_vec(&compile(
+            &SQL.replace("SELECT r.price,r.id", "SELECT r.price,r.price AS same,r.id"),
+            &native
+        )?)?
+    );
     let normalized = SQL
         .replace("r.auction=l.k AND r.at<=l.at", "l.at>=r.at AND l.k=auction")
         .replace("l.", "\"L\".")
@@ -167,7 +184,12 @@ fn lookup_resolution_normalizes_correlations_and_rejects_unsupported_sql() -> Re
         serde_json::to_vec(&compile(&SQL.replace("<=l.at", "<l.at"), &native)?)?
     );
     let mut incompatible = native;
-    incompatible.relations[1].columns.last_mut().context("missing bound")?.oid = 1184;
+    incompatible.relations[1]
+        .columns
+        .iter_mut()
+        .find(|column| column.name == "at")
+        .context("missing bound")?
+        .oid = 1184;
     assert!(compile(SQL, &incompatible).is_err());
     Ok(())
 }

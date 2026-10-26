@@ -21,7 +21,7 @@ pub use sink::{Deltas, ResultColumn, Sink, SinkOutput};
 mod tests;
 
 use crate::engine::plan::Checkpoint;
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 use tokio_postgres::Client;
 
 /// Catalog bound to an owned `PostgreSQL` schema and a stable query name.
@@ -39,6 +39,10 @@ pub struct Stored {
     pub checkpoint: Checkpoint,
 }
 impl Catalog {
+    pub(crate) fn schema(&self) -> &str {
+        &self.schema
+    }
+
     /// Bind to an existing owned schema; query names are SQL values, not identifiers.
     ///
     /// # Errors
@@ -70,7 +74,10 @@ impl Catalog {
              CREATE TABLE IF NOT EXISTS {0}.pgderive_source_slots (
                 source_key text PRIMARY KEY, query_id text NOT NULL UNIQUE REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED);
              CREATE TABLE IF NOT EXISTS {0}.pgderive_protections (
-                token text PRIMARY KEY, id bigint GENERATED ALWAYS AS IDENTITY UNIQUE, namespace text UNIQUE, active boolean NOT NULL DEFAULT true, query_id text NOT NULL, owner_fence bigint NOT NULL CHECK(owner_fence>=0), uploading boolean NOT NULL, recovering boolean NOT NULL DEFAULT false, quiescent boolean NOT NULL DEFAULT false, roots jsonb NOT NULL CHECK(jsonb_typeof(roots)='array'));
+                token text PRIMARY KEY, id bigint GENERATED ALWAYS AS IDENTITY UNIQUE, namespace text UNIQUE, active boolean NOT NULL DEFAULT true, query_id text NOT NULL, owner_fence bigint NOT NULL CHECK(owner_fence>=0), uploading boolean NOT NULL, recovering boolean NOT NULL DEFAULT false, quiescent boolean NOT NULL DEFAULT false, gc_candidate bigint NOT NULL DEFAULT 0, gc_seen bigint NOT NULL DEFAULT 0, roots jsonb NOT NULL CHECK(jsonb_typeof(roots)='array'));
+             CREATE TABLE IF NOT EXISTS {0}.pgderive_gc (
+                singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), generation bigint NOT NULL CHECK(generation>=0), cursor text CHECK(octet_length(cursor)<=16384), in_progress boolean NOT NULL);
+             INSERT INTO {0}.pgderive_gc(singleton,generation,cursor,in_progress) VALUES(true,0,NULL,false) ON CONFLICT DO NOTHING;
              CREATE TABLE IF NOT EXISTS {0}.pgderive_progress (
                 query_id text PRIMARY KEY REFERENCES {0}.pgderive_queries(query_id) ON DELETE CASCADE,
                 binding jsonb NOT NULL, sink_table text NOT NULL UNIQUE,
@@ -92,6 +99,7 @@ impl Catalog {
                 PRIMARY KEY(query_id,logical_time));",
             self.schema
         )).await?;
+        sql.query(&format!("SELECT gc_candidate,gc_seen FROM {}.pgderive_protections LIMIT 0", self.schema), &[]).await.context("incompatible GC catalog layout; rebuild this development catalog before starting this version")?;
         Ok(())
     }
 }

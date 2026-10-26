@@ -3,6 +3,7 @@
 import json
 import subprocess
 import time
+from gc_fixture import paged_garbage, empty_inventory
 
 from query_lifecycle_harness import configured, grouped, inspect, rejected, verify_result
 from worker_harness import Worker, harness_arguments
@@ -149,8 +150,13 @@ def guarded_drop(output, command, kind):
             assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '1'
             fixture.sql(f'DROP TABLE {fixture.name}.groups; ALTER TABLE {fixture.name}.held_groups RENAME TO groups')
         fixture.verify()
-        assert inspect(command, fixture, 'drop', config)['state'] == 'dropped'
-        (output/'qualification.json').write_text(json.dumps({'guard': kind, 'rejected': True, 'repair_and_retry': 'dropped'})+'\n')
+        seeded = paged_garbage(fixture) if kind == 'dependent-view' else 0
+        dropped = inspect(command, fixture, 'drop', config)
+        assert dropped['state'] == 'dropped'
+        if seeded:
+            empty_inventory(fixture, fixture.name)
+            assert dropped.get('collection_passes_complete') is True
+        (output/'qualification.json').write_text(json.dumps({'guard': kind, 'rejected': True, 'repair_and_retry': 'dropped', 'seeded_orphans':seeded, 'paged_cleanup':bool(seeded)})+'\n')
         cleanup(fixture)
     except BaseException:
         fixture.preserve()

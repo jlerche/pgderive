@@ -16,7 +16,7 @@ pub async fn drop_query(config: &Config) -> Result<Value> {
         "logical query namespace/source configuration changed"
     );
     if state.phase == Phase::Dropped {
-        return collected(config, &settings, &mut session).await;
+        return collected(config, &settings, &mut session, CollectionMode::Drain).await;
     }
     // The first generation intent persists this phase together with its fence/resources.
     state.phase = Phase::Dropping;
@@ -29,7 +29,7 @@ pub async fn drop_query(config: &Config) -> Result<Value> {
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
     save(&tx, &settings, &state, "dropped").await?;
     tx.commit().await.context("logical removal completion COMMIT uncertain; repeat drop")?;
-    collected(config, &settings, &mut session).await
+    collected(config, &settings, &mut session, CollectionMode::Drain).await
 }
 
 async fn existing(
@@ -69,10 +69,16 @@ async fn remove_generations(
     Ok(())
 }
 
+pub(super) enum CollectionMode {
+    Turn,
+    Drain,
+}
+
 pub(super) async fn collected(
     config: &Config,
     settings: &crate::worker::Settings,
     session: &mut crate::worker::sql::Session,
+    mode: CollectionMode,
 ) -> Result<Value> {
     let store = config
         .object_store
@@ -80,15 +86,26 @@ pub(super) async fn collected(
         .context("removal requires durable object storage")?
         .build(&settings.object_prefix, config.execution.object_requests)?;
     let catalog = crate::catalog::Catalog::new(&settings.catalog_schema, &settings.query_id)?;
-    let collection = catalog
-        .collect(
-            &mut session.client,
-            store,
-            crate::catalog::GcLimits::default(),
-            &mut crate::catalog::GcCache::default(),
-        )
-        .await?;
-    Ok(
-        json!({"version":1,"query_id":settings.query_id,"state":"dropped","collection":format!("{collection:?}")}),
-    )
+    let mut cache = crate::catalog::GcCache::default();
+    let mut passes = 0_u8;
+    loop {
+        let collection = catalog
+            .collect(
+                &mut session.client,
+                store.clone(),
+                crate::catalog::GcLimits::default(),
+                &mut cache,
+            )
+            .await?;
+        if let crate::catalog::Collection::Collected { pass_complete, .. } = collection {
+            passes += u8::from(pass_complete);
+            if matches!(mode, CollectionMode::Drain) && passes < 2 {
+                continue;
+            }
+        }
+        let complete = passes >= if matches!(mode, CollectionMode::Drain) { 2 } else { 1 };
+        return Ok(
+            json!({"version":1,"query_id":settings.query_id,"state":"dropped","collection":collection,"collection_passes_complete":complete}),
+        );
+    }
 }

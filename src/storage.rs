@@ -7,6 +7,8 @@ use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc};
 use url::Url;
 mod credentials;
+mod scoped;
+pub use scoped::PageStore;
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,7 +84,7 @@ impl Storage {
             Err(error) => Err(error).context("HTTPS object endpoint preflight failed"),
         }
     }
-    pub fn build(&self, prefix: &str, requests: usize) -> Result<Arc<dyn ObjectStore>> {
+    pub fn build(&self, prefix: &str, requests: usize) -> Result<Arc<dyn PageStore>> {
         self.validate()?;
         ensure!((1..=256).contains(&requests), "invalid shared object request limit");
         let credentials = credentials::load(&self.credentials_file)?;
@@ -104,14 +106,15 @@ impl Storage {
         if let Some(token) = credentials.session_token {
             builder = builder.with_token(token);
         }
-        Ok(limit(Arc::new(PrefixStore::new(builder.build()?, prefix)), requests))
+        let raw = Arc::new(builder.build()?);
+        let inner = Arc::new(PrefixStore::new(raw.clone(), prefix));
+        Ok(Arc::new(scoped::Scoped::new(
+            inner,
+            raw,
+            object_store::path::Path::from(prefix),
+            requests,
+        )))
     }
-}
-// Preserve one shared wrapper Arc across every worker task. LimitStore keeps
-// streaming GET/list permits alive and delegates bulk delete rather than
-// replacing it with one request per object.
-fn limit(store: Arc<dyn ObjectStore>, requests: usize) -> Arc<dyn ObjectStore> {
-    Arc::new(object_store::limit::LimitStore::new(store, requests))
 }
 #[cfg(test)]
 #[path = "storage/tests.rs"]

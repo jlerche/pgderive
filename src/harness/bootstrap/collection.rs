@@ -1,4 +1,6 @@
+mod cohort;
 mod concurrency;
+mod paged;
 mod paused;
 use super::super::{mvp::Query, recovery::Recovery};
 use crate::catalog::{Catalog, Collection, GcLimits, Writer};
@@ -234,5 +236,7 @@ async fn abandoned_and_ledger(
 ) -> Result<()> {
     concurrency::check(sql, catalog, graph, writer, recovery).await?;
     abandoned(sql, catalog, graph, writer, recovery).await?;
-    super::ledger::check(sql, catalog, graph, writer, recovery).await
+    super::ledger::check(sql, catalog, graph, writer, recovery).await?;
+    paged::check(sql, catalog, graph, writer, recovery).await?;
+    cohort::check(sql, catalog, graph, writer, recovery).await
 }

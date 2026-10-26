@@ -115,14 +115,14 @@ fn storage_requires_a_file_and_rejects_inline_credential_fields() {
 async fn shared_limit_covers_streamed_gets_and_preserves_bulk_delete() -> Result<()> {
     use crate::engine::tests::store::Store;
     use futures_util::{StreamExt as _, TryStreamExt as _};
-    use object_store::{ObjectStoreExt as _, path::Path};
+    use object_store::{ObjectStore as _, ObjectStoreExt as _, path::Path};
     use std::{
         future::{Future as _, poll_fn},
         sync::{Arc, atomic::Ordering},
         task::Poll,
     };
     let inner = Arc::new(Store::unpaced());
-    let store = super::limit(inner.clone(), 1);
+    let store = super::scoped::Scoped::new(inner.clone(), inner.clone(), Path::default(), 1);
     let first = Path::from("first");
     store.put(&first, vec![1_u8].into()).await?;
     let body = store.get(&first).await?;
@@ -156,5 +156,48 @@ async fn shared_limit_covers_streamed_gets_and_preserves_bulk_delete() -> Result
     assert_eq!(deleted.len(), 3);
     assert_eq!(inner.deletes.load(Ordering::SeqCst), 1);
     assert!(store.list(None).try_collect::<Vec<_>>().await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn pages_share_admission_release_it_and_translate_scoped_paths() -> Result<()> {
+    use super::{PageStore as _, scoped::Scoped};
+    use futures_util::TryStreamExt as _;
+    use object_store::{
+        ObjectStore as _, ObjectStoreExt as _, memory::InMemory, path::Path, prefix::PrefixStore,
+    };
+    use std::{
+        future::{Future as _, poll_fn},
+        sync::Arc,
+        task::Poll,
+    };
+    let raw = Arc::new(InMemory::new());
+    let prefix = Path::from("private/demo");
+    let inner = Arc::new(PrefixStore::new(raw.clone(), prefix.clone()));
+    let scoped = Scoped::new(inner, raw, prefix, 1);
+    let first = Path::from("pgderive/first");
+    scoped.put(&first, vec![1_u8].into()).await?;
+    scoped.put(&Path::from("pgderive/second"), vec![2_u8].into()).await?;
+    let body = scoped.get(&first).await?;
+    let mut waiting = Box::pin(scoped.page("pgderive/", None, 1));
+    poll_fn(|cx| {
+        assert!(waiting.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    // Cancellation of a queued page cannot consume the sole request permit.
+    drop(waiting);
+    drop(body);
+    let page = scoped.page("pgderive/", None, 1).await?;
+    assert_eq!(page.result.objects.len(), 1);
+    assert_eq!(page.result.objects[0].location, first);
+    assert!(page.page_token.is_some());
+    // Page response owns no request permit; PUT proceeds before using its token.
+    scoped.delete(&first).await?;
+    let next = scoped.page("pgderive/", page.page_token, 1).await?;
+    assert_eq!(next.result.objects[0].location.as_ref(), "pgderive/second");
+    assert!(next.page_token.is_none());
+    assert_eq!(scoped.list(None).try_collect::<Vec<_>>().await?.len(), 1);
+    assert!(scoped.put_multipart(&first).await.is_err());
     Ok(())
 }

@@ -88,14 +88,23 @@ def qualify(output, binary, kind):
             fixture.sql(f'SELECT pg_terminate_backend({int(pids.strip())})')
         busy = None
         if kind == 'storage_outage':
+            worker.event('published', minimum_time=before['logical_time']+1)
+            # Uploads run in the background; ready is valid until the bounded
+            # checkpoint deadline. Witness pending durable work, not a phase
+            # reserved for forced foreground drains.
+            pending = command(fixture, binary, 'status', config)['progress']
+            assert pending['logical_time'] == before['logical_time']+1, pending
+            for field in ('checkpoint_lsn', 'checkpoint_time', 'epoch'):
+                assert pending[field] == before[field], pending
             deadline = time.monotonic()+2
             while time.monotonic() < deadline:
-                busy = health(fixture, binary, config)
-                if busy['worker']['diagnostics']['phase'] == 'maintenance':
+                uploading = fixture.sql(f"SELECT count(*) FROM {fixture.name}.pgderive_protections WHERE active AND uploading AND NOT quiescent AND token LIKE 'worker:%:maintenance:%'").strip()
+                if uploading != '0':
                     break
-                time.sleep(.05)
-            assert busy['worker']['diagnostics']['phase'] == 'maintenance', busy
-            assert busy['worker']['recent'] and not busy['ready'], busy
+                time.sleep(.02)
+            assert uploading != '0', 'no protected checkpoint upload observed'
+            busy = health(fixture, binary, config)
+            assert busy['worker']['recent'] and busy['worker']['owner_live'] and busy['worker']['fence_current'], busy
         worker.process.wait(timeout=30)
         assert worker.process.returncode != 0, 'failure was silently accepted'
         worker.abort()

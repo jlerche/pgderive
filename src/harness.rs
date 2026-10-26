@@ -175,7 +175,7 @@ async fn execute(sql: &mut Client, fixture: &Fixture, mut config: Config) -> Res
                 .map(|time| format!("{}-{}", fixture.schema, time.as_nanos()))
         })
         .transpose()?;
-    let store: std::sync::Arc<dyn object_store::ObjectStore> =
+    let store: std::sync::Arc<dyn crate::storage::PageStore> =
         if let Some(storage) = &config.object_store {
             let prefix = prefix.as_ref().context("missing object prefix")?;
             eprintln!("MVP S3 fixture prefix: {prefix}");

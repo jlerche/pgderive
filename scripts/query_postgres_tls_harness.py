@@ -87,7 +87,7 @@ def qualify(output, binary):
                 assert 'certificate' in sql_error.lower(),sql_error
                 connector_rejections.append({'connector':'sql','stderr':sql_error})
                 for connector, invocation in [('control',control_probe+[str(config)]),
-                                              ('stream',binary+[str(config)])]:
+                                              ('stream',binary+['listen',str(config)])]:
                     probe = subprocess.run(invocation,env=fixture.environment,text=True,capture_output=True,timeout=20)
                     assert probe.returncode != 0 and any(word in probe.stderr.lower() for word in ['certificate','unknownissuer','notvalidforname','hostname mismatch']),probe.stderr
                     connector_rejections.append({'connector':connector,'stderr':probe.stderr})

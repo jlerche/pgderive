@@ -75,20 +75,25 @@ source position. Native caches and sizing summaries are disposable.
 
 ## Physical collection
 
-A nonblocking schema-wide collector lock coalesces concurrent requests. A
+A nonblocking schema-wide collector lock coalesces concurrent turns. A
 read-only savepoint captures metadata under the lifecycle lock; rolling it back
-releases that lock while keeping collector coordination until sweep completion.
+releases that lock while keeping collector coordination until the current
+bounded global listing page and its cursor metadata commit complete.
 The collector captures all committed and protected roots and the set of sealed
 upload namespaces under the catalog lifecycle barrier. Marking, listing and
 object deletion run after releasing that barrier. Retirement reacquires it and
-only retires captured namespaces with a completed-writes proof.
+only retires the pass-start quiescent cohort after the entire paged pass
+completes without any recorded surviving objects in those namespaces.
 
 This relies on existing publication validation: a new membership can retain an
 exact current root or introduce a root from an active owned upload reservation.
-It cannot resurrect a sealed orphan. Dependencies remain within the root's
-namespace, and new uploads use fresh namespaces outside an older sweep's set.
-Failed marking prevents deletion; nonquiescent fenced reservations remain in the
-ledger so delayed PUTs stay collectible.
+It cannot resurrect a sealed orphan. Roots may reuse immutable packs from other
+namespaces only through current or protected provenance. Every turn marks fresh
+authoritative roots and pins before deleting a page, and new uploads reserve
+fresh namespaces. Failed marking prevents deletion; nonquiescent fenced
+reservations remain in the ledger so delayed PUTs stay collectible. A late
+writes-finished proof cannot join an older retirement cohort. See
+[the incremental GC protocol](worker-health.md#incremental-physical-collection).
 
 A worker owns at most one collection task and a dedicated SQL connection
 configured at initialization. Waiting for the task is cancellation-safe, and an

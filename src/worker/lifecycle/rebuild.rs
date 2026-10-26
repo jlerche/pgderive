@@ -49,7 +49,8 @@ pub(in crate::worker) async fn run_owned(
         session = opened.session;
     }
     retire(config, settings, &mut session, &mut state).await?;
-    super::control::collected(config, settings, &mut session).await?;
+    super::control::collected(config, settings, &mut session, super::control::CollectionMode::Turn)
+        .await?;
     Ok(session)
 }
 

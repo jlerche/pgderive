@@ -1,6 +1,6 @@
 use crate::{catalog::Catalog, engine::plan::Plan};
 use anyhow::{Context, Result, ensure};
-use object_store::{ObjectStore, ObjectStoreExt as _, path::Path};
+use object_store::{ObjectStoreExt as _, path::Path};
 use std::sync::Arc;
 use tokio_postgres::Client;
 
@@ -9,7 +9,7 @@ pub(super) async fn corrupt_membership(
     schema: &str,
     catalog: &Catalog,
     plan: &Plan,
-    store: Arc<dyn ObjectStore>,
+    store: Arc<dyn crate::storage::PageStore>,
 ) -> Result<()> {
     let query = super::super::recovery::QUERY;
     let table = format!("{schema}.pgderive_queries");

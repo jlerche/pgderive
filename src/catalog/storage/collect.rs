@@ -1,5 +1,6 @@
 use super::{Catalog, lock};
 use crate::engine::{plan::Plan, reader::ObjectRef};
+use crate::storage::PageStore;
 use anyhow::{Context, Result, ensure};
 use futures_util::{StreamExt, TryStreamExt};
 use object_store::{ObjectStore, path::Path};
@@ -14,24 +15,33 @@ pub use cache::GcCache;
 pub struct GcLimits {
     /// Maximum committed and protected root references.
     pub roots: usize,
-    /// Maximum reachable paths and enumerated managed objects.
+    /// Maximum reachable paths and closed upload ledger entries.
     pub objects: usize,
     /// Maximum encoded catalog definitions, references and active protection metadata.
     pub metadata_bytes: u64,
+    /// Maximum physical objects requested in one global listing page.
+    pub page_objects: usize,
 }
 impl Default for GcLimits {
     fn default() -> Self {
-        Self { roots: 4096, objects: 262_144, metadata_bytes: 16 * 1024 * 1024 }
+        Self { roots: 4096, objects: 262_144, metadata_bytes: 16 * 1024 * 1024, page_objects: 1000 }
     }
 }
 impl GcLimits {
     fn validate(self) -> Result<()> {
-        ensure!(self.roots > 0 && self.objects > 0 && self.metadata_bytes > 0, "invalid GC limits");
+        ensure!(
+            self.roots > 0
+                && self.objects > 0
+                && self.metadata_bytes > 0
+                && (1..=1000).contains(&self.page_objects),
+            "invalid GC limits"
+        );
         Ok(())
     }
 }
 /// Physical collection result; logical/source progress is never modified.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
 pub enum Collection {
     /// Another physical collector already owns this catalog schema's sweep.
     AlreadyRunning,
@@ -43,6 +53,16 @@ pub enum Collection {
         retained: usize,
         /// Unreferenced managed objects deleted.
         deleted: usize,
+        /// Physical objects examined in this bounded turn.
+        scanned: usize,
+        /// Global listing pages examined in this turn.
+        pages: usize,
+        /// Whether this turn reached the end of a complete physical sweep.
+        pass_complete: bool,
+        /// Durable physical sweep generation; distinct from source/logical time.
+        generation: i64,
+        /// Finished-upload ledger rows retired after a complete sweep.
+        retired_namespaces: u64,
     },
 }
 impl Catalog {
@@ -61,7 +81,7 @@ impl Catalog {
     pub async fn collect(
         &self,
         sql: &mut Client,
-        store: Arc<dyn ObjectStore>,
+        store: Arc<dyn PageStore>,
         limits: GcLimits,
         cache: &mut GcCache,
     ) -> Result<Collection> {
@@ -83,25 +103,36 @@ impl Catalog {
             tx.rollback().await?;
             return Ok(Collection::AlreadyRunning);
         }
-        let Some(Snapshot { roots, sealed }) = snapshot(&mut tx, self, limits).await? else {
+        let Some(snapshot) = snapshot(&mut tx, self, limits).await? else {
             tx.rollback().await?;
             return Ok(Collection::UploadProtected);
         };
-        let retained = cache.mark_snapshot(&store, roots, limits).await?;
-        let sweep = candidates(&store, &retained, &sealed, limits.objects).await?;
+        let objects: Arc<dyn ObjectStore> = store.clone();
+        let retained = cache.mark_snapshot(&objects, snapshot.roots.clone(), limits).await?;
+        let sweep = candidates(&store, &retained, &snapshot, limits.page_objects).await?;
         let deleted = sweep.candidates.len();
-        delete_candidates(&store, sweep.candidates).await?;
-        lock(&tx, self, true).await?;
-        retire(&tx, self, &sealed, &sweep.surviving).await?;
-        tx.commit()
-            .await
-            .context("GC metadata barrier COMMIT failed; physical sweep is idempotent")?;
-        Ok(Collection::Collected { retained: retained.len(), deleted })
+        delete_candidates(&objects, sweep.candidates).await?;
+        let pass_complete = sweep.next.is_none();
+        let retired_namespaces = finish(&tx, self, &snapshot, sweep.next, &sweep.surviving).await?;
+        tx.commit().await.context("GC cursor COMMIT failed; physical sweep is idempotent")?;
+        Ok(Collection::Collected {
+            retained: retained.len(),
+            deleted,
+            scanned: sweep.scanned,
+            pages: 1,
+            pass_complete,
+            generation: snapshot.generation,
+            retired_namespaces,
+        })
     }
 }
 struct Snapshot {
     roots: Vec<ObjectRef>,
     sealed: BTreeSet<String>,
+    quiescent: Vec<String>,
+    generation: i64,
+    cursor: Option<String>,
+    starting: bool,
 }
 async fn snapshot(
     parent: &mut Transaction<'_>,
@@ -124,15 +155,37 @@ async fn snapshot(
         tx.rollback().await?;
         return Ok(None);
     }
-    let metadata = tx.query_one(&format!("SELECT (SELECT COALESCE(SUM(octet_length(definition::text)+octet_length(checkpoint::text)),0) FROM {0}.pgderive_queries)+(SELECT COALESCE(SUM(octet_length(roots::text)),0) FROM {0}.pgderive_protections WHERE active),(SELECT COUNT(*) FROM {0}.pgderive_protections WHERE uploading AND NOT active)",catalog.schema),&[]).await?;
+    let metadata = tx.query_one(&format!("SELECT (SELECT COALESCE(SUM(octet_length(definition::text)+octet_length(checkpoint::text)),0) FROM {0}.pgderive_queries)+(SELECT COALESCE(SUM(octet_length(roots::text)),0) FROM {0}.pgderive_protections WHERE active)+(SELECT COALESCE(SUM(octet_length(namespace)),0) FROM {0}.pgderive_protections WHERE uploading AND NOT active),(SELECT COUNT(*) FROM {0}.pgderive_protections WHERE uploading AND NOT active)",catalog.schema),&[]).await?;
     ensure!(
         u64::try_from(metadata.try_get::<_, i64>(0)?)? <= limits.metadata_bytes
             && usize::try_from(metadata.try_get::<_, i64>(1)?)? <= limits.objects,
         "GC catalog metadata budget exceeded"
     );
     let roots = roots(&tx, catalog, limits.roots).await?;
-    let sealed = tx.query(&format!("SELECT namespace FROM {}.pgderive_protections WHERE uploading AND NOT active AND namespace IS NOT NULL",catalog.schema),&[]).await?.into_iter().map(|row|row.try_get::<_,String>(0)).collect::<std::result::Result<BTreeSet<_>,_>>()?;
-    ensure!(sealed.len() <= limits.objects, "GC namespace metadata limit exceeded");
+    let rows = tx.query(&format!("SELECT namespace,quiescent FROM {}.pgderive_protections WHERE uploading AND NOT active AND namespace IS NOT NULL",catalog.schema),&[]).await?;
+    let mut sealed = BTreeSet::new();
+    let mut quiescent = Vec::new();
+    for row in rows {
+        let path: String = row.try_get(0)?;
+        if row.try_get::<_, bool>(1)? {
+            quiescent.push(path.clone());
+        }
+        sealed.insert(path);
+    }
+    let state = tx
+        .query_one(
+            &format!(
+                "SELECT generation,cursor,in_progress FROM {}.pgderive_gc WHERE singleton",
+                catalog.schema
+            ),
+            &[],
+        )
+        .await?;
+    let starting = !state.try_get::<_, bool>(2)?;
+    let prior: i64 = state.try_get(0)?;
+    let generation =
+        if starting { prior.checked_add(1).context("GC generation overflow")? } else { prior };
+    let cursor = state.try_get(1)?;
     // The snapshot's sealed namespaces cannot acquire new live roots:
     // write::stage accepts exact current roots or active fresh uploads only.
     // New roots may reuse packs from sealed namespaces, but only from current
@@ -144,7 +197,7 @@ async fn snapshot(
     // Roll back this read-only savepoint to release its lifecycle lock while
     // retaining the outer transaction's independent collector coordination.
     tx.rollback().await.context("GC snapshot savepoint rollback failed")?;
-    Ok(Some(Snapshot { roots, sealed }))
+    Ok(Some(Snapshot { roots, sealed, quiescent, generation, cursor, starting }))
 }
 
 async fn roots(tx: &Transaction<'_>, catalog: &Catalog, limit: usize) -> Result<Vec<ObjectRef>> {
@@ -193,29 +246,89 @@ async fn roots(tx: &Transaction<'_>, catalog: &Catalog, limit: usize) -> Result<
 }
 struct Sweep {
     candidates: Vec<Path>,
+    next: Option<String>,
+    scanned: usize,
     surviving: BTreeSet<String>,
 }
 async fn candidates(
-    store: &Arc<dyn ObjectStore>,
+    store: &Arc<dyn PageStore>,
     retained: &BTreeSet<String>,
-    sealed: &BTreeSet<String>,
+    snapshot: &Snapshot,
     limit: usize,
 ) -> Result<Sweep> {
-    let mut list = store.list(Some(&Path::from("pgderive")));
+    let page = store.page("pgderive/", snapshot.cursor.clone(), limit).await?;
+    ensure!(
+        page.result.objects.len() <= limit && page.result.common_prefixes.is_empty(),
+        "invalid GC namespace page"
+    );
+    ensure!(
+        page.page_token.as_ref().is_none_or(|token| !token.is_empty()
+            && token.len() <= 16_384
+            && Some(token) != snapshot.cursor.as_ref()),
+        "invalid GC continuation token"
+    );
+    let scanned = page.result.objects.len();
     let mut candidates = Vec::new();
     let mut surviving = BTreeSet::new();
-    let mut count = 0_usize;
-    while let Some(object) = list.try_next().await? {
-        count = count.checked_add(1).context("GC listing count overflow")?;
-        ensure!(count <= limit, "GC listing limit exceeded");
-        if managed(object.location.as_ref(), sealed) && !retained.contains(object.location.as_ref())
+    for object in page.result.objects {
+        ensure!(object.location.as_ref().starts_with("pgderive/"), "GC page escaped namespace");
+        if managed(object.location.as_ref(), &snapshot.sealed)
+            && !retained.contains(object.location.as_ref())
         {
             candidates.push(object.location);
-        } else if let Some(namespace) = listed_namespace(object.location.as_ref(), sealed) {
+        } else if let Some(namespace) = listed_namespace(object.location.as_ref()) {
             surviving.insert(namespace);
         }
     }
-    Ok(Sweep { candidates, surviving })
+    Ok(Sweep { candidates, next: page.page_token, scanned, surviving })
+}
+fn listed_namespace(path: &str) -> Option<String> {
+    let id = path.strip_prefix("pgderive/upload-v1/")?.split('/').next()?;
+    Some(format!("pgderive/upload-v1/{id}"))
+}
+async fn finish(
+    tx: &Transaction<'_>,
+    catalog: &Catalog,
+    snapshot: &Snapshot,
+    cursor: Option<String>,
+    surviving: &BTreeSet<String>,
+) -> Result<u64> {
+    lock(tx, catalog, true).await?;
+    if snapshot.starting {
+        let namespaces = &snapshot.quiescent;
+        tx.execute(&format!("UPDATE {}.pgderive_protections SET gc_candidate=$2 WHERE namespace=ANY($1) AND NOT active AND uploading",catalog.schema), &[namespaces, &snapshot.generation]).await?;
+    }
+    let namespaces = surviving.iter().collect::<Vec<_>>();
+    tx.execute(
+        &format!(
+            "UPDATE {}.pgderive_protections SET gc_seen=$2 WHERE namespace=ANY($1)",
+            catalog.schema
+        ),
+        &[&namespaces, &snapshot.generation],
+    )
+    .await?;
+    let retired = if cursor.is_none() {
+        tx.execute(&format!("DELETE FROM {}.pgderive_protections WHERE NOT active AND uploading AND quiescent AND gc_candidate=$1 AND gc_seen<>$1",catalog.schema), &[&snapshot.generation]).await?
+    } else {
+        0
+    };
+    tx.execute(
+        &format!(
+            "DELETE FROM {}.pgderive_protections WHERE NOT active AND NOT uploading",
+            catalog.schema
+        ),
+        &[],
+    )
+    .await?;
+    tx.execute(
+        &format!(
+            "UPDATE {}.pgderive_gc SET generation=$1,cursor=$2,in_progress=$3 WHERE singleton",
+            catalog.schema
+        ),
+        &[&snapshot.generation, &cursor, &cursor.is_some()],
+    )
+    .await?;
+    Ok(retired)
 }
 fn managed(path: &str, sealed: &BTreeSet<String>) -> bool {
     let Some((namespace, relative)) = path.split_once("/pgderive/") else { return false };
@@ -228,36 +341,6 @@ fn managed(path: &str, sealed: &BTreeSet<String>) -> bool {
     };
     hash.len() == 64
         && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-// Only closed uploads with a writes-finished proof can lose their namespace
-// ledger, and only after complete enumeration and successful sweep. Fencing
-// alone cannot establish this proof: delayed PUTs can still create orphans.
-async fn retire(
-    tx: &Transaction<'_>,
-    catalog: &Catalog,
-    sealed: &BTreeSet<String>,
-    surviving: &BTreeSet<String>,
-) -> Result<()> {
-    tx.execute(
-        &format!(
-            "DELETE FROM {}.pgderive_protections WHERE NOT active AND NOT uploading",
-            catalog.schema
-        ),
-        &[],
-    )
-    .await?;
-    for namespace in sealed.difference(surviving) {
-        tx.execute(&format!("DELETE FROM {}.pgderive_protections WHERE namespace=$1 AND NOT active AND uploading AND quiescent",catalog.schema),&[namespace]).await?;
-    }
-    Ok(())
-}
-
-fn listed_namespace(path: &str, sealed: &BTreeSet<String>) -> Option<String> {
-    let relative = path.strip_prefix("pgderive/upload-v1/")?;
-    let id = relative.split('/').next()?;
-    let namespace = format!("pgderive/upload-v1/{id}");
-    sealed.contains(&namespace).then_some(namespace)
 }
 
 // Explicit application batches bound each adapter stream. S3's adapter otherwise

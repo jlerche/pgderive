@@ -13,13 +13,13 @@ use tokio::sync::Notify;
 
 #[derive(Debug)]
 pub(super) struct Store {
-    inner: Arc<dyn ObjectStore>,
+    inner: Arc<dyn crate::storage::PageStore>,
     armed: AtomicBool,
     pub(super) entered: Notify,
     pub(super) release: Notify,
 }
 impl Store {
-    pub(super) fn new(inner: Arc<dyn ObjectStore>) -> Self {
+    pub(super) fn new(inner: Arc<dyn crate::storage::PageStore>) -> Self {
         Self { inner, armed: AtomicBool::new(true), entered: Notify::new(), release: Notify::new() }
     }
 }
@@ -61,5 +61,17 @@ impl ObjectStore for Store {
     }
     async fn copy_opts(&self, from: &Path, to: &Path, opts: CopyOptions) -> Result<()> {
         self.inner.copy_opts(from, to, opts).await
+    }
+}
+
+#[async_trait]
+impl crate::storage::PageStore for Store {
+    async fn page(
+        &self,
+        prefix: &str,
+        token: Option<String>,
+        limit: usize,
+    ) -> Result<object_store::list::PaginatedListResult> {
+        self.inner.page(prefix, token, limit).await
     }
 }

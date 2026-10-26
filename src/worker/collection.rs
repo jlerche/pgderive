@@ -5,7 +5,7 @@ use crate::{
     catalog::{Catalog, Collection, GcCache, GcLimits},
 };
 use anyhow::{Context, Result};
-use object_store::ObjectStore;
+
 use std::sync::Arc;
 use tokio::{
     sync::Mutex,
@@ -38,7 +38,7 @@ impl Collector {
     pub(super) fn start(
         &mut self,
         catalog: Catalog,
-        store: Arc<dyn ObjectStore>,
+        store: Arc<dyn crate::storage::PageStore>,
         seconds: u64,
         workspaces: Arc<crate::engine::execution::Workspaces>,
     ) -> Result<()> {
@@ -73,7 +73,7 @@ impl Collector {
         let (collection, cache_bytes) =
             result.context("worker background collection task failed")??;
         super::drive::emit(
-            &serde_json::json!({"event":"collection","collection":format!("{collection:?}"),"gc_cache_bytes":cache_bytes}),
+            &serde_json::json!({"event":"collection","collection":collection,"gc_cache_bytes":cache_bytes}),
         )
     }
     pub(super) async fn drain(&mut self) -> Result<()> {

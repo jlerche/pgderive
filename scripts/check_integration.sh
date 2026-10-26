@@ -75,6 +75,8 @@ assert 'MVP snapshot quoted-name/boolean/null/native codecs and bounded-copy/RLS
 assert 'MVP maintenance uncertain BEFORE COMMIT resolved without logical/source advance' in harness_log
 assert 'MVP maintenance uncertain AFTER COMMIT resolved without logical/source advance' in harness_log
 assert 'MVP durable streaming compaction preserved source/sink/logical state and pinned reader' in harness_log
+assert 'MVP incremental GC bounded pages, cursor rollback, fresh-cache resume and unknown retention verified' in harness_log
+assert 'MVP GC retirement excludes late quiescence and mid-pass upload closure' in harness_log
 assert 'MVP GC retained committed and pinned state; fenced abandoned uploads reclaimed without source/logical advance' in harness_log
 assert 'MVP source schema drift blocked publication and preserved durable boundary' in harness_log
 assert 'MVP exported snapshot plus concurrent insert/update/delete CDC reconstructed exact source state; native schema drift rejected' in harness_log

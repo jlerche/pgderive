@@ -1804,3 +1804,153 @@ review found no remaining actionable finding. Its additional closed-log
 zero-retry assertion for the GC witness is exercised by the common gate and
 passes. All owned PostgreSQL fixture data used tmpfs; the container and its
 volumes were removed. No deployment or change to the paused demo was made.
+
+### Incremental physical GC and qualification (2026-10-26)
+
+The worker-budget commit `7ff3808` was pushed before this slice. Physical GC now
+uses one bounded global listing page per collection turn, reusing the pinned
+S3 paginator's opaque continuation token. The default page is 1,000 objects,
+with existing sequential <=256-path bulk DELETE batches. No per-namespace LIST
+fanout, object format change, extra PUT, checkpoint trigger or source/sink
+publication change is introduced. Ordinary requests and paginated LIST share
+one scoped request semaphore; streamed GET/LIST/delete bodies retain admission.
+The upstream limiter could not expose page admission, so it has been replaced,
+with no legacy wrapper path. Coalesced GET ranges remain delegated unchanged.
+
+The coarse PostgreSQL cursor and retirement generation commit only after all
+page deletions succeed. Every turn refreshes authoritative roots and pins. Only
+namespaces already quiescent at pass start join the retirement cohort, and
+surviving/unknown namespace markers accumulate across pages. A full completed
+pass may retire that cohort's unseen ledgers; mid-pass upload closure and late
+writes-finished proofs cannot join it. Fenced nonquiescent uploads remain
+recorded, allowing late PUTs behind the cursor to be reclaimed on a later pass.
+
+Live fast validation uses the existing isolated replication harness and S3
+service/proxy. It seeds 513 canonical orphans plus an unknown object, requests
+64-object pages and discards the dependency cache between turns. An injected SQL
+trigger rejects cursor publication after physical deletes, proving rollback and
+idempotent resume. Separate controlled late writes behind the cursor and an
+empty upload closing mid-pass retain their ledgers until the next complete pass.
+Existing paused-GC pin/publication and exact source/sink/ACK checks remain active.
+The first run used a 256-object default and exposed an old fixture's assumption
+that one call always finishes the entire inventory. The default now matches S3's
+1,000-key page maximum; the explicit 64-key paged fixture still exercises multiple
+turns. The failed fixture and log are retained. This default is a bound on a turn,
+not an alternative whole-inventory collector or compatibility path.
+
+This changes the development catalog layout and requires owned-catalog recreation
+and view rebuild before running against prior state. An old layout is rejected
+with an actionable error. The paused demo remains unchanged. Detailed protocol,
+limits and diagnostics are in `worker-health.md`; unresolved release requirements
+are explicit in `production-qualification.md`. Incremental physical listing does
+not eliminate the bounded live mark/coarse-ledger snapshot or prove total RSS,
+maintenance service capacity, or arbitrary-size steady state.
+
+The optimized unchanged `maintenance-v1` replay completes in 29.24 seconds after
+a 59.94-second build, with no compiler overlap during measurement. All exact cold
+result oracles pass. Total PUTs/uploaded bytes match `7ff3808` exactly across all
+three cases: 1,028 / 2,150,111; 1,055 / 4,816,300; 727 / 4,068,895. This component
+profile uses production marking but its isolated retirement fixture does not
+exercise the new PostgreSQL-backed paged sweep; the live harness covers that.
+No increase in object PUTs is introduced by the GC cursor protocol itself.
+
+The original acceptance assessment remains red. At fixed 8,192 groups,
+index-read bytes per input rise from 1.134 to 1.924 (limit 1.418), and foreground
+GETs from 0.333 to 0.427 (limit 0.417). In the growing case, read bytes/input rise
+from 2,018 to 2,555 (limit 2,523), maintenance elapsed ns/input from 34,673 to
+65,945 (limit 43,341), and index-read bytes/input from 1.061 to 10.794 (limit
+1.326). The profile also retains its exact original total PUT/byte failures,
+including one PUT above each larger-case ceiling. Cold-root scaling remains
+unqualified. No threshold, workload hash or source baseline was changed. These
+are still blockers to broad production qualification, alongside full-worker
+retained-byte/RSS and end-to-end sustained-service evidence. Incremental GC is
+not presented as fixing live query-state index/maintenance growth.
+
+Evidence is retained under ignored
+`artifacts/benchmarks/incremental-gc-20261026/`, including the frozen optimized
+executable/source hashes, request traces, failed first fixture and unchanged red
+assessment. The complete release gate is run separately from timed replay.
+
+The extended release run passed 241 recorded worker results, including all 80
+composition-matrix histories, before finding a lookup bootstrap correctness
+failure (`missing right lookup field`). This occurred before any GC: lookup
+carried all physical right-hand fields as untyped strings, while projected source
+ingestion retained only typed dependencies. Lookup now carries deduplicated typed
+inner-SELECT columns through the existing canonical dependency visitor. Key,
+bound, order and primary-key dependencies remain explicit; unselected physical
+columns stay pruned. There is no all-column read fallback. Existing simultaneous
+input, NULL, multiplicity and restart histories now include an unused right
+column; a duplicate inner alias compiles to the same deduplicated circuit. Seven
+focused Rust lookup tests pass, and all five native lookup modes pass in 23.39s.
+
+A further removal regression seeds 1,101 unreferenced canonical objects under an
+owned upload reservation, completes all PUTs, then records quiescence. The
+original one-page admin drop fails an independent empty-S3-prefix assertion in
+4.01s: objects remain after the last worker exits. Drop now drains the current
+pass and a fresh pass through the same bounded collector, retaining a single
+cache/store. Rebuild remains opportunistic. Blocked collectors/uploads return
+explicit incomplete status, cancellation can resume through repeat drop, and no
+whole-command time bound is claimed under concurrent growth. The exact same
+regression passes in 3.96s with one drop and an empty physical inventory. The
+existing removal-case count is unchanged. The baseline failure dump, XML inventory
+and logs are retained alongside the new successful witness.
+
+The failed full run is not reported as a passing final full gate. Remaining
+release phases are run through an ignored runner derived from the unchanged
+`scripts/check_worker.sh`, starting after the separately repeated lookup suite.
+Its manifest records the source hashes and the initial expected remaining count.
+The actual remaining families produce 133 results; combined with 241 earlier
+results and five repeated lookup modes, the full matrix has 379 results. The
+old aggregate assertion of 376 was stale and is corrected to 379.
+Final common-gate coverage is run on the complete corrected source separately.
+
+The final optimized replay after the lookup/admin corrections completes in 28.93s
+after a 55.22s build, with no compiler overlap. All cold-reopen result comparisons
+pass, and all three total PUT/byte counts remain exactly unchanged from the first
+run above. The unchanged assessment still rejects every case; timing-dependent
+maintenance windows and additional growing-case byte/index-read failures remain
+visible in `maintenance-final/assessment.json`. This is a failed performance
+qualification, not a failed correctness execution or a newly accepted plateau.
+
+The remaining release checks also exposed two stale harness assumptions. The
+storage-outage case expected a foreground maintenance phase during an asynchronous
+upload. It now witnesses a newly published WAL-backed epoch, unchanged checkpoint
+and epoch, and an active protected maintenance upload, then retains timeout,
+non-readiness, no-ACK, exact result and restart assertions. All six failure modes
+pass in 20.54s. The PostgreSQL TLS stream rejection probe previously invoked the
+admin CLI as if it were the worker; it now uses the production `listen` entry
+point, which reaches replication without first going through the SQL session.
+Initial failed evidence is retained. Shared 1,101-object orphan generation now
+also runs in the core lifecycle case while an independent reader pin survives
+retirement; after releasing the pin, repeated drop must empty the physical prefix.
+The five lookup modes are promoted to core, bringing its expected result count
+from 148 to 153.
+
+The first final-core attempt reached lifecycle cleanup and its new physical
+inventory assertion exposed a pre-existing fixture leak: the registration-race
+scenario destroyed its catalog directly, then the next grouped scenario reused
+the same schema/prefix. The remaining initial objects had no namespace ledger.
+The saved empty-ledger SQL dump and inventory prevented misclassifying this as
+a safely fenced upload or weakening the assertion. Race cleanup now invokes
+production drop with the winning configuration, asserts its exact prefix empty
+and slots removed, then drops the fixture schema. All seven lifecycle cases
+pass in 40.97s, and independent review accepts the correction. The failed gate
+and diagnostic grouped-only run remain preserved.
+
+Final required gate: `PGDERIVE_TEST_POSTGRES_PORT=55439 ./scripts/check.sh` passes
+on the corrected implementation (`common-final-002.log`): 146 Python tests,
+639 Rust tests with 11 intentionally ignored, the sequential snapshot/CDC/GC
+harness, 153 core worker results plus rebuild, rustfmt, Clippy, file lengths and
+cargo-machete. Production line coverage is 97.16% (25,726 / 26,478 lines). The
+corrected lifecycle suite takes 41.22s in this run.
+
+Segmented release regression evidence verifies 379 query results across the
+recorded source boundaries, plus 11 removal faults, 12 rebuild faults, six health
+failures, slot/TLS/recovery checks, release packaging, the actual three-query
+35-second container test with cold restarts, and the 82.04-second capacity/outage
+check. `segmented-release.json` records source/evidence hashes and explicitly
+does not claim a single uninterrupted final full-profile pass. The final direct
+PostgreSQL TLS check takes 5.82s. Correctness/recovery gates pass; original
+maintenance performance ceilings remain red, and whole-worker retained-byte/RSS
+and end-to-end growing-state service qualification remain open. No deployment
+or production-readiness claim follows from these functional gates.

@@ -58,11 +58,11 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         right_bound: qualify(right_bound),
         inclusive,
         order,
-        right_fields: scopes[1]
-            .relation
-            .columns
+        right_fields: labels
             .iter()
-            .map(|column| field(1, &column.name))
+            .map(|(_, column)| column.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
             .collect(),
     };
     let nodes = nodes((left_keys, right_keys), spec, predicate, conditions.computed);

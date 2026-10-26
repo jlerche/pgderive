@@ -14,5 +14,5 @@ pub struct Lookup {
     pub(crate) right_bound: ColumnRef,
     pub(crate) inclusive: bool,
     pub(crate) order: Vec<Order>,
-    pub(crate) right_fields: Vec<String>,
+    pub(crate) right_fields: Vec<ColumnRef>,
 }
