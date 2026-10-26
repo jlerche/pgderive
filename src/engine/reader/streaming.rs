@@ -194,6 +194,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
     }
 
     async fn push(&mut self, row: Entry<K, V>) -> Result<()> {
+        super::work::spend(0).await;
         ensure!(
             row.1 != 0 && self.previous.as_ref().is_none_or(|previous| previous < &row.0),
             "noncanonical streaming input"
@@ -203,6 +204,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             bytes.checked_add(2).is_some_and(|bytes| bytes <= self.limits.block_bytes),
             crate::engine::execution::CapacityExceeded("streaming row exceeds block byte limit")
         );
+        super::work::spend(bytes).await;
         let comma = usize::from(!self.rows.is_empty());
         let next = self
             .row_bytes
@@ -227,9 +229,11 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         if self.rows.is_empty() {
             return Ok(());
         }
+        super::work::spend(0).await;
         validate(&self.rows)?;
         let decoded = bounded::encode(&self.rows)?;
         ensure!(decoded.len() <= self.limits.block_bytes, "streaming block exceeds budget");
+        super::work::spend(decoded.len()).await;
         let (mut block, encoded) = super::format::encode_block::<(K, V), _>(&self.rows, &decoded)?;
         let first_fence = self.fence_charge(&block)?;
         let next =
@@ -255,7 +259,8 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
                 hash: digest,
             };
             let (root, packed) =
-                super::index::build(&self.schema, self.limits.index_bytes, &[pack], &[single])?;
+                super::index::build(&self.schema, self.limits.index_bytes, &[pack], &[single])
+                    .await?;
             ensure!(
                 bounded::encode(&root)?.len() <= self.limits.index_bytes
                     && packed.len() <= self.limits.index_bytes,
@@ -330,6 +335,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         if self.payload.is_empty() {
             return Ok(());
         }
+        super::work::spend(self.payload.len()).await;
         let bytes = std::mem::take(&mut self.payload);
         let digest = hash(&bytes);
         let pack = Pack {
@@ -352,6 +358,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         })
     }
     async fn reuse(&mut self, leaf: super::index::Leaf<(K, V)>) -> Result<()> {
+        super::work::spend(0).await;
         leaf.pack.validate()?;
         leaf.block.validate_address()?;
         ensure!(
@@ -365,6 +372,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             .fence_charge(&block)?
             .checked_add(pack_charge)
             .context("reused fence charge overflow")?;
+        super::work::spend(bytes).await;
         ensure!(
             self.header_bytes
                 .checked_add(bytes)
@@ -400,6 +408,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             crate::engine::execution::CapacityExceeded("streaming output root limit exceeded")
         );
         self.flush_pack().await?;
+        super::work::spend(self.fence_bytes).await;
         let packs = std::mem::take(&mut self.packs);
         let blocks = std::mem::take(&mut self.blocks);
         let (reference, mut index, head) = ObjectBatch::<K, V>::upload_index(

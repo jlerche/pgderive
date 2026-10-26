@@ -19,6 +19,7 @@ struct Input<K: BatchData, V: BatchData> {
 }
 impl<K: BatchData, V: BatchData> Input<K, V> {
     async fn open(run: &Run<K, V>, store: &Arc<dyn ObjectStore>, schema: &str) -> Result<Self> {
+        crate::engine::reader::work::spend(0).await;
         let mut input = match run {
             Run::Memory(batch) => Self {
                 object: None,
@@ -65,6 +66,7 @@ impl<K: BatchData, V: BatchData> Input<K, V> {
             && let Some(object) = &self.object
         {
             let leaf = self.leaf.as_ref().context("missing loaded leaf")?;
+            crate::engine::reader::work::spend(usize::try_from(leaf.block.length)?).await;
             let rows = if read_ahead {
                 object.read_leaf(leaf).await?
             } else {
@@ -76,6 +78,9 @@ impl<K: BatchData, V: BatchData> Input<K, V> {
     }
     async fn consume(&mut self, count: usize) -> Result<()> {
         let cursor = self.cursor.as_mut().context("missing compaction cursor")?;
+        for _ in 0..count {
+            crate::engine::reader::work::spend(0).await;
+        }
         cursor.advance_rows(count).await?;
         if cursor.current().is_none() && self.object.is_some() {
             self.cursor = None;
@@ -85,6 +90,7 @@ impl<K: BatchData, V: BatchData> Input<K, V> {
         Ok(())
     }
     async fn retain(&mut self) -> Result<Leaf<(K, V)>> {
+        crate::engine::reader::work::spend(0).await;
         let leaf = self.leaf.take().context("missing retained leaf")?;
         self.ordinal += 1;
         self.refresh().await?;

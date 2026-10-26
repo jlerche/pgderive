@@ -10,6 +10,45 @@ pub struct ZSet<T: Ord> {
     pub(super) sizing: Arc<OnceLock<super::batch_size::BatchSize>>,
 }
 
+/// Incremental canonical validation without a final whole-batch scan.
+pub struct CanonicalBuilder<T: Ord> {
+    entries: Vec<(T, i64)>,
+    max_weight: u64,
+}
+impl<T: Ord> CanonicalBuilder<T> {
+    pub(crate) const fn new() -> Self {
+        Self { entries: Vec::new(), max_weight: 0 }
+    }
+    fn check(previous: Option<&T>, row: &(T, i64)) -> Result<()> {
+        ensure!(row.1 != 0, "zero canonical weight");
+        ensure!(previous.is_none_or(|previous| previous < &row.0), "noncanonical batch order");
+        Ok(())
+    }
+    pub(crate) fn push(&mut self, row: (T, i64)) -> Result<()> {
+        Self::check(self.entries.last().map(|row| &row.0), &row)?;
+        self.max_weight = self.max_weight.max(row.1.unsigned_abs());
+        self.entries.push(row);
+        Ok(())
+    }
+    pub(crate) fn finish(self) -> ZSet<T> {
+        ZSet {
+            entries: Arc::new(self.entries),
+            max_weight: self.max_weight,
+            sizing: Arc::new(OnceLock::new()),
+        }
+    }
+    fn from_entries(entries: Vec<(T, i64)>) -> Result<Self> {
+        let mut previous = None;
+        let mut max_weight = 0;
+        for row in &entries {
+            Self::check(previous, row)?;
+            previous = Some(&row.0);
+            max_weight = max_weight.max(row.1.unsigned_abs());
+        }
+        Ok(Self { entries, max_weight })
+    }
+}
+
 impl<T: Ord> PartialEq for ZSet<T> {
     fn eq(&self, other: &Self) -> bool {
         self.entries == other.entries
@@ -38,9 +77,7 @@ impl<T: Ord + Clone> ZSet<T> {
     /// Adopt already consolidated rows without rebuilding an exact accumulator.
     /// This boundary checks ordering and nonzero coefficients, never infers them.
     pub(crate) fn from_canonical(entries: Vec<(T, i64)>) -> Result<Self> {
-        ensure!(entries.iter().all(|(_, weight)| *weight != 0), "zero canonical weight");
-        ensure!(entries.windows(2).all(|pair| pair[0].0 < pair[1].0), "noncanonical batch order");
-        Ok(Self::finalized(entries))
+        Ok(CanonicalBuilder::from_entries(entries)?.finish())
     }
 
     fn finalized(entries: Vec<(T, i64)>) -> Self {
@@ -52,7 +89,8 @@ impl<T: Ord + Clone> ZSet<T> {
     }
 
     /// Iterate in deterministic tuple order.
-    pub fn iter(&self) -> impl Iterator<Item = (&T, &i64)> + Clone {
+    #[must_use]
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&T, &i64)> + ExactSizeIterator + Clone {
         self.entries.iter().map(|(tuple, weight)| (tuple, weight))
     }
 

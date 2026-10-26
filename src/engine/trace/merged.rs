@@ -40,6 +40,7 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
     }
     pub(super) async fn find(&mut self) -> Result<()> {
         loop {
+            crate::engine::reader::work::spend(0).await;
             let tuple = self
                 .cursors
                 .iter()

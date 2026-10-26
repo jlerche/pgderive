@@ -172,23 +172,22 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         cache: Option<&BlockCache>,
     ) -> Result<IndexUpload<K, V>> {
         let (packs, blocks) = data;
-        let (root, packed) = super::index::build(schema, limit, &packs, &blocks)?;
+        let (root, packed) = super::index::build(schema, limit, &packs, &blocks).await?;
+        super::work::spend(0).await;
         let head = if let Some(node) = &root.inline {
             Some(Arc::new(node.clone()))
+        } else if let Some(address) = &root.node {
+            let start = usize::try_from(address.offset)?;
+            let end = start
+                .checked_add(usize::try_from(address.length)?)
+                .context("index head range overflow")?;
+            let bytes = packed.get(start..end).context("missing generated index head")?;
+            super::work::spend(bytes.len()).await;
+            let decoded = super::compression::decode(bytes)?;
+            super::work::spend(decoded.len()).await;
+            Some(Arc::new(serde_json::from_slice(&decoded)?))
         } else {
-            root.node
-                .as_ref()
-                .map(|address| {
-                    let start = usize::try_from(address.offset)?;
-                    let end = start
-                        .checked_add(usize::try_from(address.length)?)
-                        .context("index head range overflow")?;
-                    let bytes = packed.get(start..end).context("missing generated index head")?;
-                    Ok::<_, anyhow::Error>(Arc::new(serde_json::from_slice(
-                        &super::compression::decode(bytes)?,
-                    )?))
-                })
-                .transpose()?
+            None
         };
         let head = head
             .map(|node| {
@@ -198,12 +197,14 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             })
             .transpose()?;
         if let Some(cache) = cache {
-            super::index::warm(&cache.index, &root, &packed)?;
+            super::index::warm(&cache.index, &root, &packed).await?;
         }
         if let Some(pack) = &root.pack {
             super::bounded::put(store, &pack.path, packed).await?;
         }
+        super::work::spend(0).await;
         let index = super::bounded::encode(&root)?;
+        super::work::spend(index.len()).await;
         ensure!(index.len() <= limit, "streaming index exceeds byte budget");
         let reference = ObjectRef {
             path: format!("pgderive/batch/{}", hash(&index)),

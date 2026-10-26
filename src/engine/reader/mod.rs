@@ -12,6 +12,7 @@ mod object;
 mod reachability;
 mod streaming;
 mod upload;
+pub(crate) mod work;
 pub use streaming::WriteLimits;
 
 use super::Batch;
@@ -138,3 +139,7 @@ mod index_page_tests;
 #[cfg(test)]
 #[path = "tests/points.rs"]
 mod point_tests;
+
+#[cfg(test)]
+#[path = "tests/cooperative.rs"]
+mod cooperative_tests;

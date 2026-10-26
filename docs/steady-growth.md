@@ -1587,3 +1587,74 @@ fixture used tmpfs and was removed with its volumes. No deployment or demo
 restart was performed. Only a Clippy control-flow/import refactor in the separate
 hot-root unit test followed the timed run; all production and timed workload
 functions match the frozen benchmark executable's source evidence.
+
+### Cooperative maintenance turns (2026-10-26)
+
+Checkpoint upload now consumes the existing Tokio task-wide cooperative budget
+while consolidating memory runs, scanning/retaining blocks, encoding rows and
+building/warming immutable indexes. Byte charges supplement iteration charges.
+Sibling arrangement futures share that task budget. Exhaustion suspends the
+future with its current cursors, root descriptors and partially filled pack;
+resumption continues the same writer. Yielding never flushes a partial pack or
+publishes a partial checkpoint. The existing PUT, atomic PostgreSQL publication,
+and subsequent source acknowledgement boundaries are unchanged.
+
+A single captured memory run shares its immutable batch directly. Multiple
+memory runs reuse the exact merged cursor, including cancellation-only progress,
+with incremental canonical validation and sizing; there is no whole-memory
+accumulator pass before the first yield. Frozen upload tasks hold shared captured
+state rather than cloning all traces into a temporary map. Ordering, signed
+coefficient overflow and full-tuple identity checks remain enforced.
+
+Immediate-store release tests compare cooperative and unconstrained execution
+through the same production code. Object references, PUT/GET counts and byte
+counts match exactly. One measured run records:
+
+| Path | Longest unconstrained poll | Longest cooperative poll | Cooperative suspensions |
+|---|---:|---:|---:|
+| 8,192 streamed rows | 1.406 ms | 0.119 ms | 192 |
+| 16,384 cancellation-only identities | 1.344 ms | 0.012 ms | 256 |
+| 512 retained blocks | 1.712 ms | 0.497 ms | 18 |
+| 4,096 index descriptors | 3.996 ms | 0.883 ms | 6 |
+
+The streaming case advances at most 43 rows in one observed cooperative poll,
+versus 8,192 unconstrained. These are local responsiveness measurements, not
+latency guarantees; deterministic assertions check suspension and equal results
+and storage costs. Tests also cancel after successful partial PUTs, preserve a
+nonempty published snapshot, retry under a fresh namespace and cold-open the
+exact result. Additional tests exercise suspension before memory preparation's
+first PUT and checkpoint cancellation/rebase with foreground progress. The
+sibling test establishes safe suspension/rebase, not a measured aggregate
+per-poll work bound.
+
+The unchanged `maintenance-v1` replay takes 28.82 seconds after a 55.09-second
+optimized build, with no compiler overlap during measurement. All cold oracles
+and lifecycle/resource checks pass. Relative to `ed16f31`, total PUTs and uploaded
+bytes are exactly unchanged: 1,028 / 2,150,111; 1,055 / 4,816,300; and
+727 / 4,068,895 for fixed 512, fixed 8,192 and growing 8,192 respectively.
+The original request/cost ceilings remain unchanged and qualification remains
+red. Growing index/foreground work and overlapping cold cohorts remain open.
+The smallest case also fails its comparable CPU ratio in this run (one versus
+two coarse CPU ticks per window); timing thresholds have not been relaxed.
+Cooperative suspension changes how much background work completes before the
+harness waits for checkpoint installation, so its maintenance elapsed time is
+not an isolated CPU comparison. Larger-case preparation and CPU results remain
+close to the prior run; this change does not claim a total throughput gain.
+
+This bounds cooperative iteration work, not wall-clock deadlines or total
+checkpoint duration. Codec/hash units, allocator work, and coarse planning over
+at most 256 roots remain synchronous. It does not independently schedule durable
+delta flushes versus consolidation, bound outstanding maintenance debt, or prove
+weekly uptime/steady state. Those remain subsequent slices. No new storage
+format, flush policy, compatibility path, deployment or demo restart is added.
+Evidence, including the failed disconnected sibling-test fixture and all
+benchmark failures, is retained under ignored
+`artifacts/benchmarks/maintenance-turns-20261026/`.
+
+The required `./scripts/check.sh` gate passes: 627 Rust tests (11 manual
+workloads ignored), 146 Python tests, sequential live PostgreSQL durability
+checks, core worker regressions and lifecycle/rebuild qualification, formatting,
+Clippy, docs and unused-dependency checks. Production line coverage is 97.19%.
+Independent implementation and final test/documentation reviews found no
+remaining actionable finding. The owned PostgreSQL fixture used tmpfs and was
+removed with its volumes after the gate; the paused demo was not changed.

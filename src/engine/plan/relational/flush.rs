@@ -43,11 +43,20 @@ impl<K: BatchData, V: BatchData> FrozenFlush<K, V> {
         let namespace = self.namespace.clone();
         let output_cache = BlockCache::output(execution.cache.clone());
         let shared_output = output_cache.clone();
-        let uploads = self.captured.entries.clone().into_iter().map(move |(id, entry)| {
+        #[expect(
+            clippy::needless_collect,
+            reason = "owned IDs keep spawned upload futures independent of a borrowed map iterator"
+        )]
+        let ids = self.captured.entries.keys().cloned().collect::<Vec<_>>();
+        let captured = self.captured.clone();
+        let uploads = ids.into_iter().map(move |id| {
             let execution = execution.clone();
             let output_cache = shared_output.clone();
             let namespace = namespace.clone();
+            let captured = captured.clone();
             async move {
+                tokio::task::consume_budget().await;
+                let entry = captured.entries.get(&id).context("missing captured flush entry")?;
                 let writer = execution
                     .writers
                     .get(&id)
@@ -55,8 +64,10 @@ impl<K: BatchData, V: BatchData> FrozenFlush<K, V> {
                     .clone()
                     .with_namespace(&namespace)
                     .with_cache(output_cache);
-                let entry =
-                    Entry { schema: entry.schema, trace: writer.flush(&entry.trace).await? };
+                let entry = Entry {
+                    schema: entry.schema.clone(),
+                    trace: writer.flush(&entry.trace).await?,
+                };
                 Ok::<_, anyhow::Error>((id, entry))
             }
         });

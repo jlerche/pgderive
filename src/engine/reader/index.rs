@@ -161,8 +161,13 @@ impl<T: Ord + Clone> Node<T> {
     }
 }
 
-fn append<T: Ord + Clone + Serialize>(node: &Node<T>, bytes: &mut Vec<u8>) -> Result<Address<T>> {
+async fn append<T: Ord + Clone + Serialize + Send + Sync>(
+    node: &Node<T>,
+    bytes: &mut Vec<u8>,
+) -> Result<Address<T>> {
+    super::work::spend(0).await;
     let decoded = bounded::encode(node)?;
+    super::work::spend(decoded.len()).await;
     let encoded = super::compression::compress(&decoded)?;
     ensure!(
         decoded.len() <= PAGE_BYTES,
@@ -182,7 +187,7 @@ fn append<T: Ord + Clone + Serialize>(node: &Node<T>, bytes: &mut Vec<u8>) -> Re
 
 type PackedIndex<K, V> = (Root<(K, V)>, Vec<u8>);
 
-pub(super) fn build<K: BatchData, V: BatchData>(
+pub(super) async fn build<K: BatchData, V: BatchData>(
     schema: &str,
     limit: usize,
     packs: &[Pack],
@@ -197,6 +202,7 @@ pub(super) fn build<K: BatchData, V: BatchData>(
     let mut bytes = Vec::new();
     let mut layer = Vec::new();
     for chunk in blocks.chunks(FANOUT) {
+        super::work::spend(0).await;
         let leaves = chunk
             .iter()
             .map(|block| {
@@ -206,14 +212,16 @@ pub(super) fn build<K: BatchData, V: BatchData>(
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        layer.push(append(&Node::Leaf(leaves), &mut bytes)?);
+        layer.push(append(&Node::Leaf(leaves), &mut bytes).await?);
     }
     while layer.len() > 1 {
-        layer = append_level(&layer, &mut bytes)?;
+        layer = append_level(&layer, &mut bytes).await?;
     }
     if blocks.len() <= FANOUT {
+        super::work::spend(bytes.len()).await;
         let decoded = super::compression::decode(&bytes)?;
         let mut inline_address = layer.last().cloned().context("missing inline index address")?;
+        super::work::spend(decoded.len()).await;
         let inline: Node<(K, V)> = serde_json::from_slice(&decoded)?;
         (inline_address.length, inline_address.hash) = inline_identity(&inline)?;
         let candidate = Root {
@@ -226,6 +234,7 @@ pub(super) fn build<K: BatchData, V: BatchData>(
             return Ok((candidate, Vec::new()));
         }
     }
+    super::work::spend(bytes.len()).await;
     let digest = hash(&bytes);
     let pack = Pack {
         path: format!("pgderive/pack/{digest}"),
@@ -536,7 +545,7 @@ impl<T> Node<T> {
     }
 }
 
-pub(super) fn warm<K: BatchData, V: BatchData>(
+pub(super) async fn warm<K: BatchData, V: BatchData>(
     cache: &Cache,
     root: &Root<(K, V)>,
     packed: &[u8],
@@ -546,16 +555,19 @@ pub(super) fn warm<K: BatchData, V: BatchData>(
     }
     let mut pending = root.node.clone().into_iter().collect::<Vec<_>>();
     while let Some(address) = pending.pop() {
+        super::work::spend(0).await;
         let start = usize::try_from(address.offset)?;
         let end = start
             .checked_add(usize::try_from(address.length)?)
             .context("generated index range overflow")?;
         let bytes = packed.get(start..end).context("missing generated index node")?;
+        super::work::spend(bytes.len()).await;
         cache.frames.insert(&address.hash, address.length, std::sync::Arc::new(bytes.to_vec()))?;
         if address.depth == 0 {
             continue;
         }
         let decoded = super::compression::decode(bytes)?;
+        super::work::spend(decoded.len()).await;
         let node: std::sync::Arc<Node<(K, V)>> =
             std::sync::Arc::new(serde_json::from_slice(&decoded)?);
         if let Node::Branch(children) = node.as_ref() {
@@ -590,7 +602,7 @@ pub(super) fn seek_child<T: Clone>(
     children.get(position).cloned()
 }
 
-fn append_level<T: Ord + Clone + Serialize>(
+async fn append_level<T: Ord + Clone + Serialize + Send + Sync>(
     layer: &[Address<T>],
     bytes: &mut Vec<u8>,
 ) -> Result<Vec<Address<T>>> {
@@ -601,7 +613,8 @@ fn append_level<T: Ord + Clone + Serialize>(
     let mut offset = 0;
     for group in 0..groups {
         let end = offset + width + usize::from(group < remainder);
-        next.push(append(&Node::Branch(layer[offset..end].to_vec()), bytes)?);
+        super::work::spend(0).await;
+        next.push(append(&Node::Branch(layer[offset..end].to_vec()), bytes).await?);
         offset = end;
     }
     Ok(next)
@@ -651,8 +664,8 @@ mod tests {
         assert_eq!(stats.reads, 0);
         Ok(())
     }
-    #[test]
-    fn every_branch_is_balanced_including_a_singleton_tail() -> Result<()> {
+    #[tokio::test]
+    async fn every_branch_is_balanced_including_a_singleton_tail() -> Result<()> {
         for count in [2_usize, 32, 33, 1025] {
             let layer = (0..count)
                 .map(|ordinal| {
@@ -670,7 +683,7 @@ mod tests {
                 })
                 .collect::<Result<Vec<_>>>()?;
             let mut bytes = vec![0; count];
-            let parents = append_level(&layer, &mut bytes)?;
+            let parents = append_level(&layer, &mut bytes).await?;
             assert_eq!(parents.iter().map(|parent| parent.blocks).sum::<usize>(), count);
             assert!(parents.iter().all(|parent| (2..=FANOUT).contains(&parent.blocks)));
         }

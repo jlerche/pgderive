@@ -11,7 +11,7 @@ impl<K: BatchData, V: BatchData> Run<K, V> {
     pub(super) fn row_count(&self) -> usize {
         match self {
             Self::Object(batch) => batch.row_count(),
-            Self::Memory(batch) => batch.iter().count(),
+            Self::Memory(batch) => batch.iter().len(),
         }
     }
     pub(super) fn key_bounds(&self) -> Option<(&K, &K)> {
@@ -20,7 +20,7 @@ impl<K: BatchData, V: BatchData> Run<K, V> {
             Self::Memory(batch) => {
                 let mut rows = batch.iter();
                 let ((first, _), _) = rows.next()?;
-                let last = rows.last().map_or(first, |((key, _), _)| key);
+                let last = rows.next_back().map_or(first, |((key, _), _)| key);
                 Some((first, last))
             }
         }

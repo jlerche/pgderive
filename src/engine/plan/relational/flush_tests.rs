@@ -117,3 +117,92 @@ async fn failed_upload_drains_siblings_without_changing_local_state() -> Result<
     assert_eq!(query.time(), 1);
     Ok(())
 }
+
+fn sibling_plan() -> Result<crate::engine::plan::Plan> {
+    use crate::engine::plan::{Arrangement, Kind, Node, Plan};
+    let mut definition = plan()?.definition().clone();
+    for (id, input) in [("d", "abc"), ("e", "d"), ("f", "e")] {
+        definition.nodes.push(Node {
+            id: id.into(),
+            kind: Kind::Project,
+            inputs: vec![input.into()],
+            schema: "i64-vector-v1".into(),
+        });
+        definition.arrangements.push(Arrangement {
+            id: id.into(),
+            node: id.into(),
+            schema: "i64-vector-v1".into(),
+        });
+    }
+    definition.outputs = vec!["f".into()];
+    Plan::new(definition)
+}
+fn sibling_operators() -> Result<super::super::Operators<i64, Vec<i64>>> {
+    let mut callbacks = operators();
+    for id in ["d", "e", "f"] {
+        callbacks.insert(id.into(), operators().remove("a").context("missing identity project")?);
+    }
+    Ok(callbacks)
+}
+#[tokio::test(flavor = "current_thread")]
+async fn sibling_uploads_share_fuel_and_rebase_after_foreground_progress() -> Result<()> {
+    use crate::engine::tests::store::Store;
+    use std::{
+        future::{Future as _, poll_fn},
+        task::Poll,
+    };
+    let settings = Settings { store: Arc::new(Store::unpaced()), ..settings() };
+    let mut query = Query::new(sibling_plan()?, sibling_operators()?, &settings)?;
+    let input = TimedBatch {
+        time: 1,
+        batch: (1..=3)
+            .map(|source| Batch::from_updates((0..8).map(|key| ((key, vec![source]), 1))))
+            .collect::<Result<_>>()?,
+    };
+    let work = query.prepare_memtable(input, 1_000_000).await?;
+    query.commit(work)?;
+    assert_eq!(query.snapshot().entries.len(), 8);
+    let frozen = freeze(&mut query).await?;
+    let captured = query.snapshot();
+    let before = query.memtable_bytes()?;
+    {
+        let mut cancelled = Box::pin(frozen.upload());
+        poll_fn(|cx| match cancelled.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(Ok(())),
+            Poll::Ready(_) => {
+                Poll::Ready(Err(anyhow::anyhow!("cancelled sibling upload failed to yield")))
+            }
+        })
+        .await?;
+    }
+    assert_eq!(query.time(), 1);
+    assert_eq!(query.memtable_bytes()?, before);
+    assert_eq!(
+        query.snapshot().trace("abc")?.materialize().await?,
+        captured.trace("abc")?.materialize().await?
+    );
+    let mut upload =
+        Box::pin(query.capture_flush("pgderive/upload-v1/retry-siblings".into()).await?.upload());
+    poll_fn(|cx| match upload.as_mut().poll(cx) {
+        Poll::Pending => Poll::Ready(Ok(())),
+        Poll::Ready(_) => {
+            Poll::Ready(Err(anyhow::anyhow!("sibling upload exhausted no shared fuel")))
+        }
+    })
+    .await?;
+    assert_eq!(query.time(), 1);
+    assert_eq!(query.memtable_bytes()?, before);
+    assert_eq!(
+        query.snapshot().trace("abc")?.materialize().await?,
+        captured.trace("abc")?.materialize().await?
+    );
+    tick(&mut query, 2, 1).await?;
+    let expected = query.snapshot().trace("abc")?.materialize().await?;
+    let uploaded = upload.await?;
+    assert_eq!(uploaded.checkpoint().time, 1);
+    let work = query.prepare_uploaded_flush(&uploaded).await?;
+    query.commit_compaction(work)?;
+    assert_eq!(query.time(), 2);
+    assert_eq!(query.snapshot().trace("abc")?.materialize().await?, expected);
+    Ok(())
+}
