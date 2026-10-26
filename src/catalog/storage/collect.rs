@@ -135,6 +135,10 @@ async fn snapshot(
     ensure!(sealed.len() <= limits.objects, "GC namespace metadata limit exceeded");
     // The snapshot's sealed namespaces cannot acquire new live roots:
     // write::stage accepts exact current roots or active fresh uploads only.
+    // New roots may reuse packs from sealed namespaces, but only from current
+    // or pinned input roots: a preceding GC snapshot marks those dependencies,
+    // an active upload blocks snapshots, and a later snapshot marks the new root.
+    // Detached adoption verifies that provenance before accepting shared packs.
     // New read protections pin current membership under the same barrier.
     // Release the lifecycle lock before all object-store I/O.
     // Roll back this read-only savepoint to release its lifecycle lock while

@@ -137,7 +137,7 @@ async fn oversized_full_compaction_preserves_hot_cache_and_admits_output_only_wh
 }
 
 #[tokio::test]
-async fn trusted_compaction_coalesces_cold_pages_and_rejects_corruption() -> Result<()> {
+async fn trusted_compaction_reuses_cold_pages_and_rejects_decoded_corruption() -> Result<()> {
     use std::sync::atomic::Ordering;
     let store = Arc::new(crate::engine::tests::store::Store::default());
     let writer = Arrangement::<i64, i64>::new(store.clone(), "once".into(), 1)?;
@@ -146,7 +146,7 @@ async fn trusted_compaction_coalesces_cold_pages_and_rejects_corruption() -> Res
     let before = store.reads.load(Ordering::SeqCst);
     let compacted =
         writer.clone().with_namespace("pgderive/upload-v1/compaction-once").compact(&state).await?;
-    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 1);
+    assert_eq!(store.reads.load(Ordering::SeqCst) - before, 0);
     assert_eq!(compacted.materialize().await?, state.materialize().await?);
     let manifest = state.manifest()?;
     let root = manifest.objects.first().context("missing root")?;
@@ -154,7 +154,13 @@ async fn trusted_compaction_coalesces_cold_pages_and_rejects_corruption() -> Res
     let path =
         Path::from(object.block_range(3).await?.map(|(path, _)| path).context("missing block")?);
     store.put(&path, b"corrupt".to_vec().into()).await?;
-    assert!(writer.compact(&state).await.is_err());
+    // Reuse authenticates metadata, leaving immutable payload verification to
+    // reads. Dirty overlapping blocks must still fail during consolidation.
+    let retained = writer.compact(&state).await?;
+    assert!(retained.materialize().await.is_err());
+    let dirty =
+        state.append_validated(Run::Memory(Arc::new(Batch::from_updates([((3, 3), -1)])?)), 2)?;
+    assert!(writer.compact(&dirty).await.is_err());
     assert_eq!(state.manifest()?, manifest);
     Ok(())
 }

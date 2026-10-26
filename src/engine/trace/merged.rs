@@ -5,7 +5,7 @@ use num_bigint::BigInt;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub(super) struct CoefficientOverflow;
+pub struct CoefficientOverflow;
 impl std::fmt::Display for CoefficientOverflow {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("finalized weight exceeds i64 domain")

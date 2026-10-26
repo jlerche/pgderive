@@ -84,6 +84,21 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         .map(Run::Object)
         .collect())
     }
+    pub(crate) async fn compact_runs(&self, runs: &[Run<K, V>]) -> Result<Vec<Run<K, V>>> {
+        let limits =
+            WriteLimits { block_rows: self.block_rows.min(65_536), ..WriteLimits::default() };
+        Ok(ObjectBatch::compact_resident(
+            self.store.clone(),
+            runs,
+            &self.schema,
+            (self.namespace.as_deref(), limits),
+            self.cache.clone(),
+        )
+        .await?
+        .into_iter()
+        .map(Run::Object)
+        .collect())
+    }
     /// Upload a complete delta and validate an unpublished next snapshot.
     ///
     /// # Errors

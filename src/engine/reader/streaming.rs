@@ -9,6 +9,8 @@ use std::sync::Arc;
 // A point read decodes a complete block. Bound its ordinary JSON payload so cache
 // misses do not deserialize thousands of unrelated wide rows. A single larger
 // row remains valid up to the caller's hard block budget.
+mod merge;
+
 pub(super) const TARGET_BLOCK_BYTES: usize = 16 * 1024;
 
 /// Fixed encoded-byte and entry budgets for streaming immutable state output.
@@ -57,6 +59,7 @@ impl WriteLimits {
 }
 struct Writer<K: BatchData, V: BatchData> {
     store: Arc<dyn ObjectStore>,
+    namespace: Option<String>,
     schema: String,
     limits: WriteLimits,
     rows: Vec<Entry<K, V>>,
@@ -65,6 +68,7 @@ struct Writer<K: BatchData, V: BatchData> {
     fence_bytes: usize,
     header_bytes: usize,
     payload: Vec<u8>,
+    payload_pack: Option<usize>,
     packs: Vec<Pack>,
     pack_bytes: usize,
     references: Vec<ObjectRef>,
@@ -85,13 +89,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         target: (&str, WriteLimits),
     ) -> Result<Vec<ObjectRef>> {
         ensure!(super::object::valid_namespace(target.0), "invalid streaming upload namespace");
-        let scoped: Arc<dyn ObjectStore> =
-            Arc::new(object_store::prefix::PrefixStore::new(store, target.0));
-        Self::write_stream(scoped, cursor, schema, target.1)
-            .await?
-            .into_iter()
-            .map(|reference| reference.qualify(target.0))
-            .collect()
+        Ok(Self::stream_upload(store, cursor, schema, (Some(target.0), target.1), None).await?.0)
     }
     /// Stream a canonical cursor into bounded blocks and nonoverlapping roots.
     /// No trace membership is published here. Exact consolidation and final i64
@@ -124,33 +122,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         target: (Option<&str>, WriteLimits),
         cache: Option<Arc<BlockCache>>,
     ) -> Result<(Vec<ObjectRef>, Vec<Self>)> {
-        let (namespace, limits) = target;
-        if let Some(namespace) = namespace {
-            ensure!(
-                super::object::valid_namespace(namespace),
-                "invalid streaming upload namespace"
-            );
-        }
-        let scoped = super::object::scoped_store(&store, namespace);
-        ensure!(!schema.is_empty(), "empty streaming batch schema");
-        let limits = limits.validate()?;
-        let mut writer = Writer {
-            store: scoped,
-            cache,
-            schema: schema.into(),
-            limits,
-            rows: Vec::new(),
-            row_bytes: 2,
-            blocks: Vec::new(),
-            fence_bytes: 0,
-            header_bytes: header_bytes(schema)?,
-            payload: Vec::new(),
-            packs: Vec::new(),
-            pack_bytes: pack_bytes()?,
-            references: Vec::new(),
-            resident: Vec::new(),
-            previous: None,
-        };
+        let mut writer = Writer::new(&store, schema, target, cache)?;
         while cursor.current().is_some() {
             if let Some(span) = cursor.current_span() {
                 ensure!(!span.is_empty(), "empty span at current tuple");
@@ -163,18 +135,64 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 cursor.advance().await?;
             }
         }
-        writer.flush_block().await?;
-        writer.flush_root().await?;
-        for batch in &mut writer.resident {
-            if let Some(namespace) = namespace {
+        writer.finish(&store).await
+    }
+}
+impl<K: BatchData, V: BatchData> Writer<K, V> {
+    fn new(
+        store: &Arc<dyn ObjectStore>,
+        schema: &str,
+        target: (Option<&str>, WriteLimits),
+        cache: Option<Arc<BlockCache>>,
+    ) -> Result<Self> {
+        let (namespace, limits) = target;
+        if let Some(namespace) = namespace {
+            ensure!(
+                super::object::valid_namespace(namespace),
+                "invalid streaming upload namespace"
+            );
+        }
+        ensure!(!schema.is_empty(), "empty streaming batch schema");
+        Ok(Self {
+            store: super::object::scoped_store(store, namespace),
+            namespace: namespace.map(str::to_owned),
+            cache,
+            schema: schema.into(),
+            limits: limits.validate()?,
+            rows: Vec::new(),
+            row_bytes: 2,
+            blocks: Vec::new(),
+            fence_bytes: 0,
+            header_bytes: header_bytes(schema)?,
+            payload: Vec::new(),
+            payload_pack: None,
+            packs: Vec::new(),
+            pack_bytes: pack_bytes()? + namespace.map_or(0, |namespace| namespace.len() + 1),
+            references: Vec::new(),
+            resident: Vec::new(),
+            previous: None,
+        })
+    }
+    async fn finish(
+        mut self,
+        store: &Arc<dyn ObjectStore>,
+    ) -> Result<(Vec<ObjectRef>, Vec<ObjectBatch<K, V>>)> {
+        self.flush_block().await?;
+        self.flush_root().await?;
+        if let Some(namespace) = &self.namespace {
+            self.references = self
+                .references
+                .into_iter()
+                .map(|reference| reference.qualify(namespace))
+                .collect::<Result<Vec<_>>>()?;
+            for batch in &mut self.resident {
                 batch.reference = batch.reference.clone().qualify(namespace)?;
                 batch.store = store.clone();
             }
         }
-        Ok((writer.references, writer.resident))
+        Ok((self.references, self.resident))
     }
-}
-impl<K: BatchData, V: BatchData> Writer<K, V> {
+
     async fn push(&mut self, row: Entry<K, V>) -> Result<()> {
         ensure!(
             row.1 != 0 && self.previous.as_ref().is_none_or(|previous| previous < &row.0),
@@ -217,7 +235,8 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         let next =
             self.payload.len().checked_add(encoded.len()).context("packed object size overflow")?;
         let new_pack = !self.payload.is_empty() && next > TARGET_OBJECT_BYTES;
-        block.pack = self.packs.len() + usize::from(new_pack);
+        block.pack =
+            if new_pack { self.packs.len() } else { self.payload_pack.unwrap_or(self.packs.len()) };
         block.offset = if new_pack { 0 } else { u64::try_from(self.payload.len())? };
         let mut bytes = self.fence_charge(&block)?;
         let minimum = self
@@ -231,7 +250,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             single.offset = 0;
             let digest = "0".repeat(64);
             let pack = Pack {
-                path: format!("pgderive/pack/{digest}"),
+                path: self.data_pack_path(&digest),
                 bytes: u64::try_from(bounded::MAX_BYTES)?,
                 hash: digest,
             };
@@ -245,7 +264,10 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         }
         if !self.blocks.is_empty()
             && (self.blocks.len() == self.limits.index_blocks
-                || self.index_size(bytes, block.pack + 1)? > self.limits.index_bytes)
+                || self.index_size(
+                    bytes,
+                    self.packs.len() + usize::from(self.payload_pack.is_none() || new_pack),
+                )? > self.limits.index_bytes)
         {
             self.flush_root().await?;
             block.pack = 0;
@@ -254,6 +276,11 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         } else if new_pack {
             self.flush_pack().await?;
         }
+        if self.payload_pack.is_none() {
+            self.payload_pack = Some(self.packs.len());
+            self.packs.push(self.placeholder_pack()?);
+        }
+        block.pack = self.payload_pack.context("missing pending data pack")?;
         self.payload.extend_from_slice(&encoded);
         // These immutable local computations cannot publish membership. Keeping
         // them in the bounded cache avoids pinning every page until the pack PUT.
@@ -293,6 +320,12 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             .and_then(|n| n.checked_add(self.blocks.len()))
             .context("streaming index size overflow")
     }
+    fn data_pack_path(&self, digest: &str) -> String {
+        let relative = format!("pgderive/pack/{digest}");
+        self.namespace
+            .as_ref()
+            .map_or_else(|| relative.clone(), |namespace| format!("{namespace}/{relative}"))
+    }
     async fn flush_pack(&mut self) -> Result<()> {
         if self.payload.is_empty() {
             return Ok(());
@@ -305,7 +338,57 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             hash: digest,
         };
         bounded::put(&self.store, &pack.path, bytes).await?;
-        self.packs.push(pack);
+        let index = self.payload_pack.take().context("missing pending data pack")?;
+        *self.packs.get_mut(index).context("missing pending pack slot")? =
+            Pack { path: self.data_pack_path(&pack.hash), ..pack };
+        Ok(())
+    }
+    fn placeholder_pack(&self) -> Result<Pack> {
+        let digest = "0".repeat(64);
+        Ok(Pack {
+            path: self.data_pack_path(&digest),
+            bytes: u64::try_from(super::compression::STORED_LIMIT)?,
+            hash: digest,
+        })
+    }
+    async fn reuse(&mut self, leaf: super::index::Leaf<(K, V)>) -> Result<()> {
+        leaf.pack.validate()?;
+        leaf.block.validate_address()?;
+        ensure!(
+            self.previous.as_ref().is_none_or(|previous| previous < &leaf.block.first),
+            "noncanonical reused block"
+        );
+        self.flush_block().await?;
+        let mut block = leaf.block;
+        let pack_charge = bounded::encode(&leaf.pack)?.len();
+        let bytes = self
+            .fence_charge(&block)?
+            .checked_add(pack_charge)
+            .context("reused fence charge overflow")?;
+        ensure!(
+            self.header_bytes
+                .checked_add(bytes)
+                .is_some_and(|bytes| bytes <= self.limits.index_bytes),
+            crate::engine::execution::CapacityExceeded("reused fence exceeds index budget")
+        );
+        if !self.blocks.is_empty()
+            && (self.blocks.len() == self.limits.index_blocks
+                || self.index_size(bytes, self.packs.len() + 1)? > self.limits.index_bytes)
+        {
+            self.flush_root().await?;
+        }
+        block.pack =
+            if let Some(index) = self.packs.iter().position(|pack| pack.path == leaf.pack.path) {
+                index
+            } else {
+                let index = self.packs.len();
+                self.packs.push(leaf.pack);
+                index
+            };
+        self.fence_bytes =
+            self.fence_bytes.checked_add(bytes).context("reused fence bytes overflow")?;
+        self.previous = Some(block.last.clone());
+        self.blocks.push(block);
         Ok(())
     }
     async fn flush_root(&mut self) -> Result<()> {

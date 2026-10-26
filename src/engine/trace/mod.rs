@@ -5,6 +5,7 @@ mod flush;
 mod manifest;
 mod memory;
 mod merged;
+pub(crate) use merged::CoefficientOverflow;
 mod overlap;
 mod probes;
 mod rebase;

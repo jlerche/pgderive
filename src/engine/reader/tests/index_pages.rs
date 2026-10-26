@@ -214,7 +214,7 @@ async fn coarse_fences_exclude_unrelated_runs_without_index_io() -> Result<()> {
 }
 
 #[tokio::test]
-async fn generated_index_frames_are_reused_across_namespaces_and_cold_reopen_is_independent()
+async fn generated_index_frames_authenticate_qualified_locations_and_cold_reopen_is_independent()
 -> Result<()> {
     let store = Arc::new(Store::unpaced());
     let cache = Arc::new(BlockCache::new(4 * 1024 * 1024, 128));
@@ -245,14 +245,20 @@ async fn generated_index_frames_are_reused_across_namespaces_and_cold_reopen_is_
         .index
         .read(&object.store, &pack, &root.hash, root.offset..root.offset + root.length)
         .await?;
-    pack.path = other
-        .reference()
-        .child_path(&other.index.pack.as_ref().context("missing other pack")?.path);
+    pack = other.index.pack.clone().context("missing other pack")?;
+    pack.path = other.reference().child_path(&pack.path);
+    let other_root = other.index.node.as_ref().context("missing other address")?;
+    assert_ne!(root.hash, other_root.hash);
     let right = cache
         .index
-        .read(&other.store, &pack, &root.hash, root.offset..root.offset + root.length)
+        .read(
+            &other.store,
+            &pack,
+            &other_root.hash,
+            other_root.offset..other_root.offset + other_root.length,
+        )
         .await?;
-    assert!(Arc::ptr_eq(&left, &right));
+    assert!(!Arc::ptr_eq(&left, &right));
     for key in [0_i64, 31, 128, 255] {
         assert_eq!(object.tuple_weight(&(key, key * 2)).await?, 1);
     }

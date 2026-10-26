@@ -10,7 +10,7 @@ mod authenticated;
 mod frames;
 pub(super) use authenticated::Authenticated;
 
-const FANOUT: usize = 32;
+pub(super) const FANOUT: usize = 32;
 pub(super) const PAGE_BYTES: usize = bounded::MAX_BYTES;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

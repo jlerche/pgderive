@@ -19,8 +19,10 @@ impl ObjectRef {
         ensure!(root.schema == self.schema(), "invalid reachability root schema");
         if let Some(inline) = root.inline {
             ensure!(root.pack.is_none(), "inline index retains external pack");
-            return self
-                .inline_dependencies(inline, &root.node.context("inline index lacks summary")?);
+            return Self::inline_dependencies(
+                inline,
+                &root.node.context("inline index lacks summary")?,
+            );
         }
         let (pack, node) = match (root.pack, root.node) {
             (None, None) => return Ok(Vec::new()),
@@ -28,6 +30,7 @@ impl ObjectRef {
             _ => anyhow::bail!("incomplete reachability root"),
         };
         pack.validate()?;
+        ensure!(pack.path == format!("pgderive/pack/{}", pack.hash), "qualified index pack path");
         ensure!(
             node.offset.checked_add(node.length) == Some(pack.bytes),
             "invalid reachability root range"
@@ -57,15 +60,15 @@ impl ObjectRef {
             node.validate_structure(&address, pack.bytes)?;
             match node {
                 Node::Branch(children) => pending.extend(children),
-                Node::Leaf(leaves) => dependencies
-                    .extend(leaves.into_iter().map(|leaf| self.child_path(&leaf.pack.path))),
+                Node::Leaf(leaves) => {
+                    dependencies.extend(leaves.into_iter().map(|leaf| leaf.pack.path));
+                }
             }
         }
         ensure!(examined == pack.bytes, "index contains unreachable metadata bytes");
         Ok(dependencies.into_iter().collect())
     }
     fn inline_dependencies(
-        &self,
         inline: Node<serde_json::Value>,
         address: &Address<serde_json::Value>,
     ) -> Result<Vec<String>> {
@@ -83,7 +86,7 @@ impl ObjectRef {
         };
         Ok(leaves
             .into_iter()
-            .map(|leaf| self.child_path(&leaf.pack.path))
+            .map(|leaf| leaf.pack.path)
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect())

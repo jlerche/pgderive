@@ -24,8 +24,8 @@ def verify_packed_root(root, get):
     index = json.loads(content)
     packs = {}
 
-    def load(pack):
-        path = root['namespace']+'/'+pack['path'] if root['namespace'] else pack['path']
+    def load(pack, global_path=False):
+        path = pack['file'] if global_path or not root['namespace'] else root['namespace']+'/'+pack['file']
         if path in packs:
             return packs[path]
         data = get(path)
@@ -41,7 +41,7 @@ def verify_packed_root(root, get):
         else:
             for leaf in node['Leaf']:
                 block = leaf['block']
-                payload = load(leaf['pack'])
+                payload = load(leaf['pack'], global_path=True)
                 part = payload[block['offset']:block['offset']+block['length']]
                 assert len(part) == block['length']
                 assert hashlib.sha256(part).hexdigest() == block['hash']

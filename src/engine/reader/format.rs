@@ -9,6 +9,8 @@ pub(super) const TARGET_OBJECT_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Pack {
+    // Required field rename makes the global data-location codec a hard cutover.
+    #[serde(rename = "file")]
     pub(super) path: String,
     pub(super) bytes: u64,
     pub(super) hash: String,
@@ -111,9 +113,56 @@ impl Pack {
             self.bytes > 0
                 && self.bytes <= u64::try_from(super::compression::STORED_LIMIT)?
                 && valid_hash(&self.hash)
-                && self.path == format!("pgderive/pack/{}", self.hash),
+                && valid_pack_path(&self.path, &self.hash),
             "invalid immutable pack address/size"
         );
+        Ok(())
+    }
+}
+
+fn valid_pack_path(path: &str, hash: &str) -> bool {
+    let canonical = format!("pgderive/pack/{hash}");
+    if path == canonical {
+        return true;
+    }
+    path.strip_suffix(&format!("/{canonical}")).is_some_and(super::object::valid_namespace)
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+
+    #[test]
+    fn old_relative_path_descriptor_is_rejected_instead_of_reinterpreted() -> Result<()> {
+        let digest = "a".repeat(64);
+        let legacy = serde_json::json!({
+            "path": format!("pgderive/pack/{digest}"), "bytes": 1, "hash": digest,
+        });
+        assert!(serde_json::from_value::<Pack>(legacy).is_err());
+        let current = Pack { path: format!("pgderive/pack/{digest}"), bytes: 1, hash: digest };
+        let encoded = serde_json::to_value(&current)?;
+        assert!(encoded.get("file").is_some());
+        assert!(encoded.get("path").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn pack_locations_require_canonical_hashes_and_valid_upload_namespaces() -> Result<()> {
+        let digest = "a".repeat(64);
+        let relative = format!("pgderive/pack/{digest}");
+        for path in [&relative, &format!("pgderive/upload-v1/good-1/{relative}")] {
+            Pack { path: path.clone(), bytes: 1, hash: digest.clone() }.validate()?;
+        }
+        for path in [
+            format!("other/{relative}"),
+            format!("pgderive/upload-v1//{relative}"),
+            format!("pgderive/upload-v1/../{relative}"),
+            format!("pgderive/upload-v1/bad/nested/{relative}"),
+            format!("pgderive/upload-v1/good-1/{relative}/extra"),
+            format!("pgderive/upload-v1/good-1/pgderive/pack/{}", "b".repeat(64)),
+        ] {
+            assert!(Pack { path, bytes: 1, hash: digest.clone() }.validate().is_err());
+        }
         Ok(())
     }
 }

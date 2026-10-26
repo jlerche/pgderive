@@ -1507,3 +1507,83 @@ PUT/upload totals and comparable-merge coverage; its measured SQL stage takes
 CPU differences have limited resolution. The reproducible I/O failures, rather
 than tiny CPU timing differences, establish this acceptance failure. It remains
 component evidence and does not prove production freshness or steady state.
+
+### Reusing disjoint blocks inside roots
+
+The next slice retains authenticated immutable data blocks when their complete
+`(K,V)` fences are strictly disjoint from every other remaining merge head.
+Overlapping blocks still use exact signed consolidation before i64 narrowing.
+The ordinary streaming writer rebuilds a bounded index containing retained and
+rewritten blocks. Dirty intervals share one pending output pack, so inserting a
+retained interval does not force another data PUT. Tiny fragments are repacked
+rather than accumulating one index leaf per short delta: retention requires a
+full navigation fanout of rows (or the smaller configured block-row limit), or
+at least the ordinary block-byte target in compressed payload. Requested row
+limits remain enforced; tighter decoded-byte limits require reencoding.
+
+Each input owns the existing bounded scan window. Sparse loads use cached
+windows but fetch only the requested range on a miss. Dense overlap can use
+ordinary coalescing; both the span and equal-identity consolidation paths use
+that decision. This avoids shared-window thrashing without fetching a whole
+cold pack for an isolated hot block. Cross-store compaction reencodes payloads:
+only the same store and codec can share data locations.
+
+Data-pack descriptors now authenticate their global location. The required
+serialized `file` field replaces `path`; this is a storage-codec hard cutover,
+with no old-state adapter. Existing nonempty persisted state must be rebuilt
+before deploying this version. Index-pack offsets remain local to the owning
+root, so index-subtree sharing is not implemented here. GC follows retained
+packs across upload namespaces. Detached result adoption additionally verifies
+that each dependency belongs to its fresh upload namespace or the exact pinned
+input dependencies, preventing publication of an already collectible foreign
+pack. Publication ordering remains PUT, atomic PG publication, then source ACK.
+
+The focused 8,192-row comparison retains 255 of 256 data blocks. Read bytes drop
+from 38,213 to 147 and uploaded bytes from 54,492 to 16,381, with 3 PUTs in both
+implementations. Eight complete hot replacements use 16 PUTs in both; final
+referenced physical data packs occupy 2,637 bytes versus 2,490 referenced block
+bytes. A separate dense-overlap regression requires at most six payload GETs
+for 64 source pages and checks equal full identities through consolidation.
+Failure injection, extreme signed cancellation, repeated root membership,
+namespace sharing, narrower writer limits, root splits and cold recovery are
+covered through the production compactor.
+
+This is not a steady-state proof. Index traversal and rebuilding still scale
+with block count. The unchanged broad-cohort acceptance fixture has overlapping
+cold fences across cohorts and still requires merging those payloads. Whole
+packs remain the GC unit: one retained block can pin obsolete bytes in its pack.
+Low-density repacking needs an explicit debt policy before claiming bounded
+space amplification under long sparse-update histories. Evidence and failed
+intermediate runs are retained under ignored
+`artifacts/benchmarks/block-reuse-20261026/`.
+
+The unchanged `maintenance-v1` profile remains **unqualified**. The reviewed run
+executes the SQL stage in 28.89 seconds after a 52.24-second optimized build,
+without compiler overlap. All cold oracles and lifecycle/resource checks pass.
+The original total-cost ceilings are retained:
+
+| Workload | Prior PUTs | Current PUTs | Prior uploaded bytes | Current uploaded bytes |
+|---|---:|---:|---:|---:|
+| Fixed 512 | 1,028 | 1,028 | 2,114,565 | 2,150,111 |
+| Fixed 8,192 | 1,054 | 1,055 | 4,772,791 | 4,816,300 |
+| Growing 8,192 | 726 | 727 | 4,038,000 | 4,068,895 |
+
+The two larger cases each add one PUT (less than 0.14%); uploaded bytes rise by
+less than 1.7%. These still fail the deliberately exact baseline ceilings. Total
+replay GETs/read bytes remain close to the prior implementation: fixed 8,192
+ends at 11,849 / 59,802,351 bytes versus 11,847 / 59,756,090; growing ends at
+12,393 / 63,187,471 bytes versus 12,385 / 63,146,701. These snapshots exclude
+final drain; the separate total-cost ceilings include it. Absolute timing is
+component evidence, not a demonstrated throughput improvement for uniform
+access. Growing index/foreground costs and the broad overlapping cold-root
+scaling gates remain failed. This slice demonstrates localized payload reuse,
+not a general maintenance plateau or an arbitrary-size production qualification.
+
+The common `./scripts/check.sh` gate passes: 619 Rust tests (11 explicit manual
+workloads ignored), 146 Python tests, 147 live worker results plus rebuild,
+formatting, Clippy, docs and dependency checks. Production line coverage is
+97.17%. Independent review found no remaining blocker. The isolated PostgreSQL
+fixture used tmpfs and was removed with its volumes. No deployment or demo
+restart was performed. Only a Clippy control-flow/import refactor in the separate
+hot-root unit test followed the timed run; all production and timed workload
+functions match the frozen benchmark executable's source evidence.

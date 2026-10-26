@@ -3,7 +3,7 @@ use super::{Run, TraceSnapshot};
 use crate::engine::{
     BatchBuilder,
     dataflow::Arrangement,
-    reader::{BatchData, BatchReader, BlockCache},
+    reader::{BatchData, BlockCache},
 };
 use anyhow::{Context, Result, ensure};
 
@@ -15,10 +15,9 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let scan_cache = BlockCache::scan(cache.clone());
         let mut input = self.clone();
         input.share_cache(&scan_cache);
-        let mut cursor = input.cursor().await?;
         let output_cache = BlockCache::output(cache.clone());
         let output_writer = writer.clone().with_cache(output_cache.clone());
-        let runs = output_writer.upload_cursor(&mut cursor).await?;
+        let runs = output_writer.compact_runs(&input.runs).await?;
         // This private construction streams exactly the validated merged input.
         // Untrusted replacements still require replace_runs' equivalence check.
         let mut next = Self::from_runs(runs, generation, self.time)?;

@@ -115,6 +115,23 @@ impl Ranges {
         pack: &Pack,
         range: Range<u64>,
     ) -> Result<Vec<u8>> {
+        self.read_with(store, pack, range, true).await
+    }
+    pub(in crate::engine::reader) async fn read_exact(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        pack: &Pack,
+        range: Range<u64>,
+    ) -> Result<Vec<u8>> {
+        self.read_with(store, pack, range, false).await
+    }
+    async fn read_with(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        pack: &Pack,
+        range: Range<u64>,
+        read_ahead: bool,
+    ) -> Result<Vec<u8>> {
         ensure!(range.start < range.end, "empty cached pack range");
         ensure!(range.end <= pack.bytes, "cached range exceeds pack");
         self.metrics.requested(self.scan, range.end - range.start);
@@ -139,7 +156,9 @@ impl Ranges {
                         .map_err(|_| anyhow::anyhow!("range cache lock poisoned"))?
                         .width,
                 )?;
-                let Some(width) = self.fitting_width(pack, position, maximum)? else {
+                let width =
+                    if read_ahead { self.fitting_width(pack, position, maximum)? } else { None };
+                let Some(width) = width else {
                     result.extend(self.load(store, &pack.path, position..range.end).await?);
                     return Ok(result);
                 };

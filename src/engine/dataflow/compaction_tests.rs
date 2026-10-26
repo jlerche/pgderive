@@ -114,3 +114,60 @@ async fn separate_process_can_execute_serialized_job() -> Result<()> {
     assert_eq!(output.generation(), 2);
     Ok(())
 }
+
+#[tokio::test]
+async fn detached_adoption_rejects_equal_foreign_data_in_fresh_root() -> Result<()> {
+    use crate::engine::{
+        reader::{BlockCache, ObjectBatch, WriteLimits},
+        trace::Run,
+    };
+    let store = Arc::new(InMemory::new());
+    let writer = Arrangement::<i64, String>::new(store.clone(), "tuple-v1".into(), 2)?;
+    let input = writer
+        .stage(
+            &writer.empty(),
+            &TimedBatch { time: 1, batch: Batch::from_updates([((1, "same".into()), 7)])? },
+        )
+        .await?;
+    let job = writer.make_job(&input, "pgderive/upload-v1/provenance-job")?;
+    let foreign = ObjectBatch::write_resident(
+        store.clone(),
+        &Batch::from_updates([((1_i64, "same".to_owned()), 7)])?,
+        "tuple-v1",
+        (Some("pgderive/upload-v1/unpinned-foreign"), 2),
+        Arc::new(BlockCache::new(0, 0)),
+    )
+    .await?;
+    let objects = ObjectBatch::compact_resident(
+        store,
+        &[Run::Object(foreign)],
+        "tuple-v1",
+        (Some(&job.namespace), WriteLimits { block_rows: 1, ..WriteLimits::default() }),
+        Arc::new(BlockCache::new(0, 0)),
+    )
+    .await?;
+    let result = CompactionResult {
+        job: job.clone(),
+        output: crate::engine::trace::Manifest {
+            version: 2,
+            time: input.time(),
+            generation: input.generation() + 1,
+            cohorts: vec![objects.len()],
+            objects: objects.into_iter().map(|object| object.reference().clone()).collect(),
+        },
+    };
+    assert!(
+        result
+            .output
+            .objects
+            .iter()
+            .all(|object| { object.namespace() == Some(job.namespace.as_str()) })
+    );
+    let error = writer
+        .adopt_compaction(&input, &job, result)
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("adopted unpinned foreign dependency"))?;
+    assert!(error.to_string().contains("unpinned foreign data"), "{error}");
+    Ok(())
+}

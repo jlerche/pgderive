@@ -7,6 +7,7 @@ use crate::engine::{
     tests::store::{Store, range_totals},
 };
 use anyhow::{Context as _, Result};
+use object_store::ObjectStoreExt as _;
 use std::{
     collections::BTreeSet,
     sync::{Arc, atomic::Ordering},
@@ -195,6 +196,22 @@ async fn window_subset_overflow_preserves_excluded_cohort_cancellation() -> Resu
 async fn dominant_hot_root_survives_tiny_updates_until_peers_are_comparable() -> Result<()> {
     let Fixture { store, writer, trace, cold, cold_paths } =
         fixture(Layout::Partitioned, false, 100, 100).await?;
+    let mut hot_packs = std::collections::BTreeMap::new();
+    for run in &trace.runs {
+        let Run::Object(object) = run else { continue };
+        if cold.contains(object.reference()) {
+            continue;
+        }
+        for ordinal in 0..object.block_count() {
+            let (path, _) = object.block_range(ordinal).await?.context("missing hot block")?;
+            if hot_packs.contains_key(&path) {
+                continue;
+            }
+            let size = store.head(&object_store::path::Path::from(path.clone())).await?.size;
+            hot_packs.insert(path, size);
+        }
+    }
+    let hot_input_bytes = hot_packs.values().sum::<u64>();
     let mut oracle = trace.materialize().await?;
     let first = Batch::from_updates([((0, 10_000), 1)])?;
     oracle.apply(&first)?;
@@ -235,12 +252,14 @@ async fn dominant_hot_root_survives_tiny_updates_until_peers_are_comparable() ->
     }
     let puts = store.puts.load(Ordering::SeqCst) - puts;
     assert!(
-        read_bytes < initial_bytes * 32,
-        "hot merge read amplification {read_bytes}/{initial_bytes}"
+        // Compare against the fixed physical hot input, not the first merge's
+        // reduced sparse reads, which may legitimately become zero.
+        read_bytes <= hot_input_bytes * 32,
+        "hot merge read amplification {read_bytes}/{hot_input_bytes}"
     );
     assert!(puts <= 2 * 256, "tiny checkpoints added redundant PUTs: {puts}");
     println!(
-        "dominant-hot: initialreadbytes={initial_bytes}, 256flush readbytes={read_bytes}, PUTs={puts}"
+        "dominant-hot: initialreadbytes={initial_bytes}, 256flush readbytes={read_bytes}, hotinputbytes={hot_input_bytes}, PUTs={puts}"
     );
     Ok(())
 }

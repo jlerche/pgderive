@@ -90,7 +90,7 @@ async fn malformed_packed_ranges_fail_open_and_gc_dependency_discovery() -> Resu
         bad["inline"]["Leaf"][0]["block"][field] = value.into();
         invalid.push(bad);
     }
-    for (field, value) in [("path", "../unmanaged"), ("hash", "invalid")] {
+    for (field, value) in [("file", "../unmanaged"), ("hash", "invalid")] {
         let mut bad = index.clone();
         bad["inline"]["Leaf"][0]["pack"][field] = value.into();
         invalid.push(bad);

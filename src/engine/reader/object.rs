@@ -132,9 +132,15 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         target: (&str, usize),
     ) -> Result<ObjectRef> {
         ensure!(valid_namespace(target.0), "invalid batch upload namespace");
-        let scoped: Arc<dyn ObjectStore> =
-            Arc::new(object_store::prefix::PrefixStore::new(store, target.0));
-        Self::write(scoped, batch, schema, target.1).await?.qualify(target.0)
+        Ok(Self::write_resident(
+            store,
+            batch,
+            schema,
+            (Some(target.0), target.1),
+            Arc::new(BlockCache::new(0, 0)),
+        )
+        .await?
+        .reference)
     }
     /// Encode and PUT a canonical batch without publishing trace membership.
     /// Schema identity must include the key/value types and ordering semantics.
@@ -239,6 +245,12 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let mut index: Root<(K, V)> = serde_json::from_slice(&bytes)?;
         ensure!(index.schema == schema, "object schema mismatch");
         index.validate()?;
+        if let Some(pack) = &index.pack {
+            ensure!(
+                pack.path == format!("pgderive/pack/{}", pack.hash),
+                "qualified index pack path"
+            );
+        }
         let rows = index.node.as_ref().map_or(0, |node| node.rows);
         let max_weight = index.node.as_ref().map_or(0, |node| node.max_weight);
         let head = index
@@ -386,7 +398,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let leaf = self.leaf(ordinal).await?;
         let end =
             leaf.block.offset.checked_add(leaf.block.length).context("block range overflow")?;
-        Ok(Some((self.reference.child_path(&leaf.pack.path), leaf.block.offset..end)))
+        Ok(Some((leaf.pack.path.clone(), leaf.block.offset..end)))
     }
 
     pub(crate) async fn tuple_weight(&self, tuple: &(K, V)) -> Result<i64> {
@@ -478,7 +490,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         if present {
             self.cache.ranges.record_probe(
                 &self.reference.schema,
-                &self.reference.child_path(&page.leaf.pack.path),
+                &page.leaf.pack.path,
                 &page.leaf,
                 key,
             )?;
@@ -523,11 +535,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 plans.push(plan);
                 plans.len() - 1
             };
-        let mut pack = leaf.pack.clone();
-        pack.path = self.reference.child_path(&pack.path);
         plans[index].reserve(
             &self.store,
-            &pack,
+            &leaf.pack,
             block.offset
                 ..block.offset.checked_add(block.length).context("prefetch range overflow")?,
         )
@@ -535,7 +545,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     fn encoded_key(block: &Block<(K, V)>) -> String {
         format!("json-zstd-block:{}", block.hash)
     }
-    async fn encoded(&self, leaf: &Leaf<(K, V)>) -> Result<Vec<u8>> {
+    async fn encoded(&self, leaf: &Leaf<(K, V)>, read_ahead: bool) -> Result<Vec<u8>> {
         let block = &leaf.block;
         let range =
             block.offset..block.offset.checked_add(block.length).context("block range overflow")?;
@@ -547,11 +557,13 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let bytes = if let Some(bytes) = cached {
             bytes
         } else {
-            let mut pack = leaf.pack.clone();
-            pack.path = self.reference.child_path(&pack.path);
-            let bytes = self.cache.ranges.read(&self.store, &pack, range.clone()).await?;
+            let bytes = if read_ahead {
+                self.cache.ranges.read(&self.store, &leaf.pack, range.clone()).await?
+            } else {
+                self.cache.ranges.read_exact(&self.store, &leaf.pack, range.clone()).await?
+            };
             if hash(&bytes) != block.hash {
-                self.cache.ranges.invalidate(&pack, &range)?;
+                self.cache.ranges.invalidate(&leaf.pack, &range)?;
                 anyhow::bail!("object block checksum mismatch");
             }
             if self.cache.admits_encoded()
@@ -569,7 +581,20 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let leaf = self.leaf(ordinal).await?;
         self.read_leaf(&leaf).await
     }
-    async fn read_leaf(&self, leaf: &Leaf<(K, V)>) -> Result<Arc<Vec<Entry<K, V>>>> {
+    pub(super) async fn read_leaf(&self, leaf: &Leaf<(K, V)>) -> Result<Arc<Vec<Entry<K, V>>>> {
+        self.read_leaf_with(leaf, true).await
+    }
+    pub(super) async fn read_leaf_exact(
+        &self,
+        leaf: &Leaf<(K, V)>,
+    ) -> Result<Arc<Vec<Entry<K, V>>>> {
+        self.read_leaf_with(leaf, false).await
+    }
+    async fn read_leaf_with(
+        &self,
+        leaf: &Leaf<(K, V)>,
+        read_ahead: bool,
+    ) -> Result<Arc<Vec<Entry<K, V>>>> {
         let block = &leaf.block;
 
         let rows =
@@ -577,7 +602,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 Self::check_rows(&rows, block)?;
                 rows
             } else {
-                let bytes = self.encoded(leaf).await?;
+                let bytes = self.encoded(leaf, read_ahead).await?;
                 let decoded = super::compression::decode(&bytes)?;
                 let mut rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
                 validate(&rows)?;
@@ -669,3 +694,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         Ok(&mut leaves.get_mut(ordinal).context("missing test leaf")?.block)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/locations.rs"]
+mod locations;

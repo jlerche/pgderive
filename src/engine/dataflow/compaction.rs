@@ -3,10 +3,10 @@ use crate::engine::{
     reader::{BatchData, BlockCache},
     trace::{Manifest, TraceSnapshot},
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 /// Serializable physical work, executable without a PG connection or writer ownership.
 ///
@@ -120,6 +120,7 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
                     .all(|object| object.namespace() == Some(job.namespace.as_str())),
             "invalid detached compaction output boundary"
         );
+        self.validate_dependency_scope(job, &result.output).await?;
         let candidate = TraceSnapshot::reopen(
             self.store.clone(),
             result.output,
@@ -128,6 +129,46 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         )
         .await?;
         prior.replace_runs(candidate.into_runs()).await
+    }
+    // Fresh roots may share only data already pinned by this job. Otherwise an
+    // earlier GC snapshot could have a DELETE in flight for a foreign pack even
+    // when cold equivalence verification still succeeds immediately before it.
+    async fn validate_dependency_scope(
+        &self,
+        job: &CompactionJob,
+        output: &Manifest,
+    ) -> Result<()> {
+        let limits = crate::catalog::GcLimits::default();
+        let prefix = format!("{}/", job.namespace);
+        let mut foreign = BTreeSet::new();
+        let mut bytes = 0_usize;
+        for object in &output.objects {
+            for path in object.dependencies(&self.store).await? {
+                if !path.starts_with(&prefix) && !foreign.contains(&path) {
+                    bytes = bytes
+                        .checked_add(path.len())
+                        .context("compaction dependency metadata size overflow")?;
+                    ensure!(
+                        foreign.len() < limits.objects
+                            && u64::try_from(bytes)? <= limits.metadata_bytes,
+                        "compaction dependency metadata budget exceeded"
+                    );
+                    foreign.insert(path);
+                }
+            }
+        }
+        // Keep only the bounded output candidate set, not the union of all input
+        // dependencies. Each authenticated input tree is released after use.
+        for object in &job.input.objects {
+            if foreign.is_empty() {
+                break;
+            }
+            for path in object.dependencies(&self.store).await? {
+                foreign.remove(&path);
+            }
+        }
+        ensure!(foreign.is_empty(), "compaction output references unpinned foreign data");
+        Ok(())
     }
 }
 #[cfg(test)]
