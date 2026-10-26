@@ -298,6 +298,29 @@ its predecessor is retained to document the transaction-at-a-time bottleneck.
 
 ## Fast development validation
 
+For the short maintenance acceptance profile, run:
+
+```sh
+python3 scripts/fast_validation.py --mode maintenance --release \
+  --output artifacts/fast-validation/maintenance-001
+```
+
+Use a new output directory each time. The measured component stages take about
+30 seconds after compilation on the recorded development host; Cargo build time
+is separate. This profile currently exits nonzero because it reproduces known
+cold-root and growing-state failures. Inspect `assessment.json` for those failed
+bounds and `result.json` for execution errors. A successful Rust test alone is
+not a performance pass. [Profile, scope and recorded results](steady-growth.md#short-maintenance-acceptance-profile).
+
+It reuses the compiled SQL replay, application generator/oracle, logical source
+clock, checkpoint/rebase path, GC and endurance resource checks. Exact merge-work
+witnesses prevent small merges or pending uploads from standing in for completed
+large maintenance cycles. Total PUT/upload-byte ceilings and the workload hash
+are pinned in `scripts/performance/baselines/maintenance-v1.json`; change the
+profile revision and supply new evidence when intentionally changing that input.
+This scaled component screen excludes PostgreSQL CDC/publication and networked
+storage latency. It does not establish weekly production operation.
+
 Routine development uses production-path replay and virtual-time component tests,
 not the hours-long paced qualification matrix:
 

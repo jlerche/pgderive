@@ -1383,3 +1383,127 @@ not hidden or reclassified as a plateau. Whole-root windowing is a useful local
 step; subdivision/sharing within large roots and bounded maintenance scheduling
 remain necessary for broader growing-state qualification. No push, deployment or
 demo restart was performed.
+
+## Short maintenance acceptance profile
+
+Run the next storage changes against this fixed profile before repeating the
+larger qualification:
+
+```sh
+python3 scripts/fast_validation.py --mode maintenance --release \
+  --output artifacts/fast-validation/maintenance-001
+```
+
+The directory must be new. The command deliberately exits nonzero today: it
+reproduces remaining failures rather than approving the current engine. Rust
+execution/correctness failures and performance failures are separate evidence;
+`assessment.json` retains each performance check and `result.json` records the
+command outcome. Failed artifacts and the frozen executable remain available.
+The measured stages took 0.34 seconds for cold-root scaling and 29.31 seconds for
+SQL replay after compilation. Workload generation, build time and assessment are
+additional. The run requires actual release optimization level 3, records the
+executable/build identity, and rejects observed compiler overlap.
+
+The first layer preloads four comparable cohorts containing 256 hot identities
+and increasing cold state. The partitioned layout places cold ranges in separate
+roots; the broad layout puts hot and cold rows in the same root. One fixed
+full-tuple replacement uses normal `Arrangement::flush` selection and must
+produce a naturally selected installed merge. Every case records exact
+before/after membership, verifies the weighted oracle and reopens with a fresh
+writer/cache. These are independent preload cases, explicitly not continuous
+compaction cycles.
+
+| Cold rows overall | Layout | Read bytes | PUTs | Uploaded bytes |
+| ---: | --- | ---: | ---: | ---: |
+| 800 | partitioned | 987 | 2 | 4,085 |
+| 80,000 | partitioned | 987 | 2 | 4,085 |
+| 800 | broad | 4,173 | 3 | 6,762 |
+| 80,000 | broad | 456,290 | 3 | 462,551 |
+
+The broad-root read/upload scaling fails the declared fixed-change bound: late
+bytes may exceed the smallest case by at most 25% plus 16 KiB for coarse index
+work. PUT counts have no size-dependent allowance. Timing is reported but does
+not decide this deterministic work check. This isolates the next storage problem:
+root-local selection works, but it cannot preserve a cold region within a root.
+
+The second layer reuses `fast_replay.endurance` and the actual compiled query:
+
+```sql
+SELECT account_id AS group_key, COUNT(*) AS rows, SUM(amount) AS total
+FROM source.entry GROUP BY account_id;
+```
+
+All three cases execute 512 transactions of up to 64 affected source rows on one
+live state, without restarts or forced full compaction. They preload 512 fixed
+rows, 8,192 fixed rows, and 8,192 growing rows. Seeded initial entropy matches
+updates. A 128 KiB decoded cache and 128 ms logical checkpoint cadence deliberately
+bring the state/cache and maintenance boundaries into a short run. These settings
+are scaled pressure, not the live demo's capacity or checkpoint cadence.
+
+Logical time advances only for actual affected source DML at 1,000 rows/s. The
+cases execute 32,768 / 32,768 / 30,161 source changes, representing 32.768 / 32.768 /
+30.161 logical seconds respectively. Missing deletes do not invent source work.
+The growing source ends with 9,930 groups. There are no artificial idle-day jumps;
+this does not execute many logical days of a 1,000-row/s stream.
+
+Test-only, opt-in probes record exact input rows of successful production merges
+in a bounded, shared collector. Overflow fails closed. Every sample's events must
+reconstruct the cumulative production merge-size histogram. Witnesses are taken
+only at installed checkpoint boundaries without a pending upload. At least four
+witnesses must be within 25% of the largest exact input size, including any new
+largest merge observed in the final drain. All intervening work is charged; no
+small or unmatched merges are omitted from comparison windows.
+
+The 512-row control passes with 81 comparable witnesses (1,112–1,162 input rows).
+The 8,192-row fixed case has five (16,400–16,590), and the growing case has five
+(16,669–19,006). Both large cases retain real failures:
+
+- Fixed-state index bytes rise from 1.12 to 1.90 bytes/change; comparable large
+  cycles also show increasing index-read count per change.
+- Growing-state read bytes rise from 2,027.77 to 2,592.57 bytes/change and uploaded
+  bytes from 140.36 to 201.24 bytes/change. Comparable large-cycle index-read bytes
+  rise from 2.39 to 5.11 bytes/change. Foreground read growth also remains failed.
+
+The profile reuses the endurance cache, RSS, run, memtable and service-cost
+checks. Checkpoint lag is bounded by the 128-row deadline plus one at-most-64-row
+transaction; observed maxima are 128 / 128 / 191 rows. Final installed source
+progress is exact and lag is zero. Retained roots/cohorts total 4 / 2 / 10 across
+the query graph. Final drain GETs, bytes, PUTs, exact merge work and CPU/time are
+reported separately, with I/O capped against two observed epoch turns
+because a drain may install both an existing upload and a final capture. The last
+GC observation must cover the entire cold-verified physical inventory.
+
+Quiescence proves checkpoint uploads are complete, not that every retained
+consolidation opportunity has disappeared. This fixture installs a pending
+checkpoint at the next epoch; it is not a model of an overloaded production
+coordinator or source WAL retention. The report retains both ordinary and
+comparable-cycle growth failures instead of treating coverage as a plateau.
+
+Total PUTs and uploaded bytes include bootstrap and final drain. Their ceilings
+are pinned to the prior `b49148b` implementation: 1,028 / 2,114,565 bytes, 1,054 /
+4,772,791 bytes, and 726 / 4,038,000 bytes. Current results match all three exactly.
+A uniform PUT inflation cannot pass merely because early/late trends are flat.
+The baseline also pins its executable SHA and exact replay hash; changing the
+workload without revising the profile is rejected before execution. These are
+component PUTs, not complete Cloudflare Class A billing counts.
+
+Private evidence, including the initial report-filename collision and corrected
+complete run, is retained in ignored
+`artifacts/benchmarks/maintenance-acceptance-20261026/`. No engine storage policy,
+production scheduling or publication order changed in this slice. No push,
+deployment or demo restart was performed.
+
+The final common gate passes 604 Rust tests (11 manual workloads ignored), 147
+live worker results plus rebuild, formatting, Clippy, documentation and dependency
+checks, with 97.16% production line coverage. The final Python suite passes 146
+tests, including malformed evidence, hidden final work, same-tier/noncomparable
+merges, uniform PUT inflation, workload changes and compiler overlap rejection.
+The owned PostgreSQL container is removed with its volumes. Independent review
+finds no remaining blocker.
+
+A repeat of the complete short profile reproduces the same I/O failures, matching
+PUT/upload totals and comparable-merge coverage; its measured SQL stage takes
+28.64 seconds. CPU uses the existing process tick counter, so very short cycle
+CPU differences have limited resolution. The reproducible I/O failures, rather
+than tiny CPU timing differences, establish this acceptance failure. It remains
+component evidence and does not prove production freshness or steady state.

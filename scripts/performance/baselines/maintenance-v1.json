@@ -1,0 +1,21 @@
+{
+  "revision": "maintenance-v1",
+  "source_commit": "b49148b",
+  "binary_sha256": "0daaf81fae70bcd5a2f5d18a367d62b4a387ccbbb519d9c81bc824eff166009d",
+  "scope": "Fixed workload total PUT and uploaded-byte ceilings, including bootstrap and final drain. Frozen pre-slice production implementation; exact source and replay evidence retained under artifacts/benchmarks/maintenance-acceptance-20261026. Counts are component PUTs, not all Cloudflare Class A operations.",
+  "cases": {
+    "linear-endurance-fixed-random-initial-512-512": {
+      "puts": 1028,
+      "put_bytes": 2114565
+    },
+    "linear-endurance-fixed-random-initial-8192-512": {
+      "puts": 1054,
+      "put_bytes": 4772791
+    },
+    "linear-endurance-growing-random-initial-8192-512": {
+      "puts": 726,
+      "put_bytes": 4038000
+    }
+  },
+  "trace_sha256": "dd93b1333b49d1562d1415b65722c3ea07c17472206430df38334178f4f22a61"
+}

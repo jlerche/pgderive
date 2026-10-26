@@ -28,7 +28,19 @@ async fn object(store: &Arc<Store>, rows: Vec<Entry<i64, i64>>) -> Result<Run<i6
     Ok(Run::Object(ObjectBatch::open(store.clone(), root, SCHEMA).await?))
 }
 
-async fn fixture(duplicate_cold: bool, hot_rows: i64, cold_rows: i64) -> Result<Fixture> {
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Layout {
+    Partitioned,
+    Broad,
+}
+
+async fn fixture(
+    layout: Layout,
+    duplicate_cold: bool,
+    hot_rows: i64,
+    cold_rows: i64,
+) -> Result<Fixture> {
     let mut store = Store::unpaced();
     store.record_ranges();
     let store = Arc::new(store);
@@ -38,6 +50,15 @@ async fn fixture(duplicate_cold: bool, hot_rows: i64, cold_rows: i64) -> Result<
     let mut cold_paths = BTreeSet::new();
     let mut shared_left: Option<Run<i64, i64>> = None;
     for value in 0..4 {
+        if matches!(layout, Layout::Broad) {
+            let rows = (-cold_rows..0)
+                .map(|key| ((key, value), 1))
+                .chain((value * hot_rows..(value + 1) * hot_rows).map(|item| ((0, item), 1)))
+                .chain((1..=cold_rows).map(|key| ((key, value), 1)))
+                .collect();
+            runs.push(object(&store, rows).await?);
+            continue;
+        }
         let left = if duplicate_cold {
             if let Some(left) = &shared_left {
                 left.clone()
@@ -64,7 +85,7 @@ async fn fixture(duplicate_cold: bool, hot_rows: i64, cold_rows: i64) -> Result<
         runs.extend([left, hot, right]);
     }
     let mut trace = TraceSnapshot::from_runs(runs, 1, 1)?;
-    trace.cohorts = vec![3; 4];
+    trace.cohorts = vec![if matches!(layout, Layout::Broad) { 1 } else { 3 }; 4];
     Ok(Fixture { store, writer, trace, cold, cold_paths })
 }
 
@@ -76,7 +97,7 @@ fn delta(time: u64) -> Result<Batch<i64, i64>> {
 async fn window_flush_preserves_cold_roots_and_full_tuple_values_across_restart() -> Result<()> {
     for duplicate_cold in [false, true] {
         let Fixture { store, writer, mut trace, cold, cold_paths } =
-            fixture(duplicate_cold, 1, 100).await?;
+            fixture(Layout::Partitioned, duplicate_cold, 1, 100).await?;
         let mut oracle = trace.materialize().await?;
         store.take_ranges()?;
         let first = delta(2)?;
@@ -172,7 +193,8 @@ async fn window_subset_overflow_preserves_excluded_cohort_cancellation() -> Resu
 
 #[tokio::test]
 async fn dominant_hot_root_survives_tiny_updates_until_peers_are_comparable() -> Result<()> {
-    let Fixture { store, writer, trace, cold, cold_paths } = fixture(false, 100, 100).await?;
+    let Fixture { store, writer, trace, cold, cold_paths } =
+        fixture(Layout::Partitioned, false, 100, 100).await?;
     let mut oracle = trace.materialize().await?;
     let first = Batch::from_updates([((0, 10_000), 1)])?;
     oracle.apply(&first)?;
@@ -224,7 +246,8 @@ async fn dominant_hot_root_survives_tiny_updates_until_peers_are_comparable() ->
 }
 
 async fn report_case(cold_rows: i64, changes: u64) -> Result<serde_json::Value> {
-    let Fixture { store, writer, mut trace, .. } = fixture(false, 64, cold_rows).await?;
+    let Fixture { store, writer, mut trace, .. } =
+        fixture(Layout::Partitioned, false, 64, cold_rows).await?;
     let mut oracle = trace.materialize().await?;
     let reads = store.reads.load(Ordering::SeqCst);
     let read_bytes = store.range_bytes.load(Ordering::SeqCst);
@@ -279,5 +302,71 @@ async fn report_window_compaction_costs() -> Result<()> {
     }
     let output = std::env::var("PGDERIVE_WINDOW_REPORT")?;
     std::fs::write(output, serde_json::to_vec_pretty(&reports)?)?;
+    Ok(())
+}
+
+async fn cold_root_case(layout: Layout, cold_rows: i64) -> Result<serde_json::Value> {
+    let Fixture { store, writer, trace, .. } = fixture(layout, false, 64, cold_rows).await?;
+    let mut oracle = trace.materialize().await?;
+    let before = trace.manifest()?;
+    let batch = Batch::from_updates([((0, 0), -1), ((0, 100_000), 1)])?;
+    oracle.apply(&batch)?;
+    let pending = trace.append_validated(Run::Memory(Arc::new(batch)), 2)?;
+    store.take_ranges()?;
+    let reads = store.reads.load(Ordering::SeqCst);
+    let read_bytes = store.range_bytes.load(Ordering::SeqCst);
+    let puts = store.puts.load(Ordering::SeqCst);
+    let put_bytes = store.put_bytes.load(Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    let flushed = writer.flush(&pending).await?;
+    let flush_ns = started.elapsed().as_nanos();
+    let reads = store.reads.load(Ordering::SeqCst) - reads;
+    let read_bytes = store.range_bytes.load(Ordering::SeqCst) - read_bytes;
+    let puts = store.puts.load(Ordering::SeqCst) - puts;
+    let put_bytes = store.put_bytes.load(Ordering::SeqCst) - put_bytes;
+    let after = flushed.manifest()?;
+    let selected_rows = trace.runs.iter().try_fold(0_usize, |rows, run| {
+        let Run::Object(root) = run else { anyhow::bail!("durable preload required") };
+        if after.objects.contains(root.reference()) {
+            Ok(rows)
+        } else {
+            rows.checked_add(root.row_count()).context("selected row count overflow")
+        }
+    })?;
+    assert_eq!(flushed.materialize().await?, oracle);
+    let cold_writer = Arrangement::<i64, i64>::new(store.clone(), SCHEMA.into(), 32)?;
+    let restored = cold_writer.reopen(after.clone()).await?;
+    assert_eq!(restored.manifest()?, after);
+    assert_eq!(restored.materialize().await?, oracle);
+    let merges = writer.cache().stats()?.merges;
+    assert_eq!(merges.iter().sum::<u64>(), 1);
+    Ok(serde_json::json!({
+        "layout":layout,"cold_rows_per_side_per_cohort":cold_rows,
+        "initial_hot_rows":256,"source_row_changes":2,
+        "initial_rows":256 + 8 * cold_rows,"selected_durable_rows":selected_rows,
+        "selected_cold_rows":selected_rows.saturating_sub(256),
+        "merge_sizes":merges,"natural_merges":1,"flush_ns":flush_ns,
+        "reads":reads,"read_bytes":read_bytes,"puts":puts,"put_bytes":put_bytes,
+        "before_objects":before.objects,"after_objects":after.objects,
+        "before_cohorts":before.cohorts,"after_cohorts":after.cohorts,
+        "maximum_runs":pending.run_count(),"final_runs":flushed.run_count(),
+        "cold_oracle":true,"external_reloads":0,"pending_upload":false,
+        "scope":"One naturally selected installed merge per independent preload; not continuous cycles. Preload, oracle and cold reopen excluded from request and latency measurements."
+    }))
+}
+
+#[tokio::test]
+#[ignore = "manual production-path cold-root scaling acceptance report"]
+async fn report_cold_root_scaling() -> Result<()> {
+    let mut reports = Vec::new();
+    for cold_rows in [100, 1000, 10_000] {
+        for layout in [Layout::Partitioned, Layout::Broad] {
+            reports.push(cold_root_case(layout, cold_rows).await?);
+        }
+    }
+    std::fs::write(
+        std::env::var("PGDERIVE_COLD_ROOT_REPORT")?,
+        serde_json::to_vec_pretty(&reports)?,
+    )?;
     Ok(())
 }

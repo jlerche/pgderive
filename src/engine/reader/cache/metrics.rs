@@ -33,6 +33,8 @@ pub(in crate::engine::reader) struct Metrics {
     foreground: Reads,
     maintenance: Reads,
     merges: [AtomicU64; 64],
+    #[cfg(test)]
+    exact_merges: std::sync::Mutex<Option<MergeProbes>>,
 }
 impl Default for Metrics {
     fn default() -> Self {
@@ -40,6 +42,8 @@ impl Default for Metrics {
             foreground: Reads::default(),
             maintenance: Reads::default(),
             merges: std::array::from_fn(|_| AtomicU64::new(0)),
+            #[cfg(test)]
+            exact_merges: std::sync::Mutex::new(None),
         }
     }
 }
@@ -57,6 +61,18 @@ impl Metrics {
         self.reads(scan).fetched.fetch_add(bytes, Ordering::Relaxed);
     }
     pub(super) fn merged(&self, rows: usize) -> Result<()> {
+        #[cfg(test)]
+        {
+            let mut probes = self
+                .exact_merges
+                .lock()
+                .map_err(|_| anyhow::anyhow!("merge probe lock poisoned"))?;
+            if let Some(events) = probes.as_mut() {
+                events.overflowed |= events.rows.len() >= 4096;
+                anyhow::ensure!(!events.overflowed, "merge probe event limit exceeded");
+                events.rows.push(rows);
+            }
+        }
         self.merges[usize::try_from(rows.max(1).ilog2())?].fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -77,3 +93,33 @@ impl Metrics {
         )
     }
 }
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct MergeProbes {
+    rows: Vec<usize>,
+    overflowed: bool,
+}
+#[cfg(test)]
+impl Metrics {
+    pub(super) fn enable_merge_probes(&self) -> Result<()> {
+        let mut probes =
+            self.exact_merges.lock().map_err(|_| anyhow::anyhow!("merge probe lock poisoned"))?;
+        if probes.is_none() {
+            *probes = Some(MergeProbes::default());
+        }
+        drop(probes);
+        Ok(())
+    }
+    pub(super) fn take_merge_rows(&self) -> Result<Vec<usize>> {
+        let mut probes =
+            self.exact_merges.lock().map_err(|_| anyhow::anyhow!("merge probe lock poisoned"))?;
+        let events = probes.as_mut().ok_or_else(|| anyhow::anyhow!("merge probes not enabled"))?;
+        anyhow::ensure!(!events.overflowed, "merge probe event limit exceeded");
+        let rows = std::mem::take(&mut events.rows);
+        drop(probes);
+        Ok(rows)
+    }
+}
+#[cfg(test)]
+mod tests;

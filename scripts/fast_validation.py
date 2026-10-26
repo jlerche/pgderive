@@ -56,32 +56,91 @@ def validate_report(path, cases):
                     'measured_object_puts', 'object_puts', 'stored_objects', 'stored_bytes'])
                 or not isinstance(row.get('lifecycle'), dict) or row.get('cold_reopen_equal') is not True):
             raise RuntimeError('Engine measurement/oracle coverage differs: ' + row['case'])
-        validate_lifecycle(row['lifecycle'], steps)
+        validate_lifecycle(row['lifecycle'], steps, row)
 
 
-def validate_lifecycle(report, steps):
+def nonnegative_fields(value, fields):
+    return isinstance(value, dict) and all(type(value.get(key)) is int and value[key] >= 0
+                                           for key in fields)
+
+
+def merge_events(value):
+    return isinstance(value, list) and all(type(rows) is int and rows >= 0 for rows in value)
+
+
+def validate_lifecycle(report, steps, inventory):
     fields = ('logical_ms','source_rows','checkpoints','rebased_uploads','capacity_flushes',
-              'maintenance_ns','maximum_runs','maximum_memtable_bytes','restarts')
-    if (any(type(report.get(key)) is not int or report[key] < 0 for key in fields)
+              'maintenance_ns','maximum_runs','maximum_memtable_bytes','restarts',
+              'installed_source_rows','durable_roots','durable_cohorts')
+    if (not nonnegative_fields(report, fields)
             or report['checkpoints'] < 1
             or report['rebased_uploads'] > report['checkpoints']
             or report['restarts'] != sum(step['restart'] for step in steps)
             or not isinstance(report.get('samples'), list)
             or len(report['samples']) != sum(not step['restart'] for step in steps[1:])
             or not isinstance(report.get('retirement'), list)
-            or len(report['retirement']) != report['checkpoints']):
+            or len(report['retirement']) != report['checkpoints']
+            or report.get('maintenance_quiescent') is not True
+            or inventory['memtable_bytes'] != 0):
         raise RuntimeError('Invalid checkpoint lifecycle evidence')
     source_rows = sum(step['source_rows'] for step in steps[1:] if not step['restart'])
-    if report['source_rows'] != source_rows or report['logical_ms'] != source_rows:
-        raise RuntimeError('Logical pacing differs from executed source rows at 1000/s')
+    if (report['source_rows'] != source_rows or report['logical_ms'] != source_rows
+            or report['installed_source_rows'] != source_rows
+            or report['durable_cohorts'] > report['durable_roots']):
+        raise RuntimeError('Logical pacing or final durable progress differs from executed source rows')
+    previous = dict.fromkeys(('source_rows','installed_source_rows','installed_checkpoints'), 0)
     for sample in report['samples']:
-        if any(type(sample.get(key)) is not int or sample[key] < 0 for key in
-               ('logical_ms','source_rows','prepare_ns','maintenance_ns','gets','read_bytes','puts','put_bytes','runs','memtable_bytes')):
+        fields = ('logical_ms','source_rows','prepare_ns','maintenance_ns','gets','read_bytes',
+                  'puts','put_bytes','runs','memtable_bytes','installed_checkpoints',
+                  'installed_source_rows','checkpoint_lag_rows','checkpoint_age_ms',
+                  'durable_roots','durable_cohorts')
+        if (not nonnegative_fields(sample, fields)
+                or not merge_events(sample.get('merge_input_rows'))
+                or type(sample.get('upload_pending')) is not bool):
             raise RuntimeError('Invalid per-epoch lifecycle sample')
-    for retirement in report['retirement']:
-        if any(type(retirement.get(key)) is not int or retirement[key] < 0 for key in
-               ('gets','read_bytes','cache_bytes','deleted_objects','state_objects','state_bytes','rss_bytes','peak_rss_bytes','virtual_io_us','wall_us')):
+        target = sample.get('checkpoint_target_source_rows')
+        if (sample['installed_source_rows'] > sample['source_rows']
+                or sample['source_rows'] > source_rows
+                or sample['checkpoint_lag_rows'] != sample['source_rows'] - sample['installed_source_rows']
+                or sample['logical_ms'] != sample['source_rows']
+                or sample['durable_cohorts'] > sample['durable_roots']
+                or any(sample[key] < value for key, value in previous.items())
+                or sample['installed_checkpoints'] > report['checkpoints']
+                or ('checkpoint_target_source_rows' not in sample)
+                or (sample['upload_pending'] and (type(target) is not int
+                    or not sample['installed_source_rows'] <= target <= sample['source_rows']))
+                or (not sample['upload_pending'] and (target is not None or sample['checkpoint_age_ms'] != 0))):
+            raise RuntimeError('Inconsistent per-epoch durable progress')
+        previous = {key:sample[key] for key in previous}
+    previous_source = 0
+    previous_time = 0
+    for index, retirement in enumerate(report['retirement'], start=1):
+        fields = ('gets','read_bytes','cache_bytes','deleted_objects','state_objects','state_bytes',
+                  'rss_bytes','peak_rss_bytes','virtual_io_us','wall_us',
+                  'installed_checkpoints','source_rows','logical_ms')
+        if (not nonnegative_fields(retirement, fields)
+                or retirement['installed_checkpoints'] != index
+                or not previous_source <= retirement['source_rows'] <= source_rows
+                or not previous_time <= retirement['logical_ms'] <= report['logical_ms']
+                or retirement['logical_ms'] < retirement['source_rows']):
             raise RuntimeError('Invalid fixture retirement evidence')
+        previous_source, previous_time = retirement['source_rows'], retirement['logical_ms']
+    final = report.get('final_maintenance')
+    fields = ('gets','read_bytes','puts','put_bytes','cpu_ticks','elapsed_ns',
+              'durable_roots','durable_cohorts','installed_source_rows','checkpoint_lag_rows')
+    if (not nonnegative_fields(final, fields)
+            or not merge_events(report.get('final_merge_input_rows'))
+            or not merge_events(final.get('merge_input_rows'))
+            or final['merge_input_rows'] != report['final_merge_input_rows']
+            or any(final[key] != report[key] for key in
+                   ('durable_roots','durable_cohorts','installed_source_rows'))
+            or final['checkpoint_lag_rows'] != 0):
+        raise RuntimeError('Invalid final maintenance evidence')
+    retired = report['retirement'][-1]
+    if (retired['source_rows'] != source_rows or retired['logical_ms'] != report['logical_ms']
+            or retired['state_objects'] != inventory['stored_objects']
+            or retired['state_bytes'] != inventory['stored_bytes']):
+        raise RuntimeError('Final retirement does not cover the cold-verified physical inventory')
 
 
 def validate_storage_growth(path):
@@ -120,11 +179,20 @@ def validate_sparse_growth(path):
             raise RuntimeError('Sparse decode amplification did not improve: '+str(size))
 
 
-def execute(command, output, name, environment=None):
+def execute(command, output, name, environment=None, *, isolate_compilers=False):
     started = time.monotonic()
+    compiler_overlap = set()
     with (output / (name + '.log')).open('w') as log:
         child = subprocess.Popen(command, cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
+            if isolate_compilers:
+                from fast_maintenance import compiler_processes
+                while child.poll() is None:
+                    compiler_overlap.update(compiler_processes())
+                    try:
+                        child.wait(timeout=.1)
+                    except subprocess.TimeoutExpired:
+                        pass
             code = child.wait()
         except BaseException:
             if child.poll() is None:
@@ -142,9 +210,13 @@ def execute(command, output, name, environment=None):
                 child.wait()
             raise
     result = {'command': list(map(str, command)), 'seconds': time.monotonic() - started, 'exit_code': code}
+    if isolate_compilers:
+        result['compiler_overlap'] = sorted(compiler_overlap)
     save(output / (name + '.json'), result)
     if code:
         raise RuntimeError(f'{name} failed; see {output / (name + ".log")}')
+    if compiler_overlap:
+        raise RuntimeError(f'{name} overlapped compilation; timings rejected and evidence retained')
     return result
 
 
@@ -154,11 +226,13 @@ def test_binary(output, release):
         command.append('--release')
     execute(command, output, 'build')
     artifacts = [json.loads(line) for line in (output / 'build.log').read_text().splitlines() if line.startswith('{')]
-    binaries = [item['executable'] for item in artifacts if item.get('reason') == 'compiler-artifact'
+    binaries = [item for item in artifacts if item.get('reason') == 'compiler-artifact'
                 and item.get('target', {}).get('name') == 'pgderive' and item.get('executable')]
     if len(binaries) != 1:
         raise RuntimeError('Expected exactly one library test executable')
-    return freeze_binary(binaries[0], output)
+    binary = freeze_binary(binaries[0]['executable'], output)
+    save(output/'binary-profile.json', dict(profile=binaries[0]['profile'], sha256=sha256(pathlib.Path(binary))))
+    return binary
 
 
 def freeze_binary(binary, output):
@@ -181,7 +255,7 @@ def growth_limits(rows):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=pathlib.Path, required=True)
-    parser.add_argument('--mode', choices=['correctness', 'growth', 'storage-growth', 'steady', 'cold', 'longevity', 'endurance', 'integration'], default='correctness')
+    parser.add_argument('--mode', choices=['correctness', 'growth', 'storage-growth', 'steady', 'cold', 'longevity', 'endurance', 'maintenance', 'integration'], default='correctness')
     parser.add_argument('--seeds', type=int, default=3)
     parser.add_argument('--state-rows', type=int, nargs='+', default=[1000, 8000, 32000],
                         help='Growth replay sizes; steady mode uses its fixed 32k through 524k matrix')
@@ -199,6 +273,8 @@ def main():
     parser.add_argument('--replay', type=pathlib.Path)
     parser.add_argument('--worker', type=pathlib.Path)
     args = parser.parse_args()
+    if args.mode == 'maintenance' and not args.release:
+        parser.error('Maintenance acceptance requires --release for fast, comparable execution')
     if args.seeds < 1 or args.repeats < 1 or any(not 1 <= rows <= 1048576 for rows in args.state_rows):
         parser.error('Positive seeds/repeats and state rows in [1,1048576] required')
     if args.mode == 'endurance' and args.updates < 128:
@@ -232,6 +308,36 @@ def main():
             for name in ['during-upload', 'after-commit', 'pressure', 'shutdown', 'timeout']:
                 if json.loads((directory/name/'result.json').read_text()).get('passed') is not True:
                     raise RuntimeError('Live checkpoint case did not pass: ' + name)
+        elif args.mode == 'maintenance':
+            from fast_maintenance import COLD_TEST, REVISION, assess, suite, validate_workload
+            binary = test_binary(output, args.release)
+            report['steps'].append(json.loads((output / 'build.json').read_text()))
+            report['test_binary_sha256'] = sha256(pathlib.Path(binary))
+            report['profile_revision'] = REVISION
+            sources = [ROOT/'Cargo.lock', *sorted((ROOT/'src').rglob('*.rs')),
+                       *(ROOT/'scripts'/name for name in ('fast_validation.py', 'fast_maintenance.py',
+                          'fast_cycles.py', 'fast_endurance.py', 'fast_replay.py', 'application_model.py')),
+                       ROOT/'scripts/performance/baselines/maintenance-v1.json']
+            report['source_sha256'] = {str(path.relative_to(ROOT)): sha256(path) for path in sources}
+            if json.loads((output/'binary-profile.json').read_text())['profile']['opt_level'] != '3':
+                raise RuntimeError('Maintenance acceptance requires actual optimization level 3')
+            workload = suite()
+            (output/'replay.json').write_text(json.dumps(workload, ensure_ascii=False, separators=(',', ':')) + '\n')
+            report['trace_sha256'] = validate_workload(output/'replay.json')
+            env = dict(os.environ, PGDERIVE_COLD_ROOT_REPORT=str(output/'cold-root-state.json'),
+                       PGDERIVE_FAST_REPLAY=str(output/'replay.json'),
+                       PGDERIVE_FAST_REPORT=str(output/'engine.json'))
+            report['steps'].append(execute([binary, COLD_TEST, '--exact', '--ignored', '--nocapture'],
+                                           output, 'cold-roots', env, isolate_compilers=True))
+            validate_tests(output/'cold-roots.log', {COLD_TEST})
+            report['steps'].append(execute([binary, REPLAY, '--exact', '--nocapture'],
+                                           output, 'engine-replay', env, isolate_compilers=True))
+            validate_tests(output/'engine-replay.log', {REPLAY})
+            validate_report(output/'engine.json', workload['cases'])
+            assessment = assess(output/'cold-root-state.json', output/'engine.json')
+            save(output/'assessment.json', assessment)
+            if not assessment['qualified']:
+                raise RuntimeError('Maintenance acceptance remains unqualified; see assessment.json')
         elif args.mode in ('steady', 'cold', 'longevity'):
             binary = test_binary(output, args.release)
             report['steps'].append(json.loads((output / 'build.json').read_text()))

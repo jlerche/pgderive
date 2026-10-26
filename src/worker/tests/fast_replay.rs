@@ -207,6 +207,7 @@ fn check_expected(
     Ok(1)
 }
 fn configure_diagnostics(query: &program::relational::Query) -> Result<()> {
+    query.test_cache().enable_merge_probes()?;
     if std::env::var_os("PGDERIVE_TEST_PAGE_PROBES").is_some() {
         query.test_cache().enable_page_probes();
     }
@@ -242,6 +243,7 @@ async fn run(
         if step.restart {
             lifecycle.report.restarts += 1;
             lifecycle.flush(&mut query).await?;
+            lifecycle.collect_merge_rows(&query)?;
             restart_committed(&mut query, &native, &compiled, &settings).await?;
             configure_diagnostics(&query)?;
         } else {
@@ -280,7 +282,7 @@ async fn run(
         }
         oracle_checks += check_expected(&output, step.expected, &case.name, index)?;
     }
-    lifecycle.flush(&mut query).await?;
+    lifecycle.drain(&mut query).await?;
     verify_cold(&query, &native, &compiled, &settings, &output).await?;
     let objects = store.list(None).try_collect::<Vec<_>>().await?;
     Ok(

@@ -105,6 +105,15 @@ pub struct CacheStats {
 }
 impl BlockCache {
     #[cfg(test)]
+    pub(crate) fn enable_merge_probes(&self) -> Result<()> {
+        self.ranges.metrics.enable_merge_probes()
+    }
+    #[cfg(test)]
+    pub(crate) fn take_merge_rows(&self) -> Result<Vec<usize>> {
+        self.ranges.metrics.take_merge_rows()
+    }
+
+    #[cfg(test)]
     pub(crate) fn enable_page_probes(&self) {
         self.ranges.enable_probes();
     }

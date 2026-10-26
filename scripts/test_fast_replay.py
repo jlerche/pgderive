@@ -82,6 +82,26 @@ class FastReplayTests(unittest.TestCase):
         self.assertIsNotNone(case['steps'][-1]['expected'])
 
 
+def lifecycle_evidence():
+    sample = dict.fromkeys(('logical_ms','source_rows','prepare_ns','maintenance_ns','gets',
+                           'read_bytes','puts','put_bytes','runs','installed_checkpoints',
+                           'installed_source_rows','durable_roots','durable_cohorts'), 1)
+    sample.update(memtable_bytes=0, checkpoint_lag_rows=0, checkpoint_age_ms=0,
+                  upload_pending=False, checkpoint_target_source_rows=None, merge_input_rows=[2])
+    retirement = dict.fromkeys(('gets','read_bytes','cache_bytes','deleted_objects','rss_bytes',
+                               'peak_rss_bytes','virtual_io_us','wall_us'), 0)
+    retirement.update(installed_checkpoints=1, source_rows=1, logical_ms=1,
+                      state_objects=3, state_bytes=128)
+    final = dict.fromkeys(('gets','read_bytes','puts','put_bytes','cpu_ticks','elapsed_ns',
+                          'checkpoint_lag_rows'), 0)
+    final.update(durable_roots=1, durable_cohorts=1, installed_source_rows=1, merge_input_rows=[])
+    return dict(logical_ms=1, source_rows=1, checkpoints=1, rebased_uploads=0,
+                capacity_flushes=0, maintenance_ns=0, maximum_runs=1, maximum_memtable_bytes=100,
+                restarts=0, samples=[sample], retirement=[retirement], final_merge_input_rows=[],
+                final_maintenance=final, maintenance_quiescent=True, installed_source_rows=1,
+                durable_roots=1, durable_cohorts=1)
+
+
 class CoverageTests(unittest.TestCase):
     def test_zero_selected_tests_is_not_success(self):
         import tempfile
@@ -102,9 +122,9 @@ class CoverageTests(unittest.TestCase):
             {'source_rows':1, 'expected':[[['b'],1]], 'measure':True, 'restart':False, 'updates':[{'table':'entry','row':{'id':'1'}},{'table':'entry','row':{'id':'1'}}]}]}]
         valid = {'bootstrap_ns':100, 'bootstrap_rows':0, 'case':'one', 'prepare_commit_ns':[123], 'oracle_checks':2,
                  'logical_time':2, 'measured_weighted_updates':2, 'output_groups':1,
-                 'measured_object_reads':1, 'measured_object_puts':0, 'cold_reopen_equal':True, 'lifecycle': {'logical_ms':1,'source_rows':1,'checkpoints':1,'rebased_uploads':0,'capacity_flushes':0,'maintenance_ns':0,'maximum_runs':1,'maximum_memtable_bytes':100,'restarts':0,'samples':[dict.fromkeys(('logical_ms','source_rows','prepare_ns','maintenance_ns','gets','read_bytes','puts','put_bytes','runs','memtable_bytes'),1)],'retirement':[dict.fromkeys(('gets','read_bytes','cache_bytes','deleted_objects','state_objects','state_bytes','rss_bytes','peak_rss_bytes','virtual_io_us','wall_us'),0)]},
+                 'measured_object_reads':1, 'measured_object_puts':0, 'cold_reopen_equal':True, 'lifecycle': lifecycle_evidence(),
                  'object_puts':3, 'stored_objects':3, 'stored_bytes':128,
-                 'memtable_bytes':100, 'measured_cache_misses':0, 'measured_decoded_bytes':100, 'measured_decoded_rows':1}
+                 'memtable_bytes':0, 'measured_cache_misses':0, 'measured_decoded_bytes':100, 'measured_decoded_rows':1}
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory)/'engine.json'
             with self.assertRaises(FileNotFoundError):
@@ -123,6 +143,60 @@ class CoverageTests(unittest.TestCase):
             path.write_text('[]')
             with self.assertRaises(RuntimeError):
                 validate_report(path, cases)
+
+    def test_lifecycle_rejects_hidden_debt_and_incomplete_final_gc(self):
+        from fast_validation import validate_lifecycle
+        steps = [{'source_rows':0, 'restart':False}, {'source_rows':1, 'restart':False}]
+        inventory = dict(memtable_bytes=0, stored_objects=3, stored_bytes=128)
+        validate_lifecycle(lifecycle_evidence(), steps, inventory)
+        mutations = [
+            ('maintenance_quiescent', False), ('installed_source_rows', 0),
+            ('final_merge_input_rows', None), ('final_merge_input_rows', [-1]),
+            ('final_merge_input_rows', [True]),
+        ]
+        for key, value in mutations:
+            report = lifecycle_evidence()
+            report[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
+                validate_lifecycle(report, steps, inventory)
+        for location, mutations in [
+                ('samples', [{'merge_input_rows':None}, {'merge_input_rows':[-1]},
+                             {'merge_input_rows':[True]}, {'checkpoint_lag_rows':1},
+                             {'upload_pending':1}, {'checkpoint_age_ms':1},
+                             {'checkpoint_target_source_rows':0}, {'durable_cohorts':2}]),
+                ('retirement', [{'source_rows':0}, {'logical_ms':0}, {'installed_checkpoints':0},
+                                {'state_objects':2}, {'state_bytes':127}]),
+                ('final_maintenance', [{'checkpoint_lag_rows':1}, {'puts':-1}, {'puts':True},
+                                       {'merge_input_rows':[2]}, {'durable_roots':2}])]:
+            for mutation in mutations:
+                report = lifecycle_evidence()
+                target = report[location][0] if isinstance(report[location], list) else report[location]
+                target.update(mutation)
+                with self.subTest(location=location, mutation=mutation), self.assertRaises(RuntimeError):
+                    validate_lifecycle(report, steps, inventory)
+        for missing in ['merge_input_rows','checkpoint_target_source_rows']:
+            report = lifecycle_evidence()
+            del report['samples'][0][missing]
+            with self.subTest(missing=missing), self.assertRaises(RuntimeError):
+                validate_lifecycle(report, steps, inventory)
+        for mutation in [{'memtable_bytes':1}, {'stored_objects':4}, {'stored_bytes':129}]:
+            with self.subTest(inventory=mutation), self.assertRaises(RuntimeError):
+                validate_lifecycle(lifecycle_evidence(), steps, inventory | mutation)
+
+    def test_pending_checkpoint_requires_an_explicit_bounded_source_target(self):
+        from fast_validation import validate_lifecycle
+        steps = [{'source_rows':0, 'restart':False}, {'source_rows':1, 'restart':False}]
+        inventory = dict(memtable_bytes=0, stored_objects=3, stored_bytes=128)
+        report = lifecycle_evidence()
+        report['samples'][0].update(upload_pending=True, checkpoint_target_source_rows=1,
+                                   installed_source_rows=0, installed_checkpoints=0,
+                                   checkpoint_lag_rows=1, durable_roots=0, durable_cohorts=0)
+        validate_lifecycle(report, steps, inventory)
+        for target in [None, -1, 2, True]:
+            invalid = copy.deepcopy(report)
+            invalid['samples'][0]['checkpoint_target_source_rows'] = target
+            with self.subTest(target=target), self.assertRaises(RuntimeError):
+                validate_lifecycle(invalid, steps, inventory)
 
     def test_storage_growth_rejects_retained_state_rescans(self):
         import tempfile
