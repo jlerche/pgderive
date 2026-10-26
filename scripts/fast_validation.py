@@ -305,7 +305,7 @@ def main():
             env = dict(os.environ, PGDERIVE_S3_LATENCY_SCALE='0')
             report['steps'].append(execute([sys.executable, 'scripts/run_with_s3_proxy.py', str(directory),
                 sys.executable, 'scripts/async_checkpoint_harness.py', str(directory), '--', str(args.worker.resolve())], output, 'checkpoint-events', env))
-            for name in ['during-upload', 'after-commit', 'pressure', 'shutdown', 'timeout']:
+            for name in ['during-upload', 'after-commit', 'pressure', 'debt', 'shutdown', 'timeout']:
                 if json.loads((directory/name/'result.json').read_text()).get('passed') is not True:
                     raise RuntimeError('Live checkpoint case did not pass: ' + name)
         elif args.mode == 'maintenance':

@@ -5,7 +5,12 @@ use anyhow::{Context, Result, ensure};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+pub(super) mod debt;
+
 type Uploaded = UploadedFlush<Key, Row>;
+const RUN_LIMIT: usize = crate::engine::trace::MAX_RUNS - 8;
+const SUFFIX_LIMIT: usize = 120;
+const REPLAY_LIMIT: u64 = 4096;
 pub(super) struct Pending {
     task: JoinHandle<Result<Uploaded>>,
     protection: Option<Protection>,
@@ -28,9 +33,32 @@ pub(super) fn must_drain(open: &Open, pending: bool, checkpoint_time: u64) -> bo
 const fn bounded_work(runs: usize, suffix_runs: usize, time: u64, checkpoint_time: u64) -> bool {
     // Bound replay journal work independently of physical memory-run merging.
     // Include every epoch after durable C, even those preceding this upload.
-    runs >= crate::engine::trace::MAX_RUNS - 8
-        || suffix_runs >= 120
-        || time.saturating_sub(checkpoint_time) >= 4096
+    runs >= RUN_LIMIT
+        || suffix_runs >= SUFFIX_LIMIT
+        || time.saturating_sub(checkpoint_time) >= REPLAY_LIMIT
+}
+/// Predictive admission awaits only the in-flight prefix, never flushes its suffix.
+pub(super) fn debt_pressure(open: &mut Open, checkpoint_time: u64) -> Result<bool> {
+    let Some(pending) = &open.checkpoint else { return Ok(false) };
+    if pending.task.is_finished() {
+        return Ok(false);
+    }
+    let load = load(open, checkpoint_time)?;
+    let limits = debt::Load([
+        u64::try_from(open.settings.memtable_bytes)?,
+        u64::try_from(RUN_LIMIT)?,
+        u64::try_from(SUFFIX_LIMIT)?,
+        REPLAY_LIMIT,
+    ]);
+    Ok(open.maintenance.pressure(Instant::now(), pending.started.elapsed(), load, limits))
+}
+fn load(open: &Open, checkpoint_time: u64) -> Result<debt::Load> {
+    Ok(debt::Load([
+        u64::try_from(open.query.memtable_bytes()?)?,
+        u64::try_from(open.query.run_count())?,
+        u64::try_from(open.query.unsealed_run_count())?,
+        open.query.time().saturating_sub(checkpoint_time),
+    ]))
 }
 pub(super) fn due(open: &Open, pending: bool, deadline: tokio::time::Instant) -> Result<bool> {
     Ok(pending
@@ -38,7 +66,7 @@ pub(super) fn due(open: &Open, pending: bool, deadline: tokio::time::Instant) ->
         && (tokio::time::Instant::now() >= deadline
             || u64::try_from(open.query.unsealed_run_count())? >= open.settings.maintenance_ticks))
 }
-pub(super) async fn start(open: &mut Open) -> Result<()> {
+pub(super) async fn start(open: &mut Open, checkpoint_time: u64) -> Result<()> {
     ensure!(open.checkpoint.is_none(), "checkpoint already in flight");
     let protection = open
         .writer
@@ -48,11 +76,13 @@ pub(super) async fn start(open: &mut Open) -> Result<()> {
         )
         .await?;
     let frozen = open.query.freeze_flush(&protection).await?;
+    let started = Instant::now();
+    open.maintenance.started(started, load(open, checkpoint_time)?);
     open.checkpoint = Some(Pending {
         task: tokio::spawn(frozen.upload()),
         resolved: false,
         protection: Some(protection),
-        started: Instant::now(),
+        started,
         runs: open.query.run_count(),
         deadline: tokio::time::Instant::now()
             + std::time::Duration::from_secs(open.settings.health.operation_timeout_secs),
@@ -95,6 +125,7 @@ pub(super) async fn complete(open: &mut Open, uploaded: Uploaded) -> Result<()> 
         event["merges"] = serde_json::to_value(open.query.cache_stats()?.merges)?;
         event["elapsed_us"] = serde_json::to_value(pending.started.elapsed().as_micros())?;
     }
+    open.maintenance.completed(pending.started.elapsed());
     super::drive::emit(&event)
 }
 pub(super) async fn finish(open: &mut Open) -> Result<()> {
@@ -110,7 +141,7 @@ pub(super) async fn flush(open: &mut Open) -> Result<u64> {
     }
     let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
     if durable.checkpoint_end < durable.end {
-        start(open).await?;
+        start(open, durable.stored.checkpoint.time).await?;
         finish(open).await?;
         completed += 1;
     }

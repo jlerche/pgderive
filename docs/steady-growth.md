@@ -1658,3 +1658,87 @@ Clippy, docs and unused-dependency checks. Production line coverage is 97.19%.
 Independent implementation and final test/documentation reviews found no
 remaining actionable finding. The owned PostgreSQL fixture used tmpfs and was
 removed with its volumes after the gate; the paused demo was not changed.
+
+### Admission against checkpoint debt (2026-10-26)
+
+The worker now forecasts resource pressure while a checkpoint is in flight,
+before gathering another complete source epoch. It observes four independent
+charges: total memtable bytes, maximum arrangement root count, unsealed root
+count, and all logical epochs since the authoritative durable checkpoint.
+Memory cancellation therefore cannot hide accumulating replay-journal work.
+The existing memory, root/suffix and 4,096-epoch hard bounds remain authoritative.
+
+For each resource the forecast is current charge plus net growth since capture
+at the observed suffix rate over estimated remaining completion time, plus the
+largest positive observed epoch increment as burst headroom. Checkpoint service
+estimates follow slow completions immediately and decay prior spikes by 1/8 per
+completion. They include observed upload, adoption and publication time, not
+isolated object-store latency. First and overdue uploads retain an uncertainty
+allowance based on elapsed time. Unchanged observations do not reset rate
+measurement. Using the whole captured suffix avoids extrapolating a single
+cyclic root-allocation spike as sustained growth.
+
+When the forecast exhausts a budget, the worker emits
+`checkpoint_backpressure` with `reason=maintenance_debt`, pauses source intake,
+awaits and publishes only the already captured prefix, acknowledges its durable
+progress, then re-evaluates against the new authoritative checkpoint. It does
+not flush the newer suffix as part of that decision. Capture cadence, tier
+selection, pack boundaries, one-upload protection and timeout/cancellation rules
+are unchanged. This adds no round trip to PostgreSQL: capture receives the
+already loaded authoritative checkpoint time. Explicit shutdown, hard run/replay
+limits and failed memtable admission still use the existing complete drain.
+
+The largest observed epoch is only a forecast reserve, not a promise about an
+unknown future epoch. Whole-suffix rates can lag sudden acceleration. Every
+new complete epoch still passes the existing preparation/capacity guards before
+publication; a single input that cannot fit after checkpointing still fails as
+a permanent capacity error. Scheduling does not split a committed transaction,
+change full-tuple identity, or move acknowledgement ahead of PUT and atomic
+PostgreSQL publication.
+
+Seven deterministic controller tests exercise learned service, first/overdue
+uploads, shrinking memory with increasing root/replay debt, unchanged wakes,
+extreme arithmetic and cyclic root allocation. One executes 10,000 changing
+service cycles in under a second through a paused Tokio clock and asserts early
+admission stops below capacity. This is a controller qualification, not 10,000
+production compactions, logical days of CDC, or a steady-state proof. Backpressure
+can bound engine admission while upstream queues or retained WAL grow when
+maintenance service cannot sustain the offered load. Byte-level compaction debt,
+separately scheduled consolidation and incremental GC remain subsequent work.
+
+The live fast-validation runner now includes a held-upload debt test alongside
+its existing crash, resume, capacity, shutdown and timeout checks. It uses the
+production worker, existing fault proxy, independent PostgreSQL sink oracle and
+final source/checkpoint/ACK checks. The original 160-epoch held-suffix crash
+fixture is retained. An initial recent-epoch slope falsely paused cyclic roots;
+that failed run is preserved, the rate estimate was corrected, and a regression
+covers the failure. An earlier setup failure from the disposable database not
+yet existing is also retained. Evidence is ignored under
+`artifacts/benchmarks/maintenance-debt-20261026/`.
+
+The final live fast run (`integration-004`) passes all six cases in 29.56 seconds.
+In the debt case it pauses at 68,044 charged bytes against a 126,448-byte limit,
+with runtime time 10 and durable time 2. It installs the existing captured time-3
+checkpoint while preserving runtime time 10, then processes all remaining source
+transactions and finishes at time 35 with zero journal backlog and safe ACK.
+The fixture's independently computed PostgreSQL result matches throughout the
+checked publication/recovery boundaries.
+
+The unchanged scaled component maintenance profile takes 29.16 seconds after a
+54.32-second optimized build, with no compiler overlap during measurement. Its
+cold oracles pass and total PUTs/uploaded bytes match `ea136b1` exactly for all
+three cases: 1,028 / 2,150,111; 1,055 / 4,816,300; 727 / 4,068,895. Original
+request and growth ceilings remain unchanged and still fail; no steady-state
+qualification is claimed. That component profile reuses the engine checkpoint
+lifecycle but does not execute the worker's new admission decision; the live
+held-upload cases exercise the latter. Matched component storage costs and no
+new upload action do not establish identical cloud request counts under every
+wall-clock arrival/capture schedule.
+
+The mandatory `./scripts/check.sh` gate passes: 634 Rust tests (11 explicit manual
+workloads ignored), 146 Python tests, sequential live PostgreSQL durability
+checks, 148 core worker results plus rebuild, and 97.20% production line coverage.
+Formatting, Clippy, documentation and unused-dependency checks pass. Independent
+implementation and final documentation review found no actionable remaining
+finding. The owned PostgreSQL fixture used tmpfs and was removed with its volumes.
+No deployment or change to the paused demo was made.

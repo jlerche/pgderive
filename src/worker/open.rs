@@ -10,6 +10,7 @@ use object_store::ObjectStore;
 use std::sync::Arc;
 
 pub(super) struct Open {
+    pub(super) maintenance: super::checkpoint::debt::Controller,
     pub(super) checkpoint: Option<super::checkpoint::Pending>,
     pub(super) collector: super::collection::Collector,
     pub(super) settings: Settings,
@@ -80,6 +81,7 @@ impl Open {
         let (writer, nonce) =
             reopen(&mut session, &catalog, &mut query, (&contract, settings)).await?;
         Ok(Self {
+            maintenance: super::checkpoint::debt::Controller::default(),
             checkpoint: None,
             collector: super::collection::Collector::connect(config).await?,
             settings: settings.clone(),

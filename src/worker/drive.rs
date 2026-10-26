@@ -261,8 +261,12 @@ async fn consume(
             }
             continue;
         }
+        if admit(open, stream, (&mut *count.0, count.1), durable.stored.checkpoint.time).await? {
+            deadline = tokio::time::Instant::now() + interval;
+            continue;
+        }
         if super::checkpoint::due(open, pending, deadline)? {
-            super::checkpoint::start(open).await?;
+            super::checkpoint::start(open, durable.stored.checkpoint.time).await?;
         }
         let transaction =
             match next_event(open, stream, &mut epochs, (stop, count.0), (deadline, pending))
@@ -295,6 +299,34 @@ async fn consume(
         .context("worker publication timed out; recover retained WAL without ACK")??;
         count.1.record(open, "ready")?;
     }
+}
+
+/// Reserve headroom for the checkpoint already in service before receiving more input.
+async fn admit(
+    open: &mut Open,
+    stream: &mut crate::acknowledged::Stream,
+    count: (&mut Metrics, &super::health::Reporter),
+    checkpoint_time: u64,
+) -> Result<bool> {
+    if !super::checkpoint::debt_pressure(open, checkpoint_time)? {
+        return Ok(false);
+    }
+    emit(&json!({"event":"checkpoint_backpressure","reason":"maintenance_debt",
+        "time":open.query.time(),"memtable_bytes":open.query.memtable_bytes()?,
+        "runs":open.query.run_count(),"replay_epochs":open.query.time().saturating_sub(checkpoint_time),
+        "checkpoint_in_flight":true}))?;
+    count.1.record(open, "maintenance")?;
+    timeout(
+        Duration::from_secs(open.settings.health.operation_timeout_secs),
+        super::checkpoint::finish(open),
+    )
+    .await
+    .context("debt checkpoint timed out; retain source WAL")??;
+    count.0.maintenance =
+        count.0.maintenance.checked_add(1).context("maintenance counter overflow")?;
+    stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
+    count.1.record(open, "ready")?;
+    Ok(true)
 }
 
 enum Event {

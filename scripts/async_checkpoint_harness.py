@@ -144,6 +144,64 @@ def memory_pressure(output, command):
         error.close()
 
 
+def debt_pressure(output, command):
+    """Held uploads consume headroom; pause before a failed preparation."""
+    output.mkdir(parents=True)
+    fixture = Fixture(output, 'async_debt', rows=16, auctions=4)
+    gate = output / 'checkpoint.release'
+    process, log, error, port = proxy(output, 's3', gate)
+    fixture.environment['PGDERIVE__OBJECT_STORE__ENDPOINT'] = f'http://127.0.0.1:{port}'
+    original = fixture.config
+    cap = 64*1024*1024
+    def config(maximum=0):
+        path = original(maximum)
+        text = path.read_text().replace('maintenance_ticks=4',
+            f'maintenance_ticks=64\ncheckpoint_interval_ms=500\nmemtable_bytes={cap}')
+        path.write_text(text + '\n[worker.epoch]\nenabled=false\n')
+        return path
+    fixture.config = config
+    try:
+        with fixture.managed():
+            calibrate = fixture.start(command, 'calibrate')
+            calibrate.event('ready')
+            fixture.sql(f'UPDATE {fixture.name}.bid SET price=id+100')
+            cap = calibrate.event('published')['memtable_bytes']*8
+            calibrate.finish(graceful=True)
+            worker = fixture.start(command, 'debt')
+            ready = worker.event('ready')
+            arm(gate, 'PUT')
+            fixture.sql(f'UPDATE {fixture.name}.bid SET price=id+200')
+            worker.event('published', minimum_time=ready['time']+1)
+            wait_for(lambda: pathlib.Path(str(gate)+'.pending').exists(), 'debt checkpoint held')
+            for tick in range(32):
+                first = 1000 + tick*16
+                fixture.sql(f'INSERT INTO {fixture.name}.bid SELECT i,1,i FROM generate_series({first},{first+15}) i')
+            pressure = worker.event('checkpoint_backpressure')
+            assert pressure['reason'] == 'maintenance_debt', pressure
+            assert pressure['memtable_bytes'] < cap, pressure
+            held = boundary(fixture)
+            assert held['published_time'] == pressure['time'] and held['ack_safe'], held
+            assert held['checkpoint_time'] == ready['time'], held
+            gate.touch()
+            completed = worker.event('maintenance')
+            assert completed['time'] == ready['time']+1, completed
+            assert completed['published_time'] == pressure['time'], completed
+            worker.event('published', minimum_time=ready['time']+33)
+            fixture.verify()
+            worker.finish(graceful=True)
+            final = boundary(fixture)
+            assert final['checkpoint_lsn'] == final['end_lsn'] and final['ack_safe'], final
+            (output/'result.json').write_text(json.dumps({'passed':True,'cap':cap,
+                'backpressure':pressure,'held':held,'completed_existing_prefix':completed,
+                'final':final},indent=2)+'\n')
+    finally:
+        gate.touch()
+        process.terminate()
+        process.wait(timeout=10)
+        log.close()
+        error.close()
+
+
 def upload_timeout(output, command):
     output.mkdir(parents=True)
     fixture = Fixture(output, 'async_timeout', rows=16, auctions=4)
@@ -203,6 +261,7 @@ def qualify(output, command):
     for after in [False, True]:
         case(output/('after-commit' if after else 'during-upload'), command, after)
     memory_pressure(output/'pressure', command)
+    debt_pressure(output/'debt', command)
     case(output/'shutdown', command, False, shutdown=True)
     upload_timeout(output/'timeout', command)
 
