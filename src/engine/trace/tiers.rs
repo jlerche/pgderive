@@ -66,6 +66,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
         let mut next = Self::from_runs(retained, generation, self.time)?;
         next.cohorts = retained_cohorts;
+        next.logical_cache.clone_from(&self.logical_cache);
         Ok(next)
     }
 }

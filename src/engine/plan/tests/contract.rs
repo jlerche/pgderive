@@ -146,7 +146,7 @@ impl Writers {
             sum: Writer::new(store, "sum-v1".into(), 2)?,
         })
     }
-    const fn empty(&self) -> Snapshot {
+    fn empty(&self) -> Snapshot {
         Snapshot {
             a: self.a.empty(),
             b: self.b.empty(),

@@ -1,7 +1,8 @@
 use super::Run;
-use crate::engine::reader::{BatchCursor, BatchData, BatchReader, Cursor, Entry};
+use crate::engine::reader::{BatchCursor, BatchData, BatchReader, Cursor, Entry, KeyIdentity};
 use anyhow::Result;
 use num_bigint::BigInt;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub(super) struct CoefficientOverflow;
@@ -98,13 +99,16 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
     /// # Errors
     /// Returns read/corruption/final coefficient errors, retaining prior position.
     pub async fn advance(&mut self) -> Result<()> {
+        *self = self.advanced().await?;
+        Ok(())
+    }
+    async fn advanced(&self) -> Result<Self> {
         let mut next = self.clone();
         if let Some((tuple, _)) = &self.row {
             next.skip(tuple).await?;
         }
         next.find().await?;
-        *self = next;
-        Ok(())
+        Ok(next)
     }
     /// Seek all runs, consolidating all values under the target navigation key.
     ///
@@ -150,11 +154,43 @@ impl<K: BatchData, V: BatchData> BatchCursor for MergedCursor<K, V> {
 
 /// Forward-only exact-key probe; all distinct values under the key remain visible.
 /// It cannot be reseeked to another key after excluding irrelevant runs.
-#[derive(Clone)]
+///
+/// A live probe optionally retains at most 64 KiB of private collector workspace;
+/// callers owning multiple cursors also own their separate bounded workspaces.
 pub struct KeyCursor<K: BatchData, V: BatchData> {
     pub(super) cursor: MergedCursor<K, V>,
+    collector: Option<Collector<K, V>>,
+}
+struct Collector<K: BatchData, V: BatchData> {
+    ticket: super::cache::Ticket,
+    key: Arc<KeyIdentity<K>>,
+    rows: Vec<Entry<K, V>>,
+    charge: usize,
+    limit: usize,
+}
+impl<K: BatchData, V: BatchData> Clone for KeyCursor<K, V> {
+    fn clone(&self) -> Self {
+        Self { cursor: self.cursor.clone(), collector: None }
+    }
 }
 impl<K: BatchData, V: BatchData> KeyCursor<K, V> {
+    pub(super) fn new(
+        cursor: MergedCursor<K, V>,
+        ticket: Option<super::cache::Ticket>,
+        key: Arc<KeyIdentity<K>>,
+        limit: usize,
+    ) -> Self {
+        Self {
+            cursor,
+            collector: ticket.filter(|_| limit >= 512).map(|ticket| Collector {
+                ticket,
+                key,
+                rows: Vec::new(),
+                charge: 512,
+                limit,
+            }),
+        }
+    }
     /// Current full weighted identity, restricted to the probed key.
     #[must_use]
     pub fn current(&self) -> Option<(&K, &V, i64)> {
@@ -166,7 +202,35 @@ impl<K: BatchData, V: BatchData> KeyCursor<K, V> {
     /// Returns selected-block read, integrity, or arithmetic failures and retains
     /// the prior position so the caller may retry the same operation.
     pub async fn advance(&mut self) -> Result<()> {
-        self.cursor.advance().await
+        let next = self.cursor.advanced().await?;
+        if let Some(collector) = &mut self.collector {
+            if let Some(row) = &self.cursor.row {
+                let charge = crate::engine::execution::record_size(
+                    row,
+                    collector.limit.saturating_sub(collector.charge) / 2,
+                )
+                .ok()
+                .and_then(|bytes| {
+                    bytes
+                        .checked_mul(2)
+                        .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<Entry<K, V>>()))
+                })
+                .and_then(|bytes| collector.charge.checked_add(bytes));
+                if let Some(charge) = charge.filter(|charge| *charge <= collector.limit) {
+                    collector.rows.push(row.clone());
+                    collector.charge = charge;
+                } else {
+                    self.collector = None;
+                }
+            }
+            if next.current().is_none()
+                && let Some(collector) = self.collector.take()
+            {
+                collector.ticket.remember(&collector.key, Arc::new(collector.rows));
+            }
+        }
+        self.cursor = next;
+        Ok(())
     }
 }
 

@@ -1055,3 +1055,218 @@ the sequential live PostgreSQL harnesses, formatting/lints/dependency checks and
 removed. Frozen final-binary checks additionally pass 87 reader tests and 12
 trace-probe tests. The ready-source hash manifest is unchanged across these
 checks and performance replays. These checks do not override failed growth gates.
+
+## Growing-state CPU and complete-cycle read controls
+
+The next comparison keeps the previous binary and adds a seeded initial-value
+control. The original endurance fixture begins with amounts `id % 7`, then
+replaces them with values from -2500 through 2500 and NULLs. Its compressed state
+can grow with unchanged logical cardinality. The optional
+`--initial-random-amounts` control starts with that value range and a seeded NULL
+pattern, preserving the subsequent chosen keys and replacement values. This
+reduces an entropy confound; it does not prove a stationary distribution.
+
+In the unchanged binary, the 262,144-row fixed-state control completes three
+consecutive identical largest-tier intervals, each with 185,000 changes. Their
+merge histograms match: ten tier-15, four tier-16, four tier-17 and two tier-19
+merges. Component CPU is 297.41, 300.27 and 302.32 ms per 1,000 changes; total
+read bytes are 259.93, 256.47 and 260.24 per change. Thus this finite fixed-state
+control already has near-flat complete-cycle cost. Its shorter comparison
+windows still fail strict growth checks and remain in the report. Matching
+maintenance work matters when interpreting those failures.
+
+The growing control starts at 524,288 rows, appends 102,400 rows, and changes
+existing rows within a 4,096-key working set. Its unchanged-binary short-window
+CPU grows from 81.85 to 175.85 ms per 1,000 changes; decoded bytes rise from
+559 to 4,801 per change. Only three installed boundaries reach its largest merge
+tier, so this run does not establish a complete-cycle plateau. The eager input
+fixture also reaches 4.08 GiB RSS and fails the existing 3 GiB fixture gate.
+This failure is preserved rather than addressed by raising the limit.
+
+The replay harness now compresses each committed transaction and independent
+expected bag using the existing Zstandard dependency, releases the raw input
+JSON after parsing, and decodes only the current transaction before timing its
+execution. It compares one oracle row at a time outside the measured section. Every periodic
+oracle, initial/final validation, duplicate/positive-weight validation and cold
+reopen check remains. The public state-row ceiling increases to 1,048,576;
+production ingestion and resident budgets are unchanged. Fixture RSS continues
+to include parsed transactions, integrated output and the in-memory object store,
+so it is not a worker RSS measurement.
+
+Decoded-page eviction now keeps an ordered recency set instead of searching all
+resident pages for every eviction. It preserves exact LRU behavior, including
+saturated-clock identity ties. Resident allocations no longer need a weak record;
+weak tracking covers only externally owned nonresident allocations. Statistics
+still account for resident and evicted ownership, duplicate admissions and
+re-admissions. The extra recency node and identity copy are bounded by the decoded
+entry cap, but are outside the existing modeled row charge, which is not an exact
+heap or RSS bound. This removes repeated scans without changing tuple contents,
+object format or publication order.
+
+A private compressed-output warming experiment was rejected. It retained generated
+pack windows only when the complete sibling output fit one bounded workspace,
+and fault/cancellation checks passed. However, the matched fixed-state late
+window increased fetched foreground bytes from 152.29 to 183.93 per change,
+with unchanged decoding and PUT counts. The growing late window also fetched
+more bytes. The extra staging state and borrowed-PUT interface change have been
+removed; their frozen binaries, failed tests and comparison evidence remain
+ignored. Uploading bytes does not itself justify retaining them over established
+read demands.
+
+Object PUT, atomic PostgreSQL membership/results/progress publication, and source
+acknowledgement ordering remain unchanged. Cache promotion cannot publish a view
+or acknowledge source WAL. These controls remain component tests and exclude
+PostgreSQL CDC/sink latency and real object-store latency. Ignored evidence is in
+`artifacts/benchmarks/growing-state-20261025/`; the demo remains paused.
+
+The next cache boundary is the complete logical navigation-key answer, replacing
+per-object slices. A bounded cache is shared by arrangements, with a distinct
+owning scope for each trace lineage. Incoming memory deltas update already cached
+keys using full weighted tuple identity. Whole-trace physical compaction and
+flush/rebase preserve those answers; subset compaction and reopen start fresh.
+This avoids rebuilding a hot answer from every immutable run after physical
+objects change. It adds no per-key version history or unbounded resident index.
+
+Immutable snapshots retain distinct tags. A read from an older snapshot changes
+the active cache scope rather than accepting newer rows. Reads and write-through
+updates hold the lineage lock through cache access; delayed fills must still
+match both the tag and scope. Pinned answers remain immutable. Only a fully
+consumed successful merged-key cursor can admit an answer. Partial, cloned,
+failed or cancelled cursors cannot admit incomplete results. Optional cache
+size or arithmetic failures discard cached state rather than change query
+results. These rules also cover speculative branches and rollback.
+
+Exploratory logical-cache timing screens accidentally used debug candidates
+against retained optimized release controls. These comparisons are invalid and
+excluded; two incomplete runs were stopped and their evidence retained. They
+provide no timing evidence for or against the cache design. A concurrent test
+run or compilation also excludes some screens from CPU qualification. Final
+comparisons must use matching optimized release builds with no compiler overlap.
+
+The final representation uses immutable shared typed answers, avoiding JSON
+encoding and decoding on cache hits. It reserves one bounded active collector
+rather than charging unallocated space to every queued miss. No encoded-answer
+compatibility path remains.
+
+The default bounded S3FIFO policy remains in use. An LFU experiment was rejected
+because its working-set change test retained old protected entries. Oversized
+answers continue through the ordinary merged cursor without optional admission.
+
+Typed key entries retain at least 512 bytes of modeled charge and at most
+64 KiB, including vector capacity and a serialized-size estimate of row payloads.
+The payload estimate is counted with a bounded writer rather than allocating
+a temporary serialized answer. Cache hits clone an immutable Arc; they perform
+no deserialization. Concurrent caller-owned cursors can pin evicted answers, as
+with decoded page cursors, so this resident budget is not a process RSS bound.
+Statistics reserves one active collector workspace from its pending byte target,
+while charging actual cached-answer pins to each prepared key. No collector
+exists for a queued miss until its cursor is opened.
+
+Each lineage also records whether it has ever admitted an answer in its current
+scope. Before that first admission, incoming deltas advance the tag without
+hashing every key for unused cache maintenance. Resetting the scope clears this
+hint; eviction may leave it conservatively true, affecting only optional work.
+Write-through reuses the existing sorted two-way `ZSet::apply` merge, now shared
+with the cache, instead of rebuilding a per-key map and exact accumulator.
+Canonical inputs contain each full identity once, so checked addition finalizes
+the same two-way coefficient. Optional cache overflow still discards the scope.
+Read-hit counters exclude write-through maintenance lookups.
+
+The ignored comparison runner now verifies frozen binary hashes and recorded
+Cargo release optimization level before starting a performance comparison.
+Its compiler monitor excludes overlapping compilation. Retained debug diagnostic
+screens remain explicitly excluded rather than mixed into final results.
+
+Final comparisons use optimized release builds of `500fd73` and the logical-key
+cache implementation, with identical recorded inputs and no observed compiler
+overlap. The production-source hashes are unchanged across the measurements and
+the common gate. A later test-only addition covers replacement and churn.
+The query is `COUNT(*)` and `SUM(amount)` grouped by `account_id` over the existing
+`entry(id int4, account_id int4, amount int4)` fixture. Amounts include NULLs.
+All four paired workloads below restrict existing-row changes to the first
+4,096 source rows; appended rows remain cold. With 12 rows per group, this is
+about 342 hot maintained groups, not uniform million-row churn. The additional
+million-distinct-group case also uses this 4,096-row hot set. The separate
+262,144-group control changes existing rows uniformly.
+CPU below is component process CPU per 1,000 affected source changes; it includes
+fixture output integration and maintenance, and excludes explicit oracle checks.
+Preparation and maintenance counters measure elapsed phases, not exclusive CPU.
+
+| Recorded workload | Late CPU ms/1k, before → after | Late preparation ms/1k, before → after | PUTs, unchanged |
+| --- | ---: | ---: | ---: |
+| 524,288 → 626,688 groups; 1,024 epochs; hot 4,096 rows | 175.85 → 49.69 | 152.25 → 29.15 | 1,094 |
+| 1,048,576 → 1,202,176 source rows; 12 rows/group; 1,536 epochs | 27.00 → 14.00 | 22.39 → 10.74 | 1,253 |
+| Fixed 1,048,576 source rows; 12 rows/group; 1,536 epochs | 18.67 → 11.50 | 16.53 → 9.00 | 1,238 |
+| 1,048,576 → 1,458,176 source rows; 12 rows/group; 4,096 epochs | 28.33 → 14.50 | 25.10 → 11.36 | 3,325 |
+
+The first growing case reduces late CPU by 71.7%, preparation by 80.9%, and total
+read bytes from 2,358.69 to 17.52 per change (99.3%). Foreground GETs fall from
+3.785 per 1,000 changes to zero. Its CPU grows 42.31 → 49.69 ms/1k within the new
+run, rather than 81.85 → 175.85 before. The short release screen takes 12.8 seconds
+versus 19.0 before, with mean preparation 24.68 versus 54.43 ms per transaction;
+bootstrap is essentially unchanged at 2.39 versus 2.33 seconds. These improvements
+do not override the growing case's read-byte trend and largest-tier-coverage
+failures.
+
+The fixed million-row case passes every existing growth and resource check,
+including repeated largest-tier coverage. Within-run CPU is 10.50 → 11.50 ms/1k
+and preparation 9.01 → 9.00. Its baseline already passes the growth checks but
+fails the fixture RSS cap; compressing retained fixture history fixes that bound.
+This is not evidence that the old fixed-state engine lacked a plateau.
+
+The uniform 262,144-group control completes three matched 185,000-change intervals
+with identical full merge histograms. New CPU is 291.41, 291.14 and 294.59 ms/1k;
+read bytes are 258.91, 259.26 and 261.87 per change. The unchanged baseline's
+297.41/300.27/302.32 ms and 259.93/256.47/260.24 bytes were already nearly flat.
+PUTs remain 929 and cold-verified final state remains 4,888,672 bytes. Both versions
+still fail strict short-window I/O checks with unequal maintenance histograms.
+The complete-cycle control does not support a claim of sustained fixed-state
+I/O growth, or a claim that this change fixed such growth.
+
+The longer grouped growth case executes 4.096 million changes, installs 820
+checkpoints without an active-state restart, and finishes in about 94 seconds.
+Preparation grows 9.19 → 11.36 ms/1k, while CPU grows 11.33 → 14.50, narrowly
+failing the existing 25% CPU-growth threshold. Foreground GETs remain zero and
+total read bytes are 1.89 → 1.76 per change. Only two largest-tier boundaries occur
+(at epochs 1,520 and 2,645), below the required four. Its final object state and
+PUT count match the baseline exactly. The baseline reaches 8.71 GB peak fixture
+RSS and fails the unchanged 3 GiB cap; the compressed fixture reaches 1.67 GB.
+These are whole-fixture memory figures, not isolated worker RSS.
+
+A further high-cardinality run starts with 1,048,576 maintained groups and grows
+to 1,458,176 over 4,096 epochs. It completes in 310 seconds, with 820 checkpoints,
+4,361 PUTs, and 22,559,627 bytes of cold-verified final state. Preparation grows
+25.92 → 29.74 ms/1k (+14.7%), but total CPU grows 42.31 → 73.23. Elapsed maintenance
+grows 1.04 → 14.95 ms/1k and total read bytes 5.52 → 109.75 per change; the late
+windows include much larger merges. One foreground GET occurs in the late
+65,000-change comparison window. Largest-tier boundaries at 2,180 and 4,035
+again provide only one complete interval. All correctness and resource checks
+pass, with 2.59 GB peak fixture RSS, but overall steady-state qualification fails.
+There is no retained before-build comparison for this additional workload.
+
+All growing cases retain `qualified: false`. Larger-state preparation is improved
+and its remaining short-window growth stays within the current bound, but total
+CPU and maintenance/I/O qualification are not solved. Comparing different merge
+mixes is not a complete-cycle growth proof. Four million changes at the configured
+1,000 changes per logical second represent about 68 logical minutes, not many
+logical days. None of these results proves arbitrary-size or weekly restart-free
+production operation. PostgreSQL CDC/publication, real object-store latency and
+sink freshness remain outside this component replay.
+
+For fast regression, the new production-path replacement/churn test uses four
+signed hot keys fitting half a 4 KiB point-cache budget, continuously admits cold
+keys, and replaces hot values through 512 epochs, 64 flushes and 32 explicitly
+invoked whole compactions. All 1,920 hot reads after warmup hit, weighted answers
+are exact, and resident charge stays bounded. Optimized execution takes 0.02
+seconds after compilation. This tests cache policy and inheritance at capacity;
+its invoked compactions are not natural-cycle throughput qualification.
+
+The final `./scripts/check.sh` core gate passes 588 Rust tests, 134 Python tests,
+147 live worker regression results plus rebuild, formatting, Clippy and dependency
+checks, with 97.14% production line coverage. Its owned PostgreSQL fixture uses
+tmpfs and has been removed. Independent implementation and test review found no
+blocker. Frozen release focused checks also pass reader, trace and canonical
+merge tests. The remaining investigation is larger compaction/scan work and
+run/cohort fan-in, using the existing preparation profiler to distinguish engine
+phases from fixture integration. Extra immutable cold state is acceptable;
+repeatedly reading and rewriting it needs measured justification.

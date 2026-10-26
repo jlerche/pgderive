@@ -88,15 +88,22 @@ def preloaded(rows, *, measured=32, warmup=8):
 
 
 def endurance(rows, epochs, *, batch_rows=1000, growing=True, group_width=12,
-              oracle_interval=16, hot_rows=None):
+              oracle_interval=16, hot_rows=None, initial_random_amounts=False):
     """Reuse the source model and full oracle, without resetting active engine state."""
     if min(rows, epochs, batch_rows, group_width, oracle_interval) < 1:
         raise ValueError('Positive endurance dimensions required')
     if hot_rows is not None and not 1 <= hot_rows <= rows:
         raise ValueError('Hot working set must fit initial rows')
     trace = preloaded(rows, warmup=0, measured=0)
+    initial_rng = random.Random(42)
     for row in trace['initial']['entry']:
         row['account_id'] = 1 + (row['id'] - 1) // group_width
+        if initial_random_amounts:
+            # Control initial compression entropy with the same value range and
+            # seeded NULL pattern, preserving the transaction/key sequence.
+            index = (row['id'] - 1) % batch_rows
+            row['amount'] = (None if index % 10 != 0 and index % 17 == 0
+                             else initial_rng.randrange(-2500, 2501))
     spec = query('linear', 0)
     source = state(trace['initial'])
     steps = [{'updates':[{'table': table,'row':text(row),'weight':1}
@@ -134,5 +141,7 @@ def endurance(rows, epochs, *, batch_rows=1000, growing=True, group_width=12,
     mode = 'growing' if growing else 'fixed'
     if hot_rows is not None:
         mode += f'-hot-{hot_rows}'
+    if initial_random_amounts:
+        mode += '-random-initial'
     return {'name':f'linear-endurance-{mode}-{rows}-{epochs}', 'sql':spec['sql'].format(schema='source'),
             'steps':steps}

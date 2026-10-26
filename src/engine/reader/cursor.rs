@@ -86,9 +86,7 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
                 if !batch.may_contain_page(&page, key)? {
                     return Ok(None);
                 }
-                let rows = batch.read_page(&page).await?;
-                batch.remember_key(&page, identity, &rows)?;
-                rows
+                batch.read_page(&page).await?
             }
         };
         let start = previous

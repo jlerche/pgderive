@@ -18,6 +18,7 @@ pub struct KeyProbes<K: BatchData, V: BatchData> {
     slots: Vec<usize>,
     heads: Vec<Option<Cursor<K, V>>>,
     current: Option<LastProbe<K, V>>,
+    cache: Option<super::cache::State>,
 }
 #[expect(
     clippy::redundant_pub_crate,
@@ -25,12 +26,10 @@ pub struct KeyProbes<K: BatchData, V: BatchData> {
 )]
 pub(crate) struct PreparedKey<K: BatchData, V: BatchData> {
     key: Arc<KeyIdentity<K>>,
-    pages: Vec<Option<PreparedRun<K, V>>>,
-}
-#[derive(Clone)]
-enum PreparedRun<K: BatchData, V: BatchData> {
-    Page(SelectedBlock<K, V>),
-    Complete(PointRows<K, V>),
+    pages: Vec<Option<SelectedBlock<K, V>>>,
+    complete: Option<PointRows<K, V>>,
+    ticket: Option<super::cache::Ticket>,
+    collector_limit: usize,
 }
 impl<K: BatchData, V: BatchData> PreparedKey<K, V> {
     pub(crate) fn charge(&self) -> Result<usize> {
@@ -38,16 +37,15 @@ impl<K: BatchData, V: BatchData> PreparedKey<K, V> {
         let initial = self
             .pages
             .capacity()
-            .checked_mul(std::mem::size_of::<Option<PreparedRun<K, V>>>())
+            .checked_mul(std::mem::size_of::<Option<SelectedBlock<K, V>>>())
             .and_then(|slots| slots.checked_add(key))
             .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
             .context("prepared key slot charge overflow")?;
+        let initial = initial
+            .checked_add(self.complete.as_ref().map_or(0, |rows| rows.charge))
+            .context("prepared complete key charge overflow")?;
         self.pages.iter().flatten().try_fold(initial, |total, page| {
-            let charge = match page {
-                PreparedRun::Page(page) => page.charge()?,
-                PreparedRun::Complete(rows) => rows.charge,
-            };
-            total.checked_add(charge).context("prepared key charge overflow")
+            total.checked_add(page.charge()?).context("prepared key charge overflow")
         })
     }
 }
@@ -57,6 +55,7 @@ struct LastProbe<K: BatchData, V: BatchData> {
 }
 impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
     pub(super) fn new(snapshot: TraceSnapshot<K, V>) -> Self {
+        let cache = snapshot.logical_cache.clone();
         let mut runs: Vec<Run<K, V>> = Vec::new();
         let mut paths = BTreeMap::<String, Vec<usize>>::new();
         let mut slots = Vec::new();
@@ -79,33 +78,42 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
             slots.push(index);
         }
         let heads = vec![None; runs.len()];
-        Self { runs, slots, heads, current: None }
+        Self { runs, slots, heads, current: None, cache }
     }
-    pub(crate) async fn prepare_key(
-        &self,
-        key: &K,
-        mut allowance: usize,
-    ) -> Result<PreparedKey<K, V>> {
+    pub(crate) async fn prepare_key(&self, key: &K, allowance: usize) -> Result<PreparedKey<K, V>> {
         let identity = Arc::new(KeyIdentity::new(key)?);
+        let (complete, ticket) =
+            self.cache.as_ref().map_or((None, None), |cache| cache.lookup(&identity, allowance));
+        if complete.is_some() {
+            return Ok(PreparedKey {
+                key: identity,
+                pages: Vec::new(),
+                complete,
+                ticket: None,
+                collector_limit: 0,
+            });
+        }
+        let ticket = ticket.filter(|_| !self.runs.is_empty());
         let mut pages = Vec::with_capacity(self.runs.len());
         for run in &self.runs {
             let page = if let Run::Object(batch) = run {
-                if let Some(rows) = batch.cached_key(&identity, allowance)? {
-                    allowance -= rows.charge;
-                    pages.push(Some(PreparedRun::Complete(rows)));
-                    continue;
-                }
                 let Some(page) = batch.key_page(key).await? else {
                     pages.push(None);
                     continue;
                 };
-                batch.may_contain_page(&page, key)?.then_some(PreparedRun::Page(page))
+                batch.may_contain_page(&page, key)?.then_some(page)
             } else {
                 None
             };
             pages.push(page);
         }
-        Ok(PreparedKey { key: identity, pages })
+        Ok(PreparedKey {
+            key: identity,
+            pages,
+            complete: None,
+            ticket,
+            collector_limit: allowance.min(64 * 1024),
+        })
     }
     // Reserve resolved pages in original key order; no second navigation lookup.
     pub(crate) fn plan_key(
@@ -115,7 +123,7 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
     ) -> Result<bool> {
         let mut admitted = true;
         for (index, (run, page)) in self.runs.iter().zip(&key.pages).enumerate() {
-            let (Run::Object(batch), Some(PreparedRun::Page(page))) = (run, page) else { continue };
+            let (Run::Object(batch), Some(page)) = (run, page) else { continue };
             if !self.heads[index].as_ref().is_some_and(|head| head.holds_block(batch, page.ordinal))
             {
                 admitted &= batch.reserve_page(page, plans)?;
@@ -149,6 +157,14 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         prepared: &PreparedKey<K, V>,
     ) -> Result<KeyCursor<K, V>> {
         let key = &prepared.key;
+        if let Some(rows) = &prepared.complete {
+            let mut cursor = MergedCursor {
+                cursors: vec![Cursor::memory_key_reusing(rows.rows.clone(), key.key(), None)],
+                row: None,
+            };
+            cursor.find().await?;
+            return Ok(KeyCursor::new(cursor, None, key.clone(), 0));
+        }
         let requests = self
             .runs
             .iter()
@@ -156,35 +172,27 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
             .zip(&prepared.pages)
             .map(|((run, head), page)| (run.clone(), head.clone(), key.clone(), page.clone()))
             .collect::<Vec<_>>();
-        let selected =
-            stream::iter(requests)
-                .map(|(run, head, key, page)| async move {
-                    match run {
-                        Run::Memory(batch) => Ok(Some(Cursor::memory_key_reusing(
-                            batch.shared_entries(),
-                            key.key(),
-                            head.as_ref(),
-                        ))),
-                        Run::Object(batch) => match page {
-                            Some(PreparedRun::Page(page)) => {
-                                Cursor::object_key_page(batch, &key, page, head.as_ref()).await
-                            }
-                            Some(PreparedRun::Complete(rows)) => Ok(Some(
-                                Cursor::memory_key_reusing(rows.rows, key.key(), head.as_ref()),
-                            )),
-                            None => Ok(None),
-                        },
-                    }
-                })
-                .buffered(READ_CONCURRENCY)
-                .try_collect::<Vec<_>>()
-                .await?;
+        let selected = stream::iter(requests)
+            .map(|(run, head, key, page)| async move {
+                match run {
+                    Run::Memory(batch) => Ok(Some(Cursor::memory_key_reusing(
+                        batch.shared_entries(),
+                        key.key(),
+                        head.as_ref(),
+                    ))),
+                    Run::Object(batch) => match page {
+                        Some(page) => {
+                            Cursor::object_key_page(batch, &key, page, head.as_ref()).await
+                        }
+                        None => Ok(None),
+                    },
+                }
+            })
+            .buffered(READ_CONCURRENCY)
+            .try_collect::<Vec<_>>()
+            .await?;
         let mut heads = self.heads.clone();
-        for ((head, selected), page) in heads.iter_mut().zip(&selected).zip(&prepared.pages) {
-            // A complete-key hit must not displace the reusable whole-page head.
-            if matches!(page, Some(PreparedRun::Complete(_))) {
-                continue;
-            }
+        for (head, selected) in heads.iter_mut().zip(&selected) {
             if let Some(cursor) = selected {
                 *head = Some(cursor.clone());
             }
@@ -199,7 +207,8 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         }
         let mut cursor = MergedCursor { cursors, row: None };
         cursor.find().await?;
-        let cursor = KeyCursor { cursor };
+        let cursor =
+            KeyCursor::new(cursor, prepared.ticket.clone(), key.clone(), prepared.collector_limit);
         self.heads = heads;
         self.current = Some(LastProbe { key: key.key().clone(), cursor: cursor.clone() });
         Ok(cursor)

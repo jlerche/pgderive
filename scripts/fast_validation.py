@@ -193,12 +193,14 @@ def main():
     parser.add_argument('--oracle-interval', type=int, default=16, help='Endurance full-oracle cadence')
     parser.add_argument('--cache-mib', type=int, default=64, help='Endurance decoded cache budget')
     parser.add_argument('--hot-rows', type=int, help='Endurance existing-row working set; appended rows stay cold')
+    parser.add_argument('--initial-random-amounts', action='store_true',
+                        help='Endurance control: initialize amounts with the same value range and seeded NULL pattern')
     parser.add_argument('--release', action='store_true')
     parser.add_argument('--replay', type=pathlib.Path)
     parser.add_argument('--worker', type=pathlib.Path)
     args = parser.parse_args()
-    if args.seeds < 1 or args.repeats < 1 or any(not 1 <= rows <= 262144 for rows in args.state_rows):
-        parser.error('Positive seeds/repeats and state rows in [1,262144] required')
+    if args.seeds < 1 or args.repeats < 1 or any(not 1 <= rows <= 1048576 for rows in args.state_rows):
+        parser.error('Positive seeds/repeats and state rows in [1,1048576] required')
     if args.mode == 'endurance' and args.updates < 128:
         parser.error('Endurance requires at least 128 epochs for fixed comparison windows')
     if args.warmup < 0 or args.updates < 1:
@@ -345,7 +347,7 @@ def main():
             if args.mode == 'endurance':
                 cases = [endurance(rows, args.updates, growing=args.endurance_shape=='growing',
                                    group_width=args.group_width, oracle_interval=args.oracle_interval,
-                                   hot_rows=args.hot_rows)
+                                   hot_rows=args.hot_rows, initial_random_amounts=args.initial_random_amounts)
                          for rows in args.state_rows]
             elif args.mode == 'growth':
                 cases = []

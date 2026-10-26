@@ -50,8 +50,10 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
     }
     /// Create initial immutable state at logical time zero.
     #[must_use]
-    pub const fn empty(&self) -> TraceSnapshot<K, V> {
-        TraceSnapshot::empty()
+    pub fn empty(&self) -> TraceSnapshot<K, V> {
+        let mut empty = TraceSnapshot::empty();
+        empty.share_cache(&self.cache);
+        empty
     }
     /// Cold-validate and reopen complete recorded object membership.
     ///

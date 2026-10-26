@@ -40,13 +40,17 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
         let mut rows = input.cursor().await?;
         let mut changes = Consolidator::new(limits)?;
         let mut probes = prior.probes();
+        let allowance = limits.resident_bytes / crate::engine::reader::READ_CONCURRENCY;
+        // Prepared tickets allocate no collector. Consumption is sequential, so
+        // reserve exactly one bounded active cursor's optional workspace.
+        let pending_budget = limits.resident_bytes.saturating_sub(allowance.min(64 * 1024)).max(1);
         while rows.current().is_some() {
             let mut pending = Vec::new();
             let mut bytes = 0_usize;
             let mut plans = Vec::new();
             while pending.len() < limits.resident_entries
                 && !crate::engine::reader::ReadAhead::ready(&plans)
-                && bytes < limits.resident_bytes
+                && bytes < pending_budget
             {
                 let group = gather_deltas(
                     &mut accumulator,
@@ -62,16 +66,10 @@ impl<K: BatchData, V: BatchData, S: BatchData> Statistics<K, V, S> {
                 let keys = group.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
                 // The byte target is soft by at most one READ_CONCURRENCY-sized
                 // metadata group plus one resident budget of optional key-slice pins.
-                // Each key spends its allowance across all selected runs.
+                // Actual complete-key pins remain charged to each prepared key;
+                // the one active collector is reserved outside pending metadata.
                 let prepared = stream::iter(keys)
-                    .map(|key| async move {
-                        probes
-                            .prepare_key(
-                                &key,
-                                limits.resident_bytes / crate::engine::reader::READ_CONCURRENCY,
-                            )
-                            .await
-                    })
+                    .map(|key| async move { probes.prepare_key(&key, allowance).await })
                     .buffered(crate::engine::reader::READ_CONCURRENCY)
                     .try_collect::<Vec<_>>()
                     .await?;

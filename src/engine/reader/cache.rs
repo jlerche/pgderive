@@ -2,7 +2,7 @@ use super::{BatchData, Entry};
 use anyhow::{Context, Result};
 use std::{
     any::{Any, TypeId},
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex, Weak},
 };
 
@@ -33,6 +33,8 @@ pub struct BlockCache {
 #[derive(Debug, Default)]
 struct State {
     blocks: BTreeMap<Identity, Cached>,
+    recency: BTreeSet<(u64, Identity)>,
+    // Only decoded allocations no longer owned by `blocks` need weak tracking.
     live: Vec<(Weak<Rows>, usize)>,
     stats: CacheStats,
     clock: u64,
@@ -47,9 +49,9 @@ struct Cached {
 /// Cache counters. Charges exclude allocator overhead and cannot bound RSS.
 #[derive(Debug, Clone, Default)]
 pub struct CacheStats {
-    /// Resident complete immutable key slices, separate from full decoded pages.
+    /// Resident complete logical-key slices, separate from full decoded pages.
     pub point_bytes: usize,
-    /// Retained key slices; each has at least a 512-byte charge.
+    /// Retained typed key slices; each has at least a 512-byte charge.
     pub point_entries: usize,
     /// Complete-key cache hits, avoiding data and index page reads.
     pub point_hits: u64,
@@ -177,8 +179,11 @@ impl BlockCache {
             ..Self::new(0, 0)
         })
     }
-    pub(super) const fn admits_points(&self) -> bool {
-        self.parent.is_none() || self.staged
+    pub(crate) const fn admits_points(&self) -> bool {
+        self.bytes > 0 && self.entries > 0 && (self.parent.is_none() || self.staged)
+    }
+    pub(crate) fn logical_points(&self) -> Arc<points::Points> {
+        self.points.clone()
     }
     pub(super) const fn admits_encoded(&self) -> bool {
         self.parent.is_none()
@@ -227,9 +232,14 @@ impl BlockCache {
         let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
         state.live.retain(|(rows, _)| rows.strong_count() > 0);
         let mut counters = state.stats.clone();
-        counters.live_bytes = state.live.iter().map(|(_, charge)| charge).sum();
-        let references: usize = state.live.iter().map(|(rows, _)| rows.strong_count()).sum();
-        counters.pins = references.saturating_sub(state.blocks.len());
+        counters.live_bytes =
+            counters.bytes + state.live.iter().map(|(_, charge)| charge).sum::<usize>();
+        counters.pins = state
+            .blocks
+            .values()
+            .map(|entry| Arc::strong_count(&entry.rows).saturating_sub(1))
+            .sum::<usize>()
+            + state.live.iter().map(|(rows, _)| rows.strong_count()).sum::<usize>();
         drop(state);
         (
             counters.filter_bytes,
@@ -267,10 +277,17 @@ impl BlockCache {
         let clock = state.clock;
         let identity =
             (ROW_CODEC, schema.to_owned(), hash.to_owned(), TypeId::of::<Vec<Entry<K, V>>>());
+        let mut previous = None;
         let rows = state.blocks.get_mut(&identity).map(|entry| {
+            previous = Some(entry.accessed);
             entry.accessed = clock;
             entry.rows.clone()
         });
+        if let Some(accessed) = previous {
+            let prior = (accessed, identity);
+            state.recency.remove(&prior);
+            state.recency.insert((clock, prior.1));
+        }
         if rows.is_some() {
             state.stats.hits = state.stats.hits.saturating_add(1);
         } else {
@@ -314,6 +331,7 @@ impl BlockCache {
                 || self.bytes == 0
             {
                 state.blocks.clear();
+                state.recency.clear();
                 state.live.clear();
                 state.stats.bytes = 0;
                 state.stats.entries = 0;
@@ -340,29 +358,53 @@ impl State {
         charge: usize,
         limits: (usize, usize),
     ) -> Result<()> {
-        self.live.retain(|(rows, _)| rows.strong_count() > 0);
-        self.live.push((Arc::downgrade(&rows), charge));
+        if self.blocks.get(&identity).is_some_and(|entry| Arc::ptr_eq(&entry.rows, &rows)) {
+            return Ok(());
+        }
         if charge > limits.0
             || limits.1 == 0
             || limits.0 == 0
             || self.blocks.contains_key(&identity)
         {
+            self.track(&rows, charge);
             return Ok(());
         }
         while self.stats.bytes > limits.0 - charge || self.blocks.len() >= limits.1 {
             let oldest = self
-                .blocks
-                .iter()
-                .min_by_key(|(_, entry)| entry.accessed)
-                .map(|(identity, _)| identity.clone())
+                .recency
+                .pop_first()
+                .map(|(_, identity)| identity)
                 .context("cache eviction without entries")?;
-            let evicted = self.blocks.remove(&oldest).context("cache eviction lost entry")?;
-            self.stats.bytes -= evicted.charge;
+            self.remove(oldest)?;
         }
         self.clock = self.clock.saturating_add(1);
+        self.live.retain(|(live, _)| {
+            live.strong_count() > 0 && !std::ptr::addr_eq(live.as_ptr(), Arc::as_ptr(&rows))
+        });
         self.stats.bytes += charge;
+        self.recency.insert((self.clock, identity.clone()));
         self.blocks.insert(identity, Cached { rows, charge, accessed: self.clock });
         self.stats.entries = self.blocks.len();
+        Ok(())
+    }
+    fn track(&mut self, rows: &Arc<Rows>, charge: usize) {
+        if Arc::strong_count(rows) > 1 {
+            self.live.retain(|(rows, _)| rows.strong_count() > 0);
+            if !self
+                .live
+                .iter()
+                .any(|(live, _)| std::ptr::addr_eq(live.as_ptr(), Arc::as_ptr(rows)))
+            {
+                self.live.push((Arc::downgrade(rows), charge));
+            }
+        }
+    }
+    fn remove(&mut self, identity: Identity) -> Result<()> {
+        let entry = self.blocks.remove(&identity).context("cache eviction lost entry")?;
+        self.recency.remove(&(entry.accessed, identity));
+        self.stats.bytes -= entry.charge;
+        self.stats.entries = self.blocks.len();
+        self.track(&entry.rows, entry.charge);
         Ok(())
     }
 }
@@ -379,6 +421,58 @@ mod tests {
     use super::BlockCache;
     use anyhow::Result;
     use std::sync::Arc;
+
+    #[test]
+    fn ordered_eviction_matches_lru_including_saturated_clock_ties() -> Result<()> {
+        let cache = BlockCache::new(4096, 2);
+        for hash in ["a", "b"] {
+            cache.insert("s", hash.into(), Arc::new(vec![((1_i64, 2_i64), 1)]), 8)?;
+        }
+        assert!(cache.get::<i64, i64>("s", "a")?.is_some());
+        cache.insert("s", "c".into(), Arc::new(vec![((1_i64, 2_i64), 1)]), 8)?;
+        assert!(cache.peek::<i64, i64>("s", "b")?.is_none());
+        {
+            let mut state = cache.state.lock().map_err(|_| anyhow::anyhow!("cache poisoned"))?;
+            state.clock = u64::MAX;
+        }
+        assert!(cache.get::<i64, i64>("s", "c")?.is_some());
+        assert!(cache.get::<i64, i64>("s", "a")?.is_some());
+        cache.insert("s", "d".into(), Arc::new(vec![((1_i64, 2_i64), 1)]), 8)?;
+        // Saturating timestamps preserve the old identity-order tie break.
+        assert!(cache.peek::<i64, i64>("s", "a")?.is_none());
+        assert!(cache.peek::<i64, i64>("s", "c")?.is_some());
+        let state = cache.state.lock().map_err(|_| anyhow::anyhow!("cache poisoned"))?;
+        assert_eq!(state.recency.len(), state.blocks.len());
+        assert!(state.live.is_empty());
+        drop(state);
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_allocations_and_readmitted_pins_are_charged_once() -> Result<()> {
+        let cache = BlockCache::new(4096, 1);
+        let first = Arc::new(vec![((1_i64, 2_i64), 1)]);
+        let duplicate = Arc::new(vec![((1_i64, 2_i64), 1)]);
+        cache.insert("s", "a".into(), first.clone(), 8)?;
+        let charge = cache.stats()?.bytes;
+        cache.insert("s", "a".into(), first.clone(), 8)?;
+        assert_eq!(cache.stats()?.pins, 1);
+        cache.insert("s", "a".into(), duplicate.clone(), 8)?;
+        cache.insert("s", "a".into(), duplicate.clone(), 8)?;
+        assert_eq!(cache.stats()?.live_bytes, 2 * charge);
+        assert_eq!(cache.stats()?.pins, 2);
+        cache.insert("s", "b".into(), Arc::new(vec![((3_i64, 4_i64), 1)]), 8)?;
+        assert_eq!(cache.stats()?.live_bytes, 3 * charge);
+        cache.insert("s", "a".into(), first.clone(), 8)?;
+        assert_eq!(cache.stats()?.live_bytes, 2 * charge);
+        assert_eq!(cache.stats()?.pins, 2);
+        drop(duplicate);
+        assert_eq!(cache.stats()?.live_bytes, charge);
+        assert_eq!(cache.stats()?.pins, 1);
+        drop(first);
+        assert_eq!(cache.stats()?.pins, 0);
+        Ok(())
+    }
 
     #[test]
     fn scan_preserves_foreground_lru_counters_and_tracks_its_own_pins() -> Result<()> {

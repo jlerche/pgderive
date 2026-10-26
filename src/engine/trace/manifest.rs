@@ -87,6 +87,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
                 object.share_cache(cache.clone());
             }
         }
+        snapshot.logical_cache = super::cache::State::new(&cache);
         Ok(snapshot)
     }
 }

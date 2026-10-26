@@ -34,9 +34,15 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             total.checked_add(rows).context("compaction row count overflow")
         })?;
         cache.record_merge(rows)?;
+        next.logical_cache.clone_from(&self.logical_cache);
         Ok(next)
     }
     pub(crate) fn share_cache(&mut self, cache: &std::sync::Arc<BlockCache>) {
+        if !cache.admits_points() {
+            self.logical_cache = None;
+        } else if self.logical_cache.is_none() {
+            self.logical_cache = super::cache::State::new(cache);
+        }
         for run in &mut self.runs {
             if let Run::Object(object) = run {
                 object.share_cache(cache.clone());

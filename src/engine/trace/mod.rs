@@ -1,4 +1,5 @@
 //! Immutable trace generations, weighted merging and pinned membership.
+mod cache;
 mod coefficient;
 mod flush;
 mod manifest;
@@ -64,6 +65,7 @@ impl<K: BatchData, V: BatchData> BatchReader for Run<K, V> {
 #[derive(Debug, Clone)]
 pub struct TraceSnapshot<K: BatchData, V: BatchData> {
     runs: Vec<Run<K, V>>,
+    logical_cache: Option<cache::State>,
     spans: Vec<Option<memory::Span>>,
     // Consecutive object-root counts per logical upload; memory runs are excluded.
     cohorts: Vec<usize>,
@@ -77,6 +79,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     pub(super) const fn empty() -> Self {
         Self {
             runs: Vec::new(),
+            logical_cache: None,
             spans: Vec::new(),
             cohorts: Vec::new(),
             sealed_time: 0,
@@ -87,8 +90,9 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     }
     pub(crate) async fn replace_runs(&self, runs: Vec<Run<K, V>>) -> Result<Self> {
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;
-        let next = Self::from_runs(runs, generation, self.time)?;
+        let mut next = Self::from_runs(runs, generation, self.time)?;
         ensure!(self.equivalent(&next).await?, "compaction changed logical state");
+        next.logical_cache.clone_from(&self.logical_cache);
         Ok(next)
     }
     async fn equivalent(&self, other: &Self) -> Result<bool> {
@@ -112,7 +116,20 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let spans = vec![None; runs.len()];
         let objects = runs.iter().filter(|run| matches!(run, Run::Object(_))).count();
         let cohorts = if objects == 0 { Vec::new() } else { vec![objects] };
-        Ok(Self { runs, spans, cohorts, sealed_time: time, memory_bytes, generation, time })
+        let logical_cache = runs.iter().find_map(|run| match run {
+            Run::Object(object) => cache::State::new(object.block_cache()),
+            Run::Memory(_) => None,
+        });
+        Ok(Self {
+            runs,
+            logical_cache,
+            spans,
+            cohorts,
+            sealed_time: time,
+            memory_bytes,
+            generation,
+            time,
+        })
     }
     pub(crate) fn into_runs(self) -> Vec<Run<K, V>> {
         self.runs
@@ -239,6 +256,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         if objects > 0 {
             cohorts.push(objects);
         }
+        let added_cache = added.clone();
         let mut runs = self.runs.clone();
         let mut spans = self.spans.clone();
         for run in added {
@@ -246,6 +264,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             runs.push(run);
         }
         let mut next = Self {
+            logical_cache: self.logical_cache.clone(),
             runs,
             spans,
             cohorts,
@@ -256,6 +275,13 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         };
         next.consolidate_memory()?;
         ensure!(next.runs.len() <= MAX_RUNS, "arrangement run limit requires checkpoint");
+        next.logical_cache = self.logical_cache.as_ref().map(|cache| cache.append(&added_cache));
+        if next.logical_cache.is_none() {
+            next.logical_cache = next.runs.iter().find_map(|run| match run {
+                Run::Object(object) => cache::State::new(object.block_cache()),
+                Run::Memory(_) => None,
+            });
+        }
         Ok(next)
     }
     /// Physical membership generation; compaction may change it without a tick.
@@ -339,3 +365,7 @@ mod growth_tests;
 #[cfg(test)]
 #[path = "tests/weight_bounds.rs"]
 mod weight_bound_tests;
+
+#[cfg(test)]
+#[path = "tests/logical_cache.rs"]
+mod logical_cache_tests;

@@ -74,6 +74,34 @@ class EnduranceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 endurance(200, 32, hot_rows=size)
 
+    def test_random_initial_amounts_control_keeps_transaction_sequence(self):
+        arguments = dict(rows=1000, epochs=8, batch_rows=100, group_width=1,
+                         oracle_interval=4, hot_rows=100)
+        original = endurance(**arguments)
+        control = endurance(**arguments, initial_random_amounts=True)
+        self.assertEqual(control, endurance(**arguments, initial_random_amounts=True))
+        self.assertIn('-random-initial-', control['name'])
+        initial = [change['row'] for change in control['steps'][0]['updates']
+                   if change['table'] == 'entry']
+        self.assertGreater(len({row['amount'] for row in initial}), 500)
+        for index, row in enumerate(initial):
+            position = index % arguments['batch_rows']
+            if position % 10 != 0 and position % 17 == 0:
+                self.assertIsNone(row['amount'])
+            else:
+                self.assertTrue(-2500 <= int(row['amount']) <= 2500)
+        oracle = {cells[0]: cells[1:] for cells, weight in control['steps'][0]['expected']
+                  if weight == 1}
+        self.assertEqual(oracle, {row['account_id']: ['1', row['amount']] for row in initial})
+        self.assertNotEqual(original['steps'][0]['expected'], control['steps'][0]['expected'])
+        for before, after in zip(original['steps'][1:], control['steps'][1:], strict=True):
+            self.assertEqual(before['source_rows'], after['source_rows'])
+            # New values and chosen keys are identical; only retractions of
+            # untouched initial values and their corresponding oracles differ.
+            positive = lambda step: [change for change in step['updates'] if change['weight'] > 0]
+            self.assertEqual(positive(before), positive(after))
+            self.assertEqual(before['expected'] is None, after['expected'] is None)
+
     def test_assessment_rejects_cost_growth_restarts_and_missing_cycles(self):
         samples = []
         for index in range(128):

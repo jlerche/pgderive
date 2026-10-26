@@ -8,14 +8,19 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use futures_util::TryStreamExt as _;
 use object_store::ObjectStore as _;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, atomic::Ordering},
     time::Instant,
 };
 
+mod codec;
 mod lifecycle;
+mod oracle;
+mod updates;
+use oracle::Expected;
+use updates::Updates;
 
 type Cells = Vec<Option<String>>;
 type Bag = BTreeMap<Cells, i64>;
@@ -37,13 +42,13 @@ struct Case {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Step {
-    updates: Vec<Update>,
+    updates: Updates,
     source_rows: u64,
-    expected: Option<Vec<(Cells, i64)>>,
+    expected: Option<Expected>,
     measure: bool,
     restart: bool,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Update {
     table: String,
@@ -190,13 +195,13 @@ async fn prepare_tick(
 }
 fn check_expected(
     output: &Bag,
-    expected: Option<Vec<(Cells, i64)>>,
+    expected: Option<Expected>,
     case: &str,
     index: usize,
 ) -> Result<usize> {
     let Some(expected) = expected else { return Ok(0) };
     ensure!(
-        output == &expected.into_iter().collect::<Bag>(),
+        expected.matches(output)?,
         "replay {case} step {index} differs from independent application oracle"
     );
     Ok(1)
@@ -241,7 +246,7 @@ async fn run(
             configure_diagnostics(&query)?;
         } else {
             let count = step.updates.len();
-            let changes = changes(step.updates);
+            let changes = changes(step.updates.decode()?);
             let before = query.cache_stats()?;
             let reads = store.reads.load(Ordering::SeqCst);
             let puts = store.puts.load(Ordering::SeqCst);
@@ -295,6 +300,7 @@ async fn fast_replay() -> Result<()> {
         include_str!("../../../tests/fixtures/fast-replay.json").into()
     };
     let suite = parse(&text)?;
+    drop(text);
     let mut reports = Vec::new();
     for case in suite.cases {
         reports.push(run(case, suite.limits, suite.lifecycle).await?);
@@ -319,7 +325,7 @@ fn parse(text: &str) -> Result<Suite> {
             case.steps.first().is_some_and(|step| step.expected.is_some()
                 && !step.restart
                 && !step.measure
-                && step.updates.iter().all(|update| update.weight == 1))
+                && step.updates.initial_weights)
                 && case.steps.last().is_some_and(|step| step.expected.is_some()),
             "initial/final oracle missing"
         );
@@ -332,13 +338,6 @@ fn parse(text: &str) -> Result<Suite> {
                         && step.expected.is_some()),
                 "invalid restart step"
             );
-            if let Some(expected) = &step.expected {
-                let rows = expected.iter().map(|(row, _)| row).collect::<BTreeSet<_>>();
-                ensure!(
-                    rows.len() == expected.len() && expected.iter().all(|(_, weight)| *weight > 0),
-                    "invalid expected bag"
-                );
-            }
         }
     }
     Ok(suite)
@@ -347,7 +346,7 @@ fn parse(text: &str) -> Result<Suite> {
 async fn wrong_oracle_is_rejected() -> Result<()> {
     let mut suite = parse(include_str!("../../../tests/fixtures/fast-replay.json"))?;
     let mut case = suite.cases.remove(0);
-    case.steps.last_mut().context("fixture missing steps")?.expected = Some(vec![]);
+    case.steps.last_mut().context("fixture missing steps")?.expected = Some(Expected::new(&[])?);
     let error = run(case, suite.limits, suite.lifecycle)
         .await
         .err()
@@ -364,6 +363,29 @@ fn missing_coverage_is_rejected() -> Result<()> {
     let text = include_str!("../../../tests/fixtures/fast-replay.json");
     let mut value: serde_json::Value = serde_json::from_str(text)?;
     value["cases"][0]["steps"][0]["expected"] = serde_json::Value::Null;
+    assert!(parse(&value.to_string()).is_err());
+    Ok(())
+}
+
+#[test]
+fn compressed_initial_weights_and_restart_metadata_are_validated() -> Result<()> {
+    let text = include_str!("../../../tests/fixtures/fast-replay.json");
+    let mut value: serde_json::Value = serde_json::from_str(text)?;
+    for weight in [-1, 0, 2] {
+        value["cases"][0]["steps"][0]["updates"][0]["weight"] = weight.into();
+        assert!(parse(&value.to_string()).is_err());
+    }
+    value["cases"][0]["steps"][0]["updates"][0]["weight"] = 1.into();
+    assert!(parse(&value.to_string()).is_ok());
+    let restart = &mut value["cases"][0]["steps"][1];
+    restart["restart"] = true.into();
+    restart["measure"] = false.into();
+    restart["expected"] = serde_json::json!([]);
+    restart["source_rows"] = 0.into();
+    assert!(parse(&value.to_string()).is_err());
+    value["cases"][0]["steps"][1]["updates"] = serde_json::json!([]);
+    assert!(parse(&value.to_string()).is_ok());
+    value["cases"][0]["steps"][1]["source_rows"] = 1.into();
     assert!(parse(&value.to_string()).is_err());
     Ok(())
 }
@@ -398,31 +420,33 @@ async fn capacity_flushes_use_bounded_ingestion_and_preserve_exact_results() -> 
         weight,
     };
     let expected = |changed: i32| {
-        (1..=64)
-            .map(|key| {
-                (
-                    vec![
-                        Some(key.to_string()),
-                        Some("1".into()),
-                        Some(i32::from(key <= changed).to_string()),
-                    ],
-                    1,
-                )
-            })
-            .collect()
+        Expected::new(
+            &(1..=64)
+                .map(|key| {
+                    (
+                        vec![
+                            Some(key.to_string()),
+                            Some("1".into()),
+                            Some(i32::from(key <= changed).to_string()),
+                        ],
+                        1,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
     };
     let mut steps = vec![Step {
         source_rows: 0,
-        updates: (1..=64).map(|key| update(key, 0, 1)).collect(),
-        expected: Some(expected(0)),
+        updates: Updates::new(&(1..=64).map(|key| update(key, 0, 1)).collect::<Vec<_>>())?,
+        expected: Some(expected(0)?),
         measure: false,
         restart: false,
     }];
     for key in 1..=32 {
         steps.push(Step {
             source_rows: 1,
-            updates: vec![update(key, 0, -1), update(key, 1, 1)],
-            expected: (key == 32).then(|| expected(32)),
+            updates: Updates::new(&[update(key, 0, -1), update(key, 1, 1)])?,
+            expected: (key == 32).then(|| expected(32)).transpose()?,
             measure: true,
             restart: false,
         });

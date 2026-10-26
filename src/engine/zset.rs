@@ -84,20 +84,7 @@ impl<T: Ord + Clone> ZSet<T> {
     /// # Errors
     /// Returns an error on weight overflow.
     pub fn apply(&mut self, delta: &Self) -> Result<()> {
-        let mut prior = self.entries.iter().peekable();
-        let mut next = Vec::with_capacity(self.entries.len());
-        for (tuple, weight) in delta.iter() {
-            while let Some(entry) = prior.next_if(|entry| &entry.0 < tuple) {
-                next.push(entry.clone());
-            }
-            let weight = prior.next_if(|entry| &entry.0 == tuple).map_or(Ok(*weight), |entry| {
-                entry.1.checked_add(*weight).context("Z-set weight overflow")
-            })?;
-            if weight != 0 {
-                next.push((tuple.clone(), weight));
-            }
-        }
-        next.extend(prior.cloned());
+        let next = merge_canonical(&self.entries, &delta.entries)?;
         self.max_weight = next.iter().map(|(_, weight)| weight.unsigned_abs()).max().unwrap_or(0);
         self.entries = Arc::new(next);
         self.sizing = Arc::new(OnceLock::new());
@@ -106,5 +93,54 @@ impl<T: Ord + Clone> ZSet<T> {
 
     pub(super) fn from_accumulator(weights: Accumulator<T>) -> Result<Self> {
         Ok(Self::finalized(weights.finish()?))
+    }
+}
+
+// Both inputs are already canonical: each complete identity occurs once per
+// slice, so checked addition narrows exactly one final combined coefficient.
+pub(super) fn merge_canonical<T: Ord + Clone>(
+    prior: &[(T, i64)],
+    delta: &[(T, i64)],
+) -> Result<Vec<(T, i64)>> {
+    let mut prior = prior.iter().peekable();
+    let mut next = Vec::with_capacity(prior.len());
+    for (tuple, weight) in delta {
+        while let Some(entry) = prior.next_if(|entry| &entry.0 < tuple) {
+            next.push(entry.clone());
+        }
+        let weight = prior.next_if(|entry| &entry.0 == tuple).map_or(Ok(*weight), |entry| {
+            entry.1.checked_add(*weight).context("Z-set weight overflow")
+        })?;
+        if weight != 0 {
+            next.push((tuple.clone(), weight));
+        }
+    }
+    next.extend(prior.cloned());
+    Ok(next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_canonical;
+    use crate::engine::{Batch, BatchBuilder};
+    use anyhow::Result;
+    #[test]
+    fn canonical_merge_matches_exact_accumulation_for_signed_full_tuples() -> Result<()> {
+        for before in [i64::MIN, -1, 0, 1, i64::MAX] {
+            for delta in [i64::MIN, -1, 0, 1, i64::MAX] {
+                let prior = Batch::from_updates([((1, 1), before), ((1, 2), -1), ((2, 3), 3)])?;
+                let added = Batch::from_updates([((1, 1), delta), ((1, 2), 1), ((1, 4), -2)])?;
+                let mut oracle = BatchBuilder::default();
+                oracle.extend(&prior);
+                oracle.extend(&added);
+                let expected = oracle.finish();
+                let actual = merge_canonical(&prior.shared_entries(), &added.shared_entries());
+                assert_eq!(actual.is_ok(), expected.is_ok());
+                if let (Ok(rows), Ok(expected)) = (actual, expected) {
+                    assert_eq!(Batch::from_canonical(rows)?, expected);
+                }
+            }
+        }
+        Ok(())
     }
 }

@@ -377,7 +377,6 @@ async fn coefficient_validation_overlaps_cold_runs_with_exact_cancellation() -> 
 #[tokio::test]
 async fn complete_key_reuse_preserves_page_boundaries_signed_values_and_run_multiplicity()
 -> Result<()> {
-    use crate::engine::reader::KeyIdentity;
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let cache = Arc::new(BlockCache::new(64 * 1024, 32));
     let input = Batch::from_updates([
@@ -402,31 +401,23 @@ async fn complete_key_reuse_preserves_page_boundaries_signed_values_and_run_mult
         )?;
         assert_eq!(rows(probes.cursor(&key).await?).await?, expected);
     }
-    // Equal last keys on nonfinal pages are conservatively not admitted.
-    // Key 3 actually crosses pages; no cached prefix may hide its other values.
-    for key in [1, 3] {
-        assert!(batch.cached_key(&KeyIdentity::new(&key)?, usize::MAX)?.is_none());
+    // Entire merged keys, including those crossing pages, are now retained.
+    assert_eq!(cache.stats()?.point_entries, 4);
+    let before = cache.stats()?;
+    for key in 1..=4 {
+        rows(warm.probes().cursor(&key).await?).await?;
     }
-    for key in [2, 4] {
-        assert!(batch.cached_key(&KeyIdentity::new(&key)?, usize::MAX)?.is_some());
-    }
+    assert_eq!(cache.stats()?.point_hits - before.point_hits, 4);
     let delta = Batch::from_updates([((2, 4), -2), ((4, 6), 6)])?;
     let repeated = TraceSnapshot::from_runs(
         vec![Run::Object(batch.clone()), Run::Object(batch.clone()), Run::Memory(Arc::new(delta))],
         2,
         2,
     )?;
-    let before = cache.stats()?;
     let mut probes = repeated.probes();
     assert_eq!(rows(probes.cursor(&2).await?).await?, Batch::default());
     assert_eq!(rows(probes.cursor(&4).await?).await?, Batch::from_updates([((4, 7), 4)])?);
-    let after = cache.stats()?;
-    assert!(after.point_hits > before.point_hits);
-    assert_eq!(after.foreground_io.gets, before.foreground_io.gets);
-    assert_eq!(after.index_reads, before.index_reads);
-    assert_eq!(after.decoded_bytes, before.decoded_bytes);
     let changed = object(store, cache, &Batch::from_updates([((4, 99), 1)])?, 2).await?;
-    assert!(changed.cached_key(&KeyIdentity::new(&4)?, usize::MAX)?.is_none());
     let mut probes = TraceSnapshot::from_runs(vec![Run::Object(changed)], 3, 3)?.probes();
     assert_eq!(rows(probes.cursor(&4).await?).await?, Batch::from_updates([((4, 99), 1)])?);
     Ok(())

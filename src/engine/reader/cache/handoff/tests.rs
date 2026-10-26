@@ -64,3 +64,26 @@ fn fitting_handoff_replaces_large_duplicate_capacity_before_admission() -> Resul
     assert!(parent.stats()?.bytes <= 8192);
     Ok(())
 }
+
+#[test]
+fn handoff_tracks_replaced_pins_and_keeps_recency_consistent() -> Result<()> {
+    let parent = Arc::new(BlockCache::new(8192, 2));
+    let old = Arc::new(vec![((1_i64, 2_i64), 1)]);
+    parent.insert("s", "a".into(), old.clone(), 8)?;
+    insert(&parent, "s", "b", 8)?;
+    let staged = BlockCache::output(parent.clone());
+    insert(&staged, "s", "a", 8)?;
+    staged.promote()?;
+    assert_eq!(parent.stats()?.pins, 1);
+    assert!(parent.stats()?.live_bytes > parent.stats()?.bytes);
+    insert(&parent, "s", "c", 8)?;
+    assert!(parent.peek::<i64, i64>("s", "b")?.is_none());
+    assert!(parent.peek::<i64, i64>("s", "a")?.is_some());
+    drop(old);
+    assert_eq!(parent.stats()?.pins, 0);
+    assert_eq!(parent.stats()?.live_bytes, parent.stats()?.bytes);
+    let state = parent.state.lock().map_err(|_| anyhow::anyhow!("cache poisoned"))?;
+    assert_eq!(state.recency.len(), state.blocks.len());
+    drop(state);
+    Ok(())
+}

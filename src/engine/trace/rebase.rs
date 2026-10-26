@@ -30,6 +30,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         rebased.cohorts.clone_from(&flushed.cohorts);
         rebased.spans[flushed.runs.len()..].copy_from_slice(&self.spans[captured.runs.len()..]);
         rebased.sealed_time = captured.time;
+        rebased.logical_cache.clone_from(&self.logical_cache);
         Ok(rebased)
     }
 }

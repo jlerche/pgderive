@@ -42,6 +42,7 @@ impl BlockCache {
             return Ok(());
         }
         let blocks = std::mem::take(&mut state.blocks);
+        state.recency.clear();
         state.live.clear();
         state.stats.bytes = 0;
         state.stats.entries = 0;
@@ -52,8 +53,8 @@ impl BlockCache {
         // capacities than the generated copy. The staged complete-set charge is
         // then the exact charge used by the foreground admission decision.
         for identity in blocks.keys() {
-            if let Some(old) = foreground.blocks.remove(identity) {
-                foreground.stats.bytes -= old.charge;
+            if foreground.blocks.contains_key(identity) {
+                foreground.remove(identity.clone())?;
             }
         }
         foreground.stats.entries = foreground.blocks.len();

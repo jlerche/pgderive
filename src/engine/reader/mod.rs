@@ -16,7 +16,7 @@ pub use streaming::WriteLimits;
 
 use super::Batch;
 use anyhow::Result;
-pub(crate) use cache::points::{KeyIdentity, PointRows};
+pub(crate) use cache::points::{CacheScope, KeyIdentity, PointRows, Points};
 pub use cache::{BlockCache, CacheStats, ReadStats};
 pub(crate) use cache::{ReadAhead, ReadGuard};
 pub use cursor::Cursor;
