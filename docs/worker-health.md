@@ -111,3 +111,46 @@ warned at 23,451,960 retained bytes and rebuilt in about 0.55 seconds for its
 warning threshold. This is a local observed recovery time, not a production RTO
 or proof that total PostgreSQL disk stays below 64 MiB. The full gate repeats the
 drill and retains the actual timings under query-health-slot/qualification.json.
+
+## Shared worker admission
+
+`execution.workspace_slots` (default 8, range 1..=256) limits active resource
+phases through one pool owned by the query execution. CDC/replay input conversion,
+foreground operator evaluation, arrangement staging, snapshot chunk/final
+processing, output materialization and sink-delta encoding use this pool.
+Recovery/adoption, detached compaction, captured checkpoint arrangement uploads
+and the background collector share it too. The snapshot execution clone retains
+the original pool even when its per-operator limits are reduced.
+
+Checkpoint writers and GC additionally share a maintenance quota of
+`max(1, workspace_slots - 1)`. At capacities above one this leaves a slot for
+foreground work while an upload or collection is stalled. Capacity one executes
+phases serially. An operation acquires admission before opening its private
+workspace and releases it before invoking another admitted phase. Evaluation
+therefore releases its permit before parallel arrangement staging and reacquires
+one for final output materialization. GC acquires before its SQL mutex/transaction.
+Cursors and cache pages do not own permits that they would need to acquire again
+to make progress. Cancellation releases admission through owned RAII permits.
+
+`execution.object_requests` (default 16, range 1..=256) configures the existing
+object-store API limiter around the query's scoped store. Foreground, bootstrap,
+recovery, checkpoint and GC share the same wrapper Arc. GET-body and LIST-stream
+lifetimes retain admission until consumed or dropped; bulk deletion still uses
+the underlying store's batched implementation. One API operation can issue more
+than one HTTP request internally. Pgderive's collector continues to bound each
+delete batch. These settings alter admission, leaving data packing, checkpoint
+cadence, publication ordering and object-store retry policy unchanged.
+
+Published events and heartbeat diagnostics report `workspaces`: capacity, active
+and peak global ownership, global waits, background quota/ownership and background
+waits. A background quota holder may still be waiting for global admission.
+Heartbeat `budgets` includes both shared limits alongside existing per-operation,
+cache and memtable limits. Queued phases have no new reader/writer workspace;
+existing captured snapshots, sealed values and proof handles can remain alive.
+
+These are active-phase and API-operation bounds. Aggregate retained-byte/RSS
+qualification remains separate: bootstrap folds, sealed results, decoded and
+compressed cache pins, native caches, transport/runtime buffers and allocator
+retention have lifetimes beyond an active permit. Existing encoded-record,
+contribution, scratch, cache and memtable limits remain necessary. This slice
+controls concurrency amplification without claiming a whole-process byte cap.

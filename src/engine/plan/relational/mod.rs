@@ -107,6 +107,7 @@ struct Execution<K: BatchData, V: BatchData> {
     writers: BTreeMap<String, Arrangement<K, V>>,
     limits: crate::engine::execution::Limits,
     cache: Arc<BlockCache>,
+    workspaces: Arc<crate::engine::execution::Workspaces>,
     source_statistics: BTreeSet<String>,
 }
 #[derive(Debug)]
@@ -181,6 +182,9 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
             writers,
             limits,
             cache,
+            workspaces: Arc::new(crate::engine::execution::Workspaces::new(
+                limits.workspace_slots,
+            )?),
             source_statistics,
         });
         Self::bind(execution, RelationalState { entries }, 0)
@@ -230,6 +234,9 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
             .map(|entry| entry.trace.unsealed_run_count())
             .max()
             .unwrap_or(0)
+    }
+    pub(crate) fn workspaces(&self) -> Arc<crate::engine::execution::Workspaces> {
+        self.execution.workspaces.clone()
     }
     /// Resident cache usage and physical read counters.
     ///

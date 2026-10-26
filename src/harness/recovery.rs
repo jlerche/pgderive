@@ -105,7 +105,7 @@ pub async fn run_recovery(
         .object_store
         .as_ref()
         .context("recovery requires persistent object storage")?
-        .build(prefix)?;
+        .build(prefix, config.execution.object_requests)?;
     let (mut sql, connection) = super::connect(&config).await?;
     let result = async {
         let plan = recovery_plan(&sql, schema, query).await?;

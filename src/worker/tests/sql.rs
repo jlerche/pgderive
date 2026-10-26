@@ -345,7 +345,7 @@ async fn right_null_predicate_and_wide_sum_follow_sql_numeric_output() -> Result
     let before = query.checkpoint()?;
     let prepared =
         query.prepare(program::relational::inputs(&source, compiled.relational(), 1)?).await?;
-    program::relational::deltas(&prepared.output().batch, compiled.output())?;
+    program::relational::deltas(&query, &prepared.output().batch, compiled.output()).await?;
     assert_eq!(
         super::projected_batch(&prepared.output().batch, &compiled)?,
         Batch::from_updates([(

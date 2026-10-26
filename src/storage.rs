@@ -82,8 +82,9 @@ impl Storage {
             Err(error) => Err(error).context("HTTPS object endpoint preflight failed"),
         }
     }
-    pub fn build(&self, prefix: &str) -> Result<Arc<dyn ObjectStore>> {
+    pub fn build(&self, prefix: &str, requests: usize) -> Result<Arc<dyn ObjectStore>> {
         self.validate()?;
+        ensure!((1..=256).contains(&requests), "invalid shared object request limit");
         let credentials = credentials::load(&self.credentials_file)?;
         let mut options = ClientOptions::new()
             .with_allow_http(self.endpoint()?.scheme() == "http")
@@ -103,8 +104,14 @@ impl Storage {
         if let Some(token) = credentials.session_token {
             builder = builder.with_token(token);
         }
-        Ok(Arc::new(PrefixStore::new(builder.build()?, prefix)))
+        Ok(limit(Arc::new(PrefixStore::new(builder.build()?, prefix)), requests))
     }
+}
+// Preserve one shared wrapper Arc across every worker task. LimitStore keeps
+// streaming GET/list permits alive and delegates bulk delete rather than
+// replacing it with one request per object.
+fn limit(store: Arc<dyn ObjectStore>, requests: usize) -> Arc<dyn ObjectStore> {
+    Arc::new(object_store::limit::LimitStore::new(store, requests))
 }
 #[cfg(test)]
 #[path = "storage/tests.rs"]

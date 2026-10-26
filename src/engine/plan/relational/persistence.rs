@@ -79,6 +79,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     /// # Errors
     /// Rejects incompatible/older checkpoints, missing/corrupt objects or bad codecs.
     pub async fn restore_checkpoint(&mut self, checkpoint: Checkpoint) -> Result<()> {
+        let _workspace = self.execution.workspaces.acquire().await?;
         checkpoint.validate(self.plan())?;
         ensure!(checkpoint.time >= self.time(), "recovery cannot roll back logical time");
         let mut entries = std::collections::BTreeMap::new();
@@ -116,6 +117,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         self.prepare_compaction_scoped(None).await
     }
     async fn prepare_compaction_scoped(&self, namespace: Option<&str>) -> Result<Compaction<K, V>> {
+        let workspaces = self.execution.workspaces.clone();
         let namespace = namespace.map(str::to_owned);
         let writers = self.execution.writers.clone();
         let foreground = self.execution.cache.clone();
@@ -124,9 +126,11 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
             .prepare_maintenance(move |state| async move {
                 let uploads = state.entries.iter().map(|(id, entry)| {
                     let writers = &writers;
+                    let workspaces = workspaces.clone();
                     let namespace = namespace.as_deref();
                     let output = output.clone();
                     async move {
+                        let _workspace = workspaces.background().await?;
                         let writer = writers
                             .get(id)
                             .context("missing compaction writer")?
@@ -140,7 +144,10 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                     }
                 });
                 // Drain all uploads before returning any error; protection covers all of them.
-                let completed = stream::iter(uploads).buffer_unordered(8).collect::<Vec<_>>().await;
+                let completed = stream::iter(uploads)
+                    .buffer_unordered(workspaces.capacity())
+                    .collect::<Vec<_>>()
+                    .await;
                 let mut state =
                     RelationalState { entries: completed.into_iter().collect::<Result<_>>()? };
                 output.promote()?;

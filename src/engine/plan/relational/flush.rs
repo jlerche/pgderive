@@ -55,6 +55,7 @@ impl<K: BatchData, V: BatchData> FrozenFlush<K, V> {
             let namespace = namespace.clone();
             let captured = captured.clone();
             async move {
+                let _workspace = execution.workspaces.background().await?;
                 tokio::task::consume_budget().await;
                 let entry = captured.entries.get(&id).context("missing captured flush entry")?;
                 let writer = execution
@@ -71,7 +72,10 @@ impl<K: BatchData, V: BatchData> FrozenFlush<K, V> {
                 Ok::<_, anyhow::Error>((id, entry))
             }
         });
-        let completed = stream::iter(uploads).buffer_unordered(8).collect::<Vec<_>>().await;
+        let completed = stream::iter(uploads)
+            .buffer_unordered(self.execution.workspaces.capacity())
+            .collect::<Vec<_>>()
+            .await;
         let mut state = RelationalState { entries: completed.into_iter().collect::<Result<_>>()? };
         let checkpoint = Checkpoint::new(&self.execution.plan, self.time, state.memberships()?)?;
         output_cache.promote()?;
@@ -133,6 +137,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
             Arc::ptr_eq(&self.incarnation, &uploaded.frozen.incarnation),
             "foreign checkpoint upload"
         );
+        let _workspace = self.execution.workspaces.acquire().await?;
         let current = self.snapshot();
         let entries = current
             .entries

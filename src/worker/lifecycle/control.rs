@@ -78,7 +78,7 @@ pub(super) async fn collected(
         .object_store
         .as_ref()
         .context("removal requires durable object storage")?
-        .build(&settings.object_prefix)?;
+        .build(&settings.object_prefix, config.execution.object_requests)?;
     let catalog = crate::catalog::Catalog::new(&settings.catalog_schema, &settings.query_id)?;
     let collection = catalog
         .collect(

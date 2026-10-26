@@ -20,6 +20,7 @@ pub type RangeRequests = BTreeMap<(String, u64, u64), usize>;
 pub struct Store {
     inner: InMemory,
     pub(crate) puts: AtomicUsize,
+    pub(crate) deletes: AtomicUsize,
     pub(crate) put_bytes: AtomicUsize,
     pub(crate) reads: AtomicUsize,
     pub(crate) range_start: AtomicU64,
@@ -128,6 +129,7 @@ impl ObjectStore for Store {
         &self,
         paths: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>> {
+        self.deletes.fetch_add(1, Ordering::SeqCst);
         self.inner.delete_stream(paths)
     }
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {

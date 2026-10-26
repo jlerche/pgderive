@@ -82,7 +82,7 @@ async fn history(window: bool) -> Result<()> {
         let expected = super::bag_delta(&before, &after)?;
         let candidate = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(candidate.output().batch, expected);
-        relational::deltas(&candidate.output().batch, &ir.output)?;
+        relational::deltas(&query, &candidate.output().batch, &ir.output).await?;
         query.commit(candidate)?;
         if index == 2 {
             super::restart_relational(&mut query, &native, &compiled, &options).await?;
@@ -245,7 +245,7 @@ async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()
             1
         )])?
     );
-    relational::deltas(&candidate.output().batch, &ir.output)?;
+    relational::deltas(&query, &candidate.output().batch, &ir.output).await?;
     query.commit(candidate)?;
     super::restart_relational(&mut query, &native, &compiled, &options).await?;
     let changes = batch(vec![("bid", large, -2), ("bid", negative, -3)]);

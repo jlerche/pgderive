@@ -179,7 +179,7 @@ async fn execute(sql: &mut Client, fixture: &Fixture, mut config: Config) -> Res
         if let Some(storage) = &config.object_store {
             let prefix = prefix.as_ref().context("missing object prefix")?;
             eprintln!("MVP S3 fixture prefix: {prefix}");
-            storage.build(prefix)?
+            storage.build(prefix, config.execution.object_requests)?
         } else {
             std::sync::Arc::new(object_store::memory::InMemory::new())
         };

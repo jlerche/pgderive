@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import pathlib
+import queue
 import subprocess
 import sys
 import time
@@ -53,6 +54,18 @@ def arm(gate, method):
     pathlib.Path(str(gate) + '.arm').write_text(method)
 
 
+def checkpoint_or_hold(worker, marker, minimum_time):
+    if marker.exists():
+        return True
+    try:
+        event = worker.events.get_nowait()
+    except queue.Empty:
+        return False
+    if event is None or event['event'] == 'retry':
+        raise RuntimeError('worker failed before the collection boundary')
+    return event['event'] == 'maintenance' and event['time'] >= minimum_time
+
+
 def object_kill(output, command, index, restoring, collecting=False):
     fixture = Fixture(output, index)
     gate = output / 'object.release'
@@ -61,6 +74,8 @@ def object_kill(output, command, index, restoring, collecting=False):
     try:
         if collecting:
             fixture.environment['PGDERIVE__WORKER__MAINTENANCE_TICKS'] = '1'
+            fixture.environment['PGDERIVE__EXECUTION__WORKSPACE_SLOTS'] = '2'
+            fixture.environment['PGDERIVE__EXECUTION__OBJECT_REQUESTS'] = '2'
             arm(gate, 'POST') # object_store batches GC via S3 DeleteObjects
             victim = fixture.start(command, 'victim')
             victim.event('ready')
@@ -71,9 +86,10 @@ def object_kill(output, command, index, restoring, collecting=False):
             for tick in range(64):
                 fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id={1 + tick % 3}')
                 victim.event('published', minimum_time=tick+2)
-                maintenance = victim.event('maintenance')
-                assert maintenance['time'] >= tick+2, 'checkpoint did not cover driven input'
-                if pathlib.Path(str(gate) + '.pending').exists():
+                marker = pathlib.Path(str(gate) + '.pending')
+                wait_for(lambda: checkpoint_or_hold(victim, marker, tick+2),
+                         'checkpoint or held collection')
+                if marker.exists():
                     break
             phase = {}
         elif restoring:
@@ -99,7 +115,10 @@ def object_kill(output, command, index, restoring, collecting=False):
         if collecting:
             before = int(durable(fixture).split('|')[0])
             fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')
-            victim.event('published', seconds=10, minimum_time=before + 1)
+            published = victim.event('published', seconds=10, minimum_time=before + 1)
+            usage = published['workspaces']
+            assert usage['capacity'] == usage['peak'] == 2, usage
+            assert usage['active'] == 1, 'held collector did not own shared admission'
         expected_time = int(durable(fixture).split('|')[0]) if collecting else 1
         if collecting:
             assert expected_time >= 2
@@ -109,6 +128,9 @@ def object_kill(output, command, index, restoring, collecting=False):
         else:
             assert fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_progress').strip() == '0'
         victim.abort()
+        if collecting:
+            events = [json.loads(line) for line in pathlib.Path(victim.metrics.name).read_text().splitlines()]
+            assert not any(event.get('event') == 'retry' for event in events), 'collector witness crossed a retry'
         gate.touch()
         wait_for(lambda: any(json.loads(line).get('method') == ('POST' if collecting else 'GET' if restoring else 'PUT') for line in (output / 'proxy.jsonl').read_text().splitlines()[1:]), 'held request release')
         survivor = fixture.start(command, 'survivor', maximum=3 if collecting else 1)

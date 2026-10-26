@@ -206,3 +206,40 @@ async fn sibling_uploads_share_fuel_and_rebase_after_foreground_progress() -> Re
     assert_eq!(query.snapshot().trace("abc")?.materialize().await?, expected);
     Ok(())
 }
+
+#[tokio::test]
+async fn one_shared_slot_allows_foreground_upload_rebase_and_parallel_preparations() -> Result<()> {
+    let mut settings = settings();
+    settings.limits.workspace_slots = 1;
+    let mut query = Query::new(plan()?, operators(), &settings)?;
+    tick(&mut query, 1, 3).await?;
+    let frozen = freeze(&mut query).await?;
+    let input = TimedBatch {
+        time: 2,
+        batch: (1..=3).map(|n| Batch::from_updates([((0, vec![n]), 1)])).collect::<Result<_>>()?,
+    };
+    let simultaneous = async {
+        let (first, second, uploaded) = tokio::join!(
+            query.prepare_memtable(input.clone(), 1_000_000),
+            query.prepare_memtable(input, 1_000_000),
+            frozen.upload(),
+        );
+        Ok::<_, anyhow::Error>((first?, second?, uploaded?))
+    };
+    let (first, stale, uploaded) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), simultaneous).await??;
+    query.commit(first)?;
+    assert!(query.commit(stale).is_err());
+    let expected = query.snapshot().trace("abc")?.materialize().await?;
+    let work = query.prepare_uploaded_flush(&uploaded).await?;
+    query.commit_compaction(work)?;
+    assert_eq!(query.snapshot().trace("abc")?.materialize().await?, expected);
+    let compacted = query.prepare_compaction().await?;
+    query.commit_compaction(compacted)?;
+    assert_eq!(query.snapshot().trace("abc")?.materialize().await?, expected);
+    let usage = query.workspaces().stats();
+    assert_eq!(usage.capacity, 1);
+    assert_eq!(usage.peak, 1);
+    assert_eq!(usage.active, 0);
+    Ok(())
+}

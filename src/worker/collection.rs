@@ -40,6 +40,7 @@ impl Collector {
         catalog: Catalog,
         store: Arc<dyn ObjectStore>,
         seconds: u64,
+        workspaces: Arc<crate::engine::execution::Workspaces>,
     ) -> Result<()> {
         if self.task.is_some() {
             return Ok(());
@@ -47,6 +48,7 @@ impl Collector {
         let session = self.session.as_ref().context("collector has no SQL session")?.clone();
         self.task = Some(tokio::spawn(async move {
             timeout(Duration::from_secs(seconds), async move {
+                let _workspace = workspaces.background().await?;
                 let mut session = session.lock().await;
                 let CollectionSession { sql, roots } = &mut *session;
                 let result =

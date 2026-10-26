@@ -115,6 +115,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             input.batch.len() == self.plan.definition().sources.len(),
             "incomplete relational input"
         );
+        let workspace = self.workspaces.acquire().await?;
         let mut sources = input.batch.into_iter();
         let mut values = ValidatedValues {
             batches: BTreeMap::new(),
@@ -154,10 +155,12 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             values.batches.insert(node.id.clone(), Arc::new(batch));
             profile.operator(&node.id);
         }
+        drop(workspace);
         let candidate = self.stage_all(&prior, &values, input.time, staging).await?;
         profile.mark("stage_arrangements");
         let output =
             values.batches.remove(&self.plan.definition().outputs[0]).context("missing output")?;
+        let _workspace = self.workspaces.acquire().await?;
         Ok((candidate, output.materialize(self.limits).await?))
     }
     async fn binary_sealed(
@@ -269,7 +272,10 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         }
         // Drain every in-flight upload even on failure before the caller can
         // release its upload protection. No candidate becomes visible here.
-        let completed = stream::iter(uploads).buffer_unordered(8).collect::<Vec<_>>().await;
+        let completed = stream::iter(uploads)
+            .buffer_unordered(self.workspaces.capacity())
+            .collect::<Vec<_>>()
+            .await;
         let mut candidate = prior.clone();
         for result in completed {
             if let Some((id, entry)) = result? {
@@ -348,6 +354,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         delta: TimedBatch<&crate::engine::execution::Sealed<K, V>>,
         policy: StagePolicy<'_, '_, K, V>,
     ) -> Result<Option<Replacement<K, V>>> {
+        let _workspace = self.workspaces.acquire().await?;
         let StagePolicy { staging, proof } = policy;
         let Some(member) =
             self.plan.definition().arrangements.iter().find(|member| member.node == node)

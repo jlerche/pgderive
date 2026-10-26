@@ -27,6 +27,9 @@ credentials_file = "s3.local.json"
 # Each operator spills exact coefficients before reaching these resident limits.
 # Byte budgets count serialized records, with separate entry caps for overhead.
 [execution]
+# Shared across foreground, checkpoint, bootstrap/recovery and collection.
+object_requests = 16
+workspace_slots = 8
 cache_bytes = 16777216
 cache_entries = 256
 resident_bytes = 4194304

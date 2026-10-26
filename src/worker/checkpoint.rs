@@ -117,6 +117,7 @@ pub(super) async fn complete(open: &mut Open, uploaded: Uploaded) -> Result<()> 
         open.catalog.clone(),
         open.store.clone(),
         open.settings.health.operation_timeout_secs,
+        open.query.workspaces(),
     )?;
     let mut event = serde_json::json!({"event":"maintenance","time":checkpoint.time,
         "published_time":open.query.time(),"epoch":open.writer.epoch(),

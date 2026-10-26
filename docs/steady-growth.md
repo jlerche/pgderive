@@ -1742,3 +1742,65 @@ Formatting, Clippy, documentation and unused-dependency checks pass. Independent
 implementation and final documentation review found no actionable remaining
 finding. The owned PostgreSQL fixture used tmpfs and was removed with its volumes.
 No deployment or change to the paused demo was made.
+
+### Shared worker resource admission (2026-10-26)
+
+One query-wide phase pool now replaces the independent eight-way arrangement
+upload allowances. Foreground evaluation and staging, streaming snapshot work,
+recovery/rebase, checkpoint writers and GC share admission. A maintenance quota
+leaves foreground headroom when capacity exceeds one; phase transitions never
+nest permits from the same pool. CDC and replay reuse one admitted input adapter,
+and sink-delta encoding follows the same policy. `execution.workspace_slots`
+defaults to 8. The one-slot configuration is supported and covered by simultaneous
+preparations, frozen upload, stale-candidate rejection, rebase, compaction and
+streaming-bootstrap tests.
+
+`execution.object_requests` defaults to 16. The existing object-store limiter
+wraps the scoped store once and its Arc is shared across worker tasks, including
+collection. It retains admission across streamed GET bodies and LIST results,
+and delegates batched deletion. There is no custom object-store implementation,
+new object layout, yield-triggered flush or additional checkpoint trigger.
+Diagnostics expose global/background occupancy and waits, the global peak, and
+configured limits. Detailed accounting boundaries are documented in `worker-health.md`.
+
+The scope is aggregate active-phase/API-operation concurrency. Retained batches,
+proofs, bootstrap folds and cache pins can outlive phases; those allocations and
+allocator/runtime overhead are outside this admission count. It does not prove
+an RSS bound or close retained-byte, compaction-debt or GC-scaling qualification.
+
+Fast live checkpoint validation passes all six cases in 27.80 seconds. Its debt
+case uses two workspace slots and two object-store operations, observes peak
+ownership of two and background quota waits, and finishes with the exact sink
+and safe source/checkpoint ACK. The crash suite passes in 15.13 seconds. During
+its held GC delete, another source publication completes with one shared slot
+owned by the collector and a measured global peak of two; the killed worker then
+recovers exact durable state. The initial two-slot GC test waited for a new
+checkpoint behind the held collector and reached the proxy timeout. The harness
+now detects either checkpoint completion or the held collection before driving
+the explicit foreground-progress witness; it rejects retries at that boundary.
+The failed fixture/logs remain under ignored evidence.
+
+The unchanged optimized maintenance profile executes in 29.90 seconds after a
+56.56-second build without compiler overlap, versus 29.16 seconds previously.
+Total CPU ticks in the larger cases rise about 2.5--2.8% in this single run; the
+admission controls are not presented as a throughput optimization. Total PUTs
+and uploaded bytes match `bcb3aef` exactly in all three cases: 1,028 / 2,150,111;
+1,055 / 4,816,300; and 727 / 4,068,895. Cold oracles pass. Existing growth/cost
+gates remain red; the smallest largest-tier CPU window also fails from one
+versus two coarse CPU ticks. No baseline ceiling is relaxed. The component
+profile exercises shared engine phase admission, while the live worker cases
+exercise the scoped S3 API limiter and collector wiring.
+
+Evidence, including the frozen benchmark executable, source hashes, live counters
+and failed intermediate runs, is retained under ignored
+`artifacts/benchmarks/worker-budgets-20261026/`. This is not full-worker steady-state
+or long-duration RSS qualification.
+
+The required `./scripts/check.sh` gate passes: 638 Rust tests (11 explicit manual
+workloads ignored), 146 Python tests, sequential live PostgreSQL durability
+checks, 148 core worker results plus rebuild, formatting, Clippy, docs and
+unused-dependency checks. Production line coverage is 97.20%. Independent final
+review found no remaining actionable finding. Its additional closed-log
+zero-retry assertion for the GC witness is exercised by the common gate and
+passes. All owned PostgreSQL fixture data used tmpfs; the container and its
+volumes were removed. No deployment or change to the paused demo was made.

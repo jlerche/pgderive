@@ -414,9 +414,7 @@ async fn publish(
     let mut phases = super::measurements::Phases::new(measured);
     let started = Instant::now();
     let time = open.query.time().checked_add(1).context("worker logical time overflow")?;
-    let mut input = relational::Input::new(open.compiled.relational(), open.replication.execution)?;
-    input.append(&transaction.batch, open.compiled.relational())?;
-    let input = input.seal(time)?;
+    let input = open.input(&transaction.batch, time).await?;
     phases.mark("inputs");
     let mut preparation = crate::timing::Profile::new(measured);
     let prepared = match open
@@ -449,7 +447,8 @@ async fn publish(
     };
     preparation.mark("candidate_validation");
     phases.mark("prepare_including_object_io");
-    let deltas = relational::deltas(&prepared.output().batch, open.compiled.output())?;
+    let deltas =
+        relational::deltas(&open.query, &prepared.output().batch, open.compiled.output()).await?;
     let progress = Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
     phases.mark("finalize");
     let publication = open
@@ -465,7 +464,7 @@ async fn publish(
     open.query.commit(prepared)?;
     phases.mark("local_completion");
     let cache = open.query.cache_stats()?;
-    let mut event = json!({"event":"published","time":time,"memtable_bytes":open.query.memtable_bytes()?,"end_lsn":transaction.end_lsn,"changes":transaction.changes.len(),"source_transactions":epoch.transactions(),"elapsed_ms":started.elapsed().as_millis(),"cache":crate::worker::health::cache_diagnostics(&cache)});
+    let mut event = json!({"event":"published","time":time,"workspaces":open.query.workspaces().stats(),"memtable_bytes":open.query.memtable_bytes()?,"end_lsn":transaction.end_lsn,"changes":transaction.changes.len(),"source_transactions":epoch.transactions(),"elapsed_ms":started.elapsed().as_millis(),"cache":crate::worker::health::cache_diagnostics(&cache)});
     if let Some(phases) = phases.finish(epoch.decode_us())? {
         event["phases_us"] = phases;
         event["publication_us"] = serde_json::to_value(publication)?;

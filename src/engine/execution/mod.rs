@@ -1,5 +1,7 @@
 //! Bounded scratch consolidation; physical spill boundaries never narrow weights.
 mod capacity;
+mod workspaces;
+pub use workspaces::{WorkspaceStats, Workspaces};
 mod input;
 mod levels;
 mod merge;
@@ -21,6 +23,10 @@ use tempfile::TempDir;
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
+    /// Worker-wide object-store API concurrency, including GC and streamed GETs.
+    pub object_requests: usize,
+    /// Shared active compute/arrangement/GC phases; not a retained-memory or RSS cap.
+    pub workspace_slots: usize,
     /// Separate cap for retained native values, including decoded handles.
     /// Zero disables native retention; transient decoding is outside this cap.
     pub native_cache_bytes: usize,
@@ -49,6 +55,8 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
+            object_requests: 16,
+            workspace_slots: 8,
             native_cache_bytes: 4 * 1024 * 1024,
             cache_bytes: 16 * 1024 * 1024,
             cache_entries: 256,
@@ -83,6 +91,8 @@ impl Limits {
     /// # Errors
     /// Rejects zero limits or records larger than the resident byte budget.
     pub fn validate(self) -> Result<Self> {
+        ensure!((1..=256).contains(&self.object_requests), "invalid shared object request limit");
+        ensure!((1..=256).contains(&self.workspace_slots), "invalid shared workspace slot limit");
         ensure!(
             self.record_bytes > 0
                 && self.record_bytes <= self.resident_bytes

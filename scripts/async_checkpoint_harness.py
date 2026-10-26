@@ -157,6 +157,7 @@ def debt_pressure(output, command):
         path = original(maximum)
         text = path.read_text().replace('maintenance_ticks=4',
             f'maintenance_ticks=64\ncheckpoint_interval_ms=500\nmemtable_bytes={cap}')
+        text = text.replace('[execution]\n', '[execution]\nworkspace_slots=2\nobject_requests=2\n')
         path.write_text(text + '\n[worker.epoch]\nenabled=false\n')
         return path
     fixture.config = config
@@ -186,14 +187,17 @@ def debt_pressure(output, command):
             completed = worker.event('maintenance')
             assert completed['time'] == ready['time']+1, completed
             assert completed['published_time'] == pressure['time'], completed
-            worker.event('published', minimum_time=ready['time']+33)
+            published = worker.event('published', minimum_time=ready['time']+33)
+            usage = published['workspaces']
+            assert usage['capacity'] == 2 and usage['peak'] == 2, usage
+            assert usage['active'] <= 2, usage
             fixture.verify()
             worker.finish(graceful=True)
             final = boundary(fixture)
             assert final['checkpoint_lsn'] == final['end_lsn'] and final['ack_safe'], final
             (output/'result.json').write_text(json.dumps({'passed':True,'cap':cap,
                 'backpressure':pressure,'held':held,'completed_existing_prefix':completed,
-                'final':final},indent=2)+'\n')
+                'workspaces':usage,'final':final},indent=2)+'\n')
     finally:
         gate.touch()
         process.terminate()

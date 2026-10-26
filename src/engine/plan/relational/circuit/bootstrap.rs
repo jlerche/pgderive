@@ -86,6 +86,7 @@ impl<K: BatchData, V: BatchData> Bootstrap<K, V> {
         self.limits
     }
     pub(crate) async fn append(&mut self, sources: Vec<Batch<K, V>>) -> Result<()> {
+        let _workspace = self.execution.workspaces.acquire().await?;
         ensure!(!self.failed, "failed snapshot workspace cannot be reused");
         self.failed = true;
         ensure!(
@@ -177,6 +178,7 @@ impl<K: BatchData, V: BatchData> Bootstrap<K, V> {
         mut self,
         namespace: Option<&str>,
     ) -> Result<(RelationalState<K, V>, Batch<K, V>)> {
+        let workspace = self.execution.workspaces.acquire().await?;
         ensure!(!self.failed, "failed snapshot workspace cannot finish");
         let nodes = self.execution.plan.definition().nodes.clone();
         for node in nodes.iter().filter(|n| {
@@ -214,8 +216,10 @@ impl<K: BatchData, V: BatchData> Bootstrap<K, V> {
             bags: BTreeMap::new(),
             statistics: BTreeMap::new(),
         };
+        drop(workspace);
         let state =
             self.execution.stage_all(&self.prior, &values, 1, Staging::Objects(namespace)).await?;
+        let _workspace = self.execution.workspaces.acquire().await?;
         let output = values
             .batches
             .get(&self.execution.plan.definition().outputs[0])
@@ -311,7 +315,7 @@ mod tests {
         let settings = Settings {
             store: Arc::new(object_store::memory::InMemory::new()),
             block_rows: 4096,
-            limits,
+            limits: Limits { workspace_slots: 1, ..limits },
             encoded_cache: None,
         };
         super::super::super::Relational::new(plan, operators, &settings)

@@ -24,6 +24,17 @@ pub(super) struct Open {
     pub(super) replication: Config,
 }
 impl Open {
+    pub(super) async fn input(
+        &self,
+        batch: &crate::weighted::Batch,
+        time: u64,
+    ) -> Result<relational::Inputs> {
+        let _workspace = self.query.workspaces().acquire().await?;
+        let mut input =
+            relational::Input::new(self.compiled.relational(), self.replication.execution)?;
+        input.append(batch, self.compiled.relational())?;
+        input.seal(time)
+    }
     pub(super) async fn connect_with_session(
         config: &Config,
         settings: &Settings,
@@ -44,7 +55,7 @@ impl Open {
             .object_store
             .as_ref()
             .context("worker requires durable object storage")?
-            .build(&settings.object_prefix)?;
+            .build(&settings.object_prefix, config.execution.object_requests)?;
         config
             .object_store
             .as_ref()
@@ -185,19 +196,13 @@ async fn bootstrap(
     // The preliminary registration must match the exact imported source layout.
     let compiled = settings.query.compile_bound(&session.client, &contract).await?;
     verify_snapshot_plan(config, settings, &contract, &compiled, query)?;
-    let token: String = session
-        .client
-        .query_one("SELECT pg_catalog.gen_random_uuid()::text", &[])
-        .await?
-        .try_get(0)?;
-    let protection =
-        catalog.protect_upload(&mut session.client, &format!("worker-bootstrap:{token}")).await?;
+    let protection = protect_bootstrap(&mut session.client, catalog).await?;
     super::drive::emit(
         &serde_json::json!({"event":"bootstrap_upload","slot":contract.slot,"boundary":boundary.to_string()}),
     )?;
     let prepared = query.prepare_bootstrap(input, &protection).await?;
     let checkpoint = query.prepared_checkpoint(&prepared)?;
-    let deltas = relational::deltas(&prepared.output().batch, compiled.output())?;
+    let deltas = relational::deltas(query, &prepared.output().batch, compiled.output()).await?;
     let sink = compiled.sink(&settings.sink_table, settings.sink_output, &settings.sink_key)?;
     catalog
         .activate_snapshot(
@@ -214,6 +219,15 @@ async fn bootstrap(
         .await?;
     query.commit(prepared)?;
     release_bootstrap(&mut session.client, catalog, query, protection, &checkpoint).await
+}
+
+async fn protect_bootstrap(
+    sql: &mut tokio_postgres::Client,
+    catalog: &Catalog,
+) -> Result<crate::catalog::Protection> {
+    let token: String =
+        sql.query_one("SELECT pg_catalog.gen_random_uuid()::text", &[]).await?.try_get(0)?;
+    catalog.protect_upload(sql, &format!("worker-bootstrap:{token}")).await
 }
 
 async fn read_snapshot(
@@ -239,7 +253,11 @@ async fn read_snapshot(
     let mut rows = 0_usize;
     while let Some(batch) = reader.next(snapshot).await? {
         rows = rows.checked_add(batch.updates.len()).context("snapshot row count overflow")?;
-        input.append(relational::chunk(&batch, ir)?).await?;
+        let chunk = {
+            let _workspace = query.workspaces().acquire().await?;
+            relational::chunk(&batch, ir)?
+        };
+        input.append(chunk).await?;
         if rows.is_multiple_of(limits.resident_entries.saturating_mul(128)) {
             super::drive::emit(&serde_json::json!({"event":"bootstrap_progress","rows":rows}))?;
         }
@@ -262,7 +280,7 @@ fn verify_snapshot_plan(
                 .object_store
                 .as_ref()
                 .context("missing storage")?
-                .build(&settings.object_prefix)?,
+                .build(&settings.object_prefix, config.execution.object_requests)?,
             block_rows: settings.block_rows,
             limits: config.execution,
             encoded_cache: None,

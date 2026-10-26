@@ -60,7 +60,7 @@ async fn compiled_join_deltas_cold_restart_and_atomic_failure() -> Result<()> {
         let expected = super::bag_delta(&before, &after)?;
         let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
         assert_eq!(work.output().batch, expected);
-        relational::deltas(&work.output().batch, &ir.output)?;
+        relational::deltas(&query, &work.output().batch, &ir.output).await?;
         query.prepared_checkpoint(&work)?;
         query.commit(work)?;
         if index == 1 {

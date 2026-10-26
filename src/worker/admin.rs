@@ -16,7 +16,7 @@ pub async fn start(config: Config, restart: bool) -> Result<()> {
     config.validate()?;
     let settings = config.worker.clone().context("configuration requires a worker section")?;
     let storage = config.object_store.as_ref().context("worker requires durable object storage")?;
-    let store = storage.build(&settings.object_prefix)?;
+    let store = storage.build(&settings.object_prefix, config.execution.object_requests)?;
     storage.preflight(store.as_ref()).await?;
     let mut session = Session::connect(&config).await?;
     session.own(&settings.catalog_schema, &settings.query_id).await?;

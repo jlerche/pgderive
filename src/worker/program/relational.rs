@@ -20,7 +20,7 @@ use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 pub(in crate::worker) type Key = crate::engine::value::Value<Vec<String>>;
-type Inputs = TimedBatch<Vec<crate::engine::execution::Sealed<Key, Row>>>;
+pub(in crate::worker) type Inputs = TimedBatch<Vec<crate::engine::execution::Sealed<Key, Row>>>;
 pub(in crate::worker) type Query = Circuit<Key, Row>;
 #[cfg(test)]
 pub(in crate::worker) fn build(
@@ -375,7 +375,12 @@ pub(in crate::worker) fn inputs(
     input.append(batch, ir)?;
     input.seal(time)
 }
-pub(in crate::worker) fn deltas(batch: &Batch<Key, Row>, output: &Projected) -> Result<Deltas> {
+pub(in crate::worker) async fn deltas(
+    query: &Query,
+    batch: &Batch<Key, Row>,
+    output: &Projected,
+) -> Result<Deltas> {
+    let _workspace = query.workspaces().acquire().await?;
     let updates = batch
         .iter()
         .map(|((_, row), weight)| Ok((((), output.row(row)?), *weight)))

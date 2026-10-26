@@ -34,7 +34,7 @@ pub use spec::{QueryDefinition, Settings};
 pub async fn run(config: Config) -> Result<()> {
     config.validate()?;
     let settings = config.worker.clone().context("configuration requires a worker section")?;
-    drive::run(config, settings).await
+    Box::pin(drive::run(config, settings)).await
 }
 
 #[cfg(test)]
