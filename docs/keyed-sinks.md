@@ -185,3 +185,41 @@ The encoded-metadata slice passed independent review and `./scripts/check.sh`,
 including 648 Rust tests, sequential PostgreSQL durability/lifecycle checks and
 97.14% production line coverage. The owned tmpfs fixture was removed without
 creating persistent Docker volumes; results and failure evidence were retained.
+
+
+The publication pipeline slice (2026-10-27, baseline `b47e73e`) queues lifecycle
+protection before the boundary guard using biased first polling on the same
+transaction connection. PostgreSQL still executes both original statements
+serially with separate snapshots. Both must complete before source locking,
+layout validation, progress, sink DML and synchronous commit. Checkpoint publication
+is unchanged. This removes one serial response wait, not a SQL statement.
+Combining the SQL was rejected because its statement snapshot would predate a
+wait for lifecycle protection.
+
+Fast paired production-worker measurements used 20,000 groups, 60 epochs,
+16-tick maintenance, the native binary oracle and a constant 5 ms downstream
+PostgreSQL response delay. Publication p50 fell from 45.141 to 39.462 ms;
+reverse-order testing measured 44.958 versus 39.707 ms (12–13% lower).
+Boundary-guard p50 fell from 16.758/16.707 to 11.288/11.369 ms.
+Physical sink updates/deletes and index size were equal; WAL was identical in
+the first pair and differed by 112 bytes (less than 0.01%) in the reverse pair.
+CPU is inconclusive. The localhost control was essentially flat: publication
+p50 2.138 versus 2.174 ms, with guard p50 0.597 versus 0.599 ms. The benefit
+therefore depends on database response latency. These timings isolate network
+waiting in the publication path; they do not establish a live freshness or steady-state SLO.
+
+The default memtable harness now holds an exclusive lifecycle barrier and proves
+publication has not acquired query/progress row locks while waiting. It revokes
+source ownership before releasing the barrier and requires rejection with exact
+sink tuple identity, progress and ACK unchanged. The fourteen existing boundary
+tampering cases also pass. An initial test observer incorrectly searched for a
+schema literal in parameterized SQL; the failed evidence remains saved, and the
+corrected observer checks the advisory wait. Reused proxy/measurement scripts,
+frozen binaries and results remain ignored under
+`artifacts/benchmarks/publication-roundtrips-20261027/`.
+
+The pipeline slice passed independent review and the common `./scripts/check.sh`
+core gate: 648 Rust tests, 147 Python tests, 154 live worker results plus rebuild,
+and 97.15% production line coverage. The additional barrier result is required
+by both core and full result-count verification. Disposable PostgreSQL used
+tmpfs with no persistent volumes; results and failure evidence were retained.

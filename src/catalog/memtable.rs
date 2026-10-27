@@ -22,8 +22,14 @@ impl Writer {
         ensure!(!self.boundary.covers(progress)?, "memtable transaction already published");
         self.metadata.refresh(plan, &self.boundary)?;
         let (tx, program) = sql.publication(&self.catalog, &self.boundary.binding.sink).await?;
-        super::storage::publication_lock(&tx, &self.catalog).await?;
-        self.guard_memtable(&tx, &program.guard).await?;
+        // First-poll order queues lifecycle protection before the boundary check.
+        // PostgreSQL executes these separate statements serially, retaining a fresh
+        // boundary snapshot after any lifecycle wait without an intervening RTT.
+        tokio::try_join!(
+            biased;
+            super::storage::publication_lock(&tx, &self.catalog),
+            self.guard_memtable(&tx, &program.guard),
+        )?;
         let boundary_guard = clock.lap();
         self.boundary.binding.source.lock_and_verify_layout(&tx).await?;
         let source_layout = clock.lap();

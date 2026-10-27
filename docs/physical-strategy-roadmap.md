@@ -77,6 +77,13 @@ fallback. Encoded immutable plan/binding data and the complete expected
 checkpoint comparison are also cached: physical publication epochs refresh
 checkpoint-dependent bytes before use, while per-transaction progress stays
 fresh. This reduces repeated construction/serialization/parse/planning work,
-not the number of foreground database round trips. Remaining publication work
-is reducing compatible checks under held locks. Do not label round-trip fusion
-complete based on a lower publication median.
+not the number of foreground database round trips.
+
+The next slice pipelines lifecycle protection and the boundary check on the same
+transaction connection. Biased first polling queues protection first; PostgreSQL
+executes separate statements in order, so the boundary snapshot remains fresh
+after a lifecycle wait. Both must succeed before source locks, progress, sink DML
+and synchronous commit. This removes one serial response wait, not a SQL statement
+or a durability barrier. Checkpoint publication is unchanged. Further candidates
+include source-table locking and layout inspection, subject to the same ordering
+and failure tests; round-trip reduction is not complete.
