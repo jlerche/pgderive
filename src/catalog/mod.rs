@@ -1,11 +1,14 @@
 //! `PostgreSQL` coarse checkpoint catalog and atomic sink/progress publication.
 mod bootstrap;
+mod connection;
 pub use bootstrap::Snapshot;
+pub use connection::Connection;
 pub(crate) mod epoch;
 mod maintenance;
 mod memtable;
 mod memtable_guard;
 mod position;
+mod prepared;
 mod publication;
 mod read;
 mod recovery;

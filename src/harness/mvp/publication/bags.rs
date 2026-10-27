@@ -7,10 +7,9 @@ use crate::{
     },
 };
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     schema: &str,
     initial: &super::initial::Initial<'_>,
 ) -> Result<()> {
@@ -104,7 +103,7 @@ struct Contract<'a> {
     schema: &'a str,
 }
 async fn underflow(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     writer: &mut Writer,
     checkpoint: &Checkpoint,
     contract: Contract<'_>,

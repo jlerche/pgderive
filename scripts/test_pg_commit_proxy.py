@@ -1,7 +1,7 @@
 import socket
 import struct
 import unittest
-from pg_commit_proxy import frame, commit, Proxy, Handler
+from pg_commit_proxy import frame, commit, Proxy, Handler, execution_marker
 
 
 class Frames(unittest.TestCase):
@@ -12,6 +12,20 @@ class Frames(unittest.TestCase):
             self.assertFalse(proxy.claim_fault())
             proxy.once = False
             self.assertTrue(proxy.claim_fault())
+
+    def test_named_statement_arms_on_execution_not_preparation(self):
+        observer=execution_marker(b'/* pgderive:epoch */')
+        parse=b'epoch_statement\0/* pgderive:epoch */ SELECT 1\0\x00\x00'
+        self.assertIsNone(observer.observe(b'P',parse))
+        self.assertIsNone(observer.observe(b'B',b'epoch_portal\0epoch_statement\0'))
+        self.assertTrue(observer.observe(b'E',b'epoch_portal\0\x00\x00\x00\x00'))
+        self.assertIsNone(observer.observe(b'P',b'other\0SELECT 1\0\x00\x00'))
+        self.assertIsNone(observer.observe(b'B',b'other_portal\0other\0'))
+        self.assertFalse(observer.observe(b'E',b'other_portal\0\x00\x00\x00\x00'))
+        self.assertTrue(observer.observe(b'E',b'epoch_portal\0\x00\x00\x00\x00'))
+        observer.observe(b'C',b'Pepoch_portal\0')
+        self.assertIsNone(observer.observe(b'E',b'epoch_portal\0\x00\x00\x00\x00'))
+        self.assertTrue(observer.observe(b'Q',b'/* pgderive:epoch */ SELECT 1\0'))
 
     def test_startup_and_command(self):
         left, right = socket.socketpair()

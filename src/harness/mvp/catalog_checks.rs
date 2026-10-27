@@ -2,10 +2,9 @@ use crate::{catalog::Catalog, engine::plan::Plan};
 use anyhow::{Context, Result, ensure};
 use object_store::{ObjectStoreExt as _, path::Path};
 use std::sync::Arc;
-use tokio_postgres::Client;
 
 pub(super) async fn corrupt_membership(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     schema: &str,
     catalog: &Catalog,
     plan: &Plan,

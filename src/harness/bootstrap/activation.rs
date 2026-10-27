@@ -4,10 +4,9 @@ use crate::{
     engine::plan::Plan,
 };
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     plan: &Plan,
     snapshot: Snapshot<'_>,

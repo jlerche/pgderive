@@ -8,6 +8,7 @@ mod key;
 mod keyed;
 mod layout;
 mod lookup;
+pub(super) mod program;
 mod rows;
 mod stdout;
 pub use rows::ResultColumn;
@@ -114,16 +115,16 @@ impl Deltas {
         &self,
         tx: &Transaction<'_>,
         catalog: &Catalog,
-        sink: &Sink,
         position: (u64, super::Lsn),
+        program: &program::Program,
     ) -> Result<()> {
-        let table = format!("{}.{}", catalog.schema, sink.table.as_str());
+        let sink = &program.sink;
         let context = if sink.output == SinkOutput::Stdout {
             serde_json::json!({"query_id":catalog.query,"schema":catalog.schema,
                 "table":sink.table,"columns":sink.columns,"time":position.0,"end_lsn":position.1.to_string()})
         } else {
             Value::Null
         };
-        batching::apply(tx, &table, sink, &self.rows, &context).await
+        batching::apply(tx, program, sink, &self.rows, &context).await
     }
 }

@@ -1,7 +1,6 @@
 use super::{Writer, read, write};
 use crate::engine::plan::{Checkpoint, Plan};
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::Client;
 
 impl Writer {
     /// Publish equivalent physical memberships without changing source or sink state.
@@ -13,7 +12,7 @@ impl Writer {
     /// An uncertain COMMIT blocks further publication/ACK until authoritative recovery.
     pub async fn maintain(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         checkpoint: &Checkpoint,
     ) -> Result<()> {

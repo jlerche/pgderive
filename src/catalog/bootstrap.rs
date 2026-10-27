@@ -4,7 +4,6 @@ use crate::{
     source::Contract,
 };
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::Client;
 
 /// Initial immutable state and destination output for one slot-consistent snapshot.
 /// No synthetic source transaction ID is assigned to snapshot rows.
@@ -31,7 +30,7 @@ impl Catalog {
     /// After an uncertain COMMIT, load the exact authoritative boundary before retry.
     pub async fn activate_snapshot(
         &self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         snapshot: Snapshot<'_>,
     ) -> Result<()> {
@@ -54,9 +53,15 @@ impl Catalog {
         .await?;
         write::stage(&tx, self, plan, snapshot.checkpoint, 0).await?;
         binding.initialize(&tx, self, snapshot.boundary).await?;
+        let program = super::sink::program::Program::prepare(
+            &tx,
+            &format!("{}.{}", self.schema, binding.sink.table),
+            &binding.sink,
+        )
+        .await?;
         snapshot
             .deltas
-            .apply(&tx, self, &binding.sink, (snapshot.checkpoint.time, snapshot.boundary))
+            .apply(&tx, self, (snapshot.checkpoint.time, snapshot.boundary), &program)
             .await?;
         tx.commit()
             .await

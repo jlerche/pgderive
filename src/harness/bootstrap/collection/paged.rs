@@ -5,7 +5,7 @@ use object_store::{ObjectStoreExt as _, path::Path};
 use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &Query,
     writer: &Writer,
@@ -38,7 +38,11 @@ pub(super) async fn check(
     );
     Ok(())
 }
-async fn rollback(sql: &mut Client, catalog: &Catalog, recovery: &Recovery) -> Result<()> {
+async fn rollback(
+    sql: &mut crate::catalog::Connection,
+    catalog: &Catalog,
+    recovery: &Recovery,
+) -> Result<()> {
     let schema = catalog.schema();
     let before = cursor(sql, catalog).await?;
     sql.batch_execute(&format!("CREATE FUNCTION {schema}.reject_gc_cursor() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected GC cursor failure'; END $$; CREATE TRIGGER reject_gc_cursor BEFORE UPDATE ON {schema}.pgderive_gc FOR EACH ROW EXECUTE FUNCTION {schema}.reject_gc_cursor()" )).await?;
@@ -52,7 +56,7 @@ async fn rollback(sql: &mut Client, catalog: &Catalog, recovery: &Recovery) -> R
     Ok(())
 }
 pub(super) async fn finish(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     recovery: &Recovery,
 ) -> Result<usize> {
@@ -68,7 +72,11 @@ pub(super) async fn finish(
     }
     anyhow::bail!("bounded fixture GC failed to finish a full pass")
 }
-pub(super) async fn turn(sql: &mut Client, catalog: &Catalog, recovery: &Recovery) -> Result<()> {
+pub(super) async fn turn(
+    sql: &mut crate::catalog::Connection,
+    catalog: &Catalog,
+    recovery: &Recovery,
+) -> Result<()> {
     let result = catalog
         .collect(
             sql,

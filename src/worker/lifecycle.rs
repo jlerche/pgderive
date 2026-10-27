@@ -228,7 +228,7 @@ async fn own(config: &Config) -> Result<(Session, Settings)> {
     let settings = config.worker.clone().context("configuration requires a worker section")?;
     let session = Session::connect(config).await?;
     session.own(&settings.catalog_schema, &settings.query_id).await?;
-    require_public(&session.client, &settings).await?;
+    require_public(&*session.client, &settings).await?;
     Ok((session, settings))
 }
 

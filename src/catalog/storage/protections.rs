@@ -8,7 +8,6 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
-use tokio_postgres::Client;
 
 /// Durable coarse protection, retained after disconnect or process failure.
 ///
@@ -31,7 +30,11 @@ impl Catalog {
     ///
     /// # Errors
     /// Rejects invalid tokens, tokens still recorded, or database failures.
-    pub async fn protect_upload(&self, sql: &mut Client, token: &str) -> Result<Protection> {
+    pub async fn protect_upload(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        token: &str,
+    ) -> Result<Protection> {
         insert(sql, self, token, 0).await
     }
     /// Pin an authoritative checkpoint before opening its objects for recovery/read.
@@ -41,7 +44,7 @@ impl Catalog {
     /// Rejects corrupt/missing checkpoints, tokens still recorded, or database failures.
     pub async fn protect_checkpoint(
         &self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         token: &str,
     ) -> Result<Protection> {
@@ -49,7 +52,7 @@ impl Catalog {
     }
     async fn pin_checkpoint(
         &self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         token: &str,
         recovery_fence: Option<i64>,
@@ -105,7 +108,7 @@ impl Catalog {
     }
 }
 async fn insert(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     token: &str,
     fence: i64,
@@ -192,7 +195,7 @@ impl Protection {
     /// Rejects a different query, uncertain/stale writer or nonmatching checkpoint.
     pub async fn published(
         self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         writer: &Writer,
         plan: &Plan,
         checkpoint: &Checkpoint,
@@ -211,11 +214,11 @@ impl Protection {
     ///
     /// # Errors
     /// Rejects an upload reservation or changed/missing protection.
-    pub async fn reader_finished(self, sql: &mut Client) -> Result<()> {
+    pub async fn reader_finished(self, sql: &mut crate::catalog::Connection) -> Result<()> {
         ensure!(!self.uploading, "unresolved upload cannot be released as a reader");
         self.remove(sql).await
     }
-    async fn remove(self, sql: &mut Client) -> Result<()> {
+    async fn remove(self, sql: &mut crate::catalog::Connection) -> Result<()> {
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
         shared(&tx, &self.catalog).await?;
@@ -232,7 +235,11 @@ impl Writer {
     ///
     /// # Errors
     /// Rejects uncertain/stale writers, tokens still recorded, or database failures.
-    pub async fn protect_upload(&self, sql: &mut Client, token: &str) -> Result<Protection> {
+    pub async fn protect_upload(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        token: &str,
+    ) -> Result<Protection> {
         ensure!(!self.uncertain, "uncertain writer cannot reserve uploads");
         insert(sql, &self.catalog, token, self.boundary.fence).await
     }
@@ -241,14 +248,18 @@ impl Writer {
     // after restoring, before opening CDC or exposing any recovered result.
     pub(crate) async fn protect_recovery(
         &self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         token: &str,
     ) -> Result<Protection> {
         self.confirmed(sql, plan).await?;
         self.catalog.pin_checkpoint(sql, plan, token, Some(self.boundary.fence)).await
     }
-    pub(crate) async fn seal_fenced_recovery(&self, sql: &mut Client, plan: &Plan) -> Result<u64> {
+    pub(crate) async fn seal_fenced_recovery(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        plan: &Plan,
+    ) -> Result<u64> {
         self.seal(sql, plan, true).await
     }
     /// Seal abandoned uploads belonging to earlier fenced writers of this query.
@@ -258,10 +269,19 @@ impl Writer {
     ///
     /// # Errors
     /// Rejects uncertain/stale ownership or database failures.
-    pub async fn seal_fenced_uploads(&self, sql: &mut Client, plan: &Plan) -> Result<u64> {
+    pub async fn seal_fenced_uploads(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        plan: &Plan,
+    ) -> Result<u64> {
         self.seal(sql, plan, false).await
     }
-    async fn seal(&self, sql: &mut Client, plan: &Plan, recovery: bool) -> Result<u64> {
+    async fn seal(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        plan: &Plan,
+        recovery: bool,
+    ) -> Result<u64> {
         self.confirmed(sql, plan).await?;
         let tx = sql.transaction().await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;

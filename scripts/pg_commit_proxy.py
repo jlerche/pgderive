@@ -43,6 +43,10 @@ def commit(kind, body):
     return kind == b"Q" and body == b"COMMIT\0"
 
 
+def execution_marker(marker):
+    return BindingObserver(lambda query: marker in query)
+
+
 class Proxy(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
@@ -87,6 +91,7 @@ class Handler(socketserver.BaseRequestHandler):
 
         observer = BindingObserver() if self.server.mode == "observe" else None
         sink_observer = BindingObserver(sink_category) if observer else None
+        arm_observer = execution_marker(self.server.arm_query) if self.server.arm_query else None
 
         def forward_client():
             try:
@@ -95,7 +100,7 @@ class Handler(socketserver.BaseRequestHandler):
                 armed = self.server.arm_query is None
                 while not stopping.is_set():
                     kind, body, message = frame(self.request)
-                    if kind in (b'Q', b'P') and self.server.arm_query and self.server.arm_query in body:
+                    if arm_observer and arm_observer.observe(kind, body):
                         armed = True
                     if observer:
                         inspection = observer.observe(kind, body)
@@ -121,6 +126,8 @@ class Handler(socketserver.BaseRequestHandler):
                                 raise TimeoutError("COMMIT release gate expired")
                             time.sleep(.02)
                     upstream.sendall(message)
+                    if kind == b'Q' and body in (b'BEGIN\0', b'ROLLBACK\0', b'COMMIT\0'):
+                        armed = self.server.arm_query is None
                     if chosen and self.server.mode == "hold":
                         # Keep the upstream alive until server completion even if
                         # the client died while COMMIT was held by the gate.
@@ -164,7 +171,7 @@ if __name__ == "__main__":
     parser.add_argument("--upstream", type=int, default=os.environ.get("PGDERIVE_TEST_POSTGRES_PORT", "55434"))
     parser.add_argument("--gate", type=pathlib.Path)
     parser.add_argument("--once", action="store_true", help="inject one global COMMIT fault")
-    parser.add_argument("--arm-query", help="arm after an SQL Parse/Query containing this literal")
+    parser.add_argument("--arm-query", help="arm after executing SQL containing this literal")
     args = parser.parse_args()
     if not 1 <= args.upstream <= 65535:
         parser.error("upstream port must be between 1 and 65535")

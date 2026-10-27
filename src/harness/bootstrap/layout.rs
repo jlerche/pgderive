@@ -2,9 +2,12 @@
 use super::Fixture;
 use crate::source::{Contract, Identity};
 use anyhow::{Result, ensure};
-use tokio_postgres::Client;
 
-pub(super) async fn check(sql: &mut Client, fixture: &Fixture, identity: &Identity) -> Result<()> {
+pub(super) async fn check(
+    sql: &mut crate::catalog::Connection,
+    fixture: &Fixture,
+    identity: &Identity,
+) -> Result<()> {
     let schema = &fixture.schema;
     let publication = format!("{}_layout", fixture.publication);
     let first = format!("{schema}.\"layout\"\"one\"");
@@ -17,7 +20,7 @@ pub(super) async fn check(sql: &mut Client, fixture: &Fixture, identity: &Identi
          CREATE PUBLICATION {publication} FOR TABLE {first},{second}"
     ))
     .await?;
-    let contract = Contract::inspect(sql, identity.clone(), &publication, &fixture.slot).await?;
+    let contract = Contract::inspect(&**sql, identity.clone(), &publication, &fixture.slot).await?;
     ensure!(contract.relations.len() == 2, "batched layout lost a relation");
     let tx = sql.transaction().await?;
     contract.lock_and_verify_layout(&tx).await?;
@@ -52,7 +55,7 @@ pub(super) async fn check(sql: &mut Client, fixture: &Fixture, identity: &Identi
     Ok(())
 }
 
-async fn identity_check(sql: &mut Client, contract: &Contract) -> Result<()> {
+async fn identity_check(sql: &mut crate::catalog::Connection, contract: &Contract) -> Result<()> {
     let mut wrong = contract.clone();
     wrong.identity.timeline = wrong
         .identity

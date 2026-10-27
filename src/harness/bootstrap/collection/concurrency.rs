@@ -3,10 +3,9 @@ use anyhow::{Context, Result, ensure};
 use object_store::{ObjectStoreExt, path::Path};
 use std::{sync::Arc, time::Duration};
 use tokio::time::timeout;
-use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &mut Query,
     writer: &mut Writer,
@@ -22,7 +21,7 @@ pub(super) async fn check(
     result
 }
 async fn paused(
-    sessions: (&mut Client, &mut Client),
+    sessions: (&mut crate::catalog::Connection, &mut crate::catalog::Connection),
     catalog: &Catalog,
     graph: &mut Query,
     writer: &mut Writer,
@@ -87,7 +86,11 @@ async fn paused(
     Ok(())
 }
 
-async fn competing(sql: &mut Client, catalog: &Catalog, recovery: &Recovery) -> Result<()> {
+async fn competing(
+    sql: &mut crate::catalog::Connection,
+    catalog: &Catalog,
+    recovery: &Recovery,
+) -> Result<()> {
     let result = timeout(
         Duration::from_secs(5),
         catalog.collect(

@@ -6,7 +6,7 @@ use tokio_postgres::Client;
 impl PublicationFixture {
     pub(super) async fn failure_checks(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         graph: &Query,
         publication: Publication<'_>,
     ) -> Result<()> {
@@ -40,6 +40,7 @@ impl PublicationFixture {
             "suppressed destination write was committed"
         );
         self.unchanged(sql, graph, &before).await?;
+        self.cache_checks(sql, graph, publication, &before).await?;
         eprintln!("MVP suppressed destination DML rejected without progress change");
         sql.batch_execute(&format!("DROP TRIGGER reject_sink_write ON {0}.derived_groups; DROP FUNCTION {0}.reject_sink_write()", self.schema)).await?;
         eprintln!(
@@ -47,9 +48,43 @@ impl PublicationFixture {
         );
         Ok(())
     }
+    async fn cache_checks(
+        &mut self,
+        sql: &mut crate::catalog::Connection,
+        graph: &Query,
+        publication: Publication<'_>,
+        before: &Durable,
+    ) -> Result<()> {
+        let prepared = cached(sql, &self.schema).await?;
+        ensure!(prepared.len() == 2, "bag sink requires exactly two cached DML statements");
+        ensure!(
+            self.grouped.publish(sql, graph.plan(), publication).await.is_err(),
+            "suppressed cached write committed"
+        );
+        ensure!(
+            cached(sql, &self.schema).await? == prepared,
+            "publication rebuilt cached statements"
+        );
+        let _ = sql.client_mut();
+        ensure!(
+            cached(sql, &self.schema).await?.is_empty(),
+            "raw mutable borrow retained statement cache"
+        );
+        ensure!(
+            self.grouped.publish(sql, graph.plan(), publication).await.is_err(),
+            "suppressed recompiled write committed"
+        );
+        let recompiled = cached(sql, &self.schema).await?;
+        ensure!(
+            recompiled.len() == 2 && recompiled != prepared,
+            "invalidated statements not recompiled"
+        );
+        self.unchanged(sql, graph, before).await?;
+        Ok(())
+    }
     async fn boundary_checks(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         graph: &Query,
         publication: Publication<'_>,
         before: &Durable,
@@ -115,10 +150,19 @@ impl PublicationFixture {
         eprintln!("MVP unmanaged publication roots rejected without progress change");
         Ok(())
     }
-    async fn boundary(&self, sql: &mut Client, graph: &Query) -> Result<Durable> {
+    async fn boundary(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        graph: &Query,
+    ) -> Result<Durable> {
         self.catalog.load_durable(sql, graph.plan()).await?.context("missing publication boundary")
     }
-    async fn unchanged(&self, sql: &mut Client, graph: &Query, before: &Durable) -> Result<()> {
+    async fn unchanged(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        graph: &Query,
+        before: &Durable,
+    ) -> Result<()> {
         let after = self.boundary(sql, graph).await?;
         ensure!(
             before == &after,
@@ -137,4 +181,16 @@ pub(super) async fn require_synchronous_commit(sql: &Client, schema: &str) -> Re
         CREATE TRIGGER assert_sync_commit BEFORE INSERT OR UPDATE OR DELETE ON {schema}.pgderive_progress FOR EACH STATEMENT EXECUTE FUNCTION {schema}.assert_sync_commit();
         SET synchronous_commit=off")).await?;
     Ok(())
+}
+
+async fn cached(sql: &Client, schema: &str) -> Result<Vec<String>> {
+    let pattern = format!("%pgderive:sink-%{schema}.derived_groups%");
+    sql.query(
+        "SELECT name FROM pg_catalog.pg_prepared_statements WHERE statement LIKE $1 ORDER BY name",
+        &[&pattern],
+    )
+    .await?
+    .into_iter()
+    .map(|row| row.try_get(0).map_err(Into::into))
+    .collect()
 }

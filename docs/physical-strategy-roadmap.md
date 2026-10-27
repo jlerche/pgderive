@@ -66,3 +66,15 @@ uncertain-COMMIT recovery and PUT → atomic PG publication → slot ACK orderin
 Each slice needs an independent review, fast production-path/oracle validation
 and the common gate before commit. Keep current failed cost/qualification checks
 visible. Component improvements are not a claim of production steady state.
+
+## Current slice boundary
+
+Key-directed sink access is implemented. Publication reuse now covers compiled
+sink templates/codecs/key positions and connection-local prepared sink DML,
+memtable boundary comparison and epoch-progress SQL. The connection API owns its
+cache and invalidates it before mutable raw access; there is no uncached DML
+fallback. This reduces repeated construction/parse/planning work, not the number
+of foreground database round trips. Remaining publication work includes caching
+encoded immutable plan/binding data with correct checkpoint-dependent refresh,
+and reducing compatible checks under held locks. Do not label those remaining
+items complete based on a lower sink-DML median.

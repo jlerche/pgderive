@@ -11,7 +11,7 @@ use std::{sync::Arc, time::Duration};
 use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     fixture: &Fixture,
     config: &Config,
     store: Arc<dyn ObjectStore>,
@@ -48,7 +48,7 @@ pub(super) async fn check(
     crate::outcome::combine(result, shutdown, "acknowledged source shutdown")
 }
 async fn exercise(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     fixture: &Fixture,
     graph: &mut mvp::Query,
     writer: &mut crate::catalog::Writer,

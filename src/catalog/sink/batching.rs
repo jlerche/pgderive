@@ -28,7 +28,7 @@ impl Chunk {
 }
 pub(super) async fn apply(
     tx: &Transaction<'_>,
-    table: &str,
+    program: &super::program::Program,
     sink: &Sink,
     rows: &[(Value, i64)],
     context: &Value,
@@ -42,24 +42,19 @@ pub(super) async fn apply(
         )
     );
     if !sink.primary_key.is_empty() {
-        return super::keyed::apply(tx, table, sink, rows).await;
+        return super::keyed::apply(tx, program, sink, rows).await;
     }
-    apply_rows(tx, table, sink, rows, context).await
+    apply_rows(tx, program, sink, rows, context).await
 }
 pub(super) async fn apply_rows(
     tx: &Transaction<'_>,
-    table: &str,
+    program: &super::program::Program,
     sink: &Sink,
     rows: &[(Value, i64)],
     context: &Value,
 ) -> Result<()> {
-    let layout = Layout::new(sink)?;
     for positive in [false, true] {
-        let statement = if !positive && !sink.primary_key.is_empty() {
-            super::keyed::delete_statement(table, sink, &layout)?
-        } else {
-            statement(table, &layout, positive)
-        };
+        let statement = if positive { &program.insert } else { &program.delete };
         let mut chunk = Chunk::default();
         for (tuple, delta) in
             rows.iter().filter(|(_, delta)| *delta != 0 && (*delta > 0) == positive)
@@ -68,17 +63,17 @@ pub(super) async fn apply_rows(
                 delta.checked_abs().ok_or_else(|| anyhow::anyhow!("result occurrence overflow"))?;
             let bytes = serde_json::to_vec(tuple)?.len().saturating_add(32);
             if chunk.full(bytes) {
-                execute(tx, &statement, &mut chunk, sink.output, context).await?;
+                execute(tx, statement, &mut chunk, sink.output, context).await?;
             }
             chunk.push(tuple, count, bytes)?;
         }
-        execute(tx, &statement, &mut chunk, sink.output, context).await?;
+        execute(tx, statement, &mut chunk, sink.output, context).await?;
     }
     Ok(())
 }
 pub(super) async fn execute(
     tx: &Transaction<'_>,
-    statement: &str,
+    statement: &super::program::Command,
     chunk: &mut Chunk,
     output: super::SinkOutput,
     context: &Value,
@@ -90,24 +85,23 @@ pub(super) async fn execute(
     if output == super::SinkOutput::Stdout {
         return super::stdout::emit(
             context,
-            statement,
+            &statement.sql,
             &Value::Array(chunk.values),
             chunk.occurrences,
         );
     }
-    let affected = tx
-        .execute_typed(
-            statement,
-            &[(&Value::Array(chunk.values), tokio_postgres::types::Type::JSONB)],
-        )
-        .await?;
+    let prepared = statement
+        .prepared
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Postgres sink command is not prepared"))?;
+    let affected = tx.execute(prepared, &[&Value::Array(chunk.values)]).await?;
     ensure!(
         affected == chunk.occurrences,
         "result occurrence missing or destination DML suppressed"
     );
     Ok(())
 }
-fn statement(table: &str, layout: &Layout, positive: bool) -> String {
+pub(super) fn statement(table: &str, layout: &Layout, positive: bool) -> String {
     let decoded = format!(
         "WITH decoded AS MATERIALIZED (SELECT {} FROM pg_catalog.jsonb_array_elements($1::jsonb) AS entry(value))",
         layout.decoded

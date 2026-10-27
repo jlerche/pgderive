@@ -29,14 +29,14 @@ pub(super) struct PublicationFixture {
 impl MvpFixture {
     pub(in crate::harness) async fn initialize_publication(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         schema: &str,
         config: &crate::Config,
         initial: &str,
     ) -> Result<()> {
         let source = initial::source(sql, config).await?;
         ensure!(
-            super::super::source_state(sql, schema).await?.is_empty(),
+            super::super::source_state(&**sql, schema).await?.is_empty(),
             "MVP initial snapshot requires empty source tables"
         );
         let empty = self.graph.checkpoint()?;
@@ -68,7 +68,7 @@ impl MvpFixture {
     }
     async fn initial_snapshot(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         catalog: &Catalog,
         binding: &Binding,
         initial: &str,
@@ -98,7 +98,7 @@ impl MvpFixture {
 impl PublicationFixture {
     pub(super) async fn retry_upload(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         token: &str,
     ) -> Result<Protection> {
@@ -109,7 +109,7 @@ impl PublicationFixture {
     }
     pub(super) async fn publish(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         graphs: (&mut Query, &mut Query),
         staged: (Staged, Staged),
         transaction: &Transaction,

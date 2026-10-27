@@ -24,7 +24,7 @@ impl Initial<'_> {
     }
     pub(super) async fn synthetic(
         &self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         catalog: &Catalog,
         sink: Sink,
     ) -> Result<(Writer, Checkpoint)> {

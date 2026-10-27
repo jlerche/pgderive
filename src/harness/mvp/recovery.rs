@@ -7,12 +7,11 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use std::sync::Arc;
-use tokio_postgres::Client;
 
 impl MvpFixture {
     pub(in crate::harness) async fn checkpoint_and_recover(
         &self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         schema: &str,
         recovery: &Recovery,
     ) -> Result<()> {
@@ -56,7 +55,7 @@ impl MvpFixture {
     }
     async fn missing_objects(
         &self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         schema: &str,
         recovery: &Recovery,
         stored: &Stored,
@@ -98,7 +97,7 @@ impl MvpFixture {
     }
 }
 async fn incompatible_catalog(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     plan: &crate::engine::plan::Plan,
 ) -> Result<()> {

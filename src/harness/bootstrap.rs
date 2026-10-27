@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     fixture: &Fixture,
     recovery: &super::recovery::Recovery,
 ) -> Result<()> {
@@ -55,7 +55,7 @@ pub(super) async fn check(
     let transaction = crate::outcome::combine(result, shutdown, "snapshot CDC shutdown")?;
     apply(&mut model, &transaction)?;
     ensure!(
-        model == source_state(sql, &fixture.schema).await?,
+        model == source_state(&**sql, &fixture.schema).await?,
         "snapshot plus CDC has a gap or duplicate"
     );
     let report = recovery.recover_query(sql, &fixture.schema, "snapshot_grouped").await?;
@@ -72,7 +72,7 @@ pub(super) async fn check(
     Ok(())
 }
 async fn finish_source(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     fixture: &Fixture,
     config: &Config,
     catalog: &Catalog,
@@ -88,7 +88,7 @@ async fn finish_source(
     Ok(())
 }
 async fn restore(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     mut graph: super::mvp::Query,
     boundary: Lsn,
@@ -124,7 +124,7 @@ struct Initial<'a> {
     config: &'a Config,
 }
 async fn activate(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &mut super::mvp::Query,
     initial: Initial<'_>,
@@ -157,7 +157,7 @@ async fn activate(
     Ok(protection)
 }
 async fn catch_up(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     schema: &str,
     graph: &mut super::mvp::Query,
     writer: &mut Writer,
@@ -211,7 +211,7 @@ async fn catch_up(
 }
 
 async fn reject_publication_drift(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     schema: &str,
     graph: &super::mvp::Query,
     writer: &mut Writer,
@@ -289,7 +289,7 @@ async fn schema_drift(sql: &Client, schema: &str, contract: &Contract) -> Result
     Ok(())
 }
 async fn advanced_slot(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     config: &Config,
     catalog: &Catalog,
     plan: &crate::engine::plan::Plan,
@@ -326,7 +326,7 @@ async fn snapshot_copy(
 ) -> Result<(Contract, super::Model, crate::weighted::Batch)> {
     let baseline = source_state(sql, &fixture.schema).await?;
     let (mut reader, task) = connect(config).await?;
-    let snapshot = export.import(&mut reader).await?;
+    let snapshot = export.import(reader.client_mut()).await?;
     let contract = Contract::inspect(
         &snapshot,
         export.identity().clone(),

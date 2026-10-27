@@ -8,7 +8,6 @@ use crate::{
     transaction::Transaction,
 };
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::Client;
 
 pub struct Stream {
     queue: tokio::sync::mpsc::Receiver<reader::Decoded>,
@@ -77,7 +76,7 @@ impl Stream {
     }
     pub(crate) async fn acknowledge(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         writer: &Writer,
         plan: &Plan,
     ) -> Result<()> {

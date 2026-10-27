@@ -8,7 +8,6 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use tokio_postgres::Client;
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, std::hash::Hash, Serialize, Deserialize)]
 struct Native(Option<String>, Option<String>, Option<Vec<Option<String>>>, Option<String>);
 fn native(number: &str, id: &str) -> Native {
@@ -37,7 +36,7 @@ fn sink() -> Sink {
     }
 }
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     schema: &str,
     initial: &super::initial::Initial<'_>,
 ) -> Result<()> {
@@ -81,7 +80,7 @@ pub(super) async fn check(
     Ok(())
 }
 async fn missing_index(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     plan: &Plan,
     schema: &str,
@@ -117,7 +116,7 @@ async fn missing_index(
     Ok(())
 }
 async fn publish(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     writer: &mut Writer,
     plan: &Plan,
     checkpoint: &mut Checkpoint,

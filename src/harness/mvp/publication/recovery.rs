@@ -1,13 +1,12 @@
 use super::{PublicationFixture, Query};
 use crate::catalog::{Publication, Resolution};
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::Client;
 
 impl PublicationFixture {
     /// Use dedicated local fault connections, preserving the normal oracle connection.
     pub(super) async fn uncertain_commit(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         graph: &mut Query,
         attempt: Publication<'_>,
     ) -> Result<bool> {

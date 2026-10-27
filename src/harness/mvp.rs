@@ -15,7 +15,6 @@ use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
 pub(super) use recovery::recover_plan;
 use std::{collections::BTreeMap, sync::Arc};
-use tokio_postgres::Client;
 type Key = String;
 type Group = Option<String>;
 pub(super) type Query = Relational<Key, Row>;
@@ -43,7 +42,7 @@ impl MvpFixture {
     }
     pub(super) async fn verify(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         schema: &str,
         transaction: &crate::transaction::Transaction,
         model: &Model,
@@ -114,7 +113,7 @@ impl MvpFixture {
         eprintln!("MVP project/join/group/sum passed SQL+memory at tick {time}");
         Ok(())
     }
-    async fn compact(&mut self, sql: &mut Client) -> Result<()> {
+    async fn compact(&mut self, sql: &mut crate::catalog::Connection) -> Result<()> {
         let pinned = self.graph.snapshot();
         let expected = pinned.trace("output")?.materialize().await?;
         let time = self.graph.time();

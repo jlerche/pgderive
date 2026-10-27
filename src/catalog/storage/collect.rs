@@ -5,7 +5,7 @@ use anyhow::{Context, Result, ensure};
 use futures_util::{StreamExt, TryStreamExt};
 use object_store::{ObjectStore, path::Path};
 use std::{collections::BTreeSet, sync::Arc};
-use tokio_postgres::{Client, Transaction};
+use tokio_postgres::Transaction;
 
 mod cache;
 pub use cache::GcCache;
@@ -80,7 +80,7 @@ impl Catalog {
     /// A failed sweep is safe to retry; completed deletions remain physical only.
     pub async fn collect(
         &self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         store: Arc<dyn PageStore>,
         limits: GcLimits,
         cache: &mut GcCache,

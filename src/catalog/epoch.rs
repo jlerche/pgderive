@@ -1,7 +1,7 @@
 //! Coarse WAL boundaries needed to reconstruct adaptive execution ticks exactly.
 use super::{Catalog, Durable, Lsn, Progress, Writer};
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::{Client, Transaction, types::Type};
+use tokio_postgres::{Client, Statement, Transaction};
 
 #[derive(Clone)]
 pub struct ReplayEpoch {
@@ -15,33 +15,23 @@ impl Writer {
         &self,
         tx: &Transaction<'_>,
         publication: (u64, &Progress, u64),
+        statement: &Statement,
     ) -> Result<()> {
         let (time, progress, transactions) = publication;
         ensure!(transactions > 0, "empty source epoch");
         // One statement records the replay boundary and advances visible source
         // progress. Fencing/layout locks are already held by publish_epoch.
         let inserted = tx
-            .execute_typed(
-                &format!(
-                    "/* pgderive:epoch */ WITH advanced AS (
-                UPDATE {0}.pgderive_progress SET published_time=$2,
-                    commit_lsn=$4::text::pg_lsn,end_lsn=$5::text::pg_lsn,xid=$6
-                WHERE query_id=$1 RETURNING query_id
-            ) INSERT INTO {0}.pgderive_epoch_boundaries
-                (query_id,logical_time,previous_end_lsn,commit_lsn,end_lsn,xid,transactions)
-            SELECT a.query_id,$2,$3::text::pg_lsn,$4::text::pg_lsn,$5::text::pg_lsn,$6,$7
-            FROM advanced a JOIN {0}.pgderive_queries q USING(query_id)
-            WHERE q.format_version=3",
-                    self.catalog.schema
-                ),
+            .execute(
+                statement,
                 &[
-                    (&self.catalog.query, Type::TEXT),
-                    (&i64::try_from(time)?, Type::INT8),
-                    (&self.boundary.end.to_string(), Type::TEXT),
-                    (&progress.commit.to_string(), Type::TEXT),
-                    (&progress.end.to_string(), Type::TEXT),
-                    (&i64::from(progress.xid), Type::INT8),
-                    (&i64::try_from(transactions)?, Type::INT8),
+                    &self.catalog.query,
+                    &i64::try_from(time)?,
+                    &self.boundary.end.to_string(),
+                    &progress.commit.to_string(),
+                    &progress.end.to_string(),
+                    &i64::from(progress.xid),
+                    &i64::try_from(transactions)?,
                 ],
             )
             .await?;
@@ -106,6 +96,20 @@ fn validate_epochs(epochs: &[ReplayEpoch], durable: &Durable) -> Result<()> {
         );
     }
     Ok(())
+}
+
+pub(super) fn statement(schema: &str) -> String {
+    format!(
+        "/* pgderive:epoch */ WITH advanced AS (
+                UPDATE {schema}.pgderive_progress SET published_time=$2,
+                    commit_lsn=$4::text::pg_lsn,end_lsn=$5::text::pg_lsn,xid=$6
+                WHERE query_id=$1 RETURNING query_id
+            ) INSERT INTO {schema}.pgderive_epoch_boundaries
+                (query_id,logical_time,previous_end_lsn,commit_lsn,end_lsn,xid,transactions)
+            SELECT a.query_id,$2,$3::text::pg_lsn,$4::text::pg_lsn,$5::text::pg_lsn,$6,$7
+            FROM advanced a JOIN {schema}.pgderive_queries q USING(query_id)
+            WHERE q.format_version=3"
+    )
 }
 
 #[cfg(test)]

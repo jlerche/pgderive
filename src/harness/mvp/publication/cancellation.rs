@@ -2,12 +2,11 @@ use super::{PublicationFixture, Query};
 use crate::catalog::{Publication, Resolution, Writer};
 use anyhow::{Context, Result, ensure};
 use std::{path::PathBuf, time::Duration};
-use tokio_postgres::Client;
 
 impl PublicationFixture {
     pub(super) async fn held_commit(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         graph: &mut Query,
         attempt: Publication<'_>,
     ) -> Result<bool> {
@@ -43,7 +42,7 @@ impl PublicationFixture {
 }
 async fn cancel_at_commit(
     writer: &mut Writer,
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     plan: &crate::engine::plan::Plan,
     attempt: Publication<'_>,
     gate: &std::path::Path,

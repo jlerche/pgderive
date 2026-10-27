@@ -80,7 +80,7 @@ pub async fn run_harness(config: Config) -> Result<()> {
     Ok(())
 }
 
-async fn connect(config: &Config) -> Result<(Client, ConnectionTask)> {
+async fn connect(config: &Config) -> Result<(crate::catalog::Connection, ConnectionTask)> {
     let pg = &config.postgres;
     let (client, connection) = tokio_postgres::Config::new()
         .host(&pg.host)
@@ -91,11 +91,11 @@ async fn connect(config: &Config) -> Result<(Client, ConnectionTask)> {
         .connect(NoTls)
         .await
         .context("connecting harness SQL session")?;
-    Ok((client, tokio::spawn(connection)))
+    Ok((client.into(), tokio::spawn(connection)))
 }
 
 impl Fixture {
-    async fn prepare(sql: &mut Client, config: &Config) -> Result<Self> {
+    async fn prepare(sql: &mut crate::catalog::Connection, config: &Config) -> Result<Self> {
         let fixture = Self {
             schema: format!("pgderive_harness_{}", std::process::id()),
             slot: config.replication.slot.clone(),
@@ -164,7 +164,11 @@ impl Fixture {
     }
 }
 
-async fn execute(sql: &mut Client, fixture: &Fixture, mut config: Config) -> Result<()> {
+async fn execute(
+    sql: &mut crate::catalog::Connection,
+    fixture: &Fixture,
+    mut config: Config,
+) -> Result<()> {
     config.listener.max_transactions = cases::COUNT;
     let prefix = config
         .object_store
@@ -221,7 +225,7 @@ async fn execute(sql: &mut Client, fixture: &Fixture, mut config: Config) -> Res
 }
 
 async fn drive(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     fixture: &Fixture,
     received: &mut mpsc::Receiver<Transaction>,
     recovery: recovery::Recovery,
@@ -253,7 +257,7 @@ async fn drive(
                     && change.schema == *schema),
             "unexpected operation or source schema"
         );
-        let source = source_state(sql, schema).await?;
+        let source = source_state(&**sql, schema).await?;
         weighted_oracle::verify(&transaction.batch, schema, &model, &source)?;
         join.verify(sql, schema, &transaction.batch).await?;
         apply(&mut model, &transaction)?;

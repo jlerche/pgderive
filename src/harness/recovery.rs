@@ -31,12 +31,16 @@ pub struct RecoveryReport {
     pub source_end: String,
 }
 impl Recovery {
-    pub(super) async fn recover(&self, sql: &mut Client, schema: &str) -> Result<RecoveryReport> {
+    pub(super) async fn recover(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        schema: &str,
+    ) -> Result<RecoveryReport> {
         self.recover_query(sql, schema, QUERY).await
     }
     pub(super) async fn recover_query(
         &self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         schema: &str,
         query: &str,
     ) -> Result<RecoveryReport> {
@@ -51,7 +55,7 @@ impl Recovery {
                 self.store.clone(),
                 self.config.execution,
                 durable,
-                &source_state(sql, schema).await?,
+                &source_state(&**sql, schema).await?,
                 plan,
             )
             .await;
@@ -117,7 +121,7 @@ pub async fn run_recovery(
             store,
             config.execution,
             durable,
-            &source_state(&sql, schema).await?,
+            &source_state(&*sql, schema).await?,
             plan,
         )
         .await

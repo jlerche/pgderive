@@ -55,9 +55,9 @@ pub(in crate::worker) async fn run_owned(
 }
 
 async fn require_table_sink(session: &Session, settings: &Settings) -> Result<()> {
-    let (query, _) = super::current(&session.client, settings).await?;
+    let (query, _) = super::current(&*session.client, settings).await?;
     let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
-    if super::exists(&session.client, &table).await? {
+    if super::exists(&*session.client, &table).await? {
         let row = session
             .client
             .query_opt(
@@ -96,7 +96,7 @@ async fn prepare(
     signature: &str,
     recreate: bool,
 ) -> Result<State> {
-    let prior = read(&session.client, settings).await?;
+    let prior = read(&*session.client, settings).await?;
     if let Some(state) = &prior {
         ensure!(
             state.base == Base::new(config, settings),
@@ -184,7 +184,7 @@ async fn boundary(opened: &Open, settings: &Settings, state: &State) -> Result<(
     };
     let old_end: String = row.try_get(0)?;
     let binding: crate::catalog::Binding = serde_json::from_value(row.try_get(1)?)?;
-    binding.source.identity.verify_sql(&opened.session.client).await?;
+    binding.source.identity.verify_sql(&*opened.session.client).await?;
     let new_end: String = opened
         .session
         .client

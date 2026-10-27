@@ -2,12 +2,12 @@
 use super::{Deltas, Progress, Writer, read, write};
 use crate::engine::plan::{Checkpoint, Plan};
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::{Client, Transaction};
+use tokio_postgres::Transaction;
 
 impl Writer {
     pub(crate) async fn publish_epoch(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         publication: (u64, &Progress, &Deltas, u64),
         measured: bool,
@@ -20,15 +20,16 @@ impl Writer {
             "memtable publication clock mismatch"
         );
         ensure!(!self.boundary.covers(progress)?, "memtable transaction already published");
-        let tx = sql.transaction().await?;
-        self.lock_memtable(&tx, plan, false).await?;
+        let (tx, program) = sql.publication(&self.catalog, &self.boundary.binding.sink).await?;
+        super::storage::publication_lock(&tx, &self.catalog).await?;
+        self.guard_memtable(&tx, plan, &program.guard).await?;
         let boundary_guard = clock.lap();
         self.boundary.binding.source.lock_and_verify_layout(&tx).await?;
         let source_layout = clock.lap();
-        self.record_epoch(&tx, (time, progress, transactions)).await?;
+        self.record_epoch(&tx, (time, progress, transactions), &program.epoch).await?;
         let progress_time = clock.lap();
         let membership = boundary_guard + source_layout + progress_time;
-        deltas.apply(&tx, &self.catalog, &self.boundary.binding.sink, (time, progress.end)).await?;
+        deltas.apply(&tx, &self.catalog, (time, progress.end), &program.sink).await?;
         let sink = clock.lap();
         self.commit(tx, "memtable publication").await?;
         let commit = clock.lap();
@@ -52,7 +53,7 @@ impl Writer {
     }
     pub(crate) async fn checkpoint_memtable(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         candidate: &Checkpoint,
     ) -> Result<()> {
@@ -64,7 +65,7 @@ impl Writer {
             "checkpoint is outside the published epoch suffix"
         );
         let tx = sql.transaction().await?;
-        self.lock_memtable(&tx, plan, true).await?;
+        self.lock_memtable(&tx, plan).await?;
         let row = tx.query_one(
             &format!("SELECT end_lsn::text FROM {}.pgderive_epoch_boundaries WHERE query_id=$1 AND logical_time=$2", self.catalog.schema),
             &[&self.catalog.query, &i64::try_from(candidate.time)?],
@@ -98,20 +99,11 @@ impl Writer {
         self.boundary.checkpoint_end = checkpoint_end;
         Ok(())
     }
-    async fn lock_memtable(
-        &self,
-        tx: &Transaction<'_>,
-        plan: &Plan,
-        checkpoint: bool,
-    ) -> Result<()> {
+    async fn lock_memtable(&self, tx: &Transaction<'_>, plan: &Plan) -> Result<()> {
         super::storage::publication_lock(tx, &self.catalog).await?;
-        if !checkpoint {
-            return self.guard_memtable(tx, plan).await;
-        }
-        let marker = if checkpoint { "/* pgderive:maintenance */" } else { "" };
         tx.query_one(
             &format!(
-                "SELECT {marker} query_id FROM {}.pgderive_queries WHERE query_id=$1 FOR UPDATE",
+                "SELECT /* pgderive:maintenance */ query_id FROM {}.pgderive_queries WHERE query_id=$1 FOR UPDATE",
                 self.catalog.schema
             ),
             &[&self.catalog.query],

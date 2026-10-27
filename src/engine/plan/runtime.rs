@@ -57,7 +57,7 @@ impl<S: super::checkpoint::DurableState, I: 'static, O: 'static> Graph<S, I, O, 
     }
     pub(crate) async fn publish_compaction(
         &mut self,
-        sql: &mut tokio_postgres::Client,
+        sql: &mut crate::catalog::Connection,
         writer: &mut crate::catalog::Writer,
         work: crate::engine::dataflow::PreparedMaintenance<S>,
     ) -> Result<()> {

@@ -8,7 +8,6 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use futures_util::{StreamExt as _, stream};
-use tokio_postgres::Client;
 impl<K: BatchData, V: BatchData> super::super::checkpoint::DurableState for RelationalState<K, V> {
     fn memberships(&self) -> Result<Vec<Membership>> {
         self.entries
@@ -58,7 +57,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     /// Rejects foreign work, invalid codecs, fencing or publication failures.
     pub async fn publish_prepared(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         writer: &mut Writer,
         work: Prepared<K, V>,
         progress: &crate::catalog::Progress,
@@ -178,7 +177,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     /// Returns stale/foreign, fencing or PG errors; uncertain COMMIT requires recovery.
     pub async fn publish_compaction(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         writer: &mut Writer,
         work: Compaction<K, V>,
     ) -> Result<()> {

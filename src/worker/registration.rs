@@ -10,20 +10,20 @@ use tokio_postgres::Client;
 // physical name lets restart discard only this initialization's expired snapshot
 // slot, never an unrelated pre-existing slot with the configured name.
 pub(super) async fn source(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     config: &Config,
     settings: &Settings,
 ) -> Result<Contract> {
     // Resolve/type-check before writing any registration or creating a slot.
     let identity = Identity::inspect(config).await?;
     let preliminary = Contract::inspect(
-        sql,
+        &**sql,
         identity.clone(),
         &config.replication.publication,
         &config.replication.slot,
     )
     .await?;
-    let compiled = settings.query.compile_bound(sql, &preliminary).await?;
+    let compiled = settings.query.compile_bound(&**sql, &preliminary).await?;
     compiled.sink(&settings.sink_table, settings.sink_output, &settings.sink_key)?.validate()?;
     sql.batch_execute(&format!(
         "CREATE TABLE IF NOT EXISTS {}.pgderive_worker_registration(
@@ -53,7 +53,7 @@ pub(super) async fn source(
                 && source.publication == config.replication.publication,
             "worker registration source identity changed"
         );
-        let compiled = settings.query.compile_bound(sql, &source).await?;
+        let compiled = settings.query.compile_bound(&**sql, &source).await?;
         ensure!(
             row.try_get::<_, serde_json::Value>(4)?
                 == serde_json::to_value(compiled.sink(
@@ -63,7 +63,7 @@ pub(super) async fn source(
                 )?)?,
             "worker registration destination changed"
         );
-        source.verify(sql).await?;
+        source.verify(&**sql).await?;
         ensure!(
             program::plan(&source, &compiled)?.identity() == row.try_get::<_, String>(5)?,
             "worker registration query or physical plan changed; run query rebuild explicitly"
@@ -73,7 +73,7 @@ pub(super) async fn source(
     create(sql, config, settings, identity).await
 }
 async fn create(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     config: &Config,
     settings: &Settings,
     identity: Identity,
@@ -86,8 +86,9 @@ async fn create(
         .try_get(0)?;
     let prefix = &config.replication.slot[..config.replication.slot.len().min(30)];
     let slot = format!("{prefix}_{nonce}");
-    let source = Contract::inspect(sql, identity, &config.replication.publication, &slot).await?;
-    let compiled = settings.query.compile_bound(sql, &source).await?;
+    let source =
+        Contract::inspect(&**sql, identity, &config.replication.publication, &slot).await?;
+    let compiled = settings.query.compile_bound(&**sql, &source).await?;
     let plan = program::plan(&source, &compiled)?;
     let tx = sql.transaction().await?;
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;

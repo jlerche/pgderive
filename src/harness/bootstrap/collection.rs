@@ -7,10 +7,9 @@ use super::super::{mvp::Query, recovery::Recovery};
 use crate::catalog::{Catalog, Collection, GcLimits, Writer};
 use anyhow::{Result, ensure};
 use object_store::{ObjectStoreExt, path::Path};
-use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &mut Query,
     writer: &mut Writer,
@@ -53,7 +52,7 @@ pub(super) async fn check(
 }
 
 async fn compact(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     graph: &mut Query,
     writer: &mut Writer,
     recovery: &Recovery,
@@ -86,7 +85,7 @@ async fn rewrite(
 }
 
 async fn abandoned(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &mut Query,
     writer: &mut Writer,
@@ -139,7 +138,7 @@ fn collected(result: Collection, expected_deletion: bool) -> Result<()> {
 }
 
 async fn rejected_sweep(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &Query,
     recovery: &Recovery,
@@ -175,7 +174,7 @@ async fn rejected_sweep(
 }
 
 async fn late_put(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     recovery: &Recovery,
     path: &str,
@@ -200,7 +199,7 @@ async fn late_put(
 }
 
 async fn fence_abandoned(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     writer: &mut Writer,
     plan: &crate::engine::plan::Plan,
@@ -229,7 +228,7 @@ async fn fence_abandoned(
 }
 
 async fn abandoned_and_ledger(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &mut Query,
     writer: &mut Writer,

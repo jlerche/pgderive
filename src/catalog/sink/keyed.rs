@@ -10,8 +10,7 @@ struct Change<'a> {
     old: Option<&'a Value>,
     new: Option<&'a Value>,
 }
-fn changes<'a>(sink: &Sink, rows: &'a [(Value, i64)]) -> Result<Vec<Change<'a>>> {
-    let positions = key::positions(sink)?;
+fn changes<'a>(positions: &[usize], rows: &'a [(Value, i64)]) -> Result<Vec<Change<'a>>> {
     let mut keyed = BTreeMap::<String, Change<'a>>::new();
     for (tuple, weight) in rows.iter().filter(|(_, weight)| *weight != 0) {
         ensure!(matches!(*weight, -1 | 1), "keyed result requires unit multiplicity");
@@ -35,11 +34,11 @@ fn changes<'a>(sink: &Sink, rows: &'a [(Value, i64)]) -> Result<Vec<Change<'a>>>
 }
 pub(super) async fn apply(
     tx: &Transaction<'_>,
-    table: &str,
+    program: &super::program::Program,
     sink: &Sink,
     rows: &[(Value, i64)],
 ) -> Result<()> {
-    let changes = changes(sink, rows)?;
+    let changes = changes(&program.positions, rows)?;
     let mut unpaired = Vec::new();
     let mut replacements = Vec::new();
     for change in changes {
@@ -52,20 +51,20 @@ pub(super) async fn apply(
     }
     // Unpaired keys are disjoint from replacement keys. Preserve delete-before-insert
     // bag publication and the caller's single progress/publication transaction.
-    batching::apply_rows(tx, table, sink, &unpaired, &Value::Null).await?;
-    let statement = update_statement(table, sink)?;
+    batching::apply_rows(tx, program, sink, &unpaired, &Value::Null).await?;
+    let statement = program.update.as_ref().context("missing keyed UPDATE program")?;
     let mut chunk = batching::Chunk::default();
     for pair in replacements {
         let size = serde_json::to_vec(&pair)?.len().saturating_add(32);
         if chunk.full(size) {
-            batching::execute(tx, &statement, &mut chunk, sink.output, &Value::Null).await?;
+            batching::execute(tx, statement, &mut chunk, sink.output, &Value::Null).await?;
         }
         chunk.push(&pair, 1, size)?;
     }
-    batching::execute(tx, &statement, &mut chunk, sink.output, &Value::Null).await
+    batching::execute(tx, statement, &mut chunk, sink.output, &Value::Null).await
 }
 
-fn update_statement(table: &str, sink: &Sink) -> Result<String> {
+pub(super) fn update_statement(table: &str, sink: &Sink) -> Result<String> {
     let old = layout::decode(sink, "(entry.value->0->0)")?;
     let new = layout::decode(sink, "(entry.value->0->1)")?;
     let layout = layout::Layout::new(sink)?;
@@ -134,7 +133,7 @@ mod tests {
             (json!([null, [1, 10]]), -1),
             (json!([null, [3, 40]]), -1),
         ];
-        let pairs = changes(&sink(), &rows)?;
+        let pairs = changes(&key::positions(&sink())?, &rows)?;
         assert_eq!(pairs.len(), 3);
         assert!(pairs[0].old.is_some() && pairs[0].new.is_some());
         for invalid in [
@@ -142,7 +141,7 @@ mod tests {
             vec![(json!([null, [null, 20]]), 1)],
             vec![(json!([null, [1, 20]]), 1), (json!([null, [1, 30]]), 1)],
         ] {
-            assert!(changes(&sink(), &invalid).is_err());
+            assert!(changes(&key::positions(&sink())?, &invalid).is_err());
         }
         let sql = update_statement("owned.result", &sink())?;
         assert!(sql.contains("pgderive:sink-update-v1"));
@@ -162,17 +161,17 @@ mod tests {
         let mut composite = sink();
         composite.primary_key = vec!["value".into(), "key".into()];
         let rows = vec![(json!([null, [1, 20]]), -1), (json!([null, [1, 30]]), 1)];
-        let pairs = changes(&composite, &rows)?;
+        let pairs = changes(&key::positions(&composite)?, &rows)?;
         assert_eq!(pairs.len(), 2);
         assert!(pairs.iter().all(|pair| pair.old.is_none() || pair.new.is_none()));
         let deletion =
             delete_statement("owned.result", &composite, &layout::Layout::new(&composite)?)?;
         assert!(deletion.contains("d.\"value\"=r.c1 AND d.\"key\"=r.c0"));
-        assert!(changes(&composite, &[(json!([null, [1]]), 1)]).is_err());
-        assert!(changes(&composite, &[(json!(null), 1)]).is_err());
+        assert!(changes(&key::positions(&composite)?, &[(json!([null, [1]]), 1)]).is_err());
+        assert!(changes(&key::positions(&composite)?, &[(json!(null), 1)]).is_err());
         composite.primary_key = vec!["missing".into()];
-        assert!(changes(&composite, &rows).is_err());
-        assert!(changes(&sink(), &[(json!(null), 0)])?.is_empty());
+        assert!(key::positions(&composite).is_err());
+        assert!(changes(&key::positions(&sink())?, &[(json!(null), 0)])?.is_empty());
         Ok(())
     }
 }

@@ -37,7 +37,7 @@ async fn existing(
     settings: &crate::worker::Settings,
     session: &crate::worker::sql::Session,
 ) -> Result<super::State> {
-    if let Some(state) = read(&session.client, settings).await? {
+    if let Some(state) = read(&*session.client, settings).await? {
         return Ok(state);
     }
     anyhow::ensure!(

@@ -4,10 +4,10 @@ use tokio::{
     task::JoinHandle,
     time::{Duration, timeout},
 };
-use tokio_postgres::{Client, NoTls};
+use tokio_postgres::NoTls;
 
 pub(super) struct Session {
-    pub(super) client: Client,
+    pub(super) client: crate::catalog::Connection,
     task: JoinHandle<Result<(), tokio_postgres::Error>>,
 }
 impl Session {
@@ -34,9 +34,9 @@ impl Session {
                 settings.connect(postgres_native_tls::MakeTlsConnector::new(tls.build()?)).await?;
             (client, tokio::spawn(connection))
         };
-        let session = Self { client, task };
+        let session = Self { client: client.into(), task };
         session.client.batch_execute("SET statement_timeout='30s'; SET lock_timeout='10s'").await?;
-        crate::source::Environment::configure(&session.client).await?;
+        crate::source::Environment::configure(&*session.client).await?;
         Ok(session)
     }
     pub(super) async fn own(&self, schema: &str, query: &str) -> Result<()> {
@@ -44,7 +44,7 @@ impl Session {
         Ok(())
     }
     pub(super) async fn try_own(&self, schema: &str, query: &str) -> Result<bool> {
-        crate::semantics::lease(&self.client).await?;
+        crate::semantics::lease(&*self.client).await?;
         let scope = format!("pgderive-worker:{schema}:{query}");
         let row = timeout(
             Duration::from_secs(10),

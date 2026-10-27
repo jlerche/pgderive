@@ -2,7 +2,7 @@ use super::{Catalog, Deltas, Lsn, Progress, Sink, read, write};
 use crate::engine::plan::{Checkpoint, Plan};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use tokio_postgres::{Client, Transaction};
+use tokio_postgres::Transaction;
 
 /// Immutable source and destination contract bound to this query registration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,7 +106,12 @@ impl Catalog {
     ///
     /// # Errors
     /// Rejects missing or incompatible activation and `PostgreSQL` failures.
-    pub async fn claim(&self, sql: &mut Client, plan: &Plan, binding: Binding) -> Result<Writer> {
+    pub async fn claim(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        plan: &Plan,
+        binding: Binding,
+    ) -> Result<Writer> {
         binding.validate()?;
         let tx = sql.transaction().await?;
         super::storage::shared(&tx, self).await?;
@@ -134,6 +139,7 @@ impl Catalog {
         tx.commit()
             .await
             .context("worker claim COMMIT requires authoritative reload on failure")?;
+        sql.prepare_publication(self, &boundary.binding.sink).await?;
         Ok(Writer { catalog: self.clone(), boundary, uncertain: false })
     }
 }
@@ -165,7 +171,7 @@ impl Writer {
     /// An uncertain COMMIT requires authoritative recovery before any retry.
     pub async fn publish(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         publication: Publication<'_>,
     ) -> Result<()> {
@@ -173,7 +179,7 @@ impl Writer {
     }
     pub(crate) async fn publish_timed(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         publication: Publication<'_>,
         measured: bool,
@@ -196,7 +202,7 @@ impl Writer {
         );
         ensure!(progress.end > self.boundary.end, "publication source end is stale");
         ensure!(progress.end >= progress.commit, "publication source end precedes commit");
-        let tx = sql.transaction().await?;
+        let (tx, program) = sql.publication(&self.catalog, &self.boundary.binding.sink).await?;
         tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
         self.boundary.binding.source.lock_and_verify_layout(&tx).await?;
         let epoch =
@@ -205,9 +211,7 @@ impl Writer {
             &[&self.catalog.query, &self.boundary.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.boundary.end.to_string(), &serde_json::to_value(&self.boundary.binding)?, &i64::try_from(checkpoint.time)?]).await?;
         ensure!(affected == 1, "stale or incompatible publication worker");
         let membership = clock.lap();
-        deltas
-            .apply(&tx, &self.catalog, &self.boundary.binding.sink, (checkpoint.time, progress.end))
-            .await?;
+        deltas.apply(&tx, &self.catalog, (checkpoint.time, progress.end), &program.sink).await?;
         let sink = clock.lap();
         self.commit(tx, "publication").await?;
         let commit = clock.lap();

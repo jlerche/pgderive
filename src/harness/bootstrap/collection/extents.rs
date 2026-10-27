@@ -2,10 +2,9 @@
 use super::{Catalog, Query, Recovery, Writer};
 use crate::engine::reader::{ObjectBatch, ObjectRef};
 use anyhow::{Context as _, Result, ensure};
-use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &mut Query,
     writer: &mut Writer,
@@ -50,7 +49,7 @@ pub(super) async fn check(
 
 // Rollback-only metadata isolates publication provenance from typed payload reads.
 async fn boundaries(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     checkpoint: &crate::engine::plan::Checkpoint,
 ) -> Result<()> {

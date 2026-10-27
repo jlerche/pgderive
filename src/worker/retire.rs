@@ -38,7 +38,7 @@ pub(super) async fn execute(
     let removal = state.removal.clone().context("missing generation removal intent")?;
     ensure!(removal.query == settings.query_id, "generation removal order changed");
     ensure!(removal.prefix == settings.object_prefix, "removal object namespace changed");
-    removal.source.identity.verify_sql(&session.client).await?;
+    removal.source.identity.verify_sql(&*session.client).await?;
     super::registration::drop_slot(&session.client, &removal.source).await?;
     finish(&mut session.client, settings, logical, state, &removal).await?;
     Ok(())
@@ -119,14 +119,14 @@ async fn owned_sink(
 }
 
 async fn intent(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     settings: &Settings,
     logical: &Settings,
     state: &mut super::lifecycle::State,
 ) -> Result<()> {
     let removal = load_removal(sql, settings).await?;
     ensure!(removal.prefix == settings.object_prefix, "removal object namespace changed");
-    removal.source.identity.verify_sql(sql).await?;
+    removal.source.identity.verify_sql(&**sql).await?;
     let tx = sql.transaction().await?;
     tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
     barrier(&tx, settings).await?;
@@ -156,7 +156,7 @@ async fn barrier(sql: &tokio_postgres::Transaction<'_>, settings: &Settings) -> 
 }
 
 async fn finish(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     settings: &Settings,
     logical: &Settings,
     state: &mut super::lifecycle::State,

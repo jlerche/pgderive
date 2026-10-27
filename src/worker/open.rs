@@ -41,7 +41,7 @@ impl Open {
         session: Session,
     ) -> Result<Self> {
         session.own(&settings.catalog_schema, &settings.query_id).await?;
-        let resolved = super::lifecycle::resolve(&session.client, config, settings).await?;
+        let resolved = super::lifecycle::resolve(&*session.client, config, settings).await?;
         Self::raw(&resolved.config, &resolved.settings, session).await
     }
 
@@ -78,7 +78,7 @@ impl Open {
             limits: config.execution,
             encoded_cache,
         };
-        let compiled = settings.query.compile_bound(&session.client, &contract).await?;
+        let compiled = settings.query.compile_bound(&*session.client, &contract).await?;
         let mut query = relational::build_committed(&contract, &compiled, &options)?;
         if catalog
             .load_durable(&mut session.client, query.plan())
@@ -124,7 +124,7 @@ async fn reopen(
     );
     ensure!(
         prior.binding.sink
-            == settings.query.compile_bound(&session.client, contract).await?.sink(
+            == settings.query.compile_bound(&*session.client, contract).await?.sink(
                 &settings.sink_table,
                 settings.sink_output,
                 &settings.sink_key
@@ -168,7 +168,7 @@ async fn bootstrap(
 ) -> Result<()> {
     let export = Export::create(config, &config.replication.slot).await?;
     let boundary = export.consistent();
-    let snapshot = export.import(&mut session.client).await?;
+    let snapshot = export.import(session.client.client_mut()).await?;
     let contract = Contract::inspect(
         &snapshot,
         export.identity().clone(),
@@ -194,7 +194,7 @@ async fn bootstrap(
     snapshot.commit().await?;
     export.close().await?;
     // The preliminary registration must match the exact imported source layout.
-    let compiled = settings.query.compile_bound(&session.client, &contract).await?;
+    let compiled = settings.query.compile_bound(&*session.client, &contract).await?;
     verify_snapshot_plan(config, settings, &contract, &compiled, query)?;
     let protection = protect_bootstrap(&mut session.client, catalog).await?;
     super::drive::emit(
@@ -222,7 +222,7 @@ async fn bootstrap(
 }
 
 async fn protect_bootstrap(
-    sql: &mut tokio_postgres::Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
 ) -> Result<crate::catalog::Protection> {
     let token: String =
@@ -294,7 +294,7 @@ fn verify_snapshot_plan(
 }
 
 async fn release_bootstrap(
-    sql: &mut tokio_postgres::Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     query: &relational::Query,
     protection: crate::catalog::Protection,

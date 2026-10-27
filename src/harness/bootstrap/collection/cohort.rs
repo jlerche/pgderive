@@ -2,10 +2,9 @@
 use super::{Catalog, Query, Recovery, Writer};
 use anyhow::{Result, ensure};
 use object_store::{ObjectStoreExt as _, path::Path};
-use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &Query,
     writer: &Writer,
@@ -45,7 +44,7 @@ pub(super) async fn check(
     Ok(())
 }
 async fn seen(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     recovery: &Recovery,
     namespace: &str,
@@ -62,7 +61,7 @@ async fn seen(
 }
 
 async fn verify(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     recovery: &Recovery,
     namespaces: (&str, &str),

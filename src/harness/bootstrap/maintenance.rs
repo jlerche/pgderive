@@ -4,10 +4,9 @@ use crate::{
     catalog::{Resolution, Writer},
 };
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     schema: &str,
     graph: &mut Query,
     writer: &mut Writer,
@@ -48,7 +47,7 @@ pub(super) async fn check(
 }
 
 async fn exercise(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     graph: &mut Query,
     writer: &mut Writer,
     config: &Config,

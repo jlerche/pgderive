@@ -3,10 +3,9 @@ use super::super::{mvp::Query, recovery::Recovery};
 use crate::catalog::{Catalog, GcLimits, Writer};
 use anyhow::{Result, ensure};
 use object_store::{ObjectStoreExt, path::Path};
-use tokio_postgres::Client;
 
 pub(super) async fn check(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &Query,
     writer: &mut Writer,
@@ -54,7 +53,7 @@ pub(super) async fn check(
     stale_handle(sql, catalog, graph, writer, recovery).await
 }
 async fn stale_handle(
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &Query,
     writer: &mut Writer,

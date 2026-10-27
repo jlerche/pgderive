@@ -1,7 +1,7 @@
 use super::{Binding, Catalog, Lsn, Progress, Publication, Stored, read};
 use crate::engine::plan::{Checkpoint, Plan};
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::{Client, IsolationLevel};
+use tokio_postgres::IsolationLevel;
 #[cfg(test)]
 mod tests;
 
@@ -64,13 +64,17 @@ impl Catalog {
     ///
     /// # Errors
     /// Rejects missing/incompatible progress, invalid positions or corrupt membership.
-    pub async fn load_durable(&self, sql: &mut Client, plan: &Plan) -> Result<Option<Durable>> {
+    pub async fn load_durable(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        plan: &Plan,
+    ) -> Result<Option<Durable>> {
         load(self, sql, plan, false).await
     }
 }
 async fn load(
     catalog: &Catalog,
-    sql: &mut Client,
+    sql: &mut crate::catalog::Connection,
     plan: &Plan,
     lock: bool,
 ) -> Result<Option<Durable>> {
@@ -105,7 +109,11 @@ impl super::Writer {
     ///
     /// # Errors
     /// Rejects uncertain publication, replaced writers or changed membership/progress.
-    pub async fn confirmed(&self, sql: &mut Client, plan: &Plan) -> Result<Durable> {
+    pub async fn confirmed(
+        &self,
+        sql: &mut crate::catalog::Connection,
+        plan: &Plan,
+    ) -> Result<Durable> {
         ensure!(!self.uncertain, "uncertain publication cannot authorize acknowledgement");
         let durable = self
             .catalog
@@ -121,7 +129,7 @@ impl super::Writer {
     /// Rejects replaced writers or any boundary other than the exact prior/candidate.
     pub async fn reconcile_maintenance(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         candidate: &Checkpoint,
     ) -> Result<Resolution> {
@@ -168,7 +176,7 @@ impl super::Writer {
     /// Rejects incompatible, superseded, or nonmatching outcomes and database failures.
     pub async fn reconcile(
         &mut self,
-        sql: &mut Client,
+        sql: &mut crate::catalog::Connection,
         plan: &Plan,
         attempt: Publication<'_>,
     ) -> Result<Resolution> {

@@ -20,11 +20,11 @@ pub async fn start(config: Config, restart: bool) -> Result<()> {
     storage.preflight(store.as_ref()).await?;
     let mut session = Session::connect(&config).await?;
     session.own(&settings.catalog_schema, &settings.query_id).await?;
-    if !restart && super::lifecycle::recreate(&session.client, &settings).await? {
+    if !restart && super::lifecycle::recreate(&*session.client, &settings).await? {
         session = super::lifecycle::rebuild_owned(&config, &settings, session, true).await?;
         return super::drive::run_initial(config, settings, Some(session)).await;
     }
-    let resolved = super::lifecycle::resolve(&session.client, &config, &settings).await?;
+    let resolved = super::lifecycle::resolve(&*session.client, &config, &settings).await?;
     let native = &resolved.settings;
     let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
     let exists: bool = session
@@ -67,8 +67,8 @@ pub async fn validate(config: &Config) -> Result<Value> {
     config.validate()?;
     let settings = config.worker.as_ref().context("configuration requires a worker section")?;
     let mut session = Session::connect(config).await?;
-    crate::semantics::lease(&session.client).await?;
-    super::lifecycle::require_public(&session.client, settings).await?;
+    crate::semantics::lease(&*session.client).await?;
+    super::lifecycle::require_public(&*session.client, settings).await?;
     let identity = Identity::inspect(config).await?;
     let tx = session
         .client
@@ -164,7 +164,7 @@ pub(super) fn quote(name: &str) -> String {
 pub async fn environment(config: &Config, begin: bool) -> Result<Value> {
     config.validate()?;
     let mut session = Session::connect(config).await?;
-    crate::semantics::change(&mut session.client, begin).await
+    crate::semantics::change(session.client.client_mut(), begin).await
 }
 
 // CLI removal states are independent of the journal enum's serialized spelling.

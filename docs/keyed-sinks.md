@@ -91,3 +91,55 @@ Captured single-row plans used the primary-key index at 20,000 groups;
 PostgreSQL selected sequential scans at 2,000 groups. Evidence and actual
 rolled-back plans are retained under the ignored
 `artifacts/benchmarks/keyed-access-20261027/` directory.
+
+Publication reuse compiles sink SQL, native codecs and key positions once for a
+physical SQL connection and exact sink binding. The same connection owns the
+prepared DML, boundary guard and epoch-journal statements. Claim prepares them
+before readiness; reconnecting starts with an empty cache. The cache retains at
+most one binding, replacing it on a table/column/key/output change. Explicit raw
+mutable client access clears it before the underlying connection can change.
+Snapshot activation uses the same sink compiler after installing the table.
+Stdout still emits the compiled SQL and never prepares sink DML on PostgreSQL.
+
+Every publication continues to lock and compare the complete durable boundary,
+verify source layout, check exact affected rows, and synchronously commit sink
+changes with progress. Cached SQL does not stand in for those checks. PostgreSQL
+may replan prepared statements following DDL and may select a generic plan after
+repeated executions; a cached statement does not grant ownership or authorize
+acknowledgement. SQL errors remain fail-closed and uncertain COMMIT recovery is
+unchanged. Checkpoint-dependent JSON and digests are still computed from the
+current confirmed boundary; this slice does not cache those mutable values.
+
+Prepared-reuse measurements (2026-10-27, baseline `0f87256`) used 20,000 groups
+and 60 source epochs per worker: ten repetitions each of 1/32/600-key UPDATE and
+DELETE batches, totaling 6,330 UPDATEs and 6,330 DELETEs. Repeating in reversed
+execution order reduced publication p50 from 2.54/2.58 ms to 2.09/2.15 ms
+(about 17%). All six batch categories improved; publication p95 was
+6.40/6.48 ms versus 5.76/5.85 ms. Boundary-guard, epoch-progress and sink-DML
+phase medians improved; source-layout time remained similar. Worker CPU and
+PostgreSQL sink execution time were effectively unchanged. WAL was identical in
+one pair and increased 576 bytes (0.046%) in the reverse pair.
+
+Each candidate UPDATE/DELETE used one named handle for 40 executions, including
+600-key batches crossing the 512-identity boundary and executions beyond the
+custom/generic-plan decision threshold. Bootstrap INSERT reused one handle for
+40 chunks; this workload does not test INSERT reuse across CDC epochs. Statement
+logs are isolated by byte offset per worker; literal EXPLAIN probes describe the
+SQL template, not the worker's cached generic plan. Native binary equality and
+ACK checks passed each epoch. Local fixtures exclude network latency and an
+independently arriving source stream, so these numbers do not establish a live
+freshness or throughput SLO. Results, binary hashes and the retained failed
+log-rotation attempt are under ignored
+`artifacts/benchmarks/publication-reuse-20261027/`.
+
+The COMMIT fault proxy tracks Parse/Bind/Execute through the existing protocol
+observer and arms only when the marked statement executes. Preparing epoch SQL
+at startup must not arm an unrelated COMMIT fault. Transaction boundaries reset
+the arm. The original atomicity assertion and recovery scenarios are unchanged;
+the five-scenario targeted crash run passed after correcting this harness
+assumption. The initial failed common-gate evidence remains retained.
+
+The reuse slice passed independent review and the common `./scripts/check.sh`
+gate, including sequential live PostgreSQL recovery/lifecycle tests and 97.14%
+production line coverage. Disposable fixtures were removed; measured binaries,
+results and failure evidence were retained.

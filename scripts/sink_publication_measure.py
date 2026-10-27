@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import statistics
 import sys
 import time
@@ -35,17 +36,24 @@ def dml_stats(fixture):
 
 
 def statements(fixture):
-    path=fixture.sql("SELECT pg_current_logfile('jsonlog')").strip()
+    path,offset=fixture.statement_log
+    assert path==fixture.sql("SELECT pg_current_logfile('jsonlog')").strip(), 'statement log rotated during measurement'
     if not path:
         raise RuntimeError('benchmark requires PostgreSQL JSON statement logging')
     result={}
-    raw=fixture.sql('SELECT pg_read_file('+"'"+path.replace("'","''")+"')")
+    executions={}
+    raw=fixture.sql('SELECT pg_read_file('+"'"+path.replace("'","''")+"',"+str(offset)+",(pg_stat_file('"+path.replace("'","''")+"')).size-"+str(offset)+")")
     (fixture.output/'postgres-statements.jsonl').write_text(raw)
     for line in raw.splitlines():
         if not line.strip():
             continue
         row=json.loads(line)
         message=row.get('message','')
+        handle=re.match(r'execute ([^:]+): ',message)
+        if handle and f'{fixture.name}.groups' in message and '/* pgderive:sink-' in message:
+            marker=re.search(r'pgderive:sink-(\w+)-v1',message).group(1)
+            names=executions.setdefault(marker,{})
+            names[handle.group(1)]=names.get(handle.group(1),0)+1
         for mode in ['update','delete']:
             marker='/* pgderive:sink-'+mode+'-v1 */'
             offset=message.find(marker)
@@ -53,6 +61,7 @@ def statements(fixture):
                 result[mode]=message[offset:]
     if set(result)!={'update','delete'}:
         raise RuntimeError('actual worker UPDATE/DELETE templates absent from statement log')
+    (fixture.output/'statement-executions.json').write_text(json.dumps(executions,indent=2)+'\n')
     return result
 
 
@@ -78,10 +87,12 @@ def worker_cpu(worker):
     return sum(int(fields[index]) for index in [11,12])*1000/os.sysconf('SC_CLK_TCK')
 
 
-def measure(output,command,groups):
+def measure(output,command,groups,repetitions):
     fixture=MeasuredFixture(output,rows=groups*3,auctions=groups)
     with fixture.managed():
         fixture.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements')
+        log=fixture.sql("SELECT pg_current_logfile('jsonlog')").strip()
+        fixture.statement_log=(log,int(fixture.sql("SELECT (pg_stat_file('"+log.replace("'","''")+"')).size")))
         worker=fixture.start(command,'worker');ready=worker.event('ready');fixture.verify()
         # Equal page-space headroom isolates index eligibility, not default-page packing.
         fixture.sql(f'ALTER TABLE {fixture.name}.groups SET(fillfactor=60)')
@@ -91,7 +102,7 @@ def measure(output,command,groups):
         ticks=[];logical=ready['time'];upper=groups
         for mode in ['update','delete']:
             for size in [1,32,600]:
-                for repeat in range(3):
+                for repeat in range(repetitions):
                     if mode=='update':
                         change=f'UPDATE {fixture.name}.bid SET price=coalesce(price,0)+1 WHERE auction BETWEEN 1 AND {size}'
                     else:
@@ -113,7 +124,7 @@ def measure(output,command,groups):
                 'index_bytes':int(fixture.sql(f"SELECT pg_indexes_size('{fixture.name}.groups')")),
                 'index_count':int(fixture.sql(f"SELECT count(*) FROM pg_index WHERE indrelid='{fixture.name}.groups'::regclass")),
                 'plans':plans(fixture,queries),'actual_worker_sql':queries,
-                'scope':'local production worker; three samples per mode/size; native binary oracle and safe ACK; matched fillfactor60; not a throughput or production freshness SLO'}
+                'scope':'local production worker; repeated small and chunk-crossing batches; native binary oracle and safe ACK; matched fillfactor60; not a throughput or production freshness SLO'}
         fixture.verify()
         (output/'measurement.json').write_text(json.dumps(report,indent=2)+'\n')
         return report
@@ -124,11 +135,14 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate-first',action='store_true')
     parser.add_argument('--groups',type=int,default=2000)
+    parser.add_argument('--repetitions',type=int,default=3)
     parser.add_argument('baseline')
     parser.add_argument('candidate')
     args=parser.parse_args(commands)
     if not 2000<=args.groups<=100000:
         raise ValueError('groups must be between 2000 and 100000')
+    if not 1<=args.repetitions<=20 or args.repetitions*633>=args.groups:
+        raise ValueError('repetitions must leave at least one undeleted group')
     output.mkdir()
     summary={}
     pairs=[('baseline',args.baseline),('candidate',args.candidate)]
@@ -136,7 +150,7 @@ def main():
         pairs.reverse()
     for name,binary in pairs:
         path=output/name;path.mkdir()
-        report=measure(path,[binary],args.groups);summary[name]={key:report[key] for key in ['physical','index_count','index_bytes','worker_cpu_ms']}
+        report=measure(path,[binary],args.groups,args.repetitions);summary[name]={key:report[key] for key in ['physical','index_count','index_bytes','worker_cpu_ms']}
         summary[name]['postgres_execution_ms']=sum(row['execution_ms'] for row in report['postgres'])
         summary[name]['wal_bytes']=sum(row['wal_bytes'] for row in report['postgres'])
         summary[name]['publication_p50_ms']=statistics.median(t['phases_us']['publication']/1000 for t in report['ticks'])

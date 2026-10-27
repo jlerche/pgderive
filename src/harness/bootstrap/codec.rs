@@ -35,12 +35,12 @@ pub(super) async fn check(sql: &Client, fixture: &Fixture, config: &Config) -> R
 }
 
 async fn copy_checks(
-    reader: &mut Client,
+    reader: &mut crate::catalog::Connection,
     export: &Export,
     config: &Config,
     role: &str,
 ) -> Result<()> {
-    let snapshot = export.import(reader).await?;
+    let snapshot = export.import(reader.client_mut()).await?;
     let contract = Contract::inspect(
         &snapshot,
         export.identity().clone(),
@@ -61,14 +61,14 @@ async fn copy_checks(
         "RLS rejection failed for an unrelated reason: {error:#}"
     );
     snapshot.rollback().await?;
-    let snapshot = export.import(reader).await?;
+    let snapshot = export.import(reader.client_mut()).await?;
     let limits = crate::engine::execution::Limits { record_bytes: 8, ..config.execution };
     ensure!(
         super::copy(&snapshot, &contract, limits).await.is_err(),
         "snapshot accepted oversize encoded row"
     );
     snapshot.rollback().await?;
-    let snapshot = export.import(reader).await?;
+    let snapshot = export.import(reader.client_mut()).await?;
     let batch = super::copy(&snapshot, &contract, config.execution).await?;
     ensure!(batch.updates.len() == 3, "privileged RLS bootstrap lost rows");
     for update in &batch.updates {
