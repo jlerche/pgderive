@@ -8,6 +8,43 @@ use object_store::{ObjectStoreExt as _, path::Path};
 use std::sync::Arc;
 
 #[tokio::test]
+async fn cold_key_selection_descends_once_and_preserves_spanning_keys() -> Result<()> {
+    use crate::engine::reader::{Cursor, KeyIdentity};
+    let store = Arc::new(Store::unpaced());
+    let batch = Batch::from_updates(
+        (0..256_i64).map(|n| (((n / 80) * 2, n), if n % 2 == 0 { 2 } else { -1 })),
+    )?;
+    let reference = ObjectBatch::write(store.clone(), &batch, "single-descent", 1).await?;
+    // A positive one-byte budget also disables index-frame retention.
+    let cache = Arc::new(BlockCache::new(1, 1));
+    let object =
+        ObjectBatch::<i64, i64>::open_with_cache(store, reference, "single-descent", cache.clone())
+            .await?;
+    assert!(object.head.is_none());
+    let depth = object.index.node.as_ref().context("missing root")?.depth;
+    assert!(depth > 0);
+    let before = cache.stats()?.index_reads;
+    let page = object.key_page(&2).await?.context("missing spanning key")?;
+    assert_eq!(cache.stats()?.index_reads - before, u64::try_from(depth + 1)?);
+    let mut cursor = Cursor::object_key_page(object.clone(), &KeyIdentity::new(&2)?, page, None)
+        .await?
+        .context("missing cursor")?;
+    let mut rows = Vec::new();
+    while let Some((key, value, weight)) = cursor.current() {
+        rows.push(((*key, *value), weight));
+        cursor.advance().await?;
+    }
+    assert_eq!(
+        Batch::from_updates(rows)?,
+        Batch::from_updates((80..160_i64).map(|n| ((2, n), if n % 2 == 0 { 2 } else { -1 })),)?
+    );
+    for absent in [-1, 1, 3, 5, 7] {
+        assert!(object.key_page(&absent).await?.is_none());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn growing_indexes_keep_only_bounded_metadata_and_preserve_navigation() -> Result<()> {
     let store = Arc::new(Store::unpaced());
     let remote: Arc<dyn object_store::ObjectStore> = store.clone();

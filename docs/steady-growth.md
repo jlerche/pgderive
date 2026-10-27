@@ -1954,3 +1954,52 @@ PostgreSQL TLS check takes 5.82s. Correctness/recovery gates pass; original
 maintenance performance ceilings remain red, and whole-worker retained-byte/RSS
 and end-to-end growing-state service qualification remain open. No deployment
 or production-readiness claim follows from these functional gates.
+
+### Cold point selection: one authenticated descent (2026-10-27)
+
+The existing preparation profiler and unchanged `maintenance-v1` replay isolate
+cold reads without changing the 16 KiB block target, 4 MiB pack target, or cache
+budgets. Diagnostic evidence is retained under ignored
+`artifacts/benchmarks/decode-cpu-20261027`. In the fixed 8,192-group case, JSON
+row decoding accounts for about 66% of the instrumented cold-read steps and
+cache admission about 25%; those steps together account for only about a third
+of statistics preparation. These percentages do not describe total worker CPU.
+Navigation timings enclose concurrent awaits and cannot be summed as CPU time.
+
+A preallocated row-deserialization prototype improved preparation only about
+1% in one run and was removed. The earlier smaller-block experiment also remains
+rejected: fewer decoded rows did not compensate for increased navigation and
+storage costs. Neither experiment changes the shipped format or block sizes.
+
+The retained change removes a duplicate index traversal: `key_page` previously
+located an ordinal and then descended again to retrieve its descriptor. It now
+selects the descriptor and ordinal during one authenticated descent. Every frame
+still passes the existing contextual authentication; the selected descriptor
+retains its exact root ownership proof. Full-tuple signed weights, cursor
+continuation, durable publication and acknowledgement ordering are unchanged.
+A cold-cache regression spans multiple index leaves, verifies exact signed
+results and missing keys, and requires exactly one root-to-leaf descent.
+
+The first uninstrumented release replay reduces preparation from 374.68 to
+259.19 microseconds/change for fixed 8,192 groups and from 385.44 to 268.06 for
+growing 8,192 groups (about 30%). All three cases retain identical total PUT
+counts and uploaded bytes, and pass the independent result and cold-reopen
+oracles. The original maintenance acceptance ceilings remain red. This change
+does not solve broad overlapping-root maintenance, eliminate unrelated row
+decoding, or establish production steady state.
+
+Two additional alternating frozen-binary runs per implementation, with no
+compiler overlap, confirm the preparation improvement: fixed 8,192 groups
+365.69 to 260.33 microseconds/change (28.8%), growing 8,192 groups 375.29 to
+267.98 (28.6%); fixed 512 groups 33.10 to 32.00 (3.3%). These are arithmetic
+means of two runs per version, not a confidence interval or an end-to-end
+PostgreSQL freshness measurement. All repeated result and cold-reopen checks
+pass; the trace is identical across versions.
+
+Final independent review finds no actionable issues. The required isolated
+`PGDERIVE_TEST_POSTGRES_PORT=55439 ./scripts/check.sh` passes: 146 Python tests,
+640 Rust tests (11 intentionally ignored), sequential PostgreSQL and core worker
+regressions, formatting, Clippy, file lengths and dependency checks. Production
+line coverage is 97.16% (25,734 / 26,485). Full evidence is in the ignored
+`common.log`, coverage run `qlmOJm3B`, and worker run `nVbhq8JM`. The disposable
+PostgreSQL fixture uses tmpfs and is removed after validation.

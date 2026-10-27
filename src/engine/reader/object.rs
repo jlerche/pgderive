@@ -466,16 +466,29 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         if self.index.node.as_ref().is_none_or(|root| key < &root.first.0 || key > &root.last.0) {
             return Ok(None);
         }
-        let ordinal = self.seek_block(|last| last.0 < *key).await?;
-        if ordinal >= self.block_count() {
-            return Ok(None);
+        let mut address = self.index.node.as_ref().context("empty object index")?.clone();
+        let mut ordinal = 0_usize;
+        loop {
+            match self.node(&address).await?.as_ref() {
+                Node::Leaf(leaves) => {
+                    let position = leaves.partition_point(|leaf| leaf.block.last.0 < *key);
+                    let Some(leaf) = leaves.get(position) else { return Ok(None) };
+                    return Ok((leaf.block.first.0 <= *key).then(|| SelectedBlock {
+                        ordinal: ordinal + position,
+                        owner: self.index.clone(),
+                        leaf: leaf.clone(),
+                    }));
+                }
+                Node::Branch(children) => {
+                    let Some(child) =
+                        super::index::seek_child(children, &|last| last.0 < *key, &mut ordinal)
+                    else {
+                        return Ok(None);
+                    };
+                    address = child;
+                }
+            }
         }
-        let leaf = self.leaf(ordinal).await?;
-        Ok((leaf.block.first.0 <= *key).then(|| SelectedBlock {
-            ordinal,
-            owner: self.index.clone(),
-            leaf,
-        }))
     }
     pub(crate) fn validate_page(&self, page: &SelectedBlock<K, V>) -> Result<()> {
         ensure!(
