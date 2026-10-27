@@ -1,5 +1,7 @@
 """Shared recorded CLI and proxy lifecycle; callers retain fault-specific assertions."""
 import json
+import select
+from contextlib import contextmanager
 import subprocess
 import sys
 import time
@@ -52,3 +54,37 @@ def commit_proxy(path, mode, *, once=False, marker=None, gate=None, upstream=Non
             command += [flag, str(value)]
     process, ready = start_recorded(command, path)
     return process, ready['port']
+
+
+@contextmanager
+def held_transaction(fixture, evidence, acquire):
+    """Hold fixture SQL locks; acquisition must emit exactly one 'held' row."""
+    with evidence.open('w') as errors:
+        holder = subprocess.Popen(fixture.pg[:-1]+['-Atq'], env=fixture.environment,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
+        try:
+            holder.stdin.write('BEGIN; '+acquire+';\n')
+            holder.stdin.flush()
+            assert select.select([holder.stdout], [], [], 10)[0], 'barrier acquisition timeout'
+            assert holder.stdout.readline().strip() == 'held', 'barrier holder stopped'
+            yield holder
+        finally:
+            if holder.poll() is None:
+                holder.terminate()
+                holder.wait(timeout=10)
+            holder.stdout.close()
+            if not holder.stdin.closed:
+                holder.stdin.close()
+
+
+def finish_transaction(holder, statement='COMMIT'):
+    holder.stdin.write(statement+';\n')
+    holder.stdin.close()
+    assert holder.wait(timeout=10) == 0, 'barrier transaction failed'
+
+
+def wait_sql(fixture, query, expected='1'):
+    deadline = time.monotonic()+5
+    while fixture.sql(query).strip() != expected:
+        assert time.monotonic()<deadline, 'SQL lock witness missing: '+query
+        time.sleep(.02)

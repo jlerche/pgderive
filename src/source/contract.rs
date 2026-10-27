@@ -107,8 +107,8 @@ impl Contract {
             .map(|relation| format!("{}.{}", quote(&relation.schema), quote(&relation.table)))
             .collect::<Vec<_>>()
             .join(",");
-        sql.batch_execute(&format!("LOCK TABLE {tables} IN ACCESS SHARE MODE")).await?;
-        let current = inspect_layout(sql, &self.identity, &self.publication, &self.slot).await?;
+        let lock = format!("LOCK TABLE {tables} IN ACCESS SHARE MODE");
+        let current = inspect_locked_layout(sql, &lock, self).await?;
         ensure!(current == self.relations, "source schema/publication contract changed");
         Ok(())
     }
@@ -189,6 +189,23 @@ impl Contract {
         Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(self)?)))
     }
 }
+// Keep the pipelining macro outside the deserialized contract's implementation:
+// its internal unsafe expansion is unrelated to validation of persisted fields.
+async fn inspect_locked_layout(
+    sql: &tokio_postgres::Transaction<'_>,
+    lock: &str,
+    contract: &Contract,
+) -> Result<Vec<Relation>> {
+    // Queue the lock first, then inspect in a separate statement snapshot.
+    // A DDL commit during the lock wait must be visible to inspection.
+    let ((), current) = tokio::try_join!(
+        biased;
+        async { sql.batch_execute(lock).await.map_err(anyhow::Error::from) },
+        inspect_layout(sql, &contract.identity, &contract.publication, &contract.slot),
+    )?;
+    Ok(current)
+}
+
 async fn inspect_layout(
     sql: &(impl GenericClient + Sync),
     identity: &Identity,

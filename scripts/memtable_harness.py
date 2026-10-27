@@ -3,9 +3,7 @@
 import json
 import pathlib
 import sys
-import subprocess
-import select
-import time
+from harness_control import held_transaction, finish_transaction, wait_sql
 from worker_harness import Fixture
 
 
@@ -202,38 +200,61 @@ def publication_barrier(output, command):
         progress = fixture.sql(progress_sql)
         ack_sql = f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'"
         ack = fixture.sql(ack_sql)
-        with (output/'barrier.stderr').open('w') as errors:
-            holder = subprocess.Popen(fixture.pg[:-1]+['-Atq'], env=fixture.environment,
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors, text=True)
-            try:
-                holder.stdin.write(f"BEGIN; SELECT 'held' FROM pg_advisory_xact_lock(hashtextextended('pgderive-object-lifecycle:{fixture.name}',0));\n")
-                holder.stdin.flush()
-                assert select.select([holder.stdout], [], [], 10)[0], 'barrier acquisition timeout'
-                assert holder.stdout.readline().strip() == 'held', 'barrier holder stopped'
-                fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')
-                deadline = time.monotonic()+20
-                while fixture.sql(f"SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory' AND query LIKE '%synchronous_commit%' ").strip() != '1':
-                    assert time.monotonic()<deadline, 'publication did not wait for lifecycle barrier'
-                    time.sleep(.02)
-                fixture.sql(f'BEGIN; SELECT query_id FROM {fixture.name}.pgderive_queries FOR UPDATE NOWAIT; SELECT query_id FROM {fixture.name}.pgderive_progress FOR UPDATE NOWAIT; ROLLBACK')
-                holder.stdin.write(f'DELETE FROM {fixture.name}.pgderive_source_slots; COMMIT;\n')
-                holder.stdin.close()
-                assert holder.wait(timeout=10) == 0
-                worker.process.wait(timeout=30)
-                worker.abort()
-                assert worker.process.returncode != 0, 'stale ownership accepted after lifecycle wait'
-                assert fixture.sql(audit_sql) == audit, 'barrier failure changed sink'
-                assert fixture.sql(progress_sql) == progress, 'barrier failure changed progress'
-                assert fixture.sql(ack_sql) == ack, 'barrier failure acknowledged source'
-            finally:
-                if holder.poll() is None:
-                    holder.terminate()
-                    holder.wait(timeout=10)
-                holder.stdout.close()
-                if not holder.stdin.closed:
-                    holder.stdin.close()
+        lock = f"SELECT 'held' FROM pg_advisory_xact_lock(hashtextextended('pgderive-object-lifecycle:{fixture.name}',0))"
+        with held_transaction(fixture, output/'barrier.stderr', lock) as holder:
+            fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')
+            wait_sql(fixture, "SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory' AND query LIKE '%synchronous_commit%'")
+            fixture.sql(f'BEGIN; SELECT query_id FROM {fixture.name}.pgderive_queries FOR UPDATE NOWAIT; SELECT query_id FROM {fixture.name}.pgderive_progress FOR UPDATE NOWAIT; ROLLBACK')
+            finish_transaction(holder, f'DELETE FROM {fixture.name}.pgderive_source_slots; COMMIT')
+            worker.process.wait(timeout=30)
+            worker.abort()
+            assert worker.process.returncode != 0, 'stale ownership accepted after lifecycle wait'
+            assert fixture.sql(audit_sql) == audit, 'barrier failure changed sink'
+            assert fixture.sql(progress_sql) == progress, 'barrier failure changed progress'
+            assert fixture.sql(ack_sql) == ack, 'barrier failure acknowledged source'
         (output/'result.json').write_text(json.dumps({'lifecycle_before_row_locks':True,
             'fresh_ownership_after_wait':True,'unchanged_sink_progress_ack':True})+'\n')
+
+
+def concurrent_ddl(output, command):
+    """Inspect DDL after a source-lock wait; reject commits and accept rollbacks."""
+    for outcome in ['COMMIT', 'ROLLBACK']:
+        directory = output/outcome.lower()
+        directory.mkdir(parents=True)
+        fixture = Fixture(directory, 'ddl_'+outcome.lower(), rows=8, auctions=2)
+        with fixture.managed():
+            worker = fixture.start(command, 'worker')
+            ready = worker.event('ready')
+            audit_sql = f"SELECT json_agg(json_build_array(g.ctid::text,g.xmin::text,to_jsonb(g)) ORDER BY g.ctid) FROM {fixture.name}.groups g"
+            audit = fixture.sql(audit_sql)
+            progress_sql = f'SELECT json_agg(to_jsonb(p)) FROM {fixture.name}.pgderive_progress p'
+            progress = fixture.sql(progress_sql)
+            ack_sql = f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'"
+            ack = fixture.sql(ack_sql)
+            lifecycle = f"SELECT 'held' FROM pg_advisory_xact_lock(hashtextextended('pgderive-object-lifecycle:{fixture.name}',0))"
+            with held_transaction(fixture, directory/'lifecycle.stderr', lifecycle) as barrier:
+                fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')
+                wait_sql(fixture, "SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory' AND query LIKE '%synchronous_commit%'")
+                lock = f"LOCK TABLE {fixture.name}.bid IN ACCESS EXCLUSIVE MODE; SELECT 'held'"
+                with held_transaction(fixture, directory/'ddl.stderr', lock) as ddl:
+                    finish_transaction(barrier)
+                    wait_sql(fixture, f"SELECT count(*) FROM pg_stat_activity WHERE wait_event='relation' AND query LIKE 'LOCK TABLE %' AND query LIKE '%{fixture.name}%'")
+                    finish_transaction(ddl, f'ALTER TABLE {fixture.name}.bid ADD COLUMN extra integer; {outcome}')
+            if outcome == 'COMMIT':
+                worker.process.wait(timeout=30)
+                worker.abort()
+                assert worker.process.returncode != 0, 'concurrent DDL accepted'
+                errors = [json.loads(line).get('error','') for line in pathlib.Path(worker.metrics.name).read_text().splitlines()]
+                assert any('source schema/publication contract changed' in error for error in errors), errors
+                assert fixture.sql(audit_sql) == audit, 'DDL rejection changed sink'
+                assert fixture.sql(progress_sql) == progress, 'DDL rejection changed progress'
+                assert fixture.sql(ack_sql) == ack, 'DDL rejection acknowledged source'
+            else:
+                worker.event('published', minimum_time=ready['time']+1)
+                fixture.verify()
+                worker.finish(graceful=True)
+            (directory/'result.json').write_text(json.dumps({'ddl':outcome,
+                'layout_inspected_after_source_lock':True,'correct_publication_or_rejection':True})+'\n')
 
 
 if __name__ == '__main__':
@@ -244,5 +265,6 @@ if __name__ == '__main__':
     memory_pressure(output/'pressure', command)
     publication_guards(output/'guards', command)
     publication_barrier(output/'barrier', command)
+    concurrent_ddl(output/'ddl', command)
     from adaptive_epoch_harness import qualify as epochs
     epochs(output/'epochs', command)

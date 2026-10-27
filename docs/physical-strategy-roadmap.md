@@ -79,11 +79,71 @@ checkpoint-dependent bytes before use, while per-transaction progress stays
 fresh. This reduces repeated construction/serialization/parse/planning work,
 not the number of foreground database round trips.
 
-The next slice pipelines lifecycle protection and the boundary check on the same
+Lifecycle protection and the boundary check now pipeline on the same
 transaction connection. Biased first polling queues protection first; PostgreSQL
 executes separate statements in order, so the boundary snapshot remains fresh
 after a lifecycle wait. Both must succeed before source locks, progress, sink DML
 and synchronous commit. This removes one serial response wait, not a SQL statement
-or a durability barrier. Checkpoint publication is unchanged. Further candidates
-include source-table locking and layout inspection, subject to the same ordering
-and failure tests; round-trip reduction is not complete.
+or a durability barrier. The source contract now also pipelines source-table
+locking and layout inspection using separate statements: inspection executes
+after the source lock is acquired, including after a concurrent DDL commit.
+Both must succeed before progress or sink changes. This shared source-contract
+path serves every caller rather than recognizing a query or workload.
+Concurrent-DDL commit and rollback tests cover rejection without sink/progress/
+ACK changes and successful native-equal publication, respectively. Round-trip
+reduction and general validation reuse are not complete.
+
+
+## Status against the original seven-point list
+
+The implementation order above places publication reuse before property analysis.
+In the original pasted list, property analysis was **#2** and publication reuse
+was **#3**. The status below preserves that original numbering.
+
+| Original item | Status | Completed work and remaining scope |
+|---|---|---|
+| 1. Keyed sink access | Implemented | Both UPDATE and DELETE use proven key predicates plus exact old-tuple/affected-row checks; keyed sinks no longer create the changing full-row hash index. Generic bag behavior remains intact. |
+| 2. Relational property analysis | Outstanding | The existing sink-key proof remains specialized; shared edge properties for candidate keys, nullability/equality, multiplicity and lineage have not replaced it. |
+| 3. Publication reuse | In progress | Bound sink templates/codecs, connection-local prepared DML/guard/epoch statements, encoded immutable metadata and checkpoint refresh, and ordered lifecycle/boundary pipelining are implemented. Source-lock/layout pipelining is implemented and qualified. General lock-scoped validation reuse is not complete. |
+| 4. Epoch controller cost model | Outstanding extension | Adaptive scheduling exists. The requested combination of bytes, affected keys, output DML mix, fixed publication cost and maintenance/admission interference has not been implemented as a complete model. |
+| 5. Explicit maintenance service budgets | Outstanding extension | Debt/admission controls and shared worker resource budgets exist. Byte-based job accounting, pack-utilization debt and a guaranteed minimum maintenance service allocation remain. |
+| 6. Bounded local maintenance and hierarchical membership | Partial foundations | Range-local selection, packed outputs and authenticated block sharing exist. Broader byte/fan-in-budgeted local histories, index-subtree sharing and scalable hierarchical membership remain. |
+| 7. Budgeted partial page promotion | Outstanding | Existing bounded caches and prior warming experiments do not implement measured partial generated-page promotion across its overflow threshold. |
+
+These statuses describe implementation scope, not a proof of sustained production
+service or completion of the remaining steady-state qualification gates.
+
+
+## Source-lock/layout pipeline validation (2026-10-27)
+
+Baseline `abef0a2` and the candidate use the same production worker measurement:
+20,000 groups, 60 epochs, 16-tick maintenance, native binary equality and safe
+ACK checks. With 5 ms downstream PostgreSQL response delay, publication p50
+fell from 39.739 to 34.297 ms; the reverse order measured 39.532 versus 34.518 ms
+(about 13% lower). The source-layout phase fell from 11.825/11.753 ms to
+6.440/6.469 ms. Localhost was flat: 2.084 versus 2.095 ms total publication.
+This reduces serial network waiting rather than SQL statement count or CPU.
+
+The new production-worker regression first queues publication behind lifecycle
+protection, then behind a second session's exclusive source-table lock. Committed
+DDL must produce the exact layout-drift rejection with sink tuple identity,
+progress and ACK unchanged; rolled-back DDL must publish the native-equal result.
+Both cases and the refactored existing lifecycle barrier passed fast validation
+and the coverage-instrumented common gate. The fourteen existing boundary
+mutations also passed. Shared fixture helpers replace the previous inline holder
+implementation; there is one production layout path and no compatibility fallback.
+
+Independent review found no actionable issues. The common `./scripts/check.sh`
+core gate passed 648 Rust tests, 147 Python tests, 156 live worker results plus
+rebuild, 97.14% production line coverage and dependency checks. Full release
+qualification and sustained production steady state are not claimed. Frozen
+binaries, measurement scripts and failure evidence remain ignored under
+`artifacts/benchmarks/source-layout-pipeline-20261027/`.
+
+One reverse-order candidate trial recorded extra WAL while a timed PostgreSQL
+checkpoint began; that raw result is retained. A follow-up inserted the same
+explicit CHECKPOINT before each trial's measurement reset and recorded full-page
+images: both builds produced exactly 2,222,443 sink WAL bytes, 195 full-page images
+and 12,660 WAL records, with 6,330 HOT updates and 6,330 deletes. Publication p50
+remained 39.704 versus 34.418 ms. This controls a checkpoint-dependent measurement
+confounder; it is not a claim that pipelining reduces WAL.
