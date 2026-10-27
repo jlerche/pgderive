@@ -6,6 +6,7 @@ use tokio_postgres::{Client, Statement, types::Type};
 pub(super) struct Prepared {
     pub sink: Program,
     pub guard: Statement,
+    pub maintenance: Statement,
     pub epoch: Statement,
 }
 impl Prepared {
@@ -14,7 +15,13 @@ impl Prepared {
         let sink = Program::prepare(client, &table, sink).await?;
         let guard = client
             .prepare_typed(
-                &super::memtable_guard::statement(&catalog.schema),
+                &super::validation::statement(&catalog.schema, "/* pgderive:boundary */"),
+                &[Type::TEXT, Type::JSONB, Type::JSONB, Type::JSONB, Type::TEXT],
+            )
+            .await?;
+        let maintenance = client
+            .prepare_typed(
+                &super::validation::statement(&catalog.schema, "/* pgderive:maintenance */"),
                 &[Type::TEXT, Type::JSONB, Type::JSONB, Type::JSONB, Type::TEXT],
             )
             .await?;
@@ -32,6 +39,6 @@ impl Prepared {
                 ],
             )
             .await?;
-        Ok(Self { sink, guard, epoch })
+        Ok(Self { sink, guard, maintenance, epoch })
     }
 }

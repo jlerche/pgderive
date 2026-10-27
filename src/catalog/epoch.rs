@@ -1,7 +1,7 @@
 //! Coarse WAL boundaries needed to reconstruct adaptive execution ticks exactly.
-use super::{Catalog, Durable, Lsn, Progress, Writer};
+use super::{Catalog, Durable, Lsn, Progress};
 use anyhow::{Context, Result, ensure};
-use tokio_postgres::{Client, Statement, Transaction};
+use tokio_postgres::{Client, Statement};
 
 #[derive(Clone)]
 pub struct ReplayEpoch {
@@ -10,14 +10,15 @@ pub struct ReplayEpoch {
     pub progress: Progress,
     pub transactions: u64,
 }
-impl Writer {
+impl super::validation::LockedBoundary<'_, '_> {
     pub(super) async fn record_epoch(
         &self,
-        tx: &Transaction<'_>,
         publication: (u64, &Progress, u64),
         statement: &Statement,
     ) -> Result<()> {
         let (time, progress, transactions) = publication;
+        let tx = self.transaction();
+        let catalog = self.catalog();
         ensure!(transactions > 0, "empty source epoch");
         // One statement records the replay boundary and advances visible source
         // progress. Fencing/layout locks are already held by publish_epoch.
@@ -25,9 +26,9 @@ impl Writer {
             .execute(
                 statement,
                 &[
-                    &self.catalog.query,
+                    &catalog.query,
                     &i64::try_from(time)?,
-                    &self.boundary.end.to_string(),
+                    &self.boundary().end.to_string(),
                     &progress.commit.to_string(),
                     &progress.end.to_string(),
                     &i64::from(progress.xid),
@@ -107,8 +108,7 @@ pub(super) fn statement(schema: &str) -> String {
             ) INSERT INTO {schema}.pgderive_epoch_boundaries
                 (query_id,logical_time,previous_end_lsn,commit_lsn,end_lsn,xid,transactions)
             SELECT a.query_id,$2,$3::text::pg_lsn,$4::text::pg_lsn,$5::text::pg_lsn,$6,$7
-            FROM advanced a JOIN {schema}.pgderive_queries q USING(query_id)
-            WHERE q.format_version=3"
+            FROM advanced a"
     )
 }
 

@@ -1,0 +1,18 @@
+{
+  "plan": "UPDATE {s}.pgderive_queries SET plan_identity='changed'",
+  "definition": "UPDATE {s}.pgderive_queries SET definition=definition || '{\"unexpected\":true}'::jsonb",
+  "checkpoint": "UPDATE {s}.pgderive_queries SET checkpoint=checkpoint || '{\"unexpected\":true}'::jsonb",
+  "digest": "UPDATE {s}.pgderive_queries SET checkpoint_digest='changed'",
+  "epoch": "UPDATE {s}.pgderive_queries SET epoch=epoch+1",
+  "clock": "UPDATE {s}.pgderive_queries SET logical_time=logical_time+1",
+  "fence": "UPDATE {s}.pgderive_progress SET fence=fence+1",
+  "binding": "UPDATE {s}.pgderive_progress SET binding=binding || '{\"unexpected\":true}'::jsonb",
+  "sink": "UPDATE {s}.pgderive_progress SET sink_table='changed'",
+  "identity": "UPDATE {s}.pgderive_progress SET xid=123",
+  "progress": "UPDATE {s}.pgderive_progress SET published_time=published_time+1",
+  "lsn": "UPDATE {s}.pgderive_progress SET end_lsn=end_lsn+1",
+  "ownership": "DELETE FROM {s}.pgderive_source_slots",
+  "missing": "DELETE FROM {s}.pgderive_progress",
+  "checkpoint_number": "UPDATE {s}.pgderive_queries SET checkpoint=jsonb_set(checkpoint,'{version}','1.0'::jsonb)",
+  "binding_number": "UPDATE {s}.pgderive_progress SET binding=jsonb_set(binding,'{source,identity,timeline}',to_jsonb((binding#>>'{source,identity,timeline}')::numeric*1.0))"
+}

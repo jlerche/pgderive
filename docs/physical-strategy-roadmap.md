@@ -71,13 +71,13 @@ visible. Component improvements are not a claim of production steady state.
 
 Key-directed sink access is implemented. Publication reuse now covers compiled
 sink templates/codecs/key positions and connection-local prepared sink DML,
-memtable boundary comparison and epoch-progress SQL. The connection API owns its
+complete boundary comparison for all writer paths and epoch-progress SQL. The connection API owns its
 cache and invalidates it before mutable raw access; there is no uncached DML
 fallback. Encoded immutable plan/binding data and the complete expected
 checkpoint comparison are also cached: physical publication epochs refresh
 checkpoint-dependent bytes before use, while per-transaction progress stays
-fresh. This reduces repeated construction/serialization/parse/planning work,
-not the number of foreground database round trips.
+fresh. Encoding and template reuse reduce repeated construction, serialization,
+parse and planning work.
 
 Lifecycle protection and the boundary check now pipeline on the same
 transaction connection. Biased first polling queues protection first; PostgreSQL
@@ -90,8 +90,19 @@ after the source lock is acquired, including after a concurrent DDL commit.
 Both must succeed before progress or sink changes. This shared source-contract
 path serves every caller rather than recognizing a query or workload.
 Concurrent-DDL commit and rollback tests cover rejection without sink/progress/
-ACK changes and successful native-equal publication, respectively. Round-trip
-reduction and general validation reuse are not complete.
+ACK changes and successful native-equal publication, respectively.
+
+Publication, checkpoint and physical maintenance now share a private,
+transaction-borrowing `LockedBoundary`. It is created only after lifecycle
+protection, synchronous durability configuration and the complete prepared
+boundary guard succeed. The guard locks query, progress and source-ownership
+rows; staging reuses those facts while the transaction retains its locks.
+Membership writes keep their epoch CAS, clock condition, upload provenance and
+affected-row checks. Epoch journal writes reuse the established catalog-format
+check. Bootstrap uses a separate fresh-insert path under lifecycle protection.
+Claims, recovery and ACK confirmation continue full authoritative validation in
+their own transactions. This completes the planned publication validation reuse;
+remaining performance work is evaluated against measurements.
 
 
 ## Status against the original seven-point list
@@ -104,7 +115,7 @@ was **#3**. The status below preserves that original numbering.
 |---|---|---|
 | 1. Keyed sink access | Implemented | Both UPDATE and DELETE use proven key predicates plus exact old-tuple/affected-row checks; keyed sinks no longer create the changing full-row hash index. Generic bag behavior remains intact. |
 | 2. Relational property analysis | Outstanding | The existing sink-key proof remains specialized; shared edge properties for candidate keys, nullability/equality, multiplicity and lineage have not replaced it. |
-| 3. Publication reuse | In progress | Bound sink templates/codecs, connection-local prepared DML/guard/epoch statements, encoded immutable metadata and checkpoint refresh, and ordered lifecycle/boundary pipelining are implemented. Source-lock/layout pipelining is implemented and qualified. General lock-scoped validation reuse is not complete. |
+| 3. Publication reuse | Implemented | Bound templates/codecs and prepared statements, encoded immutable metadata/checkpoint refresh, both ordered pipelines and transaction-scoped validation reuse across publication, checkpoint and maintenance are implemented. Claims, recovery and ACK confirmation retain independent authoritative validation. |
 | 4. Epoch controller cost model | Outstanding extension | Adaptive scheduling exists. The requested combination of bytes, affected keys, output DML mix, fixed publication cost and maintenance/admission interference has not been implemented as a complete model. |
 | 5. Explicit maintenance service budgets | Outstanding extension | Debt/admission controls and shared worker resource budgets exist. Byte-based job accounting, pack-utilization debt and a guaranteed minimum maintenance service allocation remain. |
 | 6. Bounded local maintenance and hierarchical membership | Partial foundations | Range-local selection, packed outputs and authenticated block sharing exist. Broader byte/fan-in-budgeted local histories, index-subtree sharing and scalable hierarchical membership remain. |
@@ -147,3 +158,73 @@ images: both builds produced exactly 2,222,443 sink WAL bytes, 195 full-page ima
 and 12,660 WAL records, with 6,330 HOT updates and 6,330 deletes. Publication p50
 remained 39.704 versus 34.418 ms. This controls a checkpoint-dependent measurement
 confounder; it is not a claim that pipelining reduces WAL.
+
+
+## Locked publication validation reuse (2026-10-27)
+
+`LockedBoundary` is private, cannot be cloned or serialized, and borrows the
+exact transaction and expected writer boundary. Complete plan/checkpoint JSON,
+checksum, format, clocks, binding, fence, source positions and ownership are
+compared before the capability is created. Plan/checkpoint and binding JSONB are
+compared through canonical `jsonb_send` bytes, preserving numeric scale as well
+as values: semantic JSONB equality accepts `1.0` as `1`, while integer metadata
+decoders reject the floating representation. Both aliases are tested across all
+four publication paths. There is no semantic-equality fallback. Physical publication refreshes cached
+checkpoint metadata before the next guard. Source ownership is held `FOR SHARE`
+through COMMIT; a held-COMMIT regression proves deletion blocks until release.
+
+Checkpoint/maintenance no longer reload and decode the same complete durable
+boundary or reacquire lifecycle protection during staging. The separate initial
+INSERT keeps conflict/affected-row rejection; existing-membership replacement
+requires the locked capability. Candidate validation, captured checkpoint LSN
+and published-suffix checks, namespace/extent provenance, epoch CAS, exact sink
+checks and uncertain-COMMIT recovery remain. The superseded guard and unlocked
+staging path have been removed.
+
+The shared sixteen-mutation fixture now exercises foreground publication,
+checkpoint publication after a held upload, full publication and maintenance.
+Each rejection preserves exact sink tuple identity, metadata and source ACK.
+The existing concurrent-DDL, fencing, cold recovery, extent/GC and before/after
+COMMIT checks also pass targeted validation. The integration fixture waits for
+its previous approved asynchronous feedback before measuring ACK stability and
+keeps setup writes synchronous while leaving the session deliberately off for
+actual publication durability assertions. Original failed fixture evidence and
+schema dumps remain retained.
+
+Paired production-worker measurements against `3f66250` use 20,000 groups,
+60 epochs and four-tick maintenance, with 5 ms downstream PostgreSQL response
+delay and matched explicit CHECKPOINTs. With canonical wire comparison, whole
+checkpoint elapsed p50 fell from 225.396/242.582 ms to 171.228/172.763 ms in the
+two execution orders (24–29%). These events include upload and publication,
+rather than pure validation time. Logged statement executions between BEGIN and
+COMMIT fell from 11 to 7 for every measured checkpoint. Captured checkpoint
+logical times matched within both pairs; one baseline event published an extra
+suffix epoch while checkpoint installation finished. Foreground publication
+stayed near 34.1–34.4 ms.
+
+Localhost checkpoint p50 was 15.570 versus 15.945 ms and foreground 2.009 versus
+2.081 ms: a small local cost. The reused 64-extra-nullable-column source fixture
+(2,000 groups, 18 epochs) recorded guard p50 0.774 versus 0.836 ms, total
+publication 3.377 versus 3.362 ms, and checkpoint 21.631 versus 21.359 ms.
+This identifies the small canonical-comparison cost rather than hiding it behind
+network savings. CPU remains inconclusive. Both delayed pairs recorded five
+checkpoints per build, localhost four, and the wider trial two. These runs use
+maintenance_ticks=4, unlike the preceding source-layout slice's 16; comparisons
+are within each pair. Sink row changes and index size matched. Both delayed
+pairs and the wider trial recorded identical sink WAL; the uncontrolled local
+trial differed by 1,560 bytes (0.13%).
+
+No live freshness or production steady-state claim follows from these component
+measurements. Final frozen binaries, scripts, SQL traces and alias checks are
+ignored under `artifacts/benchmarks/publication-validation-20261027/canonical/`.
+Earlier results using semantic JSONB comparison remain in the parent directory,
+explicitly superseded and ineligible for deployment. Failed fixture evidence and
+schema dumps are retained there as well.
+
+The corrected canonical-comparison implementation passed independent review and
+the final common `./scripts/check.sh` core gate: 648 Rust tests, 147 Python tests,
+158 live worker results plus rebuild, 97.14% production line coverage and no
+unused dependencies. This includes all 64 shared mutation checks and the
+ownership-lock, DDL, replay and uncertain-COMMIT regressions. The disposable
+PostgreSQL fixture used tmpfs with no persistent Docker volumes and was removed;
+final results and failure evidence were retained.

@@ -9,14 +9,31 @@ use tokio_postgres::Transaction;
 pub(super) async fn shared(sql: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
     lock(sql, catalog, false).await
 }
+/// Transaction-bound lifecycle protection and synchronous durability configuration.
+/// It cannot be constructed, cloned or retained beyond its transaction.
+pub(super) struct Publication<'a, 'tx> {
+    sql: &'a Transaction<'tx>,
+    catalog: &'a Catalog,
+}
+impl<'a, 'tx> Publication<'a, 'tx> {
+    pub(super) const fn transaction(&self) -> &'a Transaction<'tx> {
+        self.sql
+    }
+    pub(super) const fn catalog(&self) -> &'a Catalog {
+        self.catalog
+    }
+}
 // Configure durable publication and acquire lifecycle protection in one round trip.
-pub(super) async fn publication_lock(sql: &Transaction<'_>, catalog: &Catalog) -> Result<()> {
+pub(super) async fn publication_lock<'a, 'tx>(
+    sql: &'a Transaction<'tx>,
+    catalog: &'a Catalog,
+) -> Result<Publication<'a, 'tx>> {
     let scope = format!("pgderive-object-lifecycle:{}", catalog.schema);
     sql.query_typed_one(
         "SELECT pg_catalog.set_config('synchronous_commit','on',true), pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtextextended($1,0))",
         &[(&scope, tokio_postgres::types::Type::TEXT)],
     ).await?;
-    Ok(())
+    Ok(Publication { sql, catalog })
 }
 async fn lock(sql: &Transaction<'_>, catalog: &Catalog, exclusive: bool) -> Result<()> {
     let function = if exclusive { "pg_advisory_xact_lock" } else { "pg_advisory_xact_lock_shared" };

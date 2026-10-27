@@ -119,9 +119,11 @@ def measure(output,command,groups,repetitions,maintenance_ticks):
         cpu_ms=worker_cpu(worker)-cpu_before
         (output/'ticks.json').write_text(json.dumps(ticks,indent=2)+'\n')
         worker.finish(graceful=True)
+        records=map(json.loads,pathlib.Path(worker.metrics.name).read_text().splitlines())
+        maintenance=[row for row in records if row.get('event')=='maintenance']
         after=table_stats(fixture);sql_stats=dml_stats(fixture);queries=statements(fixture)
         physical={key:after[key]-before[key] for key in before}
-        report={'initial_groups':groups,'maintenance_ticks':maintenance_ticks,'worker_cpu_ms':cpu_ms,'ticks':ticks,'physical':physical,'postgres':sql_stats,
+        report={'initial_groups':groups,'maintenance_ticks':maintenance_ticks,'worker_cpu_ms':cpu_ms,'maintenance':maintenance,'ticks':ticks,'physical':physical,'postgres':sql_stats,
                 'index_bytes':int(fixture.sql(f"SELECT pg_indexes_size('{fixture.name}.groups')")),
                 'index_count':int(fixture.sql(f"SELECT count(*) FROM pg_index WHERE indrelid='{fixture.name}.groups'::regclass")),
                 'plans':plans(fixture,queries),'actual_worker_sql':queries,
@@ -155,6 +157,8 @@ def main():
     for name,binary in pairs:
         path=output/name;path.mkdir()
         report=measure(path,[binary],args.groups,args.repetitions,args.maintenance_ticks);summary[name]={key:report[key] for key in ['physical','index_count','index_bytes','worker_cpu_ms']}
+        summary[name]['maintenance_p50_ms']=statistics.median(row['elapsed_us']/1000 for row in report['maintenance'])
+        summary[name]['maintenance_samples']=len(report['maintenance'])
         summary[name]['postgres_execution_ms']=sum(row['execution_ms'] for row in report['postgres'])
         summary[name]['wal_bytes']=sum(row['wal_bytes'] for row in report['postgres'])
         summary[name]['publication_p50_ms']=statistics.median(t['phases_us']['publication']/1000 for t in report['ticks'])

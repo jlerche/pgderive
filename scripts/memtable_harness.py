@@ -3,6 +3,7 @@
 import json
 import pathlib
 import sys
+import subprocess
 from harness_control import held_transaction, finish_transaction, wait_sql
 from worker_harness import Fixture
 
@@ -137,22 +138,7 @@ def memory_pressure(output, command):
 
 def publication_guards(output, command):
     """Reject each altered boundary before sink/progress writes or slot feedback."""
-    mutations = {
-        'plan': "UPDATE {s}.pgderive_queries SET plan_identity='changed'",
-        'definition': "UPDATE {s}.pgderive_queries SET definition=definition || '{{\"unexpected\":true}}'::jsonb",
-        'checkpoint': "UPDATE {s}.pgderive_queries SET checkpoint=checkpoint || '{{\"unexpected\":true}}'::jsonb",
-        'digest': "UPDATE {s}.pgderive_queries SET checkpoint_digest='changed'",
-        'epoch': "UPDATE {s}.pgderive_queries SET epoch=epoch+1",
-        'clock': "UPDATE {s}.pgderive_queries SET logical_time=logical_time+1",
-        'fence': "UPDATE {s}.pgderive_progress SET fence=fence+1",
-        'binding': "UPDATE {s}.pgderive_progress SET binding=binding || '{{\"unexpected\":true}}'::jsonb",
-        'sink': "UPDATE {s}.pgderive_progress SET sink_table='changed'",
-        'identity': "UPDATE {s}.pgderive_progress SET xid=123",
-        'progress': "UPDATE {s}.pgderive_progress SET published_time=published_time+1",
-        'lsn': "UPDATE {s}.pgderive_progress SET end_lsn=end_lsn+1",
-        'ownership': "DELETE FROM {s}.pgderive_source_slots",
-        'missing': "DELETE FROM {s}.pgderive_progress",
-    }
+    mutations = json.loads((pathlib.Path(__file__).parent/'publication_mutations.json').read_text())
     for mode, mutation in mutations.items():
         directory = output/mode
         directory.mkdir(parents=True)
@@ -170,7 +156,7 @@ def publication_guards(output, command):
             audit = fixture.sql(audit_sql)
             ack_sql = f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'"
             ack = fixture.sql(ack_sql)
-            fixture.sql(mutation.format(s=fixture.name))
+            fixture.sql(mutation.replace('{s}', fixture.name))
             progress_sql = f'SELECT json_agg(to_jsonb(p)) FROM {fixture.name}.pgderive_progress p'
             progress = fixture.sql(progress_sql)
             fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')
@@ -185,6 +171,90 @@ def publication_guards(output, command):
             assert fixture.sql(ack_sql) == ack, mode+' acknowledged source'
     (output/'result.json').write_text(json.dumps({'boundary_mutations_rejected':list(mutations),
         'unchanged_sink_progress_ack':True})+'\n')
+
+
+def checkpoint_guards(output, command):
+    """An uploaded candidate cannot reuse validation from a prior transaction."""
+    from worker_crash_harness import arm, proxy, wait_for
+    mutations = json.loads((pathlib.Path(__file__).parent/'publication_mutations.json').read_text())
+    for mode, mutation in mutations.items():
+        directory = output/mode
+        directory.mkdir(parents=True)
+        fixture = Fixture(directory, 'checkpoint_'+mode, rows=8, auctions=2)
+        gate = directory/'checkpoint.release'
+        process, log, error, port = proxy(directory, 's3', gate)
+        fixture.environment['PGDERIVE__OBJECT_STORE__ENDPOINT'] = f'http://127.0.0.1:{port}'
+        original = fixture.config
+        def guarded_config(maximum=0):
+            path = original(maximum)
+            path.write_text(path.read_text().replace('retry_attempts=8', 'retry_attempts=1').replace(
+                'maintenance_ticks=4', 'maintenance_ticks=64\ncheckpoint_interval_ms=500'))
+            return path
+        fixture.config = guarded_config
+        try:
+            with fixture.managed():
+                worker = fixture.start(command, 'worker')
+                ready = worker.event('ready')
+                arm(gate, 'PUT')
+                fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')
+                worker.event('published', minimum_time=ready['time']+1)
+                wait_for(lambda: pathlib.Path(str(gate)+'.pending').exists(), 'checkpoint PUT held')
+                audit_sql = f"SELECT json_agg(json_build_array(g.ctid::text,g.xmin::text,to_jsonb(g)) ORDER BY g.ctid) FROM {fixture.name}.groups g"
+                audit = fixture.sql(audit_sql)
+                ack_sql = f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'"
+                ack = fixture.sql(ack_sql)
+                fixture.sql(mutation.replace('{s}', fixture.name))
+                metadata_sql = f"SELECT jsonb_build_array((SELECT to_jsonb(q) FROM {fixture.name}.pgderive_queries q),(SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p),(SELECT to_jsonb(s) FROM {fixture.name}.pgderive_source_slots s))"
+                changed = fixture.sql(metadata_sql)
+                gate.touch()
+                worker.process.wait(timeout=30)
+                worker.abort()
+                assert worker.process.returncode != 0, mode+' checkpoint accepted stale boundary'
+                error_text = pathlib.Path(worker.stderr.name).read_text()
+                assert any(message in error_text for message in ('memtable worker fenced',
+                    'memtable query or progress disappeared')), error_text
+                assert fixture.sql(audit_sql) == audit, mode+' checkpoint rewrote sink'
+                assert fixture.sql(metadata_sql) == changed, mode+' checkpoint changed metadata'
+                assert fixture.sql(ack_sql) == ack, mode+' checkpoint acknowledged source'
+        finally:
+            gate.touch()
+            process.terminate()
+            process.wait(timeout=10)
+            log.close()
+            error.close()
+    (output/'result.json').write_text(json.dumps({'checkpoint_mutations_rejected':list(mutations),
+        'unchanged_sink_metadata_ack':True})+'\n')
+
+
+def ownership_locked(output, command):
+    """The checked ownership row remains protected through sink COMMIT."""
+    from harness_control import commit_proxy, wait_records
+    output.mkdir(parents=True)
+    fixture = Fixture(output, 'owner_locked', rows=8, auctions=2)
+    gate = output/'commit.release'
+    proxy, port = commit_proxy(output/'proxy.jsonl', 'hold', once=True,
+        marker='/* pgderive:epoch */', gate=gate)
+    fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
+    try:
+        with fixture.managed():
+            worker = fixture.start(command, 'worker', maximum=1)
+            ready = worker.event('ready')
+            fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id=1')
+            wait_records(output/'proxy.jsonl', lambda rows: any(row.get('fault')=='held_commit' for row in rows))
+            deletion = subprocess.run(fixture.pg+[f"SET lock_timeout='100ms'; DELETE FROM {fixture.name}.pgderive_source_slots"],
+                env=fixture.environment, text=True, capture_output=True)
+            assert deletion.returncode != 0 and 'lock timeout' in deletion.stderr, deletion.stderr
+            assert fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_source_slots').strip()=='1'
+            gate.touch()
+            worker.event('published', minimum_time=ready['time']+1)
+            worker.finish()
+            fixture.verify()
+            (output/'result.json').write_text(json.dumps({'ownership_locked_through_commit':True,
+                'native_equal':True})+'\n')
+    finally:
+        gate.touch()
+        proxy.terminate()
+        proxy.wait(timeout=10)
 
 
 def publication_barrier(output, command):
@@ -264,6 +334,8 @@ if __name__ == '__main__':
     qualify(output, command)
     memory_pressure(output/'pressure', command)
     publication_guards(output/'guards', command)
+    checkpoint_guards(output/'checkpoint-guards', command)
+    ownership_locked(output/'ownership-lock', command)
     publication_barrier(output/'barrier', command)
     concurrent_ddl(output/'ddl', command)
     from adaptive_epoch_harness import qualify as epochs

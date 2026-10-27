@@ -39,8 +39,7 @@ impl Catalog {
         let binding = Binding { source: snapshot.source.clone(), sink: snapshot.sink };
         binding.validate()?;
         let tx = sql.transaction().await?;
-        super::storage::shared(&tx, self).await?;
-        tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
+        let protected = super::storage::publication_lock(&tx, self).await?;
         snapshot.source.lock_and_verify_layout(&tx).await?;
         let source_key = snapshot.source.ownership_key()?;
         tx.execute(
@@ -51,7 +50,7 @@ impl Catalog {
             &[&source_key, &self.query],
         )
         .await?;
-        write::stage(&tx, self, plan, snapshot.checkpoint, 0).await?;
+        write::create(&protected, plan, snapshot.checkpoint).await?;
         binding.initialize(&tx, self, snapshot.boundary).await?;
         let program = super::sink::program::Program::prepare(
             &tx,

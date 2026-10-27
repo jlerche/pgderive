@@ -204,13 +204,13 @@ impl Writer {
         );
         ensure!(progress.end > self.boundary.end, "publication source end is stale");
         ensure!(progress.end >= progress.commit, "publication source end precedes commit");
+        self.metadata.refresh(plan, &self.boundary)?;
         let (tx, program) = sql.publication(&self.catalog, &self.boundary.binding.sink).await?;
-        tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
+        let locked = self.lock_boundary(&tx, &program.guard).await?;
         self.boundary.binding.source.lock_and_verify_layout(&tx).await?;
-        let epoch =
-            write::stage(&tx, &self.catalog, plan, checkpoint, self.boundary.stored.epoch).await?;
-        let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,checkpoint_lsn=$4::text::pg_lsn,published_time=$8,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn AND binding=$7", self.catalog.schema),
-            &[&self.catalog.query, &self.boundary.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.boundary.end.to_string(), &self.metadata.binding, &i64::try_from(checkpoint.time)?]).await?;
+        let epoch = write::stage(&locked, checkpoint).await?;
+        let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,checkpoint_lsn=$4::text::pg_lsn,published_time=$7,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn", self.catalog.schema),
+            &[&self.catalog.query, &self.boundary.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.boundary.end.to_string(), &i64::try_from(checkpoint.time)?]).await?;
         ensure!(affected == 1, "stale or incompatible publication worker");
         let membership = clock.lap();
         deltas.apply(&tx, &self.catalog, (checkpoint.time, progress.end), &program.sink).await?;

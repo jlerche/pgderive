@@ -1,6 +1,6 @@
-use super::{Writer, read, write};
+use super::{Writer, write};
 use crate::engine::plan::{Checkpoint, Plan};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 
 impl Writer {
     /// Publish equivalent physical memberships without changing source or sink state.
@@ -18,24 +18,10 @@ impl Writer {
     ) -> Result<()> {
         ensure!(!self.uncertain, "uncertain COMMIT must be reconciled before maintenance");
         validate(&self.boundary.stored.checkpoint, checkpoint, plan)?;
-        let tx = sql.transaction().await?;
-        super::storage::shared(&tx, &self.catalog).await?;
-        tx.batch_execute("SET LOCAL synchronous_commit=on").await?;
-        // Stable operation marker lets crash probes hold maintenance, not claim/ACK COMMITs.
-        tx.query_one(
-            &format!(
-                "SELECT /* pgderive:maintenance */ query_id FROM {}.pgderive_queries WHERE query_id=$1 FOR UPDATE",
-                self.catalog.schema
-            ),
-            &[&self.catalog.query],
-        )
-        .await?;
-        let prior = read::durable(&tx, &self.catalog, plan, true)
-            .await?
-            .context("maintenance query disappeared")?;
-        ensure!(prior == self.boundary, "maintenance durable boundary changed");
-        let epoch =
-            write::stage(&tx, &self.catalog, plan, checkpoint, self.boundary.stored.epoch).await?;
+        self.metadata.refresh(plan, &self.boundary)?;
+        let (tx, program) = sql.publication(&self.catalog, &self.boundary.binding.sink).await?;
+        let locked = self.lock_boundary(&tx, &program.maintenance).await?;
+        let epoch = write::stage(&locked, checkpoint).await?;
         self.commit(tx, "maintenance").await?;
         self.boundary.stored.epoch = epoch;
         self.boundary.stored.checkpoint = checkpoint.clone();

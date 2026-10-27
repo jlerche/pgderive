@@ -4,6 +4,7 @@ mod collection;
 mod layout;
 mod ledger;
 mod maintenance;
+mod validation;
 use super::{Fixture, apply, connect, source_state};
 use crate::{
     Config,
@@ -232,6 +233,20 @@ async fn reject_publication_drift(
         .await?;
     let checkpoint = graph.prepared_checkpoint(&prepared)?;
     let deltas = crate::harness::tuple_sink::deltas(&prepared.output().batch)?;
+    let end: String = sql.query_one("SELECT pg_current_wal_lsn()::text", &[]).await?.try_get(0)?;
+    let progress = crate::catalog::Progress::new(1, &end, &end)?;
+    validation::check(
+        sql,
+        schema,
+        graph.plan(),
+        writer,
+        crate::catalog::Publication {
+            checkpoint: &checkpoint,
+            deltas: &deltas,
+            progress: &progress,
+        },
+    )
+    .await?;
     sql.batch_execute(&format!("ALTER TABLE {schema}.person DROP CONSTRAINT person_pkey")).await?;
     let end: String = sql.query_one("SELECT pg_current_wal_lsn()::text", &[]).await?.try_get(0)?;
     let progress = crate::catalog::Progress::new(1, &end, &end)?;

@@ -5,7 +5,7 @@ import pathlib
 import subprocess
 import sys
 
-COUNTS = {'async-checkpoints': 6, 'memtable': 6, 'keyed-sink': 3, 'result-table': 2, 'query-binding': 18, 'transactions': 7, 'crashes': 5,
+COUNTS = {'async-checkpoints': 6, 'memtable': 8, 'keyed-sink': 3, 'result-table': 2, 'query-binding': 18, 'transactions': 7, 'crashes': 5,
           'compiler': 4, 'application': 6, 'composition-matrix': 8, 'sliding-extrema': 6, 'prefix-window': 6, 'expression-composition': 12, 'sliding-window': 5, 'sink-batch': 2, 'stdout-sink': 1, 'projection': 2, 'functions': 1, 'postgres-support': 1, 'aggregate-inputs': 6, 'environment': 1, 'computed-join': 6, 'relational': 2, 'partition': 7,
           'numeric': 4, 'circuit-numeric': 2, 'native': 4, 'navigation': 5, 'case': 6, 'lookup': 5,
           'query-lifecycle': 7}
@@ -33,7 +33,7 @@ def main(output, binaries):
     root = pathlib.Path.cwd()
     files = [root/'Cargo.lock', root/'Cargo.toml', root/'docs/postgres-support-matrix.json', *map(pathlib.Path, binaries),
              *sorted((root/'src').rglob('*.rs')), *sorted((root/'src').rglob('*.sql')),
-             *sorted((root/'scripts').glob('*.py')), *sorted((root/'scripts').glob('*.sh')),
+             *sorted((root/'scripts').glob('*.py')), *sorted((root/'scripts').glob('*.json')), *sorted((root/'scripts').glob('*.sh')),
              *sorted((root/'queries').rglob('*.sql')),
              *sorted(output.rglob('*.json')), *sorted(output.rglob('*.jsonl'))]
     summary = {'profile': 'core', 'result_count': count,
