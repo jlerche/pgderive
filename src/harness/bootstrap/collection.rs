@@ -1,5 +1,6 @@
 mod cohort;
 mod concurrency;
+mod extents;
 mod paged;
 mod paused;
 use super::super::{mvp::Query, recovery::Recovery};
@@ -15,7 +16,7 @@ pub(super) async fn check(
     writer: &mut Writer,
     recovery: &Recovery,
 ) -> Result<()> {
-    compact(sql, graph, writer, recovery, "gc-first").await?;
+    extents::check(sql, catalog, graph, writer, recovery).await?;
     let reader = catalog.protect_checkpoint(sql, graph.plan(), "gc-reader").await?;
     let old = reader.stored()?.checkpoint.clone();
     let pinned = graph.snapshot();

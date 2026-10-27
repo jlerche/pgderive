@@ -103,6 +103,7 @@ async fn broad_root_reuses_cold_addresses_without_extra_puts() -> Result<()> {
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("missing reused range"))?;
                 assert!(original_ranges.contains(&(path, range.start, range.end)));
+                assert!(output.leaf(ordinal).await?.dense_pack);
                 reused += 1;
             }
         }
@@ -538,4 +539,47 @@ async fn overlapping_roots_coalesce_payload_reads_without_cross_input_cache_thra
     println!("overlapping roots: 2048 rows, 64 source pages, {payload_gets} payload GETs");
     cold_oracle(store, &output, &Batch::from_updates(updates)?).await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn sparse_shared_packs_stay_local_in_later_compactions() -> Result<()> {
+    let mut backend = Store::unpaced();
+    backend.record_ranges();
+    let store = Arc::new(backend);
+    let base = object(
+        store.clone(),
+        (-4096..4096).map(|n| ((n, n), 1)).collect(),
+        "pgderive/upload-v1/sparse-base",
+    )
+    .await?;
+    let first = ObjectBatch::compact_resident(
+        store.clone(),
+        &[Run::Object(base.slice(128..130).await?)],
+        SCHEMA,
+        (Some("pgderive/upload-v1/sparse-first"), limits()),
+        cache(),
+    )
+    .await?;
+    for root in &first {
+        for ordinal in 0..root.block_count() {
+            assert!(!root.leaf(ordinal).await?.dense_pack);
+        }
+    }
+    let updates =
+        Batch::from_updates([((1, 1), -1), ((1, 100_001), 1), ((60, 60), -1), ((60, 100_060), 1)])?;
+    let mut expected = Batch::from_updates((0..64).map(|n| ((n, n), 1)))?;
+    expected.apply(&updates)?;
+    let mut runs = first.into_iter().map(Run::Object).collect::<Vec<_>>();
+    runs.push(Run::Memory(Arc::new(updates)));
+    store.take_ranges()?;
+    let second = ObjectBatch::compact_resident(
+        store.clone(),
+        &runs,
+        SCHEMA,
+        (Some("pgderive/upload-v1/sparse-second"), limits()),
+        cache(),
+    )
+    .await?;
+    assert!(range_totals(&store.take_ranges()?)?.0 < 4096, "shared cold pack was read ahead");
+    cold_oracle(store, &second, &expected).await
 }

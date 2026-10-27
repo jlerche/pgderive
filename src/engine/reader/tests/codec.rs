@@ -10,6 +10,7 @@ async fn root(store: &Arc<dyn ObjectStore>, bytes: Vec<u8>) -> Result<ObjectRef>
         hash: hash(&bytes),
         schema: "tuple".into(),
         namespace: None,
+        blocks: None,
     };
     store.put(&Path::from(reference.path()), bytes.into()).await?;
     Ok(reference)

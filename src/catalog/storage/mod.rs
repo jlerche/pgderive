@@ -30,9 +30,9 @@ async fn lock(sql: &Transaction<'_>, catalog: &Catalog, exclusive: bool) -> Resu
 }
 
 // A sealed namespace may already have a delayed DELETE in flight. Publication
-// can retain exact current roots or add roots in an active, fresh reservation;
+// can retain/narrow current extents or add roots in an active, fresh reservation;
 // it cannot resurrect an old sealed object after its protection has ended.
-pub(super) async fn validate_additions(
+pub async fn validate_additions(
     sql: &Transaction<'_>,
     catalog: &Catalog,
     checkpoint: &crate::engine::plan::Checkpoint,
@@ -43,6 +43,7 @@ pub(super) async fn validate_additions(
         .iter()
         .flat_map(|member| &member.trace.objects)
         .map(|root| {
+            root.validate_identity()?;
             Ok((
                 root,
                 root.namespace().context("catalog objects require managed upload namespaces")?,
@@ -51,7 +52,7 @@ pub(super) async fn validate_additions(
         .collect::<Result<Vec<_>>>()?;
     let row = sql.query_one(
         &format!("WITH current_roots AS MATERIALIZED (SELECT reference FROM {0}.pgderive_roots WHERE query_id=$1), candidates AS (SELECT value->0 AS reference,value->>1 AS namespace FROM jsonb_array_elements($2::jsonb))
-            SELECT NOT EXISTS(SELECT 1 FROM candidates c WHERE NOT EXISTS(SELECT 1 FROM current_roots r WHERE r.reference=c.reference) AND NOT EXISTS(SELECT 1 FROM {0}.pgderive_protections p WHERE p.query_id=$1 AND p.uploading AND p.active AND p.namespace=c.namespace AND p.owner_fence=COALESCE((SELECT fence FROM {0}.pgderive_progress WHERE query_id=$1),0)))", catalog.schema),
+            SELECT NOT EXISTS(SELECT 1 FROM candidates c WHERE NOT EXISTS(SELECT 1 FROM current_roots r WHERE r.reference-'blocks'=c.reference-'blocks' AND (r.reference->'blocks'='null'::jsonb OR (c.reference->'blocks'<>'null'::jsonb AND (c.reference->'blocks'->>'start')::numeric >= (r.reference->'blocks'->>'start')::numeric AND (c.reference->'blocks'->>'end')::numeric <= (r.reference->'blocks'->>'end')::numeric))) AND NOT EXISTS(SELECT 1 FROM {0}.pgderive_protections p WHERE p.query_id=$1 AND p.uploading AND p.active AND p.namespace=c.namespace AND p.owner_fence=COALESCE((SELECT fence FROM {0}.pgderive_progress WHERE query_id=$1),0)))", catalog.schema),
         &[&catalog.query, &serde_json::to_value(candidates)?],
     ).await?;
     ensure!(row.try_get::<_, bool>(0)?, "new object has no active upload reservation");

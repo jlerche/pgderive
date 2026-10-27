@@ -75,7 +75,7 @@ impl ObjectRef {
         let (length, digest) = super::index::inline_identity(&inline)?;
         ensure!(
             address.offset == 0
-                && address.length <= 16 * 1024
+                && address.length <= u64::try_from(super::index::INLINE_BYTES)?
                 && length == address.length
                 && digest == address.hash,
             "invalid inline index identity"

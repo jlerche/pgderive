@@ -158,3 +158,27 @@ async fn snapshot_limits_are_checked_before_object_io() -> Result<()> {
     assert_eq!(cache.resident_bytes(), 0);
     Ok(())
 }
+
+#[tokio::test]
+async fn extents_share_verified_physical_dependencies_without_losing_packs() -> Result<()> {
+    let store = Arc::new(Store::unpaced());
+    let reference = root(store.clone(), 0, 128).await?;
+    let full =
+        ObjectBatch::<i64, String>::open(store.clone(), reference.clone(), "gc-cache").await?;
+    let left = full.slice(0..32).await?.reference().clone();
+    let right = full.slice(96..128).await?.reference().clone();
+    let remote: Arc<dyn ObjectStore> = store.clone();
+    let mut cache = GcCache::default();
+    let expected = cache.mark_snapshot(&remote, vec![reference], GcLimits::default()).await?;
+    let before = store.reads.load(Ordering::SeqCst);
+    for _ in 0..3 {
+        assert_eq!(
+            cache
+                .mark_snapshot(&remote, vec![left.clone(), right.clone()], GcLimits::default())
+                .await?,
+            expected
+        );
+    }
+    assert_eq!(store.reads.load(Ordering::SeqCst), before);
+    Ok(())
+}

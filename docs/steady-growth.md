@@ -2003,3 +2003,141 @@ regressions, formatting, Clippy, file lengths and dependency checks. Production
 line coverage is 97.16% (25,734 / 26,485). Full evidence is in the ignored
 `common.log`, coverage run `qlmOJm3B`, and worker run `nVbhq8JM`. The disposable
 PostgreSQL fixture uses tmpfs and is removed after validation.
+
+### Range-local immutable maintenance (2026-10-27)
+
+The next slice selects authenticated block extents within previously selected
+runs. Cold prefixes and suffixes retain their existing physical root/index/data
+objects; selected block windows, rounded to the minimum maintenance unit, enter
+the existing signed streaming merge.
+Membership records a coarse ordinal extent, not key/value fences or a per-key
+index in PostgreSQL. Cursor ordinals, point probes and nested slices are relative
+to that extent. Row counts and boundary identities come from authenticated index
+summaries; selected-page ownership cannot cross extents.
+
+This is a hard membership-format cutover: every object reference requires a
+`blocks` field (`null` for a complete root). References without it are rejected;
+there is no legacy reader or migration path. No live deployment is performed.
+
+Selection remains subject to the existing tier/window policy. It localizes only
+when an actual split retains more durable rows than it merges and leaves room
+under the physical run limit. This row-count profitability heuristic avoids
+fragmenting a nearly complete uniform-access scan merely to retain tiny tails;
+it is not a general proof about encoded-byte cost. Untouched selected extents
+share one scheduling cohort while retaining their separate weighted runs. Their
+actual rows, root count and metadata remain charged. This avoids immediately
+selecting cold remainders again on a subsequent hot flush. Moving workloads can
+still reach the 128-root whole-compaction boundary; this slice does not remove
+that capacity limit or prove arbitrary-size bounded maintenance.
+
+Sliced reads use the existing exact-range path for both payload and index pages.
+The initial experiment selected only 384 durable rows but still fetched broad
+payload read-ahead windows; disabling payload read-ahead alone still fetched
+broad index windows. Those failed measurements are retained, rather than
+misclassifying reduced selected-row counts as reduced physical I/O.
+
+Publication accepts a retained extent only when its complete physical identity
+matches a currently live root and its interval narrows current membership, or
+when the existing fresh upload-reservation rule applies. Empty/reversed extents
+are rejected before SQL. Production readers validate extent limits against the
+authenticated root before publication. The lifecycle lock, immutable PUTs,
+transactional result/membership/progress publication and subsequent WAL ACK are
+unchanged. A rollback-only SQL fixture exercises the production provenance query
+for proper narrowing, widening and malformed intervals; the live harness also
+publishes an equivalent full extent and rejects sealed widening to a whole root.
+
+GC conservatively retains the complete physical dependencies while any extent
+survives. Its dependency cache deduplicates by full physical identity, excluding
+only the ordinal selection; liveness still comes from the fresh authoritative
+snapshot. This does not reclaim holes inside live packs. Tests cover nested
+cold reopen, signed cursor and point navigation, boundary keys, invalid extents,
+cross-extent prepared-page rejection, dependency reuse and repeated hot flushes.
+Evidence is retained under ignored `artifacts/benchmarks/range-local-20261027`.
+
+Small profitable merge extents prepare at most 32 already authenticated block
+fences within the existing 16 KiB inline-index byte bound. Execution carries
+these private descriptors across scan-cache rebinding instead of walking the
+physical index again. Untouched retained extents and reopened references keep
+only coarse bounds; the prepared list is transient and is not serialized.
+Wide or larger extents continue through authenticated exact index reads. The
+resident metadata diagnostic includes the prepared descriptors, but is not an
+admission controller or a strict RSS bound. This adds a bounded transient
+metadata allowance per selected root, not a larger persistent foreground cache.
+The attempted encoded-parent-cache reuse did not improve the cold-root request
+count and was removed, including its recency-policy change.
+
+Multi-cycle replay exposed sparse block sharing beyond the first merge: a new
+hot root can reference a small block inside an old cold pack, even after its
+transient extent has disappeared. Authenticated leaves now carry a required
+`dense_pack` read-ahead hint, recomputed during index construction from encoded
+bytes referenced by that root for each pack. At least half of a pack must remain
+referenced to allow speculative read-ahead. Sparse shared packs use exact block
+reads and decline broad prefetch reservations; mostly live packs retain the
+existing coalesced scan path. The threshold is a performance heuristic, not an
+exact live-byte union or a reclamation proof. Hash/length and row validation are
+unchanged. This is also a hard index-codec cutover; old indexes lack the required
+field. A two-compaction regression verifies sparse shared-pack locality after
+reindexing, while the dense sharing test retains its read-ahead eligibility.
+
+The moving-key test initially reached the 128-root boundary because small
+already bounded roots were being split further. A root/extent fitting within
+one index leaf (32 blocks) now remains whole in its ordinary tier merge. Larger
+roots can still select a profitable block window. This ties the minimum
+maintenance quantum to the existing index geometry, rather than accumulating
+small retained fragments merely because the row-count ratio is favorable.
+The 128-root guard and eventual full-compaction capacity boundary remain.
+
+Final release-profile evidence is in `maintenance-complete` and
+`cycles-complete.json`. The unchanged cold-root locality component passes:
+
+| Broad-root retained rows | Previous read bytes | New read bytes | Previous/new PUTs |
+| --- | ---: | ---: | ---: |
+| 1,056 | 4,173 | 4,173 | 3 / 3 |
+| 8,256 | 48,294 | 991 | 3 / 2 |
+| 80,256 | 456,591 | 1,004 | 3 / 2 |
+
+The larger cases select 384 durable rows rather than 8,256 or 80,256. GETs remain
+8, and cold reopen agrees with the independent weighted oracle. The smallest
+case remains a whole-root merge under the minimum maintenance quantum.
+
+A separate ignored report reuses the existing broad-root fixture and production
+flush path for 1,024 replacement transactions (2,048 source row changes) per
+case, observing eight intervals. A moving-key variant moves across the retained key
+domain rather than repeatedly changing one hot key. The previous production
+binary (`0525ff9`) carries the same report driver; its patch and binary hash are
+saved beside the results.
+
+| Initial rows / access | Previous/new read bytes | Previous/new PUTs | Previous/new flush ms |
+| --- | ---: | ---: | ---: |
+| 8,256 / fixed hot key | 104,981 / 63,253 | 2,049 / 2,048 | 51.4 / 55.9 |
+| 8,256 / moving keys | 119,942 / 79,825 | 2,054 / 2,051 | 50.3 / 54.0 |
+| 80,256 / fixed hot key | 513,278 / 63,258 | 2,049 / 2,048 | 80.2 / 52.0 |
+| 80,256 / moving keys | 530,959 / 74,893 | 2,050 / 2,049 | 80.1 / 53.5 |
+
+These are unpaced in-memory object-store component measurements; individual
+sub-100-ms totals are noisy. Small-state flush time has a modest overhead in this run;
+large-state flush time improves about one third. Fixed-hot GETs increase 2.9%
+(1,028 to 1,058); moving GETs decline. Final root counts stay below 24 across
+these cases, and every exact/cold oracle passes. This finite test does not
+establish many-day worker service capacity or remove eventual root-limit costs.
+
+The unchanged uniform SQL maintenance replay keeps total PUTs at 1,028 and
+1,055 for the two fixed cases; growing-state PUTs rise from 727 to 728 (0.14%).
+Uploaded bytes increase about 1.0%, 0.7% and 0.3%, respectively, including the
+new authenticated hints. The overall maintenance acceptance remains unqualified:
+foreground cold reads and growing-state work still fail existing checks. No
+threshold was relaxed, and no production steady-state claim follows from this
+locality improvement.
+
+Independent review found no actionable issues. The required common gate passes
+in `common-recheck.log`: 146 Python tests, 645 Rust tests (12 intentionally
+ignored), live PostgreSQL harness, 153 core worker results plus rebuild,
+formatting, Clippy, file lengths and dependency checks. Production line coverage
+is 97.12% (26,196 / 26,974), recorded in coverage run `6IRKdarf`; worker evidence
+is `8Ja0byLK`. The initial gate failure is preserved in `common.log`: its
+unmanaged-publication fixture removed a namespace but retained a namespaced
+path, now rejected by the earlier identity check. The fixture now constructs a
+valid unmanaged identity before checking the intended publication rejection;
+production validation was not weakened. The disposable PostgreSQL fixture uses
+tmpfs, has no persistent mounts, and is removed after validation. No push or
+live deployment is performed.

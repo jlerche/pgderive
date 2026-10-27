@@ -20,9 +20,19 @@ pub struct ObjectRef {
     schema: String,
     #[serde(deserialize_with = "Option::<String>::deserialize")]
     namespace: Option<String>,
+    #[serde(deserialize_with = "Option::<std::ops::Range<usize>>::deserialize")]
+    pub(super) blocks: Option<std::ops::Range<usize>>,
 }
 
 impl ObjectRef {
+    /// Whether two extents retain the same immutable physical object and dependencies.
+    pub(crate) fn same_storage(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.bytes == other.bytes
+            && self.hash == other.hash
+            && self.schema == other.schema
+            && self.namespace == other.namespace
+    }
     pub(crate) fn namespace(&self) -> Option<&str> {
         self.namespace.as_deref()
     }
@@ -35,7 +45,11 @@ impl ObjectRef {
         self.namespace = Some(namespace.into());
         Ok(self)
     }
-    pub(super) fn validate_identity(&self) -> Result<()> {
+    pub(crate) fn validate_identity(&self) -> Result<()> {
+        ensure!(
+            self.blocks.as_ref().is_none_or(|range| range.start < range.end),
+            "empty run extent"
+        );
         ensure!(
             self.hash.len() == 64
                 && self
@@ -96,6 +110,7 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) rows: usize,
     pub(super) max_weight: u64,
     pub(super) cache: Arc<BlockCache>,
+    pub(super) span: Option<super::slices::Span<K, V>>,
 }
 
 #[derive(Clone)]
@@ -212,6 +227,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             hash: hash(&index),
             schema: schema.to_owned(),
             namespace: None,
+            blocks: None,
         };
         super::bounded::put(store, &reference.path, index).await?;
         Ok((reference, root, head))
@@ -266,10 +282,22 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 )?))
             })
             .transpose()?;
-        let batch =
-            Self { store, reference, head, index: Arc::new(index), rows, max_weight, cache };
+        let selection = reference.blocks.clone();
+        let mut batch = Self {
+            store,
+            reference,
+            head,
+            index: Arc::new(index),
+            rows,
+            max_weight,
+            cache,
+            span: None,
+        };
         if let Some(address) = batch.index.node.clone() {
             batch.node(&address).await?;
+        }
+        if let Some(range) = selection {
+            batch.install_span(range).await?;
         }
         Ok(batch)
     }
@@ -283,7 +311,16 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         self.max_weight
     }
     pub(crate) fn key_bounds(&self) -> Option<(&K, &K)> {
-        self.index.node.as_ref().map(|node| (&node.first.0, &node.last.0))
+        self.span.as_ref().map_or_else(
+            || self.index.node.as_ref().map(|node| (&node.first.0, &node.last.0)),
+            |span| Some((&span.first.0, &span.last.0)),
+        )
+    }
+    pub(super) fn last_tuple(&self) -> Option<&(K, V)> {
+        self.span.as_ref().map_or_else(
+            || self.index.node.as_ref().map(|node| &node.last),
+            |span| Some(&span.last),
+        )
     }
     pub(crate) const fn row_count(&self) -> usize {
         self.rows
@@ -304,6 +341,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     /// Returns an encoding or checked-size error.
     pub fn resident_index_bytes(&self) -> Result<usize> {
         let root = super::bounded::encode(self.index.as_ref())?.len();
+        let root = root.checked_add(self.span_charge()?).context("span charge overflow")?;
         let head = self
             .head
             .as_ref()
@@ -317,9 +355,12 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             .context("resident index charge overflow")
     }
     pub(crate) fn block_count(&self) -> usize {
-        self.index.node.as_ref().map_or(0, |node| node.blocks)
+        self.span.as_ref().map_or_else(
+            || self.index.node.as_ref().map_or(0, |node| node.blocks),
+            |span| span.range.len(),
+        )
     }
-    async fn node(&self, address: &Address<(K, V)>) -> Result<Arc<Node<(K, V)>>> {
+    pub(super) async fn node(&self, address: &Address<(K, V)>) -> Result<Arc<Node<(K, V)>>> {
         let pack_bytes = self.index.pack.as_ref().map_or(address.length, |pack| pack.bytes);
         if self.index.node.as_ref().is_some_and(|root| root.hash == address.hash)
             && let Some(node) = &self.head
@@ -338,7 +379,19 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let mut qualified = pack.clone();
         qualified.path = self.reference.child_path(&pack.path);
         let range = address.offset..address.offset + address.length;
-        let bytes = self.cache.index.read(&self.store, &qualified, &address.hash, range).await?;
+        let bytes = self
+            .cache
+            .index
+            .read(
+                &self.store,
+                &qualified,
+                super::index::FrameRead {
+                    digest: &address.hash,
+                    range,
+                    read_ahead: self.span.is_none(),
+                },
+            )
+            .await?;
         let decoded = super::compression::decode(&bytes)?;
         let node: Arc<Node<(K, V)>> = Arc::new(serde_json::from_slice(&decoded)?);
         let authenticated = Arc::new(Authenticated::new(node, address, pack.bytes)?);
@@ -347,9 +400,12 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         Ok(node)
     }
     pub(super) async fn leaf(&self, ordinal: usize) -> Result<Leaf<(K, V)>> {
+        if let Some(pages) = self.span.as_ref().and_then(|span| span.pages.as_ref()) {
+            return pages.get(ordinal).cloned().context("invalid extent block ordinal");
+        }
         let mut address = self.index.node.as_ref().context("empty object index")?.clone();
-        ensure!(ordinal < address.blocks, "invalid block ordinal");
-        let mut relative = ordinal;
+        ensure!(ordinal < self.block_count(), "invalid block ordinal");
+        let mut relative = ordinal + self.span.as_ref().map_or(0, |span| span.range.start);
         loop {
             match self.node(&address).await?.as_ref() {
                 Node::Leaf(leaves) => {
@@ -362,23 +418,28 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         }
     }
     pub(super) async fn seek_block(&self, before: impl Fn(&(K, V)) -> bool) -> Result<usize> {
+        if let Some(pages) = self.span.as_ref().and_then(|span| span.pages.as_ref()) {
+            return Ok(pages.partition_point(|leaf| before(&leaf.block.last)));
+        }
         let Some(root) = self.index.node.as_ref() else {
             return Ok(0);
         };
         if before(&root.last) {
-            return Ok(root.blocks);
+            return Ok(self.block_count());
         }
         let mut address = root.clone();
         let mut ordinal = 0_usize;
         loop {
             match self.node(&address).await?.as_ref() {
                 Node::Leaf(leaves) => {
-                    return Ok(ordinal + leaves.partition_point(|leaf| before(&leaf.block.last)));
+                    return Ok(self.relative_block(
+                        ordinal + leaves.partition_point(|leaf| before(&leaf.block.last)),
+                    ));
                 }
                 Node::Branch(children) => {
                     let Some(child) = super::index::seek_child(children, &before, &mut ordinal)
                     else {
-                        return Ok(ordinal);
+                        return Ok(self.relative_block(ordinal));
                     };
                     address = child;
                 }
@@ -463,6 +524,11 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         &self.cache
     }
     pub(crate) async fn key_page(&self, key: &K) -> Result<Option<SelectedBlock<K, V>>> {
+        if let Some(span) = &self.span
+            && let Some(pages) = &span.pages
+        {
+            return self.key_leaf(pages, span.range.start, key).await;
+        }
         if self.index.node.as_ref().is_none_or(|root| key < &root.first.0 || key > &root.last.0) {
             return Ok(None);
         }
@@ -470,15 +536,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let mut ordinal = 0_usize;
         loop {
             match self.node(&address).await?.as_ref() {
-                Node::Leaf(leaves) => {
-                    let position = leaves.partition_point(|leaf| leaf.block.last.0 < *key);
-                    let Some(leaf) = leaves.get(position) else { return Ok(None) };
-                    return Ok((leaf.block.first.0 <= *key).then(|| SelectedBlock {
-                        ordinal: ordinal + position,
-                        owner: self.index.clone(),
-                        leaf: leaf.clone(),
-                    }));
-                }
+                Node::Leaf(leaves) => return self.key_leaf(leaves, ordinal, key).await,
                 Node::Branch(children) => {
                     let Some(child) =
                         super::index::seek_child(children, &|last| last.0 < *key, &mut ordinal)
@@ -489,6 +547,30 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 }
             }
         }
+    }
+    async fn key_leaf(
+        &self,
+        leaves: &[Leaf<(K, V)>],
+        ordinal: usize,
+        key: &K,
+    ) -> Result<Option<SelectedBlock<K, V>>> {
+        let position = leaves.partition_point(|leaf| leaf.block.last.0 < *key);
+        let absolute = ordinal + position;
+        let relative = self.relative_block(absolute);
+        if relative >= self.block_count() {
+            return Ok(None);
+        }
+        let leaf = if self.span.as_ref().is_some_and(|span| absolute < span.range.start) {
+            self.leaf(0).await?
+        } else {
+            let Some(leaf) = leaves.get(position) else { return Ok(None) };
+            leaf.clone()
+        };
+        Ok((leaf.block.first.0 <= *key && *key <= leaf.block.last.0).then(|| SelectedBlock {
+            ordinal: relative,
+            owner: self.index.clone(),
+            leaf,
+        }))
     }
     pub(crate) fn validate_page(&self, page: &SelectedBlock<K, V>) -> Result<()> {
         ensure!(
@@ -528,7 +610,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     }
     fn reserve_leaf(&self, leaf: &Leaf<(K, V)>, plans: &mut Vec<super::ReadAhead>) -> Result<bool> {
         let block = &leaf.block;
-        if block.length > 256 * 1024 {
+        if !leaf.dense_pack || block.length > 256 * 1024 {
             return Ok(false);
         }
         if self.cache.peek::<K, V>(&self.reference.schema, &block.hash)?.is_some() {
@@ -596,7 +678,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         self.read_leaf(&leaf).await
     }
     pub(super) async fn read_leaf(&self, leaf: &Leaf<(K, V)>) -> Result<Arc<Vec<Entry<K, V>>>> {
-        self.read_leaf_with(leaf, true).await
+        self.read_leaf_with(leaf, self.span.is_none()).await
     }
     pub(super) async fn read_leaf_exact(
         &self,
@@ -616,7 +698,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 Self::check_rows(&rows, block)?;
                 rows
             } else {
-                let bytes = self.encoded(leaf, read_ahead).await?;
+                let bytes = self.encoded(leaf, read_ahead && leaf.dense_pack).await?;
                 let decoded = super::compression::decode(&bytes)?;
                 let mut rows: Vec<Entry<K, V>> = serde_json::from_slice(&decoded)?;
                 validate(&rows)?;

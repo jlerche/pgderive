@@ -8,6 +8,7 @@ mod merged;
 pub(crate) use merged::CoefficientOverflow;
 mod overlap;
 mod probes;
+mod ranges;
 mod rebase;
 mod tiers;
 mod validation;

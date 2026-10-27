@@ -11,6 +11,7 @@ mod read;
 mod recovery;
 pub use recovery::{Durable, Resolution};
 mod storage;
+pub(crate) use storage::validate_additions;
 pub use storage::{Collection, GcCache, GcLimits, Protection};
 mod sink;
 mod write;

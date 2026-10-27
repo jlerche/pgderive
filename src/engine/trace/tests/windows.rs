@@ -264,9 +264,12 @@ async fn dominant_hot_root_survives_tiny_updates_until_peers_are_comparable() ->
     Ok(())
 }
 
-async fn report_case(cold_rows: i64, changes: u64) -> Result<serde_json::Value> {
-    let Fixture { store, writer, mut trace, .. } =
-        fixture(Layout::Partitioned, false, 64, cold_rows).await?;
+async fn report_case(
+    cold_rows: i64,
+    changes: u64,
+    region: (Layout, bool),
+) -> Result<serde_json::Value> {
+    let Fixture { store, writer, mut trace, .. } = fixture(region.0, false, 64, cold_rows).await?;
     let mut oracle = trace.materialize().await?;
     let reads = store.reads.load(Ordering::SeqCst);
     let read_bytes = store.range_bytes.load(Ordering::SeqCst);
@@ -274,12 +277,19 @@ async fn report_case(cold_rows: i64, changes: u64) -> Result<serde_json::Value> 
     let put_bytes = store.put_bytes.load(Ordering::SeqCst);
     let mut elapsed = Vec::new();
     let mut max_runs = trace.run_count();
-    let mut values: Vec<i64> = (0..256).collect();
+    let mut values: Vec<i64> =
+        if region.1 { vec![0; usize::try_from(cold_rows)?] } else { (0..256).collect() };
+    let mut observations = Vec::new();
     let mut updates = Vec::new();
     for time in 2..changes + 2 {
-        let slot = usize::try_from(time % 256)?;
+        let slot = if region.1 {
+            usize::try_from(((time - 2) * 7919) % u64::try_from(values.len())?)?
+        } else {
+            usize::try_from(time % 256)?
+        };
         let replacement = 100_000 + i64::try_from(time)?;
-        let change = [((0, values[slot]), -1), ((0, replacement), 1)];
+        let key = if region.1 { i64::try_from(slot + 1)? } else { 0 };
+        let change = [((key, values[slot]), -1), ((key, replacement), 1)];
         values[slot] = replacement;
         updates.extend(change);
         let batch = Batch::from_updates(change)?;
@@ -289,6 +299,14 @@ async fn report_case(cold_rows: i64, changes: u64) -> Result<serde_json::Value> 
         elapsed.push(start.elapsed().as_nanos());
         store.take_ranges()?;
         max_runs = max_runs.max(trace.run_count());
+        if (time - 1).is_multiple_of(128) {
+            observations.push(serde_json::json!({"changes":time-1,"runs":trace.run_count(),
+                "reads":store.reads.load(Ordering::SeqCst)-reads,
+                "read_bytes":store.range_bytes.load(Ordering::SeqCst)-read_bytes,
+                "puts":store.puts.load(Ordering::SeqCst)-puts,
+                "put_bytes":store.put_bytes.load(Ordering::SeqCst)-put_bytes,
+                "merges":writer.cache().stats()?.merges}));
+        }
     }
     let reads = store.reads.load(Ordering::SeqCst) - reads;
     let read_bytes = store.range_bytes.load(Ordering::SeqCst) - read_bytes;
@@ -302,6 +320,7 @@ async fn report_case(cold_rows: i64, changes: u64) -> Result<serde_json::Value> 
     assert_eq!(restored.manifest()?, manifest);
     assert_eq!(restored.materialize().await?, oracle);
     Ok(serde_json::json!({
+        "layout":region.0,"moving":region.1,"observations":observations,
         "cold_rows_per_root":cold_rows,"initial_hot_rows":256,"changes":changes,
         "source_row_changes":changes * 2,"flush_ns":elapsed,
         "reads":reads,"read_bytes":read_bytes,"puts":puts,"put_bytes":put_bytes,
@@ -316,7 +335,7 @@ async fn report_window_compaction_costs() -> Result<()> {
     let mut reports = Vec::new();
     for cold_rows in [100, 1000, 10_000] {
         for changes in [256, 512] {
-            reports.push(report_case(cold_rows, changes).await?);
+            reports.push(report_case(cold_rows, changes, (Layout::Partitioned, false)).await?);
         }
     }
     let output = std::env::var("PGDERIVE_WINDOW_REPORT")?;
@@ -344,14 +363,21 @@ async fn cold_root_case(layout: Layout, cold_rows: i64) -> Result<serde_json::Va
     let puts = store.puts.load(Ordering::SeqCst) - puts;
     let put_bytes = store.put_bytes.load(Ordering::SeqCst) - put_bytes;
     let after = flushed.manifest()?;
-    let selected_rows = trace.runs.iter().try_fold(0_usize, |rows, run| {
-        let Run::Object(root) = run else { anyhow::bail!("durable preload required") };
-        if after.objects.contains(root.reference()) {
-            Ok(rows)
-        } else {
-            rows.checked_add(root.row_count()).context("selected row count overflow")
-        }
-    })?;
+    let initial_rows = trace.runs.iter().map(Run::row_count).sum::<usize>();
+    let retained_rows = flushed
+        .runs
+        .iter()
+        .filter_map(|run| {
+            let Run::Object(root) = run else { return None };
+            before
+                .objects
+                .iter()
+                .any(|old| old.same_storage(root.reference()))
+                .then(|| root.row_count())
+        })
+        .sum::<usize>();
+    let selected_rows =
+        initial_rows.checked_sub(retained_rows).context("retained row count exceeds input")?;
     assert_eq!(flushed.materialize().await?, oracle);
     let cold_writer = Arrangement::<i64, i64>::new(store.clone(), SCHEMA.into(), 32)?;
     let restored = cold_writer.reopen(after.clone()).await?;
@@ -387,5 +413,40 @@ async fn report_cold_root_scaling() -> Result<()> {
         std::env::var("PGDERIVE_COLD_ROOT_REPORT")?,
         serde_json::to_vec_pretty(&reports)?,
     )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn broad_cold_remainders_are_not_reselected_on_later_hot_flushes() -> Result<()> {
+    let Fixture { store, writer, mut trace, .. } = fixture(Layout::Broad, false, 64, 800).await?;
+    let mut oracle = trace.materialize().await?;
+    for time in 2..=65 {
+        let batch = delta(time)?;
+        oracle.apply(&batch)?;
+        trace = writer.flush(&trace.append_validated(Run::Memory(Arc::new(batch)), time)?).await?;
+        assert!(trace.run_count() < 32);
+    }
+    let merges = writer.cache().stats()?.merges;
+    assert!(
+        merges[10..].iter().all(|count| *count == 0),
+        "cold remainder was reselected: {merges:?}"
+    );
+    assert_eq!(trace.materialize().await?, oracle);
+    let restored =
+        Arrangement::<i64, i64>::new(store, SCHEMA.into(), 32)?.reopen(trace.manifest()?).await?;
+    assert_eq!(restored.materialize().await?, oracle);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "manual production-path fixed and moving range maintenance cycles"]
+async fn report_range_maintenance_cycles() -> Result<()> {
+    let mut reports = Vec::new();
+    for cold_rows in [1000, 10_000] {
+        for moving in [false, true] {
+            reports.push(report_case(cold_rows, 1024, (Layout::Broad, moving)).await?);
+        }
+    }
+    std::fs::write(std::env::var("PGDERIVE_RANGE_REPORT")?, serde_json::to_vec_pretty(&reports)?)?;
     Ok(())
 }

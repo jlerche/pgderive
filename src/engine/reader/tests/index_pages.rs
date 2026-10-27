@@ -280,7 +280,15 @@ async fn generated_index_frames_authenticate_qualified_locations_and_cold_reopen
     let root = object.index.node.as_ref().context("missing index address")?;
     let left = cache
         .index
-        .read(&object.store, &pack, &root.hash, root.offset..root.offset + root.length)
+        .read(
+            &object.store,
+            &pack,
+            super::index::FrameRead {
+                digest: &root.hash,
+                range: root.offset..root.offset + root.length,
+                read_ahead: true,
+            },
+        )
         .await?;
     pack = other.index.pack.clone().context("missing other pack")?;
     pack.path = other.reference().child_path(&pack.path);
@@ -291,8 +299,11 @@ async fn generated_index_frames_authenticate_qualified_locations_and_cold_reopen
         .read(
             &other.store,
             &pack,
-            &other_root.hash,
-            other_root.offset..other_root.offset + other_root.length,
+            super::index::FrameRead {
+                digest: &other_root.hash,
+                range: other_root.offset..other_root.offset + other_root.length,
+                read_ahead: true,
+            },
         )
         .await?;
     assert!(!Arc::ptr_eq(&left, &right));
@@ -424,5 +435,31 @@ async fn prepared_pages_recheck_synopses_learned_after_metadata_selection() -> R
         .await?
         .is_some()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn prepared_extents_keep_bounded_fences_across_cache_rebinding() -> Result<()> {
+    let store = Arc::new(Store::unpaced());
+    let batch = Batch::from_updates((0..2048_i64).map(|n| ((n, n), 1)))?;
+    let reference = ObjectBatch::write(store.clone(), &batch, "extent-fences", 1).await?;
+    let object = ObjectBatch::<i64, i64>::open(store.clone(), reference, "extent-fences").await?;
+    let mut extent = object.slice(32..40).await?;
+    extent.prepare_extent().await?;
+    assert!(extent.span.as_ref().context("missing span")?.pages.is_some());
+    extent.share_cache(Arc::new(BlockCache::new(1, 1)));
+    let before = store.reads.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(extent.key_page(&36).await?.is_some());
+    assert_eq!(extent.seek_block(|last| last.0 < 36).await?, 4);
+    for ordinal in 0..8 {
+        assert_eq!(extent.leaf(ordinal).await?.block.first.0, 32 + i64::try_from(ordinal)?);
+    }
+    assert_eq!(store.reads.load(std::sync::atomic::Ordering::SeqCst), before);
+    let wide = Batch::from_updates((0..64_i64).map(|n| ((n, "x".repeat(2048)), 1)))?;
+    let root = ObjectBatch::write(store.clone(), &wide, "wide-fences", 1).await?;
+    let object = ObjectBatch::<i64, String>::open(store, root, "wide-fences").await?;
+    let mut extent = object.slice(1..9).await?;
+    extent.prepare_extent().await?;
+    assert!(extent.span.as_ref().context("missing wide span")?.pages.is_none());
     Ok(())
 }

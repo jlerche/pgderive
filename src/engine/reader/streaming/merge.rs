@@ -57,7 +57,7 @@ impl<K: BatchData, V: BatchData> Input<K, V> {
     }
     fn last(&self) -> Option<(&K, &V)> {
         if let Some(object) = &self.object {
-            return object.index.node.as_ref().map(|node| (&node.last.0, &node.last.1));
+            return object.last_tuple().map(|last| (&last.0, &last.1));
         }
         self.cursor.as_ref()?.current_span().last().map(|row| (&row.0.0, &row.0.1))
     }

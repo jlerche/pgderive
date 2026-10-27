@@ -27,31 +27,8 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
         let selected =
             if changed { select_tier(&runs, &cohorts)? } else { vec![false; cohorts.len()] };
         let selected = super::window::restrict(&runs, &cohorts, &selected)?;
-        let mut retained = Vec::new();
-        let mut retained_cohorts = Vec::new();
-        let mut merging = Vec::new();
-        let mut offset = 0_usize;
-        for count in cohorts {
-            let mut kept = 0_usize;
-            for (run, selected) in
-                runs[offset..offset + count].iter().zip(&selected[offset..offset + count])
-            {
-                if *selected {
-                    merging.push(run.clone());
-                } else if let Run::Memory(batch) = run {
-                    let uploaded = writer.upload_flush(batch).await?;
-                    kept += uploaded.len();
-                    retained.extend(uploaded);
-                } else {
-                    kept += 1;
-                    retained.push(run.clone());
-                }
-            }
-            if kept > 0 {
-                retained_cohorts.push(kept);
-            }
-            offset += count;
-        }
+        let super::ranges::Selection { mut retained, mut retained_cohorts, merging } =
+            super::ranges::select(&runs, &cohorts, &selected, writer).await?;
         if !merging.is_empty() {
             let subset = Self::from_runs(merging, self.generation, self.time)?;
             let compacted = match subset.compact_with(writer).await {

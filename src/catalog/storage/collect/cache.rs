@@ -64,15 +64,16 @@ impl GcCache {
             self.store = Some(store.clone());
         }
         let live = roots.iter().map(|root| (root.path(), root)).collect::<BTreeMap<_, _>>();
-        self.entries
-            .retain(|path, entry| live.get(path.as_str()).is_some_and(|root| **root == entry.root));
+        self.entries.retain(|path, entry| {
+            live.get(path.as_str()).is_some_and(|root| root.same_storage(&entry.root))
+        });
         self.bytes = self.entries.values().map(|entry| entry.charge).sum();
         self.trim(0);
         Ok(())
     }
     pub(super) async fn dependencies(&mut self, root: &ObjectRef) -> Result<Arc<Vec<String>>> {
         if let Some(entry) = self.entries.get(root.path())
-            && entry.root == *root
+            && entry.root.same_storage(root)
         {
             return Ok(entry.paths.clone());
         }

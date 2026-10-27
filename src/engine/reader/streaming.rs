@@ -441,6 +441,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
                 index: Arc::new(index),
                 head,
                 cache: cache.clone(),
+                span: None,
             });
         }
         self.fence_bytes = 0;

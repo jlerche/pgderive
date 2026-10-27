@@ -98,6 +98,8 @@ impl PublicationFixture {
             .context("namespace fixture requires an object")?;
         let mut encoded = serde_json::to_value(&*root)?;
         encoded["namespace"] = serde_json::Value::Null;
+        let hash = encoded["hash"].as_str().context("missing root hash")?;
+        encoded["path"] = serde_json::json!(format!("pgderive/batch/{hash}"));
         *root = serde_json::from_value(encoded)?;
         let failure = self
             .grouped

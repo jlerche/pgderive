@@ -10,7 +10,8 @@ mod authenticated;
 mod frames;
 pub(super) use authenticated::Authenticated;
 
-pub(super) const FANOUT: usize = 32;
+pub const FANOUT: usize = 32;
+pub(super) const INLINE_BYTES: usize = 16 * 1024;
 pub(super) const PAGE_BYTES: usize = bounded::MAX_BYTES;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +30,7 @@ pub(super) struct Address<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Leaf<T> {
+    pub(super) dense_pack: bool,
     pub(super) block: Block<T>,
     pub(super) pack: Pack,
 }
@@ -185,6 +187,16 @@ async fn append<T: Ord + Clone + Serialize + Send + Sync>(
     Ok(address)
 }
 
+// Sparse shared packs use exact reads; mostly live packs retain scan coalescing.
+fn dense_packs<T>(packs: &[Pack], blocks: &[Block<T>]) -> Result<Vec<bool>> {
+    let mut bytes = vec![0_u64; packs.len()];
+    for block in blocks {
+        let count = bytes.get_mut(block.pack).context("missing coverage pack")?;
+        *count = count.checked_add(block.length).context("pack coverage overflow")?;
+    }
+    Ok(bytes.iter().zip(packs).map(|(bytes, pack)| *bytes >= pack.bytes.div_ceil(2)).collect())
+}
+
 type PackedIndex<K, V> = (Root<(K, V)>, Vec<u8>);
 
 pub(super) async fn build<K: BatchData, V: BatchData>(
@@ -199,6 +211,7 @@ pub(super) async fn build<K: BatchData, V: BatchData>(
             Vec::new(),
         ));
     }
+    let dense = dense_packs(packs, blocks)?;
     let mut bytes = Vec::new();
     let mut layer = Vec::new();
     for chunk in blocks.chunks(FANOUT) {
@@ -207,6 +220,7 @@ pub(super) async fn build<K: BatchData, V: BatchData>(
             .iter()
             .map(|block| {
                 Ok(Leaf {
+                    dense_pack: *dense.get(block.pack).context("missing pack coverage")?,
                     block: block.clone(),
                     pack: packs.get(block.pack).context("missing index data pack")?.clone(),
                 })
@@ -230,7 +244,7 @@ pub(super) async fn build<K: BatchData, V: BatchData>(
             node: Some(inline_address),
             inline: Some(inline),
         };
-        if decoded.len() <= 16 * 1024 && bounded::encode(&candidate)?.len() <= limit {
+        if decoded.len() <= INLINE_BYTES && bounded::encode(&candidate)?.len() <= limit {
             return Ok((candidate, Vec::new()));
         }
     }
@@ -275,6 +289,11 @@ pub(super) struct Stats {
     pub(super) reads: u64,
     pub(super) read_bytes: u64,
     pub(super) requested_bytes: u64,
+}
+pub(super) struct FrameRead<'a> {
+    pub(super) digest: &'a str,
+    pub(super) range: std::ops::Range<u64>,
+    pub(super) read_ahead: bool,
 }
 impl Cache {
     pub(super) fn new(bytes: usize, entries: usize) -> Self {
@@ -328,15 +347,19 @@ impl Cache {
         &self,
         store: &std::sync::Arc<dyn object_store::ObjectStore>,
         pack: &Pack,
-        digest: &str,
-        range: std::ops::Range<u64>,
+        frame: FrameRead<'_>,
     ) -> Result<std::sync::Arc<Vec<u8>>> {
         use object_store::ObjectStoreExt as _;
+        let FrameRead { digest, range, read_ahead } = frame;
         ensure!(range.start < range.end, "empty index frame range");
         ensure!(range.end <= pack.bytes, "index frame range exceeds pack");
         let length = range.end - range.start;
         if let Some(scan) = &self.scan {
-            let bytes = scan.read(store, pack, range.clone()).await?;
+            let bytes = if read_ahead {
+                scan.read(store, pack, range.clone()).await?
+            } else {
+                scan.read_exact(store, pack, range.clone()).await?
+            };
             if u64::try_from(bytes.len())? != length || hash(&bytes) != digest {
                 scan.invalidate(pack, &range)?;
                 anyhow::bail!("index frame checksum/length mismatch");
@@ -462,7 +485,7 @@ impl<T: Ord + Clone + Serialize> Root<T> {
             (None, None, None) => Ok(()),
             (None, Some(address), Some(node)) => {
                 ensure!(
-                    address.offset == 0 && address.length <= 16 * 1024,
+                    address.offset == 0 && address.length <= u64::try_from(INLINE_BYTES)?,
                     "invalid inline index size"
                 );
                 let (length, digest) = inline_identity(node)?;
