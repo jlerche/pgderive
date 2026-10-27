@@ -20,7 +20,7 @@ from worker_harness import harness_arguments
 class MeasuredFixture(KeyedFixture):
     def config(self, maximum=0):
         path=super().config(maximum)
-        path.write_text(path.read_text().replace('maintenance_ticks=4','maintenance_ticks=4\nphase_metrics=true'))
+        path.write_text(path.read_text().replace('maintenance_ticks=4',f'maintenance_ticks={self.maintenance_ticks}\nphase_metrics=true'))
         return path
 
 
@@ -87,8 +87,9 @@ def worker_cpu(worker):
     return sum(int(fields[index]) for index in [11,12])*1000/os.sysconf('SC_CLK_TCK')
 
 
-def measure(output,command,groups,repetitions):
+def measure(output,command,groups,repetitions,maintenance_ticks):
     fixture=MeasuredFixture(output,rows=groups*3,auctions=groups)
+    fixture.maintenance_ticks=maintenance_ticks
     with fixture.managed():
         fixture.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements')
         log=fixture.sql("SELECT pg_current_logfile('jsonlog')").strip()
@@ -120,7 +121,7 @@ def measure(output,command,groups,repetitions):
         worker.finish(graceful=True)
         after=table_stats(fixture);sql_stats=dml_stats(fixture);queries=statements(fixture)
         physical={key:after[key]-before[key] for key in before}
-        report={'initial_groups':groups,'worker_cpu_ms':cpu_ms,'ticks':ticks,'physical':physical,'postgres':sql_stats,
+        report={'initial_groups':groups,'maintenance_ticks':maintenance_ticks,'worker_cpu_ms':cpu_ms,'ticks':ticks,'physical':physical,'postgres':sql_stats,
                 'index_bytes':int(fixture.sql(f"SELECT pg_indexes_size('{fixture.name}.groups')")),
                 'index_count':int(fixture.sql(f"SELECT count(*) FROM pg_index WHERE indrelid='{fixture.name}.groups'::regclass")),
                 'plans':plans(fixture,queries),'actual_worker_sql':queries,
@@ -136,6 +137,7 @@ def main():
     parser.add_argument('--candidate-first',action='store_true')
     parser.add_argument('--groups',type=int,default=2000)
     parser.add_argument('--repetitions',type=int,default=3)
+    parser.add_argument('--maintenance-ticks',type=int,default=16)
     parser.add_argument('baseline')
     parser.add_argument('candidate')
     args=parser.parse_args(commands)
@@ -143,6 +145,8 @@ def main():
         raise ValueError('groups must be between 2000 and 100000')
     if not 1<=args.repetitions<=20 or args.repetitions*633>=args.groups:
         raise ValueError('repetitions must leave at least one undeleted group')
+    if not 1<=args.maintenance_ticks<=4096:
+        raise ValueError('maintenance ticks must be between1 and4096')
     output.mkdir()
     summary={}
     pairs=[('baseline',args.baseline),('candidate',args.candidate)]
@@ -150,10 +154,11 @@ def main():
         pairs.reverse()
     for name,binary in pairs:
         path=output/name;path.mkdir()
-        report=measure(path,[binary],args.groups,args.repetitions);summary[name]={key:report[key] for key in ['physical','index_count','index_bytes','worker_cpu_ms']}
+        report=measure(path,[binary],args.groups,args.repetitions,args.maintenance_ticks);summary[name]={key:report[key] for key in ['physical','index_count','index_bytes','worker_cpu_ms']}
         summary[name]['postgres_execution_ms']=sum(row['execution_ms'] for row in report['postgres'])
         summary[name]['wal_bytes']=sum(row['wal_bytes'] for row in report['postgres'])
         summary[name]['publication_p50_ms']=statistics.median(t['phases_us']['publication']/1000 for t in report['ticks'])
+        summary[name]['publication_phases_p50_ms']={key:statistics.median(t['publication_us'][key]/1000 for t in report['ticks']) for key in report['ticks'][0]['publication_us']}
         (output/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
         print(json.dumps({name:summary[name]}))
 

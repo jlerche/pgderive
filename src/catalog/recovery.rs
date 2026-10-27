@@ -3,7 +3,7 @@ use crate::engine::plan::{Checkpoint, Plan};
 use anyhow::{Context, Result, ensure};
 use tokio_postgres::IsolationLevel;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 /// One consistent durable publication boundary, including its source contract.
 #[derive(Debug, Clone, PartialEq, Eq)]

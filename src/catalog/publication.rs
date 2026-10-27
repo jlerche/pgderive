@@ -99,6 +99,7 @@ pub struct Writer {
     pub(super) catalog: Catalog,
     pub(super) boundary: super::Durable,
     pub(super) uncertain: bool,
+    pub(super) metadata: super::metadata::Metadata,
 }
 impl Catalog {
     /// Reclaim an atomically activated native source and owned destination.
@@ -140,7 +141,8 @@ impl Catalog {
             .await
             .context("worker claim COMMIT requires authoritative reload on failure")?;
         sql.prepare_publication(self, &boundary.binding.sink).await?;
-        Ok(Writer { catalog: self.clone(), boundary, uncertain: false })
+        let metadata = super::metadata::Metadata::new(plan, &boundary)?;
+        Ok(Writer { catalog: self.clone(), boundary, uncertain: false, metadata })
     }
 }
 impl Writer {
@@ -208,7 +210,7 @@ impl Writer {
         let epoch =
             write::stage(&tx, &self.catalog, plan, checkpoint, self.boundary.stored.epoch).await?;
         let affected = tx.execute(&format!("UPDATE {}.pgderive_progress SET commit_lsn=$3::text::pg_lsn,end_lsn=$4::text::pg_lsn,checkpoint_lsn=$4::text::pg_lsn,published_time=$8,xid=$5 WHERE query_id=$1 AND fence=$2 AND end_lsn=$6::text::pg_lsn AND binding=$7", self.catalog.schema),
-            &[&self.catalog.query, &self.boundary.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.boundary.end.to_string(), &serde_json::to_value(&self.boundary.binding)?, &i64::try_from(checkpoint.time)?]).await?;
+            &[&self.catalog.query, &self.boundary.fence, &progress.commit.to_string(), &progress.end.to_string(), &i64::from(progress.xid), &self.boundary.end.to_string(), &self.metadata.binding, &i64::try_from(checkpoint.time)?]).await?;
         ensure!(affected == 1, "stale or incompatible publication worker");
         let membership = clock.lap();
         deltas.apply(&tx, &self.catalog, (checkpoint.time, progress.end), &program.sink).await?;

@@ -15,7 +15,7 @@ impl Prepared {
         let guard = client
             .prepare_typed(
                 &super::memtable_guard::statement(&catalog.schema),
-                &[Type::TEXT, Type::JSONB, Type::JSONB, Type::TEXT],
+                &[Type::TEXT, Type::JSONB, Type::JSONB, Type::JSONB, Type::TEXT],
             )
             .await?;
         let epoch = client

@@ -73,8 +73,10 @@ Key-directed sink access is implemented. Publication reuse now covers compiled
 sink templates/codecs/key positions and connection-local prepared sink DML,
 memtable boundary comparison and epoch-progress SQL. The connection API owns its
 cache and invalidates it before mutable raw access; there is no uncached DML
-fallback. This reduces repeated construction/parse/planning work, not the number
-of foreground database round trips. Remaining publication work includes caching
-encoded immutable plan/binding data with correct checkpoint-dependent refresh,
-and reducing compatible checks under held locks. Do not label those remaining
-items complete based on a lower sink-DML median.
+fallback. Encoded immutable plan/binding data and the complete expected
+checkpoint comparison are also cached: physical publication epochs refresh
+checkpoint-dependent bytes before use, while per-transaction progress stays
+fresh. This reduces repeated construction/serialization/parse/planning work,
+not the number of foreground database round trips. Remaining publication work
+is reducing compatible checks under held locks. Do not label round-trip fusion
+complete based on a lower publication median.

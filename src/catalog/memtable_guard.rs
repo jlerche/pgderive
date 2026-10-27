@@ -1,29 +1,16 @@
 //! Compare the complete expected boundary inside `PostgreSQL` without decoding it again.
-use super::{Writer, checkpoint_digest};
-use crate::engine::plan::Plan;
+use super::{Writer, metadata::Jsonb};
 use anyhow::{Context, Result, ensure};
-use serde_json::json;
 use tokio_postgres::{Statement, Transaction};
 
 impl Writer {
     pub(super) async fn guard_memtable(
         &self,
         tx: &Transaction<'_>,
-        plan: &Plan,
         statement: &Statement,
     ) -> Result<()> {
         let boundary = &self.boundary;
-        let checkpoint = &boundary.stored.checkpoint;
-        let expected_query = json!([
-            plan.identity(),
-            plan.definition(),
-            checkpoint.time,
-            boundary.stored.epoch,
-            checkpoint,
-            checkpoint_digest(checkpoint)?,
-        ]);
-        let expected_progress = json!([
-            boundary.binding,
+        let expected_progress = Jsonb::new(&(
             boundary.binding.sink.table.as_str(),
             boundary.fence,
             boundary.commit.to_string(),
@@ -31,7 +18,7 @@ impl Writer {
             boundary.xid,
             boundary.checkpoint_end.to_string(),
             boundary.published_time,
-        ]);
+        ))?;
         // The progress CTE depends on the locked query CTE: keep the same query ->
         // progress lock order as claims, checkpoints and recovery. Compare every
         // field used by read::durable, including JSON bodies and their digest.
@@ -40,9 +27,10 @@ impl Writer {
                 statement,
                 &[
                     &self.catalog.query,
-                    &expected_query,
+                    &self.metadata.query,
+                    &self.metadata.binding,
                     &expected_progress,
-                    &boundary.binding.source.ownership_key()?,
+                    &self.metadata.source_key,
                 ],
             )
             .await?
@@ -60,7 +48,8 @@ pub(super) fn statement(schema: &str) -> String {
                 WHERE p.query_id=q.query_id FOR UPDATE OF p
             ) SELECT q.format_version=3
                 AND jsonb_build_array(q.plan_identity,q.definition,q.logical_time,q.epoch,q.checkpoint,q.checkpoint_digest)=$2
-                AND jsonb_build_array(p.binding,p.sink_table,p.fence,p.commit_lsn::text,p.end_lsn::text,p.xid,p.checkpoint_lsn::text,p.published_time)=$3
-                AND EXISTS(SELECT 1 FROM {schema}.pgderive_source_slots WHERE source_key=$4 AND query_id=$1)
+                AND p.binding=$3
+                AND jsonb_build_array(p.sink_table,p.fence,p.commit_lsn::text,p.end_lsn::text,p.xid,p.checkpoint_lsn::text,p.published_time)=$4
+                AND EXISTS(SELECT 1 FROM {schema}.pgderive_source_slots WHERE source_key=$5 AND query_id=$1)
             FROM q CROSS JOIN p")
 }

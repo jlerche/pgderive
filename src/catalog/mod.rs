@@ -7,6 +7,7 @@ pub(crate) mod epoch;
 mod maintenance;
 mod memtable;
 mod memtable_guard;
+mod metadata;
 mod position;
 mod prepared;
 mod publication;

@@ -1,44 +1,76 @@
 use super::{Durable, Resolution, resolve};
 use crate::{
     catalog::{Binding, Catalog, Progress, Stored, Writer},
-    engine::plan::Checkpoint,
+    engine::{
+        plan::{Arrangement, Checkpoint, Definition, Kind, Membership, Node, Plan, Source},
+        trace::Manifest,
+    },
 };
 use anyhow::Result;
 
-fn writer() -> Result<Writer> {
+pub(in crate::catalog) fn fixture() -> Result<(Plan, Writer)> {
+    let plan = Plan::new(Definition {
+        revision: "registered".into(),
+        sources: vec![Source { id: "rows".into(), schema: "row".into() }],
+        nodes: vec![Node {
+            id: "source".into(),
+            kind: Kind::Source,
+            inputs: vec!["rows".into()],
+            schema: "row".into(),
+        }],
+        arrangements: vec![Arrangement {
+            id: "rows".into(),
+            node: "source".into(),
+            schema: "row".into(),
+        }],
+        outputs: vec!["source".into()],
+    })?;
     let checkpoint = Checkpoint {
         version: 1,
-        plan_identity: "registered".into(),
+        plan_identity: plan.identity().into(),
         time: 1,
-        arrangements: vec![],
-    };
-    Ok(Writer {
-        catalog: Catalog::new("fixture", "query")?,
-        boundary: Durable {
-            stored: Stored { epoch: 1, checkpoint },
-            binding: Binding {
-                source: crate::source::tests::contract(),
-                sink: crate::harness::tuple_sink::sink("sink"),
+        arrangements: vec![Membership {
+            id: "rows".into(),
+            schema: "row".into(),
+            trace: Manifest {
+                version: 2,
+                time: 1,
+                generation: 1,
+                objects: vec![],
+                cohorts: vec![],
             },
-            fence: 1,
-            end: "0/0".parse()?,
-            commit: "0/0".parse()?,
-            xid: None,
-            checkpoint_end: "0/0".parse()?,
-            published_time: 1,
+        }],
+    };
+    let boundary = Durable {
+        stored: Stored { epoch: 1, checkpoint },
+        binding: Binding {
+            source: crate::source::tests::contract(),
+            sink: crate::harness::tuple_sink::sink("sink"),
         },
-        uncertain: true,
-    })
+        fence: 1,
+        end: "0/0".parse()?,
+        commit: "0/0".parse()?,
+        xid: None,
+        checkpoint_end: "0/0".parse()?,
+        published_time: 1,
+    };
+    let metadata = crate::catalog::metadata::Metadata::new(&plan, &boundary)?;
+    Ok((
+        plan,
+        Writer { catalog: Catalog::new("fixture", "query")?, boundary, uncertain: true, metadata },
+    ))
 }
 fn boundary(writer: &Writer) -> Durable {
     writer.boundary.clone()
 }
 #[test]
 fn resolution_requires_exact_prior_or_exact_committed_candidate() -> Result<()> {
-    let writer = writer()?;
+    let (_, writer) = fixture()?;
     let before = boundary(&writer);
     let mut candidate = writer.boundary.stored.checkpoint.clone();
     candidate.time = 2;
+    candidate.arrangements[0].trace.time = 2;
+    candidate.arrangements[0].trace.generation = 2;
     let progress = Progress::new(42, "0/10", "0/20")?;
     assert_eq!(resolve(&writer, &before, &candidate, &progress)?, Resolution::NotCommitted);
     let mut after = before.clone();
@@ -65,7 +97,7 @@ fn resolution_requires_exact_prior_or_exact_committed_candidate() -> Result<()> 
 }
 #[test]
 fn replay_uses_wal_order_and_checks_identity_at_exact_boundary() -> Result<()> {
-    let writer = writer()?;
+    let (_, writer) = fixture()?;
     let mut durable = boundary(&writer);
     durable.commit = "0/10".parse()?;
     durable.end = "0/20".parse()?;

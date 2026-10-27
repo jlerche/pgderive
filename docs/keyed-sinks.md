@@ -107,8 +107,23 @@ changes with progress. Cached SQL does not stand in for those checks. PostgreSQL
 may replan prepared statements following DDL and may select a generic plan after
 repeated executions; a cached statement does not grant ownership or authorize
 acknowledgement. SQL errors remain fail-closed and uncertain COMMIT recovery is
-unchanged. Checkpoint-dependent JSON and digests are still computed from the
-current confirmed boundary; this slice does not cache those mutable values.
+unchanged. Encoded binding/plan metadata is now retained per claimed writer.
+The complete query/checkpoint comparison and checksum are encoded once per
+confirmed physical publication epoch. Progress-only epochs reuse those bytes;
+checkpoint installation, same-time maintenance and committed recovery advance
+the authoritative epoch and refresh the comparison before the next publication.
+The expected fence, source addresses, transaction identity and published time
+remain fresh for every transaction. A different caller plan is rejected.
+
+Cached parameters use the driver's version-1 JSONB wire representation, checked
+against the standard driver encoder. PostgreSQL still compares the complete
+plan definition, checkpoint body, digest, epoch and binding under the original
+query-to-progress lock order. The epoch selects a cache entry; it does not replace
+any database comparison with an epoch-only or hash-only check. The cache retains
+one current encoded query/checkpoint and one immutable encoded binding per
+writer, adding resident bytes proportional to current coarse metadata; it does
+not establish a process-memory plateau. No catalog or arrangement format changes
+are involved.
 
 Prepared-reuse measurements (2026-10-27, baseline `0f87256`) used 20,000 groups
 and 60 source epochs per worker: ten repetitions each of 1/32/600-key UPDATE and
@@ -143,3 +158,30 @@ The reuse slice passed independent review and the common `./scripts/check.sh`
 gate, including sequential live PostgreSQL recovery/lifecycle tests and 97.14%
 production line coverage. Disposable fixtures were removed; measured binaries,
 results and failure evidence were retained.
+
+
+Encoded-metadata measurements (2026-10-27, baseline `56c0260`) reused the same
+production-worker workload and binary native oracle. With 20,000 groups,
+60 epochs and 16-tick maintenance, boundary-guard p50 fell from 0.682/0.707 ms
+to 0.628/0.656 ms in the two execution orders (7–8%). Total publication p50
+was 2.170/2.177 ms versus 2.083/2.157 ms, a modest 1–4% improvement.
+A fixture variation with 64 extra nullable, unused source attributes kept the
+same result query: 2,000 groups and 18 epochs showed guard p50 0.981/0.995 ms
+versus 0.837/0.838 ms (15–16%), with total publication gains of 1.5–6%.
+These are small local timings; CPU remains inconclusive and sink WAL was equal
+or differed by less than 0.05%. They do not establish a live freshness SLO.
+
+The measurement tool now accepts `--maintenance-ticks` (default 16) and records
+individual publication-phase medians. Both sides use the same setting; the
+preceding prepared-reuse trials used four ticks and are not an identical
+workload. Fourteen existing production-path tampering cases rejected altered
+plan, definition, checkpoint, checksum, epoch, clocks, fence, binding,
+destination, transaction identity, source positions/ownership and missing progress, with no
+sink writes, progress advance or ACK. Evidence, the reused wider-contract fixture
+and frozen binary hashes are retained under ignored
+`artifacts/benchmarks/publication-metadata-20261027/`.
+
+The encoded-metadata slice passed independent review and `./scripts/check.sh`,
+including 648 Rust tests, sequential PostgreSQL durability/lifecycle checks and
+97.14% production line coverage. The owned tmpfs fixture was removed without
+creating persistent Docker volumes; results and failure evidence were retained.
