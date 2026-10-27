@@ -55,7 +55,11 @@ pub(super) async fn apply_rows(
 ) -> Result<()> {
     let layout = Layout::new(sink)?;
     for positive in [false, true] {
-        let statement = statement(table, &layout, positive);
+        let statement = if !positive && !sink.primary_key.is_empty() {
+            super::keyed::delete_statement(table, sink, &layout)?
+        } else {
+            statement(table, &layout, positive)
+        };
         let mut chunk = Chunk::default();
         for (tuple, delta) in
             rows.iter().filter(|(_, delta)| *delta != 0 && (*delta > 0) == positive)

@@ -15,7 +15,7 @@ delete batch so requested identities cannot select the same CTID twice. Select
 at most the requested multiplicity and verify the total affected count; an
 underflow or suppressed DML must abort the complete publication transaction.
 
-A nonunique fixed-width hash expression index narrows candidate lookups. Hashes
+For unkeyed bags, a nonunique fixed-width hash expression index narrows candidate lookups. Hashes
 are not identity: the final predicate compares native send representations,
 including NULL, numeric scale and array metadata. Distinct representations may
 share a hash. New destinations create the index at initialization. Restart validates the existing

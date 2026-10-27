@@ -1,6 +1,6 @@
 //! Physical primary-key contract, independent of full-tuple weighted identity.
 use super::{Sink, SinkOutput, rows::quote};
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 use std::collections::BTreeSet;
 
 pub(super) fn validate(sink: &Sink) -> Result<()> {
@@ -49,4 +49,16 @@ pub(super) async fn verify(
         "result primary key changed or is invalid"
     );
     Ok(())
+}
+
+pub(super) fn positions(sink: &Sink) -> Result<Vec<usize>> {
+    sink.primary_key
+        .iter()
+        .map(|name| {
+            sink.columns
+                .iter()
+                .position(|column| &column.name == name)
+                .context("sink key column missing")
+        })
+        .collect()
 }

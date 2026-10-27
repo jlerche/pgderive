@@ -1,5 +1,5 @@
 //! Same-key replacements preserve key identity and emit native UPDATEs.
-use super::{Sink, batching, layout, rows::quote};
+use super::{Sink, batching, key, layout, rows::quote};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -11,16 +11,7 @@ struct Change<'a> {
     new: Option<&'a Value>,
 }
 fn changes<'a>(sink: &Sink, rows: &'a [(Value, i64)]) -> Result<Vec<Change<'a>>> {
-    let positions = sink
-        .primary_key
-        .iter()
-        .map(|name| {
-            sink.columns
-                .iter()
-                .position(|column| &column.name == name)
-                .context("sink key column missing")
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let positions = key::positions(sink)?;
     let mut keyed = BTreeMap::<String, Change<'a>>::new();
     for (tuple, weight) in rows.iter().filter(|(_, weight)| *weight != 0) {
         ensure!(matches!(*weight, -1 | 1), "keyed result requires unit multiplicity");
@@ -62,7 +53,7 @@ pub(super) async fn apply(
     // Unpaired keys are disjoint from replacement keys. Preserve delete-before-insert
     // bag publication and the caller's single progress/publication transaction.
     batching::apply_rows(tx, table, sink, &unpaired, &Value::Null).await?;
-    let statement = statement(table, sink)?;
+    let statement = update_statement(table, sink)?;
     let mut chunk = batching::Chunk::default();
     for pair in replacements {
         let size = serde_json::to_vec(&pair)?.len().saturating_add(32);
@@ -74,7 +65,7 @@ pub(super) async fn apply(
     batching::execute(tx, &statement, &mut chunk, sink.output, &Value::Null).await
 }
 
-fn statement(table: &str, sink: &Sink) -> Result<String> {
+fn update_statement(table: &str, sink: &Sink) -> Result<String> {
     let old = layout::decode(sink, "(entry.value->0->0)")?;
     let new = layout::decode(sink, "(entry.value->0->1)")?;
     let layout = layout::Layout::new(sink)?;
@@ -86,8 +77,32 @@ fn statement(table: &str, sink: &Sink) -> Result<String> {
         .collect::<Vec<_>>()
         .join(",");
     Ok(format!(
-        "/* pgderive:sink-update-v1 */ WITH replacements AS MATERIALIZED (SELECT previous.representation,previous.bucket,replacement.* FROM pg_catalog.jsonb_array_elements($1::jsonb) AS entry(value) CROSS JOIN LATERAL (SELECT {old}) original CROSS JOIN LATERAL (SELECT {} AS representation,{} AS bucket FROM (SELECT original.*) decoded) previous CROSS JOIN LATERAL (SELECT {new}) replacement) UPDATE {table} d SET {assignments} FROM replacements replacement WHERE {}=replacement.bucket AND {}=replacement.representation",
-        layout.identity, layout.bucket, layout.target_bucket, layout.target_identity
+        "/* pgderive:sink-update-v1 */ WITH replacements AS MATERIALIZED (SELECT previous.representation,replacement.* FROM pg_catalog.jsonb_array_elements($1::jsonb) AS entry(value) CROSS JOIN LATERAL (SELECT {old}) original CROSS JOIN LATERAL (SELECT {} AS representation FROM (SELECT original.*) decoded) previous CROSS JOIN LATERAL (SELECT {new}) replacement) UPDATE {table} d SET {assignments} FROM replacements replacement WHERE {} AND {}=replacement.representation",
+        layout.identity,
+        predicate(sink, "replacement")?,
+        layout.target_identity
+    ))
+}
+
+fn predicate(sink: &Sink, source: &str) -> Result<String> {
+    key::positions(sink)?
+        .into_iter()
+        .map(|index| Ok(format!("d.{}={source}.c{index}", quote(&sink.columns[index].name))))
+        .collect::<Result<Vec<_>>>()
+        .map(|values| values.join(" AND "))
+}
+
+pub(super) fn delete_statement(
+    table: &str,
+    sink: &Sink,
+    layout: &layout::Layout,
+) -> Result<String> {
+    Ok(format!(
+        "/* pgderive:sink-delete-v1 */ WITH decoded AS MATERIALIZED (SELECT {} FROM pg_catalog.jsonb_array_elements($1::jsonb) AS entry(value)), requested AS MATERIALIZED (SELECT decoded.*,{} AS representation FROM decoded) DELETE FROM {table} d USING requested r WHERE {} AND {}=r.representation",
+        layout.decoded,
+        layout.identity,
+        predicate(sink, "r")?,
+        layout.target_identity
     ))
 }
 
@@ -129,10 +144,17 @@ mod tests {
         ] {
             assert!(changes(&sink(), &invalid).is_err());
         }
-        let sql = statement("owned.result", &sink())?;
+        let sql = update_statement("owned.result", &sink())?;
         assert!(sql.contains("pgderive:sink-update-v1"));
         assert!(sql.contains("int4send(d.\"value\")"));
         assert!(sql.contains("replacement.representation"));
+        assert!(sql.contains("d.\"key\"=replacement.c0"));
+        assert!(!sql.contains("hash_record_extended"));
+        let deletion = delete_statement("owned.result", &sink(), &layout::Layout::new(&sink())?)?;
+        assert!(deletion.contains("d.\"key\"=r.c0"));
+        assert!(deletion.contains("int4send(d.\"value\")"));
+        assert!(deletion.contains("=r.representation"));
+        assert!(!deletion.contains("hash_record_extended"));
         Ok(())
     }
     #[test]
@@ -143,6 +165,9 @@ mod tests {
         let pairs = changes(&composite, &rows)?;
         assert_eq!(pairs.len(), 2);
         assert!(pairs.iter().all(|pair| pair.old.is_none() || pair.new.is_none()));
+        let deletion =
+            delete_statement("owned.result", &composite, &layout::Layout::new(&composite)?)?;
+        assert!(deletion.contains("d.\"value\"=r.c1 AND d.\"key\"=r.c0"));
         assert!(changes(&composite, &[(json!([null, [1]]), 1)]).is_err());
         assert!(changes(&composite, &[(json!(null), 1)]).is_err());
         composite.primary_key = vec!["missing".into()];

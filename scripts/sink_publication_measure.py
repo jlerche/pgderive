@@ -1,50 +1,148 @@
 #!/usr/bin/env python3
-"""Serial release worker publication samples over identical owned source histories."""
+"""Paired keyed publication cost through production workers and owned SQL fixtures.
+
+Requires a disposable PostgreSQL with pg_stat_statements preloaded and JSON
+statement logging enabled. Never point this measurement at application data.
+"""
+import argparse
 import json
+import os
 import pathlib
+import statistics
 import sys
 import time
-from sink_batch_harness import SinkFixture,observing,counts
+from decimal import Decimal
+from keyed_sink_harness import KeyedFixture
+from worker_harness import harness_arguments
 
 
-def probe(fixture, indexed):
-    table=f'{fixture.name}.groups'
-    fixture.sql(f'ANALYZE {table}')
-    predicate="int4send(d.key) IS NOT DISTINCT FROM int4send(599) AND numeric_send(d.number) IS NOT DISTINCT FROM numeric_send('1.00'::numeric)"
-    if indexed:
-        predicate="hash_record_extended(ROW(d.key,d.number),0)=hash_record_extended(ROW(599::integer,'1.00'::numeric),0) AND array_send(ARRAY[int4send(d.key),numeric_send(d.number)])=array_send(ARRAY[int4send(599),numeric_send('1.00'::numeric)])"
-    plan=json.loads(fixture.sql(f'EXPLAIN(ANALYZE,BUFFERS,FORMAT JSON) SELECT d.ctid FROM {table} d WHERE {predicate} LIMIT 1 FOR UPDATE'))
-    (fixture.output/'lookup-plan.json').write_text(json.dumps(plan,indent=2)+'\n')
-    return plan
+class MeasuredFixture(KeyedFixture):
+    def config(self, maximum=0):
+        path=super().config(maximum)
+        path.write_text(path.read_text().replace('maintenance_ticks=4','maintenance_ticks=4\nphase_metrics=true'))
+        return path
 
 
-def measure(output,command,indexed):
-    fixture=SinkFixture(output)
-    with fixture.managed(),observing(fixture) as observed:
-        worker=fixture.start(command,'initial'); worker.event('ready'); fixture.verify()
-        plan=probe(fixture,indexed)
-        index_bytes=int(fixture.sql(f"SELECT pg_relation_size('{fixture.index()}')")) if indexed else 0
-        table_bytes=int(fixture.sql(f"SELECT pg_total_relation_size('{fixture.name}.groups')"))
-        ticks=[]
-        for tick in range(3):
-            before=counts(observed)
-            started=time.perf_counter()
-            fixture.sql(f'UPDATE {fixture.name}.bid SET auction=coalesce(auction,-1)+10000')
-            event=worker.event('published',minimum_time=2+tick)
-            elapsed=(time.perf_counter()-started)*1000
-            fixture.verify()
-            ticks.append({'client_to_published_ms':elapsed,'publication_us':event['publication_us'],
-                          'phases_us':event['phases_us'],'statements':dict(counts(observed)-before)})
+def table_stats(fixture):
+    return json.loads(fixture.sql(f"SELECT json_build_object('updates',n_tup_upd,'hot_updates',n_tup_hot_upd,'deletes',n_tup_del) FROM pg_stat_all_tables WHERE relid='{fixture.name}.groups'::regclass"))
+
+
+def dml_stats(fixture):
+    return json.loads(fixture.sql(f"""SELECT coalesce(json_agg(json_build_object('calls',calls,
+      'execution_ms',total_exec_time,'rows',rows,'wal_bytes',wal_bytes,'query',query)),'[]')
+      FROM pg_stat_statements WHERE query LIKE '%pgderive:sink-%'
+      AND query LIKE '%{fixture.name}.groups%'"""))
+
+
+def statements(fixture):
+    path=fixture.sql("SELECT pg_current_logfile('jsonlog')").strip()
+    if not path:
+        raise RuntimeError('benchmark requires PostgreSQL JSON statement logging')
+    result={}
+    raw=fixture.sql('SELECT pg_read_file('+"'"+path.replace("'","''")+"')")
+    (fixture.output/'postgres-statements.jsonl').write_text(raw)
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        row=json.loads(line)
+        message=row.get('message','')
+        for mode in ['update','delete']:
+            marker='/* pgderive:sink-'+mode+'-v1 */'
+            offset=message.find(marker)
+            if offset>=0 and f'{fixture.name}.groups' in message[offset:]:
+                result[mode]=message[offset:]
+    if set(result)!={'update','delete'}:
+        raise RuntimeError('actual worker UPDATE/DELETE templates absent from statement log')
+    return result
+
+
+def plans(fixture,queries):
+    values=json.loads(fixture.sql(f"SELECT json_build_array(book::text,positions::text,units::text) FROM {fixture.name}.groups WHERE book=1"))
+    old=[None,values]
+    new=[None,[*values[:2],str(Decimal(values[2])+1)]]
+    result={}
+    for mode,payload in [('update',[[[old,new],1]]),('delete',[[old,1]])]:
+        encoded=json.dumps(payload).replace("'","''")
+        sql=queries[mode].replace('$1',"'"+encoded+"'::jsonb")
+        raw=fixture.sql('BEGIN; EXPLAIN(ANALYZE,BUFFERS,WAL,FORMAT JSON) '+sql+'; ROLLBACK')
+        (fixture.output/('plan-'+mode+'.txt')).write_text(raw)
+        lines=raw.splitlines()
+        assert lines[0]=='BEGIN' and lines[-1]=='ROLLBACK'
+        result[mode]=json.loads('\n'.join(lines[1:-1]))
+        assert result[mode][0]['Plan']['Plans'][-1]['Actual Rows']==1
+    return result
+
+
+def worker_cpu(worker):
+    fields=pathlib.Path(f'/proc/{worker.process.pid}/stat').read_text().rpartition(')')[2].split()
+    return sum(int(fields[index]) for index in [11,12])*1000/os.sysconf('SC_CLK_TCK')
+
+
+def measure(output,command,groups):
+    fixture=MeasuredFixture(output,rows=groups*3,auctions=groups)
+    with fixture.managed():
+        fixture.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements')
+        worker=fixture.start(command,'worker');ready=worker.event('ready');fixture.verify()
+        # Equal page-space headroom isolates index eligibility, not default-page packing.
+        fixture.sql(f'ALTER TABLE {fixture.name}.groups SET(fillfactor=60)')
+        fixture.sql(f'VACUUM(FULL,ANALYZE) {fixture.name}.groups')
+        fixture.sql('SELECT pg_stat_statements_reset()')
+        before=table_stats(fixture);cpu_before=worker_cpu(worker)
+        ticks=[];logical=ready['time'];upper=groups
+        for mode in ['update','delete']:
+            for size in [1,32,600]:
+                for repeat in range(3):
+                    if mode=='update':
+                        change=f'UPDATE {fixture.name}.bid SET price=coalesce(price,0)+1 WHERE auction BETWEEN 1 AND {size}'
+                    else:
+                        change=f'DELETE FROM {fixture.name}.bid WHERE auction BETWEEN {upper-size+1} AND {upper}'
+                        upper-=size
+                    started=time.perf_counter();fixture.sql(change);logical+=1
+                    event=worker.event('published',minimum_time=logical)
+                    elapsed=(time.perf_counter()-started)*1000
+                    fixture.verify()
+                    ticks.append({'mode':mode,'keys':size,'repeat':repeat,
+                        'client_to_published_ms':elapsed,'phases_us':event['phases_us'],
+                        'publication_us':event['publication_us'],'changes':event['changes']})
+        cpu_ms=worker_cpu(worker)-cpu_before
+        (output/'ticks.json').write_text(json.dumps(ticks,indent=2)+'\n')
         worker.finish(graceful=True)
-        summary={'indexed':indexed,'rows':1800,'ticks':ticks,'initial_index_bytes':index_bytes,
-                 'initial_total_relation_bytes':table_bytes,'lookup_plan':plan,
-                 'scope':'serial local worker with phase clocks; psql startup included, oracle verification excluded; no capacity claim'}
-        (output/'measurement.json').write_text(json.dumps(summary,indent=2)+'\n')
-        return summary
+        after=table_stats(fixture);sql_stats=dml_stats(fixture);queries=statements(fixture)
+        physical={key:after[key]-before[key] for key in before}
+        report={'initial_groups':groups,'worker_cpu_ms':cpu_ms,'ticks':ticks,'physical':physical,'postgres':sql_stats,
+                'index_bytes':int(fixture.sql(f"SELECT pg_indexes_size('{fixture.name}.groups')")),
+                'index_count':int(fixture.sql(f"SELECT count(*) FROM pg_index WHERE indrelid='{fixture.name}.groups'::regclass")),
+                'plans':plans(fixture,queries),'actual_worker_sql':queries,
+                'scope':'local production worker; three samples per mode/size; native binary oracle and safe ACK; matched fillfactor60; not a throughput or production freshness SLO'}
+        fixture.verify()
+        (output/'measurement.json').write_text(json.dumps(report,indent=2)+'\n')
+        return report
+
+
+def main():
+    output,commands=harness_arguments()
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--candidate-first',action='store_true')
+    parser.add_argument('--groups',type=int,default=2000)
+    parser.add_argument('baseline')
+    parser.add_argument('candidate')
+    args=parser.parse_args(commands)
+    if not 2000<=args.groups<=100000:
+        raise ValueError('groups must be between 2000 and 100000')
+    output.mkdir()
+    summary={}
+    pairs=[('baseline',args.baseline),('candidate',args.candidate)]
+    if args.candidate_first:
+        pairs.reverse()
+    for name,binary in pairs:
+        path=output/name;path.mkdir()
+        report=measure(path,[binary],args.groups);summary[name]={key:report[key] for key in ['physical','index_count','index_bytes','worker_cpu_ms']}
+        summary[name]['postgres_execution_ms']=sum(row['execution_ms'] for row in report['postgres'])
+        summary[name]['wal_bytes']=sum(row['wal_bytes'] for row in report['postgres'])
+        summary[name]['publication_p50_ms']=statistics.median(t['phases_us']['publication']/1000 for t in report['ticks'])
+        (output/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+        print(json.dumps({name:summary[name]}))
 
 
 if __name__=='__main__':
-    root=pathlib.Path(sys.argv[1])
-    for label,binary in [('before',sys.argv[2]),('after',sys.argv[3])]:
-        path=root/label; path.mkdir()
-        measure(path,[binary],label=='after')
+    main()

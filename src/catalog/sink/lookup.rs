@@ -8,6 +8,10 @@ pub(super) async fn ensure(
     sink: &Sink,
     create: bool,
 ) -> Result<()> {
+    // Keyed tables already have their validated primary-key access path.
+    if !sink.primary_key.is_empty() {
+        return Ok(());
+    }
     let table = format!("{}.{}", catalog.schema, sink.table.as_str());
     let oid: u32 =
         tx.query_one("SELECT pg_catalog.to_regclass($1)::oid", &[&table]).await?.try_get(0)?;

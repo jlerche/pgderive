@@ -11,6 +11,7 @@ class KeyedFixture(Fixture):
         self.sql(f'DELETE FROM {self.name}.bid WHERE auction IS NULL; ALTER TABLE {self.name}.bid ALTER COLUMN auction SET NOT NULL')
         self.query=f'SELECT auction AS book,COUNT(*) AS positions,SUM(price) AS units FROM {self.name}.bid GROUP BY auction'
         self.key=['book']
+        self.output_names=['book','positions','units']
 
     def config(self, maximum=0):
         path=super().config(maximum, query=self.query)
@@ -18,7 +19,7 @@ class KeyedFixture(Fixture):
         return path
 
     def verify(self):
-        expected(self,['book','positions','units'])
+        expected(self,self.output_names)
         assert binary_difference(self)=='0'
         assert self.acknowledgement_ahead().strip()=='0'
 
@@ -35,6 +36,7 @@ def qualify(output,command):
         fixture.key=['book']
         worker=fixture.start(command,'initial');ready=worker.event('ready');fixture.verify()
         assert fixture.sql(f"SELECT count(*) FROM pg_constraint WHERE conrelid='{fixture.name}.groups'::regclass AND contype='p'").strip()=='1'
+        assert fixture.sql(f"SELECT count(*) FROM pg_index WHERE indrelid='{fixture.name}.groups'::regclass").strip()=='1'
         # Replacement keys overlap old keys: stable keys must become native UPDATEs.
         for tick,change in enumerate([
             f'UPDATE {fixture.name}.bid SET auction=5-auction',
@@ -68,10 +70,15 @@ def bounded_updates(output,command):
     output.mkdir()
     fixture=KeyedFixture(output,rows=1800,auctions=600)
     with fixture.managed():
+        fixture.query=f'SELECT auction AS book,id AS row_id,COUNT(*) AS positions,SUM(price) AS units FROM {fixture.name}.bid GROUP BY auction,id'
+        fixture.key=['row_id','book']
+        fixture.output_names=['book','row_id','positions','units']
         worker=fixture.start(command,'bounded');worker.event('ready');fixture.verify()
         groups=int(fixture.sql(f'SELECT count(*) FROM {fixture.name}.groups'))
         assert groups>512
         fixture.sql(f'UPDATE {fixture.name}.bid SET price=coalesce(price,0)+1')
+        worker.event('published');fixture.verify()
+        fixture.sql(f'DELETE FROM {fixture.name}.bid WHERE id%2=0')
         worker.event('published');fixture.verify();worker.finish(graceful=True)
         updates=int(fixture.sql(f"SELECT n_tup_upd FROM pg_stat_all_tables WHERE relid='{fixture.name}.groups'::regclass"))
         assert updates==groups,(updates,groups)
@@ -80,19 +87,26 @@ def bounded_updates(output,command):
 
 def stale_destination(output,command):
     output.mkdir()
-    fixture=KeyedFixture(output)
-    with fixture.managed():
-        worker=fixture.start(command,'stale-old');worker.event('ready');fixture.verify()
-        fixture.sql(f'UPDATE {fixture.name}.groups SET units=units+1 WHERE book=1')
-        before=fixture.sql(f'SELECT row_to_json(g) FROM {fixture.name}.groups g ORDER BY book')
-        boundary=fixture.sql(f'SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.sql(f'UPDATE {fixture.name}.bid SET price=coalesce(price,0)+11')
-        worker.process.wait(timeout=40);worker.abort()
-        assert worker.process.returncode != 0
-        assert 'result occurrence missing' in (output/'stale-old/stderr.log').read_text()
-        assert fixture.sql(f'SELECT row_to_json(g) FROM {fixture.name}.groups g ORDER BY book')==before
-        assert fixture.sql(f'SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p')==boundary
-        (output/'result.json').write_text(json.dumps({'stale_old_tuple_rejected':True,'all_sink_updates_rolled_back':True,'progress_unchanged':True})+'\n')
+    scenarios=[('update','units+1','UPDATE {schema}.bid SET price=coalesce(price,0)+11'),
+               ('representation','units*1.00','UPDATE {schema}.bid SET price=coalesce(price,0)+11'),
+               ('delete','units+1','DELETE FROM {schema}.bid WHERE auction=1')]
+    for label,tamper,source in scenarios:
+        case=output/label;case.mkdir()
+        fixture=KeyedFixture(case)
+        with fixture.managed():
+            worker=fixture.start(command,'stale-old');worker.event('ready');fixture.verify()
+            fixture.sql(f'UPDATE {fixture.name}.groups SET units={tamper} WHERE book=1')
+            before=fixture.sql(f'SELECT row_to_json(g) FROM {fixture.name}.groups g ORDER BY book')
+            boundary=fixture.sql(f'SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p')
+            fixture.sql(source.format(schema=fixture.name))
+            worker.process.wait(timeout=40);worker.abort()
+            assert worker.process.returncode != 0
+            assert 'result occurrence missing' in (case/'stale-old/stderr.log').read_text()
+            assert fixture.sql(f'SELECT row_to_json(g) FROM {fixture.name}.groups g ORDER BY book')==before
+            assert fixture.sql(f'SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p')==boundary
+    (output/'result.json').write_text(json.dumps({'stale_old_update_rejected':True,
+        'stale_old_delete_rejected':True,'binary_representation_mismatch_rejected':True,
+        'all_sink_updates_rolled_back':True,'progress_unchanged':True})+'\n')
 
 
 if __name__=='__main__':
