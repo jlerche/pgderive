@@ -3,6 +3,9 @@ use super::Run;
 use crate::engine::reader::BatchData;
 use anyhow::Result;
 
+// Physical maintenance granularity is independent of index navigation fanout.
+const MIN_MERGE_BLOCKS: usize = 32;
+
 pub(super) struct Parts<K: BatchData, V: BatchData> {
     pub(super) retained: Vec<Run<K, V>>,
     pub(super) merging: Option<Run<K, V>>,
@@ -23,10 +26,9 @@ async fn parts<K: BatchData, V: BatchData>(
         if !selected {
             part.retained.push(run.clone());
         } else if let (Run::Object(object), Some((lower, upper))) = (run, anchor) {
-            // One bounded index leaf is already a useful maintenance unit.
-            // Splitting smaller roots creates fragment debt without removing
-            // an index traversal; keep those peers in the ordinary tier merge.
-            if object.block_count() <= crate::engine::reader::INDEX_FANOUT {
+            // Keep the physical merge quantum stable when navigation geometry
+            // changes; smaller fragments create debt in moving-key workloads.
+            if object.block_count() <= MIN_MERGE_BLOCKS {
                 part.merging = Some(run.clone());
                 parts.push(part);
                 continue;

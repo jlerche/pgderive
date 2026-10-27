@@ -120,7 +120,7 @@ async fn authenticated_index_frames_reject_corruption_and_retry_safely() -> Resu
 
 #[tokio::test]
 async fn failed_index_page_load_preserves_cursor_position() -> Result<()> {
-    use crate::engine::reader::index::Node;
+    use crate::engine::reader::index::{FANOUT, Node};
     let store = Arc::new(Store::unpaced());
     let batch = Batch::from_updates((0..256_i64).map(|key| ((key, key), 1)))?;
     let reference = ObjectBatch::write(store.clone(), &batch, "index-cursor", 1).await?;
@@ -138,19 +138,21 @@ async fn failed_index_page_load_preserves_cursor_position() -> Result<()> {
     let path = Path::from(object.index.pack.as_ref().context("missing index pack")?.path.clone());
     let original = store.get(&path).await?.bytes().await?;
     let mut cursor = object.cursor().await?;
-    for _ in 0..31 {
+    let last = i64::try_from(FANOUT - 1)?;
+    let next = last + 1;
+    for _ in 0..last {
         cursor.advance().await?;
     }
-    assert_eq!(cursor.current(), Some((&31, &31, 1)));
+    assert_eq!(cursor.current(), Some((&last, &last, 1)));
     let mut corrupt = original.to_vec();
     *corrupt.get_mut(offset).context("missing next leaf byte")? ^= 1;
     store.put(&path, corrupt.into()).await?;
     object.cache.index.clear_encoded();
     assert!(cursor.advance().await.is_err());
-    assert_eq!(cursor.current(), Some((&31, &31, 1)));
+    assert_eq!(cursor.current(), Some((&last, &last, 1)));
     store.put(&path, original.into()).await?;
     cursor.advance().await?;
-    assert_eq!(cursor.current(), Some((&32, &32, 1)));
+    assert_eq!(cursor.current(), Some((&next, &next, 1)));
     Ok(())
 }
 
@@ -461,5 +463,36 @@ async fn prepared_extents_keep_bounded_fences_across_cache_rebinding() -> Result
     let mut extent = object.slice(1..9).await?;
     extent.prepare_extent().await?;
     assert!(extent.span.as_ref().context("missing wide span")?.pages.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn navigation_fanout_boundaries_preserve_signed_cold_scans() -> Result<()> {
+    use crate::engine::reader::index::FANOUT;
+    let fanout = i64::try_from(FANOUT)?;
+    for rows in [fanout, fanout + 1, fanout * fanout + 1] {
+        let store = Arc::new(Store::unpaced());
+        let batch =
+            Batch::from_updates((0..rows).map(|n| ((n / 3, n), if n % 2 == 0 { -2 } else { 3 })))?;
+        let root = ObjectBatch::write(store.clone(), &batch, "fanout-boundary", 1).await?;
+        let object = ObjectBatch::<i64, i64>::open_with_cache(
+            store,
+            root,
+            "fanout-boundary",
+            Arc::new(BlockCache::new(1, 1)),
+        )
+        .await?;
+        let mut cursor = object.cursor().await?;
+        let mut actual = Vec::new();
+        while let Some((key, value, weight)) = cursor.current() {
+            actual.push(((*key, *value), weight));
+            cursor.advance().await?;
+        }
+        assert_eq!(Batch::from_updates(actual)?, batch);
+        assert_eq!(
+            object.tuple_weight(&((rows - 1) / 3, rows - 1)).await?,
+            if (rows - 1) % 2 == 0 { -2 } else { 3 }
+        );
+    }
     Ok(())
 }

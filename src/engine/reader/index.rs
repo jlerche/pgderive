@@ -10,7 +10,8 @@ mod authenticated;
 mod frames;
 pub(super) use authenticated::Authenticated;
 
-pub const FANOUT: usize = 32;
+// Keep cold navigation nodes small enough to admit under bounded metadata caches.
+pub const FANOUT: usize = 16;
 pub(super) const INLINE_BYTES: usize = 16 * 1024;
 pub(super) const PAGE_BYTES: usize = bounded::MAX_BYTES;
 

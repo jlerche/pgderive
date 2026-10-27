@@ -8,7 +8,6 @@ mod format;
 mod hybrid;
 pub use hybrid::{CacheConfig, EncodedCache};
 mod index;
-pub(crate) use index::FANOUT as INDEX_FANOUT;
 mod object;
 mod reachability;
 mod slices;

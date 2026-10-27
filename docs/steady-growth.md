@@ -2141,3 +2141,105 @@ valid unmanaged identity before checking the intended publication rejection;
 production validation was not weakened. The disposable PostgreSQL fixture uses
 tmpfs, has no persistent mounts, and is removed after validation. No push or
 live deployment is performed.
+
+### Cold index-node granularity (2026-10-27)
+
+The range-local slice (`ad9a125`) was pushed and deployed by user request. Its
+format cutover required rebuilding the demo view; source data, sink OID,
+anonymous access rules and core service start times were preserved. A second
+preexisting cutover required recreating the stopped engine's protection catalog
+in the current GC layout after retaining the old schema backup. No migration
+adapter or compatibility reader was introduced. Native equality before traffic
+and after mixed traffic, safe ACK ordering, exact graceful restart recovery and
+anonymous access checks passed. A 120-second Realtime capture observed 18,865
+events: 18,861 UPDATE, three INSERT and one DELETE. The generator, observer and
+metrics timer are running; automations remain paused. Private deployment and
+monitoring evidence is ignored under `artifacts/demo-oci/release-ad9a125`.
+These short deployment checks do not establish production steady state.
+
+The next investigation reuses the existing point-read profiler and the unchanged
+maintenance trace against `ad9a125`. Cold payload JSON deserialization consumes
+about 66% of measured payload-read time in the larger cases; cache admission
+consumes about 24%. Roughly 3.7–4.0 million rows are decoded across the larger
+traces. These diagnostic timings include instrumentation overhead and do not
+attribute total preparation exclusively to payload decoding. Navigation also
+decodes authenticated index nodes containing full tuple fences.
+
+Two rejected trials reduced the ordinary data block target from 16 KiB to
+4 KiB and 8 KiB. Both reduced decoded rows but increased metadata and physical
+traffic; fixed-state preparation worsened, and uploaded bytes increased
+substantially. Those changes were removed. Failed runs and instrumentation are
+retained under ignored `artifacts/benchmarks/next-cold-20261027`.
+
+The selected change keeps 16 KiB data blocks and 4 MiB pack targets, and reduces
+index fanout from 32 to 16. Smaller cold nodes reduce the amount of fence
+metadata decoded and can admit under the same bounded metadata cache. Cache
+budgets, hashing, authenticated summaries, content validation, full weighted
+identity and publication/ACK ordering are unchanged. Physical maintenance retains
+its independent minimum of 32 data blocks; it no longer derives that minimum
+from navigation geometry. Prepared transient extent descriptors remain bounded
+by one index leaf, now 16 descriptors rather than 32.
+
+This is another hard index-geometry cutover: existing nodes with more than 16
+children/leaves are rejected, and existing views require rebuilding before
+this selected change is deployed. No old-geometry reader is retained. The live
+demo remains on `ad9a125`, not this subsequent optimization.
+
+Two alternating frozen baseline/selected replay pairs use the same unchanged
+512-epoch maintenance workload, budgets, logical clock and independent oracle.
+No compilers overlap these timed runs. Total measured preparation seconds:
+
+| Initial groups / workload | Baseline pair | Selected pair |
+| --- | ---: | ---: |
+| 512 / fixed | 1.081, 1.079 | 1.060, 1.057 |
+| 8,192 / fixed | 8.826, 8.830 | 7.544, 7.513 |
+| 8,192 / growing | 8.458, 8.428 | 7.620, 7.717 |
+
+Every exact and cold-reopen oracle passes. Selected total PUT counts are 1,028,
+1,063 and 742 versus 1,028, 1,055 and 728: unchanged, +0.8% and +1.9%.
+Uploaded bytes fall about 1.4% and 2.9% in the larger cases. The 8-way trial
+was rejected in favor of 16-way: growing preparation gained little more while
+PUT count increased further (776). Data-block decoding remains substantially
+unchanged in the selected variant; the improvement is navigation granularity,
+not a claim that unrelated payload decoding has been eliminated.
+
+The final selected fixed/moving 1,024-transaction component cycles retain at
+most 23 roots, preserve every cold oracle, and keep PUTs within two operations
+of the current baseline. Fixed-hot GETs fall 1,058 to 1,053. Moving GETs change
+1,023 to 1,025 at the smaller size and 1,016 to 1,017 at the larger size. Moving
+read bytes increase 5.2% and 2.6%, respectively; this is a measured tradeoff,
+not a universal I/O improvement. The unchanged cold-root locality gate passes.
+The overall maintenance assessment remains red; no growth thresholds were
+relaxed, and no many-day production qualification is claimed.
+
+Whole-replay GET totals (last cumulative sample plus final drain) change from
+11,296 to 11,318 (+0.2%) and 11,948 to 11,955 (+0.06%) in the larger fixed and
+growing cases. Downloaded bytes fall slightly, from 59,211,225 to 59,189,990 and
+62,746,644 to 62,625,628. Index-only foreground downloads increase (23 to 35 and
+24 to 50 GETs); smaller nodes do not eliminate traversal misses and can deepen
+the tree. Several short-window index-growth checks therefore worsen even while
+total preparation improves. A new small-case short-window CPU-tick failure also
+appears in this run; both repeated full-trace preparation totals are slightly
+lower, so this is not evidence of a sustained small-case CPU regression. All
+failures are preserved in `selected-final/assessment.json`. This slice improves
+absolute service cost, not the remaining qualification verdict.
+
+Final independent review found no actionable findings. The required common gate
+passes in `next-cold-20261027/common.log`: 146 Python tests, 646 Rust tests
+(12 intentionally ignored), the sequential live PostgreSQL harness, 153 core
+worker results plus rebuild, formatting, Clippy, file lengths, dependencies and
+97.12% production line coverage. The corruption fixture previously hardcoded
+31/32; it now derives the next-leaf boundary from FANOUT and verifies the same
+failed-read position preservation and successful retry. Its failed release run
+is retained alongside the successful final unit/common runs. Owned Docker
+PostgreSQL uses tmpfs without persistent mounts and is removed after validation.
+
+The live `ad9a125` demo's later short window records processing p50 64.5 ms and
+receipt-to-sink p50 116 ms at about 744 observed source changes/s. However, RSS
+rose roughly 406 to 481 to 516 MB over separated observations, triggering the
+existing monitor alert. Decoded cache is at 64 MiB with no active pins; process
+rollup reports predominantly anonymous memory. This does not identify retained
+live allocations versus allocator retention, nor establish a leak. The evidence
+is preserved in the ignored live release monitoring and memory probes. Memory
+plateau and production qualification remain open; traffic is left running as
+requested, with no automatic restarts or new automation.
