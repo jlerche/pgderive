@@ -293,8 +293,9 @@ async fn index_finalization_yields_without_changing_authenticated_bytes() -> Res
 async fn contended_service_shortens_physical_turns_without_more_objects() -> Result<()> {
     use crate::engine::execution::{Workspaces, service};
     let (baseline, baseline_cost, baseline_polls) = tokio::spawn(streamed(false)).await??;
-    let pool = Arc::new(Workspaces::new(2)?);
-    let _foreground = pool.acquire().await?;
+    let pool = Arc::new(Workspaces::new(1)?);
+    let _foreground = pool.demand();
+    assert_eq!(pool.stats().active, 0);
     let _maintenance = pool.background().await?;
     let (result, service) = service::scope(pool, streamed(false)).await;
     let (roots, cost, polls) = result?;

@@ -36,7 +36,7 @@ pub struct WorkspaceStats {
     pub background_active: usize,
     /// Acquisitions that encountered a fully occupied maintenance quota.
     pub background_waits: u64,
-    /// Foreground phases active or waiting for admission.
+    /// Admitted epochs and foreground phases active or waiting for admission.
     pub foreground_demand: usize,
 }
 impl Workspaces {
@@ -67,8 +67,7 @@ impl Workspaces {
     /// # Errors
     /// Returns an error if the pool unexpectedly closes.
     pub async fn acquire(self: &Arc<Self>) -> Result<WorkspacePermit> {
-        self.foreground.fetch_add(1, Ordering::Relaxed);
-        let demand = Demand(self.clone());
+        let demand = self.demand();
         let (global, waited) = self.reserve().await?;
         Ok(WorkspacePermit { _global: global, _background: None, _demand: Some(demand), waited })
     }
@@ -93,7 +92,12 @@ impl Workspaces {
             waited: first.saturating_add(second),
         })
     }
-    pub(crate) fn foreground_waiting(&self) -> bool {
+    /// Mark latency-sensitive work without reserving an execution workspace.
+    pub(crate) fn demand(self: &Arc<Self>) -> Demand {
+        self.foreground.fetch_add(1, Ordering::Relaxed);
+        Demand(self.clone())
+    }
+    pub(crate) fn has_foreground_demand(&self) -> bool {
         self.foreground.load(Ordering::Relaxed) != 0
     }
     /// Snapshot admission counters without taking ownership of any resource.
@@ -140,7 +144,7 @@ pub struct WorkspacePermit {
     _demand: Option<Demand>,
     waited: std::time::Duration,
 }
-struct Demand(Arc<Workspaces>);
+pub struct Demand(Arc<Workspaces>);
 impl Drop for Demand {
     fn drop(&mut self) {
         self.0.foreground.fetch_sub(1, Ordering::Relaxed);

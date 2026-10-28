@@ -409,6 +409,7 @@ async fn publish(
     epoch: &super::epoch::Epoch,
     metrics: &mut Metrics,
 ) -> Result<Observation> {
+    let _foreground = open.query.workspaces().demand();
     let transaction = epoch.transaction();
     let measured = open.settings.phase_metrics;
     let mut phases = super::measurements::Phases::new(measured);

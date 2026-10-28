@@ -189,6 +189,7 @@ def debt_pressure(output, command):
             assert completed['published_time'] == pressure['time'], completed
             published = worker.event('published', minimum_time=ready['time']+33)
             usage = published['workspaces']
+            assert usage['foreground_demand'] == 1, usage
             assert usage['capacity'] == 2 and usage['peak'] == 2, usage
             assert usage['active'] <= 2, usage
             fixture.verify()

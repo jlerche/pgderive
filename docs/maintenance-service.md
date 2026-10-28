@@ -14,7 +14,11 @@ retain one foreground slot when their capacity exceeds one. Maintenance joins
 the same FIFO global queue, so newly arriving foreground work cannot continually
 overtake a queued maintenance request. Capacity one remains supported.
 
-Execution permits track active and queued foreground demand, including cancelled
+An admitted epoch tracks foreground demand from source-input preparation through
+PostgreSQL publication and local commit. It releases the demand guard on errors or
+cancellation. Idle CDC and voluntary epoch gathering do not count as demand.
+This guard does not reserve an execution permit during database waits. Execution
+permits also track active and queued foreground phases, including cancelled
 waiters. The physical maintenance scope uses the existing reader byte/operation
 charges: one work unit per charge plus one per started 4 KiB. After 128 charged
 units it yields explicitly; with foreground demand, the quantum is 32. Native
@@ -95,3 +99,23 @@ matched outputs and frozen binaries are retained under the ignored
 `artifacts/benchmarks/maintenance-service-20261027` directory. An initial candidate
 run reused a baseline-overwritten Cargo artifact; it is explicitly invalidated.
 The rebuilt candidate has a distinct hash and the required service reports.
+
+Publication demand is covered by the existing capacity-one streaming fixture: it
+marks foreground work without owning a workspace, completes maintenance with
+identical authenticated output and storage work, and requires shorter polling
+turns. The held-checkpoint worker harness also checks that successful publication
+reports the epoch demand guard. This closes a demand-lifetime gap, not the remaining
+production qualification or physical-debt inventory work.
+
+The epoch-demand follow-up was compared against `194660c` in both execution
+orders, with independently offered 1,000 changes/s, varied transactions,
+43,200 source rows and injected object-store latency. All four 20-second runs
+passed native equality and ACK checks, with zero final pending changes. Processing
+p50/p95 remained 2/12 ms; lifecycle PUTs stayed 27, GETs 30 and HEADs 12 in
+every run. These short comparisons show no measured throughput or request-cost
+regression, not a demonstrated foreground latency improvement or steady state.
+The capacity-one streaming fixture reduced maximum uninterrupted advancement
+from 43 to 11 rows with identical output and storage work. Common validation
+passed with 97.19% production line coverage; independent review found no
+actionable issues. Evidence is retained under the ignored
+`artifacts/benchmarks/epoch-service-20261028` directory.

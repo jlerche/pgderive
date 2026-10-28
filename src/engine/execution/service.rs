@@ -120,7 +120,7 @@ pub async fn spend(bytes: usize) {
     let yielded = CURRENT
         .try_with(|c| {
             let quantum =
-                if c.pool.foreground_waiting() { CONTENDED_QUANTUM } else { IDLE_QUANTUM };
+                if c.pool.has_foreground_demand() { CONTENDED_QUANTUM } else { IDLE_QUANTUM };
             let units = 1 + u64::try_from(bytes.div_ceil(BYTE_UNIT)).unwrap_or(u64::MAX - 1);
             add(&c.ledger.work_bytes, u64::try_from(bytes).unwrap_or(u64::MAX));
             let before = c.ledger.work_units.load(Ordering::Relaxed);

@@ -3,9 +3,10 @@ use anyhow::Result;
 
 #[tokio::test(start_paused = true)]
 async fn foreground_demand_shortens_turns_without_withholding_maintenance() -> Result<()> {
-    let pool = Arc::new(Workspaces::new(2)?);
+    let pool = Arc::new(Workspaces::new(1)?);
     for foreground in [false, true] {
-        let permit = if foreground { Some(pool.acquire().await?) } else { None };
+        let demand = foreground.then(|| pool.demand());
+        assert_eq!(pool.stats().active, 0);
         let _maintenance = pool.background().await?;
         let ((), report) = scope(pool.clone(), async {
             for _ in 0..4096 {
@@ -16,7 +17,7 @@ async fn foreground_demand_shortens_turns_without_withholding_maintenance() -> R
         assert_eq!(report.work_units, 4096);
         assert_eq!(report.yields, if foreground { 128 } else { 32 });
         assert_eq!(report.work_bytes, 0);
-        drop(permit);
+        drop(demand);
     }
     assert_eq!(pool.stats().active, 0);
     assert_eq!(pool.stats().foreground_demand, 0);
@@ -55,6 +56,7 @@ async fn oversized_indivisible_work_and_cancellation_do_not_wait_for_idle() -> R
     let worker = pool.clone();
     let task = tokio::spawn(async move {
         scope(worker.clone(), async move {
+            let _demand = worker.demand();
             let _permit = worker.background().await?;
             let _sent = send.send(());
             std::future::pending::<Result<()>>().await
@@ -65,6 +67,7 @@ async fn oversized_indivisible_work_and_cancellation_do_not_wait_for_idle() -> R
     task.abort();
     assert!(task.await.is_err());
     assert_eq!(pool.stats().active, 0);
+    assert_eq!(pool.stats().foreground_demand, 0);
     assert!(current().is_none());
     Ok(())
 }
