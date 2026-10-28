@@ -3,6 +3,7 @@ mod derived;
 mod lookup;
 mod membership;
 mod native_join;
+mod ordering;
 mod partition;
 mod relational;
 mod topk;
@@ -18,6 +19,7 @@ struct Scope<'a> {
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
+        Parsed::Ordered(parsed) => ordering::bind(parsed, contract),
         Parsed::Membership { parsed, distinct } => membership::bind(parsed, distinct, contract),
         Parsed::Lookup(parsed) => lookup::bind(parsed, contract),
         Parsed::Partition(parsed) => partition::bind(parsed, contract),

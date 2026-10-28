@@ -75,7 +75,7 @@ class JoinFixture(SqlFixture):
 def qualify(output,command,mode):
     fixture=JoinFixture(output,mode)
     with fixture.managed():
-        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY 1')
+        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY 1 OFFSET 1')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         name = fixture.name
         changes=[

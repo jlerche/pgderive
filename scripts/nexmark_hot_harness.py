@@ -76,7 +76,7 @@ class HotFixture(SqlFixture):
 def qualify(output,command,query,instant):
     fixture = HotFixture(output,query,instant)
     with fixture.managed():
-        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY '+fixture.labels[0])
+        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY '+fixture.labels[0]+' OFFSET 1')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
         changes = [

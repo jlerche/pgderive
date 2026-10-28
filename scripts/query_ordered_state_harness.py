@@ -72,7 +72,7 @@ class OrderedFixture(SqlFixture):
 def qualify(output, command, oid, joined):
     fixture = OrderedFixture(output, oid, joined)
     with fixture.managed():
-        fixture.rejected(command, 'unsupported', fixture.query+' ORDER BY g')
+        fixture.rejected(command, 'unsupported', fixture.query+' ORDER BY g OFFSET 1')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         changes = [
             f'INSERT INTO {fixture.name}.bid VALUES(100,NULL,NULL),(101,1,{fixture.value(-7)}),(102,1,{fixture.value(-7)})',

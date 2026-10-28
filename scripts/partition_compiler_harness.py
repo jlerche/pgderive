@@ -52,7 +52,7 @@ class PartitionFixture(SqlFixture):
 def qualify(output, command, window, frame_spec=None, fixture_class=PartitionFixture):
     fixture = fixture_class(output, window, frame_spec)
     with fixture.managed():
-        fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY auction')
+        fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY auction OFFSET 1')
         if window:
             fixture.rejected(command, 'peer-order', fixture.query.replace(',b.id ROWS', ' ROWS'))
             fixture.rejected(command, 'range', fixture.query.replace('ROWS BETWEEN ' + fixture.frame_spec[0], 'RANGE 1 PRECEDING'))

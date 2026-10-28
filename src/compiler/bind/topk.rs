@@ -20,7 +20,7 @@ pub(super) fn specialize(ir: &mut Relational, input: &str, predicate: &Predicate
     let Some(limit) = predicate.row_number_cutoff(&aggregate.field) else {
         return false;
     };
-    let spec = Spec { order: order.clone(), field: aggregate.field.clone(), limit };
+    let spec = Spec { order: order.clone(), field: Some(aggregate.field.clone()), limit };
     let id = id.clone();
     let parent = parent.clone();
     let indexed = format!("{id}_topk_input");

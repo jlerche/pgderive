@@ -91,7 +91,7 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
         SQL.replace("a.other", "a.missing"),
         SQL.replace("source.bid", "source.missing"),
         SQL.replace("GROUP BY a.category", "GROUP BY a.id"),
-        format!("{SQL} ORDER BY a.category"),
+        format!("{SQL} ORDER BY a.category OFFSET 1"),
         format!("{SQL}; {SQL}"),
         "SELECT * FROM source.auction".into(),
         SQL.replace("a.category", "a.\"Category\""),

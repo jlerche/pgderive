@@ -1,5 +1,7 @@
 # SQL compiler boundary and slices
 
+For SQL ORDER BY and ORDER BY/LIMIT, see the [ordering contract](ordering.md).
+
 For the fidelity target, implementation inventory and known qualification gaps,
 see the [compatibility contract](postgres-compatibility.md) and
 [capability inventory](postgres-capabilities.md).
@@ -84,12 +86,13 @@ comments and quoted identifiers. These are input budgets, not a general native
 parser resource guarantee. Only built-in unqualified COUNT and SUM are supported.
 
 In this bounded grouped-join syntax, other syntax fails closed: reordered grouped outputs, multiple grouping keys/aggregates, COUNT(column), DISTINCT, aggregate FILTER,
-HAVING, ORDER BY, LIMIT, CTEs, subqueries, casts, arithmetic, parameters, windows,
+HAVING, CTEs, subqueries, casts, arithmetic, parameters, windows,
 outer/self/multiple joins, set operations and multiple statements. Unsupported
 SQL is rejected before a registration row or replication slot is created.
 Administrative metadata table installation may precede compilation; it does not
 register a query. Resolution uses the explicit frozen publication catalog, not
-search_path or live SQL name interpolation.
+search_path or live SQL name interpolation. ORDER BY and LIMIT follow the
+[ordering contract](ordering.md).
 
 ## Single-source projection/filter subset
 
@@ -1040,9 +1043,9 @@ ordinary integral comparison of that row-number column with a literal: `<= K`,
 `< K`, `= K`, or an equivalent operand-reversed comparison. The derived cutoff
 is at most 1,024 occurrences; nonpositive cutoffs select no occurrences. The
 original filter still executes after selection, including equality at the cutoff.
-Other predicates, larger cutoffs, RANK/DENSE_RANK, mixed window functions and
-general ORDER BY/LIMIT retain their existing support or rejection boundaries.
-This optimization does not add general LIMIT syntax or discard peer ties.
+Other predicates, larger cutoffs and mixed window functions retain the existing
+partition evaluator. RANK/DENSE_RANK keep peer semantics.
+SQL ORDER BY/LIMIT uses the lowering in the [ordering contract](ordering.md).
 
 The existing ROW_NUMBER uniqueness proof remains required: partition and order
 fields must include complete logical occurrence identity. Native integral and

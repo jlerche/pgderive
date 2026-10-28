@@ -54,7 +54,7 @@ class RankingFixture(SqlFixture):
 def qualify(output, command, mode, fixture_class=RankingFixture):
     fixture = fixture_class(output, mode)
     with fixture.managed():
-        fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY id')
+        fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY id OFFSET 1')
         if mode == 'number':
             fixture.rejected(command, 'peer-order', fixture.query.replace(',b.id)', ')'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'

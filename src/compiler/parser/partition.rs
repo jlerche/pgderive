@@ -68,7 +68,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
         predicate: crate::compiler::syntax::predicate(select.where_clause.as_deref())?,
     })
 }
-fn parse_target(value: &Node) -> Result<Target> {
+pub(super) fn parse_target(value: &Node) -> Result<Target> {
     let NodeEnum::ResTarget(output) = node(value)? else {
         anyhow::bail!("unsupported target");
     };
@@ -215,6 +215,10 @@ pub(super) fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
     })
 }
 fn sort_key(value: &Node) -> Result<(super::scalar::Key, bool, bool)> {
+    let (value, descending, nulls_first) = sort_expression(value)?;
+    Ok((super::scalar::key(value)?, descending, nulls_first))
+}
+pub(super) fn sort_expression(value: &Node) -> Result<(&Node, bool, bool)> {
     let NodeEnum::SortBy(sort) = node(value)? else {
         anyhow::bail!("invalid window order");
     };
@@ -230,7 +234,7 @@ fn sort_key(value: &Node) -> Result<(super::scalar::Key, bool, bool)> {
         pg::SortByNulls::SortbyNullsLast => false,
         pg::SortByNulls::Undefined => anyhow::bail!("unsupported NULL ordering"),
     };
-    Ok((super::scalar::key(optional(sort.node.as_deref())?)?, descending, nulls_first))
+    Ok((optional(sort.node.as_deref())?, descending, nulls_first))
 }
 fn bound(flags: i32, offset: Option<&Node>, start: bool) -> Result<Option<i64>> {
     if flags & if start { 32 } else { 256 } != 0 {

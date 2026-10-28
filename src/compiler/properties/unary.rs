@@ -69,9 +69,11 @@ impl Analysis {
             }
             Node::TopK { id, input, spec } => {
                 let mut facts = self.edge(input)?.clone();
-                let field =
-                    ColumnRef { name: spec.field.clone(), right: false, oid: 20, nullable: false };
-                facts.columns.insert(field.name.clone(), Column::derived(id, field));
+                if let Some(name) = &spec.field {
+                    let field =
+                        ColumnRef { name: name.clone(), right: false, oid: 20, nullable: false };
+                    facts.columns.insert(field.name.clone(), Column::derived(id, field));
+                }
                 facts
             }
             Node::PrefixWindow { id, left, spec, .. } => partition(self.edge(left)?, id, spec)?,

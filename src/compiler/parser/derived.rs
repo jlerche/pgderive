@@ -12,9 +12,14 @@ pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, Strin
         anyhow::bail!("derived query requires SELECT");
     };
     let inner = query(inner)?;
-    ensure!(
-        matches!(inner, Parsed::Partition(_) | Parsed::Lookup(_)),
-        "derived query requires a native partition query or derived scope"
-    );
+    ensure!(supported(&inner), "derived query requires a native partition query or derived scope");
     Ok((inner, alias.aliasname.clone()))
+}
+
+fn supported(parsed: &Parsed) -> bool {
+    match parsed {
+        Parsed::Ordered(ordered) => supported(&ordered.inner),
+        Parsed::Partition(_) | Parsed::Lookup(_) => true,
+        Parsed::Membership { .. } => false,
+    }
 }

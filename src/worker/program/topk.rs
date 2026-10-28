@@ -45,10 +45,12 @@ pub(super) fn operator(spec: &Spec) -> OrderedSelection<Key, Row> {
         );
         let mut output = row.clone();
         output.remove(ORDER);
-        ensure!(
-            output.insert(spec.field.clone(), Some(i64::try_from(position)?.to_string())).is_none(),
-            "top-k result field collision"
-        );
+        if let Some(field) = &spec.field {
+            ensure!(
+                output.insert(field.clone(), Some(i64::try_from(position)?.to_string())).is_none(),
+                "top-k result field collision"
+            );
+        }
         Ok((key.clone(), output))
     })
 }

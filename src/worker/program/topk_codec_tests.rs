@@ -77,7 +77,7 @@ fn encoded_order_matches_signed_boundaries_and_mixed_null_prefixes() -> Result<(
                 column("0:b", 23, flags & 4 != 0, flags & 8 != 0),
                 column("0:id", 23, false, false),
             ],
-            field: "@aggregate_0".into(),
+            field: Some("@aggregate_0".into()),
             limit: 3,
         };
         let mut encoded = rows

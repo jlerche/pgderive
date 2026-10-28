@@ -175,7 +175,7 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
     for sql in [
         "SELECT * FROM source.auction",
         "SELECT id FROM source.auction LIMIT 1",
-        "SELECT id FROM source.auction ORDER BY id",
+        "SELECT id FROM source.auction ORDER BY category",
         "SELECT DISTINCT ON (category) category FROM source.auction",
         "SELECT auction.id FROM source.auction a",
         "SELECT b.id FROM source.auction a",

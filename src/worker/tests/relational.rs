@@ -85,7 +85,7 @@ fn normalized_join_identity_and_fail_closed_resolution() -> Result<()> {
         SQL.replace("a.category AS c", "id AS c"),
         SQL.replace("a.id=b.auction", "a.id=b.price"),
         SQL.replace("a.id=b.auction", "a.id=a.id"),
-        format!("{SQL} ORDER BY p"),
+        format!("{SQL} ORDER BY c"),
         SQL.replace("JOIN", "FULL JOIN"),
     ] {
         assert!(compile(&sql, &native).is_err(), "{sql}");

@@ -28,6 +28,8 @@ class TopKFixture(SqlFixture):
         if not self.temporal:return str(value)
         text="-infinity" if value<0 else f"2000-01-01 00:00:00.{value:06}"
         return f"'{text}'::{self.mode}"
+    def changed_cutoff(self):
+        return self.query.replace(f'WHERE {self.condition}', 'WHERE q.rn<=2')
     def verify(self):
         native=expected(self,self.labels)
         self.verify_sql(native)
@@ -47,8 +49,8 @@ class TopKFixture(SqlFixture):
                 if position<=self.limit and (self.mode!='equality' or position==3):oracle[(key,value)]+=1
         self.verify_memory(dict(oracle))
 
-def qualify(output,command,mode):
-    fixture=TopKFixture(output,mode)
+def qualify(output,command,mode,fixture_type=TopKFixture):
+    fixture=fixture_type(output,mode)
     with fixture.managed():
         changes=[
             f'INSERT INTO {fixture.name}.bid VALUES(100,NULL,NULL),(101,1,{fixture.value(7)}),(102,1,{fixture.value(7)}),(103,1,{fixture.value(7)})',
@@ -61,7 +63,7 @@ def qualify(output,command,mode):
             changes=changes,
             final=f'DELETE FROM {fixture.name}.bid WHERE id=107',
             normalized=fixture.query,
-            rejected=[('changed-cutoff', fixture.query.replace(f'WHERE {fixture.condition}', 'WHERE q.rn<=2'))],
+            rejected=[('changed-cutoff', fixture.changed_cutoff())],
         ))
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':'identical SQL exact bag','memory':'independent sorted raw source occurrences','duplicates':'cutoff and projection bag','restart':True,'transactions':len(changes)+1})+'\n')
 

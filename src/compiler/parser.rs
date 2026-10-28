@@ -9,6 +9,7 @@ mod membership;
 pub(super) mod native_join;
 pub(super) mod navigation;
 pub(super) mod offset;
+pub(super) mod ordering;
 pub(super) mod partition;
 pub(super) mod scalar;
 use expressions::{column, node, optional, target};
@@ -22,6 +23,7 @@ pub(super) struct Table {
 }
 pub(super) type Columns = Vec<(Name, String)>;
 pub(super) enum Parsed {
+    Ordered(ordering::Parsed),
     Membership { parsed: partition::Parsed, distinct: bool },
     Lookup(lookup::Parsed),
     Partition(partition::Parsed),
@@ -104,6 +106,9 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
     Ok(())
 }
 fn query(select: &pg::SelectStmt) -> Result<Parsed> {
+    if let Some(parsed) = ordering::parse(select)? {
+        return Ok(Parsed::Ordered(parsed));
+    }
     if let Some(parsed) = membership::parse(select)? {
         return Ok(parsed);
     }

@@ -4,6 +4,6 @@ use serde::Serialize;
 #[derive(Clone, Serialize)]
 pub struct Spec {
     pub(crate) order: Vec<Order>,
-    pub(crate) field: String,
+    pub(crate) field: Option<String>,
     pub(crate) limit: usize,
 }

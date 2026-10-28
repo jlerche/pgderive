@@ -49,9 +49,10 @@ pub(super) fn stage(
 fn aggregate_base(relational: &Relational) -> Result<usize> {
     let mut base = 0;
     for node in &relational.nodes {
-        if let Node::TopK { spec, .. } = node {
-            let index: usize = spec
-                .field
+        if let Node::TopK { spec, .. } = node
+            && let Some(field) = &spec.field
+        {
+            let index: usize = field
                 .strip_prefix("@aggregate_")
                 .context("invalid top-k aggregate field")?
                 .parse()?;
