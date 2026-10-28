@@ -36,7 +36,7 @@ uncertain-COMMIT recovery and PUT → atomic PG publication → slot ACK orderin
    proof. Reuse the same properties for sink, join and storage decisions. Include
    keyed projections/key-preserving joins in qualification only once the proof
    exists; never bypass the compiler just to label a benchmark keyed.
-4. **Extend the existing epoch controller.** Feed input bytes, affected keys,
+4. **Extend the existing epoch controller.** See [cost feedback](epoch-cost-model.md) for the implementation and measurement boundaries. Feed input bytes, affected keys,
    output DML mix, fixed publication cost, admission wait and maintenance
    interference into the existing scheduler. Combine available transactions only
    while this amortizes fixed cost within freshness/resource bounds. Compare

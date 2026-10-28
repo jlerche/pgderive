@@ -1,3 +1,4 @@
+use super::epoch::model::Observation;
 use super::{open::Open, program::relational, spec::Settings, sql::Session};
 use crate::{Config, catalog::Progress};
 use anyhow::{Context, Result, ensure};
@@ -235,7 +236,7 @@ async fn consume(
     count: (&mut Metrics, &super::health::Reporter),
 ) -> Result<()> {
     let mut epochs = Epochs {
-        collector: super::epoch::Collector::default(),
+        collector: super::epoch::Collector::new(open.source_keys.clone()),
         scheduler: super::epoch::Controller::new(settings.epoch.clone()),
     };
     let interval = Duration::from_millis(settings.checkpoint_interval_ms);
@@ -393,13 +394,12 @@ async fn publish_group(
     let age = grouped.epoch.age();
     let work = grouped.epoch.work();
     metrics.source.attempt(grouped.epoch.progress()?, grouped.epoch.transactions())?;
-    let executing = Instant::now();
-    publish(open, &grouped.epoch, metrics).await?;
-    epochs.scheduler.record(work, executing.elapsed());
+    let observation = publish(open, &grouped.epoch, metrics).await?;
+    epochs.scheduler.record(work, observation);
     metrics.source.complete()?;
     metrics.failures = 0;
     emit(
-        &json!({"event":"epoch","time":open.query.time(),"transactions":grouped.epoch.transactions(),"source_bytes":grouped.epoch.bytes(),"oldest_source_age_ms":age.as_millis(),"publication_source_age_ms":grouped.epoch.age().as_millis(),"received_to_sink_ms":grouped.epoch.received_age().as_millis(),"freshness_target_missed":grouped.epoch.age()>Duration::from_millis(settings.epoch.freshness_target_ms),"predicted_service_us":grouped.predicted.as_micros(),"reason":grouped.reason}),
+        &json!({"event":"epoch","time":open.query.time(),"transactions":grouped.epoch.transactions(),"source_bytes":grouped.epoch.bytes(),"oldest_source_age_ms":age.as_millis(),"publication_source_age_ms":grouped.epoch.age().as_millis(),"received_to_sink_ms":grouped.epoch.received_age().as_millis(),"freshness_target_missed":grouped.epoch.age()>Duration::from_millis(settings.epoch.freshness_target_ms),"predicted_service_us":grouped.predicted.as_micros(),"input_work":work,"service_observed":observation,"reason":grouped.reason}),
     )?;
     Ok(())
 }
@@ -408,15 +408,19 @@ async fn publish(
     open: &mut Open,
     epoch: &super::epoch::Epoch,
     metrics: &mut Metrics,
-) -> Result<()> {
+) -> Result<Observation> {
     let transaction = epoch.transaction();
     let measured = open.settings.phase_metrics;
     let mut phases = super::measurements::Phases::new(measured);
     let started = Instant::now();
     let time = open.query.time().checked_add(1).context("worker logical time overflow")?;
-    let input = open.input(&transaction.batch, time).await?;
-    phases.mark("inputs");
     let mut preparation = crate::timing::Profile::new(measured);
+    let input = open.input(&transaction.batch, time, &mut preparation).await?;
+    phases.mark("inputs");
+    preparation.reset_clock();
+    let preparing = Instant::now();
+    let initial_admission = preparation.admission();
+    let mut disruption = Duration::ZERO;
     let prepared = match open
         .query
         .prepare_memtable_profiled(input.clone(), open.settings.memtable_bytes, &mut preparation)
@@ -424,11 +428,16 @@ async fn publish(
     {
         Ok(work) => work,
         Err(error) if error.is::<crate::engine::plan::relational::MemtableFull>() => {
+            disruption = preparing
+                .elapsed()
+                .saturating_sub(preparation.admission().saturating_sub(initial_admission));
+            let maintenance = Instant::now();
             preparation.mark("failed_preparation_tail");
             emit(
                 &json!({"event":"checkpoint_backpressure","reason":"memtable_bytes", "time":open.query.time(),"checkpoint_in_flight":open.checkpoint.is_some()}),
             )?;
             maintain(open, metrics).await?;
+            disruption = disruption.saturating_add(maintenance.elapsed());
             preparation.mark("forced_maintenance");
             open.query
                 .prepare_memtable_profiled(input, open.settings.memtable_bytes, &mut preparation)
@@ -451,6 +460,8 @@ async fn publish(
         relational::deltas(&open.query, &prepared.output().batch, open.compiled.output()).await?;
     let progress = Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
     phases.mark("finalize");
+    let preparation_time =
+        started.elapsed().saturating_sub(preparation.admission()).saturating_sub(disruption);
     let publication = open
         .writer
         .publish_epoch(
@@ -465,12 +476,14 @@ async fn publish(
     phases.mark("local_completion");
     let cache = open.query.cache_stats()?;
     let mut event = json!({"event":"published","time":time,"workspaces":open.query.workspaces().stats(),"memtable_bytes":open.query.memtable_bytes()?,"end_lsn":transaction.end_lsn,"changes":transaction.changes.len(),"source_transactions":epoch.transactions(),"elapsed_ms":started.elapsed().as_millis(),"cache":crate::worker::health::cache_diagnostics(&cache)});
+    let admission = preparation.admission();
     if let Some(phases) = phases.finish(epoch.decode_us())? {
         event["phases_us"] = phases;
-        event["publication_us"] = serde_json::to_value(publication)?;
+        event["publication_us"] = serde_json::to_value(&publication.timings)?;
         event["preparation_us"] = serde_json::to_value(preparation.finish())?;
     }
-    emit(&event)
+    emit(&event)?;
+    Ok(Observation::published(started.elapsed(), preparation_time, admission, &publication))
 }
 async fn maintain(open: &mut Open, metrics: &mut Metrics) -> Result<()> {
     let completed = super::checkpoint::flush(open).await?;

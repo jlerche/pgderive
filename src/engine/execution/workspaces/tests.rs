@@ -97,3 +97,24 @@ async fn queued_foreground_demand_cancels_and_fifo_preserves_maintenance_service
     assert_eq!(pool.stats().active, 0);
     Ok(())
 }
+
+#[tokio::test(start_paused = true)]
+async fn admission_feedback_is_available_without_optional_phase_metrics() -> Result<()> {
+    let pool = Arc::new(Workspaces::new(1)?);
+    let held = pool.acquire().await?;
+    assert!(held.waited().is_zero());
+    let mut waiting = Box::pin(pool.acquire());
+    poll_fn(|cx| {
+        assert!(waiting.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    tokio::time::advance(std::time::Duration::from_millis(7)).await;
+    drop(held);
+    let served = waiting.await?;
+    let mut profile = crate::timing::Profile::new(false);
+    profile.admitted(&served);
+    assert_eq!(profile.admission(), std::time::Duration::from_millis(7));
+    assert!(profile.finish().is_none());
+    Ok(())
+}

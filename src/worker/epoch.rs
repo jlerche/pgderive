@@ -1,7 +1,8 @@
 //! Complete committed source prefixes; scheduling never changes source identity.
 pub(super) mod collect;
 mod count;
-mod model;
+pub(super) mod features;
+pub(super) mod model;
 mod policy;
 use crate::{catalog::Progress, engine::execution::Limits, transaction::Transaction};
 use anyhow::{Context, Result, ensure};
@@ -18,20 +19,28 @@ pub(super) struct Epoch {
     decode_us: u128,
     opened: Instant,
     source_age: Duration,
+    keys: features::Count,
 }
 impl Epoch {
-    pub(super) fn new(transaction: Transaction, decode_us: u128) -> Result<Self> {
-        Self::at(transaction, decode_us, Instant::now(), SystemTime::now())
+    pub(super) fn new(
+        transaction: Transaction,
+        decode_us: u128,
+        keys: std::sync::Arc<features::Keys>,
+    ) -> Result<Self> {
+        Self::at(transaction, decode_us, Instant::now(), SystemTime::now(), keys)
     }
     fn at(
         transaction: Transaction,
         decode_us: u128,
         opened: Instant,
         wall: SystemTime,
+        keys: std::sync::Arc<features::Keys>,
     ) -> Result<Self> {
         Progress::new(transaction.xid, &transaction.commit_lsn, &transaction.end_lsn)?;
         let source_age = source_age(transaction.commit_time_micros, wall);
-        Ok(Self { transaction, transactions: 1, decode_us, opened, source_age })
+        let mut keys = features::Count::new(keys);
+        keys.append(&transaction);
+        Ok(Self { transaction, transactions: 1, decode_us, opened, source_age, keys })
     }
     pub(super) fn push(
         &mut self,
@@ -57,6 +66,7 @@ impl Epoch {
         self.transactions =
             self.transactions.checked_add(1).context("epoch source count overflow")?;
         self.decode_us = self.decode_us.saturating_add(decode_us);
+        self.keys.append(&transaction);
         self.transaction.bytes = bytes;
         self.transaction.xid = transaction.xid;
         self.transaction.commit_lsn = transaction.commit_lsn;
@@ -92,10 +102,12 @@ impl Epoch {
     pub(super) fn progress(&self) -> Result<Progress> {
         Progress::new(self.transaction.xid, &self.transaction.commit_lsn, &self.transaction.end_lsn)
     }
-    pub(super) fn work(&self) -> f64 {
-        let changes = u32::try_from(self.transaction.changes.len()).unwrap_or(u32::MAX);
-        let bytes = u32::try_from(self.bytes()).unwrap_or(u32::MAX);
-        f64::from(changes).max(f64::from(bytes) / 256.0).max(1.0)
+    pub(super) fn work(&self) -> features::Input {
+        features::Input {
+            rows: u64::try_from(self.transaction.changes.len()).unwrap_or(u64::MAX),
+            bytes: self.bytes(),
+            keys: self.keys.keys(),
+        }
     }
 }
 fn source_age(commit: Option<i64>, wall: SystemTime) -> Duration {

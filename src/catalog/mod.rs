@@ -21,6 +21,8 @@ mod sink;
 mod write;
 pub use position::{Lsn, Progress};
 pub use publication::{Binding, Publication, Writer};
+pub(crate) use sink::measurement::Feedback;
+pub(crate) use sink::work::Mutations;
 pub use sink::{Deltas, ResultColumn, Sink, SinkOutput};
 #[cfg(test)]
 mod tests;

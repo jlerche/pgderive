@@ -10,6 +10,7 @@ use anyhow::{Context, Result, ensure};
 use std::sync::Arc;
 
 pub(super) struct Open {
+    pub(super) source_keys: Arc<super::epoch::features::Keys>,
     pub(super) maintenance: super::checkpoint::debt::Controller,
     pub(super) checkpoint: Option<super::checkpoint::Pending>,
     pub(super) collector: super::collection::Collector,
@@ -28,8 +29,10 @@ impl Open {
         &self,
         batch: &crate::weighted::Batch,
         time: u64,
+        profile: &mut crate::timing::Profile,
     ) -> Result<relational::Inputs> {
-        let _workspace = self.query.workspaces().acquire().await?;
+        let workspace = self.query.workspaces().acquire().await?;
+        profile.admitted(&workspace);
         let mut input =
             relational::Input::new(self.compiled.relational(), self.replication.execution)?;
         input.append(batch, self.compiled.relational())?;
@@ -92,6 +95,7 @@ impl Open {
         let (writer, nonce) =
             reopen(&mut session, &catalog, &mut query, (&contract, settings)).await?;
         Ok(Self {
+            source_keys: super::epoch::features::Keys::new(&contract, config.execution)?,
             maintenance: super::checkpoint::debt::Controller::default(),
             checkpoint: None,
             collector: super::collection::Collector::connect(config).await?,

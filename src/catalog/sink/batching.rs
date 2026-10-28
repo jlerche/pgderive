@@ -32,7 +32,7 @@ pub(super) async fn apply(
     sink: &Sink,
     rows: &[(Value, i64)],
     context: &Value,
-) -> Result<()> {
+) -> Result<super::work::Mutations> {
     let work =
         rows.iter().try_fold(0_u64, |total, (_, delta)| total.checked_add(delta.unsigned_abs()));
     ensure!(
@@ -52,13 +52,19 @@ pub(super) async fn apply_rows(
     sink: &Sink,
     rows: &[(Value, i64)],
     context: &Value,
-) -> Result<()> {
+) -> Result<super::work::Mutations> {
+    let mut counts = super::work::Mutations::default();
     for positive in [false, true] {
         let statement = if positive { &program.insert } else { &program.delete };
         let mut chunk = Chunk::default();
         for (tuple, delta) in
             rows.iter().filter(|(_, delta)| *delta != 0 && (*delta > 0) == positive)
         {
+            if positive {
+                counts.inserts = counts.inserts.saturating_add(delta.unsigned_abs());
+            } else {
+                counts.deletes = counts.deletes.saturating_add(delta.unsigned_abs());
+            }
             let count =
                 delta.checked_abs().ok_or_else(|| anyhow::anyhow!("result occurrence overflow"))?;
             let bytes = serde_json::to_vec(tuple)?.len().saturating_add(32);
@@ -69,7 +75,7 @@ pub(super) async fn apply_rows(
         }
         execute(tx, statement, &mut chunk, sink.output, context).await?;
     }
-    Ok(())
+    Ok(counts)
 }
 pub(super) async fn execute(
     tx: &Transaction<'_>,

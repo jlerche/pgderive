@@ -10,8 +10,8 @@ impl Writer {
         plan: &Plan,
         publication: (u64, &Progress, &Deltas, u64),
         measured: bool,
-    ) -> Result<std::collections::BTreeMap<&'static str, u128>> {
-        let mut clock = crate::timing::Clock::new(measured);
+    ) -> Result<super::Feedback> {
+        let mut clock = crate::timing::Clock::new(true);
         let (time, progress, deltas, transactions) = publication;
         ensure!(!self.uncertain, "uncertain publication requires recovery");
         ensure!(
@@ -28,7 +28,8 @@ impl Writer {
         locked.record_epoch((time, progress, transactions), &program.epoch).await?;
         let progress_time = clock.lap();
         let membership = boundary_guard + source_layout + progress_time;
-        deltas.apply(&tx, &self.catalog, (time, progress.end), &program.sink).await?;
+        let mutations =
+            deltas.apply(&tx, &self.catalog, (time, progress.end), &program.sink).await?;
         let sink = clock.lap();
         self.commit(tx, "memtable publication").await?;
         let commit = clock.lap();
@@ -36,7 +37,7 @@ impl Writer {
         self.boundary.commit = progress.commit;
         self.boundary.end = progress.end;
         self.boundary.xid = Some(progress.xid);
-        Ok(if measured {
+        let timings = if measured {
             [
                 ("membership_layout_progress", membership),
                 ("boundary_guard", boundary_guard),
@@ -48,6 +49,14 @@ impl Writer {
             .into()
         } else {
             std::collections::BTreeMap::new()
+        };
+        Ok(super::Feedback {
+            timings,
+            mutations,
+            fixed: std::time::Duration::from_micros(u64::try_from(
+                membership.saturating_add(commit),
+            )?),
+            dml: std::time::Duration::from_micros(u64::try_from(sink)?),
         })
     }
     pub(crate) async fn checkpoint_memtable(

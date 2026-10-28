@@ -1,43 +1,125 @@
-//! Bounded online fixed-plus-variable cost model, with residual uncertainty.
+//! Bounded nonnegative service estimates. Forecasts are empirical, not upper bounds.
+use super::features::Input;
+use crate::catalog::Mutations;
 use std::{collections::VecDeque, time::Duration};
+mod fit;
+use fit::Fit;
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+pub(in crate::worker) struct Observation {
+    pub preparation: Duration,
+    pub admission: Duration,
+    pub disruption: Duration,
+    pub fixed: Duration,
+    pub dml: Duration,
+    pub mutations: Mutations,
+}
+impl Observation {
+    pub(in crate::worker) const fn published(
+        elapsed: Duration,
+        preparation: Duration,
+        admission: Duration,
+        publication: &crate::catalog::Feedback,
+    ) -> Self {
+        Self {
+            preparation,
+            admission,
+            disruption: elapsed
+                .saturating_sub(preparation)
+                .saturating_sub(admission)
+                .saturating_sub(publication.fixed)
+                .saturating_sub(publication.dml),
+            fixed: publication.fixed,
+            dml: publication.dml,
+            mutations: publication.mutations,
+        }
+    }
+}
 #[derive(Default)]
 pub(super) struct Model {
-    samples: VecDeque<(f64, f64)>,
+    samples: VecDeque<(Input, Observation)>,
+    estimate: Option<Estimate>,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct Estimate {
+    preparation: Fit,
+    outputs: [Fit; 3],
+    dml: Fit,
     pub(super) fixed: f64,
-    pub(super) variable: f64,
-    pub(super) margin: f64,
-    pub(super) largest: f64,
+    overhead: f64,
+    margin: f64,
+    largest: [f64; 3],
+}
+fn mutations(value: Mutations) -> [f64; 3] {
+    [value.inserts, value.updates, value.deletes]
+        .map(|n| f64::from(u32::try_from(n).unwrap_or(u32::MAX)))
 }
 impl Model {
-    pub(super) fn record(&mut self, work: f64, elapsed: Duration) {
+    pub(super) fn record(&mut self, input: Input, observation: Observation) {
         if self.samples.len() == 32 {
             self.samples.pop_front();
         }
-        self.samples.push_back((work.max(1.0), elapsed.as_secs_f64()));
+        self.samples.push_back((input, observation));
+        let samples = self.samples.iter().copied().collect::<Vec<_>>();
+        self.estimate = Some(Estimate::learn(&samples));
     }
-    pub(super) fn estimate(&self) -> Option<Estimate> {
-        let n = f64::from(u32::try_from(self.samples.len()).ok()?);
-        if n == 0.0 {
-            return None;
-        }
-        let mean_x = self.samples.iter().map(|(x, _)| x).sum::<f64>() / n;
-        let mean_y = self.samples.iter().map(|(_, y)| y).sum::<f64>() / n;
-        let variance = self.samples.iter().map(|(x, _)| (x - mean_x).powi(2)).sum::<f64>();
-        let covariance = self.samples.iter().map(|(x, y)| (x - mean_x) * (y - mean_y)).sum::<f64>();
-        let variable = if variance > 1e-9 { (covariance / variance).max(0.0) } else { 0.0 };
-        let fixed = (-variable).mul_add(mean_x, mean_y).max(0.0);
-        let residual =
-            self.samples.iter().map(|(x, y)| (y - variable.mul_add(*x, fixed)).abs()).sum::<f64>()
-                / n;
-        let largest = self.samples.iter().map(|(x, _)| *x).fold(0.0, f64::max);
-        Some(Estimate { fixed, variable, margin: residual * 2.0, largest })
+    pub(super) const fn estimate(&self) -> Option<Estimate> {
+        self.estimate
     }
 }
 impl Estimate {
-    pub(super) fn seconds(self, work: f64) -> f64 {
-        self.variable.mul_add(work, self.fixed) + self.margin
+    fn learn(samples: &[(Input, Observation)]) -> Self {
+        let inputs = samples.iter().map(|(input, _)| input.values()).collect::<Vec<_>>();
+        let outputs = samples.iter().map(|(_, o)| mutations(o.mutations)).collect::<Vec<_>>();
+        let target =
+            |f: fn(&Observation) -> f64| samples.iter().map(|(_, o)| f(o)).collect::<Vec<_>>();
+        let n = f64::from(u32::try_from(samples.len()).unwrap_or(32)).max(1.0);
+        let mut result = Self {
+            preparation: Fit::learn(&inputs, &target(|o| o.preparation.as_secs_f64())),
+            outputs: std::array::from_fn(|i| {
+                Fit::learn(&inputs, &outputs.iter().map(|v| v[i]).collect::<Vec<_>>())
+            }),
+            dml: Fit::learn(&outputs, &target(|o| o.dml.as_secs_f64())),
+            fixed: target(|o| o.fixed.as_secs_f64()).iter().sum::<f64>() / n,
+            overhead: target(|o| o.admission.saturating_add(o.disruption).as_secs_f64())
+                .iter()
+                .sum::<f64>()
+                / n,
+            margin: 0.0,
+            largest: std::array::from_fn(|i| inputs.iter().map(|v| v[i]).fold(0.0, f64::max)),
+        };
+        result.margin = samples
+            .iter()
+            .map(|(input, o)| {
+                let actual = o
+                    .preparation
+                    .saturating_add(o.admission)
+                    .saturating_add(o.disruption)
+                    .saturating_add(o.fixed)
+                    .saturating_add(o.dml)
+                    .as_secs_f64();
+                (actual - result.seconds(*input)).abs()
+            })
+            .sum::<f64>()
+            * 2.0
+            / n;
+        result
+    }
+    pub(super) fn seconds(self, input: Input) -> f64 {
+        let input = input.values();
+        let outputs = self.outputs.map(|fit| fit.predict(input));
+        self.fixed
+            + self.overhead
+            + self.preparation.predict(input)
+            + self.dml.predict(outputs)
+            + self.margin
+    }
+    pub(super) fn exploring(self, input: Input) -> bool {
+        input
+            .values()
+            .into_iter()
+            .zip(self.largest)
+            .any(|(value, largest)| value >= largest.max(1.0) * 2.0)
     }
 }
+#[cfg(test)]
+mod tests;

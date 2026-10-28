@@ -28,7 +28,7 @@ pub(super) fn insert(table: &str, values: &[(&str, Option<&str>)]) -> Change {
 #[test]
 fn epochs_preserve_source_order_and_resource_accounting() -> Result<()> {
     let first = transaction(1, vec![insert("auction", &[("id", Some("1"))])])?;
-    let mut epoch = Epoch::new(first, 3)?;
+    let mut epoch = Epoch::new(first, 3, key_plan()?)?;
     epoch.push(transaction(2, vec![])?, 4, Limits::default())?;
     assert_eq!(epoch.transactions(), 2);
     assert_eq!(epoch.bytes(), 32);
@@ -57,7 +57,7 @@ async fn epoch_joins_include_cross_terms_and_preserve_nulls() -> Result<()> {
     )?;
     let left = insert("auction", &[("id", Some("1")), ("category", None), ("other", None)]);
     let right = insert("bid", &[("id", Some("1")), ("auction", Some("1")), ("price", Some("7"))]);
-    let mut epoch = Epoch::new(transaction(1, vec![left])?, 0)?;
+    let mut epoch = Epoch::new(transaction(1, vec![left])?, 0, key_plan()?)?;
     epoch.push(transaction(2, vec![right])?, 0, Limits::default())?;
     let input = crate::worker::program::relational::inputs(
         &epoch.transaction().batch,
@@ -89,10 +89,10 @@ fn source_clock_age_handles_absence_future_and_invalid_values() {
 #[test]
 fn adaptive_policy_learns_cost_and_avoids_sparse_or_late_waits() -> Result<()> {
     let mut scheduler = Controller::new(Policy::default());
-    let mut epoch = Epoch::new(transaction(1, vec![])?, 0)?;
+    let mut epoch = Epoch::new(transaction(1, vec![])?, 0, key_plan()?)?;
     assert_eq!(scheduler.decision(&epoch).reason, "cold_start");
-    scheduler.record(10.0, Duration::from_millis(3));
-    scheduler.record(20.0, Duration::from_millis(4));
+    scheduler.record(input_work(10), observation(1000, 2000));
+    scheduler.record(input_work(20), observation(2000, 2000));
     assert_eq!(scheduler.decision(&epoch).reason, "unknown_arrival");
     scheduler.observe(Some(100));
     scheduler.observe(Some(300));
@@ -114,12 +114,12 @@ fn bounded_model_tracks_fixed_cost_and_residuals() {
     let mut model = model::Model::default();
     assert!(model.estimate().is_none());
     for n in 1_u32..=40 {
-        model.record(f64::from(n), Duration::from_micros(u64::from(1000 + n * 100)));
+        model.record(input_work(u64::from(n)), observation(u64::from(n) * 100, 1000));
     }
     let estimate = model.estimate().into_iter().collect::<Vec<_>>();
     assert_eq!(estimate.len(), 1);
     assert!((estimate[0].fixed - 0.001).abs() < 1e-6);
-    assert!((estimate[0].seconds(10.0) - 0.002).abs() < 1e-6);
+    assert!((estimate[0].seconds(input_work(10)) - 0.002).abs() < 1e-6);
 }
 
 fn durable() -> Result<crate::catalog::Durable> {
@@ -171,22 +171,23 @@ fn source_count_resolves_uncertain_epoch_commits_once() -> Result<()> {
 }
 #[test]
 fn controller_bounds_exploration_and_uses_freshness_slack() -> Result<()> {
-    let mut epoch = Epoch::new(transaction(1, vec![])?, 0)?;
+    let mut epoch =
+        Epoch::new(transaction(1, vec![insert("bid", &[("id", Some("1"))])])?, 0, key_plan()?)?;
     let mut controller = Controller::new(Policy::default());
-    controller.record(1.0, Duration::from_millis(3));
+    controller.record(input_work(1), observation(0, 3000));
     controller.observe(Some(100));
     controller.observe(Some(200));
     epoch.transaction.bytes = 512;
     assert_eq!(controller.decision(&epoch).reason, "bounded_exploration");
     epoch.transaction.bytes = 16;
     let mut controller = Controller::new(Policy::default());
-    controller.record(1.0, Duration::from_millis(49));
+    controller.record(input_work(1), observation(0, 49_000));
     controller.observe(Some(100));
     controller.observe(Some(1000));
     assert_eq!(controller.decision(&epoch).reason, "freshness_budget");
     let mut controller = Controller::new(Policy::default());
-    controller.record(1.0, Duration::from_millis(11));
-    controller.record(10.0, Duration::from_millis(101));
+    controller.record(input_work(1), observation(10_000, 1000));
+    controller.record(input_work(10), observation(100_000, 1000));
     controller.observe(Some(100));
     controller.observe(Some(200));
     assert_eq!(controller.decision(&epoch).reason, "amortized");
@@ -199,7 +200,7 @@ async fn epoch_union_keeps_full_tuple_identity_and_cancels_signed_rows() -> Resu
         crate::compiler::compile("SELECT id, auction, price FROM source.bid", &contract)?;
     let first = insert("bid", &[("id", Some("1")), ("auction", Some("1")), ("price", None)]);
     let second = insert("bid", &[("id", Some("1")), ("auction", Some("1")), ("price", Some("9"))]);
-    let mut epoch = Epoch::new(transaction(1, vec![first.clone(), second])?, 0)?;
+    let mut epoch = Epoch::new(transaction(1, vec![first.clone(), second])?, 0, key_plan()?)?;
     let delete = Change { operation: Operation::Delete, old: first.new, new: None, ..first };
     epoch.push(transaction(2, vec![delete])?, 0, Limits::default())?;
     let input = crate::worker::program::relational::inputs(
@@ -215,9 +216,9 @@ async fn epoch_union_keeps_full_tuple_identity_and_cancels_signed_rows() -> Resu
 
 #[test]
 fn overdue_over_budget_epochs_still_obey_learned_exploration_ceiling() -> Result<()> {
-    let mut epoch = Epoch::new(transaction(1, vec![])?, 0)?;
+    let mut epoch = Epoch::new(transaction(1, vec![])?, 0, key_plan()?)?;
     let mut controller = Controller::new(Policy { freshness_target_ms: 1, ..Policy::default() });
-    controller.record(1.0, Duration::from_millis(50));
+    controller.record(input_work(1), observation(0, 50_000));
     // The ceiling applies even without an arrival estimate and when source
     // age already exceeds the objective. Such pressure forbids waiting, but
     // must not remove the learned bound on ready work.
@@ -248,11 +249,55 @@ fn epoch_receipt_age_keeps_first_complete_transaction_clock() -> Result<()> {
         .checked_sub(Duration::from_secs(2))
         .ok_or_else(|| anyhow::anyhow!("receipt clock underflow"))?;
     first.received_at = Some(received);
-    let mut epoch = Epoch::new(first, 0)?;
+    let mut epoch = Epoch::new(first, 0, key_plan()?)?;
     let mut next = transaction(2, vec![])?;
     next.received_at = Some(Instant::now());
     epoch.push(next, 0, Limits::default())?;
     assert_eq!(epoch.transaction().received_at, Some(received));
     assert!(epoch.received_age() >= Duration::from_secs(2));
+    Ok(())
+}
+
+pub(super) fn key_plan() -> Result<std::sync::Arc<features::Keys>> {
+    features::Keys::new(&crate::worker::tests::contract(), Limits::default())
+}
+pub(super) const fn input_work(n: u64) -> features::Input {
+    features::Input { rows: n, bytes: n * 16, keys: n }
+}
+pub(super) fn observation(preparation: u64, fixed: u64) -> model::Observation {
+    model::Observation {
+        preparation: Duration::from_micros(preparation),
+        fixed: Duration::from_micros(fixed),
+        ..model::Observation::default()
+    }
+}
+
+#[test]
+fn source_key_images_are_distinct_bounded_and_cost_only() -> Result<()> {
+    let first = insert("bid", &[("id", Some("1"))]);
+    let mut epoch =
+        Epoch::new(transaction(1, vec![first.clone(), first.clone()])?, 0, key_plan()?)?;
+    assert_eq!(epoch.work().rows, 2);
+    assert_eq!(epoch.work().keys, 1);
+    let update = Change {
+        operation: Operation::Update,
+        old: first.new.clone(),
+        new: Some(crate::worker::tests::row(&[("id", Some("2"))])),
+        ..first.clone()
+    };
+    epoch.push(transaction(2, vec![update])?, 0, Limits::default())?;
+    assert_eq!(epoch.work().keys, 2);
+    let plan = features::Keys::new(
+        &crate::worker::tests::contract(),
+        Limits { resident_entries: 1, ..Limits::default() },
+    )?;
+    let mut count = features::Count::new(plan);
+    count.append(&epoch.transaction);
+    assert_eq!(count.keys(), 4);
+    count.append(&transaction(3, vec![first])?);
+    assert_eq!(count.keys(), 5);
+    let mut unknown = features::Count::new(key_plan()?);
+    unknown.append(&transaction(4, vec![insert("unknown", &[])])?);
+    assert_eq!(unknown.keys(), 1);
     Ok(())
 }

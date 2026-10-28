@@ -37,7 +37,7 @@ pub(super) async fn apply(
     program: &super::program::Program,
     sink: &Sink,
     rows: &[(Value, i64)],
-) -> Result<()> {
+) -> Result<super::work::Mutations> {
     let changes = changes(&program.positions, rows)?;
     let mut unpaired = Vec::new();
     let mut replacements = Vec::new();
@@ -51,7 +51,8 @@ pub(super) async fn apply(
     }
     // Unpaired keys are disjoint from replacement keys. Preserve delete-before-insert
     // bag publication and the caller's single progress/publication transaction.
-    batching::apply_rows(tx, program, sink, &unpaired, &Value::Null).await?;
+    let mut counts = batching::apply_rows(tx, program, sink, &unpaired, &Value::Null).await?;
+    counts.updates = u64::try_from(replacements.len())?;
     let statement = program.update.as_ref().context("missing keyed UPDATE program")?;
     let mut chunk = batching::Chunk::default();
     for pair in replacements {
@@ -61,7 +62,8 @@ pub(super) async fn apply(
         }
         chunk.push(&pair, 1, size)?;
     }
-    batching::execute(tx, statement, &mut chunk, sink.output, &Value::Null).await
+    batching::execute(tx, statement, &mut chunk, sink.output, &Value::Null).await?;
+    Ok(counts)
 }
 
 pub(super) fn update_statement(table: &str, sink: &Sink) -> Result<String> {

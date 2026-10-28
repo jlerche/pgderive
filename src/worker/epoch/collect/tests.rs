@@ -1,5 +1,5 @@
 use super::*;
-use crate::worker::epoch::tests::{insert, transaction};
+use crate::worker::epoch::tests::{input_work, insert, key_plan, observation, transaction};
 use anyhow::Context;
 use tokio::sync::mpsc;
 
@@ -27,8 +27,8 @@ fn input(xid: u32, micros: i64) -> Result<Input> {
 }
 fn controller(policy: &Policy) -> Controller {
     let mut controller = Controller::new(policy.clone());
-    controller.record(1.0, Duration::from_micros(2010));
-    controller.record(32.0, Duration::from_micros(2320));
+    controller.record(input_work(1), observation(10, 2000));
+    controller.record(input_work(32), observation(320, 2000));
     controller.observe(Some(0));
     controller.observe(Some(1000));
     controller
@@ -46,7 +46,7 @@ async fn virtual_time_coalesces_paced_commits_and_preserves_order() -> Result<()
         std::future::pending::<Result<()>>().await
     });
     let mut stream = Inputs(received);
-    let mut collector = Collector { held: None, clock: LogicalClock { origin } };
+    let mut collector = Collector { held: None, clock: LogicalClock { origin }, plan: key_plan()? };
     let policy = Policy::default();
     let mut scheduler = controller(&policy);
     let (_stop, mut stop) = watch::channel(false);
@@ -79,7 +79,8 @@ async fn virtual_time_coalesces_paced_commits_and_preserves_order() -> Result<()
         assert!(collected.epoch.age() <= Duration::from_millis(50));
         assert_eq!(collected.epoch.received_age(), collected.epoch.age());
         let service = Duration::from_micros(2000 + collected.epoch.transactions() * 10);
-        scheduler.record(collected.epoch.work(), service);
+        scheduler
+            .record(collected.epoch.work(), observation(collected.epoch.transactions() * 10, 2000));
         tokio::time::sleep(service).await;
     }
     producer.abort();
@@ -92,7 +93,7 @@ async fn virtual_time_coalesces_paced_commits_and_preserves_order() -> Result<()
 #[tokio::test(start_paused = true)]
 async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
     let origin = Instant::now();
-    let mut collector = Collector { held: None, clock: LogicalClock { origin } };
+    let mut collector = Collector { held: None, clock: LogicalClock { origin }, plan: key_plan()? };
     let policy = Policy { max_transactions: 2, ..Policy::default() };
     let mut scheduler = controller(&policy);
     let (send, received) = mpsc::channel(8);
@@ -143,7 +144,7 @@ async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
 #[tokio::test(start_paused = true)]
 async fn virtual_idle_uses_production_predicted_arrival_deadline() -> Result<()> {
     let origin = Instant::now();
-    let mut collector = Collector { held: None, clock: LogicalClock { origin } };
+    let mut collector = Collector { held: None, clock: LogicalClock { origin }, plan: key_plan()? };
     let policy = Policy::default();
     let mut scheduler = controller(&policy);
     let (_send, received) = mpsc::channel(8);

@@ -10,10 +10,10 @@ pub(in crate::worker) struct Input {
     pub(in crate::worker) transaction: Transaction,
     pub(in crate::worker) decode_us: u128,
 }
-#[derive(Default)]
 pub(in crate::worker) struct Collector<C = WallTime> {
     held: Option<Input>,
     clock: C,
+    plan: std::sync::Arc<super::features::Keys>,
 }
 /// Wall time converts `PostgreSQL` commit timestamps to age; monotonic waits use Tokio.
 pub(in crate::worker) trait Clock: Send + Sync {
@@ -48,6 +48,11 @@ pub(in crate::worker) struct Collected {
     pub(in crate::worker) reason: &'static str,
     pub(in crate::worker) predicted: Duration,
 }
+impl Collector {
+    pub(in crate::worker) const fn new(plan: std::sync::Arc<super::features::Keys>) -> Self {
+        Self { held: None, clock: WallTime, plan }
+    }
+}
 impl<C: Clock> Collector<C> {
     pub(in crate::worker) async fn recv(&mut self, stream: &mut impl InputStream) -> Result<Input> {
         if let Some(input) = self.held.take() {
@@ -63,8 +68,13 @@ impl<C: Clock> Collector<C> {
         bounds: Bounds<'_>,
     ) -> Result<Collected> {
         scheduler.observe(first.transaction.commit_time_micros);
-        let mut epoch =
-            Epoch::at(first.transaction, first.decode_us, Instant::now(), self.clock.wall())?;
+        let mut epoch = Epoch::at(
+            first.transaction,
+            first.decode_us,
+            Instant::now(),
+            self.clock.wall(),
+            self.plan.clone(),
+        )?;
         loop {
             let decision = scheduler.decision(&epoch);
             let reason = ceiling(&epoch, &bounds)

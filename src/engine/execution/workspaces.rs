@@ -69,16 +69,13 @@ impl Workspaces {
     pub async fn acquire(self: &Arc<Self>) -> Result<WorkspacePermit> {
         self.foreground.fetch_add(1, Ordering::Relaxed);
         let demand = Demand(self.clone());
-        Ok(WorkspacePermit {
-            _global: self.reserve().await?,
-            _background: None,
-            _demand: Some(demand),
-        })
+        let (global, waited) = self.reserve().await?;
+        Ok(WorkspacePermit { _global: global, _background: None, _demand: Some(demand), waited })
     }
-    async fn reserve(&self) -> Result<OwnedSemaphorePermit> {
-        let permit = reserve(&self.slots, &self.waits).await?;
+    async fn reserve(&self) -> Result<(OwnedSemaphorePermit, std::time::Duration)> {
+        let (permit, waited) = reserve(&self.slots, &self.waits).await?;
         self.peak.fetch_max(self.capacity - self.slots.available_permits(), Ordering::Relaxed);
-        Ok(permit)
+        Ok((permit, waited))
     }
     /// Admit maintenance with foreground headroom. The shared FIFO queue prevents
     /// new foreground arrivals from overtaking queued maintenance. Never nest
@@ -87,11 +84,13 @@ impl Workspaces {
     /// # Errors
     /// Returns an error if an admission semaphore unexpectedly closes.
     pub async fn background(self: &Arc<Self>) -> Result<WorkspacePermit> {
-        let background = reserve(&self.background, &self.background_waits).await?;
+        let (background, first) = reserve(&self.background, &self.background_waits).await?;
+        let (global, second) = self.reserve().await?;
         Ok(WorkspacePermit {
-            _global: self.reserve().await?,
+            _global: global,
             _background: Some(background),
             _demand: None,
+            waited: first.saturating_add(second),
         })
     }
     pub(crate) fn foreground_waiting(&self) -> bool {
@@ -113,14 +112,20 @@ impl Workspaces {
         }
     }
 }
-async fn reserve(slots: &Arc<Semaphore>, waits: &AtomicU64) -> Result<OwnedSemaphorePermit> {
+async fn reserve(
+    slots: &Arc<Semaphore>,
+    waits: &AtomicU64,
+) -> Result<(OwnedSemaphorePermit, std::time::Duration)> {
     match slots.clone().try_acquire_owned() {
-        Ok(permit) => Ok(permit),
+        Ok(permit) => Ok((permit, std::time::Duration::ZERO)),
         Err(TryAcquireError::NoPermits) => {
             let _prior = waits.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 Some(count.saturating_add(1))
             });
-            slots.clone().acquire_owned().await.context("shared workspace pool closed")
+            let started = tokio::time::Instant::now();
+            let permit =
+                slots.clone().acquire_owned().await.context("shared workspace pool closed")?;
+            Ok((permit, started.elapsed()))
         }
         Err(TryAcquireError::Closed) => anyhow::bail!("shared workspace pool closed"),
     }
@@ -133,10 +138,17 @@ pub struct WorkspacePermit {
     _global: OwnedSemaphorePermit,
     _background: Option<OwnedSemaphorePermit>,
     _demand: Option<Demand>,
+    waited: std::time::Duration,
 }
 struct Demand(Arc<Workspaces>);
 impl Drop for Demand {
     fn drop(&mut self) {
         self.0.foreground.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+impl WorkspacePermit {
+    pub(crate) const fn waited(&self) -> std::time::Duration {
+        self.waited
     }
 }

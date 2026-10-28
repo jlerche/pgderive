@@ -116,6 +116,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             "incomplete relational input"
         );
         let workspace = self.workspaces.acquire().await?;
+        profile.admitted(&workspace);
         let mut sources = input.batch.into_iter();
         let mut values = ValidatedValues {
             batches: BTreeMap::new(),
@@ -160,7 +161,8 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         profile.mark("stage_arrangements");
         let output =
             values.batches.remove(&self.plan.definition().outputs[0]).context("missing output")?;
-        let _workspace = self.workspaces.acquire().await?;
+        let workspace = self.workspaces.acquire().await?;
+        profile.admitted(&workspace);
         Ok((candidate, output.materialize(self.limits).await?))
     }
     async fn binary_sealed(

@@ -68,8 +68,12 @@ impl Controller {
             self.last_commit = Some(commit);
         }
     }
-    pub(in crate::worker) fn record(&mut self, work: f64, duration: Duration) {
-        self.model.record(work, duration);
+    pub(in crate::worker) fn record(
+        &mut self,
+        work: super::features::Input,
+        observation: super::model::Observation,
+    ) {
+        self.model.record(work, observation);
     }
     pub(in crate::worker) fn decision(&self, epoch: &Epoch) -> Decision {
         let seal = |reason, predicted| Decision { wait: Duration::ZERO, reason, predicted };
@@ -80,11 +84,11 @@ impl Controller {
             return seal("cold_start", Duration::ZERO);
         };
         let work = epoch.work();
-        let predicted = Duration::from_secs_f64(model.seconds(work));
+        let predicted = Duration::try_from_secs_f64(model.seconds(work)).unwrap_or(Duration::MAX);
         // Bound ready work even when source age already exceeds the objective
         // or arrival estimates are unavailable. Freshness pressure below controls
         // waiting, rather than bypassing this learned exploration ceiling.
-        if work >= model.largest * 2.0 {
+        if model.exploring(work) {
             return seal("bounded_exploration", predicted);
         }
         let Some(arrival) = self.arrival else {
@@ -103,8 +107,9 @@ impl Controller {
         }
         // Waiting is useful only while another expected arrival plus its predicted
         // marginal work leaves freshness slack. Re-evaluate after every arrival.
-        let marginal = model.variable
-            * (work / f64::from(u32::try_from(epoch.transactions()).unwrap_or(u32::MAX)));
+        let marginal = (model.seconds(work.plus(work.average(epoch.transactions())))
+            - model.seconds(work))
+        .max(0.0);
         if slack < arrival.mul_add(1.25, marginal) {
             return seal("freshness_budget", predicted);
         }

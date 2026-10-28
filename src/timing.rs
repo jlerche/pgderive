@@ -21,10 +21,24 @@ impl Clock {
 pub struct Profile {
     clock: Clock,
     values: Option<std::collections::BTreeMap<String, u128>>,
+    admission: std::time::Duration,
 }
 impl Profile {
     pub(crate) fn new(enabled: bool) -> Self {
-        Self { clock: Clock::new(enabled), values: enabled.then(std::collections::BTreeMap::new) }
+        Self {
+            clock: Clock::new(enabled),
+            values: enabled.then(std::collections::BTreeMap::new),
+            admission: std::time::Duration::ZERO,
+        }
+    }
+    pub(crate) const fn admitted(&mut self, permit: &crate::engine::execution::WorkspacePermit) {
+        self.admission = self.admission.saturating_add(permit.waited());
+    }
+    pub(crate) const fn admission(&self) -> std::time::Duration {
+        self.admission
+    }
+    pub(crate) fn reset_clock(&mut self) {
+        self.clock = Clock::new(self.values.is_some());
     }
     pub(crate) fn mark(&mut self, name: impl Into<String>) {
         if let Some(values) = &mut self.values {

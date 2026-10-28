@@ -8,9 +8,11 @@ mod key;
 mod keyed;
 mod layout;
 mod lookup;
+pub mod measurement;
 pub(super) mod program;
 mod rows;
 mod stdout;
+pub mod work;
 pub use rows::ResultColumn;
 pub use stdout::SinkOutput;
 use tokio_postgres::Transaction;
@@ -117,7 +119,7 @@ impl Deltas {
         catalog: &Catalog,
         position: (u64, super::Lsn),
         program: &program::Program,
-    ) -> Result<()> {
+    ) -> Result<work::Mutations> {
         let sink = &program.sink;
         let context = if sink.output == SinkOutput::Stdout {
             serde_json::json!({"query_id":catalog.query,"schema":catalog.schema,

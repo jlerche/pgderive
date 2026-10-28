@@ -67,7 +67,11 @@ async fn recover_epoch(
         if let Some(epoch) = &mut epoch {
             epoch.push(transaction, stream.decode_us(), open.replication.execution)?;
         } else {
-            epoch = Some(super::epoch::Epoch::new(transaction, stream.decode_us())?);
+            epoch = Some(super::epoch::Epoch::new(
+                transaction,
+                stream.decode_us(),
+                open.source_keys.clone(),
+            )?);
         }
     }
     ensure!(transactions == boundary.transactions, "epoch replay transaction count mismatch");
@@ -80,7 +84,9 @@ async fn recover_epoch(
         open.query.time().checked_add(1) == Some(boundary.time),
         "epoch replay logical time mismatch"
     );
-    let input = open.input(&epoch.transaction().batch, boundary.time).await?;
+    let input = open
+        .input(&epoch.transaction().batch, boundary.time, &mut crate::timing::Profile::new(false))
+        .await?;
     let work = open.query.prepare_memtable(input, open.settings.memtable_bytes).await?;
     open.query.commit(work).map(|_| ())
 }
