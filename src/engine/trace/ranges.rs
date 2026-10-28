@@ -83,11 +83,6 @@ async fn parts<K: BatchData, V: BatchData>(
             })
             .collect());
     }
-    for part in &mut parts {
-        if let Some(Run::Object(object)) = &mut part.merging {
-            object.prepare_extent().await?;
-        }
-    }
     Ok(parts)
 }
 
@@ -102,7 +97,14 @@ pub(super) async fn select<K: BatchData, V: BatchData>(
     selected: &[bool],
     writer: &crate::engine::dataflow::Arrangement<K, V>,
 ) -> Result<Selection<K, V>> {
-    let parts = parts(runs, selected).await?;
+    let mut parts = parts(runs, selected).await?;
+    let mut selected = selected.to_vec();
+    super::budget::restrict(runs, cohorts, &mut selected, &mut parts)?;
+    for part in &mut parts {
+        if let Some(Run::Object(object)) = &mut part.merging {
+            object.prepare_extent().await?;
+        }
+    }
     let mut retained = Vec::new();
     let mut retained_cohorts = Vec::new();
     let mut merging = Vec::new();

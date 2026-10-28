@@ -13,6 +13,7 @@ pub(super) struct Span<K, V> {
     pub(super) range: Range<usize>,
     pub(super) first: (K, V),
     pub(super) last: (K, V),
+    pub(super) payload_bytes: u64,
     pub(super) pages: Option<Pages<K, V>>,
 }
 impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
@@ -33,6 +34,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             .checked_add(last)
             .and_then(|bytes| bytes.checked_add(pages))
             .and_then(|bytes| bytes.checked_mul(2))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Span<K, V>>()))
             .context("extent metadata charge overflow")
     }
     pub(crate) async fn slice(&self, range: Range<usize>) -> Result<Self> {
@@ -55,6 +57,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let mut stack = vec![(root.clone(), 0_usize)];
         let mut rows = 0_usize;
         let mut max_weight = 0_u64;
+        let mut payload_bytes = 0_u64;
         while let Some((address, offset)) = stack.pop() {
             super::work::spend(0).await;
             let end = offset.checked_add(address.blocks).context("slice block overflow")?;
@@ -62,6 +65,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                 continue;
             }
             if range.start <= offset && end <= range.end {
+                payload_bytes = payload_bytes
+                    .checked_add(address.payload_bytes)
+                    .context("slice payload byte overflow")?;
                 rows = rows.checked_add(address.rows).context("slice row overflow")?;
                 max_weight = max_weight.max(address.max_weight);
                 continue;
@@ -81,6 +87,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
                         .enumerate()
                         .filter(|(index, _)| range.contains(&(offset + index)))
                     {
+                        payload_bytes = payload_bytes
+                            .checked_add(leaf.block.length)
+                            .context("slice payload byte overflow")?;
                         rows = rows.checked_add(leaf.block.rows).context("slice row overflow")?;
                         max_weight = max_weight.max(leaf.block.max_weight);
                     }
@@ -92,7 +101,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         self.rows = rows;
         self.max_weight = max_weight;
         self.reference.blocks = Some(range.clone());
-        self.span = Some(Span { range, first, last, pages: None });
+        self.span = Some(Arc::new(Span { range, first, last, payload_bytes, pages: None }));
         Ok(())
     }
     pub(crate) async fn prepare_extent(&mut self) -> Result<()> {
@@ -100,7 +109,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             return Ok(());
         }
         let pages = self.extent_pages(&(0..self.block_count())).await?;
-        self.span.as_mut().context("missing prepared extent")?.pages = pages;
+        Arc::make_mut(self.span.as_mut().context("missing prepared extent")?).pages = pages;
         Ok(())
     }
     // Small selected extents carry the authenticated fences already read by
@@ -189,6 +198,37 @@ mod tests {
         let mut old = serde_json::to_value(full.reference())?;
         old.as_object_mut().context("reference object")?.remove("blocks");
         assert!(serde_json::from_value::<super::super::ObjectRef>(old).is_err());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn payload_summaries_match_encoded_ranges_and_nested_extents() -> Result<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let rows = Batch::from_updates((0..256_i64).map(|n| ((n, n.to_string().repeat(20)), 1)))?;
+        let reference = ObjectBatch::write(store.clone(), &rows, "payload-bytes", 1).await?;
+        let full =
+            ObjectBatch::<i64, String>::open(store.clone(), reference, "payload-bytes").await?;
+        let mut exact = 0;
+        let mut selected = 0;
+        for ordinal in 0..256 {
+            let (_, range) = full.block_range(ordinal).await?.context("missing payload block")?;
+            exact += range.end - range.start;
+            if (80..160).contains(&ordinal) {
+                selected += range.end - range.start;
+            }
+        }
+        assert_eq!(full.payload_bytes(), exact);
+        let outer = full.slice(30..220).await?;
+        let inner = outer.slice(50..130).await?;
+        assert_eq!(inner.payload_bytes(), selected);
+        let clone = inner.clone();
+        assert!(Arc::ptr_eq(
+            clone.span.as_ref().context("span")?,
+            inner.span.as_ref().context("span")?
+        ));
+        let reopened =
+            ObjectBatch::<i64, String>::open(store, inner.reference().clone(), "payload-bytes")
+                .await?;
+        assert_eq!(reopened.payload_bytes(), selected);
         Ok(())
     }
     fn weight(n: i64) -> i64 {

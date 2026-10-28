@@ -102,7 +102,7 @@ fn complete_composite_keys_survive_rebinding_but_partial_keys_do_not() -> Result
         let compiled = compile(sql, &native)?;
         let plan = relational::committed_plan(&native, &compiled)?;
         assert_eq!(
-            plan.definition().revision.starts_with("source-key-statistics-v3:"),
+            plan.definition().revision.starts_with("source-key-statistics-v4:"),
             optimized,
             "{sql}"
         );
@@ -144,7 +144,7 @@ fn complete_composite_keys_survive_rebinding_but_partial_keys_do_not() -> Result
             relational::committed_plan(&native, &compiled)?
                 .definition()
                 .revision
-                .starts_with("source-key-statistics-v3:"),
+                .starts_with("source-key-statistics-v4:"),
             optimized
         );
     }

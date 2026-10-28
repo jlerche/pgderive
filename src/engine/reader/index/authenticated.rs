@@ -49,6 +49,7 @@ impl<T: Ord + Clone + Serialize> Authenticated<T> {
                 && address.last == expected.last
                 && address.blocks == expected.blocks
                 && address.rows == expected.rows
+                && address.payload_bytes == expected.payload_bytes
                 && address.max_weight == expected.max_weight
                 && address.depth == expected.depth,
             "authenticated index context mismatch"
@@ -81,6 +82,7 @@ mod tests {
             last: key,
             blocks: 1,
             rows: 1,
+            payload_bytes: 1,
             max_weight: 1,
             depth: 0,
         };
@@ -98,13 +100,26 @@ mod tests {
         for _ in 0..100 {
             assert!(Arc::ptr_eq(&node, &authenticated.checked(&address, 3)?));
         }
+        let mut missing = serde_json::to_value(&address)?;
+        missing.as_object_mut().context("address object")?.remove("payload_bytes");
+        assert!(serde_json::from_value::<Address<u64>>(missing).is_err());
+        let mut forged = address.clone();
+        forged.payload_bytes += 1;
+        assert!(node.validate(&forged, 3).is_err());
+        assert!(node.validate_structure(&forged, 3).is_err());
+        let mut overflow = node.as_ref().clone();
+        if let Node::Branch(children) = &mut overflow {
+            children[0].payload_bytes = u64::MAX;
+        }
+        assert!(overflow.summary().is_err());
+        assert!(overflow.validate_structure(&address, 3).is_err());
         let mut relocated = address.clone();
         relocated.offset = 10;
         assert!(authenticated.checked(&relocated, 11).is_ok());
         relocated.offset = 1;
         assert!(authenticated.checked(&relocated, 11).is_err());
         assert!(authenticated.checked(&address, 2).is_err());
-        for field in 0..8 {
+        for field in 0..9 {
             let mut wrong = address.clone();
             match field {
                 0 => wrong.first += 1,
@@ -114,6 +129,7 @@ mod tests {
                 4 => wrong.depth += 1,
                 5 => wrong.max_weight += 1,
                 6 => wrong.length += 1,
+                7 => wrong.payload_bytes += 1,
                 _ => wrong.hash = "2".repeat(64),
             }
             assert!(authenticated.checked(&wrong, 100).is_err());

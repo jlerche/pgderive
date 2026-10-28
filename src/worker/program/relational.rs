@@ -258,8 +258,10 @@ fn declared_plan(
     contract.validate()?;
     let identity =
         format!("{:x}", Sha256::digest(serde_json::to_vec(&(contract, compiled, certified))?));
+    // v4 requires authenticated payload-byte summaries; all older registrations
+    // must rebuild rather than opening a mixture of physical codecs.
     let revision =
-        if certified.is_empty() { "relational-additive-v3" } else { "source-key-statistics-v3" };
+        if certified.is_empty() { "relational-additive-v4" } else { "source-key-statistics-v4" };
     let Some(Node::Output { id: output, .. }) = ir.nodes.last() else {
         anyhow::bail!("relational program must end in an output node");
     };

@@ -34,6 +34,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             let compacted = match subset.compact_with(writer).await {
                 Ok(compacted) => compacted,
                 Err(error) if error.is::<super::merged::CoefficientOverflow>() => {
+                    crate::engine::execution::service::escalation(true);
                     return writer.compact(self).await;
                 }
                 Err(error) => return Err(error),
@@ -44,6 +45,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
             }
         }
         if retained.len() > 128 {
+            crate::engine::execution::service::escalation(false);
             return writer.compact(self).await;
         }
         let generation = self.generation.checked_add(1).context("trace generation overflow")?;

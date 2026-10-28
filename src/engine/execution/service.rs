@@ -27,6 +27,12 @@ pub struct Ledger {
     read_bytes: AtomicU64,
     write_requested_bytes: AtomicU64,
     written_bytes: AtomicU64,
+    overflow_compactions: AtomicU64,
+    root_limit_compactions: AtomicU64,
+    selected_bytes: AtomicU64,
+    selected_runs: AtomicU64,
+    oversized_selections: AtomicU64,
+    pressure_selections: AtomicU64,
     retained_bytes: AtomicU64,
     referenced_pack_bytes: AtomicU64,
     sparse_pack_slack_bytes: AtomicU64,
@@ -41,6 +47,18 @@ pub struct Report {
     pub read_bytes: u64,
     pub write_requested_bytes: u64,
     pub written_bytes: u64,
+    /// Physical selection charge or explicit progress exception count.
+    pub overflow_compactions: u64,
+    /// Physical selection charge or explicit progress exception count.
+    pub root_limit_compactions: u64,
+    /// Physical selection charge or explicit progress exception count.
+    pub selected_bytes: u64,
+    /// Physical selection charge or explicit progress exception count.
+    pub selected_runs: u64,
+    /// Physical selection charge or explicit progress exception count.
+    pub oversized_selections: u64,
+    /// Physical selection charge or explicit progress exception count.
+    pub pressure_selections: u64,
     pub retained_bytes: u64,
     pub referenced_pack_bytes: u64,
     pub sparse_pack_slack_bytes: u64,
@@ -56,6 +74,12 @@ impl Ledger {
             read_bytes: self.read_bytes.load(Ordering::Relaxed),
             write_requested_bytes: self.write_requested_bytes.load(Ordering::Relaxed),
             written_bytes: self.written_bytes.load(Ordering::Relaxed),
+            overflow_compactions: self.overflow_compactions.load(Ordering::Relaxed),
+            root_limit_compactions: self.root_limit_compactions.load(Ordering::Relaxed),
+            selected_bytes: self.selected_bytes.load(Ordering::Relaxed),
+            selected_runs: self.selected_runs.load(Ordering::Relaxed),
+            oversized_selections: self.oversized_selections.load(Ordering::Relaxed),
+            pressure_selections: self.pressure_selections.load(Ordering::Relaxed),
             retained_bytes: self.retained_bytes.load(Ordering::Relaxed),
             referenced_pack_bytes: self.referenced_pack_bytes.load(Ordering::Relaxed),
             sparse_pack_slack_bytes: self.sparse_pack_slack_bytes.load(Ordering::Relaxed),
@@ -129,3 +153,24 @@ pub fn coverage(physical: u64, live: u64) {
 }
 #[cfg(test)]
 mod tests;
+
+/// Record referenced payload/input bytes and physical fan-in, not transferred I/O.
+pub fn selection(bytes: u64, runs: u64, oversized: bool, pressure: bool) {
+    let _current = CURRENT.try_with(|c| {
+        let ledger = &c.ledger;
+        add(&ledger.selected_bytes, bytes);
+        add(&ledger.selected_runs, runs);
+        add(&ledger.oversized_selections, u64::from(oversized));
+        add(&ledger.pressure_selections, u64::from(pressure));
+    });
+}
+
+/// Count whole-state correctness/capacity escalation outside ordinary selection.
+pub fn escalation(overflow: bool) {
+    if let Some(ledger) = current() {
+        add(
+            if overflow { &ledger.overflow_compactions } else { &ledger.root_limit_compactions },
+            1,
+        );
+    }
+}

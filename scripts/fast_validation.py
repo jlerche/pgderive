@@ -68,7 +68,7 @@ def merge_events(value):
     return isinstance(value, list) and all(type(rows) is int and rows >= 0 for rows in value)
 
 
-SERVICE_FIELDS = ('work_units','work_bytes','yields','requests','read_requested_bytes',
+SERVICE_FIELDS = ('overflow_compactions','root_limit_compactions','selected_bytes','selected_runs','oversized_selections','pressure_selections','work_units','work_bytes','yields','requests','read_requested_bytes',
                   'read_bytes','write_requested_bytes','written_bytes','retained_bytes',
                   'referenced_pack_bytes','sparse_pack_slack_bytes')
 

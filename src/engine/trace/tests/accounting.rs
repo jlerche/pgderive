@@ -46,6 +46,18 @@ async fn retained_memory_is_charged_once_and_replacements_recompute_exact_totals
         assert_eq!(one.clone().memory_charge(), initial_charge);
     }
     assert_eq!(SERIALIZATIONS.load(Ordering::Relaxed), 100);
+    let mut parts = one
+        .runs
+        .iter()
+        .map(|run| super::ranges::Parts { retained: vec![], merging: Some(run.clone()) })
+        .collect::<Vec<_>>();
+    super::budget::restrict(
+        &one.runs,
+        &[one.runs.len()],
+        &mut vec![true; one.runs.len()],
+        &mut parts,
+    )?;
+    assert_eq!(SERIALIZATIONS.load(Ordering::Relaxed), 100);
     let delta = Batch::from_updates((0..10).map(|n| ((n, Measured(n)), -1)))?;
     let delta_charge = expected(&delta)?;
     let full =

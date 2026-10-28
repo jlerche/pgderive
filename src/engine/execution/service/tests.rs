@@ -31,6 +31,10 @@ async fn oversized_indivisible_work_and_cancellation_do_not_wait_for_idle() -> R
         retained(123);
         coverage(1000, 200);
         coverage(1000, 900);
+        selection(123, 2, false, false);
+        selection(456, 3, true, true);
+        escalation(true);
+        escalation(false);
         Ok::<_, anyhow::Error>(())
     })
     .await;
@@ -41,6 +45,12 @@ async fn oversized_indivisible_work_and_cancellation_do_not_wait_for_idle() -> R
     assert_eq!(report.retained_bytes, 123);
     assert_eq!(report.referenced_pack_bytes, 2000);
     assert_eq!(report.sparse_pack_slack_bytes, 800);
+    assert_eq!(report.selected_bytes, 579);
+    assert_eq!(report.selected_runs, 5);
+    assert_eq!(report.oversized_selections, 1);
+    assert_eq!(report.pressure_selections, 1);
+    assert_eq!(report.overflow_compactions, 1);
+    assert_eq!(report.root_limit_compactions, 1);
     let (send, ready) = tokio::sync::oneshot::channel();
     let worker = pool.clone();
     let task = tokio::spawn(async move {

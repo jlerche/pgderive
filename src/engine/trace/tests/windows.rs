@@ -183,7 +183,13 @@ async fn window_subset_overflow_preserves_excluded_cohort_cancellation() -> Resu
     let batch = Batch::from_updates([((0, 1), 1)])?;
     let pending = trace.append_validated(Run::Memory(Arc::new(batch)), 2)?;
     let expected = pending.materialize().await?;
-    let flushed = writer.flush(&pending).await?;
+    let (flushed, service) = crate::engine::execution::service::scope(
+        std::sync::Arc::new(crate::engine::execution::Workspaces::new(2)?),
+        writer.flush(&pending),
+    )
+    .await;
+    let flushed = flushed?;
+    assert_eq!(service.overflow_compactions, 1);
     assert_eq!(flushed.cohorts.len(), 1);
     assert_eq!(flushed.materialize().await?, expected);
     assert_eq!(flushed.tuple_weight(&(0, 0)).await?, i64::MAX);

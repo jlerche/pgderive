@@ -110,7 +110,7 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) rows: usize,
     pub(super) max_weight: u64,
     pub(super) cache: Arc<BlockCache>,
-    pub(super) span: Option<super::slices::Span<K, V>>,
+    pub(super) span: Option<Arc<super::slices::Span<K, V>>>,
 }
 
 #[derive(Clone)]
@@ -320,6 +320,12 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         self.span.as_ref().map_or_else(
             || self.index.node.as_ref().map(|node| &node.last),
             |span| Some(&span.last),
+        )
+    }
+    pub(crate) fn payload_bytes(&self) -> u64 {
+        self.span.as_ref().map_or_else(
+            || self.index.node.as_ref().map_or(0, |node| node.payload_bytes),
+            |span| span.payload_bytes,
         )
     }
     pub(crate) const fn row_count(&self) -> usize {

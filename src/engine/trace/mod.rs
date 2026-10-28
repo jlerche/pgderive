@@ -1,4 +1,5 @@
 //! Immutable trace generations, weighted merging and pinned membership.
+mod budget;
 mod cache;
 mod coefficient;
 mod flush;

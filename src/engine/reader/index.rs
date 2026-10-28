@@ -25,6 +25,7 @@ pub(super) struct Address<T> {
     pub(super) last: T,
     pub(super) blocks: usize,
     pub(super) rows: usize,
+    pub(super) payload_bytes: u64,
     pub(super) max_weight: u64,
     pub(super) depth: usize,
 }
@@ -54,6 +55,7 @@ impl<T> Address<T> {
     pub(super) fn validate(&self, bytes: u64) -> Result<()> {
         ensure!(
             self.blocks > 0
+                && self.payload_bytes > 0
                 && self.rows >= self.blocks
                 && self.max_weight > 0
                 && self.max_weight <= i64::MIN.unsigned_abs()
@@ -72,6 +74,7 @@ impl<T> Address<T> {
 }
 impl<T: Ord + Clone> Node<T> {
     fn summary(&self) -> Result<Address<T>> {
+        let mut payload_bytes = 0_u64;
         let (first, last, blocks, rows, max_weight, depth) = match self {
             Self::Leaf(leaves) => {
                 let first = leaves.first().context("empty index leaf")?;
@@ -91,6 +94,9 @@ impl<T: Ord + Clone> Node<T> {
                                 .is_some_and(|end| end <= leaf.pack.bytes),
                         "invalid index leaf block"
                     );
+                    payload_bytes = payload_bytes
+                        .checked_add(leaf.block.length)
+                        .context("index payload byte overflow")?;
                     rows = rows.checked_add(leaf.block.rows).context("index row count overflow")?;
                     max_weight = max_weight.max(leaf.block.max_weight);
                 }
@@ -125,6 +131,9 @@ impl<T: Ord + Clone> Node<T> {
                     ensure!(child.depth == first.depth, "uneven index tree depth");
                     blocks =
                         blocks.checked_add(child.blocks).context("index block count overflow")?;
+                    payload_bytes = payload_bytes
+                        .checked_add(child.payload_bytes)
+                        .context("index payload byte overflow")?;
                     rows = rows.checked_add(child.rows).context("index row count overflow")?;
                     max_weight = max_weight.max(child.max_weight);
                 }
@@ -139,6 +148,7 @@ impl<T: Ord + Clone> Node<T> {
             last,
             blocks,
             rows,
+            payload_bytes,
             max_weight,
             depth,
         })
@@ -151,6 +161,7 @@ impl<T: Ord + Clone> Node<T> {
                 && actual.last == address.last
                 && actual.blocks == address.blocks
                 && actual.rows == address.rows
+                && actual.payload_bytes == address.payload_bytes
                 && actual.max_weight == address.max_weight
                 && actual.depth == address.depth,
             "index node summary mismatch"
@@ -524,6 +535,7 @@ impl<T> Node<T> {
         let mut rows = 0_usize;
         let mut blocks = 0_usize;
         let mut max_weight = 0_u64;
+        let mut payload_bytes = 0_u64;
         match self {
             Self::Leaf(leaves) => {
                 ensure!(
@@ -540,6 +552,9 @@ impl<T> Node<T> {
                             .is_some_and(|end| end <= leaf.pack.bytes),
                         "index leaf exceeds data pack"
                     );
+                    payload_bytes = payload_bytes
+                        .checked_add(leaf.block.length)
+                        .context("index payload byte overflow")?;
                     rows = rows.checked_add(leaf.block.rows).context("index row count overflow")?;
                     blocks += 1;
                     max_weight = max_weight.max(leaf.block.max_weight);
@@ -561,6 +576,9 @@ impl<T> Node<T> {
                         .offset
                         .checked_add(child.length)
                         .context("index child range overflow")?;
+                    payload_bytes = payload_bytes
+                        .checked_add(child.payload_bytes)
+                        .context("index payload byte overflow")?;
                     rows = rows.checked_add(child.rows).context("index row count overflow")?;
                     blocks =
                         blocks.checked_add(child.blocks).context("index block count overflow")?;
@@ -569,7 +587,10 @@ impl<T> Node<T> {
             }
         }
         ensure!(
-            rows == address.rows && blocks == address.blocks && max_weight == address.max_weight,
+            rows == address.rows
+                && blocks == address.blocks
+                && max_weight == address.max_weight
+                && payload_bytes == address.payload_bytes,
             "index structure statistics mismatch"
         );
         Ok(())
@@ -672,6 +693,7 @@ mod tests {
             last: value,
             blocks: 1,
             rows: 1,
+            payload_bytes: 1,
             max_weight: 1,
             depth: 0,
         };
@@ -708,6 +730,7 @@ mod tests {
                         last: ordinal,
                         blocks: 1,
                         rows: 1,
+                        payload_bytes: 1,
                         max_weight: 1,
                         depth: 0,
                     })
@@ -731,6 +754,7 @@ mod tests {
             last: 0,
             blocks: 1,
             rows: 1,
+            payload_bytes: 1,
             max_weight: 1,
             depth: 0,
         };
@@ -746,6 +770,7 @@ mod tests {
             last: 1,
             blocks: 2,
             rows: 2,
+            payload_bytes: 2,
             max_weight: 1,
             depth: 1,
         };
