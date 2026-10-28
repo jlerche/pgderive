@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned sequential projection CDC, native bag codec and restart qualification."""
-from worker_harness import run_cases
+from worker_harness import History, run_cases
 from harness_control import commit_proxy
 import collections
 import json
@@ -59,10 +59,6 @@ def qualify(output, command, local=False):
         proxy, port = commit_proxy(output/'sql-fault.jsonl', 'after', once=True,
                                    marker='/* pgderive:epoch */')
         fixture.environment['PGDERIVE__POSTGRES__PORT'] = str(port)
-        worker = fixture.start(command, 'first')
-        ready = worker.event('ready')
-        fixture.verify()
-        assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
         changes = [
             f"UPDATE {fixture.name}.auction SET group_id=1,enabled=false WHERE id=2; UPDATE {fixture.name}.bid SET price=9 WHERE id=2",
             f"UPDATE {fixture.name}.auction SET group_id=NULL,enabled=NULL WHERE id=2; DELETE FROM {fixture.name}.auction WHERE id=1",
@@ -71,25 +67,17 @@ def qualify(output, command, local=False):
             f"DELETE FROM {fixture.name}.auction WHERE id=100; UPDATE {fixture.name}.bid SET price=price+1 WHERE id=3",
             f"UPDATE {fixture.name}.bid SET price=price+1 WHERE id=4",  # complete empty query delta tick
         ]
-        for index, change in enumerate(changes, 1):
-            fixture.sql('BEGIN;' + change + ';COMMIT')
-            worker.event('ready' if index == 1 else 'published', minimum_time=ready['time'] + index)
-            fixture.verify()
-        worker.abort()
-        faults = [json.loads(line) for line in (output / 'sql-fault.jsonl').read_text().splitlines()[1:]]
-        assert len(faults) == 1 and faults[0]['server_committed'] is True, faults
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
-        fixture.rejected(command, 'changed-order', fixture.query.replace('(0-a.group_id) AS g, a.category AS category', 'a.category AS category, (0-a.group_id) AS g') if local else fixture.query.replace('a.group_id AS g, a.category AS category', 'a.category AS category, a.group_id AS g'))
-        fixture.rejected(command, 'changed-alias', fixture.query.replace('AS active', 'AS renamed'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == prior
-        fixture.query = fixture.query.replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('a.enabled', '"X".enabled')
-        resumed = fixture.start(command, 'resumed', maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot'] == ready['slot'] and reopened['time'] == ready['time'] + len(changes)
-        fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled,token) VALUES(101,'after restart',NULL,false,NULL)")
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        def initial():
+            assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
+        def committed_fault():
+            faults = [json.loads(line) for line in (output / 'sql-fault.jsonl').read_text().splitlines()[1:]]
+            assert len(faults) == 1 and faults[0]['server_committed'] is True, faults
+        ready = fixture.run_history(command, History(changes,
+            f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled,token) VALUES(101,'after restart',NULL,false,NULL)",
+            fixture.query.replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('a.enabled', '"X".enabled'),
+            [('changed-order',fixture.query.replace('(0-a.group_id) AS g, a.category AS category', 'a.category AS category, (0-a.group_id) AS g') if local else fixture.query.replace('a.group_id AS g, a.category AS category', 'a.category AS category, a.group_id AS g')),
+             ('changed-alias',fixture.query.replace('AS active', 'AS renamed'))], verify_reopen=False),
+            initial=initial, after_stop=committed_fault)
         if local:
             before = fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p")
             sink_before = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}")

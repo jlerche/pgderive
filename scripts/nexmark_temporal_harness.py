@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Named sessions, recorded processing buckets and exact daily statistics."""
-from worker_harness import run_cases
+from worker_harness import History, run_cases
+from contextlib import contextmanager
 import collections
 import datetime
 from decimal import Decimal
@@ -128,9 +129,6 @@ def qualify(output,command,query,instant):
         fixture.rejected(command,'unsupported',fixture.query+' ORDER BY '+fixture.labels[0])
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             ('bridge',f"INSERT INTO {fixture.name}.bid(id,auction,price,bidder,date_time,processing_time) VALUES(312,900,9999,900,'2000-01-01 00:00:09','2000-01-01 00:00:09'),(313,900,10000,900,'2000-01-01 00:00:11','2000-01-01 00:00:10'); UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=1"),
             ('split',f"DELETE FROM {fixture.name}.bid WHERE id=312; UPDATE {fixture.name}.bid SET date_time='2000-01-01 00:00:09.999999',price=NULL WHERE id=305; UPDATE {fixture.name}.bid SET price=1 WHERE id=320"),
@@ -141,28 +139,18 @@ def qualify(output,command,query,instant):
             ('delete-partition',f"DELETE FROM {fixture.name}.bid WHERE bidder IN(900,901); DELETE FROM {fixture.name}.bid WHERE id=309; UPDATE {fixture.name}.bid SET auction=NULL,bidder=NULL,price=NULL WHERE id=310"),
             ('empty-input',f"UPDATE {fixture.name}.auction SET group_id=3 WHERE id=2"),
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
-        for index,(label,change) in enumerate(changes,1):
-            before = fixture.bag() if query=='q12' and label=='event-only' else None
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
+        @contextmanager
+        def observe(index):
+            before = fixture.bag() if query=='q12' and changes[index-1][0]=='event-only' else None
+            yield
             if before is not None:
                 assert fixture.bag()==before,'q12 must not use changed event time as processing time'
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
         changed = fixture.query.replace('10 seconds','11 seconds') if query in ('q11','q12') else fixture.query.replace('10000','10001')
-        fixture.rejected(command,'changed-semantics',changed)
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        fixture.run_history(command, History([change for _,change in changes],
+            f'DELETE FROM {fixture.name}.bid',
+            fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"'),
+            [('changed-semantics',changed)]),
+            initial=lambda: fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK'), step=observe)
         (output/'result.json').write_text(json.dumps({'query':query,'time':'timestamptz' if instant else 'timestamp','postgres':'exact weighted bag','memory':'independent adjacency components / integer buckets / exact price statistics','restart':'cold same slot','session':'gap >=10 starts new component; late bridges merge and deletion splits','processing':'recorded source column, event-only change does not affect q12','statistics':'exact integral extrema/sum and PG-scale Decimal average','nulls':'NULL bidder/auction, q11 excludes NULL time, q12/q17 keep NULL bucket','infinities':'retained with guarded equal-time sessions','identity':'changed gap/stride/threshold rejected'})+'\n')
 
 if __name__ == '__main__':

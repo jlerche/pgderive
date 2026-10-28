@@ -3,7 +3,6 @@
 import json
 import os
 import pathlib
-import subprocess
 import sys
 import time
 
@@ -11,30 +10,18 @@ from query_health_harness import health
 from query_lifecycle_harness import configured, grouped, rejected
 from query_rebuild_harness import command, verify
 from worker_harness import Worker
+from harness_control import Server
 
 
 def qualify(output, binary):
     name = f'pgderive-health-slot-{os.getpid()}'
     completed = False
     old_port = os.environ.get('PGDERIVE_TEST_POSTGRES_PORT')
-    subprocess.run(['docker', 'run', '--detach', '--name', name,
-        '--tmpfs', '/var/lib/postgresql/data:rw,size=512m',
-        '--publish', '127.0.0.1::5432', '-e', 'POSTGRES_PASSWORD=postgres',
-        '-e', 'POSTGRES_DB=pgderive_dev', 'postgres:17', '-c', 'wal_level=logical',
-        '-c', 'max_slot_wal_keep_size=64MB', '-c', 'max_wal_size=128MB',
-        '-c', 'min_wal_size=32MB'], check=True, capture_output=True)
+    server = Server(output, 'postgres', name=name, size='512m', flags=['max_slot_wal_keep_size=64MB', 'max_wal_size=128MB', 'min_wal_size=32MB'],
+                    metadata='postgres.json', failure='postgres-failure.log')
     try:
-        inspection = json.loads(subprocess.check_output(['docker', 'inspect', name]))[0]
-        assert inspection['Mounts'] == [], 'persistent database storage is forbidden'
-        assert '/var/lib/postgresql/data' in inspection['HostConfig']['Tmpfs']
-        port = inspection['NetworkSettings']['Ports']['5432/tcp'][0]['HostPort']
+        port = server.port
         os.environ['PGDERIVE_TEST_POSTGRES_PORT'] = port
-        (output/'postgres.json').write_text(json.dumps({'container':name, 'port':port,
-            'tmpfs':inspection['HostConfig']['Tmpfs'], 'mounts':inspection['Mounts']}, indent=2)+'\n')
-        deadline = time.monotonic()+30
-        while subprocess.run(['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','postgres','-d','pgderive_dev'], capture_output=True).returncode:
-            assert time.monotonic() < deadline, 'owned PostgreSQL startup timed out'
-            time.sleep(.1)
         fixture = grouped(output)
         try:
             config = configured(fixture)
@@ -105,12 +92,7 @@ def qualify(output, binary):
             os.environ.pop('PGDERIVE_TEST_POSTGRES_PORT',None)
         else:
             os.environ['PGDERIVE_TEST_POSTGRES_PORT'] = old_port
-        if completed:
-            subprocess.run(['docker','rm','--force',name],check=True,capture_output=True)
-        else:
-            with (output/'postgres-failure.log').open('w') as log:
-                subprocess.run(['docker','logs',name],stdout=log,stderr=log)
-            print(f'Preserved failed owned tmpfs PostgreSQL: {name}',file=sys.stderr)
+        server.finish(completed)
 
 
 if __name__ == '__main__':

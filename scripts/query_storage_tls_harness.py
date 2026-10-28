@@ -5,8 +5,8 @@ import json
 import pathlib
 import subprocess
 import sys
-import time
 
+from harness_control import start_recorded
 from query_lifecycle_harness import configured, grouped, rejected
 from query_rebuild_harness import command, verify
 from worker_harness import Worker
@@ -33,14 +33,8 @@ def certificates(output, host):
 
 def proxy(output, certificate, key, host):
     log_path = output/'proxy.jsonl'
-    with log_path.open('w') as log:
-        process = subprocess.Popen([sys.executable,'-u','scripts/s3_tls_proxy.py','--host',host,
-            '--certificate',str(certificate),'--key',str(key)],stdout=log,stderr=log)
-    deadline = time.monotonic()+10
-    while not log_path.read_text().splitlines():
-        assert process.poll() is None and time.monotonic()<deadline,log_path.read_text()
-        time.sleep(.05)
-    ready = json.loads(log_path.read_text().splitlines()[0])
+    process, ready = start_recorded([sys.executable,'-u','scripts/s3_tls_proxy.py','--host',host,
+        '--certificate',str(certificate),'--key',str(key)], log_path)
     return process, ready['port'], log_path
 
 

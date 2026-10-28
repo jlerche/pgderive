@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Named q0/q2 exact weighted projection, remainder, CDC and cold restart."""
-from worker_harness import run_cases
+from worker_harness import History, run_cases
 import collections
 import json
 import pathlib
@@ -47,10 +47,6 @@ def qualify(output,command,query,mode):
         fixture.rejected(command,'unsupported',invalid)
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
-        assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}'))>1
         changes = [
             f"INSERT INTO {fixture.name}.auction(id,category,enabled) VALUES(400,'new',true); INSERT INTO {fixture.name}.bid(id,auction,price,bidder,date_time,extra) VALUES(400,246,9,5,NULL,'new'),(401,-246,NULL,NULL,NULL,NULL)",
             f"UPDATE {fixture.name}.bid SET auction=124,price=NULL WHERE id=300; UPDATE {fixture.name}.auction SET enabled=NULL WHERE id=400",
@@ -59,28 +55,16 @@ def qualify(output,command,query,mode):
             f"SET TIME ZONE 'America/New_York'; UPDATE {fixture.name}.bid SET date_time='2024-11-03 01:30:00.123456-04',bidder=NULL WHERE id=307; UPDATE {fixture.name}.auction SET group_id=NULL WHERE id=2",
             f"UPDATE {fixture.name}.auction SET group_id=3 WHERE id=2",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
-        for index,change in enumerate(changes,1):
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')
         changed = fixture.query.replace(',123)',',124)') if query=='q2' else fixture.query.replace('SELECT auction,','SELECT price AS auction,')
-        fixture.rejected(command,'changed-query',changed)
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p')==prior
         if query=='q2':
-            fixture.query = fixture.query.replace('pg_catalog.mod(auction,123)','auction % 123')
+            normalized = fixture.query.replace('pg_catalog.mod(auction,123)','auction % 123')
         else:
-            fixture.query = fixture.query.replace('SELECT auction,bidder,price,date_time,extra', 'SELECT "B".auction,"B".bidder,"B".price,"B".date_time,"B".extra').replace(f'FROM {fixture.name}.bid',f'FROM {fixture.name}.bid AS "B"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'DELETE FROM {fixture.name}.bid')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+            normalized = fixture.query.replace('SELECT auction,bidder,price,date_time,extra', 'SELECT "B".auction,"B".bidder,"B".price,"B".date_time,"B".extra').replace(f'FROM {fixture.name}.bid',f'FROM {fixture.name}.bid AS "B"')
+        def initial():
+            assert int(fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}'))>1
+            fixture.sql(f'BEGIN; DELETE FROM {fixture.name}.bid; ROLLBACK')
+        fixture.run_history(command, History(changes, f'DELETE FROM {fixture.name}.bid', normalized,
+            [('changed-query',changed)]), initial=initial)
         (output/'result.json').write_text(json.dumps({'query':query,'mode':mode,'postgres':'exact weighted bag','memory':'independent raw projection and integer divisibility','restart':'cold same slot','changes':'inserts updates deletes NULLs PK moves complete transactions and rollback','identity':'alias/remainder syntax normalize; changed query rejected','empty_tick':'other published relation changes advance progress'})+'\n')
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Recorded processing-time predecessor with native signed modulo key lowering."""
-from worker_harness import run_modes
+from worker_harness import History, run_modes
+from contextlib import contextmanager
 import collections
 import json
 import pathlib
@@ -76,9 +77,6 @@ def qualify(output,command,mode):
             fixture.rejected(command,label,query)
         assert fixture.sql(f"SELECT to_regclass('{name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{name}%' ").strip()=='0'
-        worker = fixture.start(command,'first')
-        ready = worker.event('ready')
-        fixture.verify()
         changes = [
             f"INSERT INTO {name}.side_input VALUES(20,1,'2000-01-01 00:00:08','simultaneous'); UPDATE {name}.bid SET processing_time='2000-01-01 00:00:08' WHERE id IN(300,301)",
             f"UPDATE {name}.bid SET date_time='2024-03-10 03:00:00-07' WHERE id IN(300,301)",
@@ -90,29 +88,20 @@ def qualify(output,command,mode):
             f"UPDATE {name}.side_input SET key=NULL,date_time=NULL WHERE id=23; UPDATE {name}.bid SET processing_time=NULL WHERE id=330",
             f"UPDATE {name}.auction SET category=NULL WHERE id=1",
         ]
-        fixture.sql(f'BEGIN; DELETE FROM {name}.bid; DELETE FROM {name}.side_input; ROLLBACK')
-        for index,change in enumerate(changes,1):
+        @contextmanager
+        def observe(index):
             values = fixture.values()
-            fixture.sql('BEGIN;'+change+';COMMIT')
-            worker.event('published',minimum_time=ready['time']+index)
-            fixture.verify()
+            yield
             if index==2:
                 assert fixture.values()==values,'event-time-only update changed predecessor values'
-        worker.abort()
-        prior = fixture.sql(f'SELECT row_to_json(p) FROM {name}.pgderive_progress p')
-        fixture.rejected(command,'changed-divisor',fixture.query.replace('10000','9999'))
-        fixture.rejected(command,'changed-bound',fixture.query.replace('s.date_time<=b.processing_time','s.date_time<b.processing_time'))
-        assert fixture.sql(f'SELECT row_to_json(p) FROM {name}.pgderive_progress p')==prior
-        fixture.query = fixture.query.replace('s.key=mod(b.auction,10000) AND s.date_time<=b.processing_time','b.processing_time>=s.date_time AND b.auction%10000=s.key')
-        fixture.query = fixture.query.replace('b.','"B".').replace('bid b','bid AS "B"')
-        resumed = fixture.start(command,'resumed',maximum=1)
-        reopened = resumed.event('ready')
-        assert reopened['slot']==ready['slot'] and reopened['time']==ready['time']+len(changes)
-        fixture.verify()
-        fixture.sql(f'BEGIN; DELETE FROM {name}.bid; DELETE FROM {name}.side_input; COMMIT')
-        resumed.event('published')
-        resumed.finish()
-        fixture.verify()
+        normalized = fixture.query.replace('s.key=mod(b.auction,10000) AND s.date_time<=b.processing_time','b.processing_time>=s.date_time AND b.auction%10000=s.key')
+        normalized = normalized.replace('b.','"B".').replace('bid b','bid AS "B"')
+        fixture.run_history(command, History(changes,
+            f'BEGIN; DELETE FROM {name}.bid; DELETE FROM {name}.side_input; COMMIT', normalized,
+            [('changed-divisor',fixture.query.replace('10000','9999')),
+             ('changed-bound',fixture.query.replace('s.date_time<=b.processing_time','s.date_time<b.processing_time'))]),
+            initial=lambda: fixture.sql(f'BEGIN; DELETE FROM {name}.bid; DELETE FROM {name}.side_input; ROLLBACK'),
+            step=observe)
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent signed modulo and deterministic predecessor','transactions':'complete simultaneous sources; late/tied right updates; NULLs/infinities; modulo collisions; source/key/time/PK changes; rollback; empty input tick','processing':'recorded source field; event-only update preserves selected values','restart':'cold same slot; MOD/% and aliases normalize','identity':'changed divisor or bound rejected'})+'\n')
 
 if __name__=='__main__':

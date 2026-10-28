@@ -15,34 +15,7 @@ from query_capacity_harness import inventory
 from query_lifecycle_harness import configured, grouped, rejected, verify_packed_root
 from query_rebuild_harness import command, pin_roots, verify
 from worker_harness import Worker
-
-
-class Server:
-    def __init__(self, output, label):
-        self.output = output
-        self.name = f'pgderive-recovery-{os.getpid()}-{label}'
-        subprocess.run(['docker','run','-d','--name',self.name,
-            '--tmpfs','/var/lib/postgresql/data:rw,size=1g','-p','127.0.0.1::5432',
-            '-e','POSTGRES_PASSWORD=postgres','-e','POSTGRES_DB=pgderive_dev',
-            'postgres:17','-c','wal_level=logical','-c','max_slot_wal_keep_size=64MB'],
-            check=True,capture_output=True)
-        info = json.loads(subprocess.check_output(['docker','inspect',self.name]))[0]
-        assert info['Mounts']==[] and '/var/lib/postgresql/data' in info['HostConfig']['Tmpfs']
-        self.port = info['NetworkSettings']['Ports']['5432/tcp'][0]['HostPort']
-        (output/f'{label}-postgres.json').write_text(json.dumps({'container':self.name,
-            'port':self.port,'tmpfs':info['HostConfig']['Tmpfs'],'mounts':info['Mounts']})+'\n')
-        deadline=time.monotonic()+30
-        while subprocess.run(['docker','exec',self.name,'pg_isready','-h','127.0.0.1','-U','postgres'],capture_output=True).returncode:
-            assert time.monotonic()<deadline
-            time.sleep(.1)
-
-    def finish(self, success):
-        if success:
-            subprocess.run(['docker','rm','-f',self.name],check=True,capture_output=True)
-        else:
-            with (self.output/(self.name+'-failure.log')).open('w') as log:
-                subprocess.run(['docker','logs',self.name],stdout=log,stderr=log)
-            print('Preserved failed owned tmpfs PostgreSQL:',self.name,file=sys.stderr)
+from harness_control import Server
 
 
 def archive_objects(fixture, roots):
@@ -115,7 +88,7 @@ def qualify(output, binary):
     old_port=os.environ.get('PGDERIVE_TEST_POSTGRES_PORT')
     fixture=None
     try:
-        source=Server(output,'source');servers.append(source)
+        source=Server(output,'source', flags=['max_slot_wal_keep_size=64MB']);servers.append(source)
         os.environ['PGDERIVE_TEST_POSTGRES_PORT']=source.port
         fixture=grouped(output)
         config=configured(fixture)
@@ -142,7 +115,7 @@ def qualify(output, binary):
             subprocess.run(['docker','exec',source.name,'pg_dump','-U','postgres','-d','pgderive_dev','-Fc'],stdout=file,stderr=log,check=True)
         dump_hash=hashlib.sha256(dump.read_bytes()).hexdigest()
         subprocess.run(['docker','stop',source.name],check=True,capture_output=True)
-        target=Server(output,'restored');servers.append(target)
+        target=Server(output,'restored', flags=['max_slot_wal_keep_size=64MB']);servers.append(target)
         began=time.monotonic()
         with dump.open('rb') as file, (output/'restore.log').open('w') as log:
             subprocess.run(['docker','exec','-i',target.name,'pg_restore','-U','postgres',

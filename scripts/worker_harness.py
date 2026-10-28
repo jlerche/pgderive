@@ -5,7 +5,7 @@ Run through run_with_s3_proxy.py for a recorded storage latency profile. The
 command after -- is an instrumented or ordinary worker executable prefix.
 """
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from harness_control import commit_proxy
 import json
@@ -49,13 +49,15 @@ class History:
     graceful: bool = False
 
 
-class Worker:
-    def __init__(self, command, config, output, environment):
+class EventStream:
+    def __init__(self, output):
         self.events = queue.Queue()
+        self.latest_cache = None
         self.metrics = (output / 'metrics.jsonl').open('w')
         self.stderr = (output / 'stderr.log').open('w')
-        self.process = subprocess.Popen(command + [str(config)], env=environment,
-                                        stdout=subprocess.PIPE, stderr=self.stderr, text=True)
+
+    def record(self, process):
+        self.process = process
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
 
@@ -63,7 +65,10 @@ class Worker:
         for line in self.process.stdout:
             self.metrics.write(line)
             self.metrics.flush()
-            self.events.put(json.loads(line))
+            value = json.loads(line)
+            if 'cache' in value:
+                self.latest_cache = value['cache']
+            self.events.put(value)
         self.events.put(None)
 
     def event(self, kind, seconds=240, minimum_time=None):
@@ -79,23 +84,32 @@ class Worker:
                 return event
         raise TimeoutError(f'worker did not emit {kind}')
 
+    def close_logs(self, require_joined=True):
+        self.reader.join(timeout=10)
+        if require_joined:
+            assert not self.reader.is_alive(), 'stdout reader remained alive'
+        self.metrics.close()
+        self.stderr.close()
+
+
+class Worker(EventStream):
+    def __init__(self, command, config, output, environment):
+        super().__init__(output)
+        self.record(subprocess.Popen(command + [str(config)], env=environment,
+                                     stdout=subprocess.PIPE, stderr=self.stderr, text=True))
+
     def finish(self, graceful=False):
         if graceful:
             self.process.send_signal(signal.SIGINT)
         self.process.wait(timeout=240)
-        self.reader.join(timeout=10)
-        assert not self.reader.is_alive(), 'stdout reader remained alive'
-        self.metrics.close()
-        self.stderr.close()
+        self.close_logs()
         assert self.process.returncode == 0, f'worker failed; see {self.stderr.name}'
 
     def abort(self):
         if self.process.poll() is None:
             self.process.kill()
             self.process.wait(timeout=10)
-        self.reader.join(timeout=10)
-        self.metrics.close()
-        self.stderr.close()
+        self.close_logs(require_joined=False)
 
 
 class Fixture:
@@ -184,22 +198,25 @@ max_transactions={maximum}
         beyond = self.acknowledgement_ahead().strip()
         assert beyond == '0', 'slot acknowledged beyond durable publication'
 
-    def run_history(self, command, history, initial=None, after=None):
+    def run_history(self, command, history, initial=None, after=None, *, step=None, after_stop=None):
         worker = self.start(command, 'first')
         ready = worker.event('ready')
         self.verify()
         if initial is not None:
             initial()
         for index, change in enumerate(history.changes, 1):
-            self.sql(history.session + 'BEGIN;' + change + ';COMMIT')
-            worker.event('published', minimum_time=ready['time'] + index)
-            self.verify()
+            with step(index) if step is not None else nullcontext():
+                self.sql(history.session + 'BEGIN;' + change + ';COMMIT')
+                worker.event('published', minimum_time=ready['time'] + index)
+                self.verify()
         if after is not None:
             after()
         if history.graceful:
             worker.finish(graceful=True)
         else:
             worker.abort()
+        if after_stop is not None:
+            after_stop()
         progress_sql = f'SELECT row_to_json(p) FROM {self.name}.pgderive_progress p'
         prior = self.sql(progress_sql)
         for label, query in history.rejected:
@@ -216,6 +233,7 @@ max_transactions={maximum}
         resumed.event('published')
         resumed.finish()
         self.verify()
+        return ready
 
     def bag_relation(self):
         """Test-only weighted projection of ordinary typed destination occurrences."""

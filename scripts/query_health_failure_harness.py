@@ -8,6 +8,7 @@ import signal
 import time
 
 from query_health_harness import health
+from harness_control import start_recorded
 from query_lifecycle_harness import configured, grouped
 from query_rebuild_harness import command, verify
 from worker_harness import Worker
@@ -34,14 +35,8 @@ def qualify(output, binary, kind):
         if kind == 'storage_outage':
             text = text.replace('[worker.health]', 'checkpoint_interval_ms=100\n[worker.health]')
             log_path = output/'storage-proxy.jsonl'
-            with log_path.open('w') as log:
-                proxy = subprocess.Popen([sys.executable, '-u', 'scripts/s3_latency_proxy.py',
-                    '--port', '0', '--scale', '0'], stdout=log, stderr=log)
-            deadline = time.monotonic()+10
-            while not log_path.read_text().splitlines():
-                assert proxy.poll() is None and time.monotonic() < deadline
-                time.sleep(.05)
-            address = json.loads(log_path.read_text().splitlines()[0])
+            proxy, address = start_recorded([sys.executable, '-u', 'scripts/s3_latency_proxy.py',
+                '--port', '0', '--scale', '0'], log_path)
             fixture.environment['PGDERIVE__OBJECT_STORE__ENDPOINT'] = f"http://127.0.0.1:{address['port']}"
         config.write_text(text)
         labels = [column['name'] for column in command(fixture, binary, 'validate', config)['columns']]

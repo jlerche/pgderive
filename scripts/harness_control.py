@@ -1,5 +1,6 @@
 """Shared recorded CLI and proxy lifecycle; callers retain fault-specific assertions."""
 import json
+import os
 import select
 from contextlib import contextmanager
 import subprocess
@@ -88,3 +89,36 @@ def wait_sql(fixture, query, expected='1'):
     while fixture.sql(query).strip() != expected:
         assert time.monotonic()<deadline, 'SQL lock witness missing: '+query
         time.sleep(.02)
+
+
+class Server:
+    def __init__(self, output, label, *, name=None, size="1g", flags=(), metadata=None, failure=None):
+        self.output = output
+        self.name = name or f'pgderive-recovery-{os.getpid()}-{label}'
+        self.failure = failure or self.name+'-failure.log'
+        subprocess.run(['docker','run','-d','--name',self.name,
+            '--tmpfs',f'/var/lib/postgresql/data:rw,size={size}','-p','127.0.0.1::5432',
+            '-e','POSTGRES_PASSWORD=postgres','-e','POSTGRES_DB=pgderive_dev',
+            'postgres:17','-c','wal_level=logical', *[item for flag in flags for item in ('-c', flag)]],
+            check=True,capture_output=True)
+        try:
+            info = json.loads(subprocess.check_output(['docker','inspect',self.name]))[0]
+            assert info['Mounts']==[] and '/var/lib/postgresql/data' in info['HostConfig']['Tmpfs']
+            self.port = info['NetworkSettings']['Ports']['5432/tcp'][0]['HostPort']
+            (output/(metadata or f'{label}-postgres.json')).write_text(json.dumps({'container':self.name,
+                'port':self.port,'tmpfs':info['HostConfig']['Tmpfs'],'mounts':info['Mounts']})+'\n')
+            deadline=time.monotonic()+30
+            while subprocess.run(['docker','exec',self.name,'pg_isready','-h','127.0.0.1','-U','postgres'],capture_output=True).returncode:
+                assert time.monotonic()<deadline
+                time.sleep(.1)
+        except BaseException:
+            self.finish(False)
+            raise
+
+    def finish(self, success):
+        if success:
+            subprocess.run(['docker','rm','-f',self.name],check=True,capture_output=True)
+        else:
+            with (self.output/self.failure).open('w') as log:
+                subprocess.run(['docker','logs',self.name],stdout=log,stderr=log)
+            print('Preserved failed owned tmpfs PostgreSQL:',self.name,file=sys.stderr)

@@ -118,28 +118,31 @@ class CompositionFixture(ApplicationFixture):
                         result[(a['label'],b['amount'])] += 1
         return result
 
+    def run_trace(self, command):
+        worker = self.start(command,'initial')
+        ready = worker.event('ready')
+        self.verify()
+        committed = 0
+        for index,transaction in enumerate(self.trace['history']):
+            self.sql(statements(self.name,transaction))
+            apply(self.model,transaction)
+            if not transaction['rollback']:
+                committed += 1
+                worker.event('published',minimum_time=ready['time']+committed)
+            self.verify()
+            if index==4:
+                worker.abort()
+                worker = self.start(command,'cold')
+                reopened = worker.event('ready')
+                assert reopened['time']==ready['time']+committed and reopened['slot']==ready['slot']
+                self.verify()
+        worker.finish(graceful=True)
+
 
 def qualify(output, command, mode, fixture_type=CompositionFixture):
     fixture = fixture_type(output,mode)
     with fixture.managed():
-        worker = fixture.start(command,'initial')
-        ready = worker.event('ready')
-        fixture.verify()
-        committed = 0
-        for index,transaction in enumerate(fixture.trace['history']):
-            fixture.sql(statements(fixture.name,transaction))
-            apply(fixture.model,transaction)
-            if not transaction['rollback']:
-                committed += 1
-                worker.event('published',minimum_time=ready['time']+committed)
-            fixture.verify()
-            if index==4:
-                worker.abort()
-                worker = fixture.start(command,'cold')
-                reopened = worker.event('ready')
-                assert reopened['time']==ready['time']+committed and reopened['slot']==ready['slot']
-                fixture.verify()
-        worker.finish(graceful=True)
+        fixture.run_trace(command)
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':'exact bag and output metadata',
             'independent_memory':'full-source frames/groups/nested loops','rollback':True,'cold_restart':True,
             'history':'saved case.json; simultaneous changes, NULLs, duplicates, retractions and key moves'})+'\n')

@@ -7,10 +7,10 @@ import pathlib
 import socket
 import subprocess
 import sys
-import time
 from query_lifecycle_harness import configured, grouped, rejected
 from query_rebuild_harness import command, verify
 from worker_harness import Worker
+from harness_control import Server
 
 
 def certificates(output):
@@ -36,22 +36,11 @@ def qualify(output, binary):
     name = f'pgderive-postgres-tls-{os.getpid()}'
     old_port = os.environ.get('PGDERIVE_TEST_POSTGRES_PORT')
     completed = False
-    subprocess.run(['docker','run','--detach','--name',name,
-        '--tmpfs','/var/lib/postgresql/data:rw,size=512m','--publish','127.0.0.1::5432',
-        '-e','POSTGRES_PASSWORD=postgres','-e','POSTGRES_DB=pgderive_dev',
-        'postgres:17','-c','wal_level=logical'],check=True,capture_output=True)
+    server = Server(output, 'postgres', name=name, size='512m', flags=[],
+                    metadata='postgres.json', failure='postgres-failure.log')
     try:
-        inspection = json.loads(subprocess.check_output(['docker','inspect',name]))[0]
-        assert inspection['Mounts']==[]
-        assert '/var/lib/postgresql/data' in inspection['HostConfig']['Tmpfs']
-        port = inspection['NetworkSettings']['Ports']['5432/tcp'][0]['HostPort']
-        os.environ['PGDERIVE_TEST_POSTGRES_PORT']=port
-        (output/'postgres.json').write_text(json.dumps({'container':name,'port':port,
-            'mounts':inspection['Mounts'],'tmpfs':inspection['HostConfig']['Tmpfs']},indent=2)+'\n')
-        deadline = time.monotonic()+30
-        while subprocess.run(['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','postgres'],capture_output=True).returncode:
-            assert time.monotonic()<deadline
-            time.sleep(.1)
+        port = server.port
+        os.environ['PGDERIVE_TEST_POSTGRES_PORT'] = port
         for label in ['server.pem','server.key']:
             subprocess.run(['docker','cp',str(output/label),name+':/tmp/'+label],check=True,capture_output=True)
         subprocess.run(['docker','exec',name,'chown','postgres:postgres','/tmp/server.pem','/tmp/server.key'],check=True)
@@ -139,12 +128,7 @@ def qualify(output, binary):
             os.environ.pop('PGDERIVE_TEST_POSTGRES_PORT',None)
         else:
             os.environ['PGDERIVE_TEST_POSTGRES_PORT']=old_port
-        if completed:
-            subprocess.run(['docker','rm','--force',name],check=True,capture_output=True)
-        else:
-            with (output/'postgres-failure.log').open('w') as log:
-                subprocess.run(['docker','logs',name],stdout=log,stderr=log)
-            print('Preserved failed owned tmpfs PostgreSQL: '+name,file=sys.stderr)
+        server.finish(completed)
 
 
 if __name__=='__main__':

@@ -181,8 +181,20 @@ class HistoryTests(unittest.TestCase):
 
         reopened.update(time=12, slot='owned')
         events.clear()
-        fixture.run_history([], History(['one', 'two'], 'final', 'normalized', [], graceful=True),
-                            after=lambda: events.append('after'))
+        from contextlib import contextmanager
+        @contextmanager
+        def step(index):
+            events.append(('before', index))
+            yield
+            events.append(('after', index))
+        ready = fixture.run_history([], History(['one', 'two'], 'final', 'normalized', [], graceful=True),
+            after=lambda: events.append('after'), step=step,
+            after_stop=lambda: events.append('stopped'))
+        self.assertEqual(ready, {'time':10, 'slot':'owned'})
+        self.assertLess(events.index(('before', 1)), events.index('BEGIN;one;COMMIT'))
+        self.assertLess(events.index('BEGIN;one;COMMIT'), events.index(('after', 1)))
+        self.assertLess(events.index(('finish', True)), events.index('stopped'))
+        self.assertLess(events.index('stopped'), events.index(('resumed', 1, 'normalized')))
         self.assertLess(events.index('after'), events.index(('finish', True)))
         self.assertNotIn('abort', events)
         events.clear()
@@ -208,3 +220,31 @@ class ProxyFixtureLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'not ready'):
                 query_binding_harness.hot_path(Path('/unused'), [], 'hot-plain', 'owned')
         self.assertEqual(evidence, ['preserved'])
+
+
+class EventStreamTests(unittest.TestCase):
+    def test_recorded_events_keep_cache_feedback_and_terminal_evidence(self):
+        import json
+        from pathlib import Path
+        import subprocess
+        import sys
+        import tempfile
+        from worker_harness import EventStream
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            stream = EventStream(output)
+            events = [{'event':'ready','time':3,'cache':{'bytes':7}},
+                      {'event':'published','time':4}]
+            process = subprocess.Popen([sys.executable,'-c',
+                'print('+repr(json.dumps(events[0]))+');print('+repr(json.dumps(events[1]))+')'],
+                stdout=subprocess.PIPE, stderr=stream.stderr, text=True)
+            stream.record(process)
+            self.assertEqual(stream.event('ready'), events[0])
+            self.assertEqual(stream.latest_cache, {'bytes':7})
+            self.assertEqual(stream.event('published', minimum_time=4), events[1])
+            with self.assertRaisesRegex(RuntimeError, 'ended before missing'):
+                stream.event('missing')
+            self.assertEqual(process.wait(timeout=10), 0)
+            stream.close_logs()
+            process.stdout.close()
+            self.assertEqual([json.loads(line) for line in (output/'metrics.jsonl').read_text().splitlines()], events)

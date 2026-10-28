@@ -2,7 +2,6 @@
 """Durable prefix windows: exact native bags/metadata and independent prefix frames."""
 import collections
 import json
-from application_model import apply, statements
 from expression_composition_harness import CompositionFixture
 from native_mv_oracle import binary_difference
 from numeric_compiler_harness import average
@@ -56,18 +55,7 @@ class PrefixFixture(CompositionFixture):
 def qualify(output,command,native,peers):
     fixture=PrefixFixture(output,native,peers)
     with fixture.managed():
-        worker=fixture.start(command,'initial');ready=worker.event('ready');fixture.verify()
-        committed=0
-        for i,transaction in enumerate(fixture.trace['history']):
-            fixture.sql(statements(fixture.name,transaction));apply(fixture.model,transaction)
-            if not transaction['rollback']:
-                committed+=1;worker.event('published',minimum_time=ready['time']+committed)
-            fixture.verify()
-            if i==4:
-                worker.abort();worker=fixture.start(command,'cold');reopened=worker.event('ready')
-                assert reopened['time']==ready['time']+committed and reopened['slot']==ready['slot']
-                fixture.verify()
-        worker.finish(graceful=True)
+        fixture.run_trace(command)
         (output/'result.json').write_text(json.dumps({'native':native,'peers':peers,'native_binary_and_metadata':True,'independent_prefix_frames':True,'cold_restart':True,'rollback':True,'prefix_statistics':True,'durable_arrangements':fixture.prefix_witness})+'\n')
 
 if __name__ == '__main__':
