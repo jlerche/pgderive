@@ -1,10 +1,11 @@
 //! Bounded scratch consolidation; physical spill boundaries never narrow weights.
 mod capacity;
 mod workspaces;
-pub use workspaces::{WorkspaceStats, Workspaces};
+pub use workspaces::{WorkspacePermit, WorkspaceStats, Workspaces};
 mod input;
 mod levels;
 mod merge;
+pub(crate) mod service;
 pub use input::{OpenInput, SealedInput};
 mod sealed;
 pub use capacity::CapacityExceeded;

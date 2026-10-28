@@ -122,7 +122,7 @@ async fn shared_limit_covers_streamed_gets_and_preserves_bulk_delete() -> Result
         task::Poll,
     };
     let inner = Arc::new(Store::unpaced());
-    let store = super::scoped::Scoped::new(inner.clone(), inner.clone(), Path::default(), 1);
+    let store = super::scoped::Scoped::new(inner.clone(), inner.clone(), Path::default(), 1)?;
     let first = Path::from("first");
     store.put(&first, vec![1_u8].into()).await?;
     let body = store.get(&first).await?;
@@ -174,7 +174,7 @@ async fn pages_share_admission_release_it_and_translate_scoped_paths() -> Result
     let raw = Arc::new(InMemory::new());
     let prefix = Path::from("private/demo");
     let inner = Arc::new(PrefixStore::new(raw.clone(), prefix.clone()));
-    let scoped = Scoped::new(inner, raw, prefix, 1);
+    let scoped = Scoped::new(inner, raw, prefix, 1)?;
     let first = Path::from("pgderive/first");
     scoped.put(&first, vec![1_u8].into()).await?;
     scoped.put(&Path::from("pgderive/second"), vec![2_u8].into()).await?;
@@ -199,5 +199,151 @@ async fn pages_share_admission_release_it_and_translate_scoped_paths() -> Result
     assert!(next.page_token.is_none());
     assert_eq!(scoped.list(None).try_collect::<Vec<_>>().await?.len(), 1);
     assert!(scoped.put_multipart(&first).await.is_err());
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn maintenance_requests_leave_headroom_and_account_actual_consumption() -> Result<()> {
+    use super::PageStore as _;
+    use crate::engine::execution::{Workspaces, service};
+    use anyhow::Context as _;
+    use object_store::{ObjectStoreExt as _, memory::InMemory, path::Path};
+    use std::sync::Arc;
+    let raw = Arc::new(InMemory::new());
+    let store = Arc::new(super::scoped::Scoped::new(raw.clone(), raw, Path::default(), 2)?);
+    let pool = Arc::new(Workspaces::new(1)?);
+    let key = Path::from("physical");
+    let (result, report) = service::scope(pool.clone(), async {
+        let _workspace = pool.background().await?;
+        store.put(&key, vec![7_u8; 1024].into()).await?;
+        let body = store.get(&key).await?;
+        // A streamed maintenance request owns one of two slots. Foreground must
+        // still enter, and dropping an unread stream must not count body bytes.
+        assert_eq!(store.service_stats().context("missing request stats")?.admission.active, 1);
+        let foreground = store.clone();
+        let key = key.clone();
+        let bytes =
+            tokio::spawn(async move { foreground.get(&key).await?.bytes().await }).await??;
+        assert_eq!(bytes.len(), 1024);
+        drop(body);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    result?;
+    assert_eq!(report.requests, 2);
+    assert_eq!(report.write_requested_bytes, 1024);
+    assert_eq!(report.written_bytes, 1024);
+    assert_eq!(report.read_requested_bytes, 1024);
+    assert_eq!(report.read_bytes, 0);
+    let bytes = store.get(&key).await?.bytes().await?;
+    assert_eq!(bytes.len(), 1024);
+    let stats = store.service_stats().context("missing request stats")?;
+    assert_eq!(stats.foreground.read_bytes, 2048);
+    assert_eq!(stats.maintenance.written_bytes, 1024);
+    assert_eq!(stats.admission.active, 0);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_and_capacity_one_requests_keep_attempts_distinct_from_success() -> Result<()> {
+    use crate::engine::{
+        execution::{Workspaces, service},
+        tests::store::Store,
+    };
+    use object_store::{ObjectStoreExt as _, path::Path};
+    use std::sync::Arc;
+    let inner = Arc::new(Store::new(Some(0)));
+    let store = super::scoped::Scoped::new(inner.clone(), inner, Path::default(), 1)?;
+    let pool = Arc::new(Workspaces::new(1)?);
+    let (result, report) = service::scope(pool.clone(), async {
+        let _phase = pool.background().await?;
+        let path = Path::from("failed");
+        assert!(store.put(&path, vec![3_u8; 512].into()).await.is_err());
+        store.put(&path, vec![4_u8; 512].into()).await?;
+        assert!(store.get_range(&path, 0..512).await?.iter().all(|v| *v == 4));
+        assert!(store.get_range(&Path::from("missing"), 0..128).await.is_err());
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    result?;
+    assert_eq!(report.requests, 4);
+    assert_eq!(report.write_requested_bytes, 1024);
+    assert_eq!(report.written_bytes, 512);
+    assert_eq!(report.read_requested_bytes, 640);
+    assert_eq!(report.read_bytes, 512);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn continuous_requests_leave_foreground_headroom_and_clear_maintenance_queue() -> Result<()> {
+    use super::PageStore as _;
+    use crate::engine::{
+        execution::{Workspaces, service},
+        tests::store::Store,
+    };
+    use anyhow::Context as _;
+    use futures_util::{StreamExt as _, TryStreamExt as _};
+    use object_store::{ObjectStoreExt as _, path::Path};
+    use std::sync::{Arc, atomic::Ordering};
+    let mut raw = Store::new(None);
+    raw.read_delay = std::time::Duration::from_millis(10);
+    let raw = Arc::new(raw);
+    let store = Arc::new(super::scoped::Scoped::new(raw.clone(), raw.clone(), Path::default(), 2)?);
+    let key = Path::from("foreground");
+    store.put(&key, vec![1_u8; 16].into()).await?;
+    let background = store.clone();
+    let pool = Arc::new(Workspaces::new(1)?);
+    let task = tokio::spawn(async move {
+        service::scope(pool.clone(), maintenance_burst(background, pool)).await
+    });
+    while raw.active.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    let started = tokio::time::Instant::now();
+    assert_eq!(store.get_range(&key, 0..16).await?.len(), 16);
+    assert_eq!(started.elapsed(), std::time::Duration::from_millis(10));
+    let foreground = futures_util::stream::iter(0..512)
+        .map(|_| {
+            let store = store.clone();
+            let key = key.clone();
+            async move { store.get_range(&key, 0..16).await }
+        })
+        .buffer_unordered(8)
+        .try_collect::<Vec<_>>();
+    let (responses, completed) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::join!(foreground, task)
+    })
+    .await?;
+    assert_eq!(responses?.len(), 512);
+    let (result, report) = completed?;
+    result?;
+    assert_eq!(report.requests, 128);
+    assert_eq!(report.written_bytes, 128 * 16);
+    let stats = store.service_stats().context("missing request stats")?;
+    assert_eq!(stats.admission.active, 0);
+    assert_eq!(stats.admission.background_active, 0);
+    assert!(stats.admission.background_waits > 0);
+    assert_eq!(stats.admission.peak, 2);
+    assert_eq!(stats.foreground.read_bytes, 513 * 16);
+    Ok(())
+}
+
+async fn maintenance_burst(
+    store: std::sync::Arc<super::scoped::Scoped>,
+    pool: std::sync::Arc<crate::engine::execution::Workspaces>,
+) -> Result<()> {
+    use futures_util::{StreamExt as _, TryStreamExt as _};
+    use object_store::{ObjectStoreExt as _, path::Path};
+    let _phase = pool.background().await?;
+    futures_util::stream::iter(0..128)
+        .map(|id| {
+            let store = store.clone();
+            async move {
+                store.put(&Path::from(format!("maintenance/{id}")), vec![2_u8; 16].into()).await
+            }
+        })
+        .buffer_unordered(8)
+        .try_collect::<Vec<_>>()
+        .await?;
     Ok(())
 }

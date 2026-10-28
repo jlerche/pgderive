@@ -114,10 +114,10 @@ was **#3**. The status below preserves that original numbering.
 | Original item | Status | Completed work and remaining scope |
 |---|---|---|
 | 1. Keyed sink access | Implemented | Both UPDATE and DELETE use proven key predicates plus exact old-tuple/affected-row checks; keyed sinks no longer create the changing full-row hash index. Generic bag behavior remains intact. |
-| 2. Relational property analysis | Outstanding | The existing sink-key proof remains specialized; shared edge properties for candidate keys, nullability/equality, multiplicity and lineage have not replaced it. |
+| 2. Relational property analysis | Implemented | Shared candidate keys, nullability/equality, cardinality and unchanged-value identities replace the three old walkers and serve sinks, positional windows and committed statistics. Unsupported shapes remain conservative proof barriers. |
 | 3. Publication reuse | Implemented | Bound templates/codecs and prepared statements, encoded immutable metadata/checkpoint refresh, both ordered pipelines and transaction-scoped validation reuse across publication, checkpoint and maintenance are implemented. Claims, recovery and ACK confirmation retain independent authoritative validation. |
 | 4. Epoch controller cost model | Outstanding extension | Adaptive scheduling exists. The requested combination of bytes, affected keys, output DML mix, fixed publication cost and maintenance/admission interference has not been implemented as a complete model. |
-| 5. Explicit maintenance service budgets | Outstanding extension | Debt/admission controls and shared worker resource budgets exist. Byte-based job accounting, pack-utilization debt and a guaranteed minimum maintenance service allocation remain. |
+| 5. Explicit maintenance service budgets | Service controls/accounting implemented; qualification open | Existing admission now gives physical object requests foreground headroom and fair maintenance service. Foreground-aware byte/operation quanta and per-job requested/delivered/written/retained-byte and observed sparse-pack accounting are implemented. This is not a CPU-share or global physical-debt guarantee; sustained qualification remains open. |
 | 6. Bounded local maintenance and hierarchical membership | Partial foundations | Range-local selection, packed outputs and authenticated block sharing exist. Broader byte/fan-in-budgeted local histories, index-subtree sharing and scalable hierarchical membership remain. |
 | 7. Budgeted partial page promotion | Outstanding | Existing bounded caches and prior warming experiments do not implement measured partial generated-page promotion across its overflow threshold. |
 
@@ -241,3 +241,11 @@ support independent many-to-many join occurrences; a single-side key does not.
 No cost model, join algorithm replacement or new epoch policy is included.
 Unsupported shapes remain proof barriers. Details and validation are recorded in
 [relational properties](relational-properties.md).
+
+
+## Maintenance service budgets
+
+[Maintenance service](maintenance-service.md) documents the shared policy, metric
+boundaries, cancellation guarantees and fast validation. The implementation adds
+no PUTs or alternate execution path. Global sparse-pack reclamation and local
+byte/fan-in selection remain #6 work; the existing growth/cost failures stay visible.

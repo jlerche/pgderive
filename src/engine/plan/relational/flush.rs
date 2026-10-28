@@ -24,8 +24,12 @@ pub struct UploadedFlush<K: BatchData, V: BatchData> {
     frozen: FrozenFlush<K, V>,
     state: RelationalState<K, V>,
     checkpoint: Checkpoint,
+    service: crate::engine::execution::service::Report,
 }
 impl<K: BatchData, V: BatchData> UploadedFlush<K, V> {
+    pub(crate) const fn service(&self) -> &crate::engine::execution::service::Report {
+        &self.service
+    }
     /// Uploaded membership at the captured time, independent of newer publications.
     #[must_use]
     pub const fn checkpoint(&self) -> &Checkpoint {
@@ -39,6 +43,13 @@ impl<K: BatchData, V: BatchData> FrozenFlush<K, V> {
     /// # Errors
     /// Returns upload, codec, resource or checkpoint validation failures.
     pub async fn upload(self) -> Result<UploadedFlush<K, V>> {
+        let pool = self.execution.workspaces.clone();
+        let (result, service) =
+            crate::engine::execution::service::scope(pool, self.upload_entries()).await;
+        let (state, checkpoint) = result?;
+        Ok(UploadedFlush { frozen: self, state, checkpoint, service })
+    }
+    async fn upload_entries(&self) -> Result<(RelationalState<K, V>, Checkpoint)> {
         let execution = self.execution.clone();
         let namespace = self.namespace.clone();
         let output_cache = BlockCache::output(execution.cache.clone());
@@ -82,7 +93,7 @@ impl<K: BatchData, V: BatchData> FrozenFlush<K, V> {
         for entry in state.entries.values_mut() {
             entry.trace.share_cache(&self.execution.cache);
         }
-        Ok(UploadedFlush { frozen: self, state, checkpoint })
+        Ok((state, checkpoint))
     }
 }
 impl<K: BatchData, V: BatchData> Relational<K, V> {

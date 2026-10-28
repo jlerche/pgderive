@@ -155,7 +155,7 @@ fn snapshot(open: &Open, phase: &str) -> Result<Value> {
     let limits = open.replication.execution;
     Ok(
         json!({"phase":phase,"logical_time":open.query.time(),"memtable_bytes":open.query.memtable_bytes()?,"memtable_limit":open.settings.memtable_bytes,"runs":open.query.run_count(),"cache":crate::worker::health::cache_diagnostics(&cache),
-            "workspaces":open.query.workspaces().stats(),
+            "workspaces":open.query.workspaces().stats(),"object_service":open.store.service_stats(),
             "budgets":{"workspace_slots":limits.workspace_slots,"object_requests":limits.object_requests,"cache_bytes":limits.cache_bytes,"cache_entries":limits.cache_entries,
             "resident_bytes":limits.resident_bytes,"resident_entries":limits.resident_entries,
             "record_bytes":limits.record_bytes,"contributions":limits.contributions,

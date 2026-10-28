@@ -1,4 +1,5 @@
 //! One request budget for streamed object operations and stateless GC pages.
+use crate::engine::execution::{WorkspacePermit, Workspaces};
 use async_trait::async_trait;
 use futures_util::{StreamExt as _, TryStreamExt as _, stream::BoxStream};
 use object_store::{
@@ -9,11 +10,17 @@ use object_store::{
     path::Path,
 };
 use std::sync::Arc;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+mod accounting;
+use accounting::Accounting;
+pub use accounting::ServiceStats;
 
 /// Object operations plus bounded, opaque-token listing. No ordering assumption.
 #[async_trait]
 pub trait PageStore: ObjectStore {
+    /// Runtime API service counters; raw harness adapters have no admission wrapper.
+    fn service_stats(&self) -> Option<ServiceStats> {
+        None
+    }
     /// List one page in this store's relative namespace.
     async fn page(
         &self,
@@ -26,7 +33,8 @@ pub trait PageStore: ObjectStore {
 pub(super) struct Scoped {
     inner: Arc<dyn ObjectStore>,
     pages: Arc<dyn PageStore>,
-    requests: Arc<Semaphore>,
+    requests: Arc<Workspaces>,
+    accounting: Accounting,
     prefix: Path,
 }
 impl Scoped {
@@ -35,19 +43,19 @@ impl Scoped {
         pages: Arc<dyn PageStore>,
         prefix: Path,
         requests: usize,
-    ) -> Self {
-        Self { inner, pages, prefix, requests: Arc::new(Semaphore::new(requests)) }
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            inner,
+            pages,
+            prefix,
+            requests: Arc::new(Workspaces::new(requests)?),
+            accounting: Accounting::default(),
+        })
     }
-    async fn permit(&self) -> Result<OwnedSemaphorePermit> {
-        self.requests.clone().acquire_owned().await.map_err(admission)
-    }
-}
-fn admission(error: tokio::sync::AcquireError) -> object_store::Error {
-    object_store::Error::Generic { store: "shared-request-budget", source: Box::new(error) }
 }
 fn guarded<T: Send + 'static>(
     stream: BoxStream<'static, Result<T>>,
-    permit: OwnedSemaphorePermit,
+    permit: WorkspacePermit,
 ) -> BoxStream<'static, Result<T>> {
     futures_util::stream::unfold((stream, permit), |(mut stream, permit)| async move {
         stream.next().await.map(|value| (value, (stream, permit)))
@@ -61,13 +69,17 @@ impl std::fmt::Display for Scoped {
 }
 #[async_trait]
 impl PageStore for Scoped {
+    fn service_stats(&self) -> Option<ServiceStats> {
+        Some(self.accounting.stats(&self.requests))
+    }
     async fn page(
         &self,
         prefix: &str,
         token: Option<String>,
         limit: usize,
     ) -> Result<PaginatedListResult> {
-        let _permit = self.permit().await?;
+        let request = self.accounting.request();
+        let _permit = request.permit(&self.requests).await?;
         let prefix = if self.prefix.as_ref().is_empty() {
             prefix.to_owned()
         } else {
@@ -91,8 +103,15 @@ impl PageStore for Scoped {
 #[async_trait]
 impl ObjectStore for Scoped {
     async fn put_opts(&self, path: &Path, data: PutPayload, opts: PutOptions) -> Result<PutResult> {
-        let _permit = self.permit().await?;
-        self.inner.put_opts(path, data, opts).await
+        let request = self.accounting.request();
+        let _permit = request.permit(&self.requests).await?;
+        let bytes = data.content_length();
+        request.writing(bytes);
+        let result = self.inner.put_opts(path, data, opts).await;
+        if result.is_ok() {
+            request.written(bytes);
+        }
+        result
     }
     async fn put_multipart_opts(
         &self,
@@ -104,24 +123,61 @@ impl ObjectStore for Scoped {
         })
     }
     async fn get_opts(&self, path: &Path, opts: GetOptions) -> Result<GetResult> {
-        let permit = self.permit().await?;
-        let result = self.inner.get_opts(path, opts).await?;
-        let payload = match result.payload {
-            GetResultPayload::Stream(stream) => GetResultPayload::Stream(guarded(stream, permit)),
-            file @ GetResultPayload::File(_, _) => {
-                drop(permit);
-                file
+        let request = self.accounting.request();
+        let permit = request.permit(&self.requests).await?;
+        let head = opts.head;
+        let estimated = if head {
+            0
+        } else {
+            match &opts.range {
+                Some(object_store::GetRange::Bounded(range)) => {
+                    range.end.saturating_sub(range.start)
+                }
+                Some(object_store::GetRange::Suffix(bytes)) => *bytes,
+                _ => 0,
             }
         };
-        Ok(GetResult { payload, ..result })
+        request.reading(estimated);
+        let result = self.inner.get_opts(path, opts).await?;
+        if !head && estimated == 0 {
+            request.reading(result.range.end.saturating_sub(result.range.start));
+        }
+        let meta = result.meta.clone();
+        let range = result.range.clone();
+        let attributes = result.attributes.clone();
+        let extensions = result.extensions.clone();
+        let stream = result
+            .into_stream()
+            .map(move |chunk| {
+                if let Ok(bytes) = &chunk {
+                    request.read(bytes.len());
+                }
+                chunk
+            })
+            .boxed();
+        Ok(GetResult {
+            payload: GetResultPayload::Stream(guarded(stream, permit)),
+            meta,
+            range,
+            attributes,
+            extensions,
+        })
     }
     async fn get_ranges(
         &self,
         path: &Path,
         ranges: &[std::ops::Range<u64>],
     ) -> Result<Vec<bytes::Bytes>> {
-        let _permit = self.permit().await?;
-        self.inner.get_ranges(path, ranges).await
+        let request = self.accounting.request();
+        let _permit = request.permit(&self.requests).await?;
+        for range in ranges {
+            request.reading(range.end.saturating_sub(range.start));
+        }
+        let result = self.inner.get_ranges(path, ranges).await?;
+        for bytes in &result {
+            request.read(bytes.len());
+        }
+        Ok(result)
     }
     fn delete_stream(
         &self,
@@ -129,8 +185,9 @@ impl ObjectStore for Scoped {
     ) -> BoxStream<'static, Result<Path>> {
         let inner = self.inner.clone();
         let requests = self.requests.clone();
+        let request = self.accounting.request();
         futures_util::stream::once(async move {
-            let permit = requests.acquire_owned().await.map_err(admission)?;
+            let permit = request.permit(&requests).await?;
             Ok::<_, object_store::Error>(guarded(inner.delete_stream(paths), permit))
         })
         .try_flatten()
@@ -140,19 +197,22 @@ impl ObjectStore for Scoped {
         let prefix = prefix.cloned();
         let inner = self.inner.clone();
         let requests = self.requests.clone();
+        let request = self.accounting.request();
         futures_util::stream::once(async move {
-            let permit = requests.acquire_owned().await.map_err(admission)?;
+            let permit = request.permit(&requests).await?;
             Ok::<_, object_store::Error>(guarded(inner.list(prefix.as_ref()), permit))
         })
         .try_flatten()
         .boxed()
     }
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let _permit = self.permit().await?;
+        let request = self.accounting.request();
+        let _permit = request.permit(&self.requests).await?;
         self.inner.list_with_delimiter(prefix).await
     }
     async fn copy_opts(&self, from: &Path, to: &Path, opts: CopyOptions) -> Result<()> {
-        let _permit = self.permit().await?;
+        let request = self.accounting.request();
+        let _permit = request.permit(&self.requests).await?;
         self.inner.copy_opts(from, to, opts).await
     }
 }

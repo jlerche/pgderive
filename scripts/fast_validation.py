@@ -68,6 +68,18 @@ def merge_events(value):
     return isinstance(value, list) and all(type(rows) is int and rows >= 0 for rows in value)
 
 
+SERVICE_FIELDS = ('work_units','work_bytes','yields','requests','read_requested_bytes',
+                  'read_bytes','write_requested_bytes','written_bytes','retained_bytes',
+                  'referenced_pack_bytes','sparse_pack_slack_bytes')
+
+
+def validate_service(report):
+    jobs = report.get('service')
+    if (not isinstance(jobs, list) or len(jobs) != report['checkpoints']
+            or any(not nonnegative_fields(job, SERVICE_FIELDS) for job in jobs)):
+        raise RuntimeError('Missing or invalid maintenance service evidence')
+
+
 def validate_lifecycle(report, steps, inventory):
     fields = ('logical_ms','source_rows','checkpoints','rebased_uploads','capacity_flushes',
               'maintenance_ns','maximum_runs','maximum_memtable_bytes','restarts',
@@ -83,6 +95,7 @@ def validate_lifecycle(report, steps, inventory):
             or report.get('maintenance_quiescent') is not True
             or inventory['memtable_bytes'] != 0):
         raise RuntimeError('Invalid checkpoint lifecycle evidence')
+    validate_service(report)
     source_rows = sum(step['source_rows'] for step in steps[1:] if not step['restart'])
     if (report['source_rows'] != source_rows or report['logical_ms'] != source_rows
             or report['installed_source_rows'] != source_rows

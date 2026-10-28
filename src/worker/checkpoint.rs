@@ -102,6 +102,7 @@ pub(super) async fn ready(pending: &mut Option<Pending>) -> Result<Uploaded> {
 pub(super) async fn complete(open: &mut Open, uploaded: Uploaded) -> Result<()> {
     let mut pending = open.checkpoint.take().context("checkpoint completion without upload")?;
     let checkpoint = uploaded.checkpoint();
+    let service = uploaded.service().clone();
     let prepared = open.query.prepare_uploaded_flush(&uploaded).await?;
     open.writer
         .checkpoint_memtable(&mut open.session.client, open.query.plan(), checkpoint)
@@ -121,7 +122,7 @@ pub(super) async fn complete(open: &mut Open, uploaded: Uploaded) -> Result<()> 
     )?;
     let mut event = serde_json::json!({"event":"maintenance","time":checkpoint.time,
         "published_time":open.query.time(),"epoch":open.writer.epoch(),
-        "previous_runs":pending.runs,"collection":"background","upload":"background"});
+        "previous_runs":pending.runs,"collection":"background","upload":"background","service":service});
     if open.settings.phase_metrics {
         event["merges"] = serde_json::to_value(open.query.cache_stats()?.merges)?;
         event["elapsed_us"] = serde_json::to_value(pending.started.elapsed().as_micros())?;

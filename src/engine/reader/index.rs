@@ -195,7 +195,14 @@ fn dense_packs<T>(packs: &[Pack], blocks: &[Block<T>]) -> Result<Vec<bool>> {
         let count = bytes.get_mut(block.pack).context("missing coverage pack")?;
         *count = count.checked_add(block.length).context("pack coverage overflow")?;
     }
-    Ok(bytes.iter().zip(packs).map(|(bytes, pack)| *bytes >= pack.bytes.div_ceil(2)).collect())
+    Ok(bytes
+        .iter()
+        .zip(packs)
+        .map(|(bytes, pack)| {
+            crate::engine::execution::service::coverage(pack.bytes, *bytes);
+            *bytes >= pack.bytes.div_ceil(2)
+        })
+        .collect())
 }
 
 type PackedIndex<K, V> = (Root<(K, V)>, Vec<u8>);

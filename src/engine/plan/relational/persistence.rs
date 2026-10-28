@@ -121,8 +121,9 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         let writers = self.execution.writers.clone();
         let foreground = self.execution.cache.clone();
         let output = BlockCache::output(foreground.clone());
-        self.engine
-            .prepare_maintenance(move |state| async move {
+        let (result, _service) = crate::engine::execution::service::scope(
+            workspaces.clone(),
+            self.engine.prepare_maintenance(move |state| async move {
                 let uploads = state.entries.iter().map(|(id, entry)| {
                     let writers = &writers;
                     let workspaces = workspaces.clone();
@@ -154,8 +155,10 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                     entry.trace.share_cache(&foreground);
                 }
                 Ok(state)
-            })
-            .await
+            }),
+        )
+        .await;
+        result
     }
     /// Install equivalent local physical state.
     ///

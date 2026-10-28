@@ -22,6 +22,7 @@ async fn cancelling_wait_retains_owned_task_and_shutdown_drains_it() -> Result<(
                 retired_namespaces: 0,
             },
             0,
+            crate::engine::execution::service::Report::default(),
         ))
     });
     let mut collector = Collector { task: Some(task), session: None };
@@ -43,7 +44,9 @@ async fn collection_failure_is_consumed_once() -> Result<()> {
     assert!(collector.completed().await.is_err());
     assert!(collector.task.is_none());
     collector.drain().await?;
-    let task = tokio::spawn(std::future::pending::<Result<(Collection, usize)>>());
+    let task = tokio::spawn(std::future::pending::<
+        Result<(Collection, usize, crate::engine::execution::service::Report)>,
+    >());
     task.abort();
     collector.task = Some(task);
     assert!(collector.completed().await.is_err());
@@ -67,7 +70,7 @@ async fn dropping_collector_aborts_owned_task() -> Result<()> {
     let task = tokio::spawn(async move {
         let _finished = Finished(Some(finished));
         let _closed = started.send(());
-        std::future::pending::<Result<(Collection, usize)>>().await
+        std::future::pending::<Result<(Collection, usize, crate::engine::execution::service::Report)>>().await
     });
     let collector = Collector { task: Some(task), session: None };
     ready.await?;

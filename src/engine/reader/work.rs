@@ -5,6 +5,7 @@
 const BYTE_UNIT: usize = 4096;
 
 pub async fn spend(bytes: usize) {
+    crate::engine::execution::service::spend(bytes).await;
     for _ in 0..=bytes.div_ceil(BYTE_UNIT) {
         tokio::task::consume_budget().await;
     }

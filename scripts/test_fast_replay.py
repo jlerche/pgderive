@@ -83,6 +83,7 @@ class FastReplayTests(unittest.TestCase):
 
 
 def lifecycle_evidence():
+    from fast_validation import SERVICE_FIELDS
     sample = dict.fromkeys(('logical_ms','source_rows','prepare_ns','maintenance_ns','gets',
                            'read_bytes','puts','put_bytes','runs','installed_checkpoints',
                            'installed_source_rows','durable_roots','durable_cohorts'), 1)
@@ -96,6 +97,7 @@ def lifecycle_evidence():
                           'checkpoint_lag_rows'), 0)
     final.update(durable_roots=1, durable_cohorts=1, installed_source_rows=1, merge_input_rows=[])
     return dict(logical_ms=1, source_rows=1, checkpoints=1, rebased_uploads=0,
+                service=[dict.fromkeys(SERVICE_FIELDS,0)],
                 capacity_flushes=0, maintenance_ns=0, maximum_runs=1, maximum_memtable_bytes=100,
                 restarts=0, samples=[sample], retirement=[retirement], final_merge_input_rows=[],
                 final_maintenance=final, maintenance_quiescent=True, installed_source_rows=1,
@@ -150,6 +152,7 @@ class CoverageTests(unittest.TestCase):
         inventory = dict(memtable_bytes=0, stored_objects=3, stored_bytes=128)
         validate_lifecycle(lifecycle_evidence(), steps, inventory)
         mutations = [
+            ('service', None), ('service', []), ('service', [{}]),
             ('maintenance_quiescent', False), ('installed_source_rows', 0),
             ('final_merge_input_rows', None), ('final_merge_input_rows', [-1]),
             ('final_merge_input_rows', [True]),

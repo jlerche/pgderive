@@ -17,6 +17,7 @@ pub struct Workspaces {
     peak: AtomicUsize,
     waits: AtomicU64,
     background_waits: AtomicU64,
+    foreground: AtomicUsize,
 }
 /// Current admission usage; independent of cache retention and process RSS.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -35,6 +36,8 @@ pub struct WorkspaceStats {
     pub background_active: usize,
     /// Acquisitions that encountered a fully occupied maintenance quota.
     pub background_waits: u64,
+    /// Foreground phases active or waiting for admission.
+    pub foreground_demand: usize,
 }
 impl Workspaces {
     /// Create one pool. Share its Arc rather than constructing a pool per task.
@@ -50,6 +53,7 @@ impl Workspaces {
             peak: AtomicUsize::new(0),
             waits: AtomicU64::new(0),
             background_waits: AtomicU64::new(0),
+            foreground: AtomicUsize::new(0),
         })
     }
     /// Maximum local polling width; actual admission is shared by every caller.
@@ -62,21 +66,36 @@ impl Workspaces {
     ///
     /// # Errors
     /// Returns an error if the pool unexpectedly closes.
-    pub async fn acquire(self: &Arc<Self>) -> Result<OwnedSemaphorePermit> {
+    pub async fn acquire(self: &Arc<Self>) -> Result<WorkspacePermit> {
+        self.foreground.fetch_add(1, Ordering::Relaxed);
+        let demand = Demand(self.clone());
+        Ok(WorkspacePermit {
+            _global: self.reserve().await?,
+            _background: None,
+            _demand: Some(demand),
+        })
+    }
+    async fn reserve(&self) -> Result<OwnedSemaphorePermit> {
         let permit = reserve(&self.slots, &self.waits).await?;
         self.peak.fetch_max(self.capacity - self.slots.available_permits(), Ordering::Relaxed);
         Ok(permit)
     }
-    /// Admit maintenance without occupying the final foreground slot when the
-    /// capacity is greater than one. Never nest with this pool's other permits.
+    /// Admit maintenance with foreground headroom. The shared FIFO queue prevents
+    /// new foreground arrivals from overtaking queued maintenance. Never nest
+    /// admission on the same pool; request and execution pools are distinct.
     ///
     /// # Errors
     /// Returns an error if an admission semaphore unexpectedly closes.
-    pub async fn background(
-        self: &Arc<Self>,
-    ) -> Result<(OwnedSemaphorePermit, OwnedSemaphorePermit)> {
+    pub async fn background(self: &Arc<Self>) -> Result<WorkspacePermit> {
         let background = reserve(&self.background, &self.background_waits).await?;
-        Ok((self.acquire().await?, background))
+        Ok(WorkspacePermit {
+            _global: self.reserve().await?,
+            _background: Some(background),
+            _demand: None,
+        })
+    }
+    pub(crate) fn foreground_waiting(&self) -> bool {
+        self.foreground.load(Ordering::Relaxed) != 0
     }
     /// Snapshot admission counters without taking ownership of any resource.
     #[must_use]
@@ -90,6 +109,7 @@ impl Workspaces {
             background_active: self.capacity.saturating_sub(1).max(1)
                 - self.background.available_permits(),
             background_waits: self.background_waits.load(Ordering::Relaxed),
+            foreground_demand: self.foreground.load(Ordering::Relaxed),
         }
     }
 }
@@ -107,3 +127,16 @@ async fn reserve(slots: &Arc<Semaphore>, waits: &AtomicU64) -> Result<OwnedSemap
 }
 #[cfg(test)]
 mod tests;
+
+/// Owns active admission and releases foreground demand on completion or cancellation.
+pub struct WorkspacePermit {
+    _global: OwnedSemaphorePermit,
+    _background: Option<OwnedSemaphorePermit>,
+    _demand: Option<Demand>,
+}
+struct Demand(Arc<Workspaces>);
+impl Drop for Demand {
+    fn drop(&mut self) {
+        self.0.foreground.fetch_sub(1, Ordering::Relaxed);
+    }
+}

@@ -47,6 +47,7 @@ pub(super) struct Report {
     pub logical_ms: u64,
     pub source_rows: u64,
     pub checkpoints: usize,
+    pub service: Vec<crate::engine::execution::service::Report>,
     pub rebased_uploads: usize,
     pub capacity_flushes: usize,
     pub restarts: usize,
@@ -108,6 +109,7 @@ impl Lifecycle {
                 .collect();
             let work = query.prepare_uploaded_flush(&uploaded).await?;
             query.commit_compaction(work)?;
+            self.report.service.push(uploaded.service().clone());
             drop(uploaded);
             self.report.installed_source_rows = task.source_rows;
             let mut retired =

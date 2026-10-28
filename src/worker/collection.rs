@@ -13,7 +13,8 @@ use tokio::{
     time::{Duration, timeout},
 };
 
-type CollectionTask = JoinHandle<Result<(Collection, usize)>>;
+type CollectionTask =
+    JoinHandle<Result<(Collection, usize, crate::engine::execution::service::Report)>>;
 
 #[derive(Default)]
 pub(super) struct Collector {
@@ -51,11 +52,14 @@ impl Collector {
                 let _workspace = workspaces.background().await?;
                 let mut session = session.lock().await;
                 let CollectionSession { sql, roots } = &mut *session;
-                let result =
-                    catalog.collect(&mut sql.client, store, GcLimits::default(), roots).await;
+                let (result, service) = crate::engine::execution::service::scope(
+                    workspaces.clone(),
+                    catalog.collect(&mut sql.client, store, GcLimits::default(), roots),
+                )
+                .await;
                 let cache_bytes = roots.resident_bytes();
                 drop(session);
-                result.map(|collection| (collection, cache_bytes))
+                result.map(|collection| (collection, cache_bytes, service))
             })
             .await
             .context("worker background collection timed out")?
@@ -70,10 +74,10 @@ impl Collector {
         };
         let result = task.await;
         self.task = None;
-        let (collection, cache_bytes) =
+        let (collection, cache_bytes, service) =
             result.context("worker background collection task failed")??;
         super::drive::emit(
-            &serde_json::json!({"event":"collection","collection":collection,"gc_cache_bytes":cache_bytes}),
+            &serde_json::json!({"event":"collection","collection":collection,"gc_cache_bytes":cache_bytes,"service":service}),
         )
     }
     pub(super) async fn drain(&mut self) -> Result<()> {

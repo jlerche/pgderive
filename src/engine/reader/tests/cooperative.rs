@@ -288,3 +288,20 @@ async fn index_finalization_yields_without_changing_authenticated_bytes() -> Res
     report("index-finalization", &polls, &baseline_polls)?;
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn contended_service_shortens_physical_turns_without_more_objects() -> Result<()> {
+    use crate::engine::execution::{Workspaces, service};
+    let (baseline, baseline_cost, baseline_polls) = tokio::spawn(streamed(false)).await??;
+    let pool = Arc::new(Workspaces::new(2)?);
+    let _foreground = pool.acquire().await?;
+    let _maintenance = pool.background().await?;
+    let (result, service) = service::scope(pool, streamed(false)).await;
+    let (roots, cost, polls) = result?;
+    assert_eq!(roots, baseline);
+    assert_eq!(cost, baseline_cost);
+    assert!(service.yields > 0);
+    assert!(polls.max_rows * 2 <= baseline_polls.max_rows, "{polls:?} vs {baseline_polls:?}");
+    report("contended-service", &polls, &baseline_polls)?;
+    Ok(())
+}

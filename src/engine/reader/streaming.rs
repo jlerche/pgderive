@@ -367,6 +367,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         );
         self.flush_block().await?;
         let mut block = leaf.block;
+        crate::engine::execution::service::retained(block.length);
         let pack_charge = bounded::encode(&leaf.pack)?.len();
         let bytes = self
             .fence_charge(&block)?

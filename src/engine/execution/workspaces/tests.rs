@@ -36,6 +36,7 @@ async fn shared_admission_releases_cancelled_waiters_and_active_tasks() -> Resul
     assert_eq!(pool.stats().active, 0);
     pool.slots.close();
     assert!(pool.acquire().await.is_err());
+    assert_eq!(pool.stats().foreground_demand, 0);
     assert!(Workspaces::new(0).is_err());
     assert!(Workspaces::new(257).is_err());
     Ok(())
@@ -60,6 +61,39 @@ async fn background_work_preserves_foreground_headroom() -> Result<()> {
     drop(foreground);
     drop(background);
     drop(queued.await?);
+    assert_eq!(pool.stats().active, 0);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn queued_foreground_demand_cancels_and_fifo_preserves_maintenance_service() -> Result<()> {
+    let pool = Arc::new(Workspaces::new(1)?);
+    for _ in 0..1024 {
+        let held = pool.acquire().await?;
+        let mut maintenance = Box::pin(pool.background());
+        poll_fn(|cx| {
+            assert!(maintenance.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        let mut later = Box::pin(pool.acquire());
+        poll_fn(|cx| {
+            assert!(later.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(pool.stats().foreground_demand, 2);
+        drop(held);
+        let served = maintenance.await?;
+        poll_fn(|cx| {
+            assert!(later.as_mut().poll(cx).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        drop(later);
+        assert_eq!(pool.stats().foreground_demand, 0);
+        drop(served);
+    }
     assert_eq!(pool.stats().active, 0);
     Ok(())
 }

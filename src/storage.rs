@@ -113,7 +113,7 @@ impl Storage {
             raw,
             object_store::path::Path::from(prefix),
             requests,
-        )))
+        )?))
     }
 }
 #[cfg(test)]

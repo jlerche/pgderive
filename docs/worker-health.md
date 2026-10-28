@@ -219,3 +219,8 @@ nonquiescent ledgers still need a writes-finished proof. The returned `collectio
 statistics describe the final turn, not the command's aggregate deletion count.
 Only individual turns are bounded; concurrent namespace growth can extend total
 drop duration. Cancelling the command preserves committed per-page progress.
+
+
+Physical maintenance service and object-request admission diagnostics are described
+in [maintenance service budgets](maintenance-service.md). These are work/payload
+measurements, not retained-memory, HTTP billing or production capacity guarantees.
