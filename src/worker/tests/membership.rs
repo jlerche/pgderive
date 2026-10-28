@@ -59,8 +59,7 @@ async fn history(anti: Option<bool>, distinct: bool) -> Result<()> {
     let compiled = compile(&sql, &native)?;
     let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
-    let mut scanned = relational::build_scanned(&native, &compiled, &options)?;
+    let scanned = relational::build_scanned(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", Some("1"))]);
     let a2 = row(&[("id", Some("2")), ("category", None), ("other", Some("1"))]);
     let null = row(&[("id", Some("3")), ("category", Some("null")), ("other", None)]);
@@ -81,27 +80,18 @@ async fn history(anti: Option<bool>, distinct: bool) -> Result<()> {
         batch(vec![("auction", a2.clone(), -1), ("bid", b.clone(), 1)]),
         batch(vec![("auction", a, -1), ("auction", null, -1), ("bid", b, -1), ("bid", bn, -1)]),
     ];
-    let mut left = State::new();
-    let mut right = State::new();
-    for (index, changes) in histories.into_iter().enumerate() {
-        let before = oracle(&left, &right, anti, distinct)?;
-        for change in &changes.updates {
-            let state = if change.tuple.table == "auction" { &mut left } else { &mut right };
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
-        let after = oracle(&left, &right, anti, distinct)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(work.output().batch, expected, "{sql}, tick {index}");
-        let reference =
-            scanned.prepare(relational::inputs(&changes, ir, scanned.time() + 1)?).await?;
-        assert_eq!(work.output().batch, reference.output().batch);
-        scanned.commit(reference)?;
-        query.commit(work)?;
-        if index == 2 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
+    let query = super::History {
+        scanned: Some(scanned),
+        ..super::History::new((&native, &compiled, &options))
     }
+    .run(
+        histories,
+        |state: &super::JoinedState| oracle(&state.0, &state.1, anti, distinct),
+        super::apply_joined,
+        |index| index == 2,
+    )
+    .await?;
+
     let before = query.checkpoint()?;
     let absent = row(&[("id", Some("999")), ("category", None), ("other", Some("1"))]);
     assert!(

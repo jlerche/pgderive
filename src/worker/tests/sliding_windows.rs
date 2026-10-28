@@ -2,7 +2,6 @@
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
 use anyhow::{Context, Result};
-use futures_util::TryStreamExt;
 use std::collections::BTreeMap;
 fn sql() -> String {
     let window = "OVER(ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)";
@@ -74,34 +73,18 @@ async fn sliding_cold_ticks_match_source_oracle_and_scan_object_costs() -> Resul
     let expected = super::bag_delta(&before, &expected(&state)?)?;
     let mut measurements = Vec::new();
     for optimized in [false, true] {
-        let mut options = settings();
-        options.block_rows = 8;
-        options.limits.cache_bytes = 0;
-        options.limits.cache_entries = 0;
-        let mut query = relational::build_scanned(&native, &compiled, &options)?;
-        query.commit(
-            query.prepare(relational::inputs(&initial, compiled.relational(), 1)?).await?,
-        )?;
-        let checkpoint = query.checkpoint()?;
-        query = if optimized {
-            relational::build(&native, &compiled, &options)?
-        } else {
-            relational::build_scanned(&native, &compiled, &options)?
-        };
-        query.restore_checkpoint(checkpoint).await?;
-        let objects = options.store.list(None).try_collect::<Vec<_>>().await?;
-        let prior = query.cache_stats()?.misses;
+        let options = super::cold_settings(8);
+        let mut query = super::cold_query(&compiled, &initial, |reopened| {
+            if reopened && optimized {
+                relational::build(&native, &compiled, &options)
+            } else {
+                relational::build_scanned(&native, &compiled, &options)
+            }
+        })
+        .await?;
+        let probe = super::Probe::start(&query, &options).await?;
         let prepared = query.prepare(relational::inputs(&delta, compiled.relational(), 2)?).await?;
-        let after = options.store.list(None).try_collect::<Vec<_>>().await?;
-        let writes = after
-            .iter()
-            .filter(|object| !objects.iter().any(|old| old.location == object.location))
-            .collect::<Vec<_>>();
-        measurements.push((
-            query.cache_stats()?.misses - prior,
-            writes.len(),
-            writes.iter().map(|object| object.size).sum::<u64>(),
-        ));
+        measurements.push(probe.finish(&query, &options).await?);
         assert_eq!(prepared.output().batch, expected);
         query.commit(prepared)?;
         super::restart_relational(&mut query, &native, &compiled, &options).await?;

@@ -59,9 +59,7 @@ async fn history(window: bool) -> Result<()> {
     native.relations[1].columns[2].oid = 23;
     let sql = if window { WINDOW } else { GROUPED };
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-2"))]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", None)]);
     let c = row(&[("id", Some("3")), ("auction", None), ("price", Some("7"))]);
@@ -74,20 +72,15 @@ async fn history(window: bool) -> Result<()> {
         batch(vec![("bid", b, -1)]),
         batch(vec![]),
     ];
-    let mut state = BTreeMap::new();
-    for (index, changes) in histories.into_iter().enumerate() {
-        let before = oracle(&state, window)?;
-        super::apply_rows(&mut state, &changes);
-        let after = oracle(&state, window)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let candidate = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(candidate.output().batch, expected);
-        relational::deltas(&query, &candidate.output().batch, &ir.output).await?;
-        query.commit(candidate)?;
-        if index == 2 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    super::History { deltas: true, ..super::History::new((&native, &compiled, &options)) }
+        .run(
+            histories,
+            |state: &super::RowState| oracle(state, window),
+            super::apply_rows,
+            |index| index == 2,
+        )
+        .await?;
+
     Ok(())
 }
 #[tokio::test]
@@ -272,15 +265,7 @@ async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()
 fn native_timestamp_resolution_normalizes_offsets_and_rejects_cross_type_casts() -> Result<()> {
     let mut native = contract();
     for (index, name, oid) in [(4, "local", 1114), (5, "instant", 1184), (6, "amount", 1700)] {
-        native.relations[1].columns.push(crate::source::Column {
-            position: index,
-            name: name.into(),
-            oid,
-            modifier: -1,
-            nullable: true,
-            primary: false,
-            collation: 0,
-        });
+        native.relations[1].columns.push(crate::source::tests::column(index, name, oid));
     }
     let sql = "SELECT b.local,b.instant,b.amount FROM source.bid b WHERE b.instant<'2000-01-01 00:00:00+00'";
     let original = compile(sql, &native)?;
@@ -303,15 +288,7 @@ fn native_timestamp_resolution_normalizes_offsets_and_rejects_cross_type_casts()
 #[tokio::test]
 async fn compiled_date_bins_retract_groups_and_preserve_nulls_across_restart() -> Result<()> {
     let mut native = contract();
-    native.relations[1].columns.push(crate::source::Column {
-        position: 4,
-        name: "event_time".into(),
-        oid: 1184,
-        modifier: -1,
-        nullable: true,
-        primary: false,
-        collation: 0,
-    });
+    native.relations[1].columns.push(crate::source::tests::column(4, "event_time", 1184));
     let bin = "date_bin('10 seconds',b.event_time,TIMESTAMPTZ '2000-01-01 00:00:00+00')";
     let sql = format!("SELECT {bin} AS bucket,COUNT(*) AS n FROM source.bid b GROUP BY {bin}");
     let compiled = compile(&sql, &native)?;
@@ -378,15 +355,7 @@ async fn compiled_date_bins_retract_groups_and_preserve_nulls_across_restart() -
 #[tokio::test]
 async fn date_bin_rejects_unqualified_semantics_and_filters_before_errors() -> Result<()> {
     let mut native = contract();
-    native.relations[1].columns.push(crate::source::Column {
-        position: 4,
-        name: "event_time".into(),
-        oid: 1184,
-        modifier: -1,
-        nullable: true,
-        primary: false,
-        collation: 0,
-    });
+    native.relations[1].columns.push(crate::source::tests::column(4, "event_time", 1184));
     let bin = "date_bin('10 seconds',b.event_time,TIMESTAMPTZ '2000-01-01 00:00:00+00')";
     let grouped = format!("SELECT {bin} AS bucket,COUNT(*) FROM source.bid b GROUP BY {bin}");
     for sql in [

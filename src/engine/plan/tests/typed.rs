@@ -4,7 +4,7 @@ use crate::engine::{
     Batch,
     dataflow::{Project, Statistics, TimedBatch},
     plan::{
-        Arrangement, Definition, Kind, Node, Plan, Settings, Source,
+        Kind, Plan, Settings,
         relational::{Operator, Operators, Relational},
     },
 };
@@ -14,39 +14,25 @@ use object_store::memory::InMemory;
 use std::{collections::BTreeMap, sync::Arc};
 type Rows = Batch<i64, Vec<i64>>;
 fn plan() -> Result<Plan> {
-    let nodes = [
-        ("as", Kind::Source, vec!["a"]),
-        ("bs", Kind::Source, vec!["b"]),
-        ("cs", Kind::Source, vec!["c"]),
-        ("a", Kind::Project, vec!["as"]),
-        ("b", Kind::Project, vec!["bs"]),
-        ("c", Kind::Project, vec!["cs"]),
-        ("ab", Kind::Join, vec!["a", "b"]),
-        ("abc", Kind::Join, vec!["ab", "c"]),
-        ("sum", Kind::Statistics, vec!["abc"]),
-    ]
-    .into_iter()
-    .map(|(id, kind, inputs)| Node {
-        id: id.into(),
-        kind,
-        inputs: inputs.into_iter().map(Into::into).collect(),
-        schema: "vector-v1".into(),
-    })
-    .collect();
-    Plan::new(Definition {
-        revision: "chain-production-v1".into(),
-        sources: ["a", "b", "c"]
-            .into_iter()
-            .map(|id| Source { id: id.into(), schema: "vector-v1".into() })
-            .collect(),
-        nodes,
-        arrangements: ["a", "b", "c", "ab", "abc", "sum"]
-            .into_iter()
-            .map(|id| Arrangement { id: id.into(), node: id.into(), schema: "vector-v1".into() })
-            .collect(),
-        outputs: vec!["sum".into()],
-    })
+    Plan::new(crate::engine::tests::definition(
+        ("chain-production-v1", "vector-v1"),
+        &["a", "b", "c"],
+        [
+            ("as", Kind::Source, vec!["a"]),
+            ("bs", Kind::Source, vec!["b"]),
+            ("cs", Kind::Source, vec!["c"]),
+            ("a", Kind::Project, vec!["as"]),
+            ("b", Kind::Project, vec!["bs"]),
+            ("c", Kind::Project, vec!["cs"]),
+            ("ab", Kind::Join, vec!["a", "b"]),
+            ("abc", Kind::Join, vec!["ab", "c"]),
+            ("sum", Kind::Statistics, vec!["abc"]),
+        ],
+        &[("a", "a"), ("b", "b"), ("c", "c"), ("ab", "ab"), ("abc", "abc"), ("sum", "sum")],
+        &["sum"],
+    ))
 }
+
 fn operators() -> Operators<i64, Vec<i64>> {
     let mut operators: Operators<_, _> = ["a", "b", "c"]
         .into_iter()

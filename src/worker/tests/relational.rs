@@ -31,7 +31,6 @@ async fn compiled_join_deltas_cold_restart_and_atomic_failure() -> Result<()> {
     let compiled = compile(SQL, &native)?;
     let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", None)]);
     let b = row(&[("id", Some("1")), ("auction", Some("1")), ("price", Some("-2"))]);
     let b2 = row(&[("id", Some("2")), ("auction", Some("1")), ("price", Some("-2"))]);
@@ -48,25 +47,16 @@ async fn compiled_join_deltas_cold_restart_and_atomic_failure() -> Result<()> {
         batch(vec![("bid", b2, -1)]),
         batch(vec![]),
     ];
-    let mut left = BTreeMap::new();
-    let mut right = BTreeMap::new();
-    for (index, changes) in histories.into_iter().enumerate() {
-        let before = oracle(&left, &right)?;
-        for change in &changes.updates {
-            let state = if change.tuple.table == "auction" { &mut left } else { &mut right };
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
-        let after = oracle(&left, &right)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(work.output().batch, expected);
-        relational::deltas(&query, &work.output().batch, &ir.output).await?;
-        query.prepared_checkpoint(&work)?;
-        query.commit(work)?;
-        if index == 1 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    let query =
+        super::History { deltas: true, ..super::History::new((&native, &compiled, &options)) }
+            .run(
+                histories,
+                |state: &super::JoinedState| oracle(&state.0, &state.1),
+                super::apply_joined,
+                |index| index == 1,
+            )
+            .await?;
+
     let before = query.checkpoint()?;
     let malformed = batch(vec![("auction", row(&[("category", None)]), 1)]);
     assert!(query.prepare(relational::inputs(&malformed, ir, query.time() + 1)?).await.is_err());

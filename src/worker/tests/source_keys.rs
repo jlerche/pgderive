@@ -164,13 +164,9 @@ async fn fixed_delta_cold_reads_do_not_grow_with_unrelated_source_rows() -> Resu
 }
 async fn fixed_delta_reads(native: &crate::source::Contract, sql: &str) -> Result<()> {
     let compiled = compile(sql, native)?;
-    let mut options = settings();
-    options.block_rows = 64;
-    options.limits.cache_bytes = 0;
-    options.limits.cache_entries = 0;
+    let options = super::cold_settings(64);
     let mut measurements = Vec::new();
     for rows in [64, 1024, 8192] {
-        let mut query = relational::build_committed(native, &compiled, &options)?;
         let original = row(&[("id", Some("0")), ("auction", Some("0")), ("price", Some("1"))]);
         let initial = batch(
             (0..rows)
@@ -187,12 +183,10 @@ async fn fixed_delta_reads(native: &crate::source::Contract, sql: &str) -> Resul
                 })
                 .collect(),
         );
-        query.commit(
-            query.prepare(relational::inputs(&initial, compiled.relational(), 1)?).await?,
-        )?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build_committed(native, &compiled, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        let mut query = super::cold_query(&compiled, &initial, |_| {
+            relational::build_committed(native, &compiled, &options)
+        })
+        .await?;
         let delta = batch(vec![("bid", original, -1)]);
         let before = query.cache_stats()?.misses;
         let work = query.prepare(relational::inputs(&delta, compiled.relational(), 2)?).await?;

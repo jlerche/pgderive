@@ -71,23 +71,14 @@ async fn prefix_history(native_cache_bytes: usize) -> Result<()> {
     let mut native = contract();
     native.relations[1].columns[1].oid = 20;
     native.relations[1].columns[1].nullable = false;
-    native.relations[1].columns.push(crate::source::Column {
-        position: 4,
-        name: "bucket".into(),
-        oid: 23,
-        modifier: -1,
-        nullable: true,
-        primary: false,
-        collation: 0,
-    });
+    native.relations[1].columns.push(crate::source::tests::column(4, "bucket", 23));
     let compiled = super::raw_statistics_compiled(compile(&sql(), &native)?);
     assert!(
         compiled.relational().nodes.iter().any(|node| matches!(node, Node::PrefixWindow { .. }))
     );
     let mut options = settings();
     options.limits.native_cache_bytes = native_cache_bytes;
-    let mut query = relational::build(&native, &compiled, &options)?;
-    let mut scan = relational::build_scanned(&native, &compiled, &options)?;
+    let scan = relational::build_scanned(&native, &compiled, &options)?;
     let mut a =
         row(&[("id", Some("1")), ("auction", Some("-9223372036854775808")), ("price", Some("2"))]);
     let mut b = row(&[("id", Some("3")), ("auction", Some("0")), ("price", None)]);
@@ -107,27 +98,21 @@ async fn prefix_history(native_cache_bytes: usize) -> Result<()> {
         vec![],
         vec![(a, -1), (c, -3), (d, -1), (moved, -1)],
     ];
-    let mut state = BTreeMap::new();
-    for (index, changes) in histories.into_iter().enumerate() {
-        let before = oracle(&state)?;
-        for (row, w) in &changes {
-            *state.entry(row.clone()).or_default() += w;
-        }
-        let expected = super::bag_delta(&before, &oracle(&state)?)?;
-        let input = batch(changes.into_iter().map(|(row, w)| ("bid", row, w)).collect());
-        let tick = u64::try_from(index)? + 1;
-        let prepared =
-            query.prepare(relational::inputs(&input, compiled.relational(), tick)?).await?;
-        let reference =
-            scan.prepare(relational::inputs(&input, compiled.relational(), tick)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        assert_eq!(prepared.output().batch, reference.output().batch);
-        query.commit(prepared)?;
-        scan.commit(reference)?;
-        super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        let compacted = query.prepare_compaction().await?;
-        query.commit_compaction(compacted)?;
+    let query = super::History {
+        scanned: Some(scan),
+        compact: true,
+        ..super::History::new((&native, &compiled, &options))
     }
+    .run(
+        histories.into_iter().map(|changes| {
+            batch(changes.into_iter().map(|(row, weight)| ("bid", row, weight)).collect())
+        }),
+        oracle,
+        super::apply_rows,
+        |_| true,
+    )
+    .await?;
+
     let before = query.checkpoint()?;
     let invalid = batch(vec![(
         "bid",
@@ -141,7 +126,6 @@ async fn prefix_history(native_cache_bytes: usize) -> Result<()> {
 
 #[tokio::test]
 async fn prefix_late_update_reduces_cold_tick_reads_with_explicit_write_cost() -> Result<()> {
-    use futures_util::TryStreamExt;
     let native = contract();
     let window = "OVER(ORDER BY id RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)";
     let compiled = super::raw_statistics_compiled(compile(
@@ -166,36 +150,20 @@ async fn prefix_late_update_reduces_cold_tick_reads_with_explicit_write_cost() -
     let mut measurements = Vec::new();
     let mut expected = None;
     for (variant, definition) in [&baseline, &compiled].into_iter().enumerate() {
-        let mut options = settings();
-        options.block_rows = 8;
-        options.limits.cache_bytes = 0;
-        options.limits.cache_entries = 0;
-        let mut query = relational::build(&native, definition, &options)?;
-        query.commit(
-            query.prepare(relational::inputs(&initial, definition.relational(), 1)?).await?,
-        )?;
+        let options = super::cold_settings(8);
+        let query = super::cold_query(definition, &initial, |_| {
+            relational::build(&native, definition, &options)
+        })
+        .await?;
         let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, definition, &options)?;
-        query.restore_checkpoint(checkpoint.clone()).await?;
-        let objects = options.store.list(None).try_collect::<Vec<_>>().await?;
-        let before = query.cache_stats()?.misses;
+        let probe = super::Probe::start(&query, &options).await?;
         let update = query.prepare(relational::inputs(&delta, definition.relational(), 2)?).await?;
         if let Some(expected) = &expected {
             assert_eq!(&update.output().batch, expected);
         } else {
             expected = Some(update.output().batch.clone());
         }
-        let reads = query.cache_stats()?.misses - before;
-        let after = options.store.list(None).try_collect::<Vec<_>>().await?;
-        let fresh = after
-            .iter()
-            .filter(|object| !objects.iter().any(|old| old.location == object.location))
-            .collect::<Vec<_>>();
-        measurements.push((
-            reads,
-            fresh.len(),
-            fresh.iter().map(|object| object.size).sum::<u64>(),
-        ));
+        measurements.push(probe.finish(&query, &options).await?);
         let mut bounded = options.clone();
         bounded.limits.contributions = 1000;
         let mut limited = relational::build(&native, definition, &bounded)?;

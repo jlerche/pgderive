@@ -75,37 +75,34 @@ async fn history(winner: bool) -> Result<()> {
             .any(|node| matches!(node, crate::compiler::relational::Node::Filter { .. }))
     );
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", None)]);
     let b = row(&[("id", Some("1")), ("auction", Some("1")), ("price", Some("-2"))]);
     let c = row(&[("id", Some("2")), ("auction", Some("1")), ("price", None)]);
     let mut changed = b.clone();
     changed.insert("price".into(), Some("7".into()));
-    let mut left = BTreeMap::new();
-    let mut right = BTreeMap::new();
-    for changes in [
-        batch(vec![("auction", a.clone(), 2), ("bid", b.clone(), 3), ("bid", c.clone(), 1)]),
-        batch(vec![
-            ("auction", a.clone(), -1),
-            ("bid", b.clone(), -3),
-            ("bid", changed.clone(), 3),
-        ]),
-        batch(vec![("auction", a.clone(), 1), ("bid", changed, -3), ("bid", b.clone(), 3)]),
-        batch(vec![("bid", b, -3), ("bid", c, -1), ("auction", a, -2)]),
-        batch(vec![]),
-    ] {
-        let before = oracle(&left, &right, winner)?;
-        for change in &changes.updates {
-            let state = if change.tuple.table == "auction" { &mut left } else { &mut right };
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
-        let after = oracle(&left, &right, winner)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        super::restart_relational(&mut query, &native, &compiled, &options).await?;
-    }
+    super::History::new((&native, &compiled, &options))
+        .run(
+            [
+                batch(vec![
+                    ("auction", a.clone(), 2),
+                    ("bid", b.clone(), 3),
+                    ("bid", c.clone(), 1),
+                ]),
+                batch(vec![
+                    ("auction", a.clone(), -1),
+                    ("bid", b.clone(), -3),
+                    ("bid", changed.clone(), 3),
+                ]),
+                batch(vec![("auction", a.clone(), 1), ("bid", changed, -3), ("bid", b.clone(), 3)]),
+                batch(vec![("bid", b, -3), ("bid", c, -1), ("auction", a, -2)]),
+                batch(vec![]),
+            ],
+            |state: &super::JoinedState| oracle(&state.0, &state.1, winner),
+            super::apply_joined,
+            |_| true,
+        )
+        .await?;
+
     Ok(())
 }
 #[tokio::test]

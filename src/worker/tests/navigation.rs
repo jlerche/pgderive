@@ -5,15 +5,7 @@ use std::collections::BTreeMap;
 type Bag = Batch<relational::Key, Row>;
 fn native() -> crate::source::Contract {
     let mut native = contract();
-    native.relations[1].columns.push(crate::source::Column {
-        position: 4,
-        name: "step".into(),
-        oid: 23,
-        modifier: -1,
-        nullable: true,
-        primary: false,
-        collation: 0,
-    });
+    native.relations[1].columns.push(crate::source::tests::column(4, "step", 23));
     native
 }
 fn sql(derived: bool) -> String {

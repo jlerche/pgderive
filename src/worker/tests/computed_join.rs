@@ -41,44 +41,36 @@ async fn computed_join_histories_match_full_source_oracle_and_restart() -> Resul
     let native = contract();
     let compiled = compile(SQL, &native)?;
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", Some("same")), ("other", None)]);
     let a2 = row(&[("id", Some("-1")), ("category", Some("same")), ("other", None)]);
     let b = row(&[("id", Some("1")), ("auction", Some("-1")), ("price", Some("7"))]);
     let b2 = row(&[("id", Some("2")), ("auction", None), ("price", None)]);
     let moved = row(&[("id", Some("2")), ("category", Some("moved")), ("other", None)]);
     let changed = row(&[("id", Some("1")), ("auction", Some("-2")), ("price", Some("7"))]);
-    let mut left = BTreeMap::new();
-    let mut right = BTreeMap::new();
-    for delta in [
-        batch(vec![
-            ("auction", a.clone(), 2),
-            ("auction", a2.clone(), 1),
-            ("bid", b.clone(), 3),
-            ("bid", b2.clone(), 1),
-        ]),
-        batch(vec![
-            ("auction", a.clone(), -2),
-            ("auction", moved.clone(), 2),
-            ("bid", b, -3),
-            ("bid", changed.clone(), 3),
-        ]),
-        batch(vec![("auction", a2, -1), ("bid", b2, -1)]),
-        batch(vec![("auction", moved, -2), ("bid", changed, -3)]),
-    ] {
-        let before = oracle(&left, &right)?;
-        for change in &delta.updates {
-            let state = if change.tuple.table == "auction" { &mut left } else { &mut right };
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
-        let expected = super::bag_delta(&before, &oracle(&left, &right)?)?;
-        let prepared = query
-            .prepare(relational::inputs(&delta, compiled.relational(), query.time() + 1)?)
-            .await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        super::restart_relational(&mut query, &native, &compiled, &options).await?;
-    }
+    let query = super::History::new((&native, &compiled, &options))
+        .run(
+            [
+                batch(vec![
+                    ("auction", a.clone(), 2),
+                    ("auction", a2.clone(), 1),
+                    ("bid", b.clone(), 3),
+                    ("bid", b2.clone(), 1),
+                ]),
+                batch(vec![
+                    ("auction", a.clone(), -2),
+                    ("auction", moved.clone(), 2),
+                    ("bid", b, -3),
+                    ("bid", changed.clone(), 3),
+                ]),
+                batch(vec![("auction", a2, -1), ("bid", b2, -1)]),
+                batch(vec![("auction", moved, -2), ("bid", changed, -3)]),
+            ],
+            |state: &super::JoinedState| oracle(&state.0, &state.1),
+            super::apply_joined,
+            |_| true,
+        )
+        .await?;
+
     // Both inputs are empty: eager ON-map errors still preserve the last boundary.
     let before = query.checkpoint()?;
     let overflow = batch(vec![(

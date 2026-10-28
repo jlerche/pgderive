@@ -7,15 +7,7 @@ use crate::{
 use anyhow::{Context, Result};
 fn native() -> crate::source::Contract {
     let mut native = contract();
-    native.relations[1].columns.push(crate::source::Column {
-        position: 4,
-        name: "event_time".into(),
-        oid: 1184,
-        modifier: -1,
-        nullable: true,
-        primary: false,
-        collation: 0,
-    });
+    native.relations[1].columns.push(crate::source::tests::column(4, "event_time", 1184));
     native
 }
 const BIN: &str = "date_bin('2 seconds',b.event_time,TIMESTAMPTZ '2000-01-01 00:00:00+00') - w.n * INTERVAL '2 seconds'";
@@ -119,15 +111,7 @@ fn series_binding_rejects_ambiguous_and_unqualified_semantics() -> Result<()> {
     ] {
         assert!(compile(&sql, &native).is_err(), "{sql}");
     }
-    native.relations[1].columns.push(crate::source::Column {
-        position: 5,
-        name: "n".into(),
-        oid: 23,
-        modifier: -1,
-        nullable: true,
-        primary: false,
-        collation: 0,
-    });
+    native.relations[1].columns.push(crate::source::tests::column(5, "n", 23));
     assert!(compile(&sql().replace("w.n *", "n *"), &native).is_err());
     assert!(compile(&sql().replace("GROUP BY", "WHERE n>0 GROUP BY"), &native).is_err());
     assert_ne!(

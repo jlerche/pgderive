@@ -2,7 +2,7 @@ use super::{Operator, Operators, Relational};
 use crate::engine::{
     Batch,
     dataflow::{Project, TimedBatch},
-    plan::{Arrangement, Definition, Kind, Node, Plan, Settings, Source},
+    plan::{Kind, Plan, Settings},
 };
 use anyhow::{Context, Result};
 use object_store::memory::InMemory;
@@ -12,42 +12,24 @@ type Bag = BTreeMap<(i64, Vec<i64>), i64>;
 type Projection = Project<i64, Vec<i64>, i64, Vec<i64>>;
 type Join = super::JoinProject<i64, Vec<i64>>;
 pub(super) fn plan() -> Result<Plan> {
-    let nodes = [
-        ("as", Kind::Source, vec!["a"]),
-        ("bs", Kind::Source, vec!["b"]),
-        ("cs", Kind::Source, vec!["c"]),
-        ("a", Kind::Project, vec!["as"]),
-        ("b", Kind::Project, vec!["bs"]),
-        ("c", Kind::Project, vec!["cs"]),
-        ("ab", Kind::Join, vec!["a", "b"]),
-        ("abc", Kind::Join, vec!["ab", "c"]),
-    ]
-    .into_iter()
-    .map(|(id, kind, inputs)| Node {
-        id: id.into(),
-        kind,
-        inputs: inputs.into_iter().map(Into::into).collect(),
-        schema: "i64-vector-v1".into(),
-    })
-    .collect();
-    Plan::new(Definition {
-        revision: "three-source-vector-v1".into(),
-        sources: ["a", "b", "c"]
-            .into_iter()
-            .map(|id| Source { id: id.into(), schema: "i64-vector-v1".into() })
-            .collect(),
-        nodes,
-        arrangements: ["a", "b", "c", "ab", "abc"]
-            .into_iter()
-            .map(|id| Arrangement {
-                id: id.into(),
-                node: id.into(),
-                schema: "i64-vector-v1".into(),
-            })
-            .collect(),
-        outputs: vec!["abc".into()],
-    })
+    Plan::new(crate::engine::tests::definition(
+        ("three-source-vector-v1", "i64-vector-v1"),
+        &["a", "b", "c"],
+        [
+            ("as", Kind::Source, vec!["a"]),
+            ("bs", Kind::Source, vec!["b"]),
+            ("cs", Kind::Source, vec!["c"]),
+            ("a", Kind::Project, vec!["as"]),
+            ("b", Kind::Project, vec!["bs"]),
+            ("c", Kind::Project, vec!["cs"]),
+            ("ab", Kind::Join, vec!["a", "b"]),
+            ("abc", Kind::Join, vec!["ab", "c"]),
+        ],
+        &[("a", "a"), ("b", "b"), ("c", "c"), ("ab", "ab"), ("abc", "abc")],
+        &["abc"],
+    ))
 }
+
 pub(super) fn operators() -> Operators<i64, Vec<i64>> {
     let projects = ["a", "b", "c"]
         .into_iter()
@@ -192,29 +174,18 @@ async fn wrong_source_arity_rejects_before_any_staged_objects() -> Result<()> {
 #[tokio::test]
 async fn fanout_self_join_keeps_prior_isolation_and_retries_downstream_failure() -> Result<()> {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    let definition = Definition {
-        revision: "fanout-v1".into(),
-        sources: vec![Source { id: "rows".into(), schema: "vector-v1".into() }],
-        nodes: [
+    let definition = crate::engine::tests::definition(
+        ("fanout-v1", "vector-v1"),
+        &["rows"],
+        [
             ("source", Kind::Source, vec!["rows"]),
             ("input", Kind::Project, vec!["source"]),
             ("join", Kind::Join, vec!["input", "input"]),
             ("output", Kind::Project, vec!["join"]),
-        ]
-        .into_iter()
-        .map(|(id, kind, inputs)| Node {
-            id: id.into(),
-            kind,
-            inputs: inputs.into_iter().map(Into::into).collect(),
-            schema: "vector-v1".into(),
-        })
-        .collect(),
-        arrangements: ["input", "output"]
-            .into_iter()
-            .map(|id| Arrangement { id: id.into(), node: id.into(), schema: "vector-v1".into() })
-            .collect(),
-        outputs: vec!["output".into()],
-    };
+        ],
+        &[("input", "input"), ("output", "output")],
+        &["output"],
+    );
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = calls.clone();
     let operators = BTreeMap::from([

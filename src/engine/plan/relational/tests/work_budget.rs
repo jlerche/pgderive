@@ -3,7 +3,7 @@ use crate::engine::{
     Batch,
     dataflow::{Group, OrderedSelection, Partition, Project, TimedBatch},
     execution::{CapacityExceeded, Limits},
-    plan::{Arrangement, Definition, Kind, Node, Plan, Settings, Source},
+    plan::{Kind, Plan, Settings},
 };
 use anyhow::{Context, Result};
 use object_store::memory::InMemory;
@@ -21,24 +21,13 @@ fn settings(resident_entries: usize, contributions: usize) -> Settings {
 }
 fn unary(operator: Operator<i64, i64>, options: &Settings) -> Result<Relational<i64, i64>> {
     let kind = operator.kind();
-    let plan = Plan::new(Definition {
-        revision: "work-scope-v1".into(),
-        sources: vec![Source { id: "s".into(), schema: "i64".into() }],
-        nodes: [("s", Kind::Source, "s"), ("p", Kind::Project, "s"), ("q", kind, "p")]
-            .into_iter()
-            .map(|(id, kind, input)| Node {
-                id: id.into(),
-                kind,
-                inputs: vec![input.into()],
-                schema: "i64".into(),
-            })
-            .collect(),
-        arrangements: ["p", "q"]
-            .into_iter()
-            .map(|id| Arrangement { id: id.into(), node: id.into(), schema: "i64".into() })
-            .collect(),
-        outputs: vec!["q".into()],
-    })?;
+    let plan = Plan::new(crate::engine::tests::definition(
+        ("work-scope-v1", "i64"),
+        &["s"],
+        [("s", Kind::Source, vec!["s"]), ("p", Kind::Project, vec!["s"]), ("q", kind, vec!["p"])],
+        &[("p", "p"), ("q", "q")],
+        &["q"],
+    ))?;
     Relational::new(
         plan,
         Operators::from([
@@ -116,33 +105,19 @@ async fn unchanged_ordered_outputs_still_charge_complete_epoch_contributions() -
 }
 
 fn joined(options: &Settings) -> Result<Relational<i64, i64>> {
-    let plan = Plan::new(Definition {
-        revision: "join-work-scope-v1".into(),
-        sources: ["l", "r"]
-            .into_iter()
-            .map(|id| Source { id: id.into(), schema: "i64".into() })
-            .collect(),
-        nodes: [
+    let plan = Plan::new(crate::engine::tests::definition(
+        ("join-work-scope-v1", "i64"),
+        &["l", "r"],
+        [
             ("l", Kind::Source, vec!["l"]),
             ("r", Kind::Source, vec!["r"]),
             ("lp", Kind::Project, vec!["l"]),
             ("rp", Kind::Project, vec!["r"]),
             ("j", Kind::Join, vec!["lp", "rp"]),
-        ]
-        .into_iter()
-        .map(|(id, kind, inputs)| Node {
-            id: id.into(),
-            kind,
-            inputs: inputs.into_iter().map(Into::into).collect(),
-            schema: "i64".into(),
-        })
-        .collect(),
-        arrangements: ["lp", "rp", "j"]
-            .into_iter()
-            .map(|id| Arrangement { id: id.into(), node: id.into(), schema: "i64".into() })
-            .collect(),
-        outputs: vec!["j".into()],
-    })?;
+        ],
+        &[("lp", "lp"), ("rp", "rp"), ("j", "j")],
+        &["j"],
+    ))?;
     let mut operators = Operators::new();
     for id in ["lp", "rp"] {
         operators.insert(

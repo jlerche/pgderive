@@ -2,7 +2,7 @@ use super::{Operator, Operators, Relational};
 use crate::engine::{
     Batch,
     dataflow::{Partition, Project, TimedBatch},
-    plan::{Arrangement, Definition, Kind, Node, Plan, Settings, Source},
+    plan::{Kind, Plan, Settings},
 };
 use anyhow::Result;
 use object_store::memory::InMemory;
@@ -13,29 +13,18 @@ use std::sync::{
 
 type Projection = Project<i64, i64, i64, i64>;
 fn plan() -> Result<Plan> {
-    Plan::new(Definition {
-        revision: "retained-partition-test-v1".into(),
-        sources: vec![Source { id: "source".into(), schema: "i64-v1".into() }],
-        nodes: [
-            ("source", Kind::Source, "source"),
-            ("input", Kind::Project, "source"),
-            ("partition", Kind::Aggregate, "input"),
-            ("output", Kind::Project, "partition"),
-        ]
-        .into_iter()
-        .map(|(id, kind, input)| Node {
-            id: id.into(),
-            kind,
-            inputs: vec![input.into()],
-            schema: "i64-v1".into(),
-        })
-        .collect(),
-        arrangements: ["input", "partition", "output"]
-            .into_iter()
-            .map(|id| Arrangement { id: id.into(), node: id.into(), schema: "i64-v1".into() })
-            .collect(),
-        outputs: vec!["output".into()],
-    })
+    Plan::new(crate::engine::tests::definition(
+        ("retained-partition-test-v1", "i64-v1"),
+        &["source"],
+        [
+            ("source", Kind::Source, vec!["source"]),
+            ("input", Kind::Project, vec!["source"]),
+            ("partition", Kind::Aggregate, vec!["input"]),
+            ("output", Kind::Project, vec!["partition"]),
+        ],
+        &[("input", "input"), ("partition", "partition"), ("output", "output")],
+        &["output"],
+    ))
 }
 fn operators(calls: &Arc<AtomicUsize>) -> Operators<i64, i64> {
     let calls = calls.clone();

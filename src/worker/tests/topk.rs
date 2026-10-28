@@ -26,9 +26,8 @@ fn top_k_specialization_requires_one_bounded_occurrence_cutoff() -> Result<()> {
         ("q.rn<=3 AND q.price>0", false),
     ] {
         let compiled = compile(&query(condition), &contract())?;
-        let ir = compiled.relational();
         assert_eq!(
-            ir.nodes.iter().any(|node| matches!(node, Node::TopK { .. })),
+            compiled.relational().nodes.iter().any(|node| matches!(node, Node::TopK { .. })),
             expected,
             "{condition}"
         );
@@ -87,36 +86,25 @@ async fn history(condition: &str) -> Result<()> {
     let native = contract();
     let options = settings();
     let compiled = compile(&query(condition), &native)?;
-    let ir = compiled.relational();
-    let mut circuit = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("7"))]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", Some("7"))]);
     let c = row(&[("id", Some("3")), ("auction", None), ("price", None)]);
     let moved = row(&[("id", Some("2")), ("auction", Some("1")), ("price", Some("-9"))]);
-    let mut state = BTreeMap::<Row, i64>::new();
     let limit = if condition.ends_with('0') { 0 } else { 3 };
     let equality = condition == "q.rn=3";
-    let mut prior = oracle(&state, limit, equality)?;
-    for (index, changes) in [
-        batch(vec![("bid", a.clone(), 2), ("bid", b.clone(), 3), ("bid", c.clone(), 1)]),
-        batch(vec![("bid", b, -3), ("bid", moved.clone(), 3)]),
-        batch(vec![("bid", a.clone(), -1), ("bid", c.clone(), -1)]),
-        batch(vec![("bid", a, -1), ("bid", moved, -3)]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        super::apply_rows(&mut state, &changes);
-        let after = oracle(&state, limit, equality)?;
-        let expected = super::bag_delta(&prior, &after)?;
-        let prepared =
-            circuit.prepare(relational::inputs(&changes, ir, circuit.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected, "{condition} tick {index}");
-        circuit.commit(prepared)?;
-        prior = after;
-        if index == 1 {
-            super::restart_relational(&mut circuit, &native, &compiled, &options).await?;
-        }
-    }
+    super::History::new((&native, &compiled, &options))
+        .run(
+            [
+                batch(vec![("bid", a.clone(), 2), ("bid", b.clone(), 3), ("bid", c.clone(), 1)]),
+                batch(vec![("bid", b, -3), ("bid", moved.clone(), 3)]),
+                batch(vec![("bid", a.clone(), -1), ("bid", c.clone(), -1)]),
+                batch(vec![("bid", a, -1), ("bid", moved, -3)]),
+            ],
+            |state: &super::RowState| oracle(state, limit, equality),
+            super::apply_rows,
+            |index| index == 1,
+        )
+        .await?;
+
     Ok(())
 }

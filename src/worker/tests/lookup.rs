@@ -7,35 +7,15 @@ type Bag = Batch<relational::Key, Row>;
 const SQL: &str = "SELECT l.category,p.price FROM source.auction l LEFT JOIN LATERAL(SELECT r.price,r.id FROM source.bid r WHERE r.auction=l.k AND r.at<=l.at ORDER BY r.at DESC,r.id DESC LIMIT 1) p ON true WHERE p.price IS NULL OR p.price>=0";
 fn native(oid: u32) -> crate::source::Contract {
     let mut native = contract();
-    native.relations[0].columns.push(crate::source::Column {
-        position: 4,
-        name: "k".into(),
-        oid: 23,
-        modifier: -1,
-        nullable: true,
-        primary: false,
-        collation: 0,
-    });
+    native.relations[0].columns.push(crate::source::tests::column(4, "k", 23));
     for relation in &mut native.relations {
-        relation.columns.push(crate::source::Column {
-            position: if relation.table == "auction" { 5 } else { 4 },
-            name: "at".into(),
+        relation.columns.push(crate::source::tests::column(
+            if relation.table == "auction" { 5 } else { 4 },
+            "at",
             oid,
-            modifier: -1,
-            nullable: true,
-            primary: false,
-            collation: 0,
-        });
+        ));
     }
-    native.relations[1].columns.push(crate::source::Column {
-        position: 5,
-        name: "unused".into(),
-        oid: 25,
-        modifier: -1,
-        nullable: true,
-        primary: false,
-        collation: 0,
-    });
+    native.relations[1].columns.push(crate::source::tests::column(5, "unused", 25));
     native
 }
 fn oracle(left: &State, right: &State, inclusive: bool) -> Result<Bag> {
@@ -69,7 +49,6 @@ async fn history(inclusive: bool) -> Result<()> {
     let compiled = compile(&sql, &native)?;
     let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let left = |id, key, at| {
         row(&[("id", Some(id)), ("category", None), ("other", None), ("k", key), ("at", at)])
     };
@@ -85,44 +64,33 @@ async fn history(inclusive: bool) -> Result<()> {
     let negative = right("3", Some("1"), Some("10"), Some("-7"));
     let moved = left("1", Some("2"), Some("8"));
     let next = right("4", Some("2"), Some("8"), Some("9"));
-    let mut lhs = State::new();
-    let mut rhs = State::new();
-    for (index, changes) in [
-        batch(vec![
-            ("auction", probe.clone(), 2),
-            ("auction", null_key, 1),
-            ("auction", null_time, 1),
-            ("bid", earlier.clone(), 3),
-        ]),
-        batch(vec![("bid", earlier.clone(), -1)]),
-        batch(vec![("bid", null_neighbor.clone(), 1), ("bid", tie.clone(), 1)]),
-        batch(vec![("bid", tie, -1), ("bid", negative.clone(), 1)]),
-        batch(vec![
-            ("auction", probe, -2),
-            ("auction", moved.clone(), 2),
-            ("bid", next.clone(), 2),
-            ("bid", null_neighbor, -1),
-        ]),
-        batch(vec![("bid", next, -1), ("bid", earlier, -2), ("bid", negative, -1)]),
-        batch(vec![]),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let before = oracle(&lhs, &rhs, inclusive)?;
-        for update in &changes.updates {
-            let state = if update.tuple.table == "auction" { &mut lhs } else { &mut rhs };
-            *state.entry(update.tuple.row.clone()).or_default() += update.weight;
-        }
-        let after = oracle(&lhs, &rhs, inclusive)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        if index == 2 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    let query = super::History::new((&native, &compiled, &options))
+        .run(
+            [
+                batch(vec![
+                    ("auction", probe.clone(), 2),
+                    ("auction", null_key, 1),
+                    ("auction", null_time, 1),
+                    ("bid", earlier.clone(), 3),
+                ]),
+                batch(vec![("bid", earlier.clone(), -1)]),
+                batch(vec![("bid", null_neighbor.clone(), 1), ("bid", tie.clone(), 1)]),
+                batch(vec![("bid", tie, -1), ("bid", negative.clone(), 1)]),
+                batch(vec![
+                    ("auction", probe, -2),
+                    ("auction", moved.clone(), 2),
+                    ("bid", next.clone(), 2),
+                    ("bid", null_neighbor, -1),
+                ]),
+                batch(vec![("bid", next, -1), ("bid", earlier, -2), ("bid", negative, -1)]),
+                batch(vec![]),
+            ],
+            |state: &super::JoinedState| oracle(&state.0, &state.1, inclusive),
+            super::apply_joined,
+            |index| index == 2,
+        )
+        .await?;
+
     let checkpoint = query.checkpoint()?;
     let absent =
         row(&[("id", Some("1")), ("auction", Some("2")), ("at", Some("8")), ("price", Some("9"))]);

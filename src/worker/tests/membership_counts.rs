@@ -12,10 +12,7 @@ async fn positive_right_count_changes_have_constant_cold_reads_and_zero_left_del
         &native,
     )?;
     let ir = compiled.relational();
-    let mut options = settings();
-    options.block_rows = 1;
-    options.limits.cache_bytes = 0;
-    options.limits.cache_entries = 0;
+    let options = super::cold_settings(1);
     let right = row(&[("id", Some("1")), ("auction", Some("1")), ("price", None)]);
     let second = row(&[("id", Some("2")), ("auction", Some("1")), ("price", None)]);
     let mut measurements = Vec::new();
@@ -31,9 +28,10 @@ async fn positive_right_count_changes_have_constant_cold_reads_and_zero_left_del
                 .chain([("bid", right.clone(), 1), ("bid", second.clone(), 1)])
                 .collect(),
         );
-        let mut query = relational::build(&native, &compiled, &options)?;
-        query.commit(query.prepare(relational::inputs(&initial, ir, 1)?).await?)?;
-        super::restart_relational(&mut query, &native, &compiled, &options).await?;
+        let mut query = super::cold_query(&compiled, &initial, |_| {
+            relational::build(&native, &compiled, &options)
+        })
+        .await?;
         let delta = batch(vec![("bid", right.clone(), -1)]);
         let before = query.cache_stats()?.misses;
         let prepared = query.prepare(relational::inputs(&delta, ir, 2)?).await?;

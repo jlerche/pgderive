@@ -54,8 +54,7 @@ async fn native_left_join_signed_history_nulls_restart_and_atomic_rejection() ->
     let compiled = compile(SQL, &native)?;
     let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
-    let mut scanned = relational::build_scanned(&native, &compiled, &options)?;
+    let scanned = relational::build_scanned(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", Some("1"))]);
     let a2 = row(&[("id", Some("2")), ("category", Some("nullkey")), ("other", None)]);
     let b = row(&[("id", Some("1")), ("auction", Some("1")), ("price", Some("-2"))]);
@@ -84,27 +83,18 @@ async fn native_left_join_signed_history_nulls_restart_and_atomic_rejection() ->
         batch(vec![("auction", changed, -1), ("auction", a.clone(), 1), ("bid", b, 1)]),
         batch(vec![("auction", a, -1), ("auction", a2, -1), ("bid", null, -1)]),
     ];
-    let mut left = BTreeMap::new();
-    let mut right = BTreeMap::new();
-    for (index, changes) in histories.into_iter().enumerate() {
-        let before = oracle(&left, &right)?;
-        for change in &changes.updates {
-            let state = if change.tuple.table == "auction" { &mut left } else { &mut right };
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
-        let after = oracle(&left, &right)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(work.output().batch, expected);
-        let reference =
-            scanned.prepare(relational::inputs(&changes, ir, scanned.time() + 1)?).await?;
-        assert_eq!(work.output().batch, reference.output().batch);
-        scanned.commit(reference)?;
-        query.commit(work)?;
-        if index == 2 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
+    let query = super::History {
+        scanned: Some(scanned),
+        ..super::History::new((&native, &compiled, &options))
     }
+    .run(
+        histories,
+        |state: &super::JoinedState| oracle(&state.0, &state.1),
+        super::apply_joined,
+        |index| index == 2,
+    )
+    .await?;
+
     let before = query.checkpoint()?;
     let absent = row(&[("id", Some("999")), ("auction", Some("1")), ("price", Some("-99"))]);
     assert!(
@@ -132,9 +122,7 @@ async fn repeated_history(multiway: bool) -> Result<()> {
     };
     let native = contract();
     let compiled = compile(sql, &native)?;
-    let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("category", None), ("other", None)]);
     let a2 = row(&[("id", Some("2")), ("category", Some("two")), ("other", None)]);
     let b = row(&[("id", Some("1")), ("auction", Some("1")), ("price", Some("-2"))]);
@@ -163,23 +151,15 @@ async fn repeated_history(multiway: bool) -> Result<()> {
         ]),
         batch(vec![("auction", a2, -1), ("bid", changed, -1)]),
     ];
-    let mut bids = BTreeMap::new();
-    let mut auctions = BTreeMap::new();
-    for (index, changes) in histories.into_iter().enumerate() {
-        let before = repeated_oracle(&bids, &auctions, multiway)?;
-        for change in &changes.updates {
-            let state = if change.tuple.table == "auction" { &mut auctions } else { &mut bids };
-            *state.entry(change.tuple.row.clone()).or_default() += change.weight;
-        }
-        let after = repeated_oracle(&bids, &auctions, multiway)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(work.output().batch, expected);
-        query.commit(work)?;
-        if index == 1 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    super::History::new((&native, &compiled, &options))
+        .run(
+            histories,
+            |state: &super::JoinedState| repeated_oracle(&state.1, &state.0, multiway),
+            super::apply_joined,
+            |index| index == 1,
+        )
+        .await?;
+
     Ok(())
 }
 fn repeated_oracle(

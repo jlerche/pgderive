@@ -4,21 +4,15 @@ use crate::compiler::{
     projection::{OutputColumn, Projected},
     relational::{Binding, Source},
 };
-use crate::source::{Column as NativeColumn, Contract};
+use crate::source::{Contract, tests::column};
 fn contract() -> Contract {
     let mut native = crate::source::tests::contract();
     for (position, name, oid, nullable) in
         [(2, "category", 23, false), (3, "optional", 23, true), (4, "parent", 20, true)]
     {
-        native.relations[0].columns.push(NativeColumn {
-            position,
-            name: name.into(),
-            oid,
-            modifier: -1,
-            nullable,
-            primary: false,
-            collation: 0,
-        });
+        let mut field = column(position, name, oid);
+        field.nullable = nullable;
+        native.relations[0].columns.push(field);
     }
     let mut other = native.relations[0].clone();
     other.oid = 43;

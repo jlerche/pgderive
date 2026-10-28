@@ -5,7 +5,6 @@ use crate::{
     worker::program::relational,
 };
 use anyhow::{Context, Result};
-use futures_util::TryStreamExt;
 use std::collections::BTreeMap;
 fn baseline(compiled: &Compiled) -> Result<Compiled> {
     let mut result = compiled.clone();
@@ -54,30 +53,16 @@ async fn ordered_extrema_reduce_cold_reads_with_measured_write_amplification() -
     let delta = batch(vec![("bid", source[500].clone(), -1), ("bid", changed, 1)]);
     let mut measured = Vec::new();
     for definition in [&scan, &compiled] {
-        let mut options = settings();
-        options.block_rows = 8;
-        options.limits.cache_bytes = 0;
-        options.limits.cache_entries = 0;
+        let options = super::cold_settings(8);
         let ir = definition.relational();
-        let mut query = relational::build(&native, definition, &options)?;
-        query.commit(query.prepare(relational::inputs(&initial, ir, 1)?).await?)?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, definition, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
-        let before_objects = options.store.list(None).try_collect::<Vec<_>>().await?;
-        let before_reads = query.cache_stats()?.misses;
+        let query = super::cold_query(definition, &initial, |_| {
+            relational::build(&native, definition, &options)
+        })
+        .await?;
+        let probe = super::Probe::start(&query, &options).await?;
         let work = query.prepare(relational::inputs(&delta, ir, 2)?).await?;
         assert_eq!(work.output().batch, Batch::from_updates([])?);
-        let after_objects = options.store.list(None).try_collect::<Vec<_>>().await?;
-        let writes = after_objects
-            .iter()
-            .filter(|object| !before_objects.iter().any(|old| old.location == object.location))
-            .collect::<Vec<_>>();
-        measured.push((
-            query.cache_stats()?.misses - before_reads,
-            writes.len(),
-            writes.iter().map(|object| object.size).sum::<u64>(),
-        ));
+        measured.push(probe.finish(&query, &options).await?);
     }
     assert!(
         measured[1].0 < measured[0].0,
@@ -126,7 +111,6 @@ async fn ordered_extrema_history_full_identity_null_filter_and_cold_restart() ->
     )?;
     let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("-9"))]);
     let b = row(&[("id", Some("2")), ("auction", None), ("price", Some("7"))]);
     let c = row(&[("id", Some("3")), ("auction", Some("1")), ("price", None)]);
@@ -141,25 +125,18 @@ async fn ordered_extrema_history_full_identity_null_filter_and_cold_restart() ->
         vec![],
         vec![(a, -1)],
     ];
-    let mut source = BTreeMap::new();
-    let mut output = Batch::from_updates([])?;
-    for updates in histories {
-        for (row, weight) in &updates {
-            *source.entry(row.clone()).or_insert(0) += weight;
-        }
-        let changes =
-            batch(updates.into_iter().map(|(row, weight)| ("bid", row, weight)).collect());
-        let work = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        output = Batch::from_updates(
-            output
-                .iter()
-                .chain(work.output().batch.iter())
-                .map(|(tuple, weight)| (tuple.clone(), *weight)),
-        )?;
-        assert_eq!(output, oracle(&source)?);
-        query.commit(work)?;
-        super::restart_relational(&mut query, &native, &compiled, &options).await?;
-    }
+    let mut query =
+        super::History { snapshot: true, ..super::History::new((&native, &compiled, &options)) }
+            .run(
+                histories.into_iter().map(|updates| {
+                    batch(updates.into_iter().map(|(row, weight)| ("bid", row, weight)).collect())
+                }),
+                oracle,
+                super::apply_rows,
+                |_| true,
+            )
+            .await?;
+
     let live = row(&[("id", Some("10")), ("auction", None), ("price", Some("-999"))]);
     let live = batch(vec![("bid", live, 1)]);
     query.commit(query.prepare(relational::inputs(&live, ir, query.time() + 1)?).await?)?;

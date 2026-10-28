@@ -73,10 +73,7 @@ async fn distinct_delta_uses_fewer_cold_blocks_than_affected_group_scan() -> Res
         &native,
     )?;
     let baseline = scan_baseline(&compiled)?;
-    let mut options = settings();
-    options.block_rows = 8;
-    options.limits.cache_entries = 0;
-    options.limits.cache_bytes = 0;
+    let options = super::cold_settings(8);
     let source = (0..1000)
         .map(|id| {
             row(&[
@@ -92,11 +89,10 @@ async fn distinct_delta_uses_fewer_cold_blocks_than_affected_group_scan() -> Res
     let mut measurements = Vec::new();
     for definition in [&baseline, &compiled] {
         let ir = definition.relational();
-        let mut query = relational::build(&native, definition, &options)?;
-        query.commit(query.prepare(relational::inputs(&initial, ir, 1)?).await?)?;
-        let checkpoint = query.checkpoint()?;
-        query = relational::build(&native, definition, &options)?;
-        query.restore_checkpoint(checkpoint).await?;
+        let query = super::cold_query(definition, &initial, |_| {
+            relational::build(&native, definition, &options)
+        })
+        .await?;
         let before = query.cache_stats()?.misses;
         let update = query.prepare(relational::inputs(&delta, ir, 2)?).await?;
         assert_eq!(update.output().batch, Batch::from_updates([])?);

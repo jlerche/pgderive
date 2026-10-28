@@ -3,7 +3,7 @@ use crate::engine::{
     dataflow::{Arrangement, GroupSum, Join, Project, Statistics, SumState, TimedBatch},
     execution::Limits,
     plan::{
-        Checkpoint, Definition, Kind, Node, Plan, Settings, Source,
+        Checkpoint, Kind, Plan, Settings,
         relational::{Operator, Relational},
     },
 };
@@ -21,13 +21,10 @@ fn stream(
     Ok(TimedBatch { time, batch: Batch::from_updates(rows)? })
 }
 fn plan() -> Result<Plan> {
-    Plan::new(Definition {
-        revision: "budget-test-v2".into(),
-        sources: ["as", "bs"]
-            .into_iter()
-            .map(|id| Source { id: id.into(), schema: "values".into() })
-            .collect(),
-        nodes: [
+    Plan::new(crate::engine::tests::definition(
+        ("budget-test-v2", "values"),
+        &["as", "bs"],
+        [
             ("a", Kind::Source, vec!["as"]),
             ("b", Kind::Source, vec!["bs"]),
             ("left", Kind::Project, vec!["a"]),
@@ -35,31 +32,16 @@ fn plan() -> Result<Plan> {
             ("join", Kind::Join, vec!["left", "right"]),
             ("aggregate", Kind::Statistics, vec!["join"]),
             ("output", Kind::Project, vec!["aggregate"]),
-        ]
-        .into_iter()
-        .map(|(id, kind, inputs)| Node {
-            id: id.into(),
-            kind,
-            inputs: inputs.into_iter().map(str::to_owned).collect(),
-            schema: "values".into(),
-        })
-        .collect(),
-        arrangements: [
+        ],
+        &[
             ("left", "left"),
             ("right", "right"),
             ("joined", "join"),
             ("sums", "aggregate"),
             ("output", "output"),
-        ]
-        .into_iter()
-        .map(|(id, node)| crate::engine::plan::Arrangement {
-            id: id.into(),
-            node: node.into(),
-            schema: "values".into(),
-        })
-        .collect(),
-        outputs: vec!["output".into()],
-    })
+        ],
+        &["output"],
+    ))
 }
 type Query = Relational<i64, Vec<i64>>;
 type SourceBatches = Vec<Batch<i64, Vec<i64>>>;

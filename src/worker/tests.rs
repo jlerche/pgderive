@@ -315,36 +315,101 @@ mod expression_composition;
 
 mod sliding_windows;
 
+type RowState = std::collections::BTreeMap<Row, i64>;
+type JoinedState = (RowState, RowState);
+type RowBatch = Batch<program::relational::Key, Row>;
+
+fn apply_joined(state: &mut JoinedState, changes: &weighted::Batch) {
+    for change in &changes.updates {
+        let rows = if change.tuple.table == "auction" { &mut state.0 } else { &mut state.1 };
+        *rows.entry(change.tuple.row.clone()).or_default() += change.weight;
+    }
+}
+struct History<'a> {
+    context: (&'a Contract, &'a crate::compiler::Compiled, &'a Settings),
+    scanned: Option<program::relational::Query>,
+    deltas: bool,
+    snapshot: bool,
+    compact: bool,
+}
+impl<'a> History<'a> {
+    const fn new(context: (&'a Contract, &'a crate::compiler::Compiled, &'a Settings)) -> Self {
+        Self { context, scanned: None, deltas: false, snapshot: false, compact: false }
+    }
+    async fn run<S: Default>(
+        mut self,
+        changes: impl IntoIterator<Item = weighted::Batch>,
+        oracle: impl Fn(&S) -> Result<RowBatch>,
+        apply: impl Fn(&mut S, &weighted::Batch),
+        restart: impl Fn(usize) -> bool,
+    ) -> Result<program::relational::Query> {
+        let (native, compiled, options) = self.context;
+        let mut query = build(native, compiled, options)?;
+        let mut state = S::default();
+        let mut output = Batch::from_updates([])?;
+        for (index, changes) in changes.into_iter().enumerate() {
+            let before = oracle(&state)?;
+            apply(&mut state, &changes);
+            let after = oracle(&state)?;
+            let expected = bag_delta(&before, &after)?;
+            let prepared = query
+                .prepare(program::relational::inputs(
+                    &changes,
+                    compiled.relational(),
+                    query.time() + 1,
+                )?)
+                .await?;
+            assert_eq!(prepared.output().batch, expected, "history step {index}");
+            if self.snapshot {
+                output = Batch::from_updates(
+                    output
+                        .iter()
+                        .chain(prepared.output().batch.iter())
+                        .map(|(tuple, weight)| (tuple.clone(), *weight)),
+                )?;
+                assert_eq!(output, after);
+            }
+            if self.deltas {
+                program::relational::deltas(
+                    &query,
+                    &prepared.output().batch,
+                    &compiled.relational().output,
+                )
+                .await?;
+            }
+            query.prepared_checkpoint(&prepared)?;
+            if let Some(scanned) = &mut self.scanned {
+                let reference = scanned
+                    .prepare(program::relational::inputs(
+                        &changes,
+                        compiled.relational(),
+                        scanned.time() + 1,
+                    )?)
+                    .await?;
+                assert_eq!(prepared.output().batch, reference.output().batch);
+                scanned.commit(reference)?;
+            }
+            query.commit(prepared)?;
+            if restart(index) {
+                restart_relational(&mut query, native, compiled, options).await?;
+            }
+            if self.compact {
+                let work = query.prepare_compaction().await?;
+                query.commit_compaction(work)?;
+            }
+        }
+        Ok(query)
+    }
+}
+
 /// Check single-source row histories without sharing the oracle's implementation.
 async fn check_row_history(
     context: (&Contract, &crate::compiler::Compiled, &Settings),
     changes: impl IntoIterator<Item = weighted::Batch>,
-    oracle: impl Fn(
-        &std::collections::BTreeMap<Row, i64>,
-    ) -> Result<Batch<program::relational::Key, Row>>,
+    oracle: impl Fn(&RowState) -> Result<RowBatch>,
     restart: impl Fn(usize) -> bool,
 ) -> Result<program::relational::Query> {
-    let (native, compiled, options) = context;
-    let mut query = build(native, compiled, options)?;
-    let mut state = std::collections::BTreeMap::new();
-    for (index, changes) in changes.into_iter().enumerate() {
-        let before = oracle(&state)?;
-        apply_rows(&mut state, &changes);
-        let expected = bag_delta(&before, &oracle(&state)?)?;
-        let prepared = query
-            .prepare(program::relational::inputs(
-                &changes,
-                compiled.relational(),
-                query.time() + 1,
-            )?)
-            .await?;
-        assert_eq!(prepared.output().batch, expected, "history step {index}");
-        query.commit(prepared)?;
-        if restart(index) {
-            restart_relational(&mut query, native, compiled, options).await?;
-        }
-    }
-    Ok(query)
+    History::new(context).run(changes, oracle, apply_rows, restart).await
 }
 
 fn peer_changes() -> [weighted::Batch; 4] {
@@ -370,3 +435,54 @@ mod fast_replay;
 
 mod sealed_input;
 mod streaming_bootstrap;
+
+fn cold_settings(block_rows: usize) -> Settings {
+    let mut options = settings();
+    options.block_rows = block_rows;
+    options.limits.cache_bytes = 0;
+    options.limits.cache_entries = 0;
+    options
+}
+async fn cold_query(
+    compiled: &crate::compiler::Compiled,
+    initial: &weighted::Batch,
+    build: impl Fn(bool) -> Result<program::relational::Query>,
+) -> Result<program::relational::Query> {
+    let mut query = build(false)?;
+    query.commit(
+        query.prepare(program::relational::inputs(initial, compiled.relational(), 1)?).await?,
+    )?;
+    let mut reopened = build(true)?;
+    reopened.restore_checkpoint(query.checkpoint()?).await?;
+    Ok(reopened)
+}
+struct Probe {
+    objects: Vec<object_store::ObjectMeta>,
+    reads: u64,
+}
+impl Probe {
+    async fn start(query: &program::relational::Query, options: &Settings) -> Result<Self> {
+        use futures_util::TryStreamExt as _;
+        Ok(Self {
+            objects: options.store.list(None).try_collect().await?,
+            reads: query.cache_stats()?.misses,
+        })
+    }
+    async fn finish(
+        self,
+        query: &program::relational::Query,
+        options: &Settings,
+    ) -> Result<(u64, usize, u64)> {
+        use futures_util::TryStreamExt as _;
+        let objects = options.store.list(None).try_collect::<Vec<_>>().await?;
+        let fresh = objects
+            .iter()
+            .filter(|object| !self.objects.iter().any(|old| old.location == object.location))
+            .collect::<Vec<_>>();
+        Ok((
+            query.cache_stats()?.misses - self.reads,
+            fresh.len(),
+            fresh.iter().map(|object| object.size).sum(),
+        ))
+    }
+}

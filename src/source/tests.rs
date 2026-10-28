@@ -2,6 +2,18 @@ use super::{Column, Contract, Identity, Relation};
 use anyhow::{Result, bail};
 use postgres_replication::protocol::LogicalReplicationMessage;
 
+pub fn column(position: i16, name: &str, oid: u32) -> Column {
+    Column {
+        position,
+        name: name.into(),
+        oid,
+        modifier: -1,
+        nullable: true,
+        primary: false,
+        collation: 0,
+    }
+}
+
 pub fn contract() -> Contract {
     Contract {
         environment: crate::source::Environment::fixture(),

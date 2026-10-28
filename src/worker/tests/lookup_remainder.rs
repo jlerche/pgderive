@@ -1,6 +1,6 @@
 //! `PostgreSQL` q13 requires a typed modulo key before predecessor selection.
 use super::contract;
-use crate::{compiler::compile, source::Column};
+use crate::{compiler::compile, source::tests::column};
 use anyhow::{Context, Result};
 
 fn native(input: u32, key: u32) -> crate::source::Contract {
@@ -11,15 +11,6 @@ fn native(input: u32, key: u32) -> crate::source::Contract {
     native.relations[0].columns[2].oid = key;
     native.relations[0].columns[2].collation = 0;
     native.relations[1].columns[1].oid = input;
-    let column = |position, name: &str, oid| Column {
-        position,
-        name: name.into(),
-        oid,
-        modifier: -1,
-        nullable: true,
-        primary: false,
-        collation: 0,
-    };
     native.relations[0].columns.push(column(4, "date_time", 1184));
     native.relations[1].columns.extend([
         column(4, "bidder", 20),
@@ -142,7 +133,6 @@ fn changes() -> Vec<crate::weighted::Batch> {
 #[tokio::test]
 async fn modulo_predecessor_matches_independent_signed_bags_and_restart() -> Result<()> {
     use super::settings;
-    use crate::worker::program::relational;
     let sql =
         include_str!("../../../queries/nexmark/q13.sql").replace("nexmark.", "source.").replace(
             "SELECT b.auction,b.bidder,b.price,b.date_time,p.value",
@@ -150,24 +140,21 @@ async fn modulo_predecessor_matches_independent_signed_bags_and_restart() -> Res
         );
     let native = native(23, 23);
     let compiled = compile(&sql, &native)?;
-    let ir = compiled.relational();
     let options = settings();
-    let mut query = relational::build(&native, &compiled, &options)?;
-    let mut state = State::new();
-    for (index, changes) in changes().into_iter().enumerate() {
-        let before = oracle(&state)?;
-        for update in &changes.updates {
-            *state.entry((update.tuple.table.clone(), update.tuple.row.clone())).or_default() +=
-                update.weight;
-        }
-        let after = oracle(&state)?;
-        let expected = super::bag_delta(&before, &after)?;
-        let prepared = query.prepare(relational::inputs(&changes, ir, query.time() + 1)?).await?;
-        assert_eq!(prepared.output().batch, expected);
-        query.commit(prepared)?;
-        if index == 2 {
-            super::restart_relational(&mut query, &native, &compiled, &options).await?;
-        }
-    }
+    super::History::new((&native, &compiled, &options))
+        .run(
+            changes(),
+            oracle,
+            |state: &mut State, changes| {
+                for update in &changes.updates {
+                    *state
+                        .entry((update.tuple.table.clone(), update.tuple.row.clone()))
+                        .or_default() += update.weight;
+                }
+            },
+            |index| index == 2,
+        )
+        .await?;
+
     Ok(())
 }

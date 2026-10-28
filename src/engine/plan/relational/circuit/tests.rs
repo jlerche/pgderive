@@ -3,7 +3,7 @@ use crate::engine::reader::WriteLimits;
 use crate::engine::{
     dataflow::{Project, Statistics},
     execution::{Consolidator, Limits, Sealed},
-    plan::{Arrangement, Definition, Settings, Source},
+    plan::Settings,
     reader::ObjectBatch,
     trace::Run,
 };
@@ -28,28 +28,17 @@ fn operator() -> Statistics<i64, String> {
     )
 }
 fn execution(store: Arc<dyn object_store::ObjectStore>) -> Result<Arc<Execution<i64, String>>> {
-    let plan = Plan::new(Definition {
-        revision: "statistics-proof".into(),
-        sources: vec![Source { id: "source".into(), schema: "wide".into() }],
-        nodes: [
-            ("source", Kind::Source, "source"),
-            ("input", Kind::Project, "source"),
-            ("stats", Kind::Statistics, "input"),
-        ]
-        .into_iter()
-        .map(|(id, kind, input)| Node {
-            id: id.into(),
-            kind,
-            inputs: vec![input.into()],
-            schema: "wide".into(),
-        })
-        .collect(),
-        arrangements: ["input", "stats"]
-            .into_iter()
-            .map(|id| Arrangement { id: id.into(), node: id.into(), schema: "wide".into() })
-            .collect(),
-        outputs: vec!["stats".into()],
-    })?;
+    let plan = Plan::new(crate::engine::tests::definition(
+        ("statistics-proof", "wide"),
+        &["source"],
+        [
+            ("source", Kind::Source, vec!["source"]),
+            ("input", Kind::Project, vec!["source"]),
+            ("stats", Kind::Statistics, vec!["input"]),
+        ],
+        &[("input", "input"), ("stats", "stats")],
+        &["stats"],
+    ))?;
     let operators = [
         (
             "input".into(),
