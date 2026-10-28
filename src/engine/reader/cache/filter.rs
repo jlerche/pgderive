@@ -185,14 +185,6 @@ impl Filters {
         }
         Ok(())
     }
-    pub(super) fn clear(&self) -> Result<()> {
-        let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("filter lock poisoned"))?;
-        state.entries.clear();
-        state.hand = None;
-        state.bytes = 0;
-        drop(state);
-        Ok(())
-    }
     pub(super) fn stats(&self) -> Result<(usize, usize, u64, u64)> {
         let state = self.state.lock().map_err(|_| anyhow::anyhow!("filter lock poisoned"))?;
         Ok((state.bytes, state.entries.len(), state.rejected, state.eviction_steps))

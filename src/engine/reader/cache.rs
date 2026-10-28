@@ -339,13 +339,7 @@ impl BlockCache {
                 || state.blocks.len() >= self.entries
                 || self.bytes == 0
             {
-                state.blocks.clear();
-                state.recency.clear();
-                state.live.clear();
-                state.stats.bytes = 0;
-                state.stats.entries = 0;
                 state.overflowed = true;
-                self.filters.clear()?;
                 return Ok(());
             }
         }

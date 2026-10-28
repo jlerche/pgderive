@@ -291,3 +291,5 @@ async fn full_tuple_probes_match_merged_bags_and_reject_invalid_retractions() ->
     assert!(ObjectBatch::<i64, i64>::open(store, reference, "point-i64-v1").await.is_err());
     Ok(())
 }
+
+mod promotion;
