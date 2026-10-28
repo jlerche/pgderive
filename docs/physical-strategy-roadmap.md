@@ -113,7 +113,7 @@ was **#3**. The status below preserves that original numbering.
 
 | Original item | Status | Completed work and remaining scope |
 |---|---|---|
-| 1. Keyed sink access | Implemented | Both UPDATE and DELETE use proven key predicates plus exact old-tuple/affected-row checks; keyed sinks no longer create the changing full-row hash index. Generic bag behavior remains intact. |
+| 1. Keyed sink access | Implemented | Both UPDATE and DELETE use proven key predicates plus exact old-tuple/affected-row checks; keyed sinks no longer create the changing full-row hash index. Bounded key probes plus statement-local tuple-location targeting prevent the demo-sized full-sink hash scan in tested generic/custom plans. Generic bag behavior remains intact. |
 | 2. Relational property analysis | Implemented | Shared candidate keys, nullability/equality, cardinality and unchanged-value identities replace the three old walkers and serve sinks, positional windows and committed statistics. Unsupported shapes remain conservative proof barriers. |
 | 3. Publication reuse | Implemented | Bound templates/codecs and prepared statements, encoded immutable metadata/checkpoint refresh, both ordered pipelines and transaction-scoped validation reuse across publication, checkpoint and maintenance are implemented. Claims, recovery and ACK confirmation retain independent authoritative validation. |
 | 4. Epoch controller cost model | Implemented cost-feedback slice | Bounded typed rows/bytes/source-key images, forecast output DML mix, measured non-DML publication, admission and maintenance overhead feed the existing controller. See [cost model](epoch-cost-model.md); empirical estimates and short regression checks are not production SLO guarantees. |

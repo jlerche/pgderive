@@ -65,20 +65,45 @@ def statements(fixture):
     return result
 
 
+def plan_nodes(plan):
+    yield plan
+    for child in plan.get('Plans',[]):
+        yield from plan_nodes(child)
+
+
+def require_keyed_access(plans):
+    for name,record in plans.items():
+        nodes=list(plan_nodes(record['explain'][0]['Plan']))
+        targets=[node for node in nodes if node.get('Relation Name')=='groups']
+        assert targets, name+' has no sink access'
+        assert not any(node['Node Type']=='Seq Scan' for node in targets), name+' scans the full sink'
+        assert any(node['Node Type']=='Tid Scan' for node in targets), name+' has no bounded modifying scan'
+        assert any(node['Node Type'] in ['Index Scan','Index Only Scan'] for node in targets), name+' has no key probe'
+        probes=[node for node in targets if node['Node Type'] in ['Tid Scan','Index Scan','Index Only Scan']]
+        assert sum(node['Actual Rows']*node['Actual Loops'] for node in probes)<=2*record['rows'], name+' revisits sink rows'
+        batches=[node for node in nodes if node['Node Type']=='CTE Scan']
+        assert sum(node['Actual Rows']*node['Actual Loops'] for node in batches)<=4*record['rows'], name+' rescans the batch'
+        assert record['explain'][0]['Plan']['Plans'][-1]['Actual Rows']==record['rows'], name
+
+
 def plans(fixture,queries):
-    values=json.loads(fixture.sql(f"SELECT json_build_array(book::text,positions::text,units::text) FROM {fixture.name}.groups WHERE book=1"))
-    old=[None,values]
-    new=[None,[*values[:2],str(Decimal(values[2])+1)]]
     result={}
-    for mode,payload in [('update',[[[old,new],1]]),('delete',[[old,1]])]:
-        encoded=json.dumps(payload).replace("'","''")
-        sql=queries[mode].replace('$1',"'"+encoded+"'::jsonb")
-        raw=fixture.sql('BEGIN; EXPLAIN(ANALYZE,BUFFERS,WAL,FORMAT JSON) '+sql+'; ROLLBACK')
-        (fixture.output/('plan-'+mode+'.txt')).write_text(raw)
-        lines=raw.splitlines()
-        assert lines[0]=='BEGIN' and lines[-1]=='ROLLBACK'
-        result[mode]=json.loads('\n'.join(lines[1:-1]))
-        assert result[mode][0]['Plan']['Plans'][-1]['Actual Rows']==1
+    for size in [1,32,512]:
+        rows=json.loads(fixture.sql(f"SELECT json_agg(r.values) FROM (SELECT json_build_array(book::text,positions::text,units::text) AS values FROM {fixture.name}.groups ORDER BY book LIMIT {size})r"))
+        old=[[None,values] for values in rows]
+        pairs=[[previous,[None,[*previous[1][:2],str(Decimal(previous[1][2] or 0)+1)]]] for previous in old]
+        for mode in ['force_generic_plan','force_custom_plan']:
+            for action,tuples in [('update',pairs),('delete',old)]:
+                name=f'{mode}-{action}-{size}'
+                payload=json.dumps([[value,1] for value in tuples]).replace("'","''")
+                raw=fixture.sql('BEGIN; SET LOCAL plan_cache_mode='+mode+
+                    '; PREPARE sink_plan_probe(jsonb) AS '+queries[action]+
+                    "; EXPLAIN(ANALYZE,BUFFERS,WAL,FORMAT JSON) EXECUTE sink_plan_probe('"+payload+
+                    "'::jsonb); DEALLOCATE sink_plan_probe; ROLLBACK")
+                (fixture.output/('plan-'+name+'.txt')).write_text(raw)
+                explained=json.loads(raw[raw.index('['):raw.rindex(']')+1])
+                assert explained[0]['Plan']['Plans'][-1]['Actual Rows']==len(rows), name
+                result[name]={'rows':len(rows),'explain':explained}
     return result
 
 
@@ -94,10 +119,12 @@ def measure(output,command,groups,repetitions,maintenance_ticks):
         fixture.sql('CREATE EXTENSION IF NOT EXISTS pg_stat_statements')
         log=fixture.sql("SELECT pg_current_logfile('jsonlog')").strip()
         fixture.statement_log=(log,int(fixture.sql("SELECT (pg_stat_file('"+log.replace("'","''")+"')).size")))
+        storage_started=time.monotonic()
         worker=fixture.start(command,'worker');ready=worker.event('ready');fixture.verify()
         # Equal page-space headroom isolates index eligibility, not default-page packing.
         fixture.sql(f'ALTER TABLE {fixture.name}.groups SET(fillfactor=60)')
         fixture.sql(f'VACUUM(FULL,ANALYZE) {fixture.name}.groups')
+        fixture.sql('CHECKPOINT')
         fixture.sql('SELECT pg_stat_statements_reset()')
         before=table_stats(fixture);cpu_before=worker_cpu(worker)
         ticks=[];logical=ready['time'];upper=groups
@@ -129,6 +156,7 @@ def measure(output,command,groups,repetitions,maintenance_ticks):
                 'plans':plans(fixture,queries),'actual_worker_sql':queries,
                 'scope':'local production worker; repeated small and chunk-crossing batches; native binary oracle and safe ACK; matched fillfactor60; not a throughput or production freshness SLO'}
         fixture.verify()
+        report['storage_interval_monotonic']=[storage_started,time.monotonic()]
         (output/'measurement.json').write_text(json.dumps(report,indent=2)+'\n')
         return report
 
@@ -157,6 +185,8 @@ def main():
     for name,binary in pairs:
         path=output/name;path.mkdir()
         report=measure(path,[binary],args.groups,args.repetitions,args.maintenance_ticks);summary[name]={key:report[key] for key in ['physical','index_count','index_bytes','worker_cpu_ms']}
+        if name=='candidate':
+            require_keyed_access(report['plans'])
         summary[name]['maintenance_p50_ms']=statistics.median(row['elapsed_us']/1000 for row in report['maintenance'])
         summary[name]['maintenance_samples']=len(report['maintenance'])
         summary[name]['postgres_execution_ms']=sum(row['execution_ms'] for row in report['postgres'])

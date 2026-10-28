@@ -12,15 +12,15 @@ sink_key = ["book_id"]
 sql = "SELECT book_id, COUNT(*) AS positions FROM public.positions GROUP BY book_id"
 ```
 
-The current proof accepts a final grouped aggregate (including ordered grouped
-aggregates), optionally followed by filters or maps that leave the key unchanged. Every grouping column must appear
-unchanged in the declared output key and must be statically non-NULL. Aliased
+A declared key must be proven unique and non-NULL by the shared
+[relational property analysis](relational-properties.md). Complete grouped keys,
+key-preserving projections and proven joins can supply that certificate. Aliased
 output labels and composite keys are supported. Keys are currently limited to
-boolean, integer, UUID, timestamp and timestamptz types. Nullable keys, incomplete
-grouping keys, projections without a grouping proof, transformed output keys,
-text/numeric keys and other unproven shapes fail initialization. These are proof
-limitations, not claims that the SQL could never have a key. PostgreSQL enforces
-the proven constraint as a final safety check; there is no upsert or row collapse.
+boolean, integer, UUID, timestamp and timestamptz types. Nullable or incomplete
+keys, unproven transformed keys and text/numeric keys fail initialization. These
+are proof limitations, not claims that the SQL could never have a key.
+PostgreSQL enforces the proven constraint as a final safety check; there is no
+upsert or row collapse.
 
 The key is persisted in the sink binding. Restart checks column nullability and
 the exact immediate, validated primary key. A changed or missing key is rejected.
@@ -34,8 +34,9 @@ source progress and slot acknowledgement retain the existing durability ordering
 Both UPDATE and DELETE look up candidates using the complete declared key and
 then verify the exact old tuple's binary representation. The keyed path creates
 only its primary-key index; it does not create or depend on the generic full-row
-hash index. PostgreSQL remains free to choose a sequential scan for large
-batches. Non-key value updates can therefore use HOT when page space and any
+hash index. Key-directed candidate probes and statement-local tuple locations
+bound the target access in the tested plans described below. Non-key value
+updates can therefore use HOT when page space and any
 other user-created indexes permit it; HOT is not guaranteed.
 
 Existing development sinks may still have the obsolete full-row hash index.
@@ -223,3 +224,121 @@ core gate: 648 Rust tests, 147 Python tests, 154 live worker results plus rebuil
 and 97.15% production line coverage. The additional barrier result is required
 by both core and full result-count verification. Disposable PostgreSQL used
 tmpfs with no persistent volumes; results and failure evidence were retained.
+
+
+## Bounded keyed target access
+
+A key predicate alone did not ensure key-directed publication. At demo-sized
+state PostgreSQL estimated `jsonb_array_elements` at 100 rows, chose a hash join
+and scanned the whole sink even for one requested replacement. The hash condition
+also encoded the full binary image of every scanned target tuple. This was an
+existing SQL planning problem, not a new object-store read amplification.
+
+UPDATE and keyed DELETE now share a materialized candidate selection. Each
+requested key probes the owned heap through a LATERAL subquery with `OFFSET 0`
+to prevent flattening into a full-target join. The modifying statement combines
+a batch join with an array of the selected tuple locations. This avoids both a
+whole-target scan and a correlated replacement lookup that would rescan the
+batch for every target. The exact old binary representation is checked again at
+the modifying node, wrapped in `COALESCE(..., false)` so it stays a residual
+check rather than a whole-target hash key. NULL rejection is unchanged.
+
+Tuple locations identify candidates in this statement only. They are never
+stored as durable or logical row identity. Both probes and modifications use
+`ONLY` to confine locations to the owned physical heap. Existing initialization
+and recovery validation now reject either direction of table inheritance. This
+does not add support for arbitrary privileged sink DDL during execution.
+
+The existing unit-weight key validation, full old-image check and exact affected
+row count remain authoritative. A concurrently changed row version can reject
+publication conservatively, even for an equivalent external rewrite; it cannot
+silently overwrite a different old tuple. Existing source/progress/sink changes
+still commit atomically, before slot acknowledgement. No additional row-locking
+SELECT, SQL round trip, object upload, alternate publication path or format
+version was introduced. Generic bag publication is unchanged.
+
+The reused keyed worker harness now holds an external row update while the
+engine tries UPDATE or DELETE. A committed mismatch must reject publication,
+leave other result rows and durable progress unchanged, and preserve the exact
+previous source ACK. A rolled-back conflicting update must allow native-equal
+publication. Separate restart cases reject both inheritance directions. The
+existing composite-key, chunk-boundary, NULL, numeric representation and recovery
+checks still run through production code.
+
+Fast paired worker measurements use 3,600 and 20,000 starting groups, three
+repetitions each of UPDATE/DELETE batches of 1, 32 and 600 keys, both execution
+orders, an explicit CHECKPOINT and matched fillfactor60. The 600-key case crosses
+the unchanged 512-identity statement boundary. Native binary equality and safe
+ACK checks follow each source transaction. These are local measurements through
+the zero-latency object proxy, not deployed freshness or throughput guarantees.
+
+| Starting groups | Publication p50, before | Publication p50, after |
+|---|---:|---:|
+| 3,600, baseline first | 3.008 ms | 2.250 ms |
+| 3,600, candidate first | 3.255 ms | 2.151 ms |
+| 20,000, baseline first | 2.231 ms | 2.193 ms |
+| 20,000, candidate first | 2.145 ms | 2.189 ms |
+
+At demo-sized state this is a 25–34% publication reduction. At 20,000 groups,
+where PostgreSQL already chose the key index for the old SQL, the final pairs
+changed by -0.038/+0.044 ms. Earlier pairs recorded an added 0.04–0.08 ms;
+this is not a universal speedup. Physical
+UPDATE/DELETE/HOT counts and index sizes match. Sink WAL is identical in the
+larger pairs and differs by 16 bytes in each smaller pair.
+
+Object-request comparisons use per-worker monotonic intervals: the fixture
+reuses its object prefix within a pair, so prefix-only counts would combine the
+two workers. Every proxy attempt belongs to exactly one measured worker window.
+Counts match within every pair: PUT/HEAD/GET are 12/6/23 at 3,600 groups and
+16/8/64 at 20,000. Including listings gives 13 and 18 estimated Class A calls,
+respectively, unchanged. Upload sizes differ by at most 25 bytes (less than
+0.02%) from encoded metadata variation. The SQL fix changes no physical
+maintenance cadence or object layout.
+
+The measurement tool captures actual worker SQL and checks generic/custom plans
+for UPDATE and DELETE at 1, 32 and 512 keys. All 48 final candidate plans use
+primary-key probes plus a bounded tuple-location scan and visit at most twice
+the requested number of target rows. A separate linear bound on batch scan
+visits rejects the quadratic replacement-lookup design. An independent SQL
+design fixture also
+covered 200,000 rows, composite quoted keys and NULL numeric values. PostgreSQL
+plans remain measured evidence for the tested version/configuration, not a
+universal planner guarantee.
+
+The correlated replacement-lookup experiment was rejected because it became
+quadratic within a large batch. An initial worker comparison was rejected when
+its PostgreSQL statement log rotated; the owned fixture then disabled rotation
+for the controlled trials. Setup failures and intermediate results are retained
+under ignored `artifacts/benchmarks/keyed-targets-20261028/`. The final evidence
+uses `production/heap-groups-*` for the initial latency pairs and
+`production/verified-groups-*` plus `production/assessment.json` for the
+final request-attributed confirmation.
+
+
+A second check reuses the existing paced benchmark with 43,200 source rows,
+3,600 groups, the adaptive epoch controller, the mixed DML generator and
+transactions from one to 1,000 changes. Two execution orders each offered 20,000
+changes over 20 seconds at exactly 1,000 changes/s through the synthetic storage
+latency proxy. All four workers reached native equality, safe ACK and zero final
+pending changes. Processing p50 was 3 ms before versus 2 ms after (integer-ms
+resolution); p95 was 13 ms before versus 11–12 ms after. Receipt-to-sink p50
+was 4 versus 3 ms. Sampled source-marker visibility p50 changed only slightly,
+with variable tails; it does not measure every INSERT/DELETE or prove atomicity.
+
+Every paced worker made the same 27 PUTs, 12 HEADs, 30 GETs and one POST over its
+full lifecycle, including bootstrap and drain. Method/listing accounting estimates
+31 Class A and 38 Class B calls, with the POST unclassified. These are proxy
+counts, not a billing invoice. The short run does not qualify growing-state
+steady operation: the unchanged evaluator reports insufficient steady windows.
+Owned paced Docker fixtures removed themselves with no cleanup errors or
+persistent database volumes. Results and source/binary hashes remain ignored
+under `production/paced-varied-*` and `production/paced-assessment.json`.
+
+Independent review approved the owned-heap boundary and concurrency checks.
+The common `./scripts/check.sh` gate passed 684 Rust tests, 163 live worker
+results plus query rebuild, 97.19% production line coverage and dependency checks.
+The final profiling-only assertion additions passed all 150 Python tests; the
+48 saved production candidate plans also pass those stricter linear-work checks.
+Coverage evidence is `artifacts/coverage/run-WGYj7GHT`; live worker evidence is
+`artifacts/worker/run-ZUlkOtG8`. No arrangement/state format changes or view
+rebuild are required to deploy this SQL-template change.

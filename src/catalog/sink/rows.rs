@@ -124,7 +124,7 @@ pub(super) async fn verify(
     sink: &Sink,
     oid: u32,
 ) -> Result<()> {
-    let row = sql.query_one("SELECT c.relkind::text,c.relreplident::text,c.relrowsecurity,c.relforcerowsecurity,c.relhasrules,EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid=c.oid AND NOT t.tgisinternal),c.relpersistence::text FROM pg_catalog.pg_class c WHERE c.oid=$1", &[&oid]).await?;
+    let row = sql.query_one("SELECT c.relkind::text,c.relreplident::text,c.relrowsecurity,c.relforcerowsecurity,c.relhasrules,EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid=c.oid AND NOT t.tgisinternal),c.relpersistence::text,EXISTS(SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid) FROM pg_catalog.pg_class c WHERE c.oid=$1", &[&oid]).await?;
     ensure!(
         row.try_get::<_, String>(0)? == "r"
             && row.try_get::<_, String>(1)? == "f"
@@ -132,8 +132,9 @@ pub(super) async fn verify(
             && !row.try_get::<_, bool>(3)?
             && !row.try_get::<_, bool>(4)?
             && !row.try_get::<_, bool>(5)?
-            && row.try_get::<_, String>(6)? == "p",
-        "result table kind, persistence, replica identity, RLS, rules or triggers changed"
+            && row.try_get::<_, String>(6)? == "p"
+            && !row.try_get::<_, bool>(7)?,
+        "result table kind, persistence, replica identity, RLS, rules, triggers or inheritance changed"
     );
     let actual: Value = sql.query_one("SELECT coalesce(jsonb_agg(jsonb_build_array(a.attname,a.atttypid::bigint,a.atttypmod,CASE WHEN a.attcollation=0 THEN NULL ELSE jsonb_build_array(n.nspname,c.collname) END,a.attnotnull,a.attgenerated,a.attidentity,a.atthasdef) ORDER BY a.attnum),'[]'::jsonb) FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_collation c ON c.oid=a.attcollation LEFT JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE a.attrelid=$1 AND a.attnum>0 AND NOT a.attisdropped", &[&oid]).await?.try_get(0)?;
     let expected = Value::Array(

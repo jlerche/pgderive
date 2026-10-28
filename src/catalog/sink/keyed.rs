@@ -78,10 +78,10 @@ pub(super) fn update_statement(table: &str, sink: &Sink) -> Result<String> {
         .collect::<Vec<_>>()
         .join(",");
     Ok(format!(
-        "/* pgderive:sink-update-v1 */ WITH replacements AS MATERIALIZED (SELECT previous.representation,replacement.* FROM pg_catalog.jsonb_array_elements($1::jsonb) AS entry(value) CROSS JOIN LATERAL (SELECT {old}) original CROSS JOIN LATERAL (SELECT {} AS representation FROM (SELECT original.*) decoded) previous CROSS JOIN LATERAL (SELECT {new}) replacement) UPDATE {table} d SET {assignments} FROM replacements replacement WHERE {} AND {}=replacement.representation",
+        "/* pgderive:sink-update-v1 */ WITH replacements AS MATERIALIZED (SELECT previous.representation,replacement.* FROM pg_catalog.jsonb_array_elements($1::jsonb) AS entry(value) CROSS JOIN LATERAL (SELECT {old}) original CROSS JOIN LATERAL (SELECT {} AS representation FROM (SELECT original.*) decoded) previous CROSS JOIN LATERAL (SELECT {new}) replacement), {} UPDATE ONLY {table} d SET {assignments} FROM selected replacement WHERE {}",
         layout.identity,
-        predicate(sink, "replacement")?,
-        layout.target_identity
+        selected(table, sink, ("replacements", "replacement"))?,
+        selected_predicate(&layout, "replacement")
     ))
 }
 
@@ -99,12 +99,33 @@ pub(super) fn delete_statement(
     layout: &layout::Layout,
 ) -> Result<String> {
     Ok(format!(
-        "/* pgderive:sink-delete-v1 */ WITH decoded AS MATERIALIZED (SELECT {} FROM pg_catalog.jsonb_array_elements($1::jsonb) AS entry(value)), requested AS MATERIALIZED (SELECT decoded.*,{} AS representation FROM decoded) DELETE FROM {table} d USING requested r WHERE {} AND {}=r.representation",
+        "/* pgderive:sink-delete-v1 */ WITH decoded AS MATERIALIZED (SELECT {} FROM pg_catalog.jsonb_array_elements($1::jsonb) AS entry(value)), requested AS MATERIALIZED (SELECT decoded.*,{} AS representation FROM decoded), {} DELETE FROM ONLY {table} d USING selected r WHERE {}",
         layout.decoded,
         layout.identity,
-        predicate(sink, "r")?,
-        layout.target_identity
+        selected(table, sink, ("requested", "r"))?,
+        selected_predicate(layout, "r")
     ))
+}
+
+// OFFSET prevents flattening the key lookup into a whole-target hash scan.
+// The TID array also bounds the UPDATE/DELETE target scan; joining selected
+// retains O(batch) replacement lookup instead of a per-target CTE rescan.
+fn selected(table: &str, sink: &Sink, source: (&str, &str)) -> Result<String> {
+    let (relation, alias) = source;
+    Ok(format!(
+        "selected AS MATERIALIZED (SELECT hit.ctid,{alias}.* FROM {relation} {alias} CROSS JOIN LATERAL (SELECT d.ctid FROM ONLY {table} d WHERE {} OFFSET 0) hit)",
+        predicate(sink, alias)?
+    ))
+}
+
+fn selected_predicate(layout: &layout::Layout, source: &str) -> String {
+    // Keep the exact old image at the modifying node for EvalPlanQual. A TID
+    // identifies a candidate in this statement, never a durable row identity.
+    // COALESCE preserves WHERE's NULL rejection without hashing every row image.
+    format!(
+        "d.ctid={source}.ctid AND d.ctid=ANY(ARRAY(SELECT ctid FROM selected)) AND COALESCE({}={source}.representation,false)",
+        layout.target_identity
+    )
 }
 
 #[cfg(test)]

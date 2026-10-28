@@ -3,6 +3,7 @@
 import json
 from worker_harness import Fixture, harness_arguments
 from native_mv_oracle import expected, binary_difference
+from harness_control import held_transaction, finish_transaction, wait_sql
 
 
 class KeyedFixture(Fixture):
@@ -109,10 +110,69 @@ def stale_destination(output,command):
         'all_sink_updates_rolled_back':True,'progress_unchanged':True})+'\n')
 
 
+def concurrent_destination(output,command):
+    """Old-image checks must survive a row version changing after target selection."""
+    output.mkdir()
+    for mode,commit in [('update',True),('delete',True),('update',False)]:
+        case=output/(mode+('-commit' if commit else '-rollback'));case.mkdir()
+        fixture=KeyedFixture(case)
+        with fixture.managed():
+            worker=fixture.start(command,'concurrent');worker.event('ready');fixture.verify()
+            boundary=fixture.sql(f'SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p')
+            expected_rows=fixture.sql(f"SELECT row_to_json(r) FROM (SELECT book,positions,CASE WHEN book=1 THEN units+1 ELSE units END AS units FROM {fixture.name}.groups ORDER BY book)r")
+            acquire=f"UPDATE {fixture.name}.groups SET units=units+1 WHERE book=1 RETURNING 'held'"
+            with held_transaction(fixture,case/'holder.stderr',acquire) as holder:
+                change=(f'UPDATE {fixture.name}.bid SET price=coalesce(price,0)+11 WHERE auction IN(1,2)'
+                        if mode=='update' else f'DELETE FROM {fixture.name}.bid WHERE auction IN(1,2)')
+                fixture.sql(change)
+                wait_sql(fixture,"SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '/* pgderive:sink-"+mode+"-v1%' AND strpos(query,'"+fixture.name+".groups')>0")
+                wait_sql(fixture,f"SELECT count(*) FROM pg_replication_slots s JOIN {fixture.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name JOIN {fixture.name}.pgderive_progress p USING(query_id) WHERE s.confirmed_flush_lsn=p.checkpoint_lsn")
+                ack_query=f"SELECT confirmed_flush_lsn::text FROM pg_replication_slots s JOIN {fixture.name}.pgderive_worker_registration r ON r.slot_name=s.slot_name"
+                ack=fixture.sql(ack_query)
+                finish_transaction(holder,'COMMIT' if commit else 'ROLLBACK')
+            if commit:
+                worker.process.wait(timeout=40);worker.abort()
+                assert worker.process.returncode != 0
+                assert 'result occurrence missing' in (case/'concurrent/stderr.log').read_text()
+                assert fixture.sql(f'SELECT row_to_json(g) FROM {fixture.name}.groups g ORDER BY book')==expected_rows
+                assert fixture.sql(f'SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p')==boundary
+                assert fixture.sql(ack_query)==ack
+                assert fixture.acknowledgement_ahead().strip()=='0'
+            else:
+                worker.event('published');fixture.verify();worker.finish(graceful=True)
+            (case/'result.json').write_text(json.dumps({'concurrent_old_image_checked':True,
+                'external_change_committed':commit,'source_mode':mode,
+                'atomic_rejection' if commit else 'native_equal_publication':True})+'\n')
+
+
+def inheritance(output,command):
+    output.mkdir()
+    for relation in ['parent','child']:
+        case=output/relation;case.mkdir()
+        fixture=KeyedFixture(case)
+        with fixture.managed():
+            worker=fixture.start(command,'initial');worker.event('ready');fixture.verify()
+            worker.finish(graceful=True)
+            boundary=fixture.sql(f'SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p')
+            if relation=='parent':
+                fixture.sql(f'CREATE TABLE {fixture.name}.inherited () INHERITS ({fixture.name}.groups)')
+            else:
+                fixture.sql(f'CREATE TABLE {fixture.name}.ancestor (); ALTER TABLE {fixture.name}.groups INHERIT {fixture.name}.ancestor')
+            invalid=fixture.start(command,'inherited');invalid.process.wait(timeout=40);invalid.abort()
+            assert invalid.process.returncode != 0
+            assert 'inheritance changed' in (case/'inherited/stderr.log').read_text()
+            assert fixture.sql(f'SELECT to_jsonb(p) FROM {fixture.name}.pgderive_progress p')==boundary
+            assert fixture.acknowledgement_ahead().strip()=='0'
+            (case/'result.json').write_text(json.dumps({'inherited_sink_rejected':relation,
+                'progress_unchanged':True,'ack_safe':True})+'\n')
+
+
 if __name__=='__main__':
     output,command=harness_arguments()
     qualify(output,command)
     stale_destination(output/'stale-destination',command)
     bounded_updates(output/'bounded-updates',command)
+    concurrent_destination(output/'concurrent-destination',command)
+    inheritance(output/'inheritance',command)
     from relational_property_cases import qualify as qualify_properties
     qualify_properties(output/'relational-properties',command)
