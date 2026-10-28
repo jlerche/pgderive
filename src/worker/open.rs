@@ -125,6 +125,7 @@ async fn reopen(
     ensure!(
         prior.binding.sink
             == settings.query.compile_bound(&*session.client, contract).await?.sink(
+                contract,
                 &settings.sink_table,
                 settings.sink_output,
                 &settings.sink_key
@@ -203,7 +204,8 @@ async fn bootstrap(
     let prepared = query.prepare_bootstrap(input, &protection).await?;
     let checkpoint = query.prepared_checkpoint(&prepared)?;
     let deltas = relational::deltas(query, &prepared.output().batch, compiled.output()).await?;
-    let sink = compiled.sink(&settings.sink_table, settings.sink_output, &settings.sink_key)?;
+    let sink =
+        compiled.sink(&contract, &settings.sink_table, settings.sink_output, &settings.sink_key)?;
     catalog
         .activate_snapshot(
             &mut session.client,

@@ -2,7 +2,7 @@ use super::{ColumnRef, Compiled, resolve, scope};
 use crate::{
     compiler::{
         parser::partition as syntax,
-        partition::{Aggregate, Function, Mode, Order, Partition},
+        partition::{Aggregate, Function, Mode, Order, Partition, result_type},
         projection::OutputColumn,
         relational::{Node, Relational, Source, field},
     },
@@ -12,7 +12,6 @@ use anyhow::{Context, Result, ensure};
 mod argument;
 pub(in crate::compiler::bind) mod composition;
 mod distinct;
-mod occurrence;
 mod ordered;
 mod prefix;
 struct Body {
@@ -23,7 +22,7 @@ struct Body {
 }
 struct Stage<'a> {
     sources: Vec<Source>,
-    occurrence_keys: &'a [String],
+    occurrence_keys: &'a crate::compiler::properties::Properties,
     aggregate_base: usize,
     scalar_scope: Option<usize>,
 }
@@ -60,7 +59,8 @@ fn bind_native(
     let resolve = |name: &crate::compiler::parser::Name| {
         crate::compiler::expansion::resolve(name, parsed.expansion.as_ref(), native(name))
     };
-    let occurrence_keys = primary_keys(&[(0, scopes[0].relation)]);
+    let occurrence_keys =
+        crate::compiler::properties::Analysis::source_relation(scopes[0].relation, 0)?;
     build(
         parsed,
         &resolve,
@@ -165,7 +165,7 @@ fn source_predicate(
 #[derive(Clone, Copy)]
 struct TargetContext<'a> {
     groups: &'a [ColumnRef],
-    occurrence_keys: &'a [String],
+    occurrence_keys: &'a crate::compiler::properties::Properties,
     scalar_scope: Option<usize>,
 }
 fn bind_targets(
@@ -347,59 +347,31 @@ fn validate_keys(keys: &[ColumnRef]) -> Result<()> {
     );
     Ok(())
 }
-fn validate_order(order: &[Order], occurrence_keys: &[String]) -> Result<()> {
+fn validate_order(
+    order: &[Order],
+    identity: &crate::compiler::properties::Properties,
+    partition: &[ColumnRef],
+) -> Result<()> {
     ensure!(
         order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
         "positional window ordering requires integral or timestamp columns"
     );
+    let names = partition
+        .iter()
+        .map(|c| c.name.clone())
+        .chain(order.iter().map(|c| c.column.name.clone()))
+        .collect::<Vec<_>>();
     ensure!(
-        occurrence_keys.iter().all(|key| order.iter().any(|order| order.column.name == *key)),
+        identity.proves_key(&names),
         "positional window partition and ordering must include complete logical occurrence identity"
     );
     Ok(())
-}
-fn result_type(function: &Function, argument: Option<&ColumnRef>) -> Result<u32> {
-    match function {
-        Function::Count | Function::Rank | Function::DenseRank | Function::RowNumber => Ok(20),
-        Function::CountDistinct => {
-            ensure!(
-                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
-                "COUNT DISTINCT requires native integral column"
-            );
-            Ok(20)
-        }
-        Function::Sum => {
-            ensure!(
-                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23 | 1700)),
-                "SUM requires an integral argument"
-            );
-            Ok(if argument.is_some_and(|arg| matches!(arg.oid, 20 | 1700)) { 1700 } else { 20 })
-        }
-        Function::Average => {
-            ensure!(
-                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
-                "AVG requires integral input"
-            );
-            Ok(1700)
-        }
-        Function::Lag | Function::Lead => {
-            anyhow::bail!("navigation requires typed operand binding")
-        }
-        Function::Min | Function::Max => {
-            let column = argument.context("missing aggregate argument")?;
-            ensure!(
-                matches!(column.oid, 20 | 21 | 23 | 1700 | 1114 | 1184),
-                "MIN/MAX require integral or timestamp columns"
-            );
-            Ok(column.oid)
-        }
-    }
 }
 
 fn bind_window(
     window: syntax::Window,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
-    context: (&[String], bool),
+    context: (&crate::compiler::properties::Properties, bool),
     computed: &mut Vec<crate::compiler::scalar::Computed>,
     scope: Option<usize>,
 ) -> Result<(Mode, Vec<ColumnRef>)> {
@@ -411,19 +383,13 @@ fn bind_window(
             Ok(Order { column: bind_key(name, resolve, computed, scope)?, descending, nulls_first })
         })
         .collect::<Result<Vec<_>>>()?;
-    let remaining = context
-        .0
-        .iter()
-        .filter(|name| !window_keys.iter().any(|key| key.name == **name))
-        .cloned()
-        .collect::<Vec<_>>();
     if window.ranking || window.peers.is_some() {
         ensure!(
             order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
             "peer ordering requires integral or timestamp columns"
         );
         if context.1 {
-            validate_order(&order, &remaining)?;
+            validate_order(&order, context.0, &window_keys)?;
         }
         let mode = if let Some(groups) = window.peers {
             Mode::Peers { order, frame: window.frame, groups }
@@ -432,7 +398,7 @@ fn bind_window(
         };
         Ok((mode, window_keys))
     } else {
-        validate_order(&order, &remaining)?;
+        validate_order(&order, context.0, &window_keys)?;
         Ok((Mode::Rows { order, frame: window.frame }, window_keys))
     }
 }
@@ -490,17 +456,4 @@ fn input_nodes(
         keys,
     });
     nodes
-}
-
-fn primary_keys(relations: &[(usize, &crate::source::Relation)]) -> Vec<String> {
-    relations
-        .iter()
-        .flat_map(|(source, relation)| {
-            relation
-                .columns
-                .iter()
-                .filter(|column| column.primary)
-                .map(|column| field(*source, &column.name))
-        })
-        .collect()
 }

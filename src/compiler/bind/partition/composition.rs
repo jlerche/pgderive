@@ -30,15 +30,15 @@ pub(super) fn stage(
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<crate::compiler::ColumnRef>,
     contract: &Contract,
 ) -> Result<Relational> {
-    let occurrence = super::occurrence::keys(relational, contract)?;
-    let known_occurrence = occurrence.is_some();
-    let occurrence_keys = occurrence.unwrap_or_default().into_iter().collect::<Vec<_>>();
+    let occurrence = crate::compiler::properties::occurrence(relational, contract)?;
+    let known_occurrence = occurrence.unique_rows();
+
     let compiled = build(
         body,
         resolve,
         Stage {
             sources: Vec::new(),
-            occurrence_keys: &occurrence_keys,
+            occurrence_keys: &occurrence,
             aggregate_base: aggregate_base(relational)?,
             scalar_scope: Some(relational.nodes.len()),
         },

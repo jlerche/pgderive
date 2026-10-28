@@ -39,7 +39,8 @@ pub(in crate::worker) fn build_committed(
     settings: &Settings,
 ) -> Result<Query> {
     let ir = compiled.relational();
-    let certified = super::source_keys::statistics(contract, ir)?;
+    let certified =
+        crate::compiler::properties::Analysis::infer(contract, ir)?.committed_statistics(ir)?;
     Query::from_source_keys(
         declared_plan(contract, compiled, ir, &certified)?,
         operators(ir, settings),
@@ -49,7 +50,12 @@ pub(in crate::worker) fn build_committed(
 }
 pub(in crate::worker) fn committed_plan(contract: &Contract, compiled: &Compiled) -> Result<Plan> {
     let ir = compiled.relational();
-    declared_plan(contract, compiled, ir, &super::source_keys::statistics(contract, ir)?)
+    declared_plan(
+        contract,
+        compiled,
+        ir,
+        &crate::compiler::properties::Analysis::infer(contract, ir)?.committed_statistics(ir)?,
+    )
 }
 fn operators(ir: &Relational, settings: &Settings) -> Operators<Key, Row> {
     let native = crate::engine::value::NativeBudget::new(settings.limits.native_cache_bytes);
@@ -250,9 +256,10 @@ fn declared_plan(
     certified: &BTreeSet<String>,
 ) -> Result<Plan> {
     contract.validate()?;
-    let identity = format!("{:x}", Sha256::digest(serde_json::to_vec(&(contract, compiled))?));
+    let identity =
+        format!("{:x}", Sha256::digest(serde_json::to_vec(&(contract, compiled, certified))?));
     let revision =
-        if certified.is_empty() { "relational-additive-v2" } else { "source-key-statistics-v2" };
+        if certified.is_empty() { "relational-additive-v3" } else { "source-key-statistics-v3" };
     let Some(Node::Output { id: output, .. }) = ir.nodes.last() else {
         anyhow::bail!("relational program must end in an output node");
     };

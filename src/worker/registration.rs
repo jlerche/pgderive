@@ -24,7 +24,9 @@ pub(super) async fn source(
     )
     .await?;
     let compiled = settings.query.compile_bound(&**sql, &preliminary).await?;
-    compiled.sink(&settings.sink_table, settings.sink_output, &settings.sink_key)?.validate()?;
+    compiled
+        .sink(&preliminary, &settings.sink_table, settings.sink_output, &settings.sink_key)?
+        .validate()?;
     sql.batch_execute(&format!(
         "CREATE TABLE IF NOT EXISTS {}.pgderive_worker_registration(
         query_id text PRIMARY KEY, format_version integer NOT NULL CHECK(format_version=1),
@@ -57,6 +59,7 @@ pub(super) async fn source(
         ensure!(
             row.try_get::<_, serde_json::Value>(4)?
                 == serde_json::to_value(compiled.sink(
+                    &source,
                     &settings.sink_table,
                     settings.sink_output,
                     &settings.sink_key
@@ -102,7 +105,7 @@ async fn create(
         "SELECT EXISTS(SELECT 1 FROM {}.pgderive_worker_registration WHERE object_prefix<>$1)", settings.catalog_schema,
     ), &[&settings.object_prefix]).await?.try_get(0)?;
     ensure!(!incompatible, "catalog schema requires one object-store prefix for safe GC");
-    tx.execute(&format!("INSERT INTO {}.pgderive_worker_registration(query_id,format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix) VALUES($1,1,$2,$3,$4,$5,$6,$7)",settings.catalog_schema),&[&settings.query_id,&config.replication.slot,&source.slot,&serde_json::to_value(&source)?,&serde_json::to_value(compiled.sink(&settings.sink_table, settings.sink_output, &settings.sink_key)?)?,&plan.identity(),&settings.object_prefix]).await?;
+    tx.execute(&format!("INSERT INTO {}.pgderive_worker_registration(query_id,format_version,logical_slot,slot_name,source,sink,plan_identity,object_prefix) VALUES($1,1,$2,$3,$4,$5,$6,$7)",settings.catalog_schema),&[&settings.query_id,&config.replication.slot,&source.slot,&serde_json::to_value(&source)?,&serde_json::to_value(compiled.sink(&source, &settings.sink_table, settings.sink_output, &settings.sink_key)?)?,&plan.identity(),&settings.object_prefix]).await?;
     tx.commit().await.context("worker registration COMMIT requires authoritative reload")?;
     Ok(source)
 }

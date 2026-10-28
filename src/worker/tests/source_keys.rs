@@ -13,16 +13,24 @@ fn authoritative_linear_plan_omits_input_and_changes_physical_identity() -> Resu
     assert_eq!(strict.definition().arrangements.len(), 3);
     assert_eq!(committed.definition().arrangements.len(), 2);
     assert_ne!(strict.definition().revision, committed.definition().revision);
-    for sql in [
-        "SELECT b.auction,MIN(b.price) FROM source.bid b GROUP BY b.auction",
+    let minimum =
+        compile("SELECT b.auction,MIN(b.price) FROM source.bid b GROUP BY b.auction", &native)?;
+    assert_eq!(
+        relational::plan(&native, &minimum, minimum.relational())?.definition().revision,
+        relational::committed_plan(&native, &minimum)?.definition().revision
+    );
+    let joined = compile(
         "SELECT a.category,SUM(b.price) FROM source.auction a JOIN source.bid b ON a.id=b.auction GROUP BY a.category",
-    ] {
-        let compiled = compile(sql, &native)?;
-        assert_eq!(
-            relational::plan(&native, &compiled, compiled.relational())?.definition().revision,
-            relational::committed_plan(&native, &compiled)?.definition().revision
-        );
-    }
+        &native,
+    )?;
+    let strict = relational::plan(&native, &joined, joined.relational())?;
+    let committed = relational::committed_plan(&native, &joined)?;
+    assert_ne!(strict.definition().revision, committed.definition().revision);
+    assert_eq!(
+        strict.definition().arrangements.len(),
+        committed.definition().arrangements.len() + 1
+    );
+
     Ok(())
 }
 
@@ -94,7 +102,7 @@ fn complete_composite_keys_survive_rebinding_but_partial_keys_do_not() -> Result
         let compiled = compile(sql, &native)?;
         let plan = relational::committed_plan(&native, &compiled)?;
         assert_eq!(
-            plan.definition().revision.starts_with("source-key-statistics-v2:"),
+            plan.definition().revision.starts_with("source-key-statistics-v3:"),
             optimized,
             "{sql}"
         );
@@ -136,7 +144,7 @@ fn complete_composite_keys_survive_rebinding_but_partial_keys_do_not() -> Result
             relational::committed_plan(&native, &compiled)?
                 .definition()
                 .revision
-                .starts_with("source-key-statistics-v2:"),
+                .starts_with("source-key-statistics-v3:"),
             optimized
         );
     }
@@ -242,6 +250,59 @@ async fn other_consumers_keep_certified_statistics_input_retained() -> Result<()
         let mut restored = relational::build_committed(&native, &compiled, &options)?;
         restored.restore_checkpoint(checkpoint).await?;
         query = restored;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn joined_statistics_match_strict_cross_terms_and_cold_restart() -> Result<()> {
+    let native = contract();
+    let compiled = compile(
+        "SELECT a.category,COUNT(*),SUM(b.price) FROM source.auction a JOIN source.bid b ON a.id=b.auction GROUP BY a.category",
+        &native,
+    )?;
+    let options = settings();
+    let mut strict = relational::build(&native, &compiled, &options)?;
+    let mut committed = relational::build_committed(&native, &compiled, &options)?;
+    let auction = |id, category| row(&[("id", Some(id)), ("category", Some(category))]);
+    let bid =
+        |id, auction, price| row(&[("id", Some(id)), ("auction", Some(auction)), ("price", price)]);
+    let a = auction("1", "a");
+    let moved = auction("1", "c");
+    let b = auction("2", "b");
+    let first = bid("1", "1", Some("7"));
+    let changed = bid("1", "2", Some("9"));
+    let second = bid("2", "1", None);
+    for updates in [
+        vec![
+            ("auction", a.clone(), 1),
+            ("auction", b.clone(), 1),
+            ("bid", first.clone(), 1),
+            ("bid", second.clone(), 1),
+        ],
+        vec![
+            ("auction", a, -1),
+            ("auction", moved.clone(), 1),
+            ("bid", first, -1),
+            ("bid", changed.clone(), 1),
+        ],
+        vec![("auction", b.clone(), -1)],
+        vec![("auction", b, 1), ("bid", second, -1)],
+        vec![("auction", moved, -1), ("bid", changed, -1)],
+    ] {
+        let delta = batch(updates);
+        let time = committed.time() + 1;
+        let expected =
+            strict.prepare(relational::inputs(&delta, compiled.relational(), time)?).await?;
+        let actual =
+            committed.prepare(relational::inputs(&delta, compiled.relational(), time)?).await?;
+        assert_eq!(actual.output().batch, expected.output().batch);
+        strict.commit(expected)?;
+        committed.commit(actual)?;
+        let checkpoint = committed.checkpoint()?;
+        let mut restored = relational::build_committed(&native, &compiled, &options)?;
+        restored.restore_checkpoint(checkpoint).await?;
+        committed = restored;
     }
     Ok(())
 }

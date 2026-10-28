@@ -114,3 +114,5 @@ if __name__=='__main__':
     qualify(output,command)
     stale_destination(output/'stale-destination',command)
     bounded_updates(output/'bounded-updates',command)
+    from relational_property_cases import qualify as qualify_properties
+    qualify_properties(output/'relational-properties',command)

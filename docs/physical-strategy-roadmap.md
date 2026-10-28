@@ -228,3 +228,16 @@ unused dependencies. This includes all 64 shared mutation checks and the
 ownership-lock, DDL, replay and uncertain-COMMIT regressions. The disposable
 PostgreSQL fixture used tmpfs with no persistent Docker volumes and was removed;
 final results and failure evidence were retained.
+
+
+## Shared relational analysis
+
+The shared analysis now serves sink admission, positional-window ordering and
+committed aggregate state selection. It replaces all three earlier walkers.
+Candidate keys, unchanged-value identities, NULL facts, equality compatibility
+and provable cardinality bounds propagate over resolved edges. Keyed source
+projections and key-preserving joins are admitted from these proofs. Pair keys
+support independent many-to-many join occurrences; a single-side key does not.
+No cost model, join algorithm replacement or new epoch policy is included.
+Unsupported shapes remain proof barriers. Details and validation are recorded in
+[relational properties](relational-properties.md).

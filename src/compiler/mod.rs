@@ -8,7 +8,7 @@ pub(crate) mod lookup;
 pub(crate) mod navigation;
 mod parser;
 pub(crate) mod partition;
-mod sink_key;
+pub(crate) mod properties;
 
 mod projection;
 pub(crate) mod relational;
@@ -55,11 +55,12 @@ impl Compiled {
     }
     pub(crate) fn sink(
         &self,
+        contract: &Contract,
         table: &str,
         output: crate::catalog::SinkOutput,
         primary_key: &[String],
     ) -> Result<crate::catalog::Sink> {
-        sink_key::prove(self, primary_key)?;
+        properties::Analysis::infer(contract, &self.relational)?.prove_sink(self, primary_key)?;
         Ok(crate::catalog::Sink {
             output,
             table: table.into(),

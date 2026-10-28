@@ -209,6 +209,26 @@ impl Predicate {
 }
 
 impl Predicate {
+    pub(in crate::compiler) fn non_null_columns(&self) -> std::collections::BTreeSet<String> {
+        fn collect(value: &Expr, out: &mut std::collections::BTreeSet<String>) {
+            match value {
+                Expr::Null(value, true) => {
+                    if let Some(c) = value.as_column() {
+                        out.insert(c.name.clone());
+                    }
+                }
+                Expr::And(values) => {
+                    for value in values {
+                        collect(value, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = std::collections::BTreeSet::new();
+        collect(&self.0, &mut out);
+        out
+    }
     pub(super) fn row_number_cutoff(&self, field: &str) -> Option<usize> {
         let Expr::Compare(compare, left, right) = &self.0 else {
             return None;

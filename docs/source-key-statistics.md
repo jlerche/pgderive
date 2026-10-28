@@ -6,28 +6,32 @@ the same state-selection principle as RisingWave's `AggStateStorage::Value`
 (`src/stream/src/executor/aggregate/agg_state.rs`, inspected at 8184836f24):
 linear aggregates update scalar state; retractable extrema need richer state.
 
-Pgderive's compiler proves that the canonical row retains every column of one
-source primary key through filters, appended computed columns, navigation-key
-changes and injective rebinding. Canonical rows are distinct from navigation
-prefixes. For authoritative snapshots and committed transactions each full tuple
-then has multiplicity zero or one; a consolidated change has weight -1 or +1.
-This proves both nonnegativity and coefficient representability without reading
-historical input tuples. Runtime checks still reject nonunit certified deltas.
-The source policy is private to the production worker construction path; it is
-not a replacement for validating arbitrary weighted inputs.
+The shared relational property analysis proves committed full-row uniqueness on
+resolved plan edges. It starts from complete source primary keys, preserves
+unchanged keys through filters, maps and rebinding, and establishes the complete
+grouping tuple. It also proves pair keys for independent join occurrences and
+preserves a side's key only when the other side has at most one matching row.
+Expansion requires the source key plus the generated ordinal. UNION ALL drops
+key proofs; unsupported internal shapes remain conservative barriers. See
+[relational properties](relational-properties.md).
 
-Only grouped COUNT, SUM and AVG paths covered by this proof omit aggregate input
-state. Joins, unions, expansion, distinct operators, windows and loss of any
-primary-key field stop the proof. Generic weighted execution retains strict
-historical validation. Other consumers can still require an input arrangement;
-state requirements are combined across all consumers. When such an arrangement
-is retained, its append proof remains tied to the exact immutable trace and batch.
+For authoritative snapshots and committed transactions, proven full tuples have
+multiplicity zero or one; a consolidated change has weight -1 or +1. This proves
+nonnegativity and coefficient representability without reading historical input
+tuples. Runtime checks still reject nonunit certified deltas. This policy is
+private to production worker construction, never generic weighted execution.
 
-The physical revision `source-key-statistics-v2` prevents reopening older layouts
-as though they had this invariant. Existing affected registrations require an
-explicit `query rebuild`; there is no silent state migration or progress reset.
-Object publication, atomic PostgreSQL result/membership/progress publication,
-source transaction ordering and post-publication acknowledgement are unchanged.
+Only grouped COUNT, SUM and AVG paths with this proof omit aggregate input state.
+Generic weighted execution retains strict historical validation. Other consumers
+can still require an input arrangement; requirements combine across all consumers.
+When retained, its append proof stays tied to the exact immutable trace and batch.
+
+The physical revisions `source-key-statistics-v3` and `relational-additive-v3`
+include the source contract and certified node set in plan identity. Existing
+registrations require an explicit `query rebuild` before using the new binary;
+there is no state migration or progress reset fallback. Object publication,
+atomic PostgreSQL result/membership/progress publication, transaction ordering
+and post-publication acknowledgement are unchanged.
 
 Preparation metrics now record `input_bag_validation` separately from aggregate
 operator computation. Overall processing time still includes preparation and

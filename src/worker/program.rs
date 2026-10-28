@@ -15,7 +15,6 @@ mod ordered;
 mod partition;
 mod prefix;
 pub(super) mod relational;
-mod source_keys;
 mod statistics;
 mod topk;
 use crate::{compiler::Compiled, engine::plan::Plan, source::Contract};

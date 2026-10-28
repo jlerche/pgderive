@@ -82,7 +82,9 @@ pub async fn validate(config: &Config) -> Result<Value> {
         Contract::inspect(&tx, identity, &config.replication.publication, &config.replication.slot)
             .await?;
     let (compiled, columns) = settings.query.describe(&tx, &source).await?;
-    compiled.sink(&settings.sink_table, settings.sink_output, &settings.sink_key)?.validate()?;
+    compiled
+        .sink(&source, &settings.sink_table, settings.sink_output, &settings.sink_key)?
+        .validate()?;
     let plan = program::plan(&source, &compiled)?;
     tx.commit().await?;
     Ok(json!({"version":1,"query_id":settings.query_id,"valid":true,
