@@ -30,6 +30,14 @@ class TopKFixture(SqlFixture):
         return f"'{text}'::{self.mode}"
     def changed_cutoff(self):
         return self.query.replace(f'WHERE {self.condition}', 'WHERE q.rn<=2')
+    def changes(self):
+        return [
+            f'INSERT INTO {self.name}.bid VALUES(100,NULL,NULL),(101,1,{self.value(7)}),(102,1,{self.value(7)}),(103,1,{self.value(7)})',
+            f'UPDATE {self.name}.bid SET price=NULL WHERE id=101; UPDATE {self.name}.bid SET price={self.value(-8)} WHERE id=2',
+            f'DELETE FROM {self.name}.bid WHERE id=102; UPDATE {self.name}.bid SET auction=2 WHERE id=103',
+            f'DELETE FROM {self.name}.bid WHERE auction=1',
+            f'INSERT INTO {self.name}.bid VALUES(104,1,{self.value(-9)}),(105,1,NULL),(106,1,{self.value(-9)}),(107,1,{self.value(0)})',
+        ]
     def verify(self):
         native=expected(self,self.labels)
         self.verify_sql(native)
@@ -52,13 +60,7 @@ class TopKFixture(SqlFixture):
 def qualify(output,command,mode,fixture_type=TopKFixture):
     fixture=fixture_type(output,mode)
     with fixture.managed():
-        changes=[
-            f'INSERT INTO {fixture.name}.bid VALUES(100,NULL,NULL),(101,1,{fixture.value(7)}),(102,1,{fixture.value(7)}),(103,1,{fixture.value(7)})',
-            f'UPDATE {fixture.name}.bid SET price=NULL WHERE id=101; UPDATE {fixture.name}.bid SET price={fixture.value(-8)} WHERE id=2',
-            f'DELETE FROM {fixture.name}.bid WHERE id=102; UPDATE {fixture.name}.bid SET auction=2 WHERE id=103',
-            f'DELETE FROM {fixture.name}.bid WHERE auction=1',
-            f'INSERT INTO {fixture.name}.bid VALUES(104,1,{fixture.value(-9)}),(105,1,NULL),(106,1,{fixture.value(-9)}),(107,1,{fixture.value(0)})',
-        ]
+        changes=fixture.changes()
         fixture.run_history(command, History(
             changes=changes,
             final=f'DELETE FROM {fixture.name}.bid WHERE id=107',

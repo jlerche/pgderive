@@ -32,6 +32,11 @@ impl Analysis {
     }
     fn unary(&self, ir: &Relational, node: &Node) -> Result<Properties> {
         Ok(match node {
+            Node::Empty { .. } => {
+                let mut facts = Properties { maximum: Some(0), ..Properties::default() };
+                facts.add_key(BTreeSet::new());
+                facts
+            }
             Node::Filter { input, predicate, .. } => {
                 let mut facts = self.edge(input)?.clone();
                 facts.non_null(predicate.non_null_columns());

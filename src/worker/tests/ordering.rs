@@ -151,3 +151,54 @@ async fn nested_limits_preserve_scope_and_filter_placement() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn zero_limits_prune_row_errors_and_state_after_binding() -> Result<()> {
+    let native = contract();
+    let options = settings();
+    for sql in [
+        "SELECT abs(price) AS p FROM source.bid ORDER BY id LIMIT 0",
+        "SELECT auction FROM source.bid ORDER BY abs(price),id LIMIT 0",
+        "SELECT q.p FROM (SELECT abs(price) AS p FROM source.bid ORDER BY id LIMIT 0) q ORDER BY q.p LIMIT 1",
+        "SELECT abs(b.price) AS p FROM source.auction a JOIN source.bid b ON a.id=b.auction ORDER BY a.id,b.id LIMIT 0",
+        "SELECT id,COUNT(abs(price)) OVER(ORDER BY id ROWS UNBOUNDED PRECEDING) AS p FROM source.bid ORDER BY id LIMIT 0",
+    ] {
+        let compiled = compile(sql, &native)?;
+        assert!(
+            !compiled.relational().nodes.iter().any(|n| matches!(
+                n,
+                Node::Map { .. }
+                    | Node::Join { .. }
+                    | Node::Partition { .. }
+                    | Node::Statistics { .. }
+            )),
+            "{sql}"
+        );
+        let a = row(&[("id", Some("1")), ("category", None), ("other", None)]);
+        let b = row(&[
+            ("id", Some("1")),
+            ("auction", Some("1")),
+            ("price", Some("-9223372036854775808")),
+        ]);
+        let query = History::new((&native, &compiled, &options))
+            .run(
+                [
+                    batch(vec![("auction", a.clone(), 1), ("bid", b.clone(), 2)]),
+                    batch(vec![("bid", b, -2), ("auction", a, -1)]),
+                ],
+                |_: &super::JoinedState| Batch::from_updates([]),
+                super::apply_joined,
+                |_| true,
+            )
+            .await?;
+        assert_eq!(query.checkpoint()?.arrangements.len(), 1, "{sql}");
+    }
+    for sql in [
+        "SELECT abs(missing) FROM source.bid ORDER BY id LIMIT 0",
+        "SELECT category FROM source.auction ORDER BY category LIMIT 0",
+        "SELECT abs(category) FROM source.auction ORDER BY id LIMIT 0",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}

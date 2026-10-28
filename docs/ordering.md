@@ -27,7 +27,16 @@ logical occurrence key. For example, include the source primary key after a
 nonunique price, or all grouping keys after an aggregate. SQL primary-key proofs
 only govern admission; the runtime still preserves complete weighted tuples and
 clips duplicate occurrence weights at the cutoff. LIMIT 0 is empty and needs no
-uniqueness proof. Text/collation, numeric, Boolean and UUID ordering, OFFSET,
+uniqueness proof. After binding and type validation, LIMIT 0 removes its upstream
+maps, joins, windows and maintained state. Row-dependent expressions are not
+evaluated, including overflowing ABS arguments. Ordered scopes over a proven
+empty derived input are pruned too. One source remains as a transaction-tick
+anchor; the complete frozen publication contract still governs catalog checks,
+capture, plan identity and durable source progress. Constant-expression errors
+and unsupported syntax/types can still reject during binding.
+Existing zero-limit registrations have a changed plan identity and require rebuild.
+
+Text/collation, numeric, Boolean and UUID ordering, OFFSET,
 WITH TIES, LIMIT ALL/NULL, dynamic limits and custom sort operators reject before
 activation. Other execution and publication budgets still apply.
 
@@ -57,8 +66,9 @@ Pgderive follows Feldera's global-key, occurrence-top-k, deindex lowering. It
 reuses the production ordered selector used by ROW_NUMBER cutoffs. The optional
 row-number field is absent for plain LIMIT, so a position change within the
 selected prefix does not manufacture result changes. Full ordered input and
-selected output remain immutable engine arrangements. Changed identities are
-validated even outside the cutoff and at K=0; selection merges changed rows with
+selected output remain immutable engine arrangements. The generic selector validates
+changed identities even outside the cutoff and at K=0; SQL LIMIT 0 instead uses
+the constant-empty lowering above. Nonzero selection merges changed rows with
 the retained ordered prefix and subtracts the prior selection. Deleted winners
 can therefore expose previously unselected rows after cold restore. This reads
 the selected prefix and changed identities, not a full partition sort, but it is
@@ -80,14 +90,23 @@ reference.
 
 ## Qualification
 
+Feldera also eliminates zero-fetch sorts with `SORT_FETCH_ZERO_INSTANCE` in its
+[Calcite optimizer](https://github.com/feldera/feldera/blob/a2e791e12dd2fe02906a6fa2065520d5fcc73760/sql-to-dbsp-compiler/SQL-compiler/src/main/java/org/dbsp/sqlCompiler/compiler/frontend/calciteCompiler/optimizer/CalciteOptimizer.java).
+The SQL empty lowering follows that rule without weakening the generic
+selector's negative-membership validation.
+
 `src/worker/tests/ordering.rs` checks binding, fail-closed forms, normalized
 aliases/ordinals, hidden expressions, weighted cutoff clipping, global selection,
 nested limit/filter placement and restart/compaction. Existing generic selector
 tests independently cover negative tail changes, failed prepare and bounded
 prefix reads. `scripts/ordering_harness.py` reuses the top-k transaction history
 and compares identical native PostgreSQL materialized-view bags with an
-independent raw-source Python sort. Its twelve modes cover both directions,
+independent raw-source Python sort. Its eighteen modes cover both directions,
 NULL placement, empty/unbounded results, computed outputs, groups, DISTINCT,
-nested limits, timestamps, timestamptz and integral extremes, including
-CDC, durable identity rejection and cold restart. It runs sequentially in the
+nested limits, timestamps, timestamptz and integral extremes. Ordered limits after
+an inner join include simultaneous changes to both sources and the join cross
+term. Ordered limits after a ROWS window independently recompute counts before
+sorting. Four zero-limit modes place overflowing ABS inputs behind root,
+derived, join and window scopes. All include CDC, durable identity rejection and
+cold restart. The harness runs sequentially in the
 common core gate.

@@ -8,7 +8,7 @@ import sys
 COUNTS = {'async-checkpoints': 6, 'memtable': 8, 'keyed-sink': 8, 'result-table': 2, 'query-binding': 18, 'transactions': 7, 'crashes': 5,
           'compiler': 4, 'application': 6, 'composition-matrix': 8, 'sliding-extrema': 6, 'prefix-window': 6, 'expression-composition': 12, 'sliding-window': 5, 'sink-batch': 2, 'stdout-sink': 1, 'projection': 2, 'functions': 1, 'postgres-support': 1, 'aggregate-inputs': 6, 'environment': 1, 'computed-join': 6, 'relational': 2, 'partition': 7,
           'numeric': 4, 'circuit-numeric': 2, 'native': 4, 'navigation': 5, 'case': 6, 'lookup': 5,
-          'ordering': 12, 'query-lifecycle': 7}
+          'ordering': 18, 'query-lifecycle': 7}
 
 
 def verify(output, counts=COUNTS):

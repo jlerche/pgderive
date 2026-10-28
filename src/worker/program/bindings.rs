@@ -7,6 +7,11 @@ use crate::{
 };
 use anyhow::{Context, ensure};
 
+/// Constant empty SQL relation, driven by source ticks without evaluating rows.
+pub(super) fn empty() -> Project<Key, Row, Key, Row> {
+    Project::new(|_: &Key, _: &Row| Ok(None))
+}
+
 pub(super) fn rebind(fields: &[Binding]) -> Project<Key, Row, Key, Row> {
     let fields = fields.to_vec();
     Project::new(move |_: &Key, row: &Row| {

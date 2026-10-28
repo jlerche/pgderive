@@ -54,6 +54,7 @@ macro_rules! relational_nodes {
     };
 }
 relational_nodes! {
+    Empty [input] => Project {},
     Filter [input] => Project { predicate: super::Predicate },
     Expand [input] => Expand { series: super::expansion::Series },
     Map [input] => Project { computed: Vec<super::scalar::Computed> },

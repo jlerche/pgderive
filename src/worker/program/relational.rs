@@ -75,6 +75,7 @@ fn bind(
 ) -> Option<Operator<Key, Row>> {
     Some(match node {
         Node::Source { .. } | Node::Union { .. } => return None,
+        Node::Empty { .. } => Operator::Project(super::bindings::empty()),
         Node::PrefixInput { spec, .. } => Operator::Project(super::prefix::input(spec)),
         Node::PrefixStatistics { spec, .. } => {
             Operator::IndexedStatistics(super::prefix::statistics(spec, native.clone()))

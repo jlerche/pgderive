@@ -28,8 +28,41 @@ class OrderingFixture(TopKFixture):
             self.query = f'SELECT q.auction,q.price FROM ({inner}) q ORDER BY q.id LIMIT 3'
         elif mode == 'unbounded':
             self.query = self.query.replace(' LIMIT 3', '')
+        elif mode == 'join':
+            self.query = (f'SELECT a.id AS auction,b.price FROM {self.name}.auction a '
+                          f'JOIN {self.name}.bid b ON a.id=b.auction '
+                          'ORDER BY b.price DESC NULLS LAST,a.id,b.id LIMIT 3')
+        elif mode == 'window':
+            self.query = (f'SELECT b.auction,COUNT(*) OVER(PARTITION BY b.auction ORDER BY b.id '
+                          f'ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS price FROM {self.name}.bid b '
+                          'ORDER BY price DESC,b.auction NULLS LAST,b.id LIMIT 3')
+        elif mode.startswith('empty-'):
+            self.sql(f"UPDATE {self.name}.bid SET price='-9223372036854775808'::bigint WHERE id=1")
+            self.limit = 0
+            self.query = (f'SELECT b.auction,abs(b.price) AS price FROM {self.name}.bid b '
+                          'ORDER BY b.id LIMIT 0')
+            if mode == 'empty-derived':
+                self.query = f'SELECT q.auction,q.price FROM ({self.query}) q ORDER BY q.auction'
+            elif mode == 'empty-join':
+                self.query = (f'SELECT a.id AS auction,abs(b.price) AS price FROM {self.name}.auction a '
+                              f'JOIN {self.name}.bid b ON a.id=b.auction ORDER BY a.id,b.id LIMIT 0')
+            elif mode == 'empty-window':
+                self.query = (f'SELECT b.auction,COUNT(abs(b.price)) OVER(ORDER BY b.id '
+                              f'ROWS UNBOUNDED PRECEDING) AS price FROM {self.name}.bid b ORDER BY b.id LIMIT 0')
+
+    def changes(self):
+        changes = super().changes()
+        if self.mode == 'join':
+            changes[0] += (f'; UPDATE {self.name}.auction SET id=50 WHERE id=8; '
+                           f'UPDATE {self.name}.bid SET auction=50,price=999 WHERE id=101; '
+                           f'INSERT INTO {self.name}.bid VALUES(108,3,998),(109,2,998),(110,1,998)')
+            changes[1] += (f'; UPDATE {self.name}.auction SET id=8 WHERE id=50; '
+                           f'UPDATE {self.name}.bid SET auction=8 WHERE id=101')
+        return changes
 
     def changed_cutoff(self):
+        if self.limit == 0:
+            return self.query.replace('LIMIT 0', 'LIMIT 2')
         if self.mode == 'unbounded':
             return self.query + ' LIMIT 2'
         before, _, _ = self.query.rpartition('LIMIT ')
@@ -38,6 +71,16 @@ class OrderingFixture(TopKFixture):
     def verify(self):
         self.verify_sql(expected(self, self.labels))
         rows = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
+        if self.mode == 'join':
+            left = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a'))
+            rows = [dict(row) for a in left for row in rows if a['id'] == row['auction']]
+        elif self.mode == 'window':
+            groups = collections.defaultdict(list)
+            for row in rows:
+                groups[row['auction']].append(row)
+            for group in groups.values():
+                for index, row in enumerate(sorted(group, key=lambda row: row['id'])):
+                    row['price'] = min(index + 1, 2)
         if self.mode == 'grouped':
             counts = collections.Counter(row['auction'] for row in rows)
             rows = [{'auction': key, 'price': count, 'id': 0} for key, count in counts.items()]
@@ -48,8 +91,8 @@ class OrderingFixture(TopKFixture):
         elif self.mode == 'distinct':
             rows = [dict(auction=key, price=value, id=0) for key, value in
                     set((row['auction'], row['price']) for row in rows)]
-        if self.mode in ('grouped', 'distinct'):
-            rows.sort(key=lambda row: (row['auction'] is None, row['auction']))
+        if self.mode in ('grouped', 'distinct', 'window', 'join'):
+            rows.sort(key=lambda row: (row['auction'] is None, row['auction'], row['id']))
         else:
             rows.sort(key=lambda row: row['id'])
         nulls = [row for row in rows if row['price'] is None]
@@ -77,4 +120,5 @@ def qualify(output, command, mode):
 if __name__ == '__main__':
     run_modes(('descending', 'ascending', 'nulls-first', 'empty', 'unbounded',
                'computed', 'grouped', 'distinct', 'derived', 'timestamp',
-               'timestamptz', 'integral-extremes'), qualify)
+               'timestamptz', 'integral-extremes', 'join', 'window', 'empty-overflow',
+               'empty-derived', 'empty-join', 'empty-window'), qualify)
