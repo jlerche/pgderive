@@ -60,16 +60,12 @@ async fn require_table_sink(session: &Session, settings: &Settings) -> Result<()
     if super::exists(&*session.client, &table).await? {
         let row = session
             .client
-            .query_opt(
-                &format!(
-                    "SELECT coalesce(sink->>'output','postgres') FROM {table} WHERE query_id=$1"
-                ),
-                &[&query],
-            )
+            .query_opt(&format!("SELECT sink->>'output' FROM {table} WHERE query_id=$1"), &[&query])
             .await?;
         if let Some(row) = row {
             ensure!(
-                row.try_get::<_, String>(0)? == "postgres",
+                row.try_get::<_, String>(0).context("registered sink output is missing")?
+                    == "postgres",
                 "stdout sink does not support rebuild; drop and create a fresh diagnostic stream"
             );
         }

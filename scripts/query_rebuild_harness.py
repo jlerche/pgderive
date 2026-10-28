@@ -72,6 +72,22 @@ def verify_collected(fixture, roots):
             assert error.code == 404
 
 
+def reject_missing_sink_output(fixture, binary, config, labels):
+    table = f'{fixture.name}.pgderive_worker_registration'
+    active = command(fixture,binary,'status',config)['lifecycle']['active']['query']
+    predicate = f"query_id='{active}'"
+    sink = fixture.sql(f'SELECT sink FROM {table} WHERE {predicate}').strip()
+    snapshot = ';'.join(f"SELECT to_jsonb(t) FROM {fixture.name}.{name} t ORDER BY to_jsonb(t)::text"
+                        for name in ('pgderive_lifecycle','pgderive_progress','groups'))
+    before = fixture.sql(snapshot)
+    fixture.sql(f"UPDATE {table} SET sink=sink-'output' WHERE {predicate}")
+    diagnostic = rejected(binary,fixture,'rebuild',config)
+    assert 'registered sink output is missing' in diagnostic, diagnostic
+    assert fixture.sql(snapshot)==before, 'rejected rebuild changed durable state or output'
+    fixture.sql(f"UPDATE {table} SET sink='{sink.replace(chr(39),chr(39)*2)}'::jsonb WHERE {predicate}")
+    verify(fixture,labels)
+
+
 def qualify(output, binary):
     fixture = grouped(output)
     try:
@@ -109,6 +125,7 @@ def qualify(output, binary):
         worker.event('published',minimum_time=ready['time']+1)
         verify(fixture,labels)
         worker.finish(graceful=True)
+        reject_missing_sink_output(fixture,binary,config,labels)
         # Changed relational semantics require a new snapshot and plan, never reuse.
         fixture.null_only = True
         fixture.where += 'AND b.price IS NULL '
@@ -158,7 +175,7 @@ def qualify(output, binary):
         verify(fixture,labels)
         worker.finish(graceful=True)
         command(fixture,binary,'drop',config)
-        (output/'qualification.json').write_text(json.dumps({'rebuild':True,'native_mv':True,
+        (output/'qualification.json').write_text(json.dumps({'rebuild':True,'missing_sink_output_rejected':True,'native_mv':True,
             'memory_oracle':True,'cold_restart':True,'dependent_view_oid_preserved':True,'reader_pin_release_gc':True})+'\n')
         fixture.sql(f'DROP PUBLICATION {fixture.name}; DROP SCHEMA {fixture.name} CASCADE')
     except BaseException:

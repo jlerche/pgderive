@@ -3,6 +3,10 @@ import collections
 import copy
 import json
 import pathlib
+import tempfile
+from unittest import mock
+from application_portfolio_harness import replay
+from verify_composition_matrix import case
 import unittest
 from application_model import state
 from composition_matrix_model import FAMILIES, expected, specification
@@ -41,12 +45,30 @@ class CompositionMatrixTests(unittest.TestCase):
                         'entry':[dict(id=1,account_id=2,amount=-1)],'region':[]})
         self.assertEqual(expected(specification('left-group',10000),source),collections.Counter({(None,1,0,None):1}))
 
-    def test_version_one_traces_remain_replayable(self):
+    def test_obsolete_traces_rejected_before_fixture_or_output_creation(self):
         trace = generate('distinct',10000)
-        trace['matrix'] = specification('distinct',10000,1)
-        validate(trace)
-        source = state(trace['initial'])
-        self.assertNotEqual(expected(trace['matrix'],source),expected(specification('distinct',10000),source))
+        obsolete = copy.deepcopy(trace)
+        obsolete['matrix']['version'] = 1
+        envelope = {**trace,'spec':{'recipe':'projection'}}
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory)/'replay'
+            factory = mock.Mock()
+            for candidate in (obsolete,envelope):
+                with self.assertRaises(AssertionError):
+                    replay(output,[],candidate,fixture_factory=factory,validator=validate)
+                factory.assert_not_called()
+                self.assertFalse(output.exists())
+
+    def test_mislabeled_evidence_rejected_without_rewriting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)
+            (path/'replay.json').write_text(json.dumps(generate('distinct',10000)))
+            result = path/'result.json'
+            original = json.dumps({'query':{'recipe':'projection'}})
+            result.write_text(original)
+            with self.assertRaises(AssertionError): case(path)
+            self.assertEqual(result.read_text(),original)
+            self.assertEqual({file.name for file in path.iterdir()},{'replay.json','result.json'})
 
     def test_trace_validation_rejects_drift_before_connecting(self):
         trace = generate('three-join',10000)

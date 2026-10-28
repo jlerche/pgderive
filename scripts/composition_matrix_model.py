@@ -6,14 +6,14 @@ FAMILIES = ('distinct','join-group','left-group','membership-group','regroup',
             'group-window','window-project','three-join')
 
 
-def specification(family, seed, version=2):
-    assert family in FAMILIES and version in (1,2)
+def specification(family, seed):
+    assert family in FAMILIES
     p = 1+seed%3
     s = '{schema}'
     a,b,r = s+'.account',s+'.entry',s+'.region'
     inner = f'SELECT account_id AS g,AVG(amount) AS v FROM {b} GROUP BY account_id'
     templates = {
-        'distinct':f'SELECT DISTINCT reverse(label) AS label,COALESCE(abs(cohort),0)+{p} AS bucket FROM {a} WHERE id>={p}',
+        'distinct':f'SELECT DISTINCT d.label,d.bucket FROM (SELECT reverse(label) AS label,COALESCE(abs(cohort),0)+{p} AS bucket FROM {a}) d WHERE d.bucket>={p+1}',
         'join-group':f'SELECT a.cohort AS g,COUNT(*) AS n,SUM(abs(b.amount)) AS total,AVG(abs(b.amount)) AS mean FROM {a} a JOIN {b} b ON abs(a.cohort)=abs(b.account_id) GROUP BY a.cohort',
         'left-group':f'SELECT a.cohort AS g,COUNT(*) AS n,COUNT(b.amount) AS present,SUM(b.amount) AS total FROM {a} a LEFT JOIN {b} b ON a.cohort+{p}=b.account_id+{p} WHERE b.amount IS NULL OR b.amount>=0 GROUP BY a.cohort',
         'membership-group':f'SELECT a.cohort AS g,COUNT(*) AS n FROM {a} a WHERE {"NOT " if seed%2 else ""}EXISTS(SELECT 1 FROM {b} b WHERE a.cohort+{p}=b.account_id+{p}) GROUP BY a.cohort',
@@ -22,15 +22,13 @@ def specification(family, seed, version=2):
         'window-project':f'SELECT d.id,COALESCE(d.v,0::numeric)+{p} AS v FROM (SELECT id,SUM(amount) OVER(PARTITION BY account_id ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS v FROM {b}) d WHERE d.v>=0',
         'three-join':f'SELECT a.cohort AS g,COUNT(*) AS n,SUM(abs(b.amount)+{p}) AS total FROM {a} a JOIN {b} b ON abs(a.cohort)=abs(b.account_id) JOIN {r} r ON a.id=r.id GROUP BY a.cohort',
     }
-    if version==2:
-        templates['distinct'] = f'SELECT DISTINCT d.label,d.bucket FROM (SELECT reverse(label) AS label,COALESCE(abs(cohort),0)+{p} AS bucket FROM {a}) d WHERE d.bucket>={p+1}'
     labels = {
         'distinct':['label','bucket'],'join-group':['g','n','total','mean'],
         'left-group':['g','n','present','total'],'membership-group':['g','n'],
         'regroup':['g','n','v'],'group-window':['g','v'],
         'window-project':['id','v'],'three-join':['g','n','total'],
     }
-    return {'version':version,'family':family,'seed':seed,'parameter':p,
+    return {'version':2,'family':family,'seed':seed,'parameter':p,
             'anti':bool(seed%2),'sql':templates[family],'labels':labels[family]}
 
 
@@ -52,7 +50,7 @@ def expected(spec, source):
     accounts,entries = list(source['account'].values()),list(source['entry'].values())
     if family == 'distinct':
         return collections.Counter({(row['label'][::-1] if row['label'] is not None else None,
-                                     abs(row['cohort'] or 0)+p):1 for row in accounts if (row['id']>=p if spec['version']==1 else abs(row['cohort'] or 0)>=1)})
+                                     abs(row['cohort'] or 0)+p):1 for row in accounts if abs(row['cohort'] or 0)>=1})
     if family in ('join-group','left-group','three-join','membership-group'):
         return joins(spec,accounts,entries,source.get('region',{}))
     groups = collections.defaultdict(list)

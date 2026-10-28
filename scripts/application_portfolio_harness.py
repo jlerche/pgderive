@@ -30,19 +30,29 @@ class DifferentialFailure(AssertionError):
 
 class ApplicationFixture(SqlFixture):
     def __init__(self, output, trace):
-        Fixture.__init__(self, output, f'app_{next(SERIAL)}', rows=0, auctions=0)
+        self.initialize_sources(output, trace)
+        self.query = self.query_specification['sql'].format(schema=self.name)
+        self.labels = self.output_labels
+
+    def create_sources(self):
         self.sql(f'ALTER TABLE {self.name}.auction RENAME TO account; ALTER TABLE {self.name}.account RENAME COLUMN category TO label; ALTER TABLE {self.name}.account ADD COLUMN cohort integer; ALTER TABLE {self.name}.bid RENAME TO entry; ALTER TABLE {self.name}.entry RENAME COLUMN auction TO account_id; ALTER TABLE {self.name}.entry RENAME COLUMN price TO amount')
+
+    def initialize_sources(self, output, trace):
+        Fixture.__init__(self, output, f'app_{next(SERIAL)}', rows=0, auctions=0)
+        self.create_sources()
         self.trace = trace
-        self.query = trace['spec']['sql'].format(schema=self.name)
         self.model = state(trace['initial'])
         for table, rows in trace['initial'].items():
             for start in range(0,len(rows),64):
                 chunk = rows[start:start+64]
                 values = ','.join('('+','.join(scalar(value) for value in row.values())+')' for row in chunk)
                 self.sql(f"INSERT INTO {self.name}.{table}({','.join(chunk[0])}) VALUES {values}")
-        self.labels = {'projection':['label','bucket'], 'group':['group_key','rows','present','unique_amounts','total'],
+
+    @property
+    def output_labels(self):
+        return {'projection':['label','bucket'], 'group':['group_key','rows','present','unique_amounts','total'],
                        'join':['label','amount'], 'left':['label','amount'], 'derived':['group_key','rows'],
-                       'window':['id','account_id','total']}[trace['spec']['recipe']]
+                       'window':['id','account_id','total']}[self.query_specification['recipe']]
 
     def cleanup(self):
         for worker in self.workers:

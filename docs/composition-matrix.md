@@ -67,9 +67,8 @@ the entire history agree. Partial cases rerun in
 fresh fixtures, leaving their original evidence intact.
 
 Each case retains its original versioned trace, exact SQL, native oracle records,
-process/object evidence and result. `--replay FILE` runs a saved trace. The original
-version-1 DISTINCT template remains replayable; version 2 adds the explicit derived
-projection/filter chain. Actual differential failures preserve fixture dumps and
+process/object evidence and result. `--replay FILE` runs a saved trace. Replay requires the current version-2 query specification, including the DISTINCT
+derived projection/filter chain, and the current trace envelope. Actual differential failures preserve fixture dumps and
 invoke same-kind bounded transaction deletion reduction, as in the original M5
 portfolio. `composition_matrix_failure_harness.py` deliberately corrupts only its
 independent oracle at a sentinel source row, verifies 1-minimal reduction and dump
@@ -77,11 +76,8 @@ preservation, then replays the minimized trace successfully without injection.
 It does not claim an engine defect.
 
 `verify_composition_matrix.py ROOT... --output SUMMARY` checks the current complete
-80-case set against saved source histories and actual native SQL witnesses. Early
-development results accidentally inherited the base portfolio's query description;
-`--repair-development-labels` corrects only that known label mismatch, preserving
-the original result and its SHA-256. It never changes test outcomes or SQL traces.
-Superseded query forms are reported separately rather than counted as current cases.
+80-case set against saved source histories and actual native SQL witnesses. Obsolete query forms and mismatched saved query descriptions are rejected without
+rewriting retained evidence.
 
 ## Completion at revision 5d7ff97
 

@@ -1,7 +1,7 @@
 """Reproducible histories: exactly thirty committed boundaries plus rollback/restart."""
 import copy
-from application_model import generated, query
-from application_trace import validate as base_validate, row_valid
+from application_model import generated
+from application_trace import FIELDS, validate_source
 from composition_matrix_model import specification
 
 
@@ -27,33 +27,11 @@ def generate(family, seed):
         {'table':'region','kind':'upsert','row':dict(id=2,label='same',cohort=2)}]}
     history = committed[:10]+[{'rollback':True,'operations':[
         {'table':'entry','kind':'delete','id':2}]}]+committed[10:15]+[{'restart':True}]+committed[15:]
-    return {'version':1,'id':family,'seed':seed,'spec':query('projection',seed),
+    return {'version':1,'id':family,'seed':seed,
             'matrix':specification(family,seed),'initial':initial,'history':history}
 
 
 def validate(trace):
-    assert trace['matrix']==specification(trace['id'],trace['seed'],trace['matrix']['version'])
-    assert set(trace['initial'])=={'account','entry','region'}
-    initial = {table:rows for table,rows in trace['initial'].items() if table!='region'}
-    history = []
-    for step in trace['history']:
-        if step.get('restart'):
-            history.append(step)
-            continue
-        assert len(step['operations'])<=16
-        regular = []
-        for operation in step['operations']:
-            if operation['table']!='region':
-                regular.append(operation)
-            elif operation['kind']=='upsert':
-                assert set(operation)=={'table','kind','row'}
-                row_valid('account',operation['row'])
-            else:
-                assert operation['kind']=='delete' and set(operation)=={'table','kind','id'}
-                assert type(operation['id']) is int and 1<=operation['id']<=100000
-        history.append({**step,'operations':regular})
-    assert len(trace['initial']['region'])<=4096
-    assert len({row['id'] for row in trace['initial']['region']})==len(trace['initial']['region'])
-    for row in trace['initial']['region']:
-        row_valid('account',row)
-    base_validate({**trace,'initial':initial,'history':history})
+    assert set(trace)=={'version','id','seed','matrix','initial','history'}
+    assert trace['matrix']==specification(trace['id'],trace['seed'])
+    validate_source(trace, {**FIELDS,'region':FIELDS['account']})

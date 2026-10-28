@@ -2,7 +2,7 @@
 """M6 frame domains and finalized relational scopes against two independent oracles."""
 import collections
 import json
-from application_model import apply, generated, query, statements
+from application_model import apply, generated, statements
 from application_portfolio_harness import ApplicationFixture
 from numeric_compiler_harness import average
 from worker_harness import run_modes
@@ -26,9 +26,9 @@ class CompositionFixture(ApplicationFixture):
         if mode == 'window-empty':
             for row in initial['entry']:
                 row['amount'] = -9223372036854775808
-        trace = {'version':1,'id':mode,'seed':6021,'spec':query('projection',6021),
+        trace = {'version':1,'id':mode,'seed':6021,
                  'initial':initial,'history':history}
-        super().__init__(output,trace)
+        self.initialize_sources(output,trace)
         self.mode = mode
         a,b = self.name+'.account',self.name+'.entry'
         window = 'PARTITION BY abs(account_id) ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING'

@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Eight named SQL families, native binary/metadata oracle, replay and minimization."""
 import argparse
-import copy
 import hashlib
 import json
 import os
 import pathlib
 import sys
-from application_model import scalar
 from application_evidence import source_files
 from application_portfolio_harness import ApplicationFixture, DifferentialFailure, run_case, admin
 from composition_matrix_model import FAMILIES, expected
@@ -16,16 +14,13 @@ from native_mv_oracle import binary_difference
 
 
 class MatrixFixture(ApplicationFixture):
-    def __init__(self, output, trace):
-        base = {**trace,'initial':{k:v for k,v in trace['initial'].items() if k!='region'}}
-        super().__init__(output,base)
-        self.trace = trace
-        self.query = trace['matrix']['sql'].format(schema=self.name)
-        self.labels = trace['matrix']['labels']
-        self.model['region'] = {row['id']:copy.deepcopy(row) for row in trace['initial']['region']}
+    def create_sources(self):
+        super().create_sources()
         self.sql(f'CREATE TABLE {self.name}.region(id integer PRIMARY KEY,label text,cohort integer); ALTER TABLE {self.name}.region REPLICA IDENTITY FULL; ALTER PUBLICATION {self.name} ADD TABLE {self.name}.region')
-        for row in trace['initial']['region']:
-            self.sql(f"INSERT INTO {self.name}.region VALUES({','.join(scalar(row[k]) for k in ('id','label','cohort'))})")
+
+    @property
+    def output_labels(self):
+        return self.query_specification['labels']
 
     @property
     def query_specification(self):
@@ -94,7 +89,7 @@ def main():
                 prior = json.loads((file.parent/'provenance.json').read_text())
                 if prior['binary_sha256']!=binaries or prior['source_sha256']!=sources:
                     continue
-                saved,result = case(file.parent,repair=True)
+                saved,result = case(file.parent)
                 if result['transactions']==30:
                     complete.append(saved)
         traces = [trace for trace in traces if not any(saved['id']==trace['id'] and saved['seed']==trace['seed']
