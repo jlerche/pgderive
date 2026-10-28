@@ -1,23 +1,24 @@
-use super::TimedBatch;
-use crate::engine::{
-    Batch,
-    execution::{Consolidator, Limits},
-    reader::BatchData,
-};
+use super::{Expand, TimedBatch};
+use crate::engine::{Batch, execution::Limits, reader::BatchData};
 use anyhow::Result;
 use std::borrow::Borrow;
-use std::sync::Arc;
-type Mapper<K, V, A, B> = dyn Fn(&K, &V) -> Result<Option<(A, B)>> + Send + Sync;
 
 /// Lifetime-bound pure projection/filter over a typed weighted edge.
 #[derive(Clone)]
 pub struct Project<K: BatchData, V: BatchData, A: BatchData, B: BatchData> {
-    map: Arc<Mapper<K, V, A, B>>,
+    expansion: Expand<K, V, A, B>,
 }
 impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Project<K, V, A, B> {
     /// Bind deterministic semantics; None filters, Some projects full identity.
     pub fn new(map: impl Fn(&K, &V) -> Result<Option<(A, B)>> + Send + Sync + 'static) -> Self {
-        Self { map: Arc::new(map) }
+        Self {
+            expansion: Expand::new(move |key, value, emit| {
+                if let Some(tuple) = map(key, value)? {
+                    emit(tuple)?;
+                }
+                Ok(())
+            }),
+        }
     }
     /// Preserve the tick and consolidate projected full-tuple collisions exactly.
     ///
@@ -35,14 +36,7 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Project<K, V, A, B>
         input: &TimedBatch<I>,
         limits: Limits,
     ) -> Result<TimedBatch<Batch<A, B>>> {
-        limits.check_batch(input.batch.borrow())?;
-        let mut builder = Consolidator::new(limits)?;
-        for ((key, value), weight) in input.batch.borrow().iter() {
-            if let Some(tuple) = (self.map)(key, value)? {
-                builder.add(tuple, *weight)?;
-            }
-        }
-        Ok(TimedBatch { time: input.time, batch: builder.finish_batch()? })
+        self.expansion.evaluate(input, limits)
     }
 }
 
@@ -60,16 +54,6 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Project<K, V, A, B>
         limits: Limits,
         contributions: &mut usize,
     ) -> Result<crate::engine::execution::Sealed<A, B>> {
-        use crate::engine::reader::{BatchCursor as _, BatchReader as _};
-        let mut cursor = input.cursor().await?;
-        let mut output = Consolidator::new(limits)?;
-        while let Some((key, value, weight)) = cursor.current() {
-            if let Some(tuple) = (self.map)(key, value)? {
-                crate::engine::execution::charge_contribution(contributions, limits.contributions)?;
-                output.add(tuple, weight)?;
-            }
-            cursor.advance().await?;
-        }
-        output.seal()
+        self.expansion.evaluate_sealed_counted(input, limits, contributions).await
     }
 }

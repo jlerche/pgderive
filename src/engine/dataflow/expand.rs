@@ -6,7 +6,7 @@ use crate::engine::{
     reader::BatchData,
 };
 use anyhow::Result;
-use std::sync::Arc;
+use std::{borrow::Borrow, sync::Arc};
 type Emit<'a, A, B> = dyn FnMut((A, B)) -> Result<()> + 'a;
 type Mapper<K, V, A, B> = dyn for<'a> Fn(&K, &V, &mut Emit<'a, A, B>) -> Result<()> + Send + Sync;
 /// Linear flat-map: every emitted identity carries the complete input weight.
@@ -26,14 +26,14 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Expand<K, V, A, B> 
     ///
     /// # Errors
     /// Returns callback, resource, scratch I/O or finalized coefficient errors.
-    pub fn evaluate(
+    pub fn evaluate<I: Borrow<Batch<K, V>>>(
         &self,
-        input: &TimedBatch<Batch<K, V>>,
+        input: &TimedBatch<I>,
         limits: Limits,
     ) -> Result<TimedBatch<Batch<A, B>>> {
-        limits.check_batch(&input.batch)?;
+        limits.check_batch(input.batch.borrow())?;
         let mut output = Consolidator::new(limits)?;
-        for ((key, value), weight) in input.batch.iter() {
+        for ((key, value), weight) in input.batch.borrow().iter() {
             (self.map)(key, value, &mut |tuple| output.add(tuple, *weight))?;
         }
         Ok(TimedBatch { time: input.time, batch: output.finish_batch()? })

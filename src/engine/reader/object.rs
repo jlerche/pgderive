@@ -8,6 +8,7 @@ use anyhow::{Context, Result, ensure};
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+type IndexLeaf<K, V> = (usize, Arc<Node<(K, V)>>);
 
 /// Coarse immutable-object reference suitable for a trusted membership catalog.
 /// Key/value fences stay in the object's index, not in `PostgreSQL`.
@@ -423,35 +424,44 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             }
         }
     }
-    pub(super) async fn seek_block(&self, before: impl Fn(&(K, V)) -> bool) -> Result<usize> {
+    pub(super) async fn seek_block(
+        &self,
+        before: impl Fn(&(K, V)) -> bool + Send + Sync,
+    ) -> Result<usize> {
         if let Some(pages) = self.span.as_ref().and_then(|span| span.pages.as_ref()) {
             return Ok(pages.partition_point(|leaf| before(&leaf.block.last)));
         }
-        let Some(root) = self.index.node.as_ref() else {
-            return Ok(0);
-        };
-        if before(&root.last) {
+        let Some((ordinal, node)) = self.seek_leaf(&before).await? else {
             return Ok(self.block_count());
+        };
+        let Node::Leaf(leaves) = node.as_ref() else { anyhow::bail!("expected index leaf") };
+        Ok(self.relative_block(ordinal + leaves.partition_point(|leaf| before(&leaf.block.last))))
+    }
+    async fn seek_leaf(
+        &self,
+        before: &(impl Fn(&(K, V)) -> bool + Sync),
+    ) -> Result<Option<IndexLeaf<K, V>>> {
+        let Some(root) = self.index.node.as_ref() else { return Ok(None) };
+        if before(&root.last) {
+            return Ok(None);
         }
         let mut address = root.clone();
-        let mut ordinal = 0_usize;
+        let mut ordinal = 0;
         loop {
-            match self.node(&address).await?.as_ref() {
-                Node::Leaf(leaves) => {
-                    return Ok(self.relative_block(
-                        ordinal + leaves.partition_point(|leaf| before(&leaf.block.last)),
-                    ));
-                }
+            let node = self.node(&address).await?;
+            match node.as_ref() {
+                Node::Leaf(_) => return Ok(Some((ordinal, node))),
                 Node::Branch(children) => {
-                    let Some(child) = super::index::seek_child(children, &before, &mut ordinal)
+                    let Some(child) = super::index::seek_child(children, before, &mut ordinal)
                     else {
-                        return Ok(self.relative_block(ordinal));
+                        return Ok(None);
                     };
                     address = child;
                 }
             }
         }
     }
+
     /// Object path and exact compressed byte range containing a selected block.
     ///
     /// # Errors
@@ -538,22 +548,13 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         if self.index.node.as_ref().is_none_or(|root| key < &root.first.0 || key > &root.last.0) {
             return Ok(None);
         }
-        let mut address = self.index.node.as_ref().context("empty object index")?.clone();
-        let mut ordinal = 0_usize;
-        loop {
-            match self.node(&address).await?.as_ref() {
-                Node::Leaf(leaves) => return self.key_leaf(leaves, ordinal, key).await,
-                Node::Branch(children) => {
-                    let Some(child) =
-                        super::index::seek_child(children, &|last| last.0 < *key, &mut ordinal)
-                    else {
-                        return Ok(None);
-                    };
-                    address = child;
-                }
-            }
-        }
+        let Some((ordinal, node)) = self.seek_leaf(&|last| last.0 < *key).await? else {
+            return Ok(None);
+        };
+        let Node::Leaf(leaves) = node.as_ref() else { anyhow::bail!("expected index leaf") };
+        self.key_leaf(leaves, ordinal, key).await
     }
+
     async fn key_leaf(
         &self,
         leaves: &[Leaf<(K, V)>],

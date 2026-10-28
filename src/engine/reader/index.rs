@@ -72,8 +72,25 @@ impl<T> Address<T> {
         Ok(())
     }
 }
-impl<T: Ord + Clone> Node<T> {
-    fn summary(&self) -> Result<Address<T>> {
+impl<T: Clone> Address<&T> {
+    fn into_owned(self) -> Address<T> {
+        Address {
+            offset: self.offset,
+            length: self.length,
+            hash: self.hash,
+            first: self.first.clone(),
+            last: self.last.clone(),
+            blocks: self.blocks,
+            rows: self.rows,
+            payload_bytes: self.payload_bytes,
+            max_weight: self.max_weight,
+            depth: self.depth,
+        }
+    }
+}
+
+impl<T> Node<T> {
+    fn summary(&self) -> Result<Address<&T>> {
         let mut payload_bytes = 0_u64;
         let (first, last, blocks, rows, max_weight, depth) = match self {
             Self::Leaf(leaves) => {
@@ -86,12 +103,10 @@ impl<T: Ord + Clone> Node<T> {
                     leaf.block.validate_address()?;
                     leaf.pack.validate()?;
                     ensure!(
-                        leaf.block.first <= leaf.block.last
-                            && leaf
-                                .block
-                                .offset
-                                .checked_add(leaf.block.length)
-                                .is_some_and(|end| end <= leaf.pack.bytes),
+                        leaf.block
+                            .offset
+                            .checked_add(leaf.block.length)
+                            .is_some_and(|end| end <= leaf.pack.bytes),
                         "invalid index leaf block"
                     );
                     payload_bytes = payload_bytes
@@ -100,18 +115,7 @@ impl<T: Ord + Clone> Node<T> {
                     rows = rows.checked_add(leaf.block.rows).context("index row count overflow")?;
                     max_weight = max_weight.max(leaf.block.max_weight);
                 }
-                ensure!(
-                    leaves.windows(2).all(|pair| pair[0].block.last < pair[1].block.first),
-                    "overlapping index leaf fences"
-                );
-                (
-                    first.block.first.clone(),
-                    last.block.last.clone(),
-                    leaves.len(),
-                    rows,
-                    max_weight,
-                    0,
-                )
+                (&first.block.first, &last.block.last, leaves.len(), rows, max_weight, 0)
             }
             Self::Branch(children) => {
                 let first = children.first().context("empty index branch")?;
@@ -119,10 +123,6 @@ impl<T: Ord + Clone> Node<T> {
                 ensure!(
                     children.len() >= 2 && children.len() <= FANOUT,
                     "invalid index branch fanout"
-                );
-                ensure!(
-                    children.windows(2).all(|pair| pair[0].last < pair[1].first),
-                    "overlapping index branch fences"
                 );
                 let mut blocks = 0_usize;
                 let mut rows = 0_usize;
@@ -137,7 +137,14 @@ impl<T: Ord + Clone> Node<T> {
                     rows = rows.checked_add(child.rows).context("index row count overflow")?;
                     max_weight = max_weight.max(child.max_weight);
                 }
-                (first.first.clone(), last.last.clone(), blocks, rows, max_weight, first.depth + 1)
+                (
+                    &first.first,
+                    &last.last,
+                    blocks,
+                    rows,
+                    max_weight,
+                    first.depth.checked_add(1).context("index depth overflow")?,
+                )
             }
         };
         Ok(Address {
@@ -153,24 +160,52 @@ impl<T: Ord + Clone> Node<T> {
             depth,
         })
     }
-    pub(super) fn validate(&self, address: &Address<T>, pack_bytes: u64) -> Result<()> {
-        self.validate_structure(address, pack_bytes)?;
-        let actual = self.summary()?;
-        ensure!(
-            actual.first == address.first
-                && actual.last == address.last
-                && actual.blocks == address.blocks
-                && actual.rows == address.rows
-                && actual.payload_bytes == address.payload_bytes
-                && actual.max_weight == address.max_weight
-                && actual.depth == address.depth,
-            "index node summary mismatch"
-        );
+    pub(super) fn validate_structure(
+        &self,
+        address: &Address<T>,
+        pack_bytes: u64,
+    ) -> Result<Address<&T>> {
+        address.validate(pack_bytes)?;
         if let Self::Branch(children) = self {
+            let mut end = 0;
             for child in children {
                 child.validate(address.offset)?;
+                ensure!(child.offset >= end, "invalid index child order/depth");
+                end =
+                    child.offset.checked_add(child.length).context("index child range overflow")?;
             }
         }
+        let actual = self.summary()?;
+        ensure!(
+            actual.rows == address.rows
+                && actual.blocks == address.blocks
+                && actual.max_weight == address.max_weight
+                && actual.payload_bytes == address.payload_bytes
+                && actual.depth == address.depth,
+            "index structure statistics mismatch"
+        );
+        Ok(actual)
+    }
+}
+impl<T: Ord + Clone> Node<T> {
+    fn validate_fences(&self) -> Result<()> {
+        let valid = match self {
+            Self::Leaf(leaves) => {
+                leaves.iter().all(|leaf| leaf.block.first <= leaf.block.last)
+                    && leaves.windows(2).all(|pair| pair[0].block.last < pair[1].block.first)
+            }
+            Self::Branch(children) => children.windows(2).all(|pair| pair[0].last < pair[1].first),
+        };
+        ensure!(valid, "invalid or overlapping index fences");
+        Ok(())
+    }
+    pub(super) fn validate(&self, address: &Address<T>, pack_bytes: u64) -> Result<()> {
+        let actual = self.validate_structure(address, pack_bytes)?;
+        self.validate_fences()?;
+        ensure!(
+            actual.first == &address.first && actual.last == &address.last,
+            "index node summary mismatch"
+        );
         Ok(())
     }
 }
@@ -187,7 +222,8 @@ async fn append<T: Ord + Clone + Serialize + Send + Sync>(
         decoded.len() <= PAGE_BYTES,
         crate::engine::execution::CapacityExceeded("index node exceeds page byte limit")
     );
-    let mut address = node.summary()?;
+    node.validate_fences()?;
+    let mut address = node.summary()?.into_owned();
     address.offset = u64::try_from(bytes.len())?;
     address.length = u64::try_from(encoded.len())?;
     address.hash = hash(&encoded);
@@ -529,74 +565,6 @@ impl<T: Ord + Clone + Serialize> Root<T> {
     }
 }
 
-impl<T> Node<T> {
-    pub(super) fn validate_structure(&self, address: &Address<T>, pack_bytes: u64) -> Result<()> {
-        address.validate(pack_bytes)?;
-        let mut rows = 0_usize;
-        let mut blocks = 0_usize;
-        let mut max_weight = 0_u64;
-        let mut payload_bytes = 0_u64;
-        match self {
-            Self::Leaf(leaves) => {
-                ensure!(
-                    !leaves.is_empty() && leaves.len() <= FANOUT && address.depth == 0,
-                    "invalid index leaf structure"
-                );
-                for leaf in leaves {
-                    leaf.block.validate_address()?;
-                    leaf.pack.validate()?;
-                    ensure!(
-                        leaf.block
-                            .offset
-                            .checked_add(leaf.block.length)
-                            .is_some_and(|end| end <= leaf.pack.bytes),
-                        "index leaf exceeds data pack"
-                    );
-                    payload_bytes = payload_bytes
-                        .checked_add(leaf.block.length)
-                        .context("index payload byte overflow")?;
-                    rows = rows.checked_add(leaf.block.rows).context("index row count overflow")?;
-                    blocks += 1;
-                    max_weight = max_weight.max(leaf.block.max_weight);
-                }
-            }
-            Self::Branch(children) => {
-                ensure!(
-                    children.len() >= 2 && children.len() <= FANOUT,
-                    "invalid index branch structure"
-                );
-                let mut end = 0;
-                for child in children {
-                    child.validate(address.offset)?;
-                    ensure!(
-                        child.depth.checked_add(1) == Some(address.depth) && child.offset >= end,
-                        "invalid index child order/depth"
-                    );
-                    end = child
-                        .offset
-                        .checked_add(child.length)
-                        .context("index child range overflow")?;
-                    payload_bytes = payload_bytes
-                        .checked_add(child.payload_bytes)
-                        .context("index payload byte overflow")?;
-                    rows = rows.checked_add(child.rows).context("index row count overflow")?;
-                    blocks =
-                        blocks.checked_add(child.blocks).context("index block count overflow")?;
-                    max_weight = max_weight.max(child.max_weight);
-                }
-            }
-        }
-        ensure!(
-            rows == address.rows
-                && blocks == address.blocks
-                && max_weight == address.max_weight
-                && payload_bytes == address.payload_bytes,
-            "index structure statistics mismatch"
-        );
-        Ok(())
-    }
-}
-
 pub(super) async fn warm<K: BatchData, V: BatchData>(
     cache: &Cache,
     root: &Root<(K, V)>,
@@ -698,7 +666,7 @@ mod tests {
             depth: 0,
         };
         let raw = std::sync::Arc::new(Node::Branch(vec![child(0), child(1)]));
-        let mut address = raw.summary()?;
+        let mut address = raw.summary()?.into_owned();
         address.offset = 2;
         address.length = 1;
         address.hash = "0".repeat(64);

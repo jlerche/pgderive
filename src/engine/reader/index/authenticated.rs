@@ -87,7 +87,7 @@ mod tests {
             depth: 0,
         };
         let node = Arc::new(Node::Branch(vec![child(0), child(1)]));
-        let mut address = node.summary()?;
+        let mut address = node.summary()?.into_owned();
         address.offset = 2;
         address.length = 1;
         address.hash = "1".repeat(64);

@@ -3,11 +3,10 @@ use crate::{
     catalog::{Protection, Writer},
     engine::{
         plan::{Checkpoint, Membership},
-        reader::{BatchData, BlockCache},
+        reader::BatchData,
     },
 };
 use anyhow::{Context, Result, ensure};
-use futures_util::{StreamExt as _, stream};
 impl<K: BatchData, V: BatchData> super::super::checkpoint::DurableState for RelationalState<K, V> {
     fn memberships(&self) -> Result<Vec<Membership>> {
         self.entries
@@ -118,43 +117,14 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     async fn prepare_compaction_scoped(&self, namespace: Option<&str>) -> Result<Compaction<K, V>> {
         let workspaces = self.execution.workspaces.clone();
         let namespace = namespace.map(str::to_owned);
-        let writers = self.execution.writers.clone();
-        let foreground = self.execution.cache.clone();
-        let output = BlockCache::output(foreground.clone());
+        let execution = self.execution.clone();
         let (result, _service) = crate::engine::execution::service::scope(
-            workspaces.clone(),
+            workspaces,
             self.engine.prepare_maintenance(move |state| async move {
-                let uploads = state.entries.iter().map(|(id, entry)| {
-                    let writers = &writers;
-                    let workspaces = workspaces.clone();
-                    let namespace = namespace.as_deref();
-                    let output = output.clone();
-                    async move {
-                        let _workspace = workspaces.background().await?;
-                        let writer = writers
-                            .get(id)
-                            .context("missing compaction writer")?
-                            .clone()
-                            .with_cache(output);
-                        let writer = namespace.map_or_else(
-                            || writer.clone(),
-                            |scope| writer.clone().with_namespace(scope),
-                        );
-                        Ok::<_, anyhow::Error>((id.clone(), compact_entry(entry, &writer).await?))
-                    }
-                });
-                // Drain all uploads before returning any error; protection covers all of them.
-                let completed = stream::iter(uploads)
-                    .buffer_unordered(workspaces.capacity())
-                    .collect::<Vec<_>>()
-                    .await;
-                let mut state =
-                    RelationalState { entries: completed.into_iter().collect::<Result<_>>()? };
-                output.promote()?;
-                for entry in state.entries.values_mut() {
-                    entry.trace.share_cache(&foreground);
-                }
-                Ok(state)
+                let (state, output) = execution
+                    .upload_entries(state, namespace.as_deref(), super::flush::Upload::Compact)
+                    .await?;
+                execution.promote(state, &output)
             }),
         )
         .await;
@@ -188,7 +158,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
     }
 }
 
-async fn compact_entry<K: BatchData, V: BatchData>(
+pub(super) async fn compact_entry<K: BatchData, V: BatchData>(
     entry: &Entry<K, V>,
     writer: &crate::engine::dataflow::Arrangement<K, V>,
 ) -> Result<Entry<K, V>> {
@@ -197,6 +167,7 @@ async fn compact_entry<K: BatchData, V: BatchData>(
     }
     Ok(Entry { schema: entry.schema.clone(), trace: writer.compact(&entry.trace).await? })
 }
+
 #[cfg(test)]
 #[path = "compaction_tests.rs"]
 mod tests;

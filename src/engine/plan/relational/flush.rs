@@ -50,50 +50,74 @@ impl<K: BatchData, V: BatchData> FrozenFlush<K, V> {
         Ok(UploadedFlush { frozen: self, state, checkpoint, service })
     }
     async fn upload_entries(&self) -> Result<(RelationalState<K, V>, Checkpoint)> {
-        let execution = self.execution.clone();
-        let namespace = self.namespace.clone();
-        let output_cache = BlockCache::output(execution.cache.clone());
-        let shared_output = output_cache.clone();
+        let (state, output) = self
+            .execution
+            .upload_entries(self.captured.clone(), Some(&self.namespace), Upload::Flush)
+            .await?;
+        let checkpoint = Checkpoint::new(&self.execution.plan, self.time, state.memberships()?)?;
+        Ok((self.execution.promote(state, &output)?, checkpoint))
+    }
+}
+#[derive(Clone, Copy)]
+pub(super) enum Upload {
+    Flush,
+    Compact,
+}
+impl<K: BatchData, V: BatchData> Execution<K, V> {
+    pub(super) async fn upload_entries(
+        self: &Arc<Self>,
+        captured: Arc<RelationalState<K, V>>,
+        namespace: Option<&str>,
+        operation: Upload,
+    ) -> Result<(RelationalState<K, V>, Arc<BlockCache>)> {
+        let output = BlockCache::output(self.cache.clone());
         #[expect(
             clippy::needless_collect,
-            reason = "owned IDs keep spawned upload futures independent of a borrowed map iterator"
+            reason = "owned IDs keep upload futures independent of a borrowed map iterator"
         )]
-        let ids = self.captured.entries.keys().cloned().collect::<Vec<_>>();
-        let captured = self.captured.clone();
-        let uploads = ids.into_iter().map(move |id| {
-            let execution = execution.clone();
-            let output_cache = shared_output.clone();
-            let namespace = namespace.clone();
+        let ids = captured.entries.keys().cloned().collect::<Vec<_>>();
+        let uploads = ids.into_iter().map(|id| {
+            let output = output.clone();
             let captured = captured.clone();
             async move {
-                let _workspace = execution.workspaces.background().await?;
+                let _workspace = self.workspaces.background().await?;
                 tokio::task::consume_budget().await;
-                let entry = captured.entries.get(&id).context("missing captured flush entry")?;
-                let writer = execution
+                let entry = captured.entries.get(&id).context("missing captured upload entry")?;
+                let writer = self
                     .writers
                     .get(&id)
-                    .context("missing flush writer")?
+                    .context("missing upload writer")?
                     .clone()
-                    .with_namespace(&namespace)
-                    .with_cache(output_cache);
-                let entry = Entry {
-                    schema: entry.schema.clone(),
-                    trace: writer.flush(&entry.trace).await?,
+                    .with_cache(output);
+                let writer = namespace
+                    .map_or_else(|| writer.clone(), |scope| writer.clone().with_namespace(scope));
+                let entry = match operation {
+                    Upload::Flush => Entry {
+                        schema: entry.schema.clone(),
+                        trace: writer.flush(&entry.trace).await?,
+                    },
+                    Upload::Compact => super::persistence::compact_entry(entry, &writer).await?,
                 };
                 Ok::<_, anyhow::Error>((id, entry))
             }
         });
+        // Finish every sibling before reporting failure: upload protection covers them all.
         let completed = stream::iter(uploads)
-            .buffer_unordered(self.execution.workspaces.capacity())
+            .buffer_unordered(self.workspaces.capacity())
             .collect::<Vec<_>>()
             .await;
-        let mut state = RelationalState { entries: completed.into_iter().collect::<Result<_>>()? };
-        let checkpoint = Checkpoint::new(&self.execution.plan, self.time, state.memberships()?)?;
-        output_cache.promote()?;
+        Ok((RelationalState { entries: completed.into_iter().collect::<Result<_>>()? }, output))
+    }
+    pub(super) fn promote(
+        &self,
+        mut state: RelationalState<K, V>,
+        output: &BlockCache,
+    ) -> Result<RelationalState<K, V>> {
+        output.promote()?;
         for entry in state.entries.values_mut() {
-            entry.trace.share_cache(&self.execution.cache);
+            entry.trace.share_cache(&self.cache);
         }
-        Ok((state, checkpoint))
+        Ok(state)
     }
 }
 impl<K: BatchData, V: BatchData> Relational<K, V> {
