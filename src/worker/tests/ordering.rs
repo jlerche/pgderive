@@ -42,16 +42,13 @@ fn ordering_binds_aliases_ordinals_and_hidden_expressions() -> Result<()> {
         "ORDER BY missing",
         "ORDER BY price LIMIT -1",
         "ORDER BY price LIMIT 1000001",
-        "ORDER BY price LIMIT NULL",
         "ORDER BY price LIMIT 1+1",
         "ORDER BY price LIMIT 1 OFFSET -1",
         "ORDER BY price LIMIT 1000000 OFFSET 1",
         "ORDER BY price OFFSET 1000001",
-        "ORDER BY price OFFSET NULL",
         "ORDER BY price COLLATE \"C\"",
         "ORDER BY price USING >",
         "ORDER BY price FETCH FIRST 1 ROW WITH TIES",
-        "LIMIT 1",
     ] {
         assert!(compile(&format!("{base} {suffix}"), &native).is_err(), "{suffix}");
     }
@@ -255,8 +252,10 @@ async fn zero_limits_prune_row_errors_and_state_after_binding() -> Result<()> {
     let options = settings();
     for sql in [
         "SELECT abs(price) AS p FROM source.bid ORDER BY id LIMIT 0",
+        "SELECT abs(price) AS p FROM source.bid LIMIT 0",
         "SELECT auction FROM source.bid ORDER BY abs(price),id LIMIT 0",
         "SELECT q.p FROM (SELECT abs(price) AS p FROM source.bid ORDER BY id LIMIT 0) q ORDER BY q.p LIMIT 1",
+        "SELECT q.p FROM (SELECT abs(price) AS p FROM source.bid LIMIT 0) q LIMIT 1",
         "SELECT abs(b.price) AS p FROM source.auction a JOIN source.bid b ON a.id=b.auction ORDER BY a.id,b.id LIMIT 0",
         "SELECT id,COUNT(abs(price)) OVER(ORDER BY id ROWS UNBOUNDED PRECEDING) AS p FROM source.bid ORDER BY id LIMIT 0",
     ] {

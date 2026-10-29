@@ -72,7 +72,7 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
         SQL.replace("JOIN source.bid b ON a.id=b.auction", "JOIN source.bid b USING (id)"),
         SQL.replace("JOIN source.bid b ON a.id=b.auction", "NATURAL JOIN source.bid b"),
         SQL.replace("source.auction a", "(SELECT * FROM source.auction) a"),
-        format!("{SQL} LIMIT ALL"),
+        format!("{SQL} LIMIT 1000001"),
         format!("{SQL} FOR UPDATE"),
         format!("{SQL} HAVING COUNT(*) > 0"),
         format!("{SQL} UNION ALL {SQL}"),

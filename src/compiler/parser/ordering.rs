@@ -25,10 +25,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     {
         return Ok(None);
     }
-    ensure!(
-        (1..=16).contains(&select.sort_clause.len()),
-        "ORDER BY requires 1..=16 keys; LIMIT requires ORDER BY"
-    );
+    ensure!(select.sort_clause.len() <= 16, "ORDER BY exceeds 16 keys");
     ensure!(
         matches!(
             pg::LimitOption::try_from(select.limit_option)?,
@@ -36,8 +33,8 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         ),
         "FETCH WITH TIES unsupported"
     );
-    let limit = select.limit_count.as_deref().map(limit).transpose()?;
-    let offset = select.limit_offset.as_deref().map(self::limit).transpose()?.unwrap_or(0);
+    let limit = select.limit_count.as_deref().map(count).transpose()?.flatten();
+    let offset = select.limit_offset.as_deref().map(count).transpose()?.flatten().unwrap_or(0);
     if let Some(limit) = limit {
         ensure!(
             limit.checked_add(offset).is_some_and(|total| total <= 1_000_000),
@@ -93,12 +90,17 @@ fn byte_order(value: &Node) -> Result<(&Node, bool)> {
     Ok((super::optional(collate.arg.as_deref())?, true))
 }
 
-fn limit(value: &Node) -> Result<usize> {
+fn count(value: &Node) -> Result<Option<usize>> {
+    // PostgreSQL represents LIMIT ALL and LIMIT NULL with the same NULL
+    // A_Const. OFFSET NULL uses that node too and means zero at its caller.
+    if matches!(node(value)?, NodeEnum::AConst(value) if value.isnull) {
+        return Ok(None);
+    }
     let value = crate::compiler::typed::native_literal(value)?
         .as_integer_literal()
-        .context("LIMIT requires a nonnegative integer literal")?;
-    ensure!((0..=1_000_000).contains(&value), "LIMIT must be in 0..=1000000");
-    usize::try_from(value).map_err(Into::into)
+        .context("LIMIT/OFFSET requires a nonnegative integer literal or NULL")?;
+    ensure!((0..=1_000_000).contains(&value), "LIMIT/OFFSET must be in 0..=1000000");
+    Ok(Some(usize::try_from(value)?))
 }
 
 fn target_index(value: &Node, targets: &[partition::Target]) -> Result<Option<usize>> {

@@ -182,6 +182,7 @@ mod ordered;
 
 mod native_join;
 
+mod limit;
 mod numeric;
 mod ordering;
 #[path = "tests/topk.rs"]

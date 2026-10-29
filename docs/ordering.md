@@ -37,12 +37,15 @@ ORDER BY b.price DESC NULLS LAST, b.id
 LIMIT 10
 ```
 
-LIMIT (or FETCH FIRST n ROWS ONLY) requires ORDER BY and a literal integer in
-0..=1,000,000. OFFSET accepts the same literal domain, with or without LIMIT;
+LIMIT (or FETCH FIRST n ROWS ONLY) accepts a literal integer in 0..=1,000,000,
+with or without ORDER BY. OFFSET accepts the same literal domain, alone or with LIMIT;
 when both occur their sum must fit the 1,000,000 occurrence prefix budget.
 OFFSET 0 is a no-op. OFFSET without LIMIT returns the remaining bag and requires
-scanning/retaining that tail within execution budgets. NULL/ALL, negative,
-computed and out-of-budget counts reject.
+scanning/retaining that tail within execution budgets. LIMIT ALL and LIMIT NULL
+are unbounded; the native PostgreSQL parser represents them with the same NULL
+A_Const, so both are admitted. OFFSET NULL means zero. Negative, computed and
+out-of-budget finite counts reject. With no finite limit or nonzero offset these
+clauses normalize to the unchanged result bag.
 
 Plain SQL ordering permits nonunique keys. Like Feldera's generated comparator,
 it orders ties by remaining fields of the complete logical tuple in tuple order,
@@ -53,6 +56,11 @@ representations retain their raw full identity as a final physical comparison;
 numeric display scales are not consolidated away. Weighted multiplicity is
 clipped at both the offset and limit boundaries. ROW_NUMBER/positional window
 ordering keeps its existing uniqueness proof; this change does not relax it.
+Without ORDER BY, the requested comparison is empty and the same complete
+logical-tuple comparison chooses the selected occurrences. This follows Feldera's
+unordered limit path, not PostgreSQL heap order. It does not promise any row
+delivery order. Text in that arbitrary selection comparison uses byte order;
+it does not assert locale-sensitive SQL ordering.
 
 After binding and type validation, LIMIT 0 removes its upstream
 maps, joins, windows and maintained state. Row-dependent expressions are not
@@ -65,7 +73,7 @@ The changed sort codec/state and added POSIX semantic attestation require rebuil
 of existing registrations with the old plan/environment identity. There is no
 compatibility decoder or migration fallback.
 
-Locale-dependent text ordering, WITH TIES, LIMIT ALL/NULL, dynamic limits and custom sort operators reject before
+Locale-dependent text ordering, WITH TIES, dynamic limits and custom sort operators reject before
 activation. Other execution and publication budgets still apply.
 
 The destination remains an ordinary PostgreSQL table. ORDER BY without LIMIT
@@ -158,3 +166,18 @@ numeric text refines remaining representation ties. Native send bytes and bags
 are both compared through CDC and restart. Rust histories separately exercise
 weighted duplicates across offset/limit boundaries, tail refill and compaction.
 The numeric kernel is compared against independent scaled-integer arithmetic.
+
+`scripts/unordered_harness.py` adds seventeen count histories: bare LIMIT/OFFSET,
+combined and zero counts, ALL/NULL, ordered/hidden-order ALL, default-collated
+text, nested limits, joins and windows, and overflow expressions behind zero
+limits. It reuses the existing join/window candidate recomputation and complete
+transaction histories. Native oracles explicitly refine unordered selections by
+the matching logical-tuple order rather than assuming PostgreSQL heap order.
+Rust histories independently cover weighted duplicate clipping, retraction/refill,
+cold restart and compaction; a parser regression proves ALL/NULL share a node.
+
+Feldera's [SortHrTests](https://github.com/feldera/feldera/blob/a2e791e12dd2fe02906a6fa2065520d5fcc73760/sql-to-dbsp-compiler/SQL-compiler/src/test/java/org/dbsp/sqlCompiler/compiler/sql/quidem/SortHrTests.java)
+exercise bare OFFSET 0 and LIMIT; its
+[SortTests](https://github.com/feldera/feldera/blob/a2e791e12dd2fe02906a6fa2065520d5fcc73760/sql-to-dbsp-compiler/SQL-compiler/src/test/java/org/dbsp/sqlCompiler/compiler/sql/quidem/SortTests.java)
+exercise LIMIT ALL. In visitSort, an empty field-collation list still uses the
+occurrence selection and deindexes directly; no sequence output is needed.

@@ -68,8 +68,7 @@ class OrderingFixture(TopKFixture):
         before, _, _ = self.query.rpartition('LIMIT ')
         return before + 'LIMIT 2'
 
-    def verify(self):
-        self.verify_sql(expected(self, self.labels))
+    def candidates(self):
         rows = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"))
         if self.mode == 'join':
             left = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a'))
@@ -91,6 +90,11 @@ class OrderingFixture(TopKFixture):
         elif self.mode == 'distinct':
             rows = [dict(auction=key, price=value, id=0) for key, value in
                     set((row['auction'], row['price']) for row in rows)]
+        return rows
+
+    def verify(self):
+        self.verify_sql(expected(self, self.labels))
+        rows = self.candidates()
         if self.mode in ('grouped', 'distinct', 'window', 'join'):
             rows.sort(key=lambda row: (row['auction'] is None, row['auction'], row['id']))
         else:
