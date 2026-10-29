@@ -1,0 +1,20 @@
+<section class="lb-layout" aria-label="Maintained leaderboard">
+  <div class="panel"><div class="panelhead"><h2>Book leaderboard · top ten</h2><small id="lbConnection">CONNECTING</small></div>
+    <p class="lb-description">Units descending, NULL last, then book ID ascending. The workload advances in 35-second phases; cutoff ties favor the smaller book ID.</p>
+    <table><thead><tr><th>Rank</th><th>Book</th><th>Positions</th><th>Net units</th></tr></thead><tbody id="lbRows"><tr><td colspan="4" class="loading">Loading the maintained top ten…</td></tr></tbody></table>
+    <div class="lb-note"><span id="lbFresh">Awaiting authoritative snapshot</span><span id="lbEvents">0 leaderboard events</span></div>
+    <div id="lbError" role="alert"></div>
+  </div>
+  <div class="panel"><div class="panelhead"><h2>Entries, exits and refills</h2><small>CUTOFF MOVEMENT</small></div>
+    <p class="lb-description">An outside book gains units, enters the top ten, then loses its boost so the next retained book refills. Small updates and position activity continue between membership changes.</p>
+    <ol id="lbMovements"><li>Waiting for the first membership change…</li></ol>
+    <details class="lb-sql"><summary>The maintained leaderboard SQL</summary><pre>SELECT book_id, COUNT(*) AS positions,
+       SUM(quantity) AS units
+FROM public.demo_positions
+GROUP BY book_id
+ORDER BY units DESC NULLS LAST, book_id ASC
+LIMIT 10</pre></details>
+    <p class="lb-description">The complete book overview, activity feed, totals, engine measurements and 24-hour history remain below. <a href="/totals.html">Open the original totals page ↗</a></p>
+  </div>
+</section>
+<section class="lb-query-section" aria-label="Measurements for both queries"><div class="panelhead"><h2>Independent query measurements</h2><small>ONE WORKER PER QUERY</small></div><div id="lbMetrics" class="lb-query-grid"></div><p class="measurement-note">Each query publishes its own committed result. The snapshots can reflect different source transactions. Processing and receipt-to-sink timings exclude browser delivery; only the totals query has the independent source-commit observer.</p></section>

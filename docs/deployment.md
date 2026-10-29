@@ -5,6 +5,14 @@ The supported release envelope is one supervised worker per query on PostgreSQL
 measured workload and configured engine/storage budgets. This is not an automatic
 HA service or arbitrary PostgreSQL SQL implementation.
 
+Several workers can consume the same source publication. Each keeps its own
+source connection, logical slot, durable progress and state; a process restart or
+query drop must not stop its peers. Use distinct catalog schemas when configuring
+distinct object prefixes, because a catalog schema owns one prefix. The
+[portfolio example](../examples/portfolio/README.md) and common concurrent-query
+qualifier exercise a full totals query and an independently maintained top ten
+with one source publication.
+
 ## Build and inspect
 
 Use the repository's pinned Rust toolchain, a C toolchain/Clang for pg_query,

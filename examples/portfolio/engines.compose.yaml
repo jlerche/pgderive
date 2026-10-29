@@ -1,0 +1,23 @@
+services:
+  engine-top10:
+    image: ${PGDERIVE_IMAGE}
+    restart: unless-stopped
+    profiles: [worker]
+    depends_on: {db: {condition: service_healthy}}
+    command: [query, restart, /etc/pgderive/query.toml]
+    environment:
+      PGDERIVE__POSTGRES__PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [./top10.toml:/etc/pgderive/query.toml:ro, ./r2-credentials.json:/run/credentials/r2.json:ro]
+    tmpfs: ["/var/lib/pgderive/scratch:uid=10001,gid=10001,mode=0700,size=512m"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_signal: SIGINT
+    stop_grace_period: 120s
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5", compress: "true"}
+  rest:
+    environment:
+      PGRST_DB_SCHEMAS: demo_ivm,demo_topk
