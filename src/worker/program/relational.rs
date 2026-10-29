@@ -29,7 +29,7 @@ pub(in crate::worker) fn build(
     settings: &Settings,
 ) -> Result<Query> {
     let ir = compiled.relational();
-    Query::new(plan(contract, compiled, ir)?, operators(ir, settings), settings)
+    Query::new(plan(contract, compiled, ir)?, operators(ir, settings)?, settings)
 }
 /// Bind only an imported `PostgreSQL` snapshot and complete ordered CDC transactions.
 /// Generic/manual weighted callers must use `build`, retaining strict validation.
@@ -43,7 +43,7 @@ pub(in crate::worker) fn build_committed(
         crate::compiler::properties::Analysis::infer(contract, ir)?.committed_statistics(ir)?;
     Query::from_source_keys(
         declared_plan(contract, compiled, ir, &certified)?,
-        operators(ir, settings),
+        operators(ir, settings)?,
         settings,
         certified,
     )
@@ -57,25 +57,29 @@ pub(in crate::worker) fn committed_plan(contract: &Contract, compiled: &Compiled
         &crate::compiler::properties::Analysis::infer(contract, ir)?.committed_statistics(ir)?,
     )
 }
-fn operators(ir: &Relational, settings: &Settings) -> Operators<Key, Row> {
+fn operators(ir: &Relational, settings: &Settings) -> Result<Operators<Key, Row>> {
     let native = crate::engine::value::NativeBudget::new(settings.limits.native_cache_bytes);
-    ir.nodes
-        .iter()
-        .filter_map(|node| {
-            bind(node, &ir.output, settings, &native)
-                .map(|operator| (node.id().to_owned(), operator))
-        })
-        .collect()
+    let mut operators = Operators::new();
+    for node in &ir.nodes {
+        if let Some(operator) = bind(node, &ir.output, settings, &native)? {
+            operators.insert(node.id().to_owned(), operator);
+        }
+    }
+    Ok(operators)
 }
+
 fn bind(
     node: &Node,
     projected: &Projected,
     settings: &Settings,
     native: &std::sync::Arc<crate::engine::value::NativeBudget>,
-) -> Option<Operator<Key, Row>> {
-    Some(match node {
-        Node::Source { .. } | Node::Union { .. } => return None,
+) -> Result<Option<Operator<Key, Row>>> {
+    Ok(Some(match node {
+        Node::Source { .. } | Node::Union { .. } => return Ok(None),
         Node::Empty { .. } => Operator::Project(super::bindings::empty()),
+        Node::Constant { rows, .. } => Operator::Constant(Batch::from_updates(
+            rows.iter().cloned().map(|row| ((Key::new(), row), 1)),
+        )?),
         Node::PrefixInput { spec, .. } => Operator::Project(super::prefix::input(spec)),
         Node::PrefixStatistics { spec, .. } => {
             Operator::IndexedStatistics(super::prefix::statistics(spec, native.clone()))
@@ -114,13 +118,13 @@ fn bind(
         | Node::OrderedFirst { .. }
         | Node::OrderedGroup { .. }
         | Node::OrderedFinalize { .. } => return bind_ordered(node),
-    })
+    }))
 }
 fn bind_statistics(
     node: &Node,
     native: &std::sync::Arc<crate::engine::value::NativeBudget>,
-) -> Option<Operator<Key, Row>> {
-    Some(match node {
+) -> Result<Option<Operator<Key, Row>>> {
+    Ok(Some(match node {
         Node::DistinctInput { spec, .. } => {
             Operator::Expand(super::distinct_statistics::input(spec))
         }
@@ -136,19 +140,19 @@ fn bind_statistics(
         Node::Finalize { spec, .. } => {
             Operator::Project(super::statistics::finalize(spec, native.clone()))
         }
-        _ => return None,
-    })
+        _ => return Ok(None),
+    }))
 }
-fn bind_ordered(node: &Node) -> Option<Operator<Key, Row>> {
-    Some(match node {
+fn bind_ordered(node: &Node) -> Result<Option<Operator<Key, Row>>> {
+    Ok(Some(match node {
         Node::TopKInput { spec, .. } => Operator::Project(super::topk::input(spec)),
         Node::TopK { spec, .. } => Operator::Ordered(super::topk::operator(spec)),
         Node::OrderedInput { spec, .. } => Operator::Expand(super::ordered::input(spec)),
         Node::OrderedFirst { spec, .. } => Operator::Ordered(super::ordered::first(spec)),
         Node::OrderedGroup { .. } => Operator::Project(super::ordered::group()),
         Node::OrderedFinalize { spec, .. } => Operator::Partition(super::ordered::finalize(spec)),
-        _ => return None,
-    })
+        _ => return Ok(None),
+    }))
 }
 fn partition_operator(
     spec: &crate::compiler::partition::Partition,
@@ -436,7 +440,7 @@ pub(in crate::worker) fn build_scanned(
         return build_scanned(contract, &scan_prefix(compiled), settings);
     }
     let ir = compiled.relational();
-    let mut operators = operators(ir, settings);
+    let mut operators = operators(ir, settings)?;
     for node in &ir.nodes {
         if let Node::Partition { id, spec, .. } = node {
             let spec = spec.clone();

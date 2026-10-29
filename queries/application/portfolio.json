@@ -34,12 +34,6 @@
   ],
   "rejected": [
     {
-      "id": "global_count",
-      "sql": "SELECT COUNT(*) AS n FROM {schema}.entry",
-      "blocker": "ungrouped aggregate seeding",
-      "diagnostic": "ungrouped aggregates unsupported"
-    },
-    {
       "id": "numeric_abs",
       "sql": "SELECT abs(amount::numeric) AS amount FROM {schema}.entry",
       "blocker": "numeric ABS overload (function backlog)",
@@ -53,6 +47,12 @@
     }
   ],
   "qualified_compositions": [
+    {
+      "id": "global_count",
+      "sql": "SELECT COUNT(*) AS n FROM {schema}.entry",
+      "qualification": "scripts/sql_composition_harness.py",
+      "milestone": "SQL composition"
+    },
     {
       "id": "computed_window",
       "sql": "SELECT id,SUM(abs(amount)) OVER(PARTITION BY account_id ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS total FROM {schema}.entry",

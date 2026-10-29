@@ -34,6 +34,11 @@ Further relational positions and additional automatic invalidation policies rema
 separate follow-up work. Live-query delivery
 remains outside the project scope.
 
+[HAVING, nonrecursive CTEs and UNION ALL](sql-composition.md) now compose the
+existing domains, including empty global aggregates and constant SELECT inputs.
+Recursive CTEs, DISTINCT set operations, broader scalar subqueries and additional
+join predicates remain separate relational expansion work.
+
 
 The [local engine development roadmap](engine-development-roadmap.md) completed its
 finite composition matrix and DBSP audit. Computed DISTINCT projections and

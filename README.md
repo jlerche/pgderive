@@ -995,3 +995,11 @@ The [local engine development roadmap](docs/engine-development-roadmap.md) track
 composition qualification, stateful work reduction, a runnable local example and
 a DBSP semantics/incrementalness audit. Run the isolated
 [local example](examples/local/README.md) with `python3 examples/local/run.py`.
+
+[HAVING, nonrecursive CTEs and UNION ALL](docs/sql-composition.md) compose the
+existing typed operators. HAVING can use hidden aggregates and the implicit
+global group, including COUNT zero on empty input. CTE references use bounded
+lexical expansion; UNION ALL reconciles branch columns and preserves duplicate
+occurrences. Constant SELECT inputs emit once at the initial logical tick.
+The sequential composition qualifier checks original PostgreSQL materialized
+views, output metadata and independent raw-source bags through CDC and restart.

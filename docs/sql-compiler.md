@@ -85,10 +85,12 @@ WHERE expression nodes; NUL is rejected. Scanner tokens exclude parentheses in s
 comments and quoted identifiers. These are input budgets, not a general native
 parser resource guarantee. Only built-in unqualified COUNT and SUM are supported.
 
-In this bounded grouped-join syntax, other syntax fails closed: reordered grouped outputs, multiple grouping keys/aggregates, COUNT(column), DISTINCT, aggregate FILTER,
-HAVING, CTEs, subqueries, casts, arithmetic, parameters, windows,
-outer/self/multiple joins, set operations and multiple statements. Unsupported
-SQL is rejected before a registration row or replication slot is created.
+This initial grouped-join shape is one lowering path; the sections below describe
+the broader typed projections, aggregates, joins, derived queries and windows.
+[HAVING, nonrecursive CTEs and UNION ALL](sql-composition.md) compose those paths.
+Parameters, recursive WITH, DISTINCT set operations and multiple statements remain
+outside the accepted grammar. Unsupported SQL is rejected before a registration
+row or replication slot is created.
 Administrative metadata table installation may precede compilation; it does not
 register a query. Resolution uses the explicit frozen publication catalog, not
 search_path or live SQL name interpolation. ORDER BY and LIMIT follow the

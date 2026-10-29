@@ -149,7 +149,7 @@ fn aggregate_maps_intern_by_scope_expression_and_filter() -> Result<()> {
         "SELECT auction,SUM(NULL) FROM source.bid GROUP BY auction",
         "SELECT auction,SUM(lower(price)) FROM source.bid GROUP BY auction",
         "SELECT auction,SUM(SUM(price)) FROM source.bid GROUP BY auction",
-        "SELECT SUM(abs(price)) FROM source.bid",
+        "SELECT id,SUM(abs(price)) FROM source.bid",
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");
     }

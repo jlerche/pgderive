@@ -2,6 +2,7 @@
 use super::{Name, Table, node, optional};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
+#[derive(Clone)]
 pub(in crate::compiler) struct Series {
     pub alias: String,
     pub column: String,

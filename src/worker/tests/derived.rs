@@ -91,7 +91,7 @@ fn derived_scope_rejects_ambiguous_and_deferred_values() -> Result<()> {
         sql(false).replace("b.price,rank", "b.price AS r,rank"),
         sql(false).replace("q.r<=3", "b.id<=3"),
         sql(false).replace("q.r<=3", "q.missing<=3"),
-        sql(false).replace(") q WHERE", ") q(x) WHERE"),
+        sql(false).replace(") q WHERE", ") q(x,y,z,r,extra) WHERE"),
         sql(false).replace("FROM(", "FROM LATERAL("),
     ] {
         assert!(compile(&query, &native).is_err(), "{query}");

@@ -8,7 +8,31 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
-    let mut compiled = super::bind(*parsed.inner, contract)?;
+    let compiled = super::bind(*parsed.inner, contract)?;
+    apply(
+        compiled,
+        Clause {
+            order: parsed.order,
+            visible: parsed.visible,
+            distinct: parsed.distinct,
+            limit: parsed.limit,
+            offset: parsed.offset,
+        },
+        contract,
+    )
+}
+pub(super) struct Clause {
+    pub(super) order: Vec<crate::compiler::parser::ordering::Order>,
+    pub(super) visible: usize,
+    pub(super) distinct: bool,
+    pub(super) limit: Option<usize>,
+    pub(super) offset: usize,
+}
+pub(super) fn apply(
+    mut compiled: Compiled,
+    parsed: Clause,
+    contract: &Contract,
+) -> Result<Compiled> {
     let ir = &mut compiled.relational;
     let facts = crate::compiler::properties::occurrence(ir, contract)?;
     let mut order = Vec::new();

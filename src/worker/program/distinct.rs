@@ -11,6 +11,9 @@ pub(super) fn evaluate(
     let argument = aggregate.argument.as_ref().context("missing distinct input")?;
     let mut values = BTreeSet::new();
     for (((), row), _) in bag.iter() {
+        if row.contains_key(crate::compiler::partition::SEED) {
+            continue;
+        }
         if aggregate
             .filter
             .as_ref()

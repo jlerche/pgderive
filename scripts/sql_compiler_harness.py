@@ -90,7 +90,7 @@ class SqlFixture(Fixture):
 def qualify(output, command, null_only, typed=False, remainder=False):
     fixture = SqlFixture(output, null_only, typed, remainder)
     with fixture.managed():
-        fixture.rejected(command, 'unsupported', fixture.query + ' HAVING COUNT(*)>1')
+        fixture.rejected(command, 'unsupported', fixture.query + ' HAVING row_number() OVER()>1')
         if remainder:
             fixture.rejected(command, 'zero-divisor', fixture.query.replace('mod(b.price,3)', 'mod(b.price,0)'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'

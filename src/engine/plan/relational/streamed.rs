@@ -18,6 +18,10 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
     ) -> Result<Sealed<K, V>> {
         let mut work = crate::engine::dataflow::PartitionWork::new(self.limits.contributions);
         match self.operators.get(&node.id).context("missing unary callback")? {
+            Operator::Constant(batch) => {
+                self.limits.check_batch(batch)?;
+                return Ok(if time == 1 { batch.clone() } else { Batch::default() }.into());
+            }
             Operator::Project(operator) => {
                 return operator.evaluate_sealed(input, self.limits).await;
             }

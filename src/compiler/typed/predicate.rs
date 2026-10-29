@@ -81,6 +81,17 @@ impl Typed {
     pub(in crate::compiler) const fn as_column(&self) -> Option<&ColumnRef> {
         if let Value::Column(column) = &self.value { Some(column) } else { None }
     }
+    pub(in crate::compiler) fn collation_source(&self) -> Option<&ColumnRef> {
+        match &self.value {
+            Value::Column(column) => Some(column),
+            Value::Cast(input)
+                if matches!(self.oid, 25 | 1043) && matches!(input.oid, 25 | 1043) =>
+            {
+                input.collation_source()
+            }
+            _ => None,
+        }
+    }
     pub(in crate::compiler) const fn as_integer_literal(&self) -> Option<i64> {
         if let Value::Literal(value) = &self.value { *value } else { None }
     }

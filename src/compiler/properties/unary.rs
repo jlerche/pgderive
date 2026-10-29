@@ -32,6 +32,16 @@ impl Analysis {
     }
     fn unary(&self, ir: &Relational, node: &Node) -> Result<Properties> {
         Ok(match node {
+            Node::Constant { rows, .. } => {
+                let mut facts = Properties {
+                    maximum: Some(u64::try_from(rows.len())?),
+                    ..Properties::default()
+                };
+                if rows.len() <= 1 {
+                    facts.add_key(BTreeSet::new());
+                }
+                facts
+            }
             Node::Empty { .. } => {
                 let mut facts = Properties { maximum: Some(0), ..Properties::default() };
                 facts.add_key(BTreeSet::new());
@@ -202,6 +212,16 @@ fn mapped(mut facts: Properties, id: &str, computed: &[Computed]) -> Result<Prop
             .filter(|c| c.reference.oid == item.column.oid)
             .cloned()
             .unwrap_or_else(|| Column::derived(id, item.column.clone()));
+        if matches!(item.column.oid, 25 | 1043) {
+            field.collation = item
+                .expression
+                .collation_source()
+                .and_then(|column| facts.columns.get(&column.name))
+                .map_or_else(
+                    || if item.expression.is_constant() { 100 } else { 0 },
+                    |column| column.collation,
+                );
+        }
         field.reference.name.clone_from(&item.column.name);
         facts.columns.insert(item.column.name.clone(), field);
     }

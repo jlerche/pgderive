@@ -181,6 +181,7 @@ impl<K: BatchData, V: BatchData> Bootstrap<K, V> {
         let workspace = self.execution.workspaces.acquire().await?;
         ensure!(!self.failed, "failed snapshot workspace cannot finish");
         let nodes = self.execution.plan.definition().nodes.clone();
+        self.seed_constants(&nodes).await?;
         for node in nodes.iter().filter(|n| {
             !matches!(n.kind, Kind::Source | Kind::Project | Kind::Expand | Kind::Union)
         }) {
@@ -227,6 +228,17 @@ impl<K: BatchData, V: BatchData> Bootstrap<K, V> {
             .materialize(self.execution.limits)
             .await?;
         Ok((state, output))
+    }
+
+    async fn seed_constants(&mut self, nodes: &[Node]) -> Result<()> {
+        for node in nodes {
+            if let Some(Operator::Constant(batch)) = self.execution.operators.get(&node.id) {
+                self.limits.check_batch(batch)?;
+                let batch = batch.clone();
+                self.feed(node.id.clone(), batch.into()).await?;
+            }
+        }
+        Ok(())
     }
 }
 impl<K: BatchData, V: BatchData> super::super::Relational<K, V> {
@@ -365,6 +377,82 @@ mod tests {
             }
             assert_eq!(query.time(), 0);
         }
+        Ok(())
+    }
+
+    fn constant(
+        batch: Batch<i64, i64>,
+        limits: Limits,
+    ) -> Result<super::super::super::Relational<i64, i64>> {
+        query(
+            Kind::Project,
+            vec!["source".into()],
+            BTreeMap::from([("output".into(), Operator::Constant(batch))]),
+            limits,
+        )
+    }
+
+    #[tokio::test]
+    async fn constant_is_once_per_logical_history_not_per_input_or_prepare() -> Result<()> {
+        let expected = Batch::from_updates([((7, 9), 2)])?;
+        let mut circuit = constant(expected.clone(), Limits::default())?;
+        let prepared = circuit
+            .prepare(TimedBatch { time: 1, batch: vec![Batch::<i64, i64>::default()] })
+            .await?;
+        let retried = circuit
+            .prepare(TimedBatch { time: 1, batch: vec![Batch::<i64, i64>::default()] })
+            .await?;
+        assert_eq!(prepared.output().batch, expected);
+        assert_eq!(retried.output().batch, expected);
+        circuit.commit(prepared)?;
+        assert!(circuit.commit(retried).is_err());
+        let checkpoint = circuit.checkpoint()?;
+        let mut restored = circuit;
+        restored.restore_checkpoint(checkpoint).await?;
+        let next = restored
+            .prepare(TimedBatch { time: 2, batch: vec![Batch::from_updates([((1, 4), 1)])?] })
+            .await?;
+        assert!(next.output().batch.iter().next().is_none());
+        restored.commit(next)?;
+        assert_eq!(restored.snapshot().trace("state")?.materialize().await?, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bootstrap_constant_survives_empty_input_and_ignores_chunk_count() -> Result<()> {
+        let expected = Batch::from_updates([((7, 9), 1)])?;
+        for chunks in [0, 1, 3] {
+            let mut circuit = constant(expected.clone(), Limits::default())?;
+            let mut workspace = circuit.bootstrap_workspace(64 * 1024 * 1024)?;
+            for index in 0..chunks {
+                workspace.append(vec![Batch::from_updates([((index, 4), 1)])?]).await?;
+            }
+            let prepared = circuit.prepare_bootstrap_unprotected(workspace).await?;
+            assert_eq!(prepared.output().batch, expected);
+            circuit.commit(prepared)?;
+            let next = circuit
+                .prepare(TimedBatch { time: 2, batch: vec![Batch::<i64, i64>::default()] })
+                .await?;
+            assert!(next.output().batch.iter().next().is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn constant_rejects_negative_bags_and_enforces_budgets_before_publication() -> Result<()>
+    {
+        assert!(constant(Batch::from_updates([((1, 2), -1)])?, Limits::default()).is_err());
+        let expected = Batch::from_updates([((1, 2), 1), ((3, 4), 1)])?;
+        let circuit = constant(expected, Limits { contributions: 1, ..Limits::default() })?;
+        assert!(
+            circuit
+                .prepare(TimedBatch { time: 1, batch: vec![Batch::<i64, i64>::default()] })
+                .await
+                .is_err()
+        );
+        let workspace = circuit.bootstrap_workspace(64 * 1024 * 1024)?;
+        assert!(circuit.prepare_bootstrap_unprotected(workspace).await.is_err());
+        assert_eq!(circuit.time(), 0);
         Ok(())
     }
 }

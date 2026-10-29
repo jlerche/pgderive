@@ -26,21 +26,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         return Ok(None);
     }
     ensure!(select.sort_clause.len() <= 16, "ORDER BY exceeds 16 keys");
-    ensure!(
-        matches!(
-            pg::LimitOption::try_from(select.limit_option)?,
-            pg::LimitOption::Default | pg::LimitOption::Count
-        ),
-        "FETCH WITH TIES unsupported"
-    );
-    let limit = select.limit_count.as_deref().map(count).transpose()?.flatten();
-    let offset = select.limit_offset.as_deref().map(count).transpose()?.flatten().unwrap_or(0);
-    if let Some(limit) = limit {
-        ensure!(
-            limit.checked_add(offset).is_some_and(|total| total <= 1_000_000),
-            "LIMIT + OFFSET exceeds 1000000 occurrence budget"
-        );
-    }
+    let (limit, offset) = bounds(select)?;
     let visible = select.target_list.len();
     let targets =
         select.target_list.iter().map(partition::parse_target).collect::<Result<Vec<_>>>()?;
@@ -125,4 +111,23 @@ fn target_index(value: &Node, targets: &[partition::Target]) -> Result<Option<us
     // Hidden expressions bind against the input scope, where SELECT aliases are
     // deliberately unavailable inside expressions, as in PostgreSQL.
     Ok(None)
+}
+
+pub(in crate::compiler) fn bounds(select: &pg::SelectStmt) -> Result<(Option<usize>, usize)> {
+    ensure!(
+        matches!(
+            pg::LimitOption::try_from(select.limit_option)?,
+            pg::LimitOption::Default | pg::LimitOption::Count
+        ),
+        "FETCH WITH TIES unsupported"
+    );
+    let limit = select.limit_count.as_deref().map(count).transpose()?.flatten();
+    let offset = select.limit_offset.as_deref().map(count).transpose()?.flatten().unwrap_or(0);
+    if let Some(limit) = limit {
+        ensure!(
+            limit.checked_add(offset).is_some_and(|total| total <= 1_000_000),
+            "LIMIT + OFFSET exceeds 1000000 occurrence budget"
+        );
+    }
+    Ok((limit, offset))
 }

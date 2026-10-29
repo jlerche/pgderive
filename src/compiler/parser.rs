@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
+mod cte;
 pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
@@ -12,6 +13,7 @@ pub(super) mod offset;
 pub(super) mod ordering;
 pub(super) mod partition;
 pub(super) mod scalar;
+pub(super) mod setop;
 use expressions::{column, node, optional, target};
 
 #[derive(Clone)]
@@ -23,6 +25,9 @@ pub(super) struct Table {
 }
 pub(super) type Columns = Vec<(Name, String)>;
 pub(super) enum Parsed {
+    With { bindings: Vec<Self>, inner: Box<Self> },
+    Renamed { inner: Box<Self>, labels: Vec<String> },
+    Union(setop::Union),
     Ordered(ordering::Parsed),
     Membership { parsed: partition::Parsed, distinct: bool },
     Lookup(lookup::Parsed),
@@ -41,7 +46,22 @@ pub(super) fn parse(sql: &str) -> Result<Parsed> {
     else {
         anyhow::bail!("SQL requires SELECT");
     };
-    query(select).context("SQL lower: unsupported SELECT")
+    let mut select = (**select).clone();
+    let validation = cte::expand(&mut select)?;
+    let inner = query(&select).context("SQL lower: unsupported SELECT")?;
+    if validation.is_empty() {
+        return Ok(inner);
+    }
+    Ok(Parsed::With {
+        bindings: validation
+            .iter()
+            .map(|(select, labels)| {
+                let parsed = query(select)?;
+                Ok(Parsed::Renamed { inner: Box::new(parsed), labels: labels.clone() })
+            })
+            .collect::<Result<_>>()?,
+        inner: Box::new(inner),
+    })
 }
 
 // Bound native parser recursion before parsing, using PostgreSQL's scanner so
@@ -70,7 +90,7 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
         where_clause: _,
         group_clause: _,
         group_distinct,
-        having_clause,
+        having_clause: _,
         window_clause,
         values_lists,
         sort_clause,
@@ -88,7 +108,6 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
         distinct_clause.is_empty()
             && into_clause.is_none()
             && !group_distinct
-            && having_clause.is_none()
             && window_clause.is_empty()
             && values_lists.is_empty()
             && sort_clause.is_empty()
@@ -106,6 +125,9 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
     Ok(())
 }
 fn query(select: &pg::SelectStmt) -> Result<Parsed> {
+    if let Some(parsed) = setop::parse(select)? {
+        return Ok(parsed);
+    }
     if let Some(parsed) = ordering::parse(select)? {
         return Ok(Parsed::Ordered(parsed));
     }

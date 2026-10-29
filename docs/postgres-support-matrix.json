@@ -760,14 +760,18 @@
     {
       "id": "composition",
       "status": "bounded",
-      "domain": "Only bound derived scopes and compositions. Finalized aggregate types cross SQL boundaries; not arbitrary CTEs, recursion or subqueries.",
+      "domain": "Bound derived scopes, HAVING with implicit global groups, nonrecursive read-only CTEs, constant SELECT and UNION ALL. Finalized aggregate types cross SQL boundaries. Existing scalar/type budgets apply; recursion and general scalar subqueries remain unsupported.",
       "implementation": [
-        "src/compiler/bind/derived.rs"
+        "src/compiler/bind/derived.rs",
+        "src/compiler/parser/cte.rs",
+        "src/compiler/bind/partition/having.rs",
+        "src/compiler/bind/setop.rs"
       ],
       "qualification": [
         "scripts/expression_composition_harness.py",
         "scripts/composition_matrix_harness.py",
-        "scripts/native_cross_harness.py"
+        "scripts/native_cross_harness.py",
+        "scripts/sql_composition_harness.py"
       ]
     },
     {

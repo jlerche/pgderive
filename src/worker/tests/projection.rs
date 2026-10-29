@@ -179,7 +179,7 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
         "SELECT DISTINCT ON (category) category FROM source.auction",
         "SELECT auction.id FROM source.auction a",
         "SELECT b.id FROM source.auction a",
-        "SELECT COUNT(*) FROM source.auction",
+        "SELECT id,COUNT(*) FROM source.auction",
         "SELECT id FROM source.auction,source.bid",
         "SELECT id FROM source.auction JOIN source.bid ON auction.id=bid.auction",
         "SELECT id FROM source.auction WHERE random()>0",
@@ -374,7 +374,7 @@ fn shared_temporal_target_binding_keeps_nested_and_on_allowlists() -> Result<()>
         "SELECT moment+interval '1 hour',COUNT(*) FROM source.bid GROUP BY moment+interval '1 hour'".into(),
         format!("SELECT {bucket} OVER() FROM source.bid"),
         "SELECT b.* FROM source.bid b".into(),
-        "SELECT COUNT(*) FROM source.bid".into(),
+        "SELECT id,COUNT(*) FROM source.bid".into(),
     ] {
         assert!(compile(&sql, &native).is_err(), "{sql}");
     }

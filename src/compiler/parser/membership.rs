@@ -33,7 +33,10 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
 }
 fn existence_source(select: &pg::SelectStmt, query: &pg::SelectStmt, anti: bool) -> Result<Tree> {
     super::validate_query(query)?;
-    ensure!(query.group_clause.is_empty(), "EXISTS grouping unsupported");
+    ensure!(
+        query.group_clause.is_empty() && query.having_clause.is_none(),
+        "EXISTS grouping/HAVING unsupported"
+    );
     let [source] = select.from_clause.as_slice() else {
         anyhow::bail!("membership requires one native source")
     };

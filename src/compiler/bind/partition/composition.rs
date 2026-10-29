@@ -20,7 +20,7 @@ pub(super) fn bind(
     let resolve = |name: &crate::compiler::parser::Name| {
         crate::compiler::bind::derived::resolve_output(name, alias, &relational.output.columns)
     };
-    let mut outer = stage(relational, body, &resolve, contract)?;
+    let mut outer = stage(relational, body, &resolve, contract, None)?;
     compose(relational, &mut outer)?;
     Ok(compiled)
 }
@@ -29,14 +29,17 @@ pub(super) fn stage(
     body: &Body,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<crate::compiler::ColumnRef>,
     contract: &Contract,
+    input: Option<&crate::compiler::properties::Properties>,
 ) -> Result<Relational> {
-    let occurrence = crate::compiler::properties::occurrence(relational, contract)?;
+    let occurrence = crate::compiler::properties::occurrence_from(relational, contract, input)?;
     let known_occurrence = occurrence.unique_rows();
 
     let compiled = build(
         body,
         resolve,
         Stage {
+            contract,
+            unit: false,
             sources: Vec::new(),
             occurrence_keys: &occurrence,
             aggregate_base: aggregate_base(relational)?,
@@ -96,12 +99,12 @@ pub(in crate::compiler::bind) fn lower_source_filter(
     let position = relational
         .nodes
         .iter()
-        .position(|node| matches!(node, Node::Source { source: 0, .. }))
+        .position(|node| matches!(node, Node::Constant { id, .. } if id == "unit"))
+        .or_else(|| {
+            relational.nodes.iter().position(|node| matches!(node, Node::Source { source: 0, .. }))
+        })
         .context("missing predicate source")?;
-    let Node::Source { id, .. } = &relational.nodes[position] else {
-        anyhow::bail!("invalid predicate source");
-    };
-    let source = id.clone();
+    let source = relational.nodes[position].id().to_owned();
     let filter = "scoped_source_filter";
     for node in &mut relational.nodes {
         node.rewrite(&|id| id.into(), &|input| {

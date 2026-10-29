@@ -29,6 +29,8 @@ type JoinProject<K, V> = Project<K, (V, V), K, V>;
 /// One callback with an explicit executable operator family.
 #[derive(Clone)]
 pub enum Operator<K: BatchData, V: BatchData> {
+    /// Positive constant bag, emitted once at logical time one.
+    Constant(Batch<K, V>),
     /// Stateless unary projection/filter.
     Project(Project<K, V, K, V>),
     /// Stateless expansion.
@@ -51,7 +53,7 @@ pub enum Operator<K: BatchData, V: BatchData> {
 impl<K: BatchData, V: BatchData> Operator<K, V> {
     const fn kind(&self) -> super::Kind {
         match self {
-            Self::Project(_) => super::Kind::Project,
+            Self::Constant(_) | Self::Project(_) => super::Kind::Project,
             Self::Expand(_) => super::Kind::Expand,
             Self::Join(_) => super::Kind::Join,
             Self::Partition(_) | Self::Group(_) => super::Kind::Aggregate,

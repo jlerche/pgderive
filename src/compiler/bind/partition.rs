@@ -12,29 +12,57 @@ use anyhow::{Context, Result, ensure};
 mod argument;
 pub(in crate::compiler::bind) mod composition;
 mod distinct;
+mod having;
 mod ordered;
 mod prefix;
+#[derive(Clone)]
 struct Body {
     expansion: Option<crate::compiler::parser::expansion::Series>,
     targets: Vec<syntax::Target>,
     groups: Vec<crate::compiler::parser::scalar::Key>,
     predicate: Option<crate::compiler::syntax::Expr>,
+    having: Option<crate::compiler::syntax::Expr>,
 }
+#[derive(Clone)]
 struct Stage<'a> {
+    contract: &'a Contract,
+    unit: bool,
     sources: Vec<Source>,
     occurrence_keys: &'a crate::compiler::properties::Properties,
     aggregate_base: usize,
     scalar_scope: Option<usize>,
 }
 pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compiled> {
-    let syntax::Parsed { source, expansion, targets, groups, predicate } = parsed;
-    let body = Body { expansion, targets, groups, predicate };
+    let syntax::Parsed { source, expansion, targets, groups, predicate, having } = parsed;
+    let body = Body { expansion, targets, groups, predicate, having };
     match source {
+        syntax::Source::Unit => {
+            let relation = contract
+                .relations
+                .first()
+                .context("constant query requires a publication driver")?;
+            let facts = crate::compiler::properties::Analysis::source_relation(relation, 0)?;
+            build(
+                &body,
+                &|_| anyhow::bail!("column reference requires FROM"),
+                Stage {
+                    contract,
+                    unit: true,
+                    sources: vec![Source {
+                        schema: relation.schema.clone(),
+                        table: relation.table.clone(),
+                    }],
+                    occurrence_keys: &facts,
+                    aggregate_base: 0,
+                    scalar_scope: None,
+                },
+            )
+        }
         syntax::Source::Native(table) => bind_native(table, &body, contract),
         syntax::Source::Join(tree) => {
             let scope = super::native_join::scope(tree, contract)?;
             let mut outer =
-                composition::stage(&scope.ir, &body, &|name| scope.resolve(name), contract)?;
+                composition::stage(&scope.ir, &body, &|name| scope.resolve(name), contract, None)?;
             let mut relational = scope.ir;
             composition::compose(&mut relational, &mut outer)?;
             Ok(Compiled { result_columns: Vec::new(), relational })
@@ -65,6 +93,8 @@ fn bind_native(
         parsed,
         &resolve,
         Stage {
+            contract,
+            unit: false,
             sources: vec![Source {
                 schema: scopes[0].relation.schema.clone(),
                 table: scopes[0].relation.table.clone(),
@@ -76,6 +106,16 @@ fn bind_native(
     )
 }
 fn build(
+    parsed: &Body,
+    resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
+    context: Stage<'_>,
+) -> Result<Compiled> {
+    if having::required(parsed) {
+        return having::build(parsed, resolve, context);
+    }
+    build_direct(parsed, resolve, context)
+}
+fn build_direct(
     parsed: &Body,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     context: Stage<'_>,
@@ -136,6 +176,21 @@ fn build(
     } else {
         nodes(state.keys, spec, computed)
     };
+    if context.unit {
+        for node in &mut nodes {
+            node.rewrite(&|id| id.into(), &|edge| {
+                if edge == "source" { "unit".into() } else { edge.into() }
+            });
+        }
+        nodes.insert(
+            1,
+            Node::Constant {
+                id: "unit".into(),
+                input: "source".into(),
+                rows: vec![crate::transaction::Row::new()],
+            },
+        );
+    }
     attach_expansion(&mut nodes, parsed.expansion.as_ref())?;
     let predicates = source_predicate(parsed.predicate.clone(), resolve)?;
     let sources = context.sources;
@@ -296,8 +351,6 @@ fn aggregate(
         }
         state.keys = window_keys;
         state.mode = Some(candidate);
-    } else {
-        ensure!(!context.groups.is_empty(), "ungrouped aggregates unsupported");
     }
     let argument::Bound { column: argument, filter, expression } = argument::bind(
         value.argument,
@@ -325,7 +378,14 @@ fn aggregate(
         .as_ref()
         .map_or_else(|| result_type(&value.function, argument.as_ref()), |value| Ok(value.oid))?;
     let name = format!("@aggregate_{}", state.base + state.aggregates.len());
-    let nullable = !value.function.ranking();
+    let nullable = !matches!(
+        value.function,
+        Function::Count
+            | Function::CountDistinct
+            | Function::Rank
+            | Function::DenseRank
+            | Function::RowNumber
+    );
     state.aggregates.push(Aggregate {
         function: value.function,
         expression,
@@ -408,6 +468,9 @@ fn nodes(
     spec: Partition,
     computed: Vec<crate::compiler::scalar::Computed>,
 ) -> Vec<Node> {
+    if matches!(&spec.mode, Mode::Grouped { keys } if keys.is_empty()) {
+        return global_nodes(spec, computed);
+    }
     if prefix::supports(&spec) {
         return prefix::nodes(keys, spec, computed);
     }
@@ -455,5 +518,42 @@ fn input_nodes(
         input: if mapped { "mapped" } else { "source" }.into(),
         keys,
     });
+    nodes
+}
+
+fn global_nodes(spec: Partition, computed: Vec<crate::compiler::scalar::Computed>) -> Vec<Node> {
+    let mut nodes = input_nodes(Vec::new(), computed);
+    if let Some(Node::PartitionBy { id, .. }) = nodes.last_mut() {
+        *id = "global_data".into();
+    }
+    nodes.push(Node::Constant {
+        id: "global_seed".into(),
+        input: "source".into(),
+        rows: vec![[(crate::compiler::partition::SEED.into(), Some("t".into()))].into()],
+    });
+    nodes.push(Node::Union {
+        id: "partition_input".into(),
+        left: "global_data".into(),
+        right: "global_seed".into(),
+    });
+    if spec
+        .aggregates
+        .iter()
+        .all(|a| matches!(a.function, Function::Count | Function::Sum | Function::Average))
+    {
+        nodes.push(Node::Statistics {
+            id: "statistics".into(),
+            input: "partition_input".into(),
+            spec: spec.clone(),
+        });
+        nodes.push(Node::Finalize { id: "partition".into(), input: "statistics".into(), spec });
+    } else {
+        nodes.push(Node::Partition {
+            id: "partition".into(),
+            input: "partition_input".into(),
+            spec,
+        });
+    }
+    nodes.push(Node::Output { id: "project".into(), input: "partition".into() });
     nodes
 }

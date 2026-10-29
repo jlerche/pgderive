@@ -6,6 +6,7 @@ mod native_join;
 mod ordering;
 mod partition;
 mod relational;
+mod setop;
 mod topk;
 use super::{
     ColumnRef, Compiled,
@@ -19,6 +20,24 @@ struct Scope<'a> {
 }
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
+        Parsed::With { bindings, inner } => {
+            for binding in bindings {
+                bind(binding, contract)?;
+            }
+            bind(*inner, contract)
+        }
+        Parsed::Renamed { inner, labels } => {
+            let mut compiled = bind(*inner, contract)?;
+            ensure!(
+                labels.len() <= compiled.relational.output.columns.len(),
+                "too many derived/CTE column aliases"
+            );
+            for (column, label) in compiled.relational.output.columns.iter_mut().zip(labels) {
+                column.label = label;
+            }
+            Ok(compiled)
+        }
+        Parsed::Union(parsed) => setop::bind(parsed, contract),
         Parsed::Ordered(parsed) => ordering::bind(parsed, contract),
         Parsed::Membership { parsed, distinct } => membership::bind(parsed, distinct, contract),
         Parsed::Lookup(parsed) => lookup::bind(parsed, contract),

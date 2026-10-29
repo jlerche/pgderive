@@ -20,10 +20,31 @@ pub struct Analysis {
 }
 impl Analysis {
     pub(crate) fn infer(contract: &Contract, ir: &Relational) -> Result<Self> {
+        Self::infer_from(contract, ir, None)
+    }
+    fn infer_from(
+        contract: &Contract,
+        ir: &Relational,
+        input: Option<&Properties>,
+    ) -> Result<Self> {
         contract.validate()?;
+        if input.is_some() {
+            ensure!(
+                ir.sources.is_empty()
+                    && ir.nodes.iter().filter(|node| matches!(node, Node::Source { .. })).count()
+                        == 1,
+                "property fragment requires one external input"
+            );
+        }
         let mut analysis = Self { edges: BTreeMap::new() };
         for node in &ir.nodes {
-            let facts = analysis.transfer(contract, ir, node)?;
+            let facts = if let Some(input) = input
+                && matches!(node, Node::Source { source: 0, .. })
+            {
+                input.clone()
+            } else {
+                analysis.transfer(contract, ir, node)?
+            };
             ensure!(
                 analysis.edges.insert(node.id().into(), facts).is_none(),
                 "duplicate property edge"
@@ -121,7 +142,14 @@ impl Analysis {
 }
 /// Composition removes the current Output, so its predecessor retains hidden row identity.
 pub(in crate::compiler) fn occurrence(ir: &Relational, contract: &Contract) -> Result<Properties> {
-    let analysis = Analysis::infer(contract, ir)?;
+    occurrence_from(ir, contract, None)
+}
+pub(in crate::compiler) fn occurrence_from(
+    ir: &Relational,
+    contract: &Contract,
+    input: Option<&Properties>,
+) -> Result<Properties> {
+    let analysis = Analysis::infer_from(contract, ir, input)?;
     let node = ir.nodes.last().context("missing occurrence output")?;
     let input = match node {
         Node::Output { input, .. } => input.as_str(),

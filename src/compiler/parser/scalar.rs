@@ -16,7 +16,7 @@ pub(in crate::compiler) fn is_bin(value: &Node) -> Result<bool> {
     let names = super::expressions::names(&call.funcname)?.0;
     Ok(super::expressions::builtin_name(&names) == Some("date_bin"))
 }
-pub(super) fn key(value: &Node) -> Result<Key> {
+pub(in crate::compiler) fn key(value: &Node) -> Result<Key> {
     if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
         Ok(Key::Column(column(value)?))
     } else {

@@ -349,11 +349,11 @@ impl<'a> History<'a> {
         let mut query = build(native, compiled, options)?;
         let mut state = S::default();
         let mut output = Batch::from_updates([])?;
+        let mut previous = Batch::default();
         for (index, changes) in changes.into_iter().enumerate() {
-            let before = oracle(&state)?;
             apply(&mut state, &changes);
             let after = oracle(&state)?;
-            let expected = bag_delta(&before, &after)?;
+            let expected = bag_delta(&previous, &after)?;
             let prepared = query
                 .prepare(program::relational::inputs(
                     &changes,
@@ -371,6 +371,7 @@ impl<'a> History<'a> {
                 )?;
                 assert_eq!(output, after);
             }
+            previous = after;
             if self.deltas {
                 program::relational::deltas(
                     &query,
@@ -488,3 +489,5 @@ impl Probe {
         ))
     }
 }
+
+mod sql_composition;

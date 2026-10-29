@@ -69,10 +69,15 @@ pub(super) fn union(left: &Properties, right: &Properties, id: &str) -> Properti
         {
             let mut column = Column::derived(id, a.reference.clone());
             column.reference.nullable |= b.reference.nullable;
-            if a.modifier == b.modifier && a.collation == b.collation {
+            if a.modifier == b.modifier {
                 column.modifier = a.modifier;
-                column.collation = a.collation;
             }
+            column.collation = match (a.collation, b.collation) {
+                (a, b) if a == b => a,
+                (0 | 100, b) => b,
+                (a, 0 | 100) => a,
+                _ => 0,
+            };
             out.columns.insert(name.clone(), column);
         }
     }

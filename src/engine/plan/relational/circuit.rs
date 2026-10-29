@@ -65,6 +65,10 @@ pub(super) fn validate<K: BatchData, V: BatchData>(
         ensure!(operator.kind() == node.kind, "operator callback family differs from declaration");
         callbacks += 1;
         match operator {
+            Operator::Constant(batch) => ensure!(
+                batch.iter().all(|(_, weight)| *weight > 0),
+                "constant requires positive tuple weights"
+            ),
             Operator::Join(_) | Operator::Window(_) => ensure!(
                 node.inputs.iter().all(|id| maintained.contains(id)),
                 "join inputs require maintained state"

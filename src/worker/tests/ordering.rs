@@ -64,14 +64,14 @@ fn ordering_binds_aliases_ordinals_and_hidden_expressions() -> Result<()> {
 }
 
 #[test]
-fn ordering_preserves_derived_admission_boundaries() {
+fn ordering_composes_with_derived_membership() {
     for query in [
         "SELECT DISTINCT id FROM source.bid",
         "SELECT b.id FROM source.bid b WHERE EXISTS(SELECT 1 FROM source.auction a WHERE a.id=b.auction)",
     ] {
         for suffix in ["", " ORDER BY id", " ORDER BY id LIMIT 3"] {
             let sql = format!("SELECT q.id FROM ({query}{suffix}) q");
-            assert!(compile(&sql, &contract()).is_err(), "{sql}");
+            assert!(compile(&sql, &contract()).is_ok(), "{sql}");
         }
     }
 }

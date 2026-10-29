@@ -56,6 +56,9 @@ pub(super) fn contribution<'a>(
     aggregate: &Aggregate,
     row: &'a Row,
 ) -> Result<Option<Contribution<'a>>> {
+    if row.contains_key(crate::compiler::partition::SEED) {
+        return Ok(None);
+    }
     if aggregate
         .filter
         .as_ref()

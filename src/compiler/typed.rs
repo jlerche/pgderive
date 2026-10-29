@@ -175,7 +175,7 @@ pub(super) fn computed(
     } else {
         bind(value, resolve, 0)?
     };
-    if typed.oid == 705 {
+    if matches!(typed.oid, 0 | 705) {
         typed.oid = 25;
     }
     ensure!(
@@ -275,5 +275,53 @@ fn numeric_cast_input(
 impl Typed {
     pub(super) const fn average(column: ColumnRef) -> Self {
         Self { oid: 1700, value: Value::Average(column) }
+    }
+}
+
+impl Typed {
+    pub(in crate::compiler) fn union_cast(column: ColumnRef, oid: u32) -> Result<Self> {
+        ensure!(
+            column.oid == oid
+                || matches!(
+                    (column.oid, oid),
+                    (20 | 21 | 23, 20 | 21 | 23 | 1700) | (25 | 1043, 25 | 1043) | (1114, 1184)
+                ),
+            "unsupported UNION coercion"
+        );
+        Ok(Self { oid, value: Value::Cast(Box::new(Self::column(column))) })
+    }
+    pub(in crate::compiler) fn union_literal(value: &Node, oid: u32) -> Result<Self> {
+        let NodeEnum::AConst(value) = crate::compiler::parser::expressions::node(value)? else {
+            anyhow::bail!("UNION contextual value is not a literal")
+        };
+        let value = literal(value)?;
+        let text = match value.value {
+            Value::Literal(None) => None,
+            Value::Text(value) => Some(value),
+            _ => anyhow::bail!("UNION requires an unknown literal"),
+        };
+        let text = text
+            .map(|value| -> Result<String> {
+                let value = if oid == 16 {
+                    let lower = value.trim_ascii().to_ascii_lowercase();
+                    let yes = lower == "1"
+                        || (!lower.is_empty()
+                            && ["true", "yes", "on"].iter().any(|v| v.starts_with(&lower)));
+                    let no = lower == "0"
+                        || (!lower.is_empty()
+                            && ["false", "no", "off"].iter().any(|v| v.starts_with(&lower)));
+                    ensure!(yes != no, "invalid UNION boolean literal");
+                    if yes { "t".into() } else { "f".into() }
+                } else if matches!(oid, 20 | 21 | 23) {
+                    value.trim_ascii().parse::<i64>()?.to_string()
+                } else {
+                    value
+                };
+                crate::compiler::value::literal_text(oid, &value)
+            })
+            .transpose()?;
+        let result = Self { oid, value: Value::Encoded(text) };
+        result.evaluate(&crate::transaction::Row::new())?;
+        Ok(result)
     }
 }

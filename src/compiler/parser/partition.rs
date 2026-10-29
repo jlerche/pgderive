@@ -7,8 +7,10 @@ pub(in crate::compiler) struct Parsed {
     pub targets: Vec<Target>,
     pub groups: Vec<super::scalar::Key>,
     pub predicate: Option<crate::compiler::syntax::Expr>,
+    pub having: Option<crate::compiler::syntax::Expr>,
 }
 pub(in crate::compiler) enum Source {
+    Unit,
     Join(super::native_join::Tree),
     Native(Table),
     Derived { inner: Box<super::Parsed>, alias: String },
@@ -46,17 +48,22 @@ pub(in crate::compiler) struct Window {
 }
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
     ensure!((1..=64).contains(&select.target_list.len()), "partition output count unsupported");
-    let [from] = select.from_clause.as_slice() else {
-        anyhow::bail!("SELECT requires one source");
-    };
-    let (source, expansion) = if let NodeEnum::RangeSubselect(derived) = node(from)? {
-        let (inner, alias) = super::derived::source_query(derived)?;
-        (Source::Derived { inner: Box::new(inner), alias }, None)
-    } else if matches!(node(from)?, NodeEnum::JoinExpr(_)) && !super::expansion::eligible(from)? {
-        (Source::Join(super::native_join::tree(from, &mut 0, 0)?), None)
+    let (source, expansion) = if select.from_clause.is_empty() {
+        (Source::Unit, None)
     } else {
-        let (table, expansion) = super::expansion::source(from)?;
-        (Source::Native(table), expansion)
+        let [from] = select.from_clause.as_slice() else {
+            anyhow::bail!("SELECT requires one source");
+        };
+        if let NodeEnum::RangeSubselect(derived) = node(from)? {
+            let (inner, alias) = super::derived::source_query(derived)?;
+            (Source::Derived { inner: Box::new(inner), alias }, None)
+        } else if matches!(node(from)?, NodeEnum::JoinExpr(_)) && !super::expansion::eligible(from)?
+        {
+            (Source::Join(super::native_join::tree(from, &mut 0, 0)?), None)
+        } else {
+            let (table, expansion) = super::expansion::source(from)?;
+            (Source::Native(table), expansion)
+        }
     };
     let targets = select.target_list.iter().map(parse_target).collect::<Result<_>>()?;
     let groups = select.group_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
@@ -66,9 +73,10 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
         targets,
         groups,
         predicate: crate::compiler::syntax::predicate(select.where_clause.as_deref())?,
+        having: crate::compiler::syntax::predicate(select.having_clause.as_deref())?,
     })
 }
-pub(super) fn parse_target(value: &Node) -> Result<Target> {
+pub(in crate::compiler) fn parse_target(value: &Node) -> Result<Target> {
     let NodeEnum::ResTarget(output) = node(value)? else {
         anyhow::bail!("unsupported target");
     };

@@ -101,3 +101,6 @@ pub(in crate::compiler) fn result_type(
         }
     }
 }
+
+/// Private neutral occurrence that makes the SQL global group exist on empty input.
+pub const SEED: &str = "@sql_global_seed";
