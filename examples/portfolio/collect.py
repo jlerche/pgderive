@@ -127,16 +127,15 @@ def flow_sql(spec):
       'inserts',s.n_tup_ins,'updates',s.n_tup_upd,'deletes',s.n_tup_del,
       'stats_reset',d.stats_reset,'engine_epochs',GREATEST(p.published_time-1,0),
       'end_lsn',p.end_lsn::text,'checkpoint_lsn',p.checkpoint_lsn::text,
-      'source_bytes',pg_total_relation_size('public.demo_positions'),
+      'source_bytes',pg_total_relation_size('public.demo_products')+pg_total_relation_size('public.demo_order_lines'),
       'sink_bytes',pg_total_relation_size('{schema}.{table}'),
       'replay_bytes',pg_wal_lsn_diff(p.end_lsn,p.checkpoint_lsn),
       'retained_wal_bytes',(SELECT pg_wal_lsn_diff(pg_current_wal_lsn(),s.restart_lsn) FROM pg_replication_slots s JOIN {schema}.pgderive_worker_registration r ON r.slot_name=s.slot_name WHERE r.query_id=p.query_id),
       'unconfirmed_wal_bytes',(SELECT pg_wal_lsn_diff(pg_current_wal_lsn(),s.confirmed_flush_lsn) FROM pg_replication_slots s JOIN {schema}.pgderive_worker_registration r ON r.slot_name=s.slot_name WHERE r.query_id=p.query_id),
-      'books',totals.books,'positions',totals.positions,'units',totals.units)
-      FROM pg_stat_user_tables s CROSS JOIN pg_stat_database d CROSS JOIN {schema}.pgderive_progress p
-      CROSS JOIN (SELECT count(*) AS books,coalesce(sum(positions),0) AS positions,coalesce(sum(units),0)::text AS units FROM {schema}.{table}) totals
-      WHERE s.schemaname='public' AND s.relname='demo_positions'
-      AND d.datname=current_database() AND p.sink_table='{table}'"""
+      'products',totals.products,'order_lines',totals.order_lines,'net_units',totals.net_units,'net_revenue_cents',totals.net_revenue_cents)
+      FROM (SELECT sum(n_tup_ins) AS n_tup_ins,sum(n_tup_upd) AS n_tup_upd,sum(n_tup_del) AS n_tup_del FROM pg_stat_user_tables WHERE schemaname='public' AND relname IN('demo_products','demo_order_lines')) s CROSS JOIN pg_stat_database d CROSS JOIN {schema}.pgderive_progress p
+      CROSS JOIN (SELECT count(*) AS products,coalesce(sum(order_lines),0) AS order_lines,coalesce(sum(net_units),0)::text AS net_units,coalesce(sum(net_revenue_cents),0)::text AS net_revenue_cents FROM {schema}.{table}) totals
+      WHERE d.datname=current_database() AND p.sink_table='{table}'"""
 
 
 def health_sql(spec):
@@ -227,8 +226,6 @@ def main():
                               observer, generator, config)
         result['queries'][name] = query
         result['errors'].extend(name+': '+error for error in query['errors'])
-    # The byte-preserved original page reads its totals measurements at the root.
-    result.update({key: result['queries']['totals'].get(key) for key in ['flow','engine','worker','latency','state']})
     try:
         publish(ROOT, result)
     except Exception as error:

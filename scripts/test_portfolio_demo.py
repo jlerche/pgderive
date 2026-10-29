@@ -1,5 +1,7 @@
-"""Validate deterministic cutoff phases and nonsecret selectable demo rendering."""
+"""Storefront schema, five-second workload and nonsecret renderer regressions."""
+import gzip
 import importlib.util
+import sys
 import pathlib
 import re
 import shutil
@@ -8,89 +10,86 @@ import tomllib
 import unittest
 from unittest import mock
 
-HERE = pathlib.Path(__file__).resolve().parents[1]/'examples/portfolio'
+HERE=pathlib.Path(__file__).resolve().parents[1]/'examples/portfolio'
 
 
 def module(name):
-    spec = importlib.util.spec_from_file_location(name, HERE/(name+'.py'))
-    loaded = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(loaded)
-    return loaded
+    spec=importlib.util.spec_from_file_location(name,HERE/(name+'.py'))
+    loaded=importlib.util.module_from_spec(spec);spec.loader.exec_module(loaded);return loaded
 
 
 class PortfolioDemo(unittest.TestCase):
-    def test_generated_asset_urls_change_with_their_contents(self):
-        renderer = module('render')
+    def test_sql_backup_round_trip_and_failed_evidence(self):
+        backup=module('backup')
         with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            shutil.copytree(HERE/'web', root/'web')
-            with mock.patch.object(renderer, 'HERE', root):
-                first = renderer.page('leaderboard')
-                css = root/'web/leaderboard.css'; css.write_text(css.read_text()+'\n/* updated */')
-                second = renderer.page('leaderboard')
-                js = root/'web/leaderboard.js'; js.write_text(js.read_text()+'\n// updated')
-                third = renderer.page('leaderboard')
-                history = root/'web/history.js'; history.write_text(history.read_text()+'\n// updated')
-                fourth = renderer.page('leaderboard')
-            css_url = lambda html: re.search(r'/leaderboard.css\?v=[a-f0-9]+', html).group()
-            js_url = lambda html: re.search(r'/leaderboard.js\?v=[a-f0-9]+', html).group()
-            self.assertNotEqual(css_url(first), css_url(second))
-            self.assertEqual(js_url(first), js_url(second))
-            self.assertEqual(css_url(second), css_url(third))
-            self.assertNotEqual(js_url(second), js_url(third))
-            history_url = lambda html: re.search(r'/history.js\?v=[a-f0-9]+', html).group()
-            self.assertNotEqual(history_url(third), history_url(fourth))
+            root=pathlib.Path(directory);path=root/'source.sql.gz'
+            command=[sys.executable,'-c',"print('CREATE TABLE source; INSERT INTO source VALUES(1);')"]
+            size=backup.dump_sql(command,path,['CREATE TABLE source','INSERT INTO source'])
+            with gzip.open(path,'rb') as stream:self.assertEqual(len(stream.read()),size)
+            self.assertEqual(path.stat().st_mode&0o777,0o600)
+            self.assertFalse(path.with_suffix('.plain.sql').exists())
+            failed=root/'failed.sql.gz'
+            with self.assertRaises(ValueError):backup.dump_sql(command,failed,['missing expected object'])
+            self.assertTrue(failed.exists());self.assertTrue(failed.with_suffix('.plain.sql').exists())
 
-    def test_slow_entry_exit_and_cutoff_tie(self):
-        workload = module('workload')
-        expected = [set(range(1, 11)), set(range(1, 10)) | {11}, set(range(1, 11)), set(range(1, 11))]
-        for phase, members in enumerate(expected):
-            ordered = sorted(range(1, 21), key=lambda book: (-workload.total(book, phase), book))
-            self.assertEqual(set(ordered[:10]), members)
-        self.assertEqual(workload.total(10, 3), workload.total(12, 3))
-        self.assertEqual(workload.MEMBERSHIP_SECONDS, 35)
-        self.assertEqual(workload.changes_sql(69, 0, 0)[1], 0)
-        self.assertEqual(workload.changes_sql(70, 1, 0)[1], 1)
-
-    def test_membership_clock_uses_elapsed_seconds_not_commit_count(self):
-        workload = module('workload')
-        phases = workload.Phases(0, 100)
-        self.assertEqual(phases.current(134.999), 0)
-        self.assertEqual(phases.current(135), 1)
-        self.assertEqual(phases.current(169.999), 1)
-        self.assertEqual(phases.current(170), 2)
-        self.assertEqual(phases.current(1000), 3)
-        self.assertEqual(phases.current(1001), 3)
-        resumed = workload.Phases(7, 2000)
-        self.assertEqual(resumed.current(2034), 7)
-        self.assertEqual(resumed.current(2035), 8)
-
-    def test_page_modes_preserve_original_and_isolate_queries(self):
-        renderer = module('render')
-        environment = {'DEMO_OBJECT_PREFIX': 'owned-demo', 'DEMO_OBJECT_ENDPOINT': 'https://objects.invalid',
-                       'DEMO_OBJECT_BUCKET': 'owned-fixture', 'DEMO_ANON_KEY': 'public-browser-key'}
+    def test_asset_hashes_change_and_metrics_are_closed(self):
+        renderer=module('render')
         with tempfile.TemporaryDirectory() as directory:
-            output = pathlib.Path(directory)
-            for mode in ('totals', 'leaderboard'):
-                renderer.render(output, environment | {'DEMO_PAGE_MODE': mode})
-                self.assertEqual((output/'web/index.html').read_text(), renderer.page(mode))
-            for metric in ['positions', 'net', 'gross', 'count', 'sourceChanges', 'processed', 'stateSize', 'workerMemory', 'sinkLatency', 'engineLatency', 'sourceLatency', 'metricHistory', 'feed', 'chart']:
-                self.assertIn('id="'+metric+'"', renderer.page('leaderboard'))
-            totals = tomllib.loads((output/'query.toml').read_text())
-            top10 = tomllib.loads((output/'top10.toml').read_text())
-            self.assertEqual(totals['replication']['publication'], top10['replication']['publication'])
-            for section, field in [('worker', 'catalog_schema'), ('worker', 'query_id'), ('worker', 'object_prefix'), ('replication', 'slot')]:
-                self.assertNotEqual(totals[section][field], top10[section][field])
-            self.assertTrue(top10['worker']['query']['sql'].endswith('ORDER BY units DESC NULLS LAST, book_id ASC LIMIT 10'))
-            self.assertNotIn('secret_access_key', (output/'web/config.json').read_text())
-            self.assertIn('name="historyQuery"', renderer.page('leaderboard'))
-            compared = renderer.page('leaderboard')
-            self.assertIn('<option value="both">Both queries</option>', compared)
-            self.assertEqual(compared.count('data-history-query='), 2)
-            self.assertEqual(compared.count('name="historyCategory"'), 1)
-            ids = re.findall(r'id="([^"]+)"', compared)
-            self.assertEqual(len(ids), len(set(ids)))
-            self.assertNotIn('name="historyQuery"', renderer.page('totals'))
-            self.assertEqual(renderer.page('totals'), (HERE/'web/totals.html').read_text())
-            with self.assertRaises(ValueError):
-                renderer.render(output, environment | {'DEMO_PAGE_MODE': 'invalid'})
+            root=pathlib.Path(directory);shutil.copytree(HERE/'web',root/'web')
+            with mock.patch.object(renderer,'HERE',root):
+                first=renderer.page()
+                for name in ['storefront.css','storefront.js','history.js','metrics.js']:
+                    path=root/'web'/name;path.write_text(path.read_text()+'\n/* changed */')
+                second=renderer.page()
+            for name in ['storefront.css','storefront.js','history.js','metrics.js']:
+                pattern='/'+re.escape(name)+r'\?v=[a-f0-9]+'
+                self.assertNotEqual(re.search(pattern,first).group(),re.search(pattern,second).group())
+            self.assertRegex(first,r'id="metricsPanel"[^>]* hidden')
+            self.assertRegex(first,r'id="underHood"[^>]* hidden')
+            self.assertIn('<option value="both">Both queries</option>',first)
+            self.assertEqual(first.count('data-history-query='),2)
+            ids=re.findall(r'id="([^"]+)"',first);self.assertEqual(len(ids),len(set(ids)))
+            self.assertNotIn('Book totals',first)
+
+    def test_elapsed_membership_clock_has_no_catch_up_burst(self):
+        workload=module('workload');phases=workload.Phases(0,100)
+        self.assertEqual(workload.MEMBERSHIP_SECONDS,5)
+        for now,expected in [(104.999,0),(105,1),(109.999,1),(110,2),(1000,3),(1001,3)]:
+            self.assertEqual(phases.current(now),expected)
+        resumed=workload.Phases(7,2000)
+        self.assertEqual(resumed.current(2004),7);self.assertEqual(resumed.current(2005),8)
+
+    def test_each_product_cycles_real_sale_refund_adjustment_and_cancel(self):
+        workload=module('workload')
+        for product in range(8):
+            statements=[];kinds=[]
+            for cycle in range(4):
+                sql,events=workload.changes_sql(product+cycle*8,0,0)
+                statements.append(sql);kinds.append(events[0]['kind'])
+            self.assertEqual(kinds,['sale','refund','sale','cancel'])
+            self.assertIn(',2,',statements[0]);self.assertIn(',-1,',statements[1]);self.assertIn(',3,',statements[2])
+            self.assertTrue(statements[3].startswith('DELETE'))
+        sql,events=workload.changes_sql(0,1,0)
+        self.assertIn('UPDATE public.demo_products',sql)
+        self.assertIn('INSERT INTO public.demo_order_lines',sql)
+        self.assertTrue(any(event['kind']=='catalog' for event in events))
+        self.assertTrue(any(event.get('unit_price_cents')=='12900' for event in events))
+        self.assertNotIn('cents each',str(events))
+
+    def test_rendered_join_queries_keep_separate_owned_state(self):
+        renderer=module('render')
+        environment={'DEMO_OBJECT_PREFIX':'owned-storefront','DEMO_OBJECT_ENDPOINT':'https://objects.invalid',
+            'DEMO_OBJECT_BUCKET':'fixture','DEMO_ANON_KEY':'public-browser-key'}
+        with tempfile.TemporaryDirectory() as directory:
+            output=pathlib.Path(directory);renderer.render(output,environment)
+            self.assertEqual((output/'web/index.html').read_text(),renderer.page())
+            totals=tomllib.loads((output/'query.toml').read_text());top=tomllib.loads((output/'top10.toml').read_text())
+            self.assertEqual(totals['replication']['publication'],top['replication']['publication'])
+            for section,field in [('worker','catalog_schema'),('worker','query_id'),('worker','object_prefix'),('replication','slot')]:
+                self.assertNotEqual(totals[section][field],top[section][field])
+            self.assertEqual(totals['worker']['sink_key'],['product_id'])
+            self.assertIn('JOIN (SELECT product_id',top['worker']['query']['sql'])
+            self.assertIn('FROM public.demo_order_lines GROUP BY product_id',top['worker']['query']['sql'])
+            self.assertIn('SUM(quantity * unit_price_cents)',top['worker']['query']['sql'])
+            self.assertTrue(top['worker']['query']['sql'].endswith('p.product_id ASC LIMIT 10'))
+            self.assertNotIn('secret_access_key',(output/'web/config.json').read_text())

@@ -27,7 +27,7 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
  await flush();
  assert.equal(totals.grid.children.length,1);assert.equal(top.grid.children.length,1);
- assert.match(totals.grid.children[0].children[0].children[0].textContent,/Totals/);
+ assert.match(totals.grid.children[0].children[0].children[0].textContent,/All products/);
  assert.match(top.grid.children[0].children[0].children[0].textContent,/Top ten/);
  const axis=el=>el.grid.children[0].children[1].axisLabels.slice(-2);
  assert.deepEqual(axis(totals),axis(top),'different history starts must not change the selected time axis');

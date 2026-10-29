@@ -8,7 +8,7 @@ function history(root){
 const controls=wrapper?.querySelector('.history-shared-controls')||root;
 const grid=root.querySelector('.history-grid'),note=root.querySelector('.history-note');
 const colors=root.dataset.historyQuery==='top10'?['#9eb9ed','#d6b8e9','#edaa94']:['#a2e8bd','#9eb9ed','#edaa94','#d6b8e9'];
-let data=null,range=86400,category='Overview',query='',processName=root.dataset.historyQuery||'totals',loadSequence=0,loadError='';
+let data=null,range=3600,category='Overview',query='',processName=root.dataset.historyQuery||'totals',loadSequence=0,loadError='';
 const hiddenSeries=new Set();
 const readable=s=>s.replaceAll('_',' ').replaceAll('bytes','bytes').replace(/\b(io|rss|wal)\b/gi,x=>x.toUpperCase());
 const labels={
@@ -22,7 +22,7 @@ const labels={
  'state.bytes':'R2 state size','state.objects':'R2 object count','flow.source_bytes':'Postgres source storage',
  'flow.sink_bytes':'Postgres sink storage','flow.retained_wal_bytes':'Retained source WAL',
  'flow.unconfirmed_wal_bytes':'Unconfirmed source WAL','flow.replay_bytes':'Uncheckpointed replay',
- 'flow.books':'Books','flow.positions':'Positions','flow.units':'Net units',
+ 'flow.products':'Products','flow.order_lines':'Line items','flow.net_units':'Net units','flow.net_revenue_cents':'Net revenue cents',
  'flow.changes_per_second':'Source row operations / second','flow.transactions_per_second':'Generator commits / second',
  'flow.inserts':'INSERT operations','flow.updates':'UPDATE operations','flow.deletes':'DELETE operations',
  'flow.transactions':'Generator commits','flow.generated_source_changes':'Generated source changes',
@@ -134,7 +134,7 @@ function render(){
  for(const spec of shown){
   const card=document.createElement('article');card.className='history-card';
   const head=document.createElement('div');head.className='history-card-head';
-  const h=document.createElement('h3');h.textContent=(wrapper?(processName==='top10'?'Top ten · ':'Totals · '):'')+spec.title;
+  const h=document.createElement('h3');h.textContent=(wrapper?(processName==='top10'?'Top ten · ':'All products · '):'')+spec.title;
   const value=document.createElement('strong'),last=rows.at(-1),firstIndex=data.columns.indexOf(spec.fields[0])+1;
   value.textContent=(spec.unit==='ms'?'p50 ':'')+format(last?.[firstIndex],spec.unit);head.append(h,value);
   const canvas=document.createElement('canvas');canvas.setAttribute('role','img');canvas.setAttribute('aria-label',h.textContent+' over time');

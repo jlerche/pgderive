@@ -15,8 +15,8 @@ METRICS = {'worker.rss_bytes', 'state.bytes', 'state.objects', 'engine.memtable_
 METRICS.update('engine.object_service.'+scope+'.'+key for scope in ['foreground','maintenance']
     for key in ['requests','read_requested_bytes','read_bytes','write_requested_bytes','written_bytes'])
 METRICS.update('engine.cache.' + key for key in CACHE_FIELDS)
-METRICS.update('flow.' + key for key in ['inserts','updates','deletes','engine_epochs','books',
-    'positions','units','transactions','generated_source_changes','changes_per_second',
+METRICS.update('flow.' + key for key in ['inserts','updates','deletes','engine_epochs','products',
+    'order_lines','net_units','net_revenue_cents','transactions','generated_source_changes','changes_per_second',
     'transactions_per_second','source_bytes','sink_bytes','replay_bytes','retained_wal_bytes',
     'unconfirmed_wal_bytes'])
 METRICS.update('engine.' + scope + '.' + key for scope in ['foreground','scan']
@@ -47,7 +47,7 @@ def flatten(sample):
                     visit(child, path + '.' + key)
         elif path in METRICS and isinstance(value, (int, float)) and math.isfinite(value):
             result[path] = int(value) if isinstance(value, bool) else value
-        elif path == 'flow.units':
+        elif path in ['flow.net_units','flow.net_revenue_cents']:
             try:
                 number = float(value)
                 if math.isfinite(number):

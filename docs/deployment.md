@@ -9,7 +9,7 @@ Several workers can consume the same source publication. Each keeps its own
 source connection, logical slot, durable progress and state; a process restart or
 query drop must not stop its peers. Use distinct catalog schemas when configuring
 distinct object prefixes, because a catalog schema owns one prefix. The
-[portfolio example](../examples/portfolio/README.md) and common concurrent-query
+[storefront example](../examples/portfolio/README.md) and common concurrent-query
 qualifier exercise a full totals query and an independently maintained top ten
 with one source publication.
 

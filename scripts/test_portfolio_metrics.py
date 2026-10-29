@@ -25,6 +25,10 @@ class PortfolioMetrics(unittest.TestCase):
     def test_production_history_shared_axes_and_query_errors(self):
         subprocess.run(['node', 'scripts/portfolio_history_probe.cjs'], cwd=HERE.parents[1], check=True, capture_output=True, text=True)
 
+    @unittest.skipUnless(shutil.which('node'), 'optional Node.js executes the storefront regression')
+    def test_storefront_exact_cents_and_independent_recovery(self):
+        subprocess.run(['node', '--experimental-vm-modules', 'scripts/storefront_probe.cjs'], cwd=HERE.parents[1], check=True, capture_output=True, text=True)
+
     def test_progress_observers_do_not_wait_for_result_changes(self):
         observer = module('observe_latency')
         totals, top = observer.QueryObserver(), observer.QueryObserver()
@@ -102,7 +106,7 @@ class PortfolioMetrics(unittest.TestCase):
 
     def test_query_failure_retains_original_age_and_does_not_borrow_other_measurements(self):
         collect = module('collect')
-        spec = {'schema': 'demo_topk', 'table': 'book_top10', 'container': 'top'}
+        spec = {'schema': 'demo_topk', 'table': 'product_top10', 'container': 'top'}
         prior = {'worker': {'observed_at': 10, 'rss_bytes': 99}, 'state': {'observed_at': 99, 'bytes': 7}}
         generator = {'transactions': 7, 'source_changes': 14}
         def sql(query):

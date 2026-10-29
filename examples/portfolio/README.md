@@ -1,115 +1,87 @@
-# Portfolio totals and a live top ten
+# Now: a live storefront
 
-This example maintains two queries over `public.demo_positions`: all book
-COUNT/SUM totals and the first ten groups ordered by units descending, NULL last,
-then book ID ascending. Each query has one supervised process, an independent
-logical slot, catalog schema, sink and object prefix. Both use the same source
-publication. Computation and state are independent; the browser can observe
-different committed source positions in the two results.
+This example maintains a product leaderboard directly in PostgreSQL. A catalog
+supplies product names and categories; signed order-line quantities and historical
+unit prices supply the facts. A sale adds units and revenue, a refund has negative
+quantity, and deleting a line retracts it. `order_lines` counts line items, not
+orders. Money is stored and rendered in exact integer cents.
 
-The assets extend an existing Supabase/PostgREST/Realtime/Caddy demo stack with
-services named `db`, `rest`, `realtime`, `edge` and `engine`. They contain no
-infrastructure credentials or public-host configuration. Database roles, TLS,
-Realtime tenant setup, the locally served Supabase SDK and restricted public
-access must already be provisioned. See [deployment](../../docs/deployment.md).
-Disposable PostgreSQL must use tmpfs. This example does not make a tmpfs database
-durable: losing its source/catalog requires explicit fresh bootstrap.
+The all-products query groups order lines by product ID and computes COUNT,
+SUM(quantity) and SUM(quantity * unit_price_cents) in a derived relation, then
+joins those aggregates to the product catalog for names and categories. The second query adds revenue descending,
+product ID ascending and LIMIT 10. Both are independently maintained production
+queries over one two-table source publication. Each has its own worker process,
+slot, catalog, result relation and object prefix. The production planner proves product_id unique through the one-to-one join,
+so both PostgreSQL result tables use that integer primary key. Supabase Realtime
+can publish their INSERT/UPDATE/DELETE changes. No engine key proof is weakened
+for the demo; text metadata remains outside the sink key.
 
-Render into an owned stack directory with these environment variables:
+`source.sql` defines the two source tables with FULL replica identity and C
+collation on catalog text. `workload.py` keeps 20 fictional products and bounded
+line IDs. Bulk sales change the cutoff on an elapsed five-second clock, including
+an exact revenue tie. Small real sales, refunds, adjustments and cancellations
+continue between bulk batches. Catalog and fact changes also share transactions,
+exercising the incremental join cross term. Historical line prices never change
+when the catalog is edited. The generator targets at most 2 source transactions
+per second; actual throughput and phase cadence are measured, with no catch-up
+burst after a slow transaction.
+
+The main page focuses on real maintained top-ten snapshots and a sanitized source
+activity feed. Under the hood reveals the schema, both SQL queries and the
+independent all-products view. Metrics is closed by default; opening it exposes
+both process panels and histories with shared filters/time axes. Monetary strings
+use BigInt rather than floating-point rounding. Result notifications trigger
+explicitly ordered authoritative refetches; polling recovers missed events.
+
+These assets extend an existing owned Supabase/PostgREST/Realtime/Caddy stack with
+`db`, `rest`, `realtime`, `edge`, `engine` and `engine-top10`. Database roles, TLS,
+Realtime setup and the locally served Supabase SDK must already exist. See
+[deployment](../../docs/deployment.md). PostgreSQL Docker storage must be tmpfs.
+Only SELECT on the two result tables is public; source tables and engine catalog
+metadata remain private. Do not enable RLS on engine-owned result tables.
+
+Render an exclusively owned fresh stack configuration:
 
 ```sh
 export DEMO_OBJECT_ENDPOINT=https://your-object-store.example
 export DEMO_OBJECT_BUCKET=your-private-bucket
 export DEMO_OBJECT_PREFIX=your-exclusive-fresh-demo-prefix
 export DEMO_ANON_KEY=your-public-browser-key
-export DEMO_PAGE_MODE=leaderboard # or totals
 python3 examples/portfolio/render.py /path/to/owned/stack-r2
 ```
 
-The renderer writes `query.toml`, `top10.toml`, a Compose override and public
-assets. The object-store credential is an external mode0600 file owned by the
-engine UID, mounted at `/run/credentials/r2.json`; the PostgreSQL password comes
-from the existing private Compose environment. `DEMO_POSTGRES_HOST` defaults to
-the internal `db` service. Each schema exclusively owns its configured prefix.
-Use a new prefix for a fresh demo; never delete an unknown bucket or historical
-prefix to clear state.
+The historical `examples/portfolio` directory name is retained for repository
+callers. `archive/totals.html` preserves the prior page; it is not published against
+the new schema. Before an explicitly authorized fresh demo, archive the existing
+page, private configuration, source data and both catalogs. Retire only recorded
+inactive demo slots and the named demo schemas/source fixtures. Retain old object
+prefixes, inspect each new prefix as empty, and preserve unrelated databases,
+publications, Realtime, edge services and object namespaces. Never clear a bucket.
 
-Use both Compose files for worker operations. First creation runs
-`query create /etc/pgderive/query.toml` for each service; wait for each query's
-ready event, stop it gracefully, and configure subsequent starts with
-`query restart /etc/pgderive/query.toml`. The supplied override already uses
-restart. Start `engine` and `engine-top10` explicitly after successful creation.
-Changing the page mode does not require a query rebuild. The original totals
-page is preserved in `web/totals.html` and remains available at `/totals.html`;
-`DEMO_PAGE_MODE` chooses which page is copied to `index.html`.
+Use both Compose files. Run `query create /etc/pgderive/query.toml` once per
+service, wait for ready and stop gracefully; subsequent workers use `query
+restart`. Object credentials are an external mode 0600 file mounted at
+`/run/credentials/r2.json`; PostgreSQL credentials stay in the private environment.
 
-The leaderboard is generated from that same original dark dashboard template.
-It retains every original metric, the complete metric-history controls and
-charts, the complete book overview and result activity. Added panels show the
-top-ten result and measurements for each independent query. Numeric snapshots
-arrive as text; the leaderboard uses BigInt, and the original chart receives
-Numbers only after an exact integral range check.
-
-For a newly owned database, `source.sql` creates the demo source and schemas;
-`workload.initial_sql()` seeds twenty baseline books. Never run those commands against an
-unrelated database. Before an authorized reset of an existing demo, stop its
-generator and workers, archive private configuration, the original page and a
-consistent source/catalog dump, and record the old image, slots and prefixes.
-Retain old object namespaces for rollback/evidence. Reset only the registered
-demo slots, dedicated catalog schemas and `demo_positions`; preserve the rest
-of PostgreSQL and Supabase. Grant anonymous SELECT only on the two result
-tables, deny source/metadata/writes, retain the engine's required disabled result
-RLS contract, add both result tables
-to `supabase_realtime`, and expose both result schemas through PostgREST.
-
-`generate.py` limits source traffic to at most two transactions per second;
-its actual rate depends on PostgreSQL/Docker execution and is measured on the page. Set
-`DEMO_ROOT` to the demo deployment root containing `stack-r2` and `generator`.
-It records exact affected-row counts and a bounded recent transaction history.
-It guards the WAL backlog of both queries before issuing more source work.
-Small quantity pulses and NULL-position insertions/deletions keep all-book
-activity visible. An elapsed-time clock advances phases at thirty-five-second
-intervals, independent of commit throughput, and resumes without a catch-up burst.
-The phases raise an outside book into the
-top ten, remove its boost so book ten refills, and create a cutoff tie that book
-ten wins by ID. One low-quantity book also opens and closes outside the cutoff,
-keeping that original totals-page behavior visible. The workload does not grow
-source state without bound.
-
-Install `collect.py`, `history.py`, `queries.py` and `observe_latency.py` together
-under the deployment's `metrics` directory, retaining its read-only SQL helper.
-Run the observer as a service with `--root` pointing at the deployment root.
-The collector preserves the original totals/history fields and adds
-`queries.totals` and `queries.top10`. Both report their own RSS, heartbeat-scoped
-cache/memtable/run diagnostics, object-service requests and bytes, processing,
-preparation, publication and checkpoint latency, published source transactions,
-progress, WAL, result storage and prefix-scoped object inventories. Object-service
-counters include all request types; CPU and PUT-only counts are not collected.
-Process counters reset on worker restart; latency and publication counts cover
-the preceding 60 seconds. Physical object inventory is sampled once per minute.
-
-One read-only observer polls both queries' durable progress with independent
-pending queues. It measures generator COMMIT acknowledgement to observed query
-publication, including transactions that leave the top-ten result unchanged.
+Install `generate.py`/`workload.py` under `generator`, and `collect.py`, `queries.py`,
+`history.py`, `observe_latency.py` under `metrics`, retaining the deployment's
+read-only SQL helper. The generator atomically publishes `activity.json` with
+sanitized committed events. The source-commit observer follows each query's
+independent durable progress, including transactions with no result-row change.
 Its pre-COMMIT WAL target is an inclusion proxy only while the generator is the
-sole source writer, with up to 50 ms polling quantization. It sends no replication
-feedback. Missing progress, stale observers and empty windows remain distinct
-from measured zero. The page renders each measurement's age independently.
-The history shows both query processes side by side by default, with shared time
-and metric filters and a Both/Totals/Top10 selector. Each panel reads its own
-bounded 24-hour document; it never
-substitutes totals samples for top-ten samples. Whole-portfolio
-metrics always come from the complete totals view. Browser requests cast integer
-and numeric outputs to text and use BigInt, preserving exact synthetic counts.
+sole source writer, with up to 50 ms polling quantization; it sends no replication
+feedback. Missing/stale values remain distinct from measured zero.
 
-The leaderboard subscribes to both result tables, refetches their authoritative
-snapshots, and specifies destination ordering explicitly. Three-second polling
-recovers missed notifications. Realtime notification time, snapshot fetch time
-and engine progress are distinct observations.
+Both process panels expose RSS, cache/memtable/run diagnostics, object-service
+requests/read/write bytes, preparation/publication/checkpoint latency, publication
+counts, progress, WAL and prefix-scoped physical inventories. CPU and PUT-only
+request counts are not collected. Process counters reset on restart; latency
+windows cover 60 seconds. Inventories are sampled once per minute. Each query has
+its own bounded 24-hour history; snapshots need not represent the same transaction.
 
-`scripts/query_concurrent_harness.py` runs the real workload and both production
-workers against one owned publication. Native materialized views and an
-independent source-row calculation check results while either query is stopped,
-restarted or dropped and its peer continues. It verifies cold replay, distinct
-stable slots, independent progress and ACK ordering. The common gate runs this
-qualifier; `test_portfolio_demo.py` checks phase boundaries and both page modes.
+`query_concurrent_harness.py` compares both production workers with native
+materialized views and an independent catalog/fact memory calculation. It covers
+real sale/refund/cancel mutations, same-transaction join inputs, ties, refill,
+independent pause/restart/drop, cold replay and ACK ordering. It runs in the common
+gate. Focused Python and production-JavaScript probes qualify pacing, exact
+rendering, query isolation, histories and unavailable states.
