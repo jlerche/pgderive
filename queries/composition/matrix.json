@@ -124,29 +124,31 @@
       "diagnostic": "DISTINCT ON unsupported"
     },
     {
-      "id": "mixed-left-key",
-      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON a.id+b.id=b.account_id",
-      "diagnostic": "local to one input"
-    },
-    {
-      "id": "constant-left-key",
-      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON 1=b.account_id",
-      "diagnostic": "must reference its input"
-    },
-    {
-      "id": "numeric-left-key",
-      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON a.id::numeric=b.account_id::numeric",
-      "diagnostic": "integral result types"
-    },
-    {
       "id": "mixed-exists-key",
       "sql": "SELECT a.id FROM {schema}.account a WHERE EXISTS(SELECT 1 FROM {schema}.entry b WHERE a.id+b.id=b.account_id)",
-      "diagnostic": "local to one input"
+      "diagnostic": "ON equality must connect"
     },
     {
       "id": "inequality-correlation",
       "sql": "SELECT a.id FROM {schema}.account a WHERE EXISTS(SELECT 1 FROM {schema}.entry b WHERE a.id<b.account_id)",
       "diagnostic": "requires ordinary equality"
+    }
+  ],
+  "qualified_compositions": [
+    {
+      "id": "mixed-left-key",
+      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON a.id+b.id=b.account_id",
+      "qualification": "scripts/join_predicate_harness.py"
+    },
+    {
+      "id": "constant-left-key",
+      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON 1=b.account_id",
+      "qualification": "scripts/join_predicate_harness.py"
+    },
+    {
+      "id": "numeric-left-key",
+      "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON a.id::numeric=b.account_id::numeric",
+      "qualification": "scripts/join_predicate_harness.py"
     }
   ]
 }

@@ -37,7 +37,7 @@ The scalar architecture uses one bound IR in `src/compiler/typed.rs` for maps an
 predicate operands. `src/compiler/value.rs` owns native decoding and literal
 normalization. Function/operator dispatch resolves at binding time. Existing
 computed key/window maps use the same IR; specialized temporal/MOD kernels retain
-bounded parser/context guards. M4 adds computed grouped aggregate arguments and side-local integral inner-join
+bounded parser/context guards. M4 adds computed grouped aggregate arguments and side-local inner-join
 keys. M6 admits computed window inputs/keys and side-local integral outer/existence
 ON expressions within its explicit domain. The current composition matrix extends
 computed DISTINCT and grouping after restricted existence.
@@ -52,7 +52,7 @@ establish uniqueness. See linked SQL-subset sections for exact syntax restrictio
 | --- | --- | --- |
 | Source/filter/map/rebind/output | Complete source transactions; projection collisions consolidate; typed scalar consumers run before state | `src/compiler/relational.rs`, `src/worker/program.rs`; `scripts/relational_compiler_harness.py` |
 | INNER/CROSS/self/multiway joins, tagged union | Full-tuple multiplicity; simultaneous-input cross term; matching typed equality keys | `src/compiler/bind/native_join.rs`; `scripts/query_native_join_harness.py`, `scripts/join_composition_harness.py` |
-| Computed equality keys | Side-local integral result expressions for inner/left joins and restricted EXISTS/NOT EXISTS; exact matching OIDs; no mixed-input or constants-only operands | `src/compiler/bind/native_join/keys.rs`; `scripts/computed_join_harness.py`, `src/worker/tests/computed_join.rs` |
+| Computed equality keys and ON predicates | [Native/computed numeric and text keys; residual INNER/LEFT predicates](join-predicates.md). Restricted EXISTS/NOT EXISTS retains equality correlation | `src/compiler/bind/native_join/keys.rs`; `scripts/computed_join_harness.py`, `scripts/join_predicate_harness.py`, `src/worker/tests/computed_join.rs` |
 | LEFT joins | NULL extension only for unmatched left occurrences; post-join WHERE does not manufacture unmatched rows; retained affected-key recomputation | `src/compiler/left_join.rs`; `scripts/query_native_join_harness.py` |
 | SELECT DISTINCT, EXISTS / NOT EXISTS | NULL grouping distinct from NULL join equality; right duplicates do not multiply existence output; restricted equality correlation | `src/compiler/bind/membership.rs`; `scripts/query_membership_harness.py` |
 | GROUP BY and group-only membership | Retractions, NULL groups, complete identity retained; accepted key families depend on compiled query shape | `src/compiler/partition.rs`; `scripts/group_membership_harness.py`, `src/worker/tests/grouped_occurrence.rs` |

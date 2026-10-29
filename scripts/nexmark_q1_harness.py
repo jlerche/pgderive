@@ -48,7 +48,7 @@ class Q1Fixture(SqlFixture):
 def qualify(output,command,mode):
     fixture = Q1Fixture(output,mode)
     with fixture.managed():
-        fixture.rejected(command,'unsupported-arithmetic',fixture.query.replace(fixture.factor+' *',fixture.factor+' /'))
+        fixture.rejected(command,'unsupported-function',fixture.query.replace(' AS price', ' + sqrt(1::numeric) AS price'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
         changes = [

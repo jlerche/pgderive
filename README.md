@@ -1008,3 +1008,6 @@ views, output metadata and independent raw-source bags through CDC and restart.
 ROUND/TRUNC/CEIL/FLOOR/ABS and checked numeric/integral/precision-scale casts.
 BigInt arithmetic preserves PostgreSQL's rounding and display-scale behavior;
 reversible AVG summaries retain removable scales and special values.
+
+[Join keys and predicates](docs/join-predicates.md) cover numeric/text computed keys
+and residual INNER/LEFT ON conditions, including per-left-tuple unmatched rows.

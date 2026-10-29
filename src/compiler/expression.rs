@@ -31,20 +31,30 @@ pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
         .transpose()
 }
 pub(super) fn bind(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Expr> {
-    bind_ast(value, resolve, &mut 0, 0)
+    bind_ast(value, resolve, &mut 0, 0, None)
 }
+pub(in crate::compiler) fn bind_join(
+    value: &pg_query::Node,
+    resolve: &Resolve<'_>,
+    collation: &impl Fn(&ColumnRef) -> Result<u32>,
+) -> Result<Expr> {
+    let text = |value: &Scalar| value.collation(collation);
+    bind_ast(value, resolve, &mut 0, 0, Some(&text))
+}
+type TextCollation<'a> = Option<&'a dyn Fn(&Scalar) -> Result<u32>>;
 fn bind_ast(
     value: &pg_query::Node,
     resolve: &Resolve<'_>,
     visited: &mut usize,
     depth: usize,
+    text: TextCollation<'_>,
 ) -> Result<Expr> {
     use super::parser::expressions::{names, node, optional};
     use pg_query::{NodeEnum, protobuf as pg};
     *visited += 1;
     ensure!(*visited <= 512 && depth <= 64, "WHERE exceeds AST/depth budget");
     match node(value)? {
-        NodeEnum::BoolExpr(value) => boolean(value, resolve, visited, depth),
+        NodeEnum::BoolExpr(value) => boolean(value, resolve, visited, depth, text),
         NodeEnum::NullTest(value) => {
             ensure!(!value.argisrow && value.xpr.is_none(), "row NULL tests unsupported");
             let not = match pg::NullTestType::try_from(value.nulltesttype)? {
@@ -75,6 +85,7 @@ fn bind_ast(
                 op,
                 operand(optional(value.lexpr.as_deref())?, resolve)?,
                 operand(optional(value.rexpr.as_deref())?, resolve)?,
+                text,
             )
         }
         _ => Ok(Expr::Value(operand(value, resolve)?.coerce(16)?)),
@@ -85,13 +96,14 @@ fn boolean(
     resolve: &Resolve<'_>,
     visited: &mut usize,
     depth: usize,
+    text: TextCollation<'_>,
 ) -> Result<Expr> {
     use pg_query::protobuf as pg;
     ensure!(value.xpr.is_none(), "invalid Boolean expression");
     let mut args = value
         .args
         .iter()
-        .map(|value| bind_ast(value, resolve, visited, depth + 1))
+        .map(|value| bind_ast(value, resolve, visited, depth + 1, text))
         .collect::<Result<Vec<_>>>()?;
     match pg::BoolExprType::try_from(value.boolop)? {
         pg::BoolExprType::AndExpr | pg::BoolExprType::OrExpr => {
@@ -105,23 +117,43 @@ fn boolean(
         pg::BoolExprType::Undefined => anyhow::bail!("invalid Boolean operator"),
     }
 }
-fn comparison(op: Compare, left: Operand, right: Operand) -> Result<Expr> {
+fn comparison(op: Compare, left: Operand, right: Operand, text: TextCollation<'_>) -> Result<Expr> {
     let oid = left
         .oid()
         .or_else(|| right.oid())
+        .or_else(|| {
+            text.is_some().then(|| {
+                [left.literal_oid(), right.literal_oid()]
+                    .into_iter()
+                    .find(|oid| *oid != 0)
+                    .unwrap_or(25)
+            })
+        })
         .context("SQL type: comparison requires a native column")?;
     ensure!(
         matches!(oid, 16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1114 | 1184 | 1186),
         "SQL type: unsupported comparison type"
     );
-    if matches!(oid, 25 | 1043) {
+    if matches!(oid, 25 | 1043) && text.is_none() {
         ensure!(
             matches!(op, Compare::Eq | Compare::Ne)
                 && left.oid().is_some() != right.oid().is_some(),
             "text equality requires one native column and an unknown literal; text ordering and column collation resolution are unsupported"
         );
     }
-    Ok(Expr::Compare(op, left.coerce(oid)?, right.coerce(oid)?))
+    let (left, right) = (left.coerce(oid)?, right.coerce(oid)?);
+    if matches!(oid, 25 | 1043)
+        && let Some(text) = text
+    {
+        let (left_collation, right_collation) = (text(&left)?, text(&right)?);
+        ensure!(left_collation != 0 && right_collation != 0, "unresolved ON text collation");
+        let collation = typed::collation::common(left_collation, right_collation)?;
+        ensure!(
+            matches!(op, Compare::Eq | Compare::Ne) || matches!(collation, 950 | 951),
+            "text ON ordering requires C/POSIX collation"
+        );
+    }
+    Ok(Expr::Compare(op, left, right))
 }
 fn normalized(args: Vec<Expr>, and: bool) -> Result<Expr> {
     let mut values = Vec::new();

@@ -95,28 +95,18 @@ fn join_keys_resolve_direction_and_reject_unproven_evaluation_domains() -> Resul
         "abs(b.auction)=abs(a.id)",
         "a.id=abs(b.auction)",
         "length(a.category)=b.auction",
+        "a.id+b.id=b.auction",
+        "abs(a.id)=abs(a.id)",
+        "1=abs(b.auction)",
+        "abs(a.id)::numeric=b.price::numeric",
+        "abs(a.id)>abs(b.auction)",
+        "a.category=a.other",
     ] {
         compile(
             &format!("SELECT a.id FROM source.auction a JOIN source.bid b ON {condition}"),
             &native,
         )?
         .validate_execution()?;
-    }
-    for condition in [
-        "a.id+b.id=b.auction",
-        "abs(a.id)=abs(a.id)",
-        "1=abs(b.auction)",
-        "abs(a.id)::numeric=b.price::numeric",
-        "abs(a.id)>abs(b.auction)",
-    ] {
-        assert!(
-            compile(
-                &format!("SELECT a.id FROM source.auction a JOIN source.bid b ON {condition}"),
-                &native
-            )
-            .is_err(),
-            "{condition}"
-        );
     }
     compile(&SQL.replace(" JOIN ", " LEFT JOIN "), &native)?.validate_execution()?;
     let compiled = compile(&format!("{SQL} AND abs(a.id)=abs(b.auction)"), &native)?;

@@ -1,4 +1,5 @@
 //! SQL membership and left-join differentiation using bounded input deltas and cursors.
+mod residual_join;
 use super::{left_join::stripped, relational::Key};
 use crate::{
     compiler::{ColumnRef, left_join::Spec},
@@ -134,6 +135,9 @@ async fn emit_unmatched(
     Ok(())
 }
 pub(super) fn left_join(spec: &Spec) -> Group<Key, Row> {
+    if spec.predicate.is_some() {
+        return residual_join::operator(spec);
+    }
     let spec = spec.clone();
     Group::new(move |input, work| {
         let spec = spec.clone();

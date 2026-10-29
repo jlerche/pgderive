@@ -1,14 +1,15 @@
 //! Left equijoin differentiated over complete tagged input partitions.
 use super::relational::Key;
-use crate::{compiler::left_join::Input, engine::dataflow::Project, transaction::Row};
 #[cfg(test)]
+use crate::engine::{
+    Batch,
+    dataflow::Partition,
+    execution::{Consolidator, Limits},
+};
 use crate::{
-    compiler::left_join::Spec,
-    engine::{
-        Batch,
-        dataflow::Partition,
-        execution::{Consolidator, Limits},
-    },
+    compiler::left_join::{Input, Spec},
+    engine::dataflow::Project,
+    transaction::Row,
 };
 use anyhow::{Context, Result, ensure};
 #[cfg(test)]
@@ -54,7 +55,15 @@ pub(super) fn operator(spec: &Spec, limits: Limits) -> Partition<Key, Row> {
         }
         let mut output = Consolidator::new(limits)?;
         for (row, weight) in left {
-            if right.is_empty() {
+            let mut matched = false;
+            for (other, multiplicity) in &right {
+                work.charge(1)?;
+                if let Some(result) = matching(&spec, row, other)? {
+                    matched = true;
+                    output.add(((), result), BigInt::from(weight) * BigInt::from(*multiplicity))?;
+                }
+            }
+            if !matched {
                 work.charge(1)?;
                 let mut result = stripped(row);
                 for column in &spec.right {
@@ -64,15 +73,6 @@ pub(super) fn operator(spec: &Spec, limits: Limits) -> Partition<Key, Row> {
                     );
                 }
                 output.add(((), result), weight)?;
-                continue;
-            }
-            for (other, multiplicity) in &right {
-                work.charge(1)?;
-                let mut result = stripped(row);
-                for (field, value) in stripped(other) {
-                    ensure!(result.insert(field, value).is_none(), "left join field collision");
-                }
-                output.add(((), result), BigInt::from(weight) * BigInt::from(*multiplicity))?;
             }
         }
         output.finish_batch()
@@ -83,4 +83,16 @@ pub(super) fn stripped(row: &Row) -> Row {
         .filter(|(field, _)| field.as_str() != SIDE)
         .map(|(field, value)| (field.clone(), value.clone()))
         .collect()
+}
+
+pub(super) fn matching(spec: &Spec, left: &Row, right: &Row) -> Result<Option<Row>> {
+    let mut result = stripped(left);
+    for (field, value) in stripped(right) {
+        ensure!(result.insert(field, value).is_none(), "left join field collision");
+    }
+    if spec.predicate.as_ref().map_or(Ok(true), |predicate| predicate.qualifies(&result))? {
+        Ok(Some(result))
+    } else {
+        Ok(None)
+    }
 }

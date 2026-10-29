@@ -28,9 +28,8 @@ FROM names two distinct publication relations using explicit schema.table names,
 connected by JOIN or INNER JOIN and one ON column = column equality. Reversing
 the equality operands is accepted. Native join types, modifiers and collations
 must match exactly; there are no implicit casts. Join/group keys are boolean,
-int2/int4/int8 or UUID. Text/varchar join keys are rejected until a collation-aware
-join runtime exists; native relational partitions support deterministic text keys
-as described below. All frozen native types can be tested for NULL.
+int2/int4/int8 or UUID. The current shared join builder additionally supports [numeric/text keys and
+ON predicates](join-predicates.md); this section describes the initial baseline. All frozen native types can be tested for NULL.
 
 WHERE supports column IS NULL / IS NOT NULL, Boolean columns and TRUE/FALSE/NULL,
 and scalar comparisons =, <>, !=, <, <=, >, >= composed with AND/OR/NOT.
@@ -101,8 +100,8 @@ search_path or live SQL name interpolation. ORDER BY and LIMIT follow the
 The same output and WHERE subset also supports two distinct source tables joined
 by one inner equijoin, with columns selected from either input. Join keys must
 have identical native bool, integral, UUID or timestamp contracts; NULL keys never match.
-Text keys, implicit integer-width coercions, outer/self/multiple joins remain
-rejected. Aliases and reversed equality operands normalize to the same semantics;
+The shared join-tree builder now broadens this initial baseline; see
+[join keys and predicates](join-predicates.md). Aliases and reversed equality operands normalize to the same semantics;
 output labels and order remain part of durable identity.
 
 Ungrouped joins lower to explicit Source, KeyBy, Join and Project IR nodes. The
@@ -894,9 +893,8 @@ Native tables and independently compiled non-LATERAL subqueries use one join
 tree and aggregate/projection builder. Derived inputs require aliases and expose
 only their selected labels; ambiguous unqualified names reject. INNER, CROSS,
 and LEFT joins share the same key binding, weighted execution, and source
-occurrence limits. ON accepts at most 16 ordinary equality operands, including
-the supported side-local integral computations. Key types must match; text
-collation resolution, OR/non-equality conditions, USING, and NATURAL remain
+occurrence limits. [ON key extraction and residual predicates](join-predicates.md)
+cover numeric/text keys, OR and non-equality conditions. USING and NATURAL remain
 unsupported. WHERE runs after the join, and the common builder handles outer
 projection, grouping, and windows under their existing semantic restrictions.
 
@@ -1192,21 +1190,13 @@ require an explicit cast. This slice adds no PostgreSQL computation path.
 
 ## Computed inner-join keys
 
-Native and already supported derived inner-join inputs accept an AND of at most
-16 ordinary equalities between side-local scalar operands. Computed operands
-require integral result types and matching OIDs on both sides; cast explicitly
-where supported. Raw-column key types keep their prior restrictions. The binder
-resolves operand direction and maps each expression only on its own input before
-keying. Repeated expressions share fields; complete source tuples remain the
-weighted identity. NULL keys never match, and simultaneous input changes retain
-the join cross term. Derived state and computed fields remain scope-local.
-
-Mixed-input operands, constants-only operands and computed numeric/text result keys
-reject. M6 extends these side-local integral keys to left/existence joins and adds
-bounded computed window arguments/keys. Hidden relation reads and
-volatile/time-dependent expressions remain unsupported.
-The finite accepted matrix and maintenance boundaries are in
-[M4 completion](m4-completion-matrix.md).
+Native and supported derived INNER/LEFT inputs accept side-local computed
+numeric/text equality keys and residual predicates. Top-level equalities become
+navigation keys where compatible; other conditions evaluate over candidate pairs.
+The [join predicate contract](join-predicates.md) specifies collation, NULL,
+match-transition and resource boundaries. Restricted EXISTS/NOT EXISTS retains
+its existing equality-only correlation rules. Hidden relation reads and volatile
+or time-dependent expressions remain unsupported.
 
 ON maps evaluate each input row eagerly. An argument error can therefore stop
 the worker even when the opposite input is empty or a later WHERE would exclude

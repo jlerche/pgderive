@@ -92,7 +92,12 @@ fn registration_binds_native_types_and_sql() -> Result<()> {
     );
     assert!(crate::compiler::compile(&SQL.replace("b.price", "b.missing"), &native).is_err());
     changed_native.relations[1].columns[1].oid = 20;
-    assert!(crate::compiler::compile(SQL, &changed_native).is_err());
+    assert_ne!(
+        original.plan().identity(),
+        build(&changed_native, &crate::compiler::compile(SQL, &changed_native)?, &settings())?
+            .plan()
+            .identity()
+    );
     Ok(())
 }
 #[tokio::test]
@@ -312,6 +317,7 @@ async fn grouped_output(
 mod computed_aggregates;
 
 mod computed_join;
+mod join_predicates;
 
 mod expression_composition;
 

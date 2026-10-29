@@ -74,7 +74,6 @@ fn unsupported_window_identity_and_join_domains_still_reject() {
         "SELECT id,SUM(abs(price)) OVER(ORDER BY abs(id) ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM source.bid",
         "SELECT id,COUNT(DISTINCT abs(price)) OVER(PARTITION BY auction) FROM source.bid",
         "SELECT id,LAG(abs(price)) OVER(ORDER BY id) FROM source.bid",
-        "SELECT a.id FROM source.auction a LEFT JOIN source.bid b ON a.id+b.id=b.auction",
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE abs(a.id+b.id)=b.auction)",
         "SELECT d.v::double precision FROM (SELECT auction,AVG(price) AS v FROM source.bid GROUP BY auction) d",
     ] {

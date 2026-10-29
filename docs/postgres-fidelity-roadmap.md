@@ -157,9 +157,10 @@ Its coverage matrix defines argument types, lazy FILTER evaluation, WHERE orderi
 derived-source composition and explicit window restrictions. The [completion matrix](m4-completion-matrix.md) defines the final bounded slice:
 side-local computed integral inner-join keys, composed derived aggregates/joins,
 and cooperative semantic maintenance. These have native-MV, independent oracle,
-retraction and recovery evidence. Arbitrary window keys/arguments, outer ON
-expressions and additional subqueries remain explicitly rejected or bounded;
-future syntax belongs to the SQL support backlog.
+retraction and recovery evidence. [Numeric/text join keys and residual INNER/LEFT
+ON predicates](join-predicates.md) extend this baseline. Additional window forms,
+join families and subqueries remain explicitly rejected or bounded; future syntax
+belongs to the SQL support backlog.
 
 Broaden M0's dependency tracking and fencing to support more changes: DDL, function/type
 changes, extensions, settings, collation providers and timezone data. Merely

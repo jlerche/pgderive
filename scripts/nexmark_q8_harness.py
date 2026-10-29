@@ -6,16 +6,26 @@ import json
 import pathlib
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import expected as native_expected
-from nexmark_temporal_harness import bucket, encode
+from nexmark_temporal_harness import bucket, encode, ordered
 
 SQL = pathlib.Path(__file__).resolve().parents[1]/'queries/nexmark/q8.sql'
 LABELS = ['id','name','starttime']
+
+def matches(condition,identity,start,seller,seller_start):
+    # Only SQL TRUE qualifies. NULL equality/order is UNKNOWN; neither qualifies
+    # an AND, and an OR qualifies exactly when its other comparison is TRUE.
+    same_identity = identity is not None and seller is not None and identity == seller
+    has_times = start is not None and seller_start is not None
+    same_bucket = has_times and (ordered(start) >= ordered(seller_start) if condition == 'range' else start == seller_start)
+    return same_identity or same_bucket if condition == 'or' else same_identity and same_bucket
+
 
 class Q8Fixture(SqlFixture):
     def __init__(self,output,mode):
         super().__init__(output,False)
         self.pg.insert(1,'-q')
-        self.instant = mode!='local'
+        self.instant = not mode.startswith('local')
+        self.condition = 'or' if mode.endswith('-or') else 'range' if mode.endswith('-range') else 'equal'
         temporal = 'timestamptz' if self.instant else 'timestamp'
         identifier = 'bigint' if mode=='icu' else 'integer'
         name = 'varchar(128) COLLATE pg_catalog."C"' if mode=='c' else 'text COLLATE pg_catalog."und-x-icu"' if mode=='icu' else 'text'
@@ -34,6 +44,10 @@ class Q8Fixture(SqlFixture):
           (306,7,'1999-12-31 23:59:59.999999'),(307,8,'infinity'),(308,9,'-infinity');
           ALTER PUBLICATION {self.name} ADD TABLE {self.name}.person''')
         self.query = SQL.read_text().replace('nexmark.',self.name+'.').strip().removesuffix(';')
+        if self.condition == 'or':
+            self.query = self.query.replace('AND p.starttime=a.starttime', 'OR p.starttime=a.starttime')
+        elif self.condition == 'range':
+            self.query = self.query.replace('p.starttime=a.starttime', 'p.starttime>=a.starttime')
         if not self.instant:
             self.query = self.query.replace('TIMESTAMPTZ','TIMESTAMP').replace('2000-01-01 00:00:00+00','2000-01-01 00:00:00')
 
@@ -45,19 +59,18 @@ class Q8Fixture(SqlFixture):
         auctions = json.loads(self.sql(prefix+f"SELECT COALESCE(json_agg(a),'[]') FROM {self.name}.auction a"))
         persons = {(p['id'],p['name'],encode(bucket(p['date_time'],10),self.instant)) for p in people}
         sellers = {(a['seller'],encode(bucket(a['date_time'],10),self.instant)) for a in auctions}
-        memory = collections.Counter((identity,name,start) for identity,name,start in persons if start is not None and (identity,start) in sellers)
+        memory = collections.Counter()
+        for identity,name,start in persons:
+            for seller,seller_start in sellers:
+                if matches(self.condition,identity,start,seller,seller_start):
+                    memory[(identity,name,start)] += 1
         self.verify_memory(dict(memory))
 
 
 def qualify(output,command,mode):
     fixture = Q8Fixture(output,mode)
     with fixture.managed():
-        for label,query in [
-            ('or',fixture.query.replace('AND p.starttime=a.starttime','OR p.starttime=a.starttime')),
-            ('non-equality',fixture.query.replace('p.starttime=a.starttime','p.starttime>=a.starttime')),
-            ('ambiguous',fixture.query.replace('SELECT p.id,p.name,p.starttime','SELECT p.id,p.name,starttime')),
-        ]:
-            fixture.rejected(command,label,query)
+        fixture.rejected(command,'ambiguous',fixture.query.replace('SELECT p.id,p.name,p.starttime','SELECT p.id,p.name,starttime'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
         changes = [
@@ -76,9 +89,9 @@ def qualify(output,command,mode):
             changes=changes,
             final=f'DELETE FROM {fixture.name}.person; DELETE FROM {fixture.name}.auction',
             normalized=fixture.query.replace('p.', '"P".').replace('a.', '"A".').replace('person p', 'person AS "P"').replace('auction a', 'auction AS "A"').replace(') p', ') AS "P"').replace(') a', ') AS "A"').replace('"P".id="A".seller AND "P".starttime="A".starttime', '"A".starttime="P".starttime AND "A".seller="P".id'),
-            rejected=[('changed-key', fixture.query.replace('AND p.starttime=a.starttime', '')),('changed-stride', fixture.query.replace('10 seconds', '11 seconds'))],
+            rejected=[('changed-key', fixture.query.replace('OR p.starttime=a.starttime' if fixture.condition=='or' else 'AND p.starttime>=a.starttime' if fixture.condition=='range' else 'AND p.starttime=a.starttime', '')),('changed-stride', fixture.query.replace('10 seconds', '11 seconds'))],
         ), initial=initial)
-        (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent grouped memberships and compound identity/bucket equality','transactions':'complete simultaneous sources; duplicate partial/last deletion; PK/key/bucket moves; NULLs/infinities; rollback; empty bid-only input tick','restart':'cold same slot; aliases/operand orientation/conjunction order normalized','identity':'changed stride and compound join key rejected'})+'\n')
+        (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent grouped memberships and SQL three-valued identity/bucket predicate; occurrence multiplicities', 'condition':fixture.condition,'transactions':'complete simultaneous sources; duplicate partial/last deletion; PK/key/bucket moves; NULLs/infinities; rollback; empty bid-only input tick','restart':'cold same slot; aliases/operand orientation/conjunction order normalized','identity':'changed stride and compound join key rejected'})+'\n')
 
 if __name__=='__main__':
-    run_modes(('local', 'instant', 'c', 'icu'), qualify)
+    run_modes(('local', 'instant', 'c', 'icu', 'instant-or', 'local-or', 'instant-range', 'local-range'), qualify)

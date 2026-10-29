@@ -9,4 +9,5 @@ pub struct Input {
 #[derive(Clone, Serialize)]
 pub struct Spec {
     pub(crate) right: Vec<ColumnRef>,
+    pub(crate) predicate: Option<super::Predicate>,
 }

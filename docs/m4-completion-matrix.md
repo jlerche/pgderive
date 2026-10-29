@@ -12,7 +12,7 @@ implementation and is now implemented and qualified.
 | Maintenance durability | Owned-database tests: active-worker refusal, pending-state startup rejection, idempotent begin/finish, process restart, stale registration refusal with unchanged sink/progress/ACK, explicit rebuild, and native-MV equality after resume. |
 | Computed inner equijoin keys | Side-local typed integral expressions, exact matching result OIDs, at most 16 equalities. Preserve source tuple identity, NULL exclusion, collisions and simultaneous input cross terms. Native-MV and independent source oracle through retractions and restart. |
 | Derived compositions | Computed aggregate results and keys can participate in already supported derived joins; state and generated field identities remain scope-local. Qualify through CDC and recovery. |
-| Outer/existence computed ON expressions | Keep rejected until unmatched-row semantics and evaluation domains are separately qualified. Existing raw-column forms remain supported. |
+| Outer/existence computed ON expressions | [Residual INNER/LEFT ON predicates and numeric/text keys](join-predicates.md) now qualify unmatched-row semantics separately; restricted existence correlation remains equality-only. |
 | Computed window arguments/keys and arbitrary subqueries | Remain rejected where frame-aware evaluation, occurrence identity or dependency tracking is unproven. Add explicit rejection evidence; no approximate execution. |
 | Wall clock, volatile operations, hidden relation reads | Rejected; no refresh-epoch or hidden dependency evaluator is introduced. |
 

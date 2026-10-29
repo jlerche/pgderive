@@ -15,7 +15,6 @@ struct Column {
     label: String,
     qualifiers: Vec<String>,
     value: ColumnRef,
-    modifier: i32,
     collation: u32,
 }
 struct Edge {
@@ -69,10 +68,13 @@ impl Builder<'_> {
                 self.existence(left, right, keys, anti)
             }
             Tree::Derived { source, alias } => self.derived(source, alias),
-            Tree::Join { left, right, keys, outer } => {
+            Tree::Join { left, right, condition, outer } => {
                 let left = self.tree(*left)?;
                 let right = self.tree(*right)?;
-                self.join(left, right, keys, outer)
+                let id = format!("tree_join_{}", self.joins);
+                let bound =
+                    keys::condition(condition.as_deref(), &left.columns, &right.columns, &id)?;
+                self.join(left, right, bound, outer)
             }
         }
     }
@@ -84,6 +86,10 @@ impl Builder<'_> {
         let offset = self.sources.len();
         let prefix = format!("tree_scope_{offset}_");
         let scope = super::derived::scope((source, alias), &prefix, offset, self.contract)?;
+        let mut context = scope.ir.clone();
+        context.sources.splice(..0, self.sources.iter().cloned());
+        context.nodes.splice(..0, self.nodes.iter().cloned());
+        let facts = crate::compiler::properties::occurrence(&context, self.contract)?;
         let columns = scope
             .ir
             .output
@@ -93,8 +99,7 @@ impl Builder<'_> {
                 label: output.label.clone(),
                 qualifiers: vec![scope.alias.clone()],
                 value: output.column.clone(),
-                modifier: -1,
-                collation: 0,
+                collation: facts.collation(&output.column).unwrap_or(0),
             })
             .collect();
         self.sources.extend(scope.ir.sources);
@@ -123,7 +128,6 @@ impl Builder<'_> {
                     oid: column.oid,
                     nullable: column.nullable,
                 },
-                modifier: column.modifier,
                 collation: column.collation,
             })
             .collect();
@@ -139,7 +143,7 @@ impl Builder<'_> {
         &mut self,
         mut left: Edge,
         mut right: Edge,
-        names: Vec<(crate::compiler::parser::scalar::Key, crate::compiler::parser::scalar::Key)>,
+        bound: keys::Bound,
         outer: bool,
     ) -> Result<Edge> {
         ensure!(
@@ -150,7 +154,7 @@ impl Builder<'_> {
             "duplicate exposed table qualifier"
         );
         let id = format!("tree_join_{}", self.joins);
-        let keys::Bound { keys, computed } = keys::bind(names, &left.columns, &right.columns, &id)?;
+        let keys::Bound { keys, computed, predicate } = bound;
         let [left_computed, right_computed] = computed;
         self.map(&mut left, left_computed, &format!("{id}_left_map"));
         self.map(&mut right, right_computed, &format!("{id}_right_map"));
@@ -181,6 +185,7 @@ impl Builder<'_> {
                 input,
                 spec: crate::compiler::left_join::Spec {
                     right: right.columns.iter().map(|value| value.value.clone()).collect(),
+                    predicate: predicate.clone(),
                 },
             });
             for column in &mut right.columns {
@@ -191,9 +196,16 @@ impl Builder<'_> {
             self.key(right_key.clone(), right.id, keys.into_iter().map(|pair| pair.1).collect());
             self.nodes.push(Node::Join { id: id.clone(), left: left_key, right: right_key });
         }
+        let result = if !outer && let Some(predicate) = predicate {
+            let filtered = format!("{id}_filtered");
+            self.nodes.push(Node::Filter { id: filtered.clone(), input: id, predicate });
+            filtered
+        } else {
+            id
+        };
         let mut columns = left.columns;
         columns.extend(right.columns);
-        Ok(Edge { id, columns })
+        Ok(Edge { id: result, columns })
     }
     fn existence(
         &mut self,
@@ -203,7 +215,9 @@ impl Builder<'_> {
         anti: bool,
     ) -> Result<Edge> {
         let columns = left.columns.clone();
-        let edge = self.join(left, right, names, true)?;
+        let id = format!("tree_join_{}", self.joins);
+        let bound = keys::bind(names, &left.columns, &right.columns, &id)?;
+        let edge = self.join(left, right, bound, true)?;
         let Some(Node::LeftJoin { id, input, .. }) = self.nodes.pop() else {
             anyhow::bail!("missing existence join")
         };

@@ -211,8 +211,6 @@ fn join_tree_aliases_keys_and_unsupported_shapes_bind_identity() -> Result<()> {
         sql.replace("a.category AS c", "id AS c"),
         sql.replace("LEFT JOIN", "RIGHT JOIN"),
         sql.replace("LEFT JOIN", "FULL JOIN"),
-        sql.replace("a.id=b.auction AND a.id=b.id", "a.id=b.auction OR a.id=b.id"),
-        sql.replace("a.id=b.auction AND a.id=b.id", "a.id=a.id"),
         sql.replace("bid b ", "bid a "),
         "SELECT l.id FROM source.bid l LEFT JOIN source.bid r USING(id)".into(),
     ] {

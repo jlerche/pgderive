@@ -17,7 +17,7 @@ pub(in crate::compiler) enum Tree {
     Join {
         left: Box<Self>,
         right: Box<Self>,
-        keys: Vec<(super::scalar::Key, super::scalar::Key)>,
+        condition: Option<Box<Node>>,
         outer: bool,
     },
 }
@@ -48,15 +48,10 @@ pub(super) fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tr
             );
             let left = tree(optional(join.larg.as_deref())?, sources, depth + 1)?;
             let right = tree(optional(join.rarg.as_deref())?, sources, depth + 1)?;
-            let mut keys = Vec::new();
-            if let Some(condition) = join.quals.as_deref() {
-                computed_equalities(condition, &mut keys, 0)?;
-            }
-            ensure!(keys.len() <= 16, "join key count exceeded");
             Ok(Tree::Join {
                 left: Box::new(left),
                 right: Box::new(right),
-                keys,
+                condition: join.quals.clone(),
                 outer: join.jointype == i32::from(pg::JoinType::JoinLeft),
             })
         }

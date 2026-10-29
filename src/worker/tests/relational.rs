@@ -83,8 +83,6 @@ fn normalized_join_identity_and_fail_closed_resolution() -> Result<()> {
     assert_eq!(serde_json::to_vec(&first)?, serde_json::to_vec(&alias)?);
     for sql in [
         SQL.replace("a.category AS c", "id AS c"),
-        SQL.replace("a.id=b.auction", "a.id=b.price"),
-        SQL.replace("a.id=b.auction", "a.id=a.id"),
         format!("{SQL} ORDER BY c"),
         SQL.replace("JOIN", "FULL JOIN"),
     ] {

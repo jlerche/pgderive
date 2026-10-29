@@ -6,6 +6,7 @@ use pg_query::{Node, NodeEnum};
 use serde::Serialize;
 use types::numeric_common;
 mod case;
+pub(in crate::compiler) mod collation;
 mod evaluate;
 mod functions;
 mod operand;

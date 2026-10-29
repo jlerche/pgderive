@@ -47,6 +47,14 @@ def inventory(fixture, command):
         records.append({**item,'native_valid':True,'returncode':result.returncode,'stderr':result.stderr})
         (fixture.output/'rejections.json').write_text(json.dumps(records,indent=2)+'\n')
         assert result.returncode!=0 and item['diagnostic'] in result.stderr,records[-1]
+    accepted = []
+    for item in manifest['qualified_compositions']:
+        sql = item['sql'].format(schema=fixture.name)
+        fixture.sql('EXPLAIN '+sql)
+        result = admin(fixture,command,sql)
+        accepted.append({**item,'native_valid':True,'returncode':result.returncode,'stderr':result.stderr})
+        (fixture.output/'qualified-compositions.json').write_text(json.dumps(accepted,indent=2)+'\n')
+        assert result.returncode==0,accepted[-1]
 
 def main():
     parser = argparse.ArgumentParser()

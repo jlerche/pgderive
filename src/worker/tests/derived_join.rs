@@ -193,9 +193,6 @@ fn scoped_join_normalizes_equalities_and_rejects_unsupported_shapes() -> Result<
     assert_eq!(serde_json::to_vec(&original)?, serde_json::to_vec(&equivalent)?);
     for invalid in [
         sql.replace("p.id,p.name,p.starttime", "p.id,p.name,starttime"),
-        sql.replace("AND p.starttime=a.starttime", "OR p.starttime=a.starttime"),
-        sql.replace("p.starttime=a.starttime", "p.starttime>=a.starttime"),
-        sql.replace("p.id=a.seller", "p.id=p.id"),
         sql.replace("p.id=a.seller", "p.id=a.starttime"),
         sql.replace(") a ON", ") p ON"),
         sql.replace("JOIN (", "FULL JOIN ("),

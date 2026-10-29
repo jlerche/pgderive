@@ -38,6 +38,9 @@ pub(in crate::compiler) fn bind(
     Ok(Operand { value, contextual, null_test })
 }
 impl Operand {
+    pub(in crate::compiler) const fn literal_oid(&self) -> u32 {
+        if self.value.oid == 705 { 25 } else { self.value.oid }
+    }
     pub(in crate::compiler) const fn oid(&self) -> Option<u32> {
         if self.contextual { None } else { Some(self.value.oid) }
     }
@@ -47,6 +50,7 @@ impl Operand {
         }
         ensure!(
             self.value.oid == oid
+                || (matches!(self.value.oid, 25 | 1043) && matches!(oid, 25 | 1043))
                 || (matches!(oid, 20 | 21 | 23 | 1700)
                     && matches!(self.value.oid, 20 | 21 | 23 | 1700)),
             "SQL type: incompatible comparison operands"

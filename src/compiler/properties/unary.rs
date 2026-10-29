@@ -215,12 +215,12 @@ fn mapped(mut facts: Properties, id: &str, computed: &[Computed]) -> Result<Prop
         if matches!(item.column.oid, 25 | 1043) {
             field.collation = item
                 .expression
-                .collation_source()
-                .and_then(|column| facts.columns.get(&column.name))
-                .map_or_else(
-                    || if item.expression.is_constant() { 100 } else { 0 },
-                    |column| column.collation,
-                );
+                .collation(&|column| {
+                    facts
+                        .collation(column)
+                        .ok_or_else(|| anyhow::anyhow!("missing expression collation"))
+                })
+                .unwrap_or(0);
         }
         if item.expression.as_column().is_none() {
             field.modifier = item.expression.modifier();

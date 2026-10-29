@@ -54,8 +54,6 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
     let unsupported = [
         SQL.replace("a.category", "id"),
         SQL.replace("source.auction", "auction"),
-        SQL.replace("a.id=b.auction", "a.id=a.category"),
-        SQL.replace("a.id=b.auction", "a.id=b.id AND b.price IS NULL"),
         SQL.replace("SUM(b.price)", "SUM(a.other)"),
         SQL.replace("COUNT(*)", "COUNT(*) OVER (PARTITION BY b.price)"),
         SQL.replace("SUM(b.price)", "SUM(VARIADIC b.price)"),
@@ -109,7 +107,7 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
         assert!(compile(&sql, &native()).is_err(), "accepted {sql}");
     }
     let mut wrong = native();
-    wrong.relations[1].columns[1].oid = 20;
+    wrong.relations[1].columns[1].oid = 1114;
     assert!(compile(SQL, &wrong).is_err());
     wrong = native();
     wrong.relations[1].columns[2].oid = 25;
@@ -368,11 +366,12 @@ async fn right_null_predicate_and_wide_sum_follow_sql_numeric_output() -> Result
 }
 
 #[test]
-fn text_equality_is_outside_the_sql_join_allowlist() {
+fn text_equality_uses_native_join_keys() -> Result<()> {
     let mut native = native();
     native.relations[1].columns[1].oid = 25;
     native.relations[1].columns[1].collation = 100;
-    assert!(compile("SELECT a.id,COUNT(*),SUM(b.price) FROM source.auction a JOIN source.bid b ON a.other=b.auction GROUP BY a.id", &native).is_err());
+    compile("SELECT a.id,COUNT(*),SUM(b.price) FROM source.auction a JOIN source.bid b ON a.other=b.auction GROUP BY a.id", &native)?.validate_execution()?;
+    Ok(())
 }
 
 #[tokio::test]

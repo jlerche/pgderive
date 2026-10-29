@@ -44,8 +44,10 @@ the matrix exercises integral addition keys, NULLs and grouping; existing M6 liv
 cases include mixed COUNT/SUM/AVG/MIN/MAX plus numeric SUM (the scan path), FILTER
 and empty frames. The weighted unit history now tests right multiplicities
 3 -> 1 -> 0 -> 1 -> 0 with cold restore at each boundary and fail-atomic overflow.
-Named native-valid rejections cover DISTINCT ON, mixed-input/constant-only/
-nonintegral computed keys and inequality correlation.
+Named native-valid rejections retain DISTINCT ON and unsupported existence
+correlation. Mixed-input and constant-side LEFT conditions and numeric cast keys
+are now promoted in the inventory, with exact runtime histories in the
+[join predicate qualification](join-predicates.md).
 
 ## Reproduce and preserve evidence
 

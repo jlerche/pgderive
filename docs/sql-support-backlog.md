@@ -37,7 +37,8 @@ remains outside the project scope.
 [HAVING, nonrecursive CTEs and UNION ALL](sql-composition.md) now compose the
 existing domains, including empty global aggregates and constant SELECT inputs.
 Recursive CTEs, DISTINCT set operations, broader scalar subqueries and additional
-join predicates remain separate relational expansion work.
+join families remain separate relational expansion work. [Numeric/text join keys
+and residual INNER/LEFT ON predicates](join-predicates.md) are qualified.
 
 
 The [local engine development roadmap](engine-development-roadmap.md) completed its

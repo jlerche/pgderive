@@ -61,7 +61,7 @@ def qualify(output, command, mode):
     fixture = JoinKeysFixture(output, mode)
     with fixture.managed():
         if mode == 'inner':
-            for label, condition in [('mixed', 'a.id+b.id=b.auction'), ('same-side','abs(a.id)=abs(a.group_id)'), ('constant','1=abs(b.auction)'), ('numeric','abs(a.id)::numeric=b.price::numeric')]:
+            for label, condition in [('unsupported-function', 'sqrt(a.id::numeric)=b.price::numeric')]:
                 fixture.rejected(command, label, fixture.query.split(' ON ')[0]+' ON '+condition)
             assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         changes = [

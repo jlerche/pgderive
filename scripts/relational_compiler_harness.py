@@ -43,7 +43,7 @@ def qualify(output, command, filtered):
         for label, query in [
             ('ambiguous', fixture.query.replace('a.enabled OR', 'id > 0 OR')),
             ('unsupported', fixture.query + ' ORDER BY g FETCH FIRST 1 ROW WITH TIES'),
-            ('text-key', fixture.query.replace('b.auction=a.id', 'a.category=a.category')),
+            ('unsupported-function', fixture.query.replace('b.auction=a.id', 'lower(a.category)=a.category')),
         ]:
             fixture.rejected(command, label, query)
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
