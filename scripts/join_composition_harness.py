@@ -55,7 +55,7 @@ class JoinedFixture(SqlFixture):
 def qualify(output, command, mode):
     fixture = JoinedFixture(output, mode)
     with fixture.managed():
-        fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY g OFFSET 1')
+        fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY g FETCH FIRST 1 ROW WITH TIES')
         fixture.rejected(command, 'hidden', fixture.query.replace('q.g','q.enabled'))
         fixture.rejected(command, 'unsupported-scalar', fixture.query.replace('b.price+0 AS p','abs(b.price::numeric) AS p'))
         if mode == 'winner':

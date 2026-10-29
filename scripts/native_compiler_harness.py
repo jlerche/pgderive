@@ -107,7 +107,7 @@ class NativeFixture(SqlFixture):
 def qualify(output, command, mode, fixture_class=NativeFixture):
     fixture = fixture_class(output, mode)
     with fixture.managed():
-        fixture.rejected(command,'unsupported',fixture.query + ' ORDER BY id OFFSET 1')
+        fixture.rejected(command,'unsupported',fixture.query + ' ORDER BY id FETCH FIRST 1 ROW WITH TIES')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         changes = [
             f"INSERT INTO {fixture.name}.bid(id,auction,price,event_at,event_time,amount) VALUES(100,NULL,NULL,NULL,NULL,NULL),(101,1,-7,'2000-01-01 00:00:00','1999-12-31 16:00:00-08',0.000000000000000000000000000001)",

@@ -10,21 +10,44 @@ use anyhow::{Context, Result, ensure};
 pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let mut compiled = super::bind(*parsed.inner, contract)?;
     let ir = &mut compiled.relational;
+    let facts = crate::compiler::properties::occurrence(ir, contract)?;
     let mut order = Vec::new();
-    for (index, descending, nulls_first) in parsed.order {
-        let column =
-            ir.output.columns.get(index).context("missing ORDER BY target")?.column.clone();
+    for value in parsed.order {
         ensure!(
-            matches!(column.oid, 20 | 21 | 23 | 1114 | 1184),
-            "ORDER BY requires integral, timestamp or timestamptz keys"
+            !parsed.distinct || !value.bytewise,
+            "DISTINCT ORDER BY COLLATE requires a selected collated expression, which is unsupported"
+        );
+        let column =
+            ir.output.columns.get(value.index).context("missing ORDER BY target")?.column.clone();
+        ensure!(
+            !value.bytewise || matches!(column.oid, 25 | 1043),
+            "COLLATE requires text ordering"
+        );
+        ensure!(
+            matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1114 | 1184),
+            "unsupported ORDER BY native type"
+        );
+        ensure!(
+            !matches!(column.oid, 25 | 1043)
+                || value.bytewise
+                || matches!(facts.collation(&column), Some(950 | 951)),
+            "text ORDER BY requires built-in C/POSIX collation or explicit COLLATE"
         );
         ensure!(
             !parsed.distinct
                 || ir.output.columns[..parsed.visible].iter().any(|c| c.column == column),
             "SELECT DISTINCT ORDER BY expressions must appear in the output"
         );
-        order.push(Order { column, descending, nulls_first });
+        order.push(Order { column, descending: value.descending, nulls_first: value.nulls_first });
     }
+    let mut seen = std::collections::BTreeSet::new();
+    let identity = ir
+        .output
+        .columns
+        .iter()
+        .map(|column| column.column.clone())
+        .filter(|column| seen.insert(column.name.clone()))
+        .collect::<Vec<_>>();
     ir.output.columns.truncate(parsed.visible);
     if parsed.limit == Some(0)
         || crate::compiler::properties::occurrence(ir, contract)?.maximum_rows() == Some(0)
@@ -32,12 +55,12 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         prune_empty(ir)?;
         return Ok(compiled);
     }
-    if let Some(limit) = parsed.limit {
-        let names = order.iter().map(|order| order.column.name.clone()).collect::<Vec<_>>();
-        ensure!(
-            crate::compiler::properties::occurrence(ir, contract)?.proves_key(&names),
-            "ORDER BY LIMIT must include complete logical occurrence identity"
-        );
+    if parsed.limit.is_some() || parsed.offset > 0 {
+        let limit = parsed
+            .limit
+            .map(|limit| limit.checked_add(parsed.offset).context("LIMIT + OFFSET overflow"))
+            .transpose()?
+            .unwrap_or(usize::MAX);
         let Some(Node::Output { id, input }) = ir.nodes.pop() else {
             anyhow::bail!("ORDER BY requires final Output")
         };
@@ -45,8 +68,15 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         let global = format!("{prefix}_global");
         let indexed = format!("{prefix}_input");
         let selected = format!("{prefix}_selected");
-        let spec = Spec { order, field: None, limit };
-        ir.nodes.push(Node::CrossKey { id: global.clone(), input });
+        let fields = identity
+            .iter()
+            .map(|column| crate::compiler::relational::Binding {
+                input: column.clone(),
+                output: column.clone(),
+            })
+            .collect();
+        let spec = Spec { order, field: None, limit, offset: parsed.offset, identity };
+        ir.nodes.push(Node::Rebind { id: global.clone(), input, fields });
         ir.nodes.push(Node::TopKInput { id: indexed.clone(), input: global, spec: spec.clone() });
         ir.nodes.push(Node::TopK { id: selected.clone(), input: indexed, spec });
         ir.nodes.push(Node::Output { id, input: selected });

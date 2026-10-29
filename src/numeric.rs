@@ -13,6 +13,31 @@ pub enum Numeric {
     Nan,
 }
 impl Numeric {
+    /// Canonical order shared by scalar comparisons and resident SQL sort tokens.
+    pub(crate) fn order_key(&self) -> String {
+        let Self::Finite { coefficient, scale } = self else {
+            return match self {
+                Self::NegativeInfinity => "0",
+                Self::Infinity => "4",
+                _ => "5",
+            }
+            .into();
+        };
+        let text = coefficient.to_string();
+        if coefficient == &BigInt::from(0) {
+            return "2".into();
+        }
+        let negative = text.starts_with('-');
+        let digits = text.strip_prefix('-').unwrap_or(&text);
+        let exponent = digits.bytes().map(|_| 1_i64).sum::<i64>() - i64::from(*scale);
+        let biased = u64::from_be_bytes(exponent.to_be_bytes()) ^ (1_u64 << 63);
+        let payload = format!("{biased:016x}{}/", digits.trim_end_matches('0'));
+        if negative {
+            format!("1{}", payload.bytes().map(|byte| char::from(127 - byte)).collect::<String>())
+        } else {
+            format!("3{payload}")
+        }
+    }
     pub(crate) fn parse(text: &str) -> Result<Self> {
         match text {
             "NaN" => return Ok(Self::Nan),
@@ -143,21 +168,7 @@ impl PartialOrd for Numeric {
 }
 impl Ord for Numeric {
     fn cmp(&self, other: &Self) -> Ordering {
-        if let (
-            Self::Finite { coefficient: left, scale: ls },
-            Self::Finite { coefficient: right, scale: rs },
-        ) = (self, other)
-        {
-            let scale = (*ls).max(*rs);
-            return (left * power(scale - ls)).cmp(&(right * power(scale - rs)));
-        }
-        let rank = |value: &Self| match value {
-            Self::NegativeInfinity => 0,
-            Self::Finite { .. } => 1,
-            Self::Infinity => 2,
-            Self::Nan => 3,
-        };
-        rank(self).cmp(&rank(other))
+        self.order_key().cmp(&other.order_key())
     }
 }
 impl Numeric {
@@ -196,6 +207,42 @@ impl Numeric {
 mod tests {
     use super::Numeric;
     use anyhow::Result;
+    #[test]
+    fn canonical_order_matches_independent_scaled_integer_comparison() -> Result<()> {
+        let mut values = Vec::new();
+        for coefficient in
+            [-1001, -1000, -101, -100, -11, -10, -1, 0, 1, 9, 10, 11, 99, 100, 101, 1000, 1001]
+        {
+            for scale in 0..=6 {
+                values.push(Numeric::parse(&format!("{coefficient}e-{scale}"))?);
+            }
+        }
+        for text in ["1e4090", "1e-4090", "-1e4090", "-1e-4090", "-Infinity", "Infinity", "NaN"] {
+            values.push(Numeric::parse(text)?);
+        }
+        let rank = |value: &Numeric| match value {
+            Numeric::NegativeInfinity => 0,
+            Numeric::Finite { .. } => 1,
+            Numeric::Infinity => 2,
+            Numeric::Nan => 3,
+        };
+        for a in &values {
+            for b in &values {
+                let expected = if let (
+                    Numeric::Finite { coefficient: a, scale: sa },
+                    Numeric::Finite { coefficient: b, scale: sb },
+                ) = (a, b)
+                {
+                    let scale = (*sa).max(*sb);
+                    (a * super::power(scale - sa)).cmp(&(b * super::power(scale - sb)))
+                } else {
+                    rank(a).cmp(&rank(b))
+                };
+                assert_eq!(a.cmp(b), expected);
+            }
+        }
+        Ok(())
+    }
     #[test]
     fn exact_numeric_keys_order_scale_and_limits() -> Result<()> {
         for (left, right) in [("1.00", "1"), ("0.000", "0"), ("1e2", "100"), ("-0.00", "0")] {

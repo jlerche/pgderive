@@ -22,6 +22,9 @@ fn ordering_binds_aliases_ordinals_and_hidden_expressions() -> Result<()> {
         "SELECT DISTINCT abs(auction) AS a FROM source.bid ORDER BY abs(auction) LIMIT 3",
         "SELECT price FROM source.bid ORDER BY price,id LIMIT 1025",
         "SELECT price FROM source.bid ORDER BY price,id FETCH FIRST 3 ROWS ONLY",
+        "SELECT price FROM source.bid ORDER BY price LIMIT 3",
+        "SELECT price FROM source.bid ORDER BY price LIMIT 3 OFFSET 2",
+        "SELECT price FROM source.bid ORDER BY price OFFSET 2",
     ] {
         let compiled = compile(sql, &native)?;
         assert!(
@@ -41,7 +44,11 @@ fn ordering_binds_aliases_ordinals_and_hidden_expressions() -> Result<()> {
         "ORDER BY price LIMIT 1000001",
         "ORDER BY price LIMIT NULL",
         "ORDER BY price LIMIT 1+1",
-        "ORDER BY price LIMIT 1 OFFSET 1",
+        "ORDER BY price LIMIT 1 OFFSET -1",
+        "ORDER BY price LIMIT 1000000 OFFSET 1",
+        "ORDER BY price OFFSET 1000001",
+        "ORDER BY price OFFSET NULL",
+        "ORDER BY price COLLATE \"C\"",
         "ORDER BY price USING >",
         "ORDER BY price FETCH FIRST 1 ROW WITH TIES",
         "LIMIT 1",
@@ -53,7 +60,6 @@ fn ordering_binds_aliases_ordinals_and_hidden_expressions() -> Result<()> {
         "SELECT price AS p FROM source.bid ORDER BY p+1 LIMIT 3",
         "SELECT DISTINCT auction FROM source.bid ORDER BY price LIMIT 3",
         "SELECT category FROM source.auction ORDER BY category LIMIT 3",
-        "SELECT price FROM source.bid ORDER BY price LIMIT 3",
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");
     }
@@ -71,6 +77,97 @@ fn ordering_preserves_derived_admission_boundaries() {
             assert!(compile(&sql, &contract()).is_err(), "{sql}");
         }
     }
+}
+
+#[test]
+fn native_order_domains_and_window_proofs_remain_explicit() -> Result<()> {
+    for oid in [16, 1700, 2950, 25, 1043] {
+        let mut native = contract();
+        native.relations[1].columns[2].oid = oid;
+        native.relations[1].columns[2].collation = if matches!(oid, 25 | 1043) { 950 } else { 0 };
+        let compiled =
+            compile("SELECT price FROM source.bid ORDER BY price DESC LIMIT 3 OFFSET 2", &native)?;
+        relational::build(&native, &compiled, &settings())?;
+    }
+    let native = contract();
+    for sql in [
+        "SELECT category FROM source.auction ORDER BY category COLLATE pg_catalog.\"C\" LIMIT 3",
+        "SELECT category FROM source.auction ORDER BY category COLLATE \"POSIX\" OFFSET 1",
+        "SELECT reverse(category) FROM source.auction ORDER BY reverse(category) COLLATE \"C\" LIMIT 3",
+    ] {
+        compile(sql, &native)?;
+    }
+    assert!(
+        compile("SELECT id,ROW_NUMBER() OVER(ORDER BY price) FROM source.bid", &native).is_err()
+    );
+    assert!(
+        compile(
+            "SELECT category FROM source.auction ORDER BY category COLLATE \"en_US\" LIMIT 3",
+            &native
+        )
+        .is_err()
+    );
+    assert!(
+        compile(
+            "SELECT DISTINCT category FROM source.auction ORDER BY category COLLATE \"C\" LIMIT 3",
+            &native
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plain_order_ties_and_offsets_count_weighted_occurrences() -> Result<()> {
+    let native = contract();
+    let options = settings();
+    for (offset, limit) in [(0, Some(3)), (2, Some(3)), (3, None), (1_000_000, None), (0, None)] {
+        let suffix = limit.map_or_else(String::new, |n| format!(" LIMIT {n}"));
+        let compiled = compile(
+            &format!(
+                "SELECT auction,price FROM source.bid ORDER BY price DESC NULLS LAST{suffix} OFFSET {offset}"
+            ),
+            &native,
+        )?;
+        let mut history = History::new((&native, &compiled, &options));
+        history.compact = true;
+        history
+            .run(
+                super::peer_changes(),
+                |state| offset_oracle(state, offset, limit),
+                super::apply_rows,
+                |_| true,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn offset_oracle(state: &RowState, offset: usize, limit: Option<usize>) -> Result<super::RowBatch> {
+    let mut rows = Vec::new();
+    for (row, weight) in state {
+        let price = row["price"].as_deref().map(str::parse::<i64>).transpose()?;
+        let auction = row["auction"].as_deref().map(str::parse::<i64>).transpose()?;
+        for _ in 0..*weight {
+            rows.push((price, auction, row));
+        }
+    }
+    rows.sort_by_key(|(p, a, _)| (p.is_none(), p.map(std::cmp::Reverse), *a));
+    Batch::from_updates(rows.into_iter().skip(offset).take(limit.unwrap_or(usize::MAX)).map(
+        |(_, _, row)| {
+            (
+                (
+                    relational::Key::new(),
+                    [
+                        ("0:auction".into(), row["auction"].clone()),
+                        ("0:price".into(), row["price"].clone()),
+                    ]
+                    .into(),
+                ),
+                1,
+            )
+        },
+    ))
 }
 
 fn oracle(state: &RowState, limit: Option<usize>) -> Result<super::RowBatch> {

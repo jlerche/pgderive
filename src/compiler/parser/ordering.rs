@@ -5,21 +5,30 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 
 pub(in crate::compiler) struct Parsed {
     pub inner: Box<super::Parsed>,
-    pub order: Vec<(usize, bool, bool)>,
+    pub order: Vec<Order>,
     pub visible: usize,
     pub distinct: bool,
     pub limit: Option<usize>,
+    pub offset: usize,
+}
+pub(in crate::compiler) struct Order {
+    pub index: usize,
+    pub descending: bool,
+    pub nulls_first: bool,
+    pub bytewise: bool,
 }
 
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
-    if select.sort_clause.is_empty() && select.limit_count.is_none() {
+    if select.sort_clause.is_empty()
+        && select.limit_count.is_none()
+        && select.limit_offset.is_none()
+    {
         return Ok(None);
     }
     ensure!(
         (1..=16).contains(&select.sort_clause.len()),
         "ORDER BY requires 1..=16 keys; LIMIT requires ORDER BY"
     );
-    ensure!(select.limit_offset.is_none(), "ORDER BY OFFSET unsupported");
     ensure!(
         matches!(
             pg::LimitOption::try_from(select.limit_option)?,
@@ -28,6 +37,13 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         "FETCH WITH TIES unsupported"
     );
     let limit = select.limit_count.as_deref().map(limit).transpose()?;
+    let offset = select.limit_offset.as_deref().map(self::limit).transpose()?.unwrap_or(0);
+    if let Some(limit) = limit {
+        ensure!(
+            limit.checked_add(offset).is_some_and(|total| total <= 1_000_000),
+            "LIMIT + OFFSET exceeds 1000000 occurrence budget"
+        );
+    }
     let visible = select.target_list.len();
     let targets =
         select.target_list.iter().map(partition::parse_target).collect::<Result<Vec<_>>>()?;
@@ -35,7 +51,10 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     let mut order = Vec::new();
     for value in &select.sort_clause {
         let (expression, descending, nulls_first) = partition::sort_expression(value)?;
-        let index = if let Some(index) = target_index(expression, &targets)? {
+        let (expression, bytewise) = byte_order(expression)?;
+        let index = if let Some(index) =
+            if bytewise { None } else { target_index(expression, &targets)? }
+        {
             index
         } else {
             let index = plain.target_list.len();
@@ -47,10 +66,11 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
             });
             index
         };
-        order.push((index, descending, nulls_first));
+        order.push(Order { index, descending, nulls_first, bytewise });
     }
     plain.sort_clause.clear();
     plain.limit_count = None;
+    plain.limit_offset = None;
     plain.limit_option = i32::from(pg::LimitOption::Default);
     Ok(Some(Parsed {
         inner: Box::new(query(&plain)?),
@@ -58,7 +78,19 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         distinct: !plain.distinct_clause.is_empty(),
         order,
         limit,
+        offset,
     }))
+}
+
+fn byte_order(value: &Node) -> Result<(&Node, bool)> {
+    let NodeEnum::CollateClause(collate) = node(value)? else { return Ok((value, false)) };
+    let name = super::expressions::names(&collate.collname)?.0;
+    ensure!(
+        matches!(name.as_slice(), [schema, name] if schema == "pg_catalog" && matches!(name.as_str(), "C" | "POSIX"))
+            || matches!(name.as_slice(), [name] if matches!(name.as_str(), "C" | "POSIX")),
+        "ORDER BY COLLATE requires built-in C or POSIX"
+    );
+    Ok((super::optional(collate.arg.as_deref())?, true))
 }
 
 fn limit(value: &Node) -> Result<usize> {

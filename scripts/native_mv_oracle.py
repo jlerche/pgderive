@@ -13,14 +13,15 @@ def sql(fixture,statement):
     return subprocess.check_output(command+[statement],env=fixture.environment,text=True)
 
 
-def expected(fixture,labels):
+def expected(fixture,labels,query_sql=None):
     view = quote(fixture.name)+'."pgderive_native_oracle"'
     context = "SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; "
     if not getattr(fixture,'native_oracle_ready',False):
         # Freeze the original query definition across normalized worker restarts.
         # No output key or unique index: the native MV retains SQL duplicates.
-        sql(fixture,context+f'CREATE MATERIALIZED VIEW {view} AS {fixture.query} WITH NO DATA')
-        fixture.native_oracle_sql = fixture.query
+        definition = fixture.query if query_sql is None else query_sql
+        sql(fixture,context+f'CREATE MATERIALIZED VIEW {view} AS {definition} WITH NO DATA')
+        fixture.native_oracle_sql = definition
         fixture.native_oracle_ready = True
     sql(fixture,context+f'REFRESH MATERIALIZED VIEW {view}')
     metadata = json.loads(sql(fixture,f"""SELECT json_build_object(

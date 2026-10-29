@@ -20,6 +20,16 @@ pub struct OrderedSelection<K: BatchData, V: BatchData> {
     select: Arc<Selection<K, V>>,
 }
 impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
+    /// Subtract the first `offset` occurrences from the selected prefix, as SQL
+    /// OFFSET does. Complete input-delta membership validation remains required.
+    #[must_use]
+    pub fn skip(mut self, offset: usize) -> Self {
+        let select = self.select;
+        self.select = Arc::new(move |key, value, position, limits| {
+            if position <= offset { Ok(None) } else { select(key, value, position, limits) }
+        });
+        self
+    }
     /// Bind a pure selection that preserves the input key and receives a
     /// one-based position for each selected occurrence.
     #[must_use]

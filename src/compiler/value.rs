@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use serde::Serialize;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub(super) enum Value {
+pub enum Value {
     Boolean(bool),
     Text(String),
     Integer(i64),
@@ -11,7 +11,7 @@ pub(super) enum Value {
     Timestamp(crate::temporal::Timestamp),
     Interval(crate::temporal::Gap),
 }
-pub(super) fn decode(oid: u32, text: &str) -> Result<Value> {
+pub fn decode(oid: u32, text: &str) -> Result<Value> {
     match oid {
         16 => match text {
             "t" => Ok(Value::Boolean(true)),

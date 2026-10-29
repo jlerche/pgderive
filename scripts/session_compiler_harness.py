@@ -95,7 +95,7 @@ class SessionFixture(NativeFixture):
 def qualify(output, command, mode):
     fixture = SessionFixture(output,mode)
     with fixture.managed():
-        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY bidder OFFSET 1')
+        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY bidder FETCH FIRST 1 ROW WITH TIES')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         changes = [
             f"INSERT INTO {fixture.name}.bid(id,auction,price,event_at,event_time) VALUES(202,900,NULL,'2000-01-01 00:00:15','2000-01-01 00:00:15+00'),(205,NULL,NULL,NULL,NULL)",

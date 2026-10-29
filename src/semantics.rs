@@ -27,7 +27,7 @@ impl Environment {
         collations: &[u32],
     ) -> Result<Self> {
         let mut collations = collations.to_vec();
-        collations.extend([100, 950]); // PostgreSQL's default and built-in C collation.
+        collations.extend([100, 950, 951]); // Default and built-in C/POSIX collations.
         collations.sort_unstable();
         collations.dedup();
         collations.retain(|oid| *oid != 0);

@@ -6,4 +6,6 @@ pub struct Spec {
     pub(crate) order: Vec<Order>,
     pub(crate) field: Option<String>,
     pub(crate) limit: usize,
+    pub(crate) offset: usize,
+    pub(crate) identity: Vec<super::ColumnRef>,
 }

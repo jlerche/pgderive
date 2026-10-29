@@ -65,6 +65,17 @@ async fn top_k_validates_complete_delta_even_outside_selected_prefix() -> Result
         let negative = TimedBatch { time: 2, batch: Batch::from_updates([((0, 99), -3)])? };
         assert!(operator.evaluate(&negative, &prior, &retained, Limits::default()).await.is_err());
     }
+    let vacant =
+        writer.stage(&empty, &TimedBatch { time: 1, batch: Batch::from_updates([])? }).await?;
+    for (limit, offset) in [(0, 1), (1, 1), (3, 3)] {
+        let operator = OrderedSelection::new(limit, |key: &i64, value: &i64, _| Ok((*key, *value)))
+            .skip(offset);
+        for (value, weight) in [(1, -4), (99, -3)] {
+            let invalid =
+                TimedBatch { time: 2, batch: Batch::from_updates([((0, value), weight)])? };
+            assert!(operator.evaluate(&invalid, &prior, &vacant, Limits::default()).await.is_err());
+        }
+    }
     let operator = OrderedSelection::new(1, |key: &i64, value: &i64, _| Ok((*key, *value)));
     let next = TimedBatch { time: 2, batch: Batch::from_updates([((0, 1), -3)])? };
     let limits = Limits { contributions: 1, ..Limits::default() };

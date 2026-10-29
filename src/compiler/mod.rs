@@ -21,7 +21,7 @@ pub(crate) mod scalar;
 mod syntax;
 pub(crate) mod topk;
 mod typed;
-mod value;
+pub(crate) mod value;
 use crate::source::Contract;
 use anyhow::Result;
 pub(crate) use expression::Predicate;

@@ -44,9 +44,12 @@ bounded numeric and temporal domains need individual qualification; they do not
 imply coverage of the corresponding complete PostgreSQL types.
 
 Ordering-sensitive selection needs a reproducible result. Reject an ambiguous
-ROW_NUMBER/top-k selection unless the existing supported form proves sufficient
-occurrence ordering. Peer-aware ranks and frames have distinct contracts. Do not
-invent tie breakers that change query semantics. Float aggregation and other
+ROW_NUMBER/positional-window selection unless the supported form proves sufficient
+occurrence ordering. Plain SQL ORDER BY/LIMIT/OFFSET permits nonunique keys and
+uses Feldera's complete logical-tuple secondary comparison to choose deterministic
+rows within allowed ties; full weighted identity is preserved. Peer-aware ranks
+and frames have distinct contracts. Do not add secondary comparisons to peer
+equality. Float aggregation and other
 plan/order-sensitive operations require a separate support decision.
 
 The closed built-in allowlist is not an arbitrary function runtime. User-defined

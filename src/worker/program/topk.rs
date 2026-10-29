@@ -5,28 +5,11 @@ use crate::{
     engine::dataflow::{OrderedSelection, Project},
     transaction::Row,
 };
-use anyhow::{Context, Result, ensure};
-use std::fmt::Write;
+use anyhow::ensure;
+#[path = "topk_encoding.rs"]
+mod codec;
+use codec::encoding;
 const ORDER: &str = "\0ordered";
-fn encoding(spec: &Spec, row: &Row) -> Result<String> {
-    let mut token = String::new();
-    for order in &spec.order {
-        let value = row.get(&order.column.name).context("missing top-k ordering field")?;
-        let Some(value) = value else {
-            token.push(if order.nulls_first { '0' } else { '2' });
-            continue;
-        };
-        token.push('1');
-        ensure!(
-            matches!(order.column.oid, 20 | 21 | 23 | 1114 | 1184),
-            "unsupported top-k ordering type"
-        );
-        let value = super::order::value(value, order.column.oid)?;
-        let biased = super::order::biased(value, order.descending);
-        write!(token, "{biased:016x}")?;
-    }
-    Ok(token)
-}
 pub(super) fn input(spec: &Spec) -> Project<Key, Row, Key, Row> {
     let spec = spec.clone();
     Project::new(move |key: &Key, row: &Row| {
@@ -37,6 +20,7 @@ pub(super) fn input(spec: &Spec) -> Project<Key, Row, Key, Row> {
     })
 }
 pub(super) fn operator(spec: &Spec) -> OrderedSelection<Key, Row> {
+    let offset = spec.offset;
     let spec = spec.clone();
     OrderedSelection::new(spec.limit, move |key: &Key, row: &Row, position| {
         ensure!(
@@ -53,6 +37,7 @@ pub(super) fn operator(spec: &Spec) -> OrderedSelection<Key, Row> {
         }
         Ok((key.clone(), output))
     })
+    .skip(offset)
 }
 
 #[cfg(test)]
