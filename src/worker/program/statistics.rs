@@ -129,7 +129,11 @@ pub(super) fn finalize(spec: &Partition, budget: Arc<NativeBudget>) -> Project<K
             let sum = &values[sum(index)];
             let value = match sum {
                 Scalar::Numeric(sum) if scalar::numeric(aggregate) => {
-                    sum.result(count.integer()?)?
+                    if matches!(aggregate.function, Function::Average) {
+                        sum.average_ratio(count.integer()?)?
+                    } else {
+                        sum.result(count.integer()?)?
+                    }
                 }
                 Scalar::Integer(sum) if !scalar::numeric(aggregate) => {
                     Linear { count: count.integer()?.clone(), sum: sum.clone() }

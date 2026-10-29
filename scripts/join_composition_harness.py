@@ -57,7 +57,7 @@ def qualify(output, command, mode):
     with fixture.managed():
         fixture.rejected(command, 'unsupported', fixture.query + ' ORDER BY g FETCH FIRST 1 ROW WITH TIES')
         fixture.rejected(command, 'hidden', fixture.query.replace('q.g','q.enabled'))
-        fixture.rejected(command, 'unsupported-scalar', fixture.query.replace('b.price+0 AS p','abs(b.price::numeric) AS p'))
+        fixture.rejected(command, 'unsupported-scalar', fixture.query.replace('b.price+0 AS p','sqrt(b.price::numeric) AS p'))
         if mode == 'winner':
             fixture.rejected(command,'right-key',fixture.query.replace(',q.bid,q.aid)',',q.aid)'))
             # Auction identity is already fixed within each partition.

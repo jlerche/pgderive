@@ -27,7 +27,7 @@ PostgreSQL computation fallback, or placement report.
 | Native scalar source codecs | Boolean, integral, text/varchar, UUID, timestamps and bounded exact numeric; source modifiers and environment captured |
 | Integral casts and +, -, * | Checked native widths in Rust; unavailable casts reject |
 | CASE/COALESCE and predicates | Local lazy branches and SQL NULL behavior in supported typed domains |
-| Numeric arithmetic | Exact bounded coefficient/scale +, -, *; unsupported division/rounding reject |
+| Numeric arithmetic | Exact bounded coefficient/scale +, -, *, /, numeric AVG, rounding and checked numeric/integral/typmod casts; [contract](numeric-arithmetic.md) |
 | Integer AVG | Local arbitrary-precision sum/count finalization with PostgreSQL scale selection and rounding; no SQL numeric_div call |
 | Fixed timestamp bins/offsets and integral MOD | Local qualified bounded implementations |
 | Pure integer/text functions | Checked integral ABS/to_hex; UTF8 length, trim, slice, replace, translate, reverse, split, repeat, code points and prefix checks; exact signatures in `src/compiler/capabilities.rs`; expansion budgets and right/MIN boundary in the roadmap |

@@ -5,7 +5,7 @@ use crate::{
     numeric::Numeric,
     transaction::Row,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 impl Typed {
     pub(in crate::compiler) fn native_pair(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
         self.native_value(rows)?
@@ -58,7 +58,18 @@ impl Typed {
             Value::Call(call) => {
                 call.evaluate(rows)?.map(|text| value::decode(self.oid, &text)).transpose()?
             }
-            Value::Cast(input) => input.native_pair(rows)?,
+            Value::Cast { input, typmod } => input
+                .native_pair(rows)?
+                .map(|value| -> Result<Native> {
+                    if matches!(self.oid, 20 | 21 | 23) && matches!(value, Native::Numeric(_)) {
+                        return Ok(Native::Integer(numeric(value)?.integer()?));
+                    }
+                    if let Some(typmod) = typmod {
+                        return Ok(Native::Numeric(numeric(value)?.constrained(*typmod)?));
+                    }
+                    Ok(value)
+                })
+                .transpose()?,
             Value::Binary { operation, left, right } => {
                 let (left, right) = (left.native_pair(rows)?, right.native_pair(rows)?);
                 match (left, right) {
@@ -66,6 +77,11 @@ impl Typed {
                         numeric(left)?.binary(&numeric(right)?, operation.symbol())?,
                     )),
                     (Some(Native::Integer(left)), Some(Native::Integer(right))) => {
+                        ensure!(
+                            !matches!(operation, crate::compiler::capabilities::Arithmetic::Divide)
+                                || right != 0,
+                            "division by zero"
+                        );
                         Some(Native::Integer(
                             operation
                                 .integer(left, right)

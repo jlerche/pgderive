@@ -298,7 +298,7 @@ fn numeric_value(
 ) -> Result<Option<String>> {
     use crate::numeric::Numeric;
     work.charge(bag.iter().count())?;
-    let mut sum = Numeric::parse("0")?;
+    let mut sum = crate::numeric::sum::Sum::default();
     let mut count = BigInt::from(0);
     let mut extremum: Option<Numeric> = None;
     for (((), row), weight) in bag.iter() {
@@ -311,9 +311,8 @@ fn numeric_value(
         let value = Numeric::parse(&text)?;
         match aggregate.function {
             Function::Count => {}
-            Function::Sum => {
-                sum =
-                    sum.binary(&value.binary(&Numeric::parse(&weight.to_string())?, "*")?, "+")?;
+            Function::Sum | Function::Average => {
+                sum.add_scaled(&crate::numeric::sum::Sum::measure(&text)?, *weight);
             }
             Function::Min | Function::Max => {
                 if extremum.as_ref().is_none_or(|prior| {
@@ -331,7 +330,8 @@ fn numeric_value(
     }
     match aggregate.function {
         Function::Count => Ok(Some(i64::try_from(count).context("COUNT overflow")?.to_string())),
-        Function::Sum => Ok((count != BigInt::from(0)).then(|| sum.text())),
+        Function::Sum => sum.result(&count),
+        Function::Average => sum.average_ratio(&count),
         Function::Min | Function::Max => Ok(extremum.map(|v| v.text())),
         _ => anyhow::bail!("unsupported numeric aggregate"),
     }

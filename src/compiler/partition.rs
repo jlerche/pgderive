@@ -83,8 +83,8 @@ pub(in crate::compiler) fn result_type(
         }
         Function::Average => {
             ensure!(
-                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
-                "AVG requires integral input"
+                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23 | 1700)),
+                "AVG requires integral or numeric input"
             );
             Ok(1700)
         }

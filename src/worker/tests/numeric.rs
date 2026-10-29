@@ -79,7 +79,7 @@ async fn numeric_grouped_history_uses_raw_scale_and_cold_restart() -> Result<()>
     Ok(())
 }
 #[test]
-fn numeric_binding_rejects_unimplemented_rounding_and_division() {
+fn numeric_binding_admits_exact_rounding_division_and_average() {
     let mut native = contract();
     native.relations[1].columns[2].oid = 1700;
     let live = "SELECT \"B\".auction AS auction,COUNT(*) AS n,COUNT(\"B\".price) AS present,SUM(\"B\".price) AS total,MIN(\"B\".price) AS lo,MAX(\"B\".price) AS hi,COUNT(*) FILTER(WHERE \"B\".price<0) AS negative FROM (SELECT b.auction AS auction,b.price * 1.20 + 0.30 - 0.10 AS price FROM source.bid b WHERE b.price<0 OR b.price>=0 OR b.price IS NULL) \"B\" GROUP BY \"B\".auction";
@@ -90,7 +90,7 @@ fn numeric_binding_rejects_unimplemented_rounding_and_division() {
         "SELECT price::numeric(10,2) AS p FROM source.bid",
         "SELECT price::integer AS p FROM source.bid",
     ] {
-        assert!(compile(sql, &native).is_err(), "{sql}");
+        assert!(compile(sql, &native).is_ok(), "{sql}");
     }
 }
 

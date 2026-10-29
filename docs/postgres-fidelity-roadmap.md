@@ -208,7 +208,8 @@ and the following UTF8 text/varchar functions:
 without modifiers, text CASE/COALESCE, nested calls and supported predicate
 positions use the same local evaluator. Unknown literals resolve only in the
 explicitly supported contexts; other overloads fail with argument type OIDs.
-`abs(numeric/float)` and locale-sensitive case conversion remain unsupported.
+[Numeric arithmetic](numeric-arithmetic.md) adds numeric ABS and rounding;
+floating-point overloads and locale-sensitive case conversion remain unsupported.
 Ambiguous `to_hex(smallint)`/`to_hex(NULL)` calls reject, matching PostgreSQL.
 An untyped NULL position in `substring` selects a regex overload unless an
 integral third argument disambiguates it; cast positions explicitly to use the

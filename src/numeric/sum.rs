@@ -83,6 +83,16 @@ impl Sum {
         Ok(result)
     }
     pub(crate) fn result(&self, count: &BigInt) -> Result<Option<String>> {
+        self.value(count)?
+            .map(|value| match value {
+                Numeric::Finite { coefficient, scale } => {
+                    Ok(Numeric::finite(coefficient, scale)?.text())
+                }
+                other => Ok(other.text()),
+            })
+            .transpose()
+    }
+    fn value(&self, count: &BigInt) -> Result<Option<Numeric>> {
         let value = self.canonical(count)?;
         if count == &BigInt::default() {
             return Ok(None);
@@ -90,15 +100,19 @@ impl Sum {
         if value.nan > BigInt::default()
             || (value.positive > BigInt::default() && value.negative > BigInt::default())
         {
-            return Ok(Some("NaN".into()));
+            return Ok(Some(Numeric::Nan));
         }
         if value.positive > BigInt::default() {
-            return Ok(Some("Infinity".into()));
+            return Ok(Some(Numeric::Infinity));
         }
         if value.negative > BigInt::default() {
-            return Ok(Some("-Infinity".into()));
+            return Ok(Some(Numeric::NegativeInfinity));
         }
-        Ok(Some(Numeric::finite(value.coefficient, value.scale)?.text()))
+        Ok(Some(Numeric::Finite { coefficient: value.coefficient, scale: value.scale }))
+    }
+    pub(crate) fn average_ratio(&self, count: &BigInt) -> Result<Option<String>> {
+        let count_i64 = i64::try_from(count).context("AVG non-NULL count overflow")?;
+        Ok(self.value(count)?.map(|sum| format!("{}/{count_i64}", sum.text())))
     }
     pub(crate) fn heap_bytes(&self) -> Result<usize> {
         // Charge a complete maximum-size BTree node per occupied entry, including

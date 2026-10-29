@@ -30,7 +30,7 @@ enum Value {
     Remainder(super::remainder::Remainder),
     Temporal(super::scalar::Temporal),
     Call(functions::Call),
-    Cast(Box<Typed>),
+    Cast { input: Box<Typed>, typmod: Option<crate::numeric::Typmod> },
     Binary { operation: Arithmetic, left: Box<Typed>, right: Box<Typed> },
     Coalesce(Vec<Typed>),
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
@@ -49,7 +49,7 @@ impl Typed {
             | Value::Encoded(_)
             | Value::Interval(_) => true,
             Value::Call(call) => call.arguments.iter().all(Self::is_constant),
-            Value::Cast(value) => value.is_constant(),
+            Value::Cast { input, .. } => input.is_constant(),
             Value::Binary { left, right, .. } => left.is_constant() && right.is_constant(),
             Value::Coalesce(values) => values.iter().all(Self::is_constant),
             Value::Case { branches, otherwise } => {
@@ -97,7 +97,7 @@ fn bind_inner(
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     depth: usize,
 ) -> Result<Typed> {
-    use super::parser::expressions::{column, names, node, optional};
+    use super::parser::expressions::{column, node};
     ensure!(depth < 32, "typed scalar expression depth exceeded");
     match node(value)? {
         NodeEnum::CaseExpr(value) => case::bind(value, resolve, depth),
@@ -111,29 +111,7 @@ fn bind_inner(
         }
         NodeEnum::AConst(constant) => literal(constant),
         NodeEnum::TypeCast(cast) => types::cast(cast, resolve, depth),
-        NodeEnum::AExpr(expression) => {
-            ensure!(
-                expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprOp),
-                "unsupported scalar operator kind"
-            );
-            let name = names(&expression.name)?.0;
-            let [operation] = name.as_slice() else {
-                anyhow::bail!("qualified scalar operator unsupported");
-            };
-            let operation = Arithmetic::resolve(operation)?;
-            let left = bind(optional(expression.lexpr.as_deref())?, resolve, depth + 1)?;
-            let right = bind(optional(expression.rexpr.as_deref())?, resolve, depth + 1)?;
-            ensure!(left.oid != 0 || right.oid != 0, "unresolved scalar operator types");
-            ensure!(
-                [left.oid, right.oid].iter().all(|oid| matches!(oid, 0 | 20 | 21 | 23 | 1700)),
-                "arithmetic requires integral or numeric operands"
-            );
-            let oid = numeric_common(&[left.oid, right.oid]);
-            Ok(Typed {
-                oid,
-                value: Value::Binary { operation, left: Box::new(left), right: Box::new(right) },
-            })
-        }
+        NodeEnum::AExpr(expression) => arithmetic(expression, resolve, depth),
         NodeEnum::CoalesceExpr(expression) => {
             ensure!(
                 expression.xpr.is_none() && (1..=64).contains(&expression.args.len()),
@@ -155,6 +133,48 @@ fn bind_inner(
         _ => anyhow::bail!("expression is not available in-engine"),
     }
 }
+fn arithmetic(
+    expression: &pg_query::protobuf::AExpr,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    depth: usize,
+) -> Result<Typed> {
+    use super::parser::expressions::{names, optional};
+    ensure!(
+        expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprOp),
+        "unsupported scalar operator kind"
+    );
+    let name = names(&expression.name)?.0;
+    let [operation] = name.as_slice() else {
+        anyhow::bail!("qualified scalar operator unsupported")
+    };
+    let operation = Arithmetic::resolve(operation)?;
+    let left =
+        expression.lexpr.as_deref().map(|value| bind(value, resolve, depth + 1)).transpose()?;
+    let right = bind(optional(expression.rexpr.as_deref())?, resolve, depth + 1)?;
+    let left = if let Some(left) = left {
+        left
+    } else {
+        ensure!(
+            matches!(operation, Arithmetic::Add | Arithmetic::Subtract)
+                && matches!(right.oid, 20 | 21 | 23 | 1700),
+            "unresolved unary scalar operator"
+        );
+        if matches!(operation, Arithmetic::Add) {
+            return Ok(right);
+        }
+        Typed { oid: right.oid, value: Value::Literal(Some(0)) }
+    };
+    ensure!(left.oid != 0 || right.oid != 0, "unresolved scalar operator types");
+    ensure!(
+        [left.oid, right.oid].iter().all(|oid| matches!(oid, 0 | 20 | 21 | 23 | 1700)),
+        "arithmetic requires integral or numeric operands"
+    );
+    Ok(Typed {
+        oid: numeric_common(&[left.oid, right.oid]),
+        value: Value::Binary { operation, left: Box::new(left), right: Box::new(right) },
+    })
+}
+
 pub(super) fn computed(
     value: &Node,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
@@ -235,7 +255,7 @@ impl Typed {
             Value::Remainder(value) => value.input.nullable,
             Value::Temporal(value) => value.input.nullable,
             Value::Call(call) => call.arguments.iter().any(Self::nullable),
-            Value::Cast(input) => input.nullable(),
+            Value::Cast { input, .. } => input.nullable(),
             Value::Binary { left, right, .. } => left.nullable() || right.nullable(),
             Value::Coalesce(arguments) => arguments.iter().all(Self::nullable),
             Value::Case { branches, otherwise } => {
@@ -288,7 +308,7 @@ impl Typed {
                 ),
             "unsupported UNION coercion"
         );
-        Ok(Self { oid, value: Value::Cast(Box::new(Self::column(column))) })
+        Ok(Self { oid, value: Value::Cast { input: Box::new(Self::column(column)), typmod: None } })
     }
     pub(in crate::compiler) fn union_literal(value: &Node, oid: u32) -> Result<Self> {
         let NodeEnum::AConst(value) = crate::compiler::parser::expressions::node(value)? else {

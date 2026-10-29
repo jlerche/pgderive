@@ -1003,3 +1003,8 @@ lexical expansion; UNION ALL reconciles branch columns and preserves duplicate
 occurrences. Constant SELECT inputs emit once at the initial logical tick.
 The sequential composition qualifier checks original PostgreSQL materialized
 views, output metadata and independent raw-source bags through CDC and restart.
+
+[Exact numeric arithmetic](docs/numeric-arithmetic.md) adds division, numeric AVG,
+ROUND/TRUNC/CEIL/FLOOR/ABS and checked numeric/integral/precision-scale casts.
+BigInt arithmetic preserves PostgreSQL's rounding and display-scale behavior;
+reversible AVG summaries retain removable scales and special values.

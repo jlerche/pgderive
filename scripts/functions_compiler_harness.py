@@ -72,7 +72,7 @@ class FunctionsFixture(SqlFixture):
 def qualify(output, command):
     fixture = FunctionsFixture(output)
     with fixture.managed():
-        fixture.rejected(command, 'overload', fixture.query.replace('abs(a.group_id)', 'abs(a.group_id::numeric)'))
+        fixture.rejected(command, 'overload', fixture.query.replace('abs(a.group_id)', 'sqrt(a.group_id::numeric)'))
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         changes = [
             f"UPDATE {fixture.name}.auction SET category='🙂é🙂',group_id=-1 WHERE id=2",

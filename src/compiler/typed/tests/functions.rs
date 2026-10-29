@@ -82,7 +82,7 @@ fn unsupported_signatures_and_function_errors_are_explicit() {
         "to_hex(1::smallint)",
         "substring('x',NULL)",
         "substring('x',NULL,NULL)",
-        "abs(1.2)",
+        "round(1)",
         "abs(NULL)",
         "length(1)",
         "substr('x','x')",

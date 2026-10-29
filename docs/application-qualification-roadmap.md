@@ -67,8 +67,9 @@ The machine-readable [portfolio](../queries/application/portfolio.json) is the
 blocker matrix. At M5 completion, ungrouped COUNT and computed windows had misleading
 diagnostics. M6 promotes computed windows, derived AVG and computed outer keys into
 `qualified_compositions`; the [SQL composition](sql-composition.md) slice now
-qualifies ungrouped COUNT, including its empty-input row. Numeric ABS and locale-sensitive LOWER
-remain on the separate function/type backlog. This inventory is representative,
+qualifies ungrouped COUNT, including its empty-input row. Numeric arithmetic now
+qualifies numeric ABS; locale-sensitive LOWER remains on the function/type
+backlog. This inventory is representative,
 not an enumeration of all unsupported PostgreSQL features.
 
 `./scripts/check.sh` includes six generated cases (one seed per recipe).

@@ -509,6 +509,118 @@
           "column": "large_value"
         }
       ]
+    },
+    {
+      "name": "abs",
+      "input_oids": [
+        1700
+      ],
+      "result_oid": 1700,
+      "expression": "abs(a.amount)",
+      "arguments": [
+        {
+          "column": "amount"
+        }
+      ]
+    },
+    {
+      "name": "round",
+      "input_oids": [
+        1700
+      ],
+      "result_oid": 1700,
+      "expression": "round(a.amount)",
+      "arguments": [
+        {
+          "column": "amount"
+        }
+      ]
+    },
+    {
+      "name": "round",
+      "input_oids": [
+        1700,
+        23
+      ],
+      "result_oid": 1700,
+      "expression": "round(a.amount,a.group_id)",
+      "arguments": [
+        {
+          "column": "amount"
+        },
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "trunc",
+      "input_oids": [
+        1700
+      ],
+      "result_oid": 1700,
+      "expression": "trunc(a.amount)",
+      "arguments": [
+        {
+          "column": "amount"
+        }
+      ]
+    },
+    {
+      "name": "trunc",
+      "input_oids": [
+        1700,
+        23
+      ],
+      "result_oid": 1700,
+      "expression": "trunc(a.amount,a.group_id)",
+      "arguments": [
+        {
+          "column": "amount"
+        },
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "ceil",
+      "input_oids": [
+        1700
+      ],
+      "result_oid": 1700,
+      "expression": "ceil(a.amount)",
+      "arguments": [
+        {
+          "column": "amount"
+        }
+      ]
+    },
+    {
+      "name": "ceiling",
+      "input_oids": [
+        1700
+      ],
+      "result_oid": 1700,
+      "expression": "ceiling(a.amount)",
+      "arguments": [
+        {
+          "column": "amount"
+        }
+      ]
+    },
+    {
+      "name": "floor",
+      "input_oids": [
+        1700
+      ],
+      "result_oid": 1700,
+      "expression": "floor(a.amount)",
+      "arguments": [
+        {
+          "column": "amount"
+        }
+      ]
     }
   ],
   "coercion_cases": [
@@ -558,6 +670,40 @@
           "literal": null
         }
       ]
+    },
+    {
+      "name": "round",
+      "input_oids": [
+        21,
+        23
+      ],
+      "result_oid": 1700,
+      "expression": "round(a.small_value,1)",
+      "arguments": [
+        {
+          "column": "small_value"
+        },
+        {
+          "literal": 1
+        }
+      ]
+    },
+    {
+      "name": "trunc",
+      "input_oids": [
+        21,
+        23
+      ],
+      "result_oid": 1700,
+      "expression": "trunc(a.small_value,1)",
+      "arguments": [
+        {
+          "column": "small_value"
+        },
+        {
+          "literal": 1
+        }
+      ]
     }
   ],
   "rejections": [
@@ -602,16 +748,6 @@
       "error_contains": "function current_setting is not available in-engine"
     },
     {
-      "id": "numeric-division",
-      "expression": "a.amount/2",
-      "error_contains": "operator / is not available in-engine"
-    },
-    {
-      "id": "numeric-abs",
-      "expression": "abs(a.amount)",
-      "error_contains": "overload is not available in-engine"
-    },
-    {
       "id": "floating-function",
       "expression": "sqrt(2.0::double precision)",
       "error_contains": "function sqrt is not available in-engine"
@@ -625,6 +761,16 @@
       "id": "ambiguous-null-substring",
       "expression": "substring(a.category,NULL)",
       "error_contains": "untyped NULL position selects an unsupported regex overload"
+    },
+    {
+      "id": "unary-integral-rounding",
+      "expression": "round(a.group_id)",
+      "error_contains": "unary overload requires numeric"
+    },
+    {
+      "id": "numeric-power",
+      "expression": "a.amount ^ 2",
+      "error_contains": "operator ^ is not available in-engine"
     }
   ],
   "features": [
@@ -650,7 +796,7 @@
       "implementation": [
         "src/compiler/capabilities.rs",
         "src/compiler/typed.rs",
-        "src/compiler/typed/functions/strings.rs"
+        "src/compiler/typed/functions/kernels.rs"
       ],
       "qualification": [
         "scripts/postgres_support_harness.py",
@@ -661,14 +807,17 @@
     {
       "id": "arithmetic-and-casts",
       "status": "bounded",
-      "domain": "Checked integral and bounded exact numeric +,-,*. Supported casts and predicates only; no generic PostgreSQL coercion engine. Numeric division and additional overloads reject.",
+      "domain": "Checked integral +,-,*,/ and bounded exact unconstrained numeric +,-,*,/. Numeric round/trunc, ceil/ceiling/floor and abs; checked rounded numeric-to-integer casts and numeric(p,s), precision 1..1000 and scale -1000..1000. No generic PostgreSQL coercion engine; unary rounding requires numeric to avoid unsupported float8 overloads.",
       "implementation": [
         "src/compiler/typed.rs",
-        "src/compiler/capabilities.rs"
+        "src/compiler/capabilities.rs",
+        "src/numeric/division.rs",
+        "src/numeric/rounding.rs"
       ],
       "qualification": [
         "scripts/projection_compiler_harness.py",
-        "scripts/circuit_numeric_harness.py"
+        "scripts/circuit_numeric_harness.py",
+        "scripts/numeric_arithmetic_harness.py"
       ]
     },
     {
@@ -717,7 +866,7 @@
     {
       "id": "aggregates",
       "status": "bounded",
-      "domain": "COUNT, supported SUM/AVG/MIN/MAX, FILTER and bounded distinct-membership forms. Empty/all-NULL rules, exact intermediate statistics and result-width/scale bounds; not every PostgreSQL aggregate/type combination.",
+      "domain": "COUNT, supported SUM/AVG/MIN/MAX including exact numeric AVG with removable scale/special summaries, FILTER and bounded distinct-membership forms. Empty/all-NULL rules, exact intermediate statistics and result-width/scale bounds; not every PostgreSQL aggregate/type combination.",
       "implementation": [
         "src/compiler/partition.rs",
         "src/numeric.rs"
@@ -725,7 +874,8 @@
       "qualification": [
         "scripts/numeric_compiler_harness.py",
         "scripts/circuit_numeric_harness.py",
-        "scripts/aggregate_inputs_compiler_harness.py"
+        "scripts/aggregate_inputs_compiler_harness.py",
+        "scripts/numeric_arithmetic_harness.py"
       ]
     },
     {

@@ -490,4 +490,5 @@ impl Probe {
     }
 }
 
+mod numeric_arithmetic;
 mod sql_composition;

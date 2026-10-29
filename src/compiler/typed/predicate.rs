@@ -84,12 +84,19 @@ impl Typed {
     pub(in crate::compiler) fn collation_source(&self) -> Option<&ColumnRef> {
         match &self.value {
             Value::Column(column) => Some(column),
-            Value::Cast(input)
+            Value::Cast { input, .. }
                 if matches!(self.oid, 25 | 1043) && matches!(input.oid, 25 | 1043) =>
             {
                 input.collation_source()
             }
             _ => None,
+        }
+    }
+    pub(in crate::compiler) fn modifier(&self) -> i32 {
+        if let Value::Cast { typmod: Some(typmod), .. } = self.value {
+            typmod.encoded()
+        } else {
+            -1
         }
     }
     pub(in crate::compiler) const fn as_integer_literal(&self) -> Option<i64> {

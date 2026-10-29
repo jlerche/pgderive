@@ -310,3 +310,60 @@ fn existence_does_not_reuse_navigation_from_before_tagging() -> Result<()> {
     assert!(joined.proves_key(&["2:id".into(), "0:id".into()]));
     Ok(())
 }
+
+#[test]
+fn direct_scalar_identity_retains_modifiers_while_plain_numeric_cast_clears() -> Result<()> {
+    for (oid, modifier) in [(1700, (6 << 16 | 2) + 4), (1043, 10)] {
+        let mut native = contract();
+        let column = &mut native.relations[0].columns[1];
+        column.oid = oid;
+        column.modifier = modifier;
+        column.collation = if oid == 1043 { 100 } else { 0 };
+        let mut compiled = crate::compiler::compile("SELECT category FROM public.items", &native)?;
+        let input = compiled.output().columns[0].column.clone();
+        let mut output = input.clone();
+        output.name = "identity_copy".into();
+        let ir = &mut compiled.relational;
+        let Some(Node::Output { input: edge, .. }) = ir.nodes.last_mut() else {
+            anyhow::bail!("missing output")
+        };
+        let prior = std::mem::replace(edge, "identity".into());
+        ir.nodes.insert(
+            ir.nodes.len() - 1,
+            Node::Map {
+                id: "identity".into(),
+                input: prior,
+                computed: vec![crate::compiler::scalar::Computed {
+                    column: output.clone(),
+                    expression: crate::compiler::typed::Typed::column(input),
+                }],
+            },
+        );
+        ir.output.columns[0].column = output;
+        assert_eq!(
+            Analysis::infer(&native, ir)?.edge("project")?.columns["identity_copy"].modifier,
+            modifier
+        );
+        let derived = crate::compiler::compile(
+            "SELECT q.category FROM(SELECT category FROM public.items)q",
+            &native,
+        )?;
+        let field = &derived.output().columns[0].column.name;
+        assert_eq!(
+            Analysis::infer(&native, derived.relational())?.edge("project")?.columns[field]
+                .modifier,
+            modifier
+        );
+        if oid == 1700 {
+            let cast =
+                crate::compiler::compile("SELECT category::numeric FROM public.items", &native)?;
+            let field = &cast.output().columns[0].column.name;
+            assert_eq!(
+                Analysis::infer(&native, cast.relational())?.edge("project")?.columns[field]
+                    .modifier,
+                -1
+            );
+        }
+    }
+    Ok(())
+}

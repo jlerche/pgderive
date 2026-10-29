@@ -23,6 +23,10 @@ pub(in crate::compiler) enum Builtin {
     Substring,
     Hex,
     Abs,
+    Round,
+    Trunc,
+    Ceiling,
+    Floor,
 }
 pub(in crate::compiler) struct Signature {
     pub name: &'static str,
@@ -72,6 +76,14 @@ const SIGNATURES: &[Signature] = &[
     Signature::strict("abs", &[21], 21, Builtin::Abs),
     Signature::strict("abs", &[23], 23, Builtin::Abs),
     Signature::strict("abs", &[20], 20, Builtin::Abs),
+    Signature::strict("abs", &[1700], 1700, Builtin::Abs),
+    Signature::strict("round", &[1700], 1700, Builtin::Round),
+    Signature::strict("round", &[1700, 23], 1700, Builtin::Round),
+    Signature::strict("trunc", &[1700], 1700, Builtin::Trunc),
+    Signature::strict("trunc", &[1700, 23], 1700, Builtin::Trunc),
+    Signature::strict("ceil", &[1700], 1700, Builtin::Ceiling),
+    Signature::strict("ceiling", &[1700], 1700, Builtin::Ceiling),
+    Signature::strict("floor", &[1700], 1700, Builtin::Floor),
 ];
 pub(in crate::compiler) fn contains(name: &str) -> bool {
     SIGNATURES.iter().any(|value| value.name == name)
@@ -95,6 +107,12 @@ pub(in crate::compiler) fn resolve(name: &str, types: &[u32]) -> Result<&'static
             && types.get(1) == Some(&0)
             && !types.get(2).is_some_and(|oid| matches!(oid, 21 | 23))),
         "function substring: untyped NULL position selects an unsupported regex overload; cast the position to integer"
+    );
+    ensure!(
+        !(matches!(name, "round" | "trunc" | "ceil" | "ceiling" | "floor")
+            && types.len() == 1
+            && types[0] != 1700),
+        "function {name}: unary overload requires numeric; other PostgreSQL overloads are not available in-engine"
     );
     let signature = SIGNATURES.iter().find(|value| {
         value.name == name
@@ -132,6 +150,7 @@ const fn compatible(expected: u32, actual: u32, operation: Builtin) -> bool {
     match expected {
         25 => matches!(actual, 0 | 25 | 1043 | 705),
         23 => matches!(actual, 0 | 21 | 23),
+        1700 => matches!(actual, 0 | 20 | 21 | 23 | 705 | 1700),
         _ => expected == actual,
     }
 }
@@ -160,6 +179,7 @@ pub(in crate::compiler) enum Arithmetic {
     Add,
     Subtract,
     Multiply,
+    Divide,
 }
 impl Arithmetic {
     pub(super) fn resolve(name: &str) -> Result<Self> {
@@ -167,8 +187,9 @@ impl Arithmetic {
             "+" => Ok(Self::Add),
             "-" => Ok(Self::Subtract),
             "*" => Ok(Self::Multiply),
+            "/" => Ok(Self::Divide),
             _ => anyhow::bail!(
-                "operator {name} is not available in-engine; supported arithmetic: +, -, *"
+                "operator {name} is not available in-engine; supported arithmetic: +, -, *, /"
             ),
         }
     }
@@ -177,6 +198,7 @@ impl Arithmetic {
             Self::Add => "+",
             Self::Subtract => "-",
             Self::Multiply => "*",
+            Self::Divide => "/",
         }
     }
     pub(super) const fn integer(self, left: i64, right: i64) -> Option<i64> {
@@ -184,6 +206,7 @@ impl Arithmetic {
             Self::Add => left.checked_add(right),
             Self::Subtract => left.checked_sub(right),
             Self::Multiply => left.checked_mul(right),
+            Self::Divide => left.checked_div(right),
         }
     }
 }

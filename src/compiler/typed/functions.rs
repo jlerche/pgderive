@@ -4,7 +4,7 @@ use crate::compiler::capabilities as registry;
 use anyhow::{Result, ensure};
 use pg_query::protobuf as pg;
 use serde::Serialize;
-mod strings;
+mod kernels;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct Call {
@@ -62,6 +62,6 @@ impl Call {
         let Some(arguments) = values.into_iter().collect::<Option<Vec<_>>>() else {
             return Ok(None);
         };
-        strings::evaluate(self.operation, &arguments, self.input_oid).map(Some)
+        kernels::evaluate(self.operation, &arguments, self.input_oid).map(Some)
     }
 }

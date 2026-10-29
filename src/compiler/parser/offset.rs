@@ -4,6 +4,9 @@ use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) fn eligible(value: &Node) -> Result<bool> {
     let NodeEnum::AExpr(expression) = node(value)? else { return Ok(false) };
+    let Some(left) = expression.lexpr.as_deref() else {
+        return Ok(false);
+    };
     let Some(right) = expression.rexpr.as_deref() else {
         return Ok(false);
     };
@@ -11,7 +14,7 @@ pub(in crate::compiler) fn eligible(value: &Node) -> Result<bool> {
         return Ok(false);
     };
     let kind = cast.type_name.as_ref().context("missing timestamp offset type")?;
-    Ok(matches!(node(optional(expression.lexpr.as_deref())?)?, NodeEnum::ColumnRef(_))
+    Ok(matches!(node(left)?, NodeEnum::ColumnRef(_))
         && super::expressions::builtin_name(&super::expressions::names(&kind.names)?.0)
             == Some("interval"))
 }

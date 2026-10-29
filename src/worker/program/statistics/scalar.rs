@@ -58,7 +58,7 @@ impl super::super::native::NativeValue for Scalar {
     }
 }
 pub(super) fn numeric(aggregate: &Aggregate) -> bool {
-    matches!(aggregate.function, Function::Sum)
+    matches!(aggregate.function, Function::Sum | Function::Average)
         && aggregate.argument.as_ref().is_some_and(|arg| arg.oid == 1700)
 }
 pub(super) fn decode_fields(row: &Row, width: usize) -> Result<Vec<Scalar>> {

@@ -28,7 +28,7 @@ pub(super) fn cast(
     use crate::compiler::parser::expressions::{builtin_name, names, optional};
     let kind = cast.type_name.as_ref().context("missing scalar cast type")?;
     ensure!(
-        crate::compiler::parser::expressions::unmodified_type(kind),
+        kind.array_bounds.is_empty() && !kind.setof && !kind.pct_type,
         "unsupported scalar cast modifier"
     );
     let name = names(&kind.names)?.0;
@@ -41,6 +41,7 @@ pub(super) fn cast(
         "varchar" => 1043,
         _ => anyhow::bail!("unsupported scalar cast"),
     };
+    let typmod = modifier(kind, oid)?;
     let argument = optional(cast.arg.as_deref())?;
     let input = if oid == 1700 {
         super::numeric_cast_input(argument, resolve, depth + 1)?
@@ -50,12 +51,27 @@ pub(super) fn cast(
     let valid = if matches!(oid, 25 | 1043) {
         matches!(input.oid, 0 | 25 | 1043 | 705)
     } else {
-        matches!(input.oid, 0 | 20 | 21 | 23) || (oid == 1700 && input.oid == 1700)
+        matches!(input.oid, 0 | 20 | 21 | 23 | 1700)
     };
     ensure!(valid, "scalar cast from OID {} to OID {oid} is not available in-engine", input.oid);
-    Ok(Typed { oid, value: Value::Cast(Box::new(input)) })
+    Ok(Typed { oid, value: Value::Cast { input: Box::new(input), typmod } })
 }
 
 pub(super) fn numeric_common(types: &[u32]) -> u32 {
     [1700, 20, 23, 21].into_iter().find(|oid| types.contains(oid)).unwrap_or(23)
+}
+
+fn modifier(kind: &pg::TypeName, oid: u32) -> Result<Option<crate::numeric::Typmod>> {
+    if kind.typmods.is_empty() {
+        return Ok(None);
+    }
+    ensure!(oid == 1700 && kind.typmods.len() <= 2, "unsupported scalar cast modifier");
+    let mut values = kind.typmods.iter().map(|node| {
+        super::native_literal(node)?
+            .as_integer_literal()
+            .context("numeric modifier requires integer constants")
+    });
+    let precision = values.next().context("missing numeric precision")??;
+    let scale = values.next().transpose()?.unwrap_or(0);
+    Ok(Some(crate::numeric::Typmod::new(precision, scale)?))
 }

@@ -222,6 +222,9 @@ fn mapped(mut facts: Properties, id: &str, computed: &[Computed]) -> Result<Prop
                     |column| column.collation,
                 );
         }
+        if item.expression.as_column().is_none() {
+            field.modifier = item.expression.modifier();
+        }
         field.reference.name.clone_from(&item.column.name);
         facts.columns.insert(item.column.name.clone(), field);
     }

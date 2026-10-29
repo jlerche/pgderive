@@ -3,6 +3,8 @@
 import collections
 import json
 import pathlib
+from decimal import Decimal
+from numeric_arithmetic_oracle import clean,number,rounding
 from functions_compiler_harness import substring
 from native_mv_oracle import binary_difference, expected
 from sql_compiler_harness import SqlFixture
@@ -92,7 +94,9 @@ def evaluate(case, row):
         width = 64 if case['input_oids'][0] == 20 else 32
         return format(text & ((1 << width) - 1), 'x')
     if name == 'abs':
-        return abs(text)
+        return clean(number(text).copy_abs()) if case['input_oids'][0] == 1700 else abs(text)
+    if name in ['round', 'trunc', 'ceil', 'ceiling', 'floor']:
+        return clean(rounding(number(text), rest[0] if rest else 0, name))
     raise ValueError('No independent oracle for ' + name)
 
 
@@ -124,10 +128,10 @@ class SupportFixture(SqlFixture):
         def columns(table):
             return self.sql(f"SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum) FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped").strip()
         assert columns('groups') == columns('pgderive_native_oracle'), 'Sink column metadata differs'
-        rows = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a')) or []
+        rows = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a'), parse_float=Decimal) or []
         memory = collections.Counter(tuple(evaluate(case, row) for case in self.cases)
                     for row in rows if not (row['category'] or '').startswith('skip'))
-        self.verify_memory(dict(memory))
+        self.verify_memory(dict(memory), parse_float=Decimal)
 
 
 def qualify(output, command):
@@ -179,7 +183,7 @@ def qualify(output, command):
             'coercion_cases': len(matrix['coercion_cases']), 'rejected_cases': len(matrix['rejections']),
             'unsupported_source_types': len(matrix['source_rejections']),
             'native_oracle': 'refreshed original SQL, weighted bag, send bytes and column metadata',
-            'independent_oracle': 'Python Unicode and integer-width rules',
+            'independent_oracle': 'Python Unicode, integer widths and Decimal rounding',
             'transactions': len(changes) + 1, 'restart': 'same slot and durable state',
             'duplicates_nulls_retractions': 'exact'}) + '\n')
 

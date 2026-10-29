@@ -8,7 +8,7 @@ pub(in crate::compiler) enum Key {
 }
 pub(in crate::compiler) fn is_bin(value: &Node) -> Result<bool> {
     if let NodeEnum::AExpr(expression) = node(value)? {
-        return is_bin(optional(expression.lexpr.as_deref())?);
+        return expression.lexpr.as_deref().map_or(Ok(false), is_bin);
     }
     let NodeEnum::FuncCall(call) = node(value)? else {
         return Ok(false);

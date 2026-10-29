@@ -4,18 +4,19 @@ import json
 import pathlib
 import tempfile
 import unittest
+from decimal import Decimal
 from postgres_support_harness import evaluate, load_matrix
 
 
 class SupportMatrixTests(unittest.TestCase):
     def test_references_and_declared_signatures_are_complete(self):
         matrix = load_matrix()
-        self.assertEqual(len(matrix['scalar_functions']), 31)
+        self.assertEqual(len(matrix['scalar_functions']), 39)
         self.assertEqual({case['oid'] for case in matrix['source_rejections']},
                          set(matrix['unsupported_source_type_oids']))
         self.assertTrue(set(matrix['source_type_oids']).isdisjoint(matrix['unsupported_source_type_oids']))
         for case in matrix['scalar_functions'] + matrix['coercion_cases']:
-            row = dict.fromkeys(['category', 'group_id', 'small_value', 'large_value', 'codepoint', 'vartext'])
+            row = dict.fromkeys(['category', 'group_id', 'small_value', 'large_value', 'codepoint', 'vartext', 'amount'])
             self.assertIsNone(evaluate(case, row), case)
 
     def test_duplicate_signature_and_missing_qualification_fail(self):
@@ -55,6 +56,19 @@ class SupportMatrixTests(unittest.TestCase):
         self.assertEqual(run('octet_length', ['é🙂'], [25]), 6)
         self.assertEqual(run('split_part', ['é🙂x🙂y', '🙂', -2], [25, 25, 23]), 'x')
         self.assertEqual(run('replace', ['é', '', 'x'], [25, 25, 25]), 'é')
+
+    def test_numeric_rounding_oracle_retains_sign_and_special_values(self):
+        def run(name, values, oids):
+            return evaluate({'name': name, 'input_oids': oids,
+                             'arguments': [{'literal': value} for value in values]}, {})
+        self.assertEqual(run('round', [Decimal('2.5')], [1700]), Decimal(3))
+        self.assertEqual(run('round', [Decimal('-1250'), -2], [1700,23]), Decimal(-1300))
+        self.assertEqual(run('trunc', [Decimal('-1250'), -2], [1700,23]), Decimal(-1200))
+        self.assertEqual(run('ceil', [Decimal('-2.5')], [1700]), Decimal(-2))
+        self.assertEqual(run('floor', [Decimal('-2.5')], [1700]), Decimal(-3))
+        self.assertEqual(run('abs', [Decimal('-Infinity')], [1700]), 'Infinity')
+        self.assertEqual(run('round', [Decimal('NaN')], [1700]), 'NaN')
+        self.assertIsNone(run('round', [None], [1700]))
 
 
 if __name__ == '__main__':

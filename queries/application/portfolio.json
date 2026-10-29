@@ -34,12 +34,6 @@
   ],
   "rejected": [
     {
-      "id": "numeric_abs",
-      "sql": "SELECT abs(amount::numeric) AS amount FROM {schema}.entry",
-      "blocker": "numeric ABS overload (function backlog)",
-      "diagnostic": "overload"
-    },
-    {
       "id": "locale_label",
       "sql": "SELECT lower(label) AS label FROM {schema}.account",
       "blocker": "locale-sensitive text kernel (function backlog)",
@@ -47,6 +41,12 @@
     }
   ],
   "qualified_compositions": [
+    {
+      "id": "numeric_abs",
+      "sql": "SELECT abs(amount::numeric) AS amount FROM {schema}.entry",
+      "qualification": "scripts/numeric_arithmetic_harness.py",
+      "milestone": "Exact numeric arithmetic"
+    },
     {
       "id": "global_count",
       "sql": "SELECT COUNT(*) AS n FROM {schema}.entry",

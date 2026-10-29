@@ -1,4 +1,4 @@
-//! Character operations use Unicode scalar values, never bytes or grapheme clusters.
+//! Closed native kernels share exact numeric arithmetic and UTF8 character semantics.
 use crate::compiler::capabilities::Builtin;
 use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
@@ -9,6 +9,20 @@ pub(super) fn evaluate(operation: Builtin, arguments: &[String], input_oid: u32)
     let second = || arguments.get(1).context("second function input absent");
     let third = || arguments.get(2).context("third function input absent");
     match operation {
+        Builtin::Abs if input_oid == 1700 => {
+            Ok(crate::numeric::Numeric::parse(first)?.absolute().text())
+        }
+        Builtin::Round | Builtin::Trunc | Builtin::Ceiling | Builtin::Floor => {
+            let scale =
+                arguments.get(1).map(|value| value.parse::<i32>()).transpose()?.unwrap_or(0);
+            let mode = match operation {
+                Builtin::Round => crate::numeric::Rounding::Nearest,
+                Builtin::Trunc => crate::numeric::Rounding::Truncate,
+                Builtin::Ceiling => crate::numeric::Rounding::Ceiling,
+                _ => crate::numeric::Rounding::Floor,
+            };
+            Ok(crate::numeric::Numeric::parse(first)?.rounded(scale, mode)?.text())
+        }
         Builtin::Abs => {
             let value = first.parse::<i64>()?.checked_abs().context("integral abs overflow")?;
             super::super::check_width(value, input_oid)?;

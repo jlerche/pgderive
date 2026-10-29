@@ -3,7 +3,10 @@ use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
 use serde::Serialize;
 use std::cmp::Ordering;
+mod division;
+mod rounding;
 pub mod sum;
+pub use rounding::{Rounding, Typmod};
 const LIMIT: usize = 4096;
 #[derive(Clone, Debug, Serialize)]
 pub enum Numeric {
@@ -39,13 +42,16 @@ impl Numeric {
         }
     }
     pub(crate) fn parse(text: &str) -> Result<Self> {
+        Self::parse_bounded(text, LIMIT)
+    }
+    fn parse_bounded(text: &str, budget: usize) -> Result<Self> {
         match text {
             "NaN" => return Ok(Self::Nan),
             "Infinity" | "+Infinity" => return Ok(Self::Infinity),
             "-Infinity" => return Ok(Self::NegativeInfinity),
             _ => {}
         }
-        ensure!(text.len() <= LIMIT, "numeric input exceeds digit budget");
+        ensure!(text.len() <= budget, "numeric input exceeds digit budget");
         let (mantissa, exponent) = text
             .split_once(['e', 'E'])
             .map_or(Ok((text, 0_i32)), |(m, e)| Ok::<_, anyhow::Error>((m, e.parse::<i32>()?)))?;
@@ -58,22 +64,25 @@ impl Numeric {
         );
         let mut coefficient = digits.parse::<BigInt>()?;
         let scale = i64::try_from(fraction.len())? - i64::from(exponent);
-        ensure!(scale.unsigned_abs() <= u64::try_from(LIMIT)?, "numeric scale exceeds budget");
+        ensure!(scale.unsigned_abs() <= u64::try_from(budget)?, "numeric scale exceeds budget");
         let scale = if scale < 0 {
             coefficient *= power(u32::try_from(-scale)?);
             0
         } else {
             u32::try_from(scale)?
         };
-        Self::finite(coefficient, scale)
+        Self::finite_bounded(coefficient, scale, budget)
     }
     fn finite(coefficient: BigInt, scale: u32) -> Result<Self> {
+        Self::finite_bounded(coefficient, scale, LIMIT)
+    }
+    fn finite_bounded(coefficient: BigInt, scale: u32, budget: usize) -> Result<Self> {
         ensure!(
-            coefficient.to_string().len() <= LIMIT && usize::try_from(scale)? <= LIMIT,
+            coefficient.to_string().len() <= budget && usize::try_from(scale)? <= budget,
             "numeric result exceeds digit budget"
         );
         let value = Self::Finite { coefficient, scale };
-        ensure!(value.text().len() <= LIMIT, "numeric display exceeds budget");
+        ensure!(value.text().len() <= budget, "numeric display exceeds budget");
         Ok(value)
     }
     pub(crate) fn text(&self) -> String {
@@ -108,6 +117,9 @@ impl Numeric {
         Self::Finite { coefficient, scale }.text()
     }
     pub(crate) fn binary(&self, other: &Self, operation: &str) -> Result<Self> {
+        if operation == "/" {
+            return self.divide(other);
+        }
         ensure!(matches!(operation, "+" | "-" | "*"), "unsupported numeric operation");
         if operation == "-" {
             return self.binary(&other.negated(), "+");
@@ -174,32 +186,13 @@ impl Ord for Numeric {
 impl Numeric {
     pub(crate) fn average(ratio: &str) -> Result<String> {
         let (sum, count) = ratio.split_once('/').context("invalid engine AVG operand")?;
-        ensure!(sum.len() <= LIMIT, "AVG sum exceeds numeric digit budget");
-        let numerator: BigInt = sum.parse()?;
-        let denominator = BigInt::from(count.parse::<i64>()?);
-        ensure!(denominator > BigInt::from(0), "invalid engine AVG count");
-        let magnitude = if numerator < BigInt::from(0) { -&numerator } else { numerator.clone() };
-        let leading = |mut value: BigInt| {
-            let mut weight = 0_i32;
-            while value >= BigInt::from(10_000) {
-                value /= 10_000;
-                weight += 1;
-            }
-            (weight, value)
-        };
-        let (weight1, digit1) = leading(magnitude.clone());
-        let (weight2, digit2) = leading(denominator.clone());
-        let weight = weight1 - weight2 - i32::from(digit1 <= digit2);
-        let scale = u32::try_from((16 - 4 * weight).clamp(0, 1000))?;
-        let scaled = magnitude * power(scale);
-        let mut result = &scaled / &denominator;
-        if (&scaled % &denominator) * 2 >= denominator {
-            result += 1;
-        }
-        if numerator < BigInt::from(0) {
-            result = -result;
-        }
-        Ok(Self::finite(result, scale)?.text())
+        let denominator = count.parse::<i64>()?;
+        ensure!(denominator > 0, "invalid engine AVG count");
+        // Aligned sums can span both input digit extremes plus an i64 count;
+        // only the final quotient must fit the public result/display budget.
+        Ok(Self::parse_bounded(sum, 2 * LIMIT + 32)?
+            .divide(&Self::parse(&denominator.to_string())?)?
+            .text())
     }
 }
 
@@ -275,3 +268,6 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests_arithmetic;

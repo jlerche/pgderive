@@ -66,9 +66,9 @@ fn native_literals_and_function_aliases_keep_normalized_identities() -> Result<(
 }
 #[test]
 fn unsupported_overloads_explain_types_and_available_signatures() -> Result<()> {
-    let error = expression("abs(n::numeric)>1").err().context("unsupported overload accepted")?;
+    let error = expression("abs(text)>1").err().context("unsupported overload accepted")?;
     let error = format!("{error:#}");
-    assert!(error.contains("abs(numeric [OID 1700])"), "{error}");
+    assert!(error.contains("abs(text [OID 25])"), "{error}");
     assert!(error.contains("supported signatures: abs(smallint [OID 21])"), "{error}");
     assert!(error.contains("abs(integer [OID 23])"), "{error}");
     Ok(())

@@ -223,7 +223,8 @@ supported three-valued predicate subset. NULL grouping keys remain present;
 COUNT(column) ignores NULL; filters retain only true. Existing groups with no
 qualifying non-NULL measures produce COUNT zero and SUM/MIN/MAX NULL. Removing
 all input rows removes a grouped result. Integral COUNT DISTINCT is described
-below; ungrouped aggregation, SELECT DISTINCT and numeric input aggregates remain rejected. Derived group/window composition is described below.
+below. Later sections add global groups, DISTINCT, derived composition and exact
+numeric input aggregates; see also [numeric arithmetic](numeric-arithmetic.md).
 
 Single-source window SELECT supports the same aggregate functions with explicit
 ROWS frames and integral/timestamp column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition
@@ -284,7 +285,8 @@ The live harness compares AVG display scale and rounding with PostgreSQL and the
 independent Decimal oracle across extreme integers, negative values, NULLs,
 FILTER, source updates and restart. Supported derived scopes now render AVG internally
 before consuming it; see the M6 composition boundary below. Arbitrary derived SQL
-and numeric-input AVG remain unsupported.
+remains bounded; [numeric AVG](numeric-arithmetic.md) now uses exact division and
+reversible numeric summaries.
 
 ## Native timestamp and numeric source values
 
@@ -307,9 +309,8 @@ PostgreSQL context and expression lowering rather than string ordering.
 
 Numeric projection safely defers native input conversion to PostgreSQL inside
 atomic publication, preserving exact decimals and PostgreSQL JSON representations
-of NaN/Infinity. COUNT(column) can inspect numeric NULLness in Rust. Numeric keys,
-comparisons, arithmetic and numeric-input SUM/AVG remain unsupported; preserving
-raw decimal scale in a source row is not a claim of Rust numeric SQL equality.
+of NaN/Infinity. Later circuit numeric work adds keys, comparisons, arithmetic and
+numeric SUM/AVG with explicit scale/result budgets; see the numeric sections below.
 
 The owned native harness checks snapshot/CDC/restart projection, timestamp grouping,
 ordered windows and same-type joins against PostgreSQL and independent memory
@@ -1148,10 +1149,10 @@ special values. NULL propagates and lazy branches preserve evaluation order.
 Circuit input/result text and scale are bounded to 4,096 characters/digits; this
 is an explicit circuit resource restriction, far below PostgreSQL's full numeric
 range. Intermediate integer powers and products are bounded by operand limits.
-This is not an RSS bound. Numeric AVG/division, numeric-to-integral conversion,
-rounding functions and precision/scale cast modifiers are rejected before
-registration. Native numeric typmods are already applied authoritatively by
-PostgreSQL before CDC; they are not re-applied to circuit arithmetic.
+This is not an RSS bound. [Exact numeric arithmetic](numeric-arithmetic.md) now
+adds division, numeric AVG, rounding and checked integral/precision-scale casts.
+Native source typmods have already been applied by PostgreSQL before CDC;
+explicit expression casts apply their own modifiers inside the engine.
 
 Numeric SUM and extrema currently use bounded affected-partition recomputation,
 retaining all input identities and scales so deleting the highest-scale input
