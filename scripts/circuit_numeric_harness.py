@@ -12,7 +12,7 @@ from native_mv_oracle import expected, binary_difference
 class NumericFixture(PartitionFixture):
     def __init__(self, output, window, mode=None):
         super().__init__(output, False)
-        self.mode = mode
+        self.mode = mode or 'native'
         self.computed = mode in ('computed', 'sum-computed')
         self.sql(f'''ALTER TABLE {self.name}.bid ALTER COLUMN price TYPE numeric;
             UPDATE {self.name}.bid SET price=price/100.0;
@@ -27,6 +27,14 @@ class NumericFixture(PartitionFixture):
         if mode == 'group-key':
             self.query = f'SELECT b.price AS price,COUNT(*) AS n,COUNT(*) FILTER(WHERE b.price<0) AS negative FROM {self.name}.bid b GROUP BY b.price'
             self.labels = ['price', 'n', 'negative']
+        if self.mode.startswith('extrema-'):
+            terms = [('MIN', 'lo'), ('MAX', 'hi')]
+            if mode != 'extrema-mixed':
+                terms = [terms[mode == 'extrema-max']]
+            self.query = ('SELECT b.price AS price,' + ','.join(
+                f'{function}(b.auction) AS {label}' for function, label in terms)
+                + f' FROM {self.name}.bid b GROUP BY b.price')
+            self.labels = ['price'] + [label for _, label in terms]
         if mode == 'join-key':
             self.query = f'SELECT b.id AS left_id,r.id AS right_id FROM {self.name}.bid b JOIN {self.name}.bid r ON b.price=r.price WHERE b.price<0 OR b.price>=0 OR b.price IS NULL'
             self.labels = ['left_id', 'right_id']
@@ -36,6 +44,19 @@ class NumericFixture(PartitionFixture):
                 f'FROM (SELECT b.auction AS auction,b.price * 1.20 + 0.30 - 0.10 AS price FROM {self.name}.bid b WHERE b.price<0 OR b.price>=0 OR b.price IS NULL) "B"')
 
     def run_history(self, command, history):
+        if self.mode.startswith('extrema-'):
+            history.changes = [
+                f"INSERT INTO {self.name}.bid VALUES(900,1,42.50),(901,5,42.5000),(902,1,42.50),(903,NULL,42.5000)",
+                f"UPDATE {self.name}.bid SET auction=9 WHERE id=900",
+                f"DELETE FROM {self.name}.bid WHERE id=902",
+                f"DELETE FROM {self.name}.bid WHERE id=901",
+                f"UPDATE {self.name}.bid SET price=42.5 WHERE id=900",
+                f"DELETE FROM {self.name}.bid WHERE id=900",
+                f"DELETE FROM {self.name}.bid WHERE id=903",
+            ] + history.changes
+            history.rejected = [('changed', self.query.replace('(b.auction)', '(b.id)'))]
+            super().run_history(command, history)
+            return
         # Exercise inverse transitions, including display-only changes and masked
         # finite sums, through the same CDC/restart/oracle harness as other queries.
         history.changes = [
@@ -55,11 +76,17 @@ class NumericFixture(PartitionFixture):
         self.verify_sql(native)
         if self.mode in ('sum', 'sum-computed'):
             assert binary_difference(self) == '0', 'numeric SUM scale/send representation differs'
+        if self.mode.startswith('extrema-'):
+            # PostgreSQL may emit any member's scale for an equal numeric key.
+            # Require an actual retained spelling, without assuming heap order.
+            assert self.sql(f'''SELECT count(*) FROM {self.name}.groups g WHERE NOT EXISTS(
+                SELECT 1 FROM {self.name}.bid b WHERE b.price IS NOT DISTINCT FROM g.price
+                AND numeric_send(b.price) IS NOT DISTINCT FROM numeric_send(g.price))''').strip() == '0'
 
         source = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.name}.bid b"), parse_float=decimal.Decimal)
         if self.mode == 'join-key':
             expected_memory = self.join_memory(source)
-        elif self.mode == 'group-key':
+        elif self.mode == 'group-key' or self.mode.startswith('extrema-'):
             expected_memory = self.group_key_memory(source)
         else:
             expected_memory = self.aggregate_memory(source)
@@ -84,13 +111,19 @@ class NumericFixture(PartitionFixture):
                     output[(left['id'], right['id'])] += 1
         return dict(output)
 
-    @classmethod
-    def group_key_memory(cls, source):
+    def group_key_memory(self, source):
         groups = collections.defaultdict(list)
         for row in source:
-            groups[cls.key(row['price'])].append(row)
+            groups[self.key(row['price'])].append(row)
         output = {}
         for key, rows in groups.items():
+            if self.mode.startswith('extrema-'):
+                values = [row['auction'] for row in rows if row['auction'] is not None]
+                extrema = [min(values) if values else None, max(values) if values else None]
+                if self.mode != 'extrema-mixed':
+                    extrema = [extrema[self.mode == 'extrema-max']]
+                output[(key, *extrema)] = 1
+                continue
             negative = int(key == '-Infinity' or isinstance(key, decimal.Decimal) and key < 0)
             output[(key, len(rows), len(rows) * negative)] = 1
         return output
@@ -123,5 +156,6 @@ class NumericFixture(PartitionFixture):
 
 if __name__ == '__main__':
     modes = ('sum', 'sum-computed') if os.environ.get('PGDERIVE_CHECK_PROFILE') == 'core' else ('native', 'computed', 'sum', 'sum-computed', 'group-key', 'join-key')
+    modes += ('extrema-min', 'extrema-max', 'extrema-mixed')
     run_cases(((mode, False, mode) for mode in modes),
               qualify, fixture_class=NumericFixture)

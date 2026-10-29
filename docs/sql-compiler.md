@@ -967,8 +967,9 @@ state tradeoff and remaining ordered-index work.
 
 ## Ordered full-identity grouped extrema
 
-Grouped queries whose aggregates are all MIN/MAX now maintain a reusable ordered
-index over complete weighted rows per aggregate. Integral, timestamp and
+Grouped queries whose aggregates are all MIN/MAX and whose grouping keys are
+nonnumeric maintain a reusable ordered index over complete weighted rows per
+aggregate. Integral, timestamp and
 timestamptz values use explicit native ordering, including infinities. FILTER
 retains only true; NULL and excluded values use a last sentinel so a nonempty
 group with no eligible values still produces NULL. NUL-prefixed internal fields
@@ -987,6 +988,19 @@ empty state and reused only from the bound authoritative checkpoint.
 The maintained ordered arrangements are explicit graph state. Mixed aggregate
 and window queries retain their appropriate generic operators. A graph/layout
 change cannot silently adopt incompatible checkpoints.
+
+Numeric grouping keys use the existing affected-partition evaluator, including
+when the aggregate arguments are integral or timestamp values. Numeric-equal
+keys such as `1.20` and `1.2000` share one group while retaining full raw row
+identity. The evaluator takes all grouping fields from one retained member;
+independent MIN/MAX winners cannot disagree about that member's display scale.
+PostgreSQL may choose a different member's scale for the same numeric group,
+so SQL numeric equality and retained-member representation are qualified
+separately. A representative deletion can change the displayed group scale.
+The numeric Rust history covers weighted duplicates, updates, retractions,
+last-member removal, cold restore and compaction; three live numeric cases check
+MIN, MAX and their combination against a native materialized view and an
+independent Decimal oracle.
 
 A controlled 1,000-row/two-extrema update with eight-row blocks and cache disabled
 reduces data-block cache misses during the complete prepare operation from 127

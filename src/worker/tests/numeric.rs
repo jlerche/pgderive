@@ -101,6 +101,95 @@ fn numeric_contract() -> crate::source::Contract {
 }
 
 #[tokio::test]
+async fn numeric_grouped_extrema_share_one_scale_representative_through_retractions() -> Result<()>
+{
+    let native = numeric_contract();
+    let options = settings();
+    for aggregates in ["MIN(auction),MAX(auction)", "MIN(auction)", "MAX(auction)"] {
+        let compiled =
+            compile(&format!("SELECT price,{aggregates} FROM source.bid GROUP BY price"), &native)?;
+        assert!(
+            compiled
+                .relational()
+                .nodes
+                .iter()
+                .any(|node| matches!(node, crate::compiler::relational::Node::Partition { .. }))
+        );
+        let mut history = super::History::new((&native, &compiled, &options));
+        history.snapshot = true;
+        history.compact = true;
+        history
+            .run(
+                numeric_key_changes(),
+                |state| numeric_key_extrema(state, aggregates),
+                super::apply_rows,
+                |_| true,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn numeric_key_changes() -> Vec<crate::weighted::Batch> {
+    let member =
+        |id, value, group| row(&[("id", Some(id)), ("auction", Some(value)), ("price", group)]);
+    let low = member("1", "1", Some("1.20"));
+    let high = member("2", "5", Some("1.2000"));
+    let moved = member("1", "9", Some("1.20"));
+    let rescaled = member("1", "9", Some("1.2"));
+    let null = member("3", "2", None);
+    [
+        vec![("bid", low.clone(), 2), ("bid", high.clone(), 1), ("bid", null.clone(), 1)],
+        vec![("bid", low.clone(), -1), ("bid", moved.clone(), 1)],
+        vec![("bid", low, -1)],
+        vec![("bid", high, -1)],
+        vec![("bid", moved, -1), ("bid", rescaled.clone(), 1)],
+        vec![("bid", rescaled, -1)],
+        vec![("bid", null, -1)],
+    ]
+    .into_iter()
+    .map(batch)
+    .collect()
+}
+
+fn numeric_key_extrema(state: &super::RowState, aggregates: &str) -> Result<super::RowBatch> {
+    let mut groups =
+        std::collections::BTreeMap::<bool, Vec<(i64, &crate::transaction::Row)>>::new();
+    for (row, weight) in state {
+        if *weight > 0 {
+            // The fixture's three finite spellings are the same fixed decimal;
+            // its other group is NULL. The oracle uses no production numeric code.
+            let key = row["price"].is_some();
+            groups.entry(key).or_default().push((
+                row["auction"].as_deref().context("missing oracle argument")?.parse()?,
+                row,
+            ));
+        }
+    }
+    let rows = groups
+        .into_values()
+        .map(|members| {
+            let low = members.iter().min_by_key(|(value, _)| value).context("empty group")?;
+            let high = members.iter().max_by_key(|(value, _)| value).context("empty group")?;
+            let values = if aggregates.contains(',') {
+                vec![low.0, high.0]
+            } else if aggregates.starts_with("MIN") {
+                vec![low.0]
+            } else {
+                vec![high.0]
+            };
+            let mut output =
+                crate::transaction::Row::from([("0:price".into(), low.1["price"].clone())]);
+            for (index, value) in values.into_iter().enumerate() {
+                output.insert(format!("@aggregate_{index}"), Some(value.to_string()));
+            }
+            Ok(((relational::Key::new(), output), 1))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Batch::from_updates(rows)
+}
+
+#[tokio::test]
 async fn computed_numeric_group_keys_and_native_join_keys_use_value_equality() -> Result<()> {
     let native = numeric_contract();
     for sql in [

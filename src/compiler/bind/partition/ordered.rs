@@ -6,7 +6,10 @@ use crate::compiler::{
     scalar::Computed,
 };
 pub(super) fn supports(spec: &Partition) -> bool {
-    matches!(spec.mode, Mode::Grouped { .. })
+    // Numeric-equal keys can retain different display scales. Each extremum
+    // selects its own member, so these groups need the ordinary evaluator's
+    // single representative for all grouping fields.
+    matches!(&spec.mode, Mode::Grouped { keys } if keys.iter().all(|key| key.oid != 1700))
         && !spec.aggregates.is_empty()
         && spec.aggregates.iter().all(|value| {
             value.argument.as_ref().is_none_or(|arg| arg.oid != 1700)
