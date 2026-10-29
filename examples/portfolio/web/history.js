@@ -1,10 +1,14 @@
 (()=>{
 'use strict';
-const root=document.getElementById('metricHistory');
-if(!root)return;
+const wrapper=document.getElementById('historyProcesses');
+let sharedEnd=Date.now()/1000;
+const renderers=[];
+const renderAll=()=>{sharedEnd=Date.now()/1000;renderers.forEach(render=>render())};
+function history(root){
+const controls=wrapper?.querySelector('.history-shared-controls')||root;
 const grid=root.querySelector('.history-grid'),note=root.querySelector('.history-note');
-const colors=['#a2e8bd','#9eb9ed','#edaa94','#d6b8e9'];
-let data=null,range=86400,category='Overview',query='';
+const colors=root.dataset.historyQuery==='top10'?['#9eb9ed','#d6b8e9','#edaa94']:['#a2e8bd','#9eb9ed','#edaa94','#d6b8e9'];
+let data=null,range=86400,category='Overview',query='',processName=root.dataset.historyQuery||'totals',loadSequence=0,loadError='';
 const hiddenSeries=new Set();
 const readable=s=>s.replaceAll('_',' ').replaceAll('bytes','bytes').replace(/\b(io|rss|wal)\b/gi,x=>x.toUpperCase());
 const labels={
@@ -53,6 +57,7 @@ function group(key){
  if(key.includes('observer.')||key.includes('wal_')||key.includes('replay_bytes'))return 'Backlog';
  if(key.startsWith('latency.'))return 'Latency';
  if(key.startsWith('worker.')||key.includes('.cache.')||key.includes('memtable'))return 'Memory';
+ if(key.startsWith('engine.object_service.'))return 'Object I/O';
  if(key.startsWith('engine.foreground.')||key.startsWith('engine.scan.'))return 'Object I/O';
  if(key.startsWith('state.')||key.endsWith('_bytes'))return 'Storage';
  if(key.startsWith('flow.'))return 'Flow';
@@ -97,7 +102,7 @@ function draw(canvas,spec,rows,hover=null){
  const indices=activeFields.map(key=>data.columns.indexOf(key)+1);
  const values=rows.flatMap(row=>indices.map(i=>row[i]).filter(Number.isFinite));
  const low=Math.min(0,...values),high=Math.max(low+1,...values),left=65,right=w-12,top=12,bottom=h-28;
- const end=Date.now()/1000,start=Math.max(end-range,data.rows[0]?.[0]??end-range);
+ const end=sharedEnd,start=end-range;
  const x=t=>left+(t-start)/Math.max(60,end-start)*(right-left),y=v=>bottom-(v-low)/(high-low)*(bottom-top);
  ctx.font='10px "IBM Plex Mono",monospace';ctx.lineWidth=1;
  for(let i=0;i<4;i++){
@@ -122,17 +127,17 @@ function draw(canvas,spec,rows,hover=null){
  return {x,start,end,left,right};
 }
 function render(){
- if(!data)return;
- const end=Date.now()/1000,rows=data.rows.filter(r=>r[0]>=end-range),all=specs();
+ if(!data){if(loadError)note.textContent=loadError;return}
+ const end=sharedEnd,rows=data.rows.filter(r=>r[0]>=end-range),all=specs();
  grid.replaceChildren();
  const shown=all.filter(s=>(category==='All'||category==='Overview'&&s.overview||s.category===category)&&(!query||(s.title+' '+s.fields.join(' ')).toLowerCase().includes(query)));
  for(const spec of shown){
   const card=document.createElement('article');card.className='history-card';
   const head=document.createElement('div');head.className='history-card-head';
-  const h=document.createElement('h3');h.textContent=spec.title;
+  const h=document.createElement('h3');h.textContent=(wrapper?(processName==='top10'?'Top ten · ':'Totals · '):'')+spec.title;
   const value=document.createElement('strong'),last=rows.at(-1),firstIndex=data.columns.indexOf(spec.fields[0])+1;
   value.textContent=(spec.unit==='ms'?'p50 ':'')+format(last?.[firstIndex],spec.unit);head.append(h,value);
-  const canvas=document.createElement('canvas');canvas.setAttribute('role','img');canvas.setAttribute('aria-label',spec.title+' over time');
+  const canvas=document.createElement('canvas');canvas.setAttribute('role','img');canvas.setAttribute('aria-label',h.textContent+' over time');
   const legend=document.createElement('div');legend.className='history-legend';
   spec.fields.forEach((field,i)=>{const span=document.createElement(spec.fields.length>1?'button':'span');span.style.color=colors[i%colors.length];if(spec.fields.length>1){span.type='button';span.setAttribute('aria-pressed',String(!hiddenSeries.has(field)));span.addEventListener('click',()=>{if(hiddenSeries.has(field))hiddenSeries.delete(field);else hiddenSeries.add(field);span.setAttribute('aria-pressed',String(!hiddenSeries.has(field)));draw(canvas,spec,rows)})}span.textContent=spec.fields.length>1?field.split('.').at(-1).replace('_ms',''):spec.unit==='count'?'Count':spec.unit==='bytes'?'Bytes':'Per second';if(spec.unit==='ms'&&spec.fields.length===1)span.textContent='Milliseconds';legend.append(span)});
   const tip=document.createElement('div');tip.className='history-tooltip';tip.hidden=true;
@@ -150,20 +155,42 @@ function render(){
   canvas.addEventListener('pointerleave',()=>{tip.hidden=true;draw(canvas,spec,rows)});
  }
  const age=end-data.updated_at;
- note.textContent=(age>90?'History is stale. ':'')+rows.length+' minute samples / '+all.length+' metric charts. '+(rows.length?'Available since '+new Date(rows[0][0]*1000).toLocaleString()+'. ':'')+'Blank intervals mean no fresh sample. Latency points summarize the preceding 60 seconds; they are not whole-day percentiles. Counters can reset on restart.';
+ note.textContent=loadError+(age>90?'History is stale. ':'')+rows.length+' minute samples / '+all.length+' metric charts. '+(rows.length?'Available since '+new Date(rows[0][0]*1000).toLocaleString()+'. ':'')+'Blank intervals mean no fresh sample. Latency points summarize the preceding 60 seconds; they are not whole-day percentiles. Counters can reset on restart.';
  if(!shown.length){const p=document.createElement('p');p.textContent='No matching metrics.';grid.append(p)}
 }
-root.querySelectorAll('[data-history-range]').forEach(button=>button.addEventListener('click',()=>{range=Number(button.dataset.historyRange);root.querySelectorAll('[data-history-range]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));render()}));
-root.querySelector('[name=historyCategory]').addEventListener('change',event=>{category=event.target.value;render()});
-root.querySelector('[name=historySearch]').addEventListener('input',event=>{query=event.target.value.trim().toLowerCase();render()});
+controls.querySelectorAll('[data-history-range]').forEach(button=>button.addEventListener('click',()=>{range=Number(button.dataset.historyRange);controls.querySelectorAll('[data-history-range]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));render()}));
+controls.querySelector('[name=historyCategory]').addEventListener('change',event=>{category=event.target.value;render()});
+controls.querySelector('[name=historySearch]').addEventListener('input',event=>{query=event.target.value.trim().toLowerCase();render()});
 root.querySelector('[data-history-download]').addEventListener('click',()=>{
  if(!data)return;
  const rows=[['time',...data.columns],...data.rows.map(row=>[new Date(row[0]*1000).toISOString(),...row.slice(1)])];
  const url=URL.createObjectURL(new Blob([rows.map(row=>row.map(v=>v??'').join(',')).join('\n')],{type:'text/csv'}));
- const a=document.createElement('a');a.href=url;a.download='pgderive-metrics-24h.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ const a=document.createElement('a');a.href=url;a.download='pgderive-'+processName+'-metrics-24h.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 let resize;
 window.addEventListener('resize',()=>{clearTimeout(resize);resize=setTimeout(render,150)});
-async function load(){try{const response=await fetch('/metrics-history.json',{cache:'no-store'});if(!response.ok)throw Error('History unavailable');const next=await response.json();if(next.version!==1||!Array.isArray(next.rows)||!Array.isArray(next.columns))throw Error('Invalid history');data=next;render()}catch(error){note.textContent='History unavailable. Retrying in one minute.'}}
+async function load(){
+ const sequence=++loadSequence,name=processName;
+ try{
+  const response=await fetch(name==='totals'?'/metrics-history.json':'/metrics-history-top10.json',{cache:'no-store'});
+  if(!response.ok)throw Error('History unavailable');
+  const next=await response.json();
+  if(next.version!==1||!Array.isArray(next.rows)||!Array.isArray(next.columns))throw Error('Invalid history');
+  if(sequence!==loadSequence)return;
+  data=next;loadError='';renderAll();
+ }catch(error){if(sequence===loadSequence){loadError='History unavailable for this query. Retrying in one minute. ';render()}}
+}
+root.addEventListener('history-visible',render);
+renderers.push(render);
 load();setInterval(load,60000);
+}
+document.querySelectorAll('.metric-history').forEach(history);
+wrapper?.querySelector('[name=historyQuery]').addEventListener('change',event=>{
+ const name=event.target.value;
+ wrapper.querySelector('.history-processes').classList.toggle('history-single',name!=='both');
+ wrapper.querySelectorAll('.metric-history').forEach(section=>{
+  section.hidden=name!=='both'&&section.dataset.historyQuery!==name;
+  if(!section.hidden)section.dispatchEvent(new Event('history-visible'));
+ });
+});
 })();

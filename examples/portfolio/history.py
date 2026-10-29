@@ -10,7 +10,10 @@ CACHE_FIELDS = ['bytes','live_bytes','entries','filter_bytes','filter_entries','
                 'index_requested_bytes','filter_rejections','filter_eviction_steps',
                 'misses','hits','point_hits','decoded_rows','decoded_bytes','pins']
 METRICS = {'worker.rss_bytes', 'state.bytes', 'state.objects', 'engine.memtable_bytes',
-           'latency.observer_healthy'}
+           'engine.memtable_limit', 'engine.runs', 'engine.logical_time',
+           'latency.observer_healthy', 'latency.published_epochs', 'latency.published_source_transactions'}
+METRICS.update('engine.object_service.'+scope+'.'+key for scope in ['foreground','maintenance']
+    for key in ['requests','read_requested_bytes','read_bytes','write_requested_bytes','written_bytes'])
 METRICS.update('engine.cache.' + key for key in CACHE_FIELDS)
 METRICS.update('flow.' + key for key in ['inserts','updates','deletes','engine_epochs','books',
     'positions','units','transactions','generated_source_changes','changes_per_second',
@@ -78,8 +81,8 @@ def update(document, samples, now):
             'rows': [[stamp, *(values.get(key) for key in columns)] for stamp, values in records]}
 
 
-def publish(root, sample):
-    path = root / 'stack-r2/web/metrics-history.json'
+def publish_query(root, sample, name):
+    path = root / 'stack-r2/web' / ('metrics-history.json' if name == 'totals' else 'metrics-history-'+name+'.json')
     now = sample['collected_at']
     samples = [sample]
     if path.exists():
@@ -87,13 +90,18 @@ def publish(root, sample):
     else:
         document = {}
         # Reuse existing retained observations on first installation only.
-        for name in ['history.previous.jsonl', 'history.jsonl']:
-            source = root / 'metrics' / name
+        for filename in ['history.previous.jsonl', 'history.jsonl']:
+            source = root / 'metrics' / filename
             if source.exists():
                 with source.open() as stream:
                     for line in stream:
                         try:
-                            samples.append(json.loads(line))
+                            record = json.loads(line)
+                            query = record.get('queries', {}).get(name)
+                            if query:
+                                samples.append(query | {'collected_at': record['collected_at']})
+                            elif name == 'totals':
+                                samples.append(record)
                         except (ValueError, TypeError):
                             continue
     document = update(document, samples, now)
@@ -101,3 +109,8 @@ def publish(root, sample):
     temporary.write_text(json.dumps(document, separators=(',', ':'), allow_nan=False) + '\n')
     temporary.chmod(0o644)
     temporary.replace(path)
+
+
+def publish(root, sample):
+    for name, query in sample['queries'].items():
+        publish_query(root, query | {'collected_at': sample['collected_at']}, name)

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 from string import Template
@@ -25,6 +26,22 @@ def page(mode):
     js_version = hashlib.sha256((HERE/'web/leaderboard.js').read_bytes()).hexdigest()[:12]
     body = body.replace('</head>', f'<link rel="stylesheet" href="/leaderboard.css?v={css_version}"></head>')
     body = body.replace('</body>', f'<script type="module" src="/leaderboard.js?v={js_version}"></script></body>')
+    history_version = hashlib.sha256((HERE/'web/history.js').read_bytes()).hexdigest()[:12]
+    body = body.replace('/history.js?v=1', '/history.js?v='+history_version)
+    start = body.index('<section class="metric-history"')
+    end = body.index('</section>', start)+len('</section>')
+    section = body[start:end]
+    toolbar = re.search(r'<div class="history-toolbar">.*?</div>\s*<div class="history-note"', section, re.S)
+    controls = toolbar.group().removesuffix('<div class="history-note"')
+    section = section.replace(controls, '')
+    panels = []
+    for name, label in [('totals', 'Complete totals query'), ('top10', 'Top-ten query')]:
+        root_id = 'metricHistory' if name == 'totals' else 'metricHistoryTop10'
+        panel = section.replace('id="metricHistory"', f'id="{root_id}" data-history-query="{name}"')
+        panel = panel.replace('24-hour history</h2>', label+' · 24-hour history</h2>')
+        panels.append(panel)
+    controls = controls.replace('<div class="history-toolbar">', '<div class="history-toolbar history-shared-controls"><select name="historyQuery" aria-label="Query processes shown"><option value="both">Both queries</option><option value="totals">Complete totals query</option><option value="top10">Top-ten query</option></select>')
+    body = body[:start]+'<section id="historyProcesses" aria-label="History for both query processes">'+controls+'<div class="history-processes">'+''.join(panels)+'</div></section>'+body[end:]
     body = body.replace("fetch('/config.json')", "fetch('/config.json',{cache:'no-store'})")
     body = body.replace("document.addEventListener('visibilitychange'", "setInterval(refresh,3000);document.addEventListener('visibilitychange'")
     guard = "const safeInteger=value=>{if(typeof value==='number'&&!Number.isSafeInteger(value))throw Error('Value exceeds exact demo range');const n=BigInt(value);if(n>BigInt(Number.MAX_SAFE_INTEGER)||n<BigInt(Number.MIN_SAFE_INTEGER))throw Error('Value exceeds exact demo range');return Number(n)};"

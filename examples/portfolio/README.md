@@ -76,13 +76,29 @@ ten wins by ID. One low-quantity book also opens and closes outside the cutoff,
 keeping that original totals-page behavior visible. The workload does not grow
 source state without bound.
 
-Install `collect.py` and `history.py` together under the deployment's `metrics`
-directory, retaining the existing totals latency observer and read-only SQL
-helper. The collector preserves the original totals/history fields and adds
-`queries.totals` and `queries.top10`, with separate progress, WAL, RSS, processing
-latency and prefix-scoped object inventories. Only totals has the existing
-source-commit observer; top ten does not borrow its latency. The page renders
-each query's measurement age and fetch time independently. Whole-portfolio
+Install `collect.py`, `history.py`, `queries.py` and `observe_latency.py` together
+under the deployment's `metrics` directory, retaining its read-only SQL helper.
+Run the observer as a service with `--root` pointing at the deployment root.
+The collector preserves the original totals/history fields and adds
+`queries.totals` and `queries.top10`. Both report their own RSS, heartbeat-scoped
+cache/memtable/run diagnostics, object-service requests and bytes, processing,
+preparation, publication and checkpoint latency, published source transactions,
+progress, WAL, result storage and prefix-scoped object inventories. Object-service
+counters include all request types; CPU and PUT-only counts are not collected.
+Process counters reset on worker restart; latency and publication counts cover
+the preceding 60 seconds. Physical object inventory is sampled once per minute.
+
+One read-only observer polls both queries' durable progress with independent
+pending queues. It measures generator COMMIT acknowledgement to observed query
+publication, including transactions that leave the top-ten result unchanged.
+Its pre-COMMIT WAL target is an inclusion proxy only while the generator is the
+sole source writer, with up to 50 ms polling quantization. It sends no replication
+feedback. Missing progress, stale observers and empty windows remain distinct
+from measured zero. The page renders each measurement's age independently.
+The history shows both query processes side by side by default, with shared time
+and metric filters and a Both/Totals/Top10 selector. Each panel reads its own
+bounded 24-hour document; it never
+substitutes totals samples for top-ten samples. Whole-portfolio
 metrics always come from the complete totals view. Browser requests cast integer
 and numeric outputs to text and use BigInt, preserving exact synthetic counts.
 
