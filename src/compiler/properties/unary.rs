@@ -77,11 +77,12 @@ impl Analysis {
             | Node::Finalize { .. }
             | Node::OrderedFinalize { .. }
             | Node::Statistics { .. }
-            | Node::SetDistinct { .. } => self.grouping(ir, node)?,
+            | Node::SetDistinct { .. }
+            | Node::SetOperation { .. } => self.grouping(ir, node)?,
             Node::Expand { id, input, series } => expanded(self.edge(input)?, id, series)?,
-            Node::TopKInput { input, .. } | Node::PrefixInput { input, .. } => {
-                self.edge(input)?.clone()
-            }
+            Node::TopKInput { input, .. }
+            | Node::PrefixInput { input, .. }
+            | Node::SetTag { input, .. } => self.edge(input)?.clone(),
             Node::TopK { id, input, spec } => {
                 let mut facts = self.edge(input)?.clone();
                 if let Some(name) = &spec.field {
@@ -122,6 +123,15 @@ impl Analysis {
             Node::SetDistinct { id, input, columns } => {
                 let mut facts = project(self.edge(input)?, id, columns.iter())?;
                 facts.add_key(facts.columns.values().map(|c| c.identity.clone()).collect());
+                facts
+            }
+            Node::SetOperation { id, input, spec } => {
+                let mut facts = project(self.edge(input)?, id, spec.columns.iter())?;
+                facts.keys.clear();
+                facts.navigation.clear();
+                if !spec.all {
+                    facts.add_key(facts.columns.values().map(|c| c.identity.clone()).collect());
+                }
                 facts
             }
             _ => anyhow::bail!("non-grouping property node"),

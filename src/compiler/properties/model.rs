@@ -66,6 +66,9 @@ impl Properties {
     pub(crate) const fn maximum_rows(&self) -> Option<u64> {
         self.maximum
     }
+    pub(in crate::compiler) fn modifier(&self, column: &ColumnRef) -> Option<i32> {
+        self.columns.get(&column.name).map(|field| field.modifier)
+    }
     pub(in crate::compiler) fn collation(&self, column: &ColumnRef) -> Option<u32> {
         self.columns.get(&column.name).map(|field| field.collation)
     }

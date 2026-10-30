@@ -37,7 +37,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
             }
             Ok(compiled)
         }
-        Parsed::Union(parsed) => setop::bind(parsed, contract),
+        Parsed::SetOperation(parsed) => setop::bind(parsed, contract),
         Parsed::Ordered(parsed) => ordering::bind(parsed, contract),
         Parsed::Membership { parsed, distinct } => membership::bind(parsed, distinct, contract),
         Parsed::Lookup(parsed) => lookup::bind(parsed, contract),

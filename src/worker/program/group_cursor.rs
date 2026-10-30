@@ -20,7 +20,7 @@ fn is_left(row: &Row) -> Result<bool> {
         _ => anyhow::bail!("invalid group input side"),
     }
 }
-fn project(columns: &[ColumnRef], row: &Row) -> Result<Row> {
+pub(super) fn project(columns: &[ColumnRef], row: &Row) -> Result<Row> {
     columns
         .iter()
         .map(|column| {

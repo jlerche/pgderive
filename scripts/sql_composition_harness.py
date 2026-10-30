@@ -183,7 +183,6 @@ def qualify(output, command, mode):
         b = fixture.name+'.bid'
         negatives = {
             'recursive': f'WITH RECURSIVE c AS (SELECT b.id FROM {b} b) SELECT c.id FROM c',
-            'union-distinct': f'SELECT b.id FROM {b} b UNION SELECT b.id FROM {b} b',
             'having-alias': f'SELECT b.auction AS g,COUNT(*) AS n FROM {b} b GROUP BY b.auction HAVING n>1',
         }
         # Check fail-closed admission once; each history also rejects changed plans.

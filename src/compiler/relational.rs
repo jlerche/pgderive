@@ -66,6 +66,8 @@ relational_nodes! {
     Union [left, right] => Union {},
     LeftJoinInput [input] => Project { spec: super::left_join::Input },
     SetDistinct [input] => Aggregate { columns: Vec<ColumnRef> },
+    SetTag [input] => Project { left: bool },
+    SetOperation [input] => Aggregate { spec: super::setop::Spec },
     Existence [input] => Aggregate { anti: bool },
     PrefixInput [input] => Project { spec: super::partition::Partition },
     PrefixStatistics [input] => Statistics { spec: super::partition::Partition },

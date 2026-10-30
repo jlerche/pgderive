@@ -102,6 +102,8 @@ fn bind(
         Node::SetDistinct { columns, .. } => {
             Operator::Group(super::group_cursor::distinct(columns))
         }
+        Node::SetTag { left, .. } => Operator::Project(super::setop::tag(*left)),
+        Node::SetOperation { spec, .. } => Operator::Group(super::setop::operator(spec)),
         Node::RightCounts { .. } => Operator::Statistics(super::membership_counts::counts()),
         Node::RightPresence { .. } => Operator::Project(super::membership_counts::presence()),
         Node::Existence { anti, .. } => Operator::Group(super::group_cursor::existence(*anti)),

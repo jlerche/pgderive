@@ -27,7 +27,7 @@ pub(super) type Columns = Vec<(Name, String)>;
 pub(super) enum Parsed {
     With { bindings: Vec<Self>, inner: Box<Self> },
     Renamed { inner: Box<Self>, labels: Vec<String> },
-    Union(setop::Union),
+    SetOperation(setop::SetOperation),
     Ordered(ordering::Parsed),
     Membership { parsed: partition::Parsed, distinct: bool },
     Lookup(lookup::Parsed),

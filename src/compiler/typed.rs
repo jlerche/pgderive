@@ -300,7 +300,11 @@ impl Typed {
 }
 
 impl Typed {
-    pub(in crate::compiler) fn union_cast(column: ColumnRef, oid: u32) -> Result<Self> {
+    pub(in crate::compiler) fn set_cast(
+        column: ColumnRef,
+        oid: u32,
+        modifier: Option<i32>,
+    ) -> Result<Self> {
         ensure!(
             column.oid == oid
                 || matches!(
@@ -309,7 +313,22 @@ impl Typed {
                 ),
             "unsupported UNION coercion"
         );
-        Ok(Self { oid, value: Value::Cast { input: Box::new(Self::column(column)), typmod: None } })
+        let mut input = Self::column(column);
+        if input.oid == 1700
+            && let Some(modifier) = modifier.filter(|value| *value >= 4)
+        {
+            input = Self {
+                oid: 1700,
+                value: Value::Cast {
+                    input: Box::new(input),
+                    typmod: Some(crate::numeric::Typmod::from_encoded(modifier)?),
+                },
+            };
+        }
+        if input.oid == oid {
+            return Ok(input);
+        }
+        Ok(Self { oid, value: Value::Cast { input: Box::new(input), typmod: None } })
     }
     pub(in crate::compiler) fn union_literal(value: &Node, oid: u32) -> Result<Self> {
         let NodeEnum::AConst(value) = crate::compiler::parser::expressions::node(value)? else {

@@ -18,6 +18,7 @@ pub(crate) use projection::Projected;
 pub(crate) mod expansion;
 mod remainder;
 pub(crate) mod scalar;
+pub(crate) mod setop;
 mod syntax;
 pub(crate) mod topk;
 mod typed;

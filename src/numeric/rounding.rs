@@ -22,6 +22,12 @@ impl Typmod {
         );
         Ok(Self { precision: u16::try_from(precision)?, scale: i16::try_from(scale)? })
     }
+    pub(crate) fn from_encoded(value: i32) -> Result<Self> {
+        let value = value.checked_sub(4).context("invalid numeric type modifier")?;
+        ensure!(value >= 0, "invalid numeric type modifier");
+        let scale = ((value & 0x7ff) ^ 0x400) - 0x400;
+        Self::new(i64::from(value >> 16), i64::from(scale))
+    }
     pub(crate) fn encoded(self) -> i32 {
         ((i32::from(self.precision) << 16) | (i32::from(self.scale) & 0x7ff)) + 4
     }

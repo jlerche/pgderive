@@ -113,7 +113,9 @@ ORDER BY/LIMIT/OFFSET applies to the combined result. PostgreSQL's set-operation
 ordering restrictions still apply. Destination tables remain relational bags;
 consumers must specify their own ORDER BY when reading them.
 
-UNION without ALL, INTERSECT and EXCEPT are separate capabilities.
+[UNION DISTINCT, INTERSECT and EXCEPT, including their ALL variants](set-operations.md),
+now use the shared set-operation binding; that contract specifies equality, numeric
+representation and collation boundaries.
 
 ## Feldera reference and qualification
 

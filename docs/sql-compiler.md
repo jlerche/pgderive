@@ -87,7 +87,8 @@ parser resource guarantee. Only built-in unqualified COUNT and SUM are supported
 This initial grouped-join shape is one lowering path; the sections below describe
 the broader typed projections, aggregates, joins, derived queries and windows.
 [HAVING, nonrecursive CTEs and UNION ALL](sql-composition.md) compose those paths.
-Parameters, recursive WITH, DISTINCT set operations and multiple statements remain
+[UNION DISTINCT, INTERSECT and EXCEPT with ALL variants](set-operations.md) extend
+that composition. Parameters, recursive WITH and multiple statements remain
 outside the accepted grammar. Unsupported SQL is rejected before a registration
 row or replication slot is created.
 Administrative metadata table installation may precede compilation; it does not
