@@ -209,10 +209,8 @@ fn join_tree_aliases_keys_and_unsupported_shapes_bind_identity() -> Result<()> {
     );
     for bad in [
         sql.replace("a.category AS c", "id AS c"),
-        sql.replace("LEFT JOIN", "RIGHT JOIN"),
-        sql.replace("LEFT JOIN", "FULL JOIN"),
         sql.replace("bid b ", "bid a "),
-        "SELECT l.id FROM source.bid l LEFT JOIN source.bid r USING(id)".into(),
+        "SELECT l.id FROM source.bid l LEFT JOIN source.bid r USING(id,id)".into(),
     ] {
         assert!(compile(&bad, &native).is_err(), "accepted {bad}");
     }

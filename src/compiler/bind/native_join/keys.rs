@@ -176,3 +176,22 @@ fn conjunct(
     )?);
     Ok(())
 }
+
+pub(super) fn using(pairs: &[super::using::Pair], prefix: &str) -> Result<Bound> {
+    let mut bound = Bound::new();
+    for pair in pairs {
+        let left = Operand {
+            sides: 1,
+            expression: typed::Typed::set_cast(pair.left.value.clone(), pair.oid, None)?,
+            collation: pair.left.collation,
+        };
+        let right = Operand {
+            sides: 2,
+            expression: typed::Typed::set_cast(pair.right.value.clone(), pair.oid, None)?,
+            collation: pair.right.collation,
+        };
+        ensure!(bound.key(left, right, prefix)?, "incompatible USING key types");
+    }
+    bound.normalize();
+    Ok(bound)
+}

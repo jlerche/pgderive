@@ -7,7 +7,10 @@ use crate::engine::{
     execution::{Consolidator, Limits},
 };
 use crate::{
-    compiler::left_join::{Input, Spec},
+    compiler::{
+        ColumnRef,
+        left_join::{Input, Spec},
+    },
     engine::dataflow::Project,
     transaction::Row,
 };
@@ -54,25 +57,32 @@ pub(super) fn operator(spec: &Spec, limits: Limits) -> Partition<Key, Row> {
             }
         }
         let mut output = Consolidator::new(limits)?;
-        for (row, weight) in left {
+        for (row, weight) in &left {
             let mut matched = false;
             for (other, multiplicity) in &right {
                 work.charge(1)?;
                 if let Some(result) = matching(&spec, row, other)? {
                     matched = true;
-                    output.add(((), result), BigInt::from(weight) * BigInt::from(*multiplicity))?;
+                    output
+                        .add(((), result), BigInt::from(*weight) * BigInt::from(*multiplicity))?;
                 }
             }
             if !matched {
                 work.charge(1)?;
-                let mut result = stripped(row);
-                for column in &spec.right {
-                    ensure!(
-                        result.insert(column.name.clone(), None).is_none(),
-                        "left join field collision"
-                    );
+                let result = null_extend(&spec.right, row)?;
+                output.add(((), result), *weight)?;
+            }
+        }
+        if spec.full {
+            for (row, weight) in right {
+                let mut matched = false;
+                for (other, _) in &left {
+                    work.charge(1)?;
+                    matched |= matching(&spec, other, row)?.is_some();
                 }
-                output.add(((), result), weight)?;
+                if !matched {
+                    output.add(((), null_extend(&spec.left, row)?), weight)?;
+                }
             }
         }
         output.finish_batch()
@@ -99,4 +109,12 @@ pub(super) fn matching(spec: &Spec, left: &Row, right: &Row) -> Result<Option<Ro
     } else {
         Ok(None)
     }
+}
+
+pub(super) fn null_extend(columns: &[ColumnRef], row: &Row) -> Result<Row> {
+    let mut result = stripped(row);
+    for column in columns {
+        ensure!(result.insert(column.name.clone(), None).is_none(), "outer join field collision");
+    }
+    Ok(result)
 }

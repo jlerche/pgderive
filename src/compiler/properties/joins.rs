@@ -88,7 +88,13 @@ fn node<'a>(ir: &'a Relational, id: &str) -> Option<&'a Node> {
     ir.nodes.iter().find(|n| n.id() == id)
 }
 impl Analysis {
-    pub(super) fn left_join(&self, ir: &Relational, id: &str, input: &str) -> Result<Properties> {
+    pub(super) fn left_join(
+        &self,
+        ir: &Relational,
+        id: &str,
+        input: &str,
+        full: bool,
+    ) -> Result<Properties> {
         let Some(Node::Union { left, right, .. }) = node(ir, input) else {
             return Ok(Properties::default());
         };
@@ -106,6 +112,16 @@ impl Analysis {
         let mut right = self.edge(b)?.clone();
         right.navigation = rk.keys.iter().map(|k| k.name.clone()).collect();
         let mut out = merge(&left, &right)?;
+        if full {
+            for (name, column) in &mut out.columns {
+                column.reference.nullable = true;
+                column.identity = Identity::Derived(id.into(), name.clone());
+            }
+            out.maximum = left.maximum.zip(right.maximum).and_then(|(left, right)| {
+                left.checked_mul(right)?.checked_add(left)?.checked_add(right)
+            });
+            return Ok(out);
+        }
         if overlap(&left, &right) {
             for (name, c) in &mut out.columns {
                 c.identity = Identity::Derived(id.into(), name.clone());

@@ -49,7 +49,7 @@ PGDERIVE_S3_LATENCY_SCALE="$crash_scale" run_qualification crashes python3 scrip
 while read -r qualification script; do
     if [[ "$profile" == core ]]; then
         case "$qualification" in
-            subqueries|set-operations|join-predicates|numeric-arithmetic|sql-composition|query-concurrent|unordered|ordering-domains|ordering|keyed-sink|compiler|application|composition-matrix|sliding-extrema|prefix-window|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|postgres-support|computed-join|environment|aggregate-inputs|relational|partition|numeric|circuit-numeric|native|navigation|case|lookup) ;;
+            outer-joins|subqueries|set-operations|join-predicates|numeric-arithmetic|sql-composition|query-concurrent|unordered|ordering-domains|ordering|keyed-sink|compiler|application|composition-matrix|sliding-extrema|prefix-window|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|postgres-support|computed-join|environment|aggregate-inputs|relational|partition|numeric|circuit-numeric|native|navigation|case|lookup) ;;
             *) continue ;;
         esac
     fi
@@ -86,6 +86,7 @@ postgres-support postgres_support
 environment environment
 computed-join computed_join
 join-predicates join_predicate
+outer-joins outer_join
 aggregate-inputs aggregate_inputs_compiler
 relational relational_compiler
 partition partition_compiler
@@ -162,7 +163,7 @@ python3 - "$output" "${worker[0]}" "${admin[0]}" <<'PY'
 import hashlib,json,os,pathlib,stat,subprocess,sys
 output=pathlib.Path(sys.argv[1])
 results=list(output.rglob('result.json'))
-assert len(results)==633,results
+assert len(results)==676,results
 removals=list((output/'query-removal').glob('*/qualification.json'))
 assert len(removals)==11,removals
 rebuild_faults=list((output/'query-rebuild-fault').glob('*/qualification.json'))

@@ -7,7 +7,10 @@ use crate::{
         execution::Consolidator,
     },
     transaction::Row,
-    worker::program::{left_join::matching, relational::Key},
+    worker::program::{
+        left_join::{matching, null_extend},
+        relational::Key,
+    },
 };
 use anyhow::Result;
 use num_bigint::BigInt;
@@ -50,6 +53,40 @@ async fn emit(
         }
         if !matched {
             output.add(((), unmatched(spec, &left)?), BigInt::from(weight) * sign)?;
+        }
+    }
+    if spec.full {
+        emit_right(spec, start, sign, output, work).await?;
+    }
+    Ok(())
+}
+
+async fn emit_right(
+    spec: &Spec,
+    mut cursor: GroupCursor<Key, Row>,
+    sign: i64,
+    output: &mut Consolidator<((), Row)>,
+    work: &mut PartitionWork,
+) -> Result<()> {
+    let start = cursor.clone();
+    while let Some((right, weight)) = cursor.next(work).await? {
+        if is_left(&right)? {
+            continue;
+        }
+        let mut left = start.clone();
+        let mut matched = false;
+        while let Some((row, _)) = left.next(work).await? {
+            if !is_left(&row)? {
+                continue;
+            }
+            work.charge(1)?;
+            if matching(spec, &row, &right)?.is_some() {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            output.add(((), null_extend(&spec.left, &right)?), BigInt::from(weight) * sign)?;
         }
     }
     Ok(())

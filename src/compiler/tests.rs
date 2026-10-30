@@ -178,3 +178,6 @@ fn deterministic_text_equality_preserves_bytes_and_unknown() -> Result<()> {
 
 #[path = "tests/scalar.rs"]
 mod scalar;
+
+#[path = "tests/using.rs"]
+mod using;

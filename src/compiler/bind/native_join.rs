@@ -1,10 +1,12 @@
 //! Resolve native source occurrences into an executable join tree.
 mod keys;
 mod subquery;
+mod using;
 use super::scope as native_source;
 use crate::{
     compiler::{
         ColumnRef,
+        left_join::Kind,
         parser::{Name, native_join::Tree},
         relational::{Node, Relational, Source, field},
     },
@@ -17,6 +19,8 @@ struct Column {
     qualifiers: Vec<String>,
     value: ColumnRef,
     collation: u32,
+    modifier: i32,
+    unqualified: bool,
 }
 struct Edge {
     id: String,
@@ -74,19 +78,16 @@ impl Builder<'_> {
                 let right = self.derived_checked(right, alias, true)?;
                 let id = format!("tree_join_{}", self.joins);
                 let bound = keys::condition(None, &left.columns, &right.columns, &id)?;
-                self.join(left, right, bound, true)
+                self.join(left, right, bound, Kind::Left)
             }
             Tree::Mark { left, right, probe, alias, condition } => {
                 let left = self.tree(*left)?;
                 self.mark(left, right, (&probe, alias, condition.as_deref()))
             }
-            Tree::Join { left, right, condition, outer } => {
+            Tree::Join { left, right, condition, kind, using } => {
                 let left = self.tree(*left)?;
                 let right = self.tree(*right)?;
-                let id = format!("tree_join_{}", self.joins);
-                let bound =
-                    keys::condition(condition.as_deref(), &left.columns, &right.columns, &id)?;
-                self.join(left, right, bound, outer)
+                self.native_join(left, right, condition.as_deref(), (kind, using))
             }
         }
     }
@@ -124,6 +125,8 @@ impl Builder<'_> {
                 qualifiers: vec![scope.alias.clone()],
                 value: output.column.clone(),
                 collation: facts.collation(&output.column).unwrap_or(0),
+                modifier: facts.modifier(&output.column).unwrap_or(-1),
+                unqualified: true,
             })
             .collect();
         self.sources.extend(scope.ir.sources);
@@ -153,6 +156,8 @@ impl Builder<'_> {
                     nullable: column.nullable,
                 },
                 collation: column.collation,
+                modifier: column.modifier,
+                unqualified: true,
             })
             .collect();
         self.sources.push(Source {
@@ -168,13 +173,17 @@ impl Builder<'_> {
         mut left: Edge,
         mut right: Edge,
         bound: keys::Bound,
-        outer: bool,
+        kind: Kind,
     ) -> Result<Edge> {
+        if kind == Kind::Right {
+            return self.right_join(left, right, bound);
+        }
+        let outer = kind != Kind::Inner;
         ensure!(
-            !left.columns.iter().any(|left| right
-                .columns
-                .iter()
-                .any(|right| left.qualifiers.last() == right.qualifiers.last())),
+            !left.columns.iter().any(|left| right.columns.iter().any(|right| left
+                .qualifiers
+                .last()
+                .is_some_and(|qualifier| right.qualifiers.last() == Some(qualifier)))),
             "duplicate exposed table qualifier"
         );
         let id = format!("tree_join_{}", self.joins);
@@ -208,10 +217,17 @@ impl Builder<'_> {
                 id: id.clone(),
                 input,
                 spec: crate::compiler::left_join::Spec {
+                    left: left.columns.iter().map(|value| value.value.clone()).collect(),
+                    full: kind == Kind::Full,
                     right: right.columns.iter().map(|value| value.value.clone()).collect(),
                     predicate: predicate.clone(),
                 },
             });
+            if kind == Kind::Full {
+                for column in &mut left.columns {
+                    column.value.nullable = true;
+                }
+            }
             for column in &mut right.columns {
                 column.value.nullable = true;
             }
@@ -231,6 +247,14 @@ impl Builder<'_> {
         columns.extend(right.columns);
         Ok(Edge { id: result, columns })
     }
+    fn right_join(&mut self, left: Edge, right: Edge, mut bound: keys::Bound) -> Result<Edge> {
+        let width = right.columns.len();
+        bound.keys = bound.keys.into_iter().map(|(left, right)| (right, left)).collect();
+        bound.computed.swap(0, 1);
+        let mut edge = self.join(right, left, bound, Kind::Left)?;
+        edge.columns.rotate_left(width);
+        Ok(edge)
+    }
     fn existence(
         &mut self,
         left: Edge,
@@ -241,7 +265,7 @@ impl Builder<'_> {
         let columns = left.columns.clone();
         let id = format!("tree_join_{}", self.joins);
         let bound = keys::bind(names, &left.columns, &right.columns, &id)?;
-        let edge = self.join(left, right, bound, true)?;
+        let edge = self.join(left, right, bound, Kind::Left)?;
         let Some(Node::LeftJoin { id, input, .. }) = self.nodes.pop() else {
             anyhow::bail!("missing existence join")
         };
@@ -276,7 +300,7 @@ fn resolve<'a>(name: &Name, columns: &'a [Column]) -> Result<&'a Column> {
     let mut matches = columns.iter().filter(|column| {
         Some(&column.label) == name.0.last()
             && match name.0.as_slice() {
-                [_] => true,
+                [_] => column.unqualified,
                 [qualifier, _] => column.qualifiers.last() == Some(qualifier),
                 [schema, table, _] => {
                     column.qualifiers.as_slice() == [schema.clone(), table.clone()]

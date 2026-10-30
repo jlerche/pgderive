@@ -195,7 +195,7 @@ fn scoped_join_normalizes_equalities_and_rejects_unsupported_shapes() -> Result<
         sql.replace("p.id,p.name,p.starttime", "p.id,p.name,starttime"),
         sql.replace("p.id=a.seller", "p.id=a.starttime"),
         sql.replace(") a ON", ") p ON"),
-        sql.replace("JOIN (", "FULL JOIN ("),
+        sql.replace("JOIN (", "NATURAL JOIN ("),
     ] {
         assert!(compile(&invalid, &native).is_err(), "{invalid}");
     }

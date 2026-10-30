@@ -9,6 +9,7 @@ mod case;
 pub(in crate::compiler) mod collation;
 mod evaluate;
 mod functions;
+mod join;
 mod operand;
 mod predicate;
 pub(super) use operand::{Operand, bind as operand, native_literal, navigation};

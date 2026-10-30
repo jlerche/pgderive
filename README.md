@@ -1011,6 +1011,8 @@ reversible AVG summaries retain removable scales and special values.
 
 [Join keys and predicates](docs/join-predicates.md) cover numeric/text computed keys
 and residual INNER/LEFT ON conditions, including per-left-tuple unmatched rows.
+[RIGHT/FULL joins and USING](docs/outer-joins.md) add unmatched occurrences on
+either side, merged common-typed keys and independently qualified original columns.
 
 [Set operations](docs/set-operations.md) add UNION DISTINCT, INTERSECT and EXCEPT,
 including INTERSECT ALL and EXCEPT ALL, with exact duplicate/NULL multiplicities.

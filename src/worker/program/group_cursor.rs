@@ -13,7 +13,7 @@ use crate::{
     },
     transaction::Row,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use num_bigint::BigInt;
 const SIDE: &str = "\0left_join_side";
 fn is_left(row: &Row) -> Result<bool> {
@@ -110,11 +110,7 @@ async fn products(
     Ok(present)
 }
 fn unmatched(spec: &Spec, row: &Row) -> Result<Row> {
-    let mut result = stripped(row);
-    for column in &spec.right {
-        ensure!(result.insert(column.name.clone(), None).is_none(), "left join field collision");
-    }
-    Ok(result)
+    super::left_join::null_extend(&spec.right, row)
 }
 async fn emit_unmatched(
     spec: &Spec,
@@ -131,7 +127,7 @@ async fn emit_unmatched(
     Ok(())
 }
 pub(super) fn left_join(spec: &Spec) -> Group<Key, Row> {
-    if spec.predicate.is_some() {
+    if spec.predicate.is_some() || spec.full {
         return residual_join::operator(spec);
     }
     let spec = spec.clone();

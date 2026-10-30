@@ -837,16 +837,18 @@
     {
       "id": "joins",
       "status": "bounded",
-      "domain": "Native/computed numeric and text equality keys, CROSS/self/multiway, residual INNER/LEFT ON predicates, and restricted equality EXISTS/NOT EXISTS. SQL three-valued matching, full-tuple multiplicity and simultaneous-input cross term; collation/work boundaries in join-predicates.md.",
+      "domain": "Native/computed numeric and text equality keys, CROSS/self/multiway, residual INNER/LEFT/RIGHT/FULL ON predicates, USING merged/qualified names and native common types, and restricted equality EXISTS/NOT EXISTS. SQL three-valued matching, full-tuple multiplicity and simultaneous-input cross term; PostgreSQL FULL planning and collation/work boundaries in outer-joins.md and join-predicates.md.",
       "implementation": [
         "src/compiler/bind/native_join.rs",
         "src/compiler/left_join.rs",
+        "src/compiler/bind/native_join/using.rs",
         "src/compiler/bind/membership.rs"
       ],
       "qualification": [
         "scripts/query_native_join_harness.py",
         "scripts/computed_join_harness.py",
         "scripts/join_predicate_harness.py",
+        "scripts/outer_join_harness.py",
         "scripts/join_composition_harness.py",
         "src/engine/dataflow/tests/join.rs"
       ]

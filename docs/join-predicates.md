@@ -1,10 +1,11 @@
 # Join keys and ON predicates
 
-INNER and LEFT joins over native tables and supported non-LATERAL derived scopes
+INNER, LEFT, RIGHT and FULL joins over native tables and supported non-LATERAL derived scopes
 accept the existing local scalar predicate domain in ON. This includes AND, OR,
 NOT, NULL tests, constants, inequalities and expressions referencing both inputs.
-Only TRUE matches; FALSE and UNKNOWN do not. USING, NATURAL, RIGHT/FULL joins,
-lateral references and arbitrary subqueries remain outside this slice.
+Only TRUE matches; FALSE and UNKNOWN do not. [Outer joins and USING](outer-joins.md)
+extend the shared match machinery and name/type binding. NATURAL joins, lateral
+references and arbitrary subqueries remain outside this slice.
 
 ## Keys and types
 
@@ -50,6 +51,8 @@ budgets bound this cost. This slice does not add a range join index.
 The LEFT join plan records its ON predicate explicitly, including its absence.
 Existing LEFT join registrations therefore require an explicit rebuild before
 restarting with this worker; their captured physical plan identity changes.
+The RIGHT/FULL extension also changes the shared outer specification; see its
+[rebuild and qualification contract](outer-joins.md).
 
 ## Qualification
 

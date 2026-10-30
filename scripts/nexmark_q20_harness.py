@@ -55,7 +55,7 @@ def qualify(output,command,mode):
     fixture = Q20Fixture(output,mode)
     with fixture.managed():
         fixture.rejected(command,'ambiguous-column',fixture.query.replace('b.date_time AS bid_date_time','date_time AS bid_date_time'))
-        fixture.rejected(command,'unsupported-full-join',fixture.query.replace('INNER JOIN','FULL JOIN'))
+        fixture.rejected(command,'unsupported-natural-join',fixture.query.replace('INNER JOIN','NATURAL JOIN').replace(' ON b.auction=a.id',''))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
         changes = [

@@ -87,11 +87,25 @@ impl Typed {
     pub(in crate::compiler) const fn as_column(&self) -> Option<&ColumnRef> {
         if let Value::Column(column) = &self.value { Some(column) } else { None }
     }
-    pub(in crate::compiler) fn modifier(&self) -> i32 {
-        if let Value::Cast { typmod: Some(typmod), .. } = self.value {
-            typmod.encoded()
-        } else {
-            -1
+    pub(in crate::compiler) fn modifier(
+        &self,
+        resolve: &impl Fn(&ColumnRef) -> Option<i32>,
+    ) -> i32 {
+        match &self.value {
+            Value::Column(column) => resolve(column).unwrap_or(-1),
+            Value::Cast { typmod: Some(typmod), .. } => typmod.encoded(),
+            Value::Coalesce(values) => {
+                let modifier = values.first().map_or(-1, |value| value.modifier(resolve));
+                if values
+                    .iter()
+                    .all(|value| value.oid == self.oid && value.modifier(resolve) == modifier)
+                {
+                    modifier
+                } else {
+                    -1
+                }
+            }
+            _ => -1,
         }
     }
     pub(in crate::compiler) const fn as_integer_literal(&self) -> Option<i64> {

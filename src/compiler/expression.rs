@@ -277,6 +277,9 @@ impl Predicate {
     pub(super) const fn new(expr: Expr) -> Self {
         Self(expr)
     }
+    pub(in crate::compiler) fn is_constant(&self) -> bool {
+        self.0.is_constant()
+    }
     pub(crate) fn qualifies(&self, row: &Row) -> Result<bool> {
         Ok(self.0.evaluate((row, row))? == Some(true))
     }

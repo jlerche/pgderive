@@ -30,7 +30,8 @@ pub(in crate::compiler) enum Tree {
         left: Box<Self>,
         right: Box<Self>,
         condition: Option<Box<Node>>,
-        outer: bool,
+        kind: crate::compiler::left_join::Kind,
+        using: Vec<String>,
     },
 }
 pub(super) fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tree> {
@@ -50,9 +51,11 @@ pub(super) fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tr
             ensure!(
                 matches!(
                     pg::JoinType::try_from(join.jointype)?,
-                    pg::JoinType::JoinInner | pg::JoinType::JoinLeft
+                    pg::JoinType::JoinInner
+                        | pg::JoinType::JoinLeft
+                        | pg::JoinType::JoinRight
+                        | pg::JoinType::JoinFull
                 ) && !join.is_natural
-                    && join.using_clause.is_empty()
                     && join.join_using_alias.is_none()
                     && join.alias.is_none()
                     && join.rtindex == 0,
@@ -64,7 +67,13 @@ pub(super) fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tr
                 left: Box::new(left),
                 right: Box::new(right),
                 condition: join.quals.clone(),
-                outer: join.jointype == i32::from(pg::JoinType::JoinLeft),
+                kind: match pg::JoinType::try_from(join.jointype)? {
+                    pg::JoinType::JoinLeft => crate::compiler::left_join::Kind::Left,
+                    pg::JoinType::JoinRight => crate::compiler::left_join::Kind::Right,
+                    pg::JoinType::JoinFull => crate::compiler::left_join::Kind::Full,
+                    _ => crate::compiler::left_join::Kind::Inner,
+                },
+                using: super::expressions::names(&join.using_clause)?.0,
             })
         }
         _ => anyhow::bail!("native join tree requires ordinary native tables"),

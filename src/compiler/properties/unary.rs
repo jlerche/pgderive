@@ -25,7 +25,7 @@ impl Analysis {
             Node::Union { id, left, right } => {
                 Ok(super::joins::union(self.edge(left)?, self.edge(right)?, id))
             }
-            Node::LeftJoin { id, input, .. } => self.left_join(ir, id, input),
+            Node::LeftJoin { id, input, spec } => self.left_join(ir, id, input, spec.full),
             Node::Existence { input, .. } => self.semi_join(ir, input),
             Node::Mark { id, input, spec } => {
                 let mut facts = self.semi_join(ir, input)?;
@@ -233,7 +233,7 @@ fn mapped(mut facts: Properties, id: &str, computed: &[Computed]) -> Result<Prop
                 .unwrap_or(0);
         }
         if item.expression.as_column().is_none() {
-            field.modifier = item.expression.modifier();
+            field.modifier = item.expression.modifier(&|column| facts.modifier(column));
         }
         field.reference.name.clone_from(&item.column.name);
         facts.columns.insert(item.column.name.clone(), field);

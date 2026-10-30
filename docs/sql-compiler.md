@@ -893,10 +893,11 @@ and a raw nested-loop memory oracle through simultaneous changes and cold restar
 Native tables and independently compiled non-LATERAL subqueries use one join
 tree and aggregate/projection builder. Derived inputs require aliases and expose
 only their selected labels; ambiguous unqualified names reject. INNER, CROSS,
-and LEFT joins share the same key binding, weighted execution, and source
+LEFT, RIGHT and FULL joins share the same key binding, weighted execution, and source
 occurrence limits. [ON key extraction and residual predicates](join-predicates.md)
-cover numeric/text keys, OR and non-equality conditions. USING and NATURAL remain
-unsupported. WHERE runs after the join, and the common builder handles outer
+cover numeric/text keys, OR and non-equality conditions. [USING and outer joins](outer-joins.md)
+preserve merged names and qualified originals; NATURAL remains unsupported.
+WHERE runs after the join, and the common builder handles outer
 projection, grouping, and windows under their existing semantic restrictions.
 
 Scope boundaries, compound key expressions and complete native contracts belong
@@ -1041,6 +1042,9 @@ multiply exactly before final narrowing. WHERE runs after null extension, so
 filtering a matched row cannot manufacture an unmatched row. Complete tuple
 identity survives state maintenance, publication and cold recovery. Left joins
 currently do not establish a uniqueness proof for positional window ordering.
+RIGHT normalizes physical inputs through this same machinery. FULL additionally
+emits unmatched right occurrences with the entire missing scope null-extended;
+see [outer joins and USING](outer-joins.md) for names, types and rebuild boundaries.
 
 Source occurrences, compound keys, retained left-join semantics and nested
 scope bindings are explicit in normalized IR alongside full native contracts.
@@ -1192,7 +1196,7 @@ require an explicit cast. This slice adds no PostgreSQL computation path.
 
 ## Computed inner-join keys
 
-Native and supported derived INNER/LEFT inputs accept side-local computed
+Native and supported derived INNER/LEFT/RIGHT/FULL inputs accept side-local computed
 numeric/text equality keys and residual predicates. Top-level equalities become
 navigation keys where compatible; other conditions evaluate over candidate pairs.
 The [join predicate contract](join-predicates.md) specifies collation, NULL,

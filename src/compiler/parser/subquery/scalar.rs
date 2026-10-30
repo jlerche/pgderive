@@ -64,7 +64,8 @@ impl Rewrite<'_> {
                 alias: alias.clone(),
             }),
             condition: ast::logical(conditions, true),
-            outer: true,
+            kind: crate::compiler::left_join::Kind::Left,
+            using: Vec::new(),
         });
         let fallback = self.alias()?;
         self.attach_scalar(named(&empty)?, fallback.clone())?;

@@ -186,6 +186,7 @@ mod incremental_distinct;
 mod ordered;
 
 mod native_join;
+mod outer_joins;
 
 mod limit;
 mod numeric;

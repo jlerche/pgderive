@@ -84,7 +84,7 @@ fn normalized_join_identity_and_fail_closed_resolution() -> Result<()> {
     for sql in [
         SQL.replace("a.category AS c", "id AS c"),
         format!("{SQL} ORDER BY c"),
-        SQL.replace("JOIN", "FULL JOIN"),
+        SQL.replace("JOIN", "NATURAL JOIN"),
     ] {
         assert!(compile(&sql, &native).is_err(), "{sql}");
     }

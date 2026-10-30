@@ -59,7 +59,7 @@ impl Builder<'_> {
         let columns = left.columns.clone();
         let id = format!("tree_join_{}", self.joins);
         let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
-        let edge = self.join(left, right, bound, true)?;
+        let edge = self.join(left, right, bound, crate::compiler::left_join::Kind::Left)?;
         let Some(Node::LeftJoin { id, input, spec }) = self.nodes.pop() else {
             anyhow::bail!("missing marker tagged join");
         };
@@ -82,6 +82,8 @@ impl Builder<'_> {
             qualifiers: vec![alias],
             value: output,
             collation: 0,
+            modifier: -1,
+            unqualified: true,
         });
         ensure!(edge.id == id, "marker join edge differs");
         Ok(Edge { id, columns })
