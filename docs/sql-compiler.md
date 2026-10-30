@@ -1106,13 +1106,14 @@ partition lowering as other grouped queries; see the [composition matrix](compos
 
 An outer ordinary source may use exactly `WHERE EXISTS (SELECT 1 FROM schema.table
 alias WHERE inner.key = outer.key [AND ...])`, or `WHERE NOT EXISTS (...)`.
-Correlations must use qualified columns and 1..16 native equalities connecting the
-inner and outer inputs. Key OIDs, modifiers and collations must match; supported
-keys are boolean, integral, numeric, UUID and timestamp types. Aliases expose source
+Correlations must use qualified operands and 1..16 equalities connecting the
+inner and outer inputs. Key types, computations and collations use the shared
+[join key binder](join-predicates.md). Aliases expose source
 occurrences, permitting self correlation with distinct aliases. Additional outer
 or inner predicates, OR/inequality correlations, uncorrelated subqueries, nested
-subqueries, aggregates, ordering and limits remain rejected. NOT IN is unsupported
-and does not share NOT EXISTS semantics.
+subqueries, aggregates, ordering and limits remain rejected for this EXISTS form.
+[IN/NOT IN and scalar aggregate subqueries](subqueries.md) have a separate bounded
+shared relational lowering. NOT IN preserves UNKNOWN and differs from NOT EXISTS.
 
 Execution tags both complete full-row input bags, separates NULL keys by side,
 unions synchronized transaction deltas and computes current affected key
@@ -1269,3 +1270,10 @@ and fused prefix statistics as explicit engine state. Other admitted frames keep
 the existing exact evaluator. This changes the plan identity of eligible old
 window registrations, requiring explicit rebuild. See [supported forms, evidence
 and read/write costs](prefix-windows.md).
+
+## Scalar aggregate subqueries and membership marks
+
+[The subquery contract](subqueries.md) covers scalar global/equality-correlated
+aggregates, IN lists and null-aware IN/NOT IN subqueries. It specifies cardinality,
+empty/default rows, correlation scope, native types, guarded evaluation and
+qualification boundaries.

@@ -1014,3 +1014,7 @@ and residual INNER/LEFT ON conditions, including per-left-tuple unmatched rows.
 
 [Set operations](docs/set-operations.md) add UNION DISTINCT, INTERSECT and EXCEPT,
 including INTERSECT ALL and EXCEPT ALL, with exact duplicate/NULL multiplicities.
+
+[Scalar aggregate subqueries and IN/NOT IN](docs/subqueries.md) add bounded
+global/equality-correlated aggregation and three-valued membership with correct
+empty/NULL behavior and preserved outer multiplicities.

@@ -3,8 +3,18 @@ use super::{ColumnRef, Name, Typed, Value};
 use anyhow::{Context, Result, ensure};
 use pg_query::protobuf as pg;
 
-pub(super) fn common(types: &[u32]) -> Result<u32> {
+pub(in crate::compiler) fn common(types: &[u32]) -> Result<u32> {
     let known = types.iter().copied().filter(|oid| !matches!(oid, 0 | 705)).collect::<Vec<_>>();
+    if let Some(first) = known.first()
+        && matches!(first, 16 | 2950 | 1114 | 1184)
+        && known.iter().all(|oid| oid == first)
+    {
+        ensure!(
+            types.iter().all(|oid| *oid == 0 || oid == first),
+            "native CASE/COALESCE requires typed values instead of unknown string results"
+        );
+        return Ok(*first);
+    }
     if known.is_empty() || known.iter().all(|oid| matches!(oid, 25 | 1043)) {
         // Unknown literals do not change a resolved varchar candidate.
         return Ok(if known.iter().all(|oid| *oid == 1043) && !known.is_empty() {
@@ -48,6 +58,9 @@ pub(super) fn cast(
     } else {
         super::bind(argument, resolve, depth + 1)?
     };
+    if matches!(oid, 20 | 21 | 23) && input.oid == 705 {
+        return Typed::contextual_literal(input, oid);
+    }
     let valid = if matches!(oid, 25 | 1043) {
         matches!(input.oid, 0 | 25 | 1043 | 705)
     } else {

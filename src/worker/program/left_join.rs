@@ -85,11 +85,15 @@ pub(super) fn stripped(row: &Row) -> Row {
         .collect()
 }
 
-pub(super) fn matching(spec: &Spec, left: &Row, right: &Row) -> Result<Option<Row>> {
+pub(super) fn pair(left: &Row, right: &Row) -> Result<Row> {
     let mut result = stripped(left);
     for (field, value) in stripped(right) {
         ensure!(result.insert(field, value).is_none(), "left join field collision");
     }
+    Ok(result)
+}
+pub(super) fn matching(spec: &Spec, left: &Row, right: &Row) -> Result<Option<Row>> {
+    let result = pair(left, right)?;
     if spec.predicate.as_ref().map_or(Ok(true), |predicate| predicate.qualifies(&result))? {
         Ok(Some(result))
     } else {

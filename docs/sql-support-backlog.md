@@ -37,7 +37,9 @@ remains outside the project scope.
 [HAVING, nonrecursive CTEs and UNION ALL](sql-composition.md) now compose the
 existing domains, including empty global aggregates and constant SELECT inputs.
 [UNION DISTINCT, INTERSECT and EXCEPT with ALL variants](set-operations.md) extend
-that composition. Recursive CTEs, broader scalar subqueries and additional
+that composition. [Scalar aggregate subqueries and IN/NOT IN](subqueries.md) add
+bounded global/equality-correlated scopes and three-valued membership. Recursive
+CTEs, general scalar subqueries and additional
 join families remain separate relational expansion work. [Numeric/text join keys
 and residual INNER/LEFT ON predicates](join-predicates.md) are qualified.
 

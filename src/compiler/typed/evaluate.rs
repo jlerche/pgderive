@@ -22,6 +22,7 @@ impl Typed {
     }
     fn native_value(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
         Ok(match &self.value {
+            Value::Boolean(value) => value.evaluate(rows)?.map(Native::Boolean),
             Value::Column(column) => (if column.right { rows.1 } else { rows.0 })
                 .get(&column.name)
                 .context("compiled scalar column absent")?

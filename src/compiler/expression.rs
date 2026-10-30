@@ -30,6 +30,10 @@ pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
         })
         .transpose()
 }
+pub(in crate::compiler) fn is_comparison(value: &pg_query::protobuf::AExpr) -> Result<bool> {
+    Ok(value.kind == i32::from(pg_query::protobuf::AExprKind::AexprOp)
+        && matches!(super::parser::expressions::names(&value.name)?.0.as_slice(), [value] if matches!(value.as_str(), "="|"<>"|"<"|"<="|">"|">=")))
+}
 pub(super) fn bind(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Expr> {
     bind_ast(value, resolve, &mut 0, 0, None)
 }
@@ -65,6 +69,9 @@ fn bind_ast(
             let value = optional(value.arg.as_deref())?;
             let value = operand(value, resolve)?.null_test()?;
             Ok(Expr::Null(value, not))
+        }
+        NodeEnum::AExpr(value) if value.kind == i32::from(pg::AExprKind::AexprIn) => {
+            membership(value, resolve, text)
         }
         NodeEnum::AExpr(value) => {
             ensure!(value.kind == i32::from(pg::AExprKind::AexprOp), "unsupported comparison kind");
@@ -118,30 +125,28 @@ fn boolean(
     }
 }
 fn comparison(op: Compare, left: Operand, right: Operand, text: TextCollation<'_>) -> Result<Expr> {
-    let oid = left
-        .oid()
-        .or_else(|| right.oid())
-        .or_else(|| {
-            text.is_some().then(|| {
-                [left.literal_oid(), right.literal_oid()]
-                    .into_iter()
-                    .find(|oid| *oid != 0)
-                    .unwrap_or(25)
-            })
-        })
-        .context("SQL type: comparison requires a native column")?;
+    let oid = left.oid().or_else(|| right.oid()).unwrap_or_else(|| {
+        [left.literal_oid(), right.literal_oid()].into_iter().find(|oid| *oid != 0).unwrap_or(25)
+    });
     ensure!(
         matches!(oid, 16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1114 | 1184 | 1186),
         "SQL type: unsupported comparison type"
     );
+    compare_values(op, left.coerce(oid)?, right.coerce(oid)?, text)
+}
+fn compare_values(
+    op: Compare,
+    left: Scalar,
+    right: Scalar,
+    text: TextCollation<'_>,
+) -> Result<Expr> {
+    let oid = left.oid();
     if matches!(oid, 25 | 1043) && text.is_none() {
         ensure!(
-            matches!(op, Compare::Eq | Compare::Ne)
-                && left.oid().is_some() != right.oid().is_some(),
-            "text equality requires one native column and an unknown literal; text ordering and column collation resolution are unsupported"
+            matches!(op, Compare::Eq | Compare::Ne) && (left.is_constant() || right.is_constant()),
+            "text equality requires a constant operand or resolved join collation"
         );
     }
-    let (left, right) = (left.coerce(oid)?, right.coerce(oid)?);
     if matches!(oid, 25 | 1043)
         && let Some(text) = text
     {
@@ -154,6 +159,43 @@ fn comparison(op: Compare, left: Operand, right: Operand, text: TextCollation<'_
         );
     }
     Ok(Expr::Compare(op, left, right))
+}
+fn membership(
+    value: &pg_query::protobuf::AExpr,
+    resolve: &Resolve<'_>,
+    text: TextCollation<'_>,
+) -> Result<Expr> {
+    use super::parser::expressions::{names, node, optional};
+    use pg_query::NodeEnum;
+    let NodeEnum::List(list) = node(optional(value.rexpr.as_deref())?)? else {
+        anyhow::bail!("IN requires a scalar list");
+    };
+    ensure!((1..=64).contains(&list.items.len()), "IN list budget exceeded");
+    let operator = names(&value.name)?;
+    let [operator] = operator.0.as_slice() else {
+        anyhow::bail!("qualified IN operator unsupported");
+    };
+    ensure!(matches!(operator.as_str(), "=" | "<>"), "unsupported IN operator");
+    let values = std::iter::once(optional(value.lexpr.as_deref())?)
+        .chain(&list.items)
+        .map(|value| operand(value, resolve))
+        .collect::<Result<Vec<_>>>()?;
+    let common = typed::comparison_type(
+        &values
+            .iter()
+            .map(|value| value.oid().unwrap_or_else(|| value.literal_oid()))
+            .collect::<Vec<_>>(),
+    )?;
+    let mut values = values.into_iter().map(|value| value.coerce(common));
+    let probe = values.next().context("IN probe absent")??;
+    let and = operator == "<>";
+    let op = if and { Compare::Ne } else { Compare::Eq };
+    normalized(
+        values
+            .map(|value| compare_values(op.clone(), probe.clone(), value?, text))
+            .collect::<Result<_>>()?,
+        and,
+    )
 }
 fn normalized(args: Vec<Expr>, and: bool) -> Result<Expr> {
     let mut values = Vec::new();

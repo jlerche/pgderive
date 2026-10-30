@@ -69,6 +69,7 @@ relational_nodes! {
     SetTag [input] => Project { left: bool },
     SetOperation [input] => Aggregate { spec: super::setop::Spec },
     Existence [input] => Aggregate { anti: bool },
+    Mark [input] => Aggregate { spec: Box<super::subquery::Mark> },
     PrefixInput [input] => Project { spec: super::partition::Partition },
     PrefixStatistics [input] => Statistics { spec: super::partition::Partition },
     PrefixWindow [left, right] => Window { spec: super::partition::Partition },

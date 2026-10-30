@@ -12,6 +12,7 @@ mod functions;
 mod operand;
 mod predicate;
 pub(super) use operand::{Operand, bind as operand, native_literal, navigation};
+pub(super) use types::common as comparison_type;
 mod types;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Typed {
@@ -21,6 +22,7 @@ pub struct Typed {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 enum Value {
     Column(ColumnRef),
+    Boolean(Box<super::expression::Expr>),
     Average(ColumnRef),
     Literal(Option<i64>),
     Numeric(String),
@@ -44,6 +46,7 @@ impl Typed {
             | Value::Difference(..)
             | Value::Remainder(_)
             | Value::Temporal(_) => false,
+            Value::Boolean(value) => value.is_constant(),
             Value::Literal(_)
             | Value::Numeric(_)
             | Value::Text(_)
@@ -105,13 +108,20 @@ fn bind_inner(
         NodeEnum::ColumnRef(_) => {
             let column = resolve(&column(value)?)?;
             ensure!(
-                matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700),
+                matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1114 | 1184),
                 "column type is not available in-engine typed expressions"
             );
             Ok(Typed { oid: column.oid, value: Value::Column(column) })
         }
         NodeEnum::AConst(constant) => literal(constant),
         NodeEnum::TypeCast(cast) => types::cast(cast, resolve, depth),
+        NodeEnum::BoolExpr(_) | NodeEnum::NullTest(_) => boolean(value, resolve),
+        NodeEnum::AExpr(expression)
+            if expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprIn)
+                || super::expression::is_comparison(expression)? =>
+        {
+            boolean(value, resolve)
+        }
         NodeEnum::AExpr(expression) => arithmetic(expression, resolve, depth),
         NodeEnum::CoalesceExpr(expression) => {
             ensure!(
@@ -133,6 +143,9 @@ fn bind_inner(
         NodeEnum::FuncCall(function) => functions::bind(function, resolve, depth),
         _ => anyhow::bail!("expression is not available in-engine"),
     }
+}
+fn boolean(value: &Node, resolve: &impl Fn(&Name) -> Result<ColumnRef>) -> Result<Typed> {
+    Ok(Typed { oid: 16, value: Value::Boolean(Box::new(super::expression::bind(value, resolve)?)) })
 }
 fn arithmetic(
     expression: &pg_query::protobuf::AExpr,
@@ -249,6 +262,7 @@ impl Typed {
     pub(super) fn nullable(&self) -> bool {
         match &self.value {
             Value::Column(column) | Value::Average(column) => column.nullable,
+            Value::Boolean(_) => true,
             Value::Literal(value) => value.is_none(),
             Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
             Value::Encoded(value) => value.is_none(),
@@ -334,7 +348,9 @@ impl Typed {
         let NodeEnum::AConst(value) = crate::compiler::parser::expressions::node(value)? else {
             anyhow::bail!("UNION contextual value is not a literal")
         };
-        let value = literal(value)?;
+        Self::contextual_literal(literal(value)?, oid)
+    }
+    fn contextual_literal(value: Self, oid: u32) -> Result<Self> {
         let text = match value.value {
             Value::Literal(None) => None,
             Value::Text(value) => Some(value),

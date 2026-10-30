@@ -103,6 +103,9 @@ pub(in crate::compiler) fn parse_target(value: &Node) -> Result<Target> {
                 column(expression)?.0.last().context("missing column")?.clone()
             }
             NodeEnum::CaseExpr(_) => "case".into(),
+            _ if super::subquery::nested_node(expression) => {
+                super::subquery::scalar_label(expression)?
+            }
             _ => "?column?".into(),
         };
         (Value::Typed(Box::new(expression.clone())), label)

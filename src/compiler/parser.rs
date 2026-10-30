@@ -14,6 +14,7 @@ pub(super) mod ordering;
 pub(super) mod partition;
 pub(super) mod scalar;
 pub(super) mod setop;
+mod subquery;
 use expressions::{column, node, optional, target};
 
 #[derive(Clone)]
@@ -130,6 +131,9 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     }
     if let Some(parsed) = ordering::parse(select)? {
         return Ok(Parsed::Ordered(parsed));
+    }
+    if let Some(parsed) = subquery::parse(select)? {
+        return Ok(parsed);
     }
     if let Some(parsed) = membership::parse(select)? {
         return Ok(parsed);

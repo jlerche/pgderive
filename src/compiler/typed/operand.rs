@@ -39,7 +39,7 @@ pub(in crate::compiler) fn bind(
 }
 impl Operand {
     pub(in crate::compiler) const fn literal_oid(&self) -> u32 {
-        if self.value.oid == 705 { 25 } else { self.value.oid }
+        if self.value.oid == 705 { 0 } else { self.value.oid }
     }
     pub(in crate::compiler) const fn oid(&self) -> Option<u32> {
         if self.contextual { None } else { Some(self.value.oid) }

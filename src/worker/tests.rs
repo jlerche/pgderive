@@ -499,3 +499,4 @@ impl Probe {
 mod numeric_arithmetic;
 mod set_operations;
 mod sql_composition;
+mod subqueries;

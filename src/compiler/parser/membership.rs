@@ -71,12 +71,10 @@ fn exists(value: &Node) -> Result<Option<(&pg::SelectStmt, bool)>> {
         _ => (value, false),
     };
     let NodeEnum::SubLink(value) = node(value)? else { return Ok(None) };
-    ensure!(
-        value.sub_link_type == i32::from(pg::SubLinkType::ExistsSublink)
-            && value.testexpr.is_none()
-            && value.oper_name.is_empty(),
-        "only EXISTS sublinks supported"
-    );
+    if value.sub_link_type != i32::from(pg::SubLinkType::ExistsSublink) {
+        return Ok(None);
+    }
+    ensure!(value.testexpr.is_none() && value.oper_name.is_empty(), "invalid EXISTS sublink");
     let NodeEnum::SelectStmt(query) = node(optional(value.subselect.as_deref())?)? else {
         anyhow::bail!("EXISTS requires SELECT")
     };

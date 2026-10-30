@@ -911,7 +911,7 @@
     {
       "id": "composition",
       "status": "bounded",
-      "domain": "Bound derived scopes, HAVING with implicit global groups, nonrecursive read-only CTEs, constant SELECT and UNION/INTERSECT/EXCEPT with DISTINCT and ALL variants. Set numeric equality requires uniform provable display scale; text equality requires compatible resolved deterministic collations. Finalized aggregate types cross SQL boundaries. Existing scalar/type budgets apply; recursion and general scalar subqueries remain unsupported.",
+      "domain": "Bound derived scopes, HAVING with implicit global groups, nonrecursive read-only CTEs, constant SELECT and UNION/INTERSECT/EXCEPT with DISTINCT and ALL variants. Set numeric equality requires uniform provable display scale; text equality requires compatible resolved deterministic collations. Finalized aggregate types cross SQL boundaries. Existing scalar/type budgets apply; Scalar global/equality-correlated aggregate subqueries and IN/NOT IN use the bounded contract in subqueries.md; recursion and arbitrary/multirow scalar subqueries remain unsupported.",
       "implementation": [
         "src/compiler/bind/derived.rs",
         "src/compiler/parser/cte.rs",
@@ -923,7 +923,8 @@
         "scripts/composition_matrix_harness.py",
         "scripts/native_cross_harness.py",
         "scripts/sql_composition_harness.py",
-        "scripts/set_operation_harness.py"
+        "scripts/set_operation_harness.py",
+        "scripts/subquery_harness.py"
       ]
     },
     {

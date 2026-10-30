@@ -17,6 +17,7 @@ mod prefix;
 pub(super) mod relational;
 mod setop;
 mod statistics;
+mod subquery;
 mod topk;
 use crate::{compiler::Compiled, engine::plan::Plan, source::Contract};
 use anyhow::Result;

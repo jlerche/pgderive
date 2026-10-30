@@ -108,14 +108,11 @@ fn normalization_and_fail_closed_types() -> Result<()> {
         "a = 1",
         "n = true",
         "n = u",
-        "n = '1'",
-        "1 = 1",
         "u = 'bad'",
         "u = '0000--0000000000000000000000000000'",
         "u = '00000000000000000000000000000000-'",
         "u = '0-0000000000000000000000000000000'",
         "n BETWEEN 1 AND 2",
-        "n IN (1,2)",
         "n IS DISTINCT FROM 1",
         "true IS NULL",
         "ROW(a) IS NULL",
@@ -125,6 +122,9 @@ fn normalization_and_fail_closed_types() -> Result<()> {
     ] {
         assert!(expression(sql).is_err(), "accepted {sql}");
     }
+    let one = [("n".into(), Some("1".into()))].into();
+    assert_eq!(expression("n='1'")?.evaluate((&one, &one))?, Some(true));
+    assert_eq!(expression("1=1")?.evaluate((&one, &one))?, Some(true));
     assert!(expression(&format!("{}a", "NOT ".repeat(66))).is_err());
     Ok(())
 }

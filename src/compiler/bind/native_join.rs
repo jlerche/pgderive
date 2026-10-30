@@ -1,5 +1,6 @@
 //! Resolve native source occurrences into an executable join tree.
 mod keys;
+mod subquery;
 use super::scope as native_source;
 use crate::{
     compiler::{
@@ -68,6 +69,17 @@ impl Builder<'_> {
                 self.existence(left, right, keys, anti)
             }
             Tree::Derived { source, alias } => self.derived(source, alias),
+            Tree::Scalar { left, right, alias } => {
+                let left = self.tree(*left)?;
+                let right = self.derived_checked(right, alias, true)?;
+                let id = format!("tree_join_{}", self.joins);
+                let bound = keys::condition(None, &left.columns, &right.columns, &id)?;
+                self.join(left, right, bound, true)
+            }
+            Tree::Mark { left, right, probe, alias, condition } => {
+                let left = self.tree(*left)?;
+                self.mark(left, right, (&probe, alias, condition.as_deref()))
+            }
             Tree::Join { left, right, condition, outer } => {
                 let left = self.tree(*left)?;
                 let right = self.tree(*right)?;
@@ -83,6 +95,14 @@ impl Builder<'_> {
         source: Box<crate::compiler::parser::Parsed>,
         alias: String,
     ) -> Result<Edge> {
+        self.derived_checked(source, alias, false)
+    }
+    fn derived_checked(
+        &mut self,
+        source: Box<crate::compiler::parser::Parsed>,
+        alias: String,
+        scalar: bool,
+    ) -> Result<Edge> {
         let offset = self.sources.len();
         let prefix = format!("tree_scope_{offset}_");
         let scope = super::derived::scope((source, alias), &prefix, offset, self.contract)?;
@@ -90,6 +110,10 @@ impl Builder<'_> {
         context.sources.splice(..0, self.sources.iter().cloned());
         context.nodes.splice(..0, self.nodes.iter().cloned());
         let facts = crate::compiler::properties::occurrence(&context, self.contract)?;
+        ensure!(
+            !scalar || facts.maximum_rows().is_some_and(|maximum| maximum <= 1),
+            "scalar subquery cardinality is not proven at most one row"
+        );
         let columns = scope
             .ir
             .output

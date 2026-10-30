@@ -19,6 +19,7 @@ pub(crate) mod expansion;
 mod remainder;
 pub(crate) mod scalar;
 pub(crate) mod setop;
+pub(crate) mod subquery;
 mod syntax;
 pub(crate) mod topk;
 mod typed;

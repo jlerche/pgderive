@@ -1,6 +1,9 @@
 //! SQL membership and left-join differentiation using bounded input deltas and cursors.
 mod residual_join;
-use super::{left_join::stripped, relational::Key};
+use super::{
+    left_join::{pair, stripped},
+    relational::Key,
+};
 use crate::{
     compiler::{ColumnRef, left_join::Spec},
     engine::{
@@ -82,13 +85,6 @@ pub(super) fn existence(anti: bool) -> Group<Key, Row> {
             output.finish_batch()
         })
     })
-}
-fn pair(left: &Row, right: &Row) -> Result<Row> {
-    let mut result = stripped(left);
-    for (field, value) in stripped(right) {
-        ensure!(result.insert(field, value).is_none(), "left join field collision");
-    }
-    Ok(result)
 }
 async fn products(
     input: &GroupInput<'_, Key, Row>,

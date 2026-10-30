@@ -14,6 +14,12 @@ impl Typed {
             }
             Value::Literal(Some(value)) if oid == 1700 => Some(value.to_string()),
             Value::Encoded(value) if self.oid == 16 && oid == 16 => value,
+            Value::Text(value) if matches!(oid, 16 | 20 | 21 | 23) => {
+                return Self::contextual_literal(
+                    Self { oid: self.oid, value: Value::Text(value) },
+                    oid,
+                );
+            }
             Value::Text(value) if matches!(oid, 25 | 1043 | 1700 | 2950 | 1114 | 1184) => {
                 Some(value)
             }

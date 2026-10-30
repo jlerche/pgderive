@@ -27,6 +27,13 @@ impl Analysis {
             }
             Node::LeftJoin { id, input, .. } => self.left_join(ir, id, input),
             Node::Existence { input, .. } => self.semi_join(ir, input),
+            Node::Mark { id, input, spec } => {
+                let mut facts = self.semi_join(ir, input)?;
+                facts
+                    .columns
+                    .insert(spec.output.name.clone(), Column::derived(id, spec.output.clone()));
+                Ok(facts)
+            }
             _ => self.unary(ir, node),
         }
     }
@@ -83,21 +90,14 @@ impl Analysis {
             Node::TopKInput { input, .. }
             | Node::PrefixInput { input, .. }
             | Node::SetTag { input, .. } => self.edge(input)?.clone(),
-            Node::TopK { id, input, spec } => {
-                let mut facts = self.edge(input)?.clone();
-                if let Some(name) = &spec.field {
-                    let field =
-                        ColumnRef { name: name.clone(), right: false, oid: 20, nullable: false };
-                    facts.columns.insert(field.name.clone(), Column::derived(id, field));
-                }
-                facts
-            }
+            Node::TopK { id, input, spec } => ranked(self.edge(input)?, id, spec.field.as_deref()),
             Node::PrefixWindow { id, left, spec, .. } => partition(self.edge(left)?, id, spec)?,
             Node::Source { .. }
             | Node::Join { .. }
             | Node::Union { .. }
             | Node::LeftJoin { .. }
-            | Node::Existence { .. } => anyhow::bail!("non-unary property node"),
+            | Node::Existence { .. }
+            | Node::Mark { .. } => anyhow::bail!("non-unary property node"),
             Node::Lookup { .. }
             | Node::LeftJoinInput { .. }
             | Node::LookupInput { .. }
@@ -296,4 +296,13 @@ fn append_aggregates(facts: &mut Properties, id: &str, spec: &Partition) -> Resu
     }
     facts.prune();
     Ok(())
+}
+
+fn ranked(input: &Properties, id: &str, name: Option<&str>) -> Properties {
+    let mut facts = input.clone();
+    if let Some(name) = name {
+        let field = ColumnRef { name: name.into(), right: false, oid: 20, nullable: false };
+        facts.columns.insert(field.name.clone(), Column::derived(id, field));
+    }
+    facts
 }

@@ -14,6 +14,18 @@ pub(in crate::compiler) enum Tree {
         source: Box<super::Parsed>,
         alias: String,
     },
+    Scalar {
+        left: Box<Self>,
+        right: Box<super::Parsed>,
+        alias: String,
+    },
+    Mark {
+        left: Box<Self>,
+        right: Box<super::Parsed>,
+        probe: Box<Node>,
+        alias: String,
+        condition: Option<Box<Node>>,
+    },
     Join {
         left: Box<Self>,
         right: Box<Self>,
