@@ -48,7 +48,7 @@ pub(super) fn apply(
             "COLLATE requires text ordering"
         );
         ensure!(
-            matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1114 | 1184),
+            matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
             "unsupported ORDER BY native type"
         );
         ensure!(
@@ -72,6 +72,10 @@ pub(super) fn apply(
         .map(|column| column.column.clone())
         .filter(|column| seen.insert(column.name.clone()))
         .collect::<Vec<_>>();
+    ensure!(
+        identity.iter().all(|column| column.oid != 1186),
+        "interval ORDER BY/LIMIT tuple ordering is unsupported"
+    );
     ir.output.columns.truncate(parsed.visible);
     if parsed.limit == Some(0)
         || crate::compiler::properties::occurrence(ir, contract)?.maximum_rows() == Some(0)

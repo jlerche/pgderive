@@ -36,15 +36,6 @@ impl Typed {
                 value.as_deref().map(|text| value::decode(self.oid, text)).transpose()?
             }
             Value::Interval(value) => Some(Native::Interval(*value)),
-            Value::Difference(left, right) => {
-                let (Some(Native::Timestamp(left)), Some(Native::Timestamp(right))) = (
-                    Self::column(left.clone()).native_pair(rows)?,
-                    Self::column(right.clone()).native_pair(rows)?,
-                ) else {
-                    return Ok(None);
-                };
-                Some(Native::Interval(left.difference(right)?))
-            }
             Value::Average(column) => rows
                 .0
                 .get(&column.name)
@@ -68,7 +59,7 @@ impl Typed {
                     if let Some(typmod) = typmod {
                         return Ok(Native::Numeric(numeric(value)?.constrained(*typmod)?));
                     }
-                    Ok(value)
+                    super::calendar::cast(value, self.oid)
                 })
                 .transpose()?,
             Value::Binary { operation, left, right } => {
@@ -90,6 +81,17 @@ impl Typed {
                         ))
                     }
                     (None, _) | (_, None) => None,
+                    (Some(left), Some(right))
+                        if matches!(
+                            left,
+                            Native::Date(_) | Native::Timestamp(_) | Native::Interval(_)
+                        ) || matches!(
+                            right,
+                            Native::Date(_) | Native::Timestamp(_) | Native::Interval(_)
+                        ) =>
+                    {
+                        Some(super::calendar::evaluate(left, right, *operation)?)
+                    }
                     _ => anyhow::bail!("invalid arithmetic operands"),
                 }
             }

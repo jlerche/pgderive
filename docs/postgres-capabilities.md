@@ -24,14 +24,15 @@ PostgreSQL computation fallback, or placement report.
 
 | Family | Implemented path and limits |
 | --- | --- |
-| Native scalar source codecs | Boolean, integral, text/varchar, UUID, timestamps and bounded exact numeric; source modifiers and environment captured |
+| Native scalar source codecs | Boolean, integral, text/varchar, UUID, date, timestamps, full interval and bounded exact numeric; source modifiers and environment captured |
 | Integral casts and +, -, * | Checked native widths in Rust; unavailable casts reject |
 | CASE/COALESCE and predicates | Local lazy branches and SQL NULL behavior in supported typed domains |
 | Numeric arithmetic | Exact bounded coefficient/scale +, -, *, /, numeric AVG, rounding and checked numeric/integral/typmod casts; [contract](numeric-arithmetic.md) |
 | Integer AVG | Local arbitrary-precision sum/count finalization with PostgreSQL scale selection and rounding; no SQL numeric_div call |
 | Fixed timestamp bins/offsets and integral MOD | Local qualified bounded implementations |
+| Calendar arithmetic, EXTRACT and date_trunc | [Native date/interval values, exact numeric fields and UTC calendar operations](temporal-arithmetic.md); type/coercion and relational restrictions remain explicit |
 | Pure integer/text functions | Checked integral ABS/to_hex; UTF8 length, trim, slice, replace, translate, reverse, split, repeat, code points and prefix checks; exact signatures in `src/compiler/capabilities.rs`; expansion budgets and right/MIN boundary in the roadmap |
-| lower, upper, regexp, array extraction, calendar formatting/extraction | Not available in-engine; compile-time errors, no fallback |
+| lower, upper, regexp, array extraction, calendar formatting and named zones | Not available in-engine; compile-time errors, no fallback |
 
 The scalar architecture uses one bound IR in `src/compiler/typed.rs` for maps and
 predicate operands. `src/compiler/value.rs` owns native decoding and literal

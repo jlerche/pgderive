@@ -1014,6 +1014,10 @@ and residual INNER/LEFT ON conditions, including per-left-tuple unmatched rows.
 [RIGHT/FULL joins and USING](docs/outer-joins.md) add unmatched occurrences on
 either side, merged common-typed keys and independently qualified original columns.
 
+[Calendar arithmetic](docs/temporal-arithmetic.md) adds native date/full-interval
+values, UTC calendar operations, exact EXTRACT and date_trunc using the shared
+typed engine, with explicit relational, coercion and range boundaries.
+
 [Set operations](docs/set-operations.md) add UNION DISTINCT, INTERSECT and EXCEPT,
 including INTERSECT ALL and EXCEPT ALL, with exact duplicate/NULL multiplicities.
 

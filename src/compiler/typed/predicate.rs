@@ -20,7 +20,9 @@ impl Typed {
                     oid,
                 );
             }
-            Value::Text(value) if matches!(oid, 25 | 1043 | 1700 | 2950 | 1114 | 1184) => {
+            Value::Text(value)
+                if matches!(oid, 25 | 1043 | 1700 | 2950 | 1082 | 1114 | 1184 | 1186) =>
+            {
                 Some(value)
             }
             Value::Interval(value) if oid == 1186 => {
@@ -48,16 +50,6 @@ impl Typed {
             }
             _ => anyhow::bail!("unsupported LAG/LEAD default"),
         })
-    }
-    pub(in crate::compiler) fn difference(left: ColumnRef, right: ColumnRef) -> Result<Self> {
-        if matches!(left.oid, 20 | 21 | 23 | 1700) && matches!(right.oid, 20 | 21 | 23 | 1700) {
-            return Ok(super::difference(left, right));
-        }
-        ensure!(
-            matches!(left.oid, 1114 | 1184) && left.oid == right.oid,
-            "timestamp subtraction requires same-type native timestamp operands"
-        );
-        Ok(Self { oid: 1186, value: Value::Difference(left, right) })
     }
     pub(in crate::compiler) fn remainder(input: ColumnRef, divisor: i64) -> Result<Self> {
         ensure!(

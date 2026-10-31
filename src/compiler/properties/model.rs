@@ -26,10 +26,11 @@ impl Column {
         self.reference.oid == other.reference.oid
             && self.modifier == other.modifier
             && self.collation == other.collation
-            && matches!(self.reference.oid, 16 | 20 | 21 | 23 | 1700 | 2950 | 1114 | 1184)
+            && matches!(self.reference.oid, 16 | 20 | 21 | 23 | 1082 | 1700 | 2950 | 1114 | 1184)
     }
     pub const fn sink_compatible(&self) -> bool {
-        self.collation == 0 && matches!(self.reference.oid, 16 | 20 | 21 | 23 | 2950 | 1114 | 1184)
+        self.collation == 0
+            && matches!(self.reference.oid, 16 | 20 | 21 | 23 | 1082 | 2950 | 1114 | 1184)
     }
 }
 pub(super) type Key = BTreeSet<Identity>;

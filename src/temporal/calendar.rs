@@ -8,12 +8,12 @@ pub(super) fn parse(value: &str, bc: bool) -> Result<i64> {
         anyhow::bail!("invalid ISO date");
     };
     ensure!(
-        (1..=294_277).contains(year) && (1..=12).contains(month),
+        (1..=5_874_897).contains(year) && (1..=12).contains(month),
         "invalid timestamp year/month"
     );
     let year = if bc { 1 - year } else { *year };
     let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let days = match month {
+    let month_length = match month {
         2 => {
             if leap {
                 29
@@ -24,16 +24,19 @@ pub(super) fn parse(value: &str, bc: bool) -> Result<i64> {
         4 | 6 | 9 | 11 => 30,
         _ => 31,
     };
-    ensure!((1..=days).contains(day), "invalid timestamp day");
-    let adjusted_year = year - i64::from(*month <= 2);
+    ensure!((1..=month_length).contains(day), "invalid timestamp day");
+    Ok(days(year, *month, *day))
+}
+pub(super) fn days(year: i64, month: i64, day: i64) -> i64 {
+    let adjusted_year = year - i64::from(month <= 2);
     let era = adjusted_year.div_euclid(400);
     let year_of_era = adjusted_year - era * 400;
-    let shifted_month = month + if *month > 2 { -3 } else { 9 };
+    let shifted_month = month + if month > 2 { -3 } else { 9 };
     let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    Ok(era * 146_097 + day_of_era - 719_468 - 10_957)
+    era * 146_097 + day_of_era - 719_468 - 10_957
 }
-pub(super) fn format(days: i64) -> (String, bool) {
+pub(super) fn fields(days: i64) -> (i64, i64, i64) {
     let days = days + 719_468 + 10_957;
     let era = days.div_euclid(146_097);
     let day_of_era = days - era * 146_097;
@@ -44,6 +47,18 @@ pub(super) fn format(days: i64) -> (String, bool) {
     let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
     let month = shifted_month + if shifted_month < 10 { 3 } else { -9 };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+pub(super) fn format(days: i64) -> (String, bool) {
+    let (year, month, day) = fields(days);
     let display_year = if year <= 0 { 1 - year } else { year };
     (format!("{display_year:04}-{month:02}-{day:02}"), year <= 0)
+}
+pub(super) const fn month_days(year: i64, month: i64) -> i64 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
 }

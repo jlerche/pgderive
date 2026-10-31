@@ -6,7 +6,7 @@ use pg_query::protobuf as pg;
 pub(in crate::compiler) fn common(types: &[u32]) -> Result<u32> {
     let known = types.iter().copied().filter(|oid| !matches!(oid, 0 | 705)).collect::<Vec<_>>();
     if let Some(first) = known.first()
-        && matches!(first, 16 | 2950 | 1114 | 1184)
+        && matches!(first, 16 | 2950 | 1082 | 1114 | 1184 | 1186)
         && known.iter().all(|oid| oid == first)
     {
         ensure!(
@@ -49,6 +49,10 @@ pub(super) fn cast(
         "numeric" => 1700,
         "text" => 25,
         "varchar" => 1043,
+        "date" => 1082,
+        "timestamp" => 1114,
+        "timestamptz" => 1184,
+        "interval" => 1186,
         _ => anyhow::bail!("unsupported scalar cast"),
     };
     let typmod = modifier(kind, oid)?;
@@ -58,6 +62,17 @@ pub(super) fn cast(
     } else {
         super::bind(argument, resolve, depth + 1)?
     };
+    if matches!(oid, 1082 | 1114 | 1184 | 1186) {
+        if matches!(input.oid, 0 | 705) {
+            return Typed::contextual_literal(input, oid);
+        }
+        ensure!(
+            input.oid == oid
+                || (matches!(input.oid, 1082 | 1114 | 1184) && matches!(oid, 1082 | 1114 | 1184)),
+            "unsupported temporal cast"
+        );
+        return Ok(Typed { oid, value: Value::Cast { input: Box::new(input), typmod: None } });
+    }
     if matches!(oid, 20 | 21 | 23) && input.oid == 705 {
         return Typed::contextual_literal(input, oid);
     }

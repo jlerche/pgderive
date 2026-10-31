@@ -27,6 +27,8 @@ pub(in crate::compiler) enum Builtin {
     Trunc,
     Ceiling,
     Floor,
+    Extract,
+    DateTrunc,
 }
 pub(in crate::compiler) struct Signature {
     pub name: &'static str,
@@ -45,6 +47,15 @@ impl Signature {
     }
 }
 const SIGNATURES: &[Signature] = &[
+    Signature::strict("extract", &[25, 1082], 1700, Builtin::Extract),
+    Signature::strict("date_trunc", &[25, 1082], 1184, Builtin::DateTrunc),
+    Signature::strict("extract", &[25, 1114], 1700, Builtin::Extract),
+    Signature::strict("date_trunc", &[25, 1114], 1114, Builtin::DateTrunc),
+    Signature::strict("extract", &[25, 1184], 1700, Builtin::Extract),
+    Signature::strict("date_trunc", &[25, 1184], 1184, Builtin::DateTrunc),
+    Signature::strict("extract", &[25, 1186], 1700, Builtin::Extract),
+    Signature::strict("date_trunc", &[25, 1186], 1186, Builtin::DateTrunc),
+    Signature::strict("date_trunc", &[25, 1184, 25], 1184, Builtin::DateTrunc),
     Signature::strict("length", &[25], 23, Builtin::Length),
     Signature::strict("char_length", &[25], 23, Builtin::Length),
     Signature::strict("character_length", &[25], 23, Builtin::Length),
@@ -102,6 +113,11 @@ pub(in crate::compiler) fn validate_arity(name: &str, arity: usize) -> Result<()
     Ok(())
 }
 pub(in crate::compiler) fn resolve(name: &str, types: &[u32]) -> Result<&'static Signature> {
+    ensure!(
+        !(matches!(name, "extract" | "date_trunc")
+            && types.get(1).is_some_and(|oid| matches!(oid, 0 | 705))),
+        "ambiguous untyped calendar input"
+    );
     ensure!(
         !(name == "substring"
             && types.get(1) == Some(&0)

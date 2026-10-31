@@ -29,7 +29,7 @@ impl Builder<'_> {
         );
         let value = right.columns[0].value.clone();
         ensure!(
-            matches!(value.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1114 | 1184),
+            matches!(value.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
             "unsupported IN native type"
         );
         let probe = operand.coerce(value.oid)?;

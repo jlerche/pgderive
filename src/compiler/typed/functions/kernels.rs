@@ -4,11 +4,17 @@ use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
 const OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 
-pub(super) fn evaluate(operation: Builtin, arguments: &[String], input_oid: u32) -> Result<String> {
+pub(super) fn evaluate(
+    operation: Builtin,
+    arguments: &[String],
+    input_oid: u32,
+) -> Result<Option<String>> {
     let first = arguments.first().context("function input absent")?;
     let second = || arguments.get(1).context("second function input absent");
     let third = || arguments.get(2).context("third function input absent");
-    match operation {
+    let result = match operation {
+        Builtin::Extract => return crate::temporal::extract(first, second()?, input_oid),
+        Builtin::DateTrunc => crate::temporal::truncate(first, second()?, input_oid),
         Builtin::Abs if input_oid == 1700 => {
             Ok(crate::numeric::Numeric::parse(first)?.absolute().text())
         }
@@ -54,7 +60,8 @@ pub(super) fn evaluate(operation: Builtin, arguments: &[String], input_oid: u32)
             second()?.parse()?,
             arguments.get(2).map(|value| value.parse()).transpose()?,
         ),
-    }
+    };
+    result.map(Some)
 }
 fn count(value: usize) -> Result<String> {
     Ok(i32::try_from(value).context("function integer result overflow")?.to_string())

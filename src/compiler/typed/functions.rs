@@ -30,12 +30,22 @@ pub(super) fn bind(
         .collect::<Result<Vec<_>>>()?;
     let types = arguments.iter().map(|value| value.oid).collect::<Vec<_>>();
     let signature = registry::resolve(name, &types)?;
+    if matches!(signature.operation, registry::Builtin::Extract | registry::Builtin::DateTrunc) {
+        validate_calendar(&arguments, signature)?;
+    }
     let value = if constant_null(&arguments)? {
         Value::Literal(None)
     } else {
         Value::Call(Call {
             operation: signature.operation,
-            input_oid: signature.inputs[0],
+            input_oid: if matches!(
+                signature.operation,
+                registry::Builtin::Extract | registry::Builtin::DateTrunc
+            ) {
+                signature.inputs[1]
+            } else {
+                signature.inputs[0]
+            },
             arguments,
         })
     };
@@ -62,6 +72,26 @@ impl Call {
         let Some(arguments) = values.into_iter().collect::<Option<Vec<_>>>() else {
             return Ok(None);
         };
-        kernels::evaluate(self.operation, &arguments, self.input_oid).map(Some)
+        kernels::evaluate(self.operation, &arguments, self.input_oid)
     }
+}
+
+fn validate_calendar(arguments: &[Typed], signature: &registry::Signature) -> Result<()> {
+    use anyhow::Context;
+    let field = arguments.first().context("missing calendar field")?;
+    ensure!(field.is_constant(), "calendar field must be constant");
+    if let Some(field) = field.evaluate(&crate::transaction::Row::new())? {
+        crate::temporal::validate_field(
+            &field.to_ascii_lowercase(),
+            signature.inputs[1],
+            signature.operation == registry::Builtin::DateTrunc,
+        )?;
+    }
+    if let Some(zone) = arguments.get(2) {
+        ensure!(zone.is_constant(), "date_trunc zone must be constant UTC");
+        if let Some(zone) = zone.evaluate(&crate::transaction::Row::new())? {
+            ensure!(zone.eq_ignore_ascii_case("UTC"), "date_trunc named zones are unsupported");
+        }
+    }
+    Ok(())
 }

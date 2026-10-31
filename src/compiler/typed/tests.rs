@@ -117,3 +117,41 @@ mod functions;
 
 #[path = "tests/numeric.rs"]
 mod numeric;
+
+#[test]
+fn calendar_functions_and_arithmetic_use_native_kernels() -> Result<()> {
+    let row = crate::transaction::Row::new();
+    for (sql, expected) in [
+        ("EXTRACT(second FROM TIMESTAMP '2024-02-29 12:34:56.123456')", "56.123456"),
+        ("EXTRACT(milliseconds FROM INTERVAL '25 hours 2.123456 seconds')", "2123.456"),
+        ("EXTRACT(hour FROM INTERVAL '25 hours')", "25"),
+        ("EXTRACT(epoch FROM DATE '2000-01-01')", "946684800"),
+        ("EXTRACT(epoch FROM TIMESTAMP '2000-01-01 00:00:00')", "946684800.000000"),
+        ("EXTRACT(week FROM DATE '2021-01-01')", "53"),
+        ("EXTRACT(isoyear FROM DATE '2021-01-01')", "2020"),
+        ("DATE '2024-02-28' + 2", "2024-03-01"),
+        ("DATE '2024-03-01' - DATE '2024-02-28'", "2"),
+        ("TIMESTAMP '2024-01-31 12:00:00' + INTERVAL '1 month'", "2024-02-29 12:00:00"),
+        ("date_trunc('month', TIMESTAMP '2024-02-29 12:34:56')", "2024-02-01 00:00:00"),
+        ("date_trunc('month', DATE '2024-02-29')", "2024-02-01 00:00:00+00"),
+        ("(INTERVAL '1 month' = INTERVAL '30 days')", "t"),
+        ("DATE '2024-02-29' = TIMESTAMP '2024-02-29 00:00:00'", "t"),
+        ("DATE '5874897-12-31' > TIMESTAMP '294276-12-31 00:00:00'", "t"),
+        ("TIMESTAMPTZ 'infinity' > DATE '5874897-12-31'", "t"),
+        ("DATE 'infinity' = TIMESTAMP 'infinity'", "t"),
+        ("TIMESTAMP '2000-01-01 12:00:00' = DATE '2000-01-01'", "f"),
+    ] {
+        assert_eq!(expression(sql)?.evaluate(&row)?.as_deref(), Some(expected), "{sql}");
+    }
+    for sql in [
+        "date_trunc('year',NULL)",
+        "EXTRACT(year FROM NULL)",
+        "DATE '2000-01-01'+NULL",
+        "DATE '2000-01-01'+1::bigint",
+        "date_trunc('day',TIMESTAMPTZ '2000-01-01 00:00:00+00','America/New_York')",
+        "date_part('year',DATE '2000-01-01')",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    Ok(())
+}

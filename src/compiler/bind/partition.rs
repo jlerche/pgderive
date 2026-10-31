@@ -310,10 +310,6 @@ fn bind_key(
     match key {
         crate::compiler::parser::scalar::Key::Column(name) => resolve(&name),
         crate::compiler::parser::scalar::Key::Typed(value) => {
-            ensure!(
-                !crate::compiler::parser::offset::eligible(&value)?,
-                "timestamp offsets in grouping/order keys are unsupported"
-            );
             crate::compiler::typed::computed(&value, resolve, computed, scope)
         }
     }
@@ -401,7 +397,7 @@ fn validate_keys(keys: &[ColumnRef]) -> Result<()> {
     ensure!(
         keys.iter().all(|key| matches!(
             key.oid,
-            16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1114 | 1184
+            16 | 20 | 21 | 23 | 1082 | 1700 | 25 | 1043 | 2950 | 1114 | 1184
         )),
         "partition key requires native deterministic scalar equality"
     );

@@ -81,7 +81,11 @@ pub(in crate::compiler) fn validate_call(call: &pg::FuncCall) -> Result<()> {
             && call.agg_order.is_empty()
             && call.agg_filter.is_none()
             && call.over.is_none()
-            && call.funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall),
+            && (call.funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall)
+                || (call.funcformat == i32::from(pg::CoercionForm::CoerceSqlSyntax)
+                    && super::expressions::builtin_name(
+                        &super::expressions::names(&call.funcname)?.0
+                    ) == Some("extract"))),
         "scalar/series modifiers unsupported"
     );
     Ok(())

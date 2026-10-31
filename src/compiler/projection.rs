@@ -40,6 +40,9 @@ impl Projected {
                                 .json(output.column.oid)?,
                         )),
                         25 | 1043 | 2950 | 1700 => Ok(Cell::Text(value.into())),
+                        1082 | 1186 => {
+                            Ok(Cell::Text(super::value::literal_text(output.column.oid, value)?))
+                        }
                         _ => anyhow::bail!("unsupported native projection codec"),
                     })
                     .transpose()

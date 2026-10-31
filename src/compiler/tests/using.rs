@@ -28,6 +28,7 @@ fn merged_modifier_oid_collation_and_qualified_originals_follow_postgres() -> Re
     let numeric = crate::numeric::Typmod::new(8, 2)?.encoded();
     for (left, right, oid, modifier) in [
         ((21, -1, 0), (20, -1, 0), 20, -1),
+        ((1082, -1, 0), (1082, -1, 0), 1082, -1),
         ((1700, numeric, 0), (1700, numeric, 0), 1700, numeric),
         ((1700, numeric, 0), (1700, crate::numeric::Typmod::new(9, 4)?.encoded(), 0), 1700, -1),
         ((1043, 12, 950), (1043, 12, 950), 1043, 12),
@@ -75,6 +76,23 @@ fn full_nullable_group_pairs_do_not_claim_occurrence_uniqueness() -> Result<()> 
             .is_err()
     );
     Ok(())
+}
+
+#[test]
+fn mixed_date_timestamp_using_rejects_even_when_the_merged_value_is_unused() {
+    for (left, right) in [(1082, 1114), (1184, 1082)] {
+        let native = native((left, -1, 0), (right, -1, 0));
+        for kind in ["JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN"] {
+            assert!(
+                compile(
+                    &format!("SELECT l.id FROM public.items l {kind} public.other r USING(k)"),
+                    &native,
+                )
+                .is_err(),
+                "{left} {kind} {right}"
+            );
+        }
+    }
 }
 
 #[test]

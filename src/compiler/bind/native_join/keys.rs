@@ -68,7 +68,8 @@ impl Bound {
         let compatible = aoid == boid
             || (matches!(aoid, 20 | 21 | 23) && matches!(boid, 20 | 21 | 23))
             || (matches!(aoid, 25 | 1043) && matches!(boid, 25 | 1043));
-        if !compatible || !matches!(aoid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1114 | 1184)
+        if !compatible
+            || !matches!(aoid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184)
         {
             return Ok(false);
         }

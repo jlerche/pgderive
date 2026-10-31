@@ -13,15 +13,16 @@
     23,
     25,
     1043,
+    1082,
     1114,
     1184,
+    1186,
     1700,
     2950
   ],
   "unsupported_source_type_oids": [
     700,
     701,
-    1186,
     1007,
     1009,
     3802
@@ -185,13 +186,13 @@
         25
       ],
       "result_oid": 25,
-      "expression": "ltrim(a.category,'é🙂 ')",
+      "expression": "ltrim(a.category,'\u00e9\ud83d\ude42 ')",
       "arguments": [
         {
           "column": "category"
         },
         {
-          "literal": "é🙂 "
+          "literal": "\u00e9\ud83d\ude42 "
         }
       ]
     },
@@ -215,13 +216,13 @@
         25
       ],
       "result_oid": 25,
-      "expression": "rtrim(a.category,'é🙂 ')",
+      "expression": "rtrim(a.category,'\u00e9\ud83d\ude42 ')",
       "arguments": [
         {
           "column": "category"
         },
         {
-          "literal": "é🙂 "
+          "literal": "\u00e9\ud83d\ude42 "
         }
       ]
     },
@@ -245,13 +246,13 @@
         25
       ],
       "result_oid": 25,
-      "expression": "btrim(a.category,'é🙂 ')",
+      "expression": "btrim(a.category,'\u00e9\ud83d\ude42 ')",
       "arguments": [
         {
           "column": "category"
         },
         {
-          "literal": "é🙂 "
+          "literal": "\u00e9\ud83d\ude42 "
         }
       ]
     },
@@ -263,13 +264,13 @@
         25
       ],
       "result_oid": 25,
-      "expression": "replace(a.category,'é','xy')",
+      "expression": "replace(a.category,'\u00e9','xy')",
       "arguments": [
         {
           "column": "category"
         },
         {
-          "literal": "é"
+          "literal": "\u00e9"
         },
         {
           "literal": "xy"
@@ -284,13 +285,13 @@
         25
       ],
       "result_oid": 25,
-      "expression": "translate(a.category,'é🙂é','abz')",
+      "expression": "translate(a.category,'\u00e9\ud83d\ude42\u00e9','abz')",
       "arguments": [
         {
           "column": "category"
         },
         {
-          "literal": "é🙂é"
+          "literal": "\u00e9\ud83d\ude42\u00e9"
         },
         {
           "literal": "abz"
@@ -304,13 +305,13 @@
         25
       ],
       "result_oid": 23,
-      "expression": "strpos(a.category,'🙂')",
+      "expression": "strpos(a.category,'\ud83d\ude42')",
       "arguments": [
         {
           "column": "category"
         },
         {
-          "literal": "🙂"
+          "literal": "\ud83d\ude42"
         }
       ]
     },
@@ -321,13 +322,13 @@
         25
       ],
       "result_oid": 16,
-      "expression": "starts_with(a.category,'é')",
+      "expression": "starts_with(a.category,'\u00e9')",
       "arguments": [
         {
           "column": "category"
         },
         {
-          "literal": "é"
+          "literal": "\u00e9"
         }
       ]
     },
@@ -356,13 +357,13 @@
         23
       ],
       "result_oid": 25,
-      "expression": "split_part(a.category,'🙂',-2)",
+      "expression": "split_part(a.category,'\ud83d\ude42',-2)",
       "arguments": [
         {
           "column": "category"
         },
         {
-          "literal": "🙂"
+          "literal": "\ud83d\ude42"
         },
         {
           "literal": -2
@@ -621,6 +622,163 @@
           "column": "amount"
         }
       ]
+    },
+    {
+      "name": "extract",
+      "input_oids": [
+        25,
+        1082
+      ],
+      "result_oid": 1700,
+      "expression": "EXTRACT(year FROM a.on_date)",
+      "arguments": [
+        {
+          "literal": "year"
+        },
+        {
+          "column": "on_date"
+        }
+      ]
+    },
+    {
+      "name": "date_trunc",
+      "input_oids": [
+        25,
+        1082
+      ],
+      "result_oid": 1184,
+      "expression": "date_trunc('month',a.on_date)",
+      "arguments": [
+        {
+          "literal": "month"
+        },
+        {
+          "column": "on_date"
+        }
+      ]
+    },
+    {
+      "name": "extract",
+      "input_oids": [
+        25,
+        1114
+      ],
+      "result_oid": 1700,
+      "expression": "EXTRACT(year FROM a.local_time)",
+      "arguments": [
+        {
+          "literal": "year"
+        },
+        {
+          "column": "local_time"
+        }
+      ]
+    },
+    {
+      "name": "date_trunc",
+      "input_oids": [
+        25,
+        1114
+      ],
+      "result_oid": 1114,
+      "expression": "date_trunc('month',a.local_time)",
+      "arguments": [
+        {
+          "literal": "month"
+        },
+        {
+          "column": "local_time"
+        }
+      ]
+    },
+    {
+      "name": "extract",
+      "input_oids": [
+        25,
+        1184
+      ],
+      "result_oid": 1700,
+      "expression": "EXTRACT(year FROM a.event_time)",
+      "arguments": [
+        {
+          "literal": "year"
+        },
+        {
+          "column": "event_time"
+        }
+      ]
+    },
+    {
+      "name": "date_trunc",
+      "input_oids": [
+        25,
+        1184
+      ],
+      "result_oid": 1184,
+      "expression": "date_trunc('month',a.event_time)",
+      "arguments": [
+        {
+          "literal": "month"
+        },
+        {
+          "column": "event_time"
+        }
+      ]
+    },
+    {
+      "name": "extract",
+      "input_oids": [
+        25,
+        1186
+      ],
+      "result_oid": 1700,
+      "expression": "EXTRACT(second FROM a.span)",
+      "arguments": [
+        {
+          "literal": "second"
+        },
+        {
+          "column": "span"
+        }
+      ]
+    },
+    {
+      "name": "date_trunc",
+      "input_oids": [
+        25,
+        1186
+      ],
+      "result_oid": 1186,
+      "expression": "date_trunc('month',a.span)",
+      "arguments": [
+        {
+          "literal": "month"
+        },
+        {
+          "column": "span"
+        }
+      ]
+    },
+    {
+      "name": "date_trunc",
+      "input_oids": [
+        25,
+        1184,
+        25
+      ],
+      "result_oid": 1184,
+      "expression": "date_trunc('month',a.event_time,'UTC')",
+      "arguments": [
+        {
+          "literal": "month"
+        },
+        {
+          "column": "event_time"
+        },
+        {
+          "literal": "UTC"
+        }
+      ]
     }
   ],
   "coercion_cases": [
@@ -718,9 +876,9 @@
       "error_contains": "function timezone is not available in-engine"
     },
     {
-      "id": "calendar-truncation",
-      "expression": "date_trunc('month',a.event_time)",
-      "error_contains": "function date_trunc is not available in-engine"
+      "id": "named-calendar-zone",
+      "expression": "date_trunc('month',a.event_time,'America/New_York')",
+      "error_contains": "date_trunc named zones are unsupported"
     },
     {
       "id": "formatting",
@@ -729,7 +887,7 @@
     },
     {
       "id": "regex",
-      "expression": "regexp_replace(a.category,'é','x','g')",
+      "expression": "regexp_replace(a.category,'\u00e9','x','g')",
       "error_contains": "function regexp_replace is not available in-engine"
     },
     {
@@ -823,7 +981,7 @@
     {
       "id": "time-instants",
       "status": "bounded",
-      "domain": "Microsecond timestamp/timestamptz values, BC/infinities and stored instant normalization. UTC execution; bounded fixed-duration offsets/date_bin. No named-zone conversion, DST calendar arithmetic, month bins or formatting.",
+      "domain": "Native date and full interval codecs; microsecond timestamp/timestamptz, BC/infinities; UTC calendar month/day/time arithmetic, exact numeric EXTRACT and date_trunc. Date relational composition is bounded; interval group/distinct/set/order and named zones remain unsupported. See temporal-arithmetic.md.",
       "implementation": [
         "src/temporal.rs",
         "src/compiler/scalar.rs"
@@ -831,7 +989,8 @@
       "qualification": [
         "scripts/native_compiler_harness.py",
         "scripts/date_bin_compiler_harness.py",
-        "scripts/postgres_support_harness.py"
+        "scripts/postgres_support_harness.py",
+        "scripts/temporal_arithmetic_harness.py"
       ]
     },
     {
@@ -970,11 +1129,6 @@
     {
       "oid": 701,
       "sql_type": "double precision",
-      "error_contains": "unsupported source column contract"
-    },
-    {
-      "oid": 1186,
-      "sql_type": "interval",
       "error_contains": "unsupported source column contract"
     },
     {

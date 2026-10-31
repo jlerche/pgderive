@@ -9,7 +9,8 @@ pub enum Value {
     Numeric(crate::numeric::Numeric),
     Uuid([u8; 16]),
     Timestamp(crate::temporal::Timestamp),
-    Interval(crate::temporal::Gap),
+    Date(crate::temporal::Date),
+    Interval(crate::temporal::Interval),
 }
 pub fn decode(oid: u32, text: &str) -> Result<Value> {
     match oid {
@@ -22,6 +23,8 @@ pub fn decode(oid: u32, text: &str) -> Result<Value> {
         1700 => Ok(Value::Numeric(crate::numeric::Numeric::parse(text)?)),
         25 | 1043 | 705 => Ok(Value::Text(text.into())),
         1114 | 1184 => Ok(Value::Timestamp(crate::temporal::Timestamp::parse(text, oid)?)),
+        1082 => Ok(Value::Date(crate::temporal::Date::parse(text)?)),
+        1186 => Ok(Value::Interval(crate::temporal::Interval::parse(text)?)),
         2950 => Ok(Value::Uuid(uuid(text)?)),
         _ => anyhow::bail!("unsupported scalar codec for OID {oid}"),
     }
@@ -50,6 +53,8 @@ fn uuid(text: &str) -> Result<[u8; 16]> {
 
 pub(super) fn literal_text(oid: u32, text: &str) -> Result<String> {
     Ok(match decode(oid, text)? {
+        Value::Date(value) => value.text(),
+        Value::Interval(value) => value.text(),
         Value::Timestamp(value) => value.text(oid)?,
         Value::Uuid(bytes) => {
             use std::fmt::Write;
@@ -80,7 +85,8 @@ impl Value {
                 }
                 text
             }
-            Self::Interval(_) => anyhow::bail!("interval output is not available in-engine"),
+            Self::Interval(value) => value.text(),
+            Self::Date(value) => value.text(),
         })
     }
 }

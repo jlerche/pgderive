@@ -12,7 +12,7 @@ pub(super) fn bind(parsed: Parsed, distinct: bool, contract: &Contract) -> Resul
         ensure!(
             relational.output.columns.iter().all(|column| matches!(
                 column.column.oid,
-                16 | 20 | 21 | 23 | 25 | 1043 | 2950 | 1114 | 1184
+                16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 2950 | 1114 | 1184
             )),
             "unsupported DISTINCT native type"
         );

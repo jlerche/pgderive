@@ -1,33 +1,33 @@
 //! `PostgreSQL` timestamp values in microseconds relative to 2000-01-01.
 mod calendar;
+mod date;
+mod fields;
+mod interval;
 use anyhow::{Context, Result, ensure};
+pub use date::Date;
+pub use fields::{extract, truncate, validate as validate_field};
+pub use interval::Interval;
 use serde::Serialize;
 const DAY: i64 = 86_400_000_000;
 const MIN: i64 = -211_813_488_000_000_000;
 const END: i64 = 9_223_371_331_200_000_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Timestamp(i64);
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub enum Gap {
-    NegativeInfinity,
-    Finite(i64),
-    PositiveInfinity,
-}
 impl Timestamp {
-    pub(crate) fn difference(self, other: Self) -> Result<Gap> {
+    pub(crate) fn difference(self, other: Self) -> Result<Interval> {
         match (self.0, other.0) {
             (i64::MIN, value) => {
                 ensure!(value != i64::MIN, "interval out of range");
-                Ok(Gap::NegativeInfinity)
+                Ok(Interval::NegativeInfinity)
             }
             (i64::MAX, value) => {
                 ensure!(value != i64::MAX, "interval out of range");
-                Ok(Gap::PositiveInfinity)
+                Ok(Interval::PositiveInfinity)
             }
-            (_, i64::MIN) => Ok(Gap::PositiveInfinity),
-            (_, i64::MAX) => Ok(Gap::NegativeInfinity),
+            (_, i64::MIN) => Ok(Interval::PositiveInfinity),
+            (_, i64::MAX) => Ok(Interval::NegativeInfinity),
             (left, right) => {
-                Ok(Gap::Finite(left.checked_sub(right).context("interval out of range")?))
+                Interval::difference(left.checked_sub(right).context("interval out of range")?)
             }
         }
     }
@@ -52,6 +52,55 @@ impl Timestamp {
             .context("timestamp arithmetic out of range")?;
         ensure!((MIN..END).contains(&micros), "timestamp out of PostgreSQL range");
         Ok(Self(micros))
+    }
+    pub(crate) fn from_micros(value: i64) -> Result<Self> {
+        ensure!((MIN..END).contains(&value), "timestamp out of range");
+        Ok(Self(value))
+    }
+    pub(crate) fn date(self) -> Result<Date> {
+        Ok(match self.0 {
+            i64::MIN => Date::negative_infinity(),
+            i64::MAX => Date::infinity(),
+            value => Date::from_days(value.div_euclid(DAY))?,
+        })
+    }
+    pub(crate) fn add_interval(self, interval: Interval) -> Result<Self> {
+        match (self.0, interval) {
+            (i64::MIN, Interval::PositiveInfinity) | (i64::MAX, Interval::NegativeInfinity) => {
+                anyhow::bail!("timestamp infinity arithmetic is indeterminate")
+            }
+            (_, Interval::PositiveInfinity) => Ok(Self(i64::MAX)),
+            (_, Interval::NegativeInfinity) => Ok(Self(i64::MIN)),
+            (i64::MIN | i64::MAX, _) => Ok(self),
+            (value, Interval::Finite { months, days, micros }) => {
+                let mut result = value;
+                if months != 0 {
+                    let (year, month, day) = calendar::fields(result.div_euclid(DAY));
+                    let month = year * 12 + month - 1 + i64::from(months);
+                    let year = month.div_euclid(12);
+                    let month = month.rem_euclid(12) + 1;
+                    let day = day.min(calendar::month_days(year, month));
+                    result = calendar::days(year, month, day)
+                        .checked_mul(DAY)
+                        .and_then(|date| date.checked_add(result.rem_euclid(DAY)))
+                        .context("timestamp month arithmetic out of range")?;
+                    Self::from_micros(result)?;
+                }
+                if days != 0 {
+                    result = result
+                        .checked_add(
+                            i64::from(days)
+                                .checked_mul(DAY)
+                                .context("timestamp day arithmetic out of range")?,
+                        )
+                        .context("timestamp day arithmetic out of range")?;
+                    Self::from_micros(result)?;
+                }
+                Self::from_micros(
+                    result.checked_add(micros).context("timestamp time arithmetic out of range")?,
+                )
+            }
+        }
     }
     pub(crate) fn bin(self, stride: i64, origin: Self) -> Result<Self> {
         if matches!(self.0, i64::MIN | i64::MAX) {

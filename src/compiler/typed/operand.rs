@@ -1,5 +1,5 @@
 //! Contextual predicate operands reuse the shared typed scalar representation.
-use super::{ColumnRef, Name, Typed, Value};
+use super::{ColumnRef, Name, Typed};
 use crate::compiler::parser::{
     expressions::{column, names, node, optional},
     scalar,
@@ -20,16 +20,6 @@ pub(in crate::compiler) fn bind(
         (Typed::column(resolve(&name)?), false, true)
     } else if let Ok(literal) = native_literal(value) {
         (literal, true, false)
-    } else if matches!(node(value)?, NodeEnum::TypeCast(_))
-        && let Ok(interval) = scalar::interval(value, true)
-    {
-        (
-            Typed { oid: 1186, value: Value::Interval(crate::temporal::Gap::Finite(interval)) },
-            true,
-            false,
-        )
-    } else if let Ok((left, right)) = difference(value) {
-        (Typed::difference(resolve(&left)?, resolve(&right)?)?, false, false)
     } else if let Ok((name, divisor)) = remainder(value) {
         (Typed::remainder(resolve(&name)?, divisor)?, false, false)
     } else {
@@ -51,6 +41,8 @@ impl Operand {
         ensure!(
             self.value.oid == oid
                 || (matches!(self.value.oid, 25 | 1043) && matches!(oid, 25 | 1043))
+                || (matches!(oid, 1082 | 1114 | 1184)
+                    && matches!(self.value.oid, 1082 | 1114 | 1184))
                 || (matches!(oid, 20 | 21 | 23 | 1700)
                     && matches!(self.value.oid, 20 | 21 | 23 | 1700)),
             "SQL type: incompatible comparison operands"
@@ -83,14 +75,6 @@ pub(in crate::compiler) fn navigation(
         return Ok(Typed::column(resolve(&name)?));
     }
     native_literal(value)
-}
-fn difference(value: &Node) -> Result<(Name, Name)> {
-    let NodeEnum::AExpr(value) = node(value)? else { anyhow::bail!("native difference required") };
-    ensure!(
-        value.kind == i32::from(pg::AExprKind::AexprOp) && names(&value.name)?.0 == ["-"],
-        "native difference required"
-    );
-    Ok((column(optional(value.lexpr.as_deref())?)?, column(optional(value.rexpr.as_deref())?)?))
 }
 fn remainder(value: &Node) -> Result<(Name, i64)> {
     let (left, right) = match node(value)? {

@@ -14,6 +14,9 @@ fn scalar(column: &ColumnRef, text: &str) -> Result<String> {
         Value::Timestamp(value) => {
             format!("{:016x}", super::super::order::biased(value.sort_value(), false))
         }
+        Value::Date(value) => {
+            format!("{:016x}", super::super::order::biased(value.sort_value(), false))
+        }
         Value::Numeric(value) => value.order_key(),
         Value::Text(value) => value,
         Value::Uuid(value) => {

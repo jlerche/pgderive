@@ -17,7 +17,7 @@ connected PostgreSQL computation and sink deferral are not fallback strategies.
 | Numeric and integral | Additional functions such as numeric remainder/power; [division, AVG, rounding and casts](numeric-arithmetic.md) now qualified with exact scale, specials and checked boundaries |
 | Text and encodings | Additional string operations and casts; UTF8, trailing spaces, byte versus character semantics and expansion budgets |
 | Locale and collation | Case conversion and comparison; provider/version-specific behavior, normalization, deterministic versus nondeterministic equality |
-| Calendar and timezones | Extraction, truncation, named zones, intervals and formatting; DST transitions, infinity, BC and external timezone data |
+| Calendar and timezones | [UTC calendar arithmetic, date/interval codecs, EXTRACT and date_trunc](temporal-arithmetic.md) now qualified; named zones, formatting, additional interval relational operations and precision casts remain separate tasks |
 | Regex and formatting | PostgreSQL-compatible matching/replacement, capture/array behavior, format languages and resource limits |
 | Arrays and structured values | Native codecs, subscripts, NULL elements, bounds, constructors and equality/representation |
 | Floating point | Native codecs, scalar operations and aggregates; special values, rounding and order-dependent evaluation |

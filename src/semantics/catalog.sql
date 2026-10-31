@@ -1,6 +1,6 @@
 WITH RECURSIVE native AS (
     SELECT t.* FROM pg_catalog.pg_type t
-    WHERE t.oid = ANY(ARRAY[16,17,20,21,23,25,26,701,1009,1043,1114,1184,1186,1700,2275,2950,3802]::oid[])
+    WHERE t.oid = ANY(ARRAY[16,17,20,21,23,25,26,701,1009,1043,1082,1114,1184,1186,1700,2275,2950,3802]::oid[])
 ), casts AS (
     SELECT c.* FROM pg_catalog.pg_cast c
     WHERE c.castsource IN (SELECT oid FROM native)
@@ -8,7 +8,7 @@ WITH RECURSIVE native AS (
 ), families AS (
     SELECT p.oid FROM pg_catalog.pg_proc p
     WHERE p.pronamespace = 'pg_catalog'::regnamespace
-      AND p.proname = ANY(ARRAY['date_bin','mod','count','sum','avg','min','max',
+      AND p.proname = ANY(ARRAY['date_bin','extract','date_trunc','mod','count','sum','avg','min','max',
           'row_number','rank','dense_rank','lag','lead','generate_series'])
       OR (p.pronamespace = 'pg_catalog'::regnamespace AND p.proname = ANY($2::text[]))
 ), aggregates AS (

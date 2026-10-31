@@ -97,6 +97,10 @@ impl Builder<'_> {
     }
 }
 fn common(left: u32, right: u32) -> Result<u32> {
+    ensure!(
+        !matches!((left, right), (1082, 1114 | 1184) | (1114 | 1184, 1082)),
+        "mixed DATE/timestamp USING requires explicit casts or an ON predicate"
+    );
     let oid = match (left, right) {
         (a, b) if a == b => a,
         (20 | 21 | 23 | 1700, 20 | 21 | 23 | 1700) => [1700, 20, 23, 21]
@@ -108,7 +112,7 @@ fn common(left: u32, right: u32) -> Result<u32> {
         _ => anyhow::bail!("USING columns have incompatible native types"),
     };
     ensure!(
-        matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1114 | 1184),
+        matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
         "unsupported USING native type"
     );
     Ok(oid)

@@ -378,14 +378,13 @@ owned timestamp-without-time-zone fixture uses its local calendar fields. NULL
 hours and infinity fall through to otherTime, exactly as PostgreSQL specifies.
 The camel-case bidTimeType output is quoted explicitly.
 
-Two owned fixtures compare the exact query with a native materialized view and
-an independent Decimal/Unicode/hour bag. They cover duplicate outputs, NULL
-operands, infinities, numeric range boundaries, int8 extrema, simultaneous row
-changes, predicate crossings, DST instants, PK moves, rollback, empty input ticks
-and cold restart. Changed range bounds or CASE labels reject durable state reuse;
-source alias changes preserve identity. The terminal program evaluates only
-signed tuple-local deltas inside atomic publication; it cannot feed deferred
-values into other operators or substitute an implicit replay clock.
+The local timestamp fixture compares its query with an original-SQL native
+materialized view, send representations, output metadata and an independent
+Decimal/Unicode/hour bag through updates, deletions, predicate crossings and cold
+restart. The [calendar arithmetic](temporal-arithmetic.md) slice executes these
+expressions in the engine. The instant variant still requires unsupported
+AT TIME ZONE syntax and rejects before activation; no terminal/deferred evaluator
+or implicit replay clock supplies its values.
 
 ## Explicit text context and hidden operands (q21)
 

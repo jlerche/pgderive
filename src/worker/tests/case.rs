@@ -130,14 +130,15 @@ fn case_rejects_unsupported_arms_and_gap_types() -> Result<()> {
         sql(false).replace("THEN 1", "THEN 'x'"),
         sql(false).replace("CASE WHEN", "CASE q.price WHEN"),
         sql(false).replace("q.price-q.previous", "q.id-q.auction"),
-        sql(false).replace("INTERVAL '10 seconds'", "INTERVAL '1 month'"),
-        sql(false).replace("INTERVAL '10 seconds'", "INTERVAL '0 seconds'"),
         sql(false)
             .replace("THEN 1", "THEN NULL")
             .replace("THEN 0", "THEN NULL")
             .replace("ELSE 0", "ELSE NULL"),
     ] {
         assert!(compile(&invalid, &native).is_err(), "{invalid}");
+    }
+    for unit in ["1 month", "0 seconds"] {
+        compile(&sql(false).replace("10 seconds", unit), &native)?;
     }
     assert_ne!(
         serde_json::to_vec(&compile(&sql(false), &native)?)?,

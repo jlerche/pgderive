@@ -302,10 +302,11 @@ calendar and infinities. Native projection emits PostgreSQL-compatible JSON stri
 including BC dates and UTC timestamptz offsets. Equality/grouping and ROWS ordering
 support timestamps with existing NULL and signed-delta rules. WHERE supports native
 timestamp comparisons and unknown string constants in the qualified canonical ISO
-form; timestamptz constants need explicit numeric offsets or Z. Ambiguous date
-formats, timezone names, date-only constants, mixed timestamp/timestamptz coercions,
-casts and calendar/timezone functions remain rejected. They require deliberate
-PostgreSQL context and expression lowering rather than string ordering.
+form; timestamptz constants need explicit numeric offsets or Z. The later
+[calendar arithmetic](temporal-arithmetic.md) slice adds native date and interval
+values, selected UTC casts, exact EXTRACT and date_trunc. Ambiguous date formats,
+named zones and unsupported casts/functions still reject rather than using string
+ordering or a PostgreSQL computation fallback.
 
 Numeric projection safely defers native input conversion to PostgreSQL inside
 atomic publication, preserving exact decimals and PostgreSQL JSON representations
@@ -1024,12 +1025,12 @@ with SQL three-valued comparisons and NULL tests. All-NULL circuit expressions
 require an explicit integral cast. CASE result promotion and nullability come
 from the same typed representation rather than a second simple-CASE evaluator.
 
-Terminal EXTRACT additionally accepts year, month, day, minute, second, epoch,
-week, isoyear, isodow, dow, doy and quarter. It consumes timestamp without time
-zone, including an explicit attested UTC conversion from timestamptz. Arbitrary
-named zones, ambient-session timestamptz extraction, volatile functions, user
-functions and arbitrary casts remain rejected. UTC is a bound execution context;
-source LSN and logical time remain distinct from temporal SQL values.
+[EXTRACT and date_trunc](temporal-arithmetic.md) now operate in the typed engine
+over date, timestamps and interval. EXTRACT emits exact numeric fields; timestamptz
+uses the fixed UTC context. Date and interval arithmetic preserve calendar fields
+and native bounds. Named-zone/AT TIME ZONE expansion, volatile functions, user
+functions and arbitrary casts remain rejected. Source LSN and logical time remain
+distinct from temporal SQL values.
 
 ## Native and mixed derived join trees
 

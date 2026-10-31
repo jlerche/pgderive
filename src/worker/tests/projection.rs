@@ -289,7 +289,7 @@ fn named_hot_auction_and_highest_bid_queries_lower() -> Result<()> {
 }
 
 #[test]
-fn calendar_extract_and_date_part_remain_explicitly_unavailable() -> Result<()> {
+fn calendar_extract_rejects_named_zone_and_date_part() -> Result<()> {
     let mut native = contract();
     let column = &mut native.relations[1].columns[2];
     column.name = "date_time".into();
@@ -306,7 +306,6 @@ fn calendar_extract_and_date_part_remain_explicitly_unavailable() -> Result<()> 
     for query in [
         format!("SELECT {calendar} FROM source.bid"),
         "SELECT date_part('year',date_time AT TIME ZONE 'UTC') FROM source.bid".into(),
-        "SELECT extract(timezone FROM date_time) FROM source.bid".into(),
         "SELECT extract(year FROM date_time AT TIME ZONE 'America/Los_Angeles') FROM source.bid"
             .into(),
     ]
@@ -370,8 +369,6 @@ fn shared_temporal_target_binding_keeps_nested_and_on_allowlists() -> Result<()>
             bucket.replace("moment", "b.moment")
         ),
         "SELECT date_part('hour',moment) FROM source.bid".into(),
-        "SELECT moment+interval '1 day' FROM source.bid".into(),
-        "SELECT moment+interval '1 hour',COUNT(*) FROM source.bid GROUP BY moment+interval '1 hour'".into(),
         format!("SELECT {bucket} OVER() FROM source.bid"),
         "SELECT b.* FROM source.bid b".into(),
         "SELECT id,COUNT(*) FROM source.bid".into(),

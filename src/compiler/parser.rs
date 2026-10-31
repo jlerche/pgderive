@@ -9,7 +9,6 @@ pub(super) mod lookup;
 mod membership;
 pub(super) mod native_join;
 pub(super) mod navigation;
-pub(super) mod offset;
 pub(super) mod ordering;
 pub(super) mod partition;
 pub(super) mod scalar;

@@ -262,7 +262,7 @@ async fn integer_numeric_statistics_preserve_exact_weighted_state() -> Result<()
 }
 
 #[test]
-fn native_timestamp_resolution_normalizes_offsets_and_rejects_cross_type_casts() -> Result<()> {
+fn native_timestamp_resolution_normalizes_offsets_and_utc_cross_type_comparisons() -> Result<()> {
     let mut native = contract();
     for (index, name, oid) in [(4, "local", 1114), (5, "instant", 1184), (6, "amount", 1700)] {
         native.relations[1].columns.push(crate::source::tests::column(index, name, oid));
@@ -274,9 +274,8 @@ fn native_timestamp_resolution_normalizes_offsets_and_rejects_cross_type_casts()
     assert_eq!(serde_json::to_vec(&original)?, serde_json::to_vec(&equivalent)?);
     assert!(original.validate_execution().is_ok());
 
-    for predicate in
-        ["b.local=b.instant", "b.instant<'2000-01-01 00:00:00'", "b.local<'1900-02-29 00:00:00'"]
-    {
+    compile("SELECT b.local FROM source.bid b WHERE b.local=b.instant", &native)?;
+    for predicate in ["b.instant<'2000-01-01 00:00:00'", "b.local<'1900-02-29 00:00:00'"] {
         assert!(
             compile(&format!("SELECT b.local FROM source.bid b WHERE {predicate}"), &native)
                 .is_err()

@@ -98,18 +98,18 @@ async fn complete_sessions_merge_split_move_and_restore_signed_bags() -> Result<
     Ok(())
 }
 #[test]
-fn offsets_reject_calendar_and_untyped_arithmetic_before_registration() -> Result<()> {
+fn offsets_accept_calendar_but_reject_untyped_arithmetic_before_registration() -> Result<()> {
     let mut native = contract();
     native.relations[1].columns[2].oid = 1114;
-    for expression in [
-        "b.price+INTERVAL '1 day'",
-        "b.price+INTERVAL '1 month'",
-        "b.price+'10 seconds'",
-        "b.id+INTERVAL '10 seconds'",
-        "b.price*INTERVAL '10 seconds'",
-        "b.price+INTERVAL '0 seconds'",
-    ] {
+    for expression in
+        ["b.price+'10 seconds'", "b.id+INTERVAL '10 seconds'", "b.price*INTERVAL '10 seconds'"]
+    {
         assert!(compile(&format!("SELECT {expression} FROM source.bid b"), &native).is_err());
+    }
+    for expression in
+        ["b.price+INTERVAL '1 day'", "b.price+INTERVAL '1 month'", "b.price+INTERVAL '0 seconds'"]
+    {
+        compile(&format!("SELECT {expression} FROM source.bid b"), &native)?;
     }
     assert_ne!(
         serde_json::to_vec(&compile(&sql(), &native)?)?,

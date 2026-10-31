@@ -222,7 +222,7 @@ async fn inspect_layout(
 pub(super) fn quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
-const SOURCE_TYPE_OIDS: &[u32] = &[16, 20, 21, 23, 25, 1043, 2950, 1114, 1184, 1700];
+const SOURCE_TYPE_OIDS: &[u32] = &[16, 20, 21, 23, 25, 1043, 1082, 2950, 1114, 1184, 1186, 1700];
 
 pub(super) fn validate_columns(columns: &[Column]) -> Result<()> {
     ensure!(

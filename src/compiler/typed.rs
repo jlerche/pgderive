@@ -5,6 +5,7 @@ use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum};
 use serde::Serialize;
 use types::numeric_common;
+mod calendar;
 mod case;
 pub(in crate::compiler) mod collation;
 mod evaluate;
@@ -29,8 +30,7 @@ enum Value {
     Numeric(String),
     Text(String),
     Encoded(Option<String>),
-    Interval(crate::temporal::Gap),
-    Difference(ColumnRef, ColumnRef),
+    Interval(crate::temporal::Interval),
     Remainder(super::remainder::Remainder),
     Temporal(super::scalar::Temporal),
     Call(functions::Call),
@@ -42,11 +42,9 @@ enum Value {
 impl Typed {
     pub(in crate::compiler) fn is_constant(&self) -> bool {
         match &self.value {
-            Value::Column(_)
-            | Value::Average(_)
-            | Value::Difference(..)
-            | Value::Remainder(_)
-            | Value::Temporal(_) => false,
+            Value::Column(_) | Value::Average(_) | Value::Remainder(_) | Value::Temporal(_) => {
+                false
+            }
             Value::Boolean(value) => value.is_constant(),
             Value::Literal(_)
             | Value::Numeric(_)
@@ -109,7 +107,10 @@ fn bind_inner(
         NodeEnum::ColumnRef(_) => {
             let column = resolve(&column(value)?)?;
             ensure!(
-                matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1114 | 1184),
+                matches!(
+                    column.oid,
+                    16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1082 | 1114 | 1184 | 1186
+                ),
                 "column type is not available in-engine typed expressions"
             );
             Ok(Typed { oid: column.oid, value: Value::Column(column) })
@@ -171,14 +172,24 @@ fn arithmetic(
     } else {
         ensure!(
             matches!(operation, Arithmetic::Add | Arithmetic::Subtract)
-                && matches!(right.oid, 20 | 21 | 23 | 1700),
+                && matches!(right.oid, 20 | 21 | 23 | 1700 | 1186),
             "unresolved unary scalar operator"
         );
         if matches!(operation, Arithmetic::Add) {
             return Ok(right);
         }
-        Typed { oid: right.oid, value: Value::Literal(Some(0)) }
+        if right.oid == 1186 {
+            calendar::zero_interval()
+        } else {
+            Typed { oid: right.oid, value: Value::Literal(Some(0)) }
+        }
     };
+    if let Some(oid) = calendar::oid(left.oid, right.oid, operation)? {
+        return Ok(Typed {
+            oid,
+            value: Value::Binary { operation, left: Box::new(left), right: Box::new(right) },
+        });
+    }
     ensure!(left.oid != 0 || right.oid != 0, "unresolved scalar operator types");
     ensure!(
         [left.oid, right.oid].iter().all(|oid| matches!(oid, 0 | 20 | 21 | 23 | 1700)),
@@ -198,15 +209,13 @@ pub(super) fn computed(
 ) -> Result<ColumnRef> {
     use super::parser::{
         expressions::{column, node},
-        offset, scalar,
+        scalar,
     };
     if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
         return resolve(&column(value)?);
     }
     let mut typed = if scalar::is_bin(value)? {
         Typed::temporal(scalar::bin(value, resolve)?)
-    } else if offset::eligible(value)? {
-        Typed::temporal(offset::parse(value, resolve)?)
     } else {
         bind(value, resolve, 0)?
     };
@@ -214,7 +223,7 @@ pub(super) fn computed(
         typed.oid = 25;
     }
     ensure!(
-        matches!(typed.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 1114 | 1184),
+        matches!(typed.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 1082 | 1114 | 1184 | 1186),
         "computed scalar requires supported native type"
     );
     super::scalar::register(typed, computed, &format!("@typed_{scope:?}_"))
@@ -267,10 +276,12 @@ impl Typed {
             Value::Literal(value) => value.is_none(),
             Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
             Value::Encoded(value) => value.is_none(),
-            Value::Difference(left, right) => left.nullable || right.nullable,
             Value::Remainder(value) => value.input.nullable,
             Value::Temporal(value) => value.input.nullable,
-            Value::Call(call) => call.arguments.iter().any(Self::nullable),
+            Value::Call(call) => {
+                call.operation == super::capabilities::Builtin::Extract
+                    || call.arguments.iter().any(Self::nullable)
+            }
             Value::Cast { input, .. } => input.nullable(),
             Value::Binary { left, right, .. } => left.nullable() || right.nullable(),
             Value::Coalesce(arguments) => arguments.iter().all(Self::nullable),
@@ -281,16 +292,6 @@ impl Typed {
     }
     pub(in crate::compiler) const fn oid(&self) -> u32 {
         self.oid
-    }
-}
-pub(super) fn difference(left: ColumnRef, right: ColumnRef) -> Typed {
-    Typed {
-        oid: numeric_common(&[left.oid, right.oid]),
-        value: Value::Binary {
-            operation: Arithmetic::Subtract,
-            left: Box::new(Typed { oid: left.oid, value: Value::Column(left) }),
-            right: Box::new(Typed { oid: right.oid, value: Value::Column(right) }),
-        },
     }
 }
 
@@ -324,7 +325,10 @@ impl Typed {
             column.oid == oid
                 || matches!(
                     (column.oid, oid),
-                    (20 | 21 | 23, 20 | 21 | 23 | 1700) | (25 | 1043, 25 | 1043) | (1114, 1184)
+                    (20 | 21 | 23, 20 | 21 | 23 | 1700)
+                        | (25 | 1043, 25 | 1043)
+                        | (1082, 1114 | 1184)
+                        | (1114, 1184)
                 ),
             "unsupported UNION coercion"
         );

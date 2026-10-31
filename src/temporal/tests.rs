@@ -81,20 +81,20 @@ fn bins_match_independent_floor_and_postgres_checked_boundaries() -> Result<()> 
 
 #[test]
 fn timestamp_difference_preserves_pg_infinity_and_overflow_rules() -> Result<()> {
-    use super::Gap;
+    use super::Interval;
     let finite = Timestamp::parse("2000-01-01 00:00:00", 1114)?;
     let later = Timestamp::parse("2000-01-01 00:00:10.000001", 1114)?;
     let negative = Timestamp::parse("-infinity", 1114)?;
     let positive = Timestamp::parse("infinity", 1114)?;
-    assert_eq!(later.difference(finite)?, Gap::Finite(10_000_001));
-    assert_eq!(finite.difference(later)?, Gap::Finite(-10_000_001));
+    assert_eq!(later.difference(finite)?, Interval::duration(10_000_001));
+    assert_eq!(finite.difference(later)?, Interval::duration(-10_000_001));
     for (left, right, expected) in [
-        (positive, finite, Gap::PositiveInfinity),
-        (finite, negative, Gap::PositiveInfinity),
-        (negative, finite, Gap::NegativeInfinity),
-        (finite, positive, Gap::NegativeInfinity),
-        (positive, negative, Gap::PositiveInfinity),
-        (negative, positive, Gap::NegativeInfinity),
+        (positive, finite, Interval::PositiveInfinity),
+        (finite, negative, Interval::PositiveInfinity),
+        (negative, finite, Interval::NegativeInfinity),
+        (finite, positive, Interval::NegativeInfinity),
+        (positive, negative, Interval::PositiveInfinity),
+        (negative, positive, Interval::NegativeInfinity),
     ] {
         assert_eq!(left.difference(right)?, expected);
     }
@@ -104,6 +104,165 @@ fn timestamp_difference_preserves_pg_infinity_and_overflow_rules() -> Result<()>
     let max = Timestamp::parse("294276-12-31 23:59:59.999999", 1114)?;
     assert!(max.difference(min).is_err());
     assert!(min.difference(max).is_err());
-    assert_eq!(finite.difference(finite)?, Gap::Finite(0));
+    assert_eq!(finite.difference(finite)?, Interval::duration(0));
+    Ok(())
+}
+
+#[test]
+fn native_dates_intervals_and_calendar_edges() -> Result<()> {
+    use super::{Date, Interval, extract, truncate};
+    for text in
+        ["4714-11-24 BC", "0001-01-01 BC", "2000-02-29", "5874897-12-31", "infinity", "-infinity"]
+    {
+        assert_eq!(Date::parse(text)?.text(), text);
+    }
+    assert!(Date::parse("5874897-12-31")?.timestamp().is_err());
+    let components = Interval::parse("P13M-2DT90000.123456S")?;
+    assert_eq!(Interval::parse(&components.text())?.text(), components.text());
+    assert_eq!(Interval::parse("1 month")?, Interval::parse("30 days")?);
+    assert_ne!(Interval::parse("1 month")?.text(), Interval::parse("30 days")?.text());
+    assert!(Interval::finite(i32::MAX, i32::MAX, i64::MAX).is_err());
+    for (field, text, oid, expected) in [
+        ("year", "0001-01-01 BC", 1082, Some("-1")),
+        ("century", "0001-01-01 BC", 1082, Some("-1")),
+        ("month", "infinity", 1114, None),
+        ("epoch", "infinity", 1186, Some("Infinity")),
+        ("quarter", "-4 months", 1186, Some("0")),
+        ("epoch", "1 year 1 month 1 day 0.000001 second", 1186, Some("34236000.000001")),
+        ("epoch", "294276-12-31 23:59:59.999999", 1114, Some("9224318016000.000000")),
+    ] {
+        assert_eq!(extract(field, text, oid)?.as_deref(), expected, "{field}/{text}");
+    }
+    for (text, expected) in
+        [("0002-01-01 BC", "-1"), ("0011-01-01 BC", "-1"), ("0012-01-01 BC", "-2")]
+    {
+        assert_eq!(extract("decade", text, 1082)?.as_deref(), Some(expected));
+    }
+    assert_eq!(truncate("week", "2021-01-01 12:00:00", 1114)?, "2020-12-28 00:00:00");
+    let later = Timestamp::parse("2000-01-03 01:00:00", 1114)?;
+    let earlier = Timestamp::parse("2000-01-01 02:00:00", 1114)?;
+    assert_eq!(later.difference(earlier)?.text(), "P0M1DT82800.000000S");
+    Ok(())
+}
+
+#[test]
+fn calendar_units_null_infinity_and_overflow_are_closed() -> Result<()> {
+    use super::Interval;
+    for invalid in [
+        "",
+        "P",
+        "PT",
+        "P1YT",
+        "P1M2M",
+        "P1Q",
+        "1",
+        "1 fortnight",
+        "0.0000001 seconds",
+        "1 day 00:99:00",
+        "2147483648 months",
+        "9223372036854775808 microseconds",
+    ] {
+        assert!(Interval::parse(invalid).is_err(), "{invalid}");
+    }
+    for literal in [
+        "1 year 2 mons 3 days 04:05:06.123456",
+        "-25:00:00",
+        "1 week",
+        "2 milliseconds",
+        "3 microseconds",
+        "-infinity",
+        "infinity",
+    ] {
+        let value = Interval::parse(literal)?;
+        assert_eq!(Interval::parse(&value.text())?, value);
+    }
+    Ok(())
+}
+#[test]
+fn calendar_all_supported_fields_and_units() -> Result<()> {
+    use super::{extract, truncate};
+    for field in [
+        "year",
+        "month",
+        "day",
+        "quarter",
+        "week",
+        "isoyear",
+        "dow",
+        "isodow",
+        "doy",
+        "decade",
+        "century",
+        "millennium",
+        "julian",
+        "epoch",
+        "hour",
+        "minute",
+        "second",
+        "milliseconds",
+        "microseconds",
+        "timezone",
+        "timezone_hour",
+        "timezone_minute",
+    ] {
+        extract(field, "2024-02-29 12:34:56.123456+00", 1184)?;
+    }
+    for field in [
+        "microseconds",
+        "milliseconds",
+        "second",
+        "minute",
+        "hour",
+        "day",
+        "week",
+        "month",
+        "quarter",
+        "year",
+        "decade",
+        "century",
+        "millennium",
+    ] {
+        truncate(field, "2024-02-29 12:34:56.123456", 1114)?;
+        if field != "week" {
+            truncate(field, "-13 months -2 days -25 hours -2.123456 seconds", 1186)?;
+        }
+    }
+    for field in [
+        "year",
+        "month",
+        "day",
+        "quarter",
+        "decade",
+        "century",
+        "millennium",
+        "hour",
+        "minute",
+        "second",
+        "milliseconds",
+        "microseconds",
+        "epoch",
+    ] {
+        extract(field, "-13 months -2 days -25 hours -2.123456 seconds", 1186)?;
+    }
+    Ok(())
+}
+#[test]
+fn calendar_invalid_fields_and_arithmetic_boundaries() -> Result<()> {
+    use super::{Date, Interval, extract, truncate};
+    assert!(extract("timezone", "2000-01-01", 1082).is_err());
+    assert!(truncate("week", "1 month", 1186).is_err());
+    assert!(Date::infinity().difference(Date::infinity()).is_err());
+    assert!(Date::parse("5874897-12-31")?.add_days(1).is_err());
+    assert!(Interval::PositiveInfinity.binary(Interval::NegativeInfinity, false).is_err());
+    assert_eq!(
+        Interval::PositiveInfinity.binary(Interval::duration(i64::MIN), true)?,
+        Interval::PositiveInfinity
+    );
+    assert!(Interval::duration(i64::MIN).negate().is_err());
+    assert!(Interval::finite(i32::MAX, 0, 0)?.binary(Interval::parse("1 month")?, false).is_err());
+    assert_eq!(
+        extract("epoch", "294247-01-10 04:00:54.775807", 1114)?.as_deref(),
+        Some("9223372036854.775800")
+    );
     Ok(())
 }

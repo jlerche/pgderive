@@ -5,6 +5,7 @@ import json
 import pathlib
 from decimal import Decimal
 from numeric_arithmetic_oracle import clean,number,rounding
+from temporal_oracle import parse_civil,parse_interval,extract,truncate,encoded
 from functions_compiler_harness import substring
 from native_mv_oracle import binary_difference, expected
 from sql_compiler_harness import SqlFixture
@@ -97,18 +98,24 @@ def evaluate(case, row):
         return clean(number(text).copy_abs()) if case['input_oids'][0] == 1700 else abs(text)
     if name in ['round', 'trunc', 'ceil', 'ceiling', 'floor']:
         return clean(rounding(number(text), rest[0] if rest else 0, name))
+    if name in ('extract','date_trunc'):
+        kind = {1082:'date',1114:'stamp',1184:'instant',1186:'interval'}[case['input_oids'][1]]
+        value = parse_interval(rest[0]) if kind == 'interval' else parse_civil(rest[0])
+        return clean(extract(value,kind,text)) if name == 'extract' else encoded(truncate(value,kind,text),'instant' if kind == 'date' else kind)
     raise ValueError('No independent oracle for ' + name)
 
 
 class SupportFixture(SqlFixture):
     def __init__(self, output, matrix):
         super().__init__(output, False)
+        self.pg[1:1] = ['-q','-c',"SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; SET IntervalStyle='iso_8601'"]
         self.cases = matrix['scalar_functions'] + matrix['coercion_cases']
         self.labels = ['v' + str(index) for index in range(len(self.cases))]
         self.sql(f'''ALTER TABLE {self.name}.auction
             ADD COLUMN small_value smallint, ADD COLUMN large_value bigint,
             ADD COLUMN codepoint integer, ADD COLUMN vartext varchar(64),
-            ADD COLUMN event_time timestamptz, ADD COLUMN local_time timestamp, ADD COLUMN amount numeric;
+            ADD COLUMN event_time timestamptz, ADD COLUMN local_time timestamp, ADD COLUMN amount numeric,
+            ADD COLUMN on_date date, ADD COLUMN span interval;
             UPDATE {self.name}.auction SET
             category=CASE WHEN id IN(1,2) THEN 'é🙂á é' WHEN id=3 THEN ''
                           WHEN id=4 THEN NULL ELSE 'skip me' END,
@@ -117,7 +124,9 @@ class SupportFixture(SqlFixture):
             large_value=CASE WHEN id=4 THEN NULL ELSE -2147483649 END,
             codepoint=CASE WHEN id=4 THEN NULL WHEN id=3 THEN 65 ELSE 128578 END,
             vartext=CASE WHEN id=4 THEN NULL ELSE '界🙂' END,
-            event_time='2024-03-10 01:30:00-05',local_time='2024-03-10 01:30:00',amount=3.14''')
+            event_time='2024-03-10 01:30:00-05',local_time='2024-03-10 01:30:00',amount=3.14,
+            on_date=CASE WHEN id=4 THEN NULL ELSE '2024-02-29'::date END,
+            span=CASE WHEN id=4 THEN NULL ELSE 'P1Y1M1DT2H3M4.123456S'::interval END''')
         self.query = ('SELECT ' + ','.join(case['expression'] + ' AS ' + label
                       for case, label in zip(self.cases, self.labels))
                       + f" FROM {self.name}.auction a WHERE NOT starts_with(COALESCE(a.category,''),'skip')")

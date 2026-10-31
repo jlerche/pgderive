@@ -44,7 +44,13 @@ fn common(left: &ColumnRef, right: &ColumnRef, unknown: (bool, bool)) -> Result<
             .find(|oid| *oid == a || *oid == b)
             .context("missing numeric set operation type")?,
         (25 | 1043, 25 | 1043) => a,
-        (1114 | 1184, 1114 | 1184) => 1184,
+        (1082 | 1114 | 1184, 1082 | 1114 | 1184) => {
+            if a == 1184 || b == 1184 {
+                1184
+            } else {
+                1114
+            }
+        }
         _ => anyhow::bail!("set operation operands have incompatible native types"),
     })
 }
@@ -79,7 +85,7 @@ pub(super) fn bind(parsed: SetOperation, contract: &Contract) -> Result<Compiled
                 ),
             )?;
             ensure!(
-                matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1114 | 1184),
+                matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
                 "unsupported set operation native type"
             );
             Ok(OutputColumn {
