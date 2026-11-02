@@ -5,6 +5,7 @@ mod cte;
 pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
+mod label;
 pub(super) mod lookup;
 mod membership;
 pub(super) mod native_join;

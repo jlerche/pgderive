@@ -89,6 +89,39 @@ fn count(value: &Node) -> Result<Option<usize>> {
     Ok(Some(usize::try_from(value)?))
 }
 
+fn same_expression(left: &partition::Target, right: &partition::Target) -> bool {
+    let (partition::Value::Typed(left), partition::Value::Typed(right)) =
+        (&left.value, &right.value)
+    else {
+        return false;
+    };
+    locationless(left) == locationless(right)
+}
+
+fn locationless(value: &Node) -> String {
+    const FIELD: &str = "location: ";
+    let text = format!("{value:?}");
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    let mut quoted = false;
+    while let Some(character) = rest.chars().next() {
+        if !quoted && rest.starts_with(FIELD) {
+            rest = rest[FIELD.len()..]
+                .trim_start_matches(|digit: char| digit == '-' || digit.is_ascii_digit());
+            continue;
+        }
+        let escaped = quoted && character == '\\';
+        quoted ^= character == '"';
+        output.push(character);
+        rest = &rest[character.len_utf8()..];
+        if let Some(next) = rest.chars().next().filter(|_| escaped) {
+            output.push(next);
+            rest = &rest[next.len_utf8()..];
+        }
+    }
+    output
+}
+
 fn target_index(value: &Node, targets: &[partition::Target]) -> Result<Option<usize>> {
     if let NodeEnum::AConst(value) = node(value)? {
         let Some(pg::a_const::Val::Ival(value)) = &value.val else {
@@ -103,9 +136,12 @@ fn target_index(value: &Node, targets: &[partition::Target]) -> Result<Option<us
         let name = column(value)?;
         if let [label] = name.0.as_slice() {
             let mut candidates = targets.iter().enumerate().filter(|(_, t)| t.label == *label);
-            let first = candidates.next().map(|(index, _)| index);
-            ensure!(candidates.next().is_none(), "ambiguous ORDER BY output label");
-            return Ok(first);
+            let Some((index, first)) = candidates.next() else { return Ok(None) };
+            ensure!(
+                candidates.all(|(_, other)| same_expression(first, other)),
+                "ambiguous ORDER BY output label"
+            );
+            return Ok(Some(index));
         }
     }
     // Hidden expressions bind against the input scope, where SELECT aliases are

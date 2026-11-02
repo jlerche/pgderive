@@ -7,7 +7,7 @@ use super::{
     expressions::{names, node, optional},
     native_join::Tree,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 struct Rewrite<'a> {
     select: &'a pg::SelectStmt,
@@ -114,7 +114,6 @@ impl Rewrite<'_> {
                 matches!(name.0.as_slice(), [name] if matches!(name.as_str(), "="|"<>")),
                 "unsupported IN operator"
             );
-            self.changed = true;
         }
         self.children(value, guarded, depth)
     }
@@ -130,7 +129,7 @@ impl Rewrite<'_> {
                     && let Some(original) = original
                     && self.links != links
                 {
-                    value.name = scalar_label(&original)?;
+                    value.name = super::label::output(&original)?;
                 }
             }
             Some(NodeEnum::AExpr(value)) => {
@@ -258,48 +257,6 @@ impl Rewrite<'_> {
         Ok(ast::column(&alias, ast::VALUE))
     }
 }
-pub(super) fn scalar_label(value: &Node) -> Result<String> {
-    Ok(match node(value)? {
-        NodeEnum::SubLink(link)
-            if link.sub_link_type == i32::from(pg::SubLinkType::ExprSublink) =>
-        {
-            let NodeEnum::SelectStmt(query) = node(optional(link.subselect.as_deref())?)? else {
-                anyhow::bail!("scalar subquery requires SELECT");
-            };
-            let target = query.target_list.first().context("scalar subquery has no target")?;
-            let NodeEnum::ResTarget(target) = node(target)? else {
-                anyhow::bail!("scalar subquery requires an output target");
-            };
-            if target.name.is_empty() {
-                scalar_label(optional(target.val.as_deref())?)?
-            } else {
-                target.name.clone()
-            }
-        }
-        NodeEnum::ColumnRef(_) => {
-            super::expressions::column(value)?.0.last().cloned().context("empty column label")?
-        }
-        NodeEnum::FuncCall(value) => {
-            names(&value.funcname)?.0.last().cloned().context("empty function label")?
-        }
-        NodeEnum::CoalesceExpr(_) => "coalesce".into(),
-        NodeEnum::CaseExpr(_) => "case".into(),
-        NodeEnum::TypeCast(value) => {
-            let label = scalar_label(optional(value.arg.as_deref())?)?;
-            if label == "?column?" {
-                names(&value.type_name.as_ref().context("missing cast type")?.names)?
-                    .0
-                    .last()
-                    .cloned()
-                    .context("empty cast label")?
-            } else {
-                label
-            }
-        }
-        _ => "?column?".into(),
-    })
-}
-
 fn constant_null(value: &Node) -> bool {
     match &value.node {
         Some(NodeEnum::AConst(value)) => value.isnull,

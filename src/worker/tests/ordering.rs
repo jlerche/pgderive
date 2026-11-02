@@ -3,7 +3,7 @@ use super::{History, RowState, batch, contract, row, settings};
 use crate::{
     compiler::compile, compiler::relational::Node, engine::Batch, worker::program::relational,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 #[test]
 fn ordering_binds_aliases_ordinals_and_hidden_expressions() -> Result<()> {
@@ -296,5 +296,75 @@ async fn zero_limits_prune_row_errors_and_state_after_binding() -> Result<()> {
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");
     }
+    Ok(())
+}
+
+#[test]
+fn output_labels_and_order_by_ambiguity_follow_postgresql() -> Result<()> {
+    let mut native = contract();
+    native.relations[0].columns[2].oid = 23;
+    native.relations[0].columns[2].collation = 0;
+    let label = |expression: &str| -> Result<String> {
+        let sql = format!("SELECT {expression} FROM source.auction a");
+        let compiled = compile(&sql, &native)?;
+        Ok(compiled.output().columns[0].label.clone())
+    };
+    for (expression, expected) in [
+        ("a.other::int8", "other"),
+        ("1::int8", "int8"),
+        ("1::int4::int8", "int8"),
+        ("(CASE WHEN a.id>0 THEN 1 END)::int8", "int8"),
+        ("(a.other+1)::int8", "int8"),
+        ("'a'::text", "text"),
+        ("a.other::numeric(5,1)", "other"),
+        ("COALESCE(a.other,1)", "coalesce"),
+        ("CASE WHEN a.id>0 THEN a.other END", "case"),
+        ("CASE WHEN a.id>0 THEN 1 ELSE a.other END", "other"),
+        ("CASE WHEN a.id>0 THEN 1 ELSE a.other+1 END", "case"),
+        ("a.other+1", "?column?"),
+        ("-a.other", "?column?"),
+        ("a.other IS NULL", "?column?"),
+        ("1", "?column?"),
+        ("INTERVAL '1 day'", "interval"),
+        ("DATE '2000-01-01'", "date"),
+        ("abs(a.other)", "abs"),
+    ] {
+        assert_eq!(label(expression)?, expected, "{expression}");
+    }
+    let error = compile(
+        "SELECT category AS other,other::int8 FROM source.auction ORDER BY other LIMIT 1",
+        &native,
+    )
+    .err()
+    .context("ambiguous label accepted")?;
+    assert!(format!("{error:#}").contains("ambiguous"), "{error:#}");
+    compile("SELECT other,other FROM source.auction ORDER BY other LIMIT 1", &native)?;
+    compile("SELECT id+1 AS x,id+1 AS x FROM source.auction ORDER BY x LIMIT 1", &native)?;
+    for literals in
+        ["'location: 5' AS x,'location: 7' AS x", r#"'q"location: 5' AS x,'q"location: 7' AS x"#]
+    {
+        let sql = format!("SELECT {literals} FROM source.auction ORDER BY x LIMIT 1");
+        let error = compile(&sql, &native).err().context("different literals accepted")?;
+        assert!(format!("{error:#}").contains("ambiguous"), "{error:#}");
+    }
+    compile("SELECT q.other FROM (SELECT other::int8 FROM source.auction) q", &native)?;
+    assert!(
+        compile(r#"SELECT q."?column?" FROM (SELECT other::int8 FROM source.auction) q"#, &native)
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn in_lists_do_not_bypass_existence_lowering() -> Result<()> {
+    let mut native = contract();
+    native.relations[0].columns[2].oid = 23;
+    native.relations[0].columns[2].collation = 0;
+    compile(
+        "SELECT a.other IN (1,2) AS listed FROM source.auction a \
+         WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=a.other)",
+        &native,
+    )?
+    .validate_execution()?;
     Ok(())
 }
