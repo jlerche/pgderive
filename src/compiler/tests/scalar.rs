@@ -84,3 +84,21 @@ fn uuid_literals_use_the_source_text_form() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn deciding_boolean_operands_dominate_errors_in_any_written_order() -> Result<()> {
+    let zero = Row::from([("n".into(), Some("0".to_owned()))]);
+    let one = Row::from([("n".into(), Some("1".to_owned()))]);
+    for predicate in ["n>0 AND 10/n<5", "10/n<5 AND n>0"] {
+        assert_eq!(expression(predicate)?.evaluate((&zero, &zero))?, Some(false));
+        assert_eq!(expression(predicate)?.evaluate((&one, &one))?, Some(false));
+    }
+    for predicate in ["n<=0 OR 10/n<5", "10/n<5 OR n<=0"] {
+        assert_eq!(expression(predicate)?.evaluate((&zero, &zero))?, Some(true));
+    }
+    for predicate in ["n=0 AND 10/n<5", "n<>0 OR 10/n<5"] {
+        let error = expression(predicate)?.evaluate((&zero, &zero));
+        assert!(format!("{:#}", error.err().context("division accepted")?).contains("zero"));
+    }
+    Ok(())
+}

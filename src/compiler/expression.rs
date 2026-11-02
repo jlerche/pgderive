@@ -268,14 +268,16 @@ impl Expr {
 }
 fn logical(values: &[Expr], rows: (&Row, &Row), and: bool) -> Result<Option<bool>> {
     let mut unknown = false;
+    let mut failure = None;
     for value in values {
-        match value.evaluate(rows)? {
-            Some(value) if value != and => return Ok(Some(!and)),
-            None => unknown = true,
-            Some(_) => {}
+        match value.evaluate(rows) {
+            Ok(Some(value)) if value != and => return Ok(Some(!and)),
+            Ok(None) => unknown = true,
+            Ok(Some(_)) => {}
+            Err(error) => failure = failure.or(Some(error)),
         }
     }
-    Ok((!unknown).then_some(and))
+    failure.map_or(Ok((!unknown).then_some(and)), Err)
 }
 const fn compare(op: &Compare, ordering: Ordering) -> bool {
     match op {

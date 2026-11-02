@@ -13,7 +13,7 @@ from worker_harness import History, run_modes
 MODES = ('division', 'mixed', 'integer-division', 'rounding', 'integer-casts', 'typmods', 'positive-scale',
          'average-group', 'average-global', 'average-window', 'average-filter',
          'average-computed', 'average-derived', 'average-having', 'average-union',
-         'division-error', 'integer-error', 'typmod-error')
+         'guarded-division', 'division-error', 'integer-error', 'typmod-error')
 
 
 def finite(value):
@@ -38,6 +38,7 @@ class NumericFixture(SqlFixture):
                 (906,4,9223372036854775807.49,1,0),(907,4,-9223372036854775808.49,1,0)''')
         expressions = {
             'division': ['price/divisor'],
+            'guarded-division': ['CASE WHEN divisor>0 AND 1/divisor>0 THEN 1 ELSE 0 END'],
             'mixed': ['price/2', 'CASE WHEN divisor=0 THEN NULL ELSE 2::numeric/divisor END'],
             'integer-division': ['id/2','-id/2','id/(-2)','id::bigint/2'],
             'rounding': ['round(price)', 'round(price,places)', 'trunc(price)', 'trunc(price,places)',
@@ -91,6 +92,8 @@ class NumericFixture(SqlFixture):
     def row_values(self, row):
         value, divisor, places = row['price'], row['divisor'], row['places']
         mode = self.mode
+        if mode == 'guarded-division':
+            return [int(divisor is not None and (divisor.is_nan() or (divisor>0 and divisor.is_finite())))]
         if mode == 'division':
             return [division(value, divisor)]
         if mode == 'mixed':

@@ -1212,6 +1212,12 @@ PostgreSQL optimizer-specific evaluation order is not promised. Use an explicit
 lazy CASE or an admitted derived-source filter to guard an operand. Errors retain
 the last sink/progress/ACK boundary.
 
+AND and OR do not depend on written operand order. A deciding operand (FALSE for
+AND, TRUE for OR) decides the result even when another operand raises an error;
+the error is raised only when no operand decides. `x>0 AND 10/x<5` is therefore
+safe at x=0 in either order, including inside CASE, where PostgreSQL would raise
+for `10/x<5 AND x>0`.
+
 
 ## M6 frame-aware and derived expressions
 
