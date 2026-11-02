@@ -8,7 +8,7 @@ from decimal import Decimal
 from native_mv_oracle import expected, binary_difference
 from numeric_arithmetic_oracle import number, average, clean
 from sql_compiler_harness import SqlFixture
-from worker_harness import History, run_modes
+from worker_harness import blocked_diagnostic, History, run_modes
 
 SCALAR = ('count','sum','avg','min','max','distinct','filter','having-zero','having',
           'limit-zero','computed','where','double','error','shadow','unaliased','self','order-alias','ordered-default','ordered-coalesce')
@@ -347,10 +347,7 @@ def qualify(output, command, mode):
             sink = f.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {f.bag_relation()}")
             worker = f.start(command,'expected-error');worker.event('ready')
             f.sql(f'INSERT INTO {b}(id,auction,price) VALUES(999,2,0)')
-            worker.process.wait(timeout=60)
-            assert worker.process.returncode != 0
-            worker.abort()
-            assert 'division by zero' in (output/'expected-error/stderr.log').read_text().lower()
+            assert 'division by zero' in blocked_diagnostic(worker)
             native = subprocess.run(f.pg+[f.query],env=f.environment,capture_output=True,text=True)
             (output/'native-error.txt').write_text(native.stderr)
             assert native.returncode != 0 and 'division by zero' in native.stderr.lower()

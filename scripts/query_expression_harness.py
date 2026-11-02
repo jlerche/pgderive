@@ -4,7 +4,7 @@ import collections
 import json
 from native_mv_oracle import expected
 from sql_compiler_harness import SqlFixture
-from worker_harness import Worker, harness_arguments, History
+from worker_harness import blocked_diagnostic, Worker, harness_arguments, History
 
 
 class ExpressionFixture(SqlFixture):
@@ -83,10 +83,8 @@ def overflow(output, command, grouped):
         acknowledged = fixture.sql(f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{slot}'")
         sink = fixture.sql(f'SELECT json_agg(g ORDER BY tuple) FROM {fixture.bag_relation()} g')
         fixture.sql(f'UPDATE {fixture.name}.bid SET price=32768 WHERE id=1')
-        worker.process.wait(timeout=60)
-        assert worker.process.returncode != 0
-        worker.abort()
-        assert 'overflow' in (logs/'stderr.log').read_text() or 'out of range' in (logs/'stderr.log').read_text()
+        error = blocked_diagnostic(worker)
+        assert 'overflow' in error or 'out of range' in error
         assert fixture.sql(f'SELECT row_to_json(p) FROM {fixture.name}.pgderive_progress p') == before
         assert fixture.sql(f"SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name='{slot}'") == acknowledged
         assert fixture.sql(f'SELECT json_agg(g ORDER BY tuple) FROM {fixture.bag_relation()} g') == sink

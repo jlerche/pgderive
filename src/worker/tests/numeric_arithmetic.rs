@@ -1,7 +1,7 @@
 //! Native numeric AVG retains exact SUM scales/specials through reversible histories.
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, worker::program::relational};
-use anyhow::Result;
+use anyhow::{Context, Result};
 #[tokio::test]
 async fn numeric_average_recovers_scales_and_finite_values_after_special_retractions() -> Result<()>
 {
@@ -83,5 +83,26 @@ fn unary_numeric_arithmetic_compiles_through_the_full_sql_frontend() -> Result<(
         &native,
     )?;
     relational::build(&native, &compiled, &settings())?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn row_dependent_failures_are_marked_and_preserve_the_prior_boundary() -> Result<()> {
+    let mut native = super::contract();
+    native.relations[0].columns[2].oid = 23;
+    native.relations[0].columns[2].collation = 0;
+    let compiled = crate::compiler::compile("SELECT 1/other AS v FROM source.auction", &native)?;
+    let ir = compiled.relational();
+    let query = crate::worker::program::relational::build(&native, &compiled, &super::settings())?;
+    let poison = super::row(&[("id", Some("1")), ("category", None), ("other", Some("0"))]);
+    let insert = super::batch(vec![("auction", poison.clone(), 1)]);
+    let inputs = crate::worker::program::relational::inputs(&insert, ir, 1)?;
+    let error = query.prepare(inputs).await.err().context("division accepted")?;
+    assert!(error.is::<crate::engine::execution::EvaluationFailed>(), "{error:#}");
+    assert_eq!(query.time(), 0);
+    let cancelled = super::batch(vec![("auction", poison.clone(), 1), ("auction", poison, -1)]);
+    let inputs = crate::worker::program::relational::inputs(&cancelled, ir, 1)?;
+    let prepared = query.prepare(inputs).await?;
+    assert_eq!(prepared.output().batch.iter().count(), 0);
     Ok(())
 }

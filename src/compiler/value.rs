@@ -26,7 +26,7 @@ pub fn decode(oid: u32, text: &str) -> Result<Value> {
         1082 => Ok(Value::Date(crate::temporal::Date::parse(text)?)),
         1186 => Ok(Value::Interval(crate::temporal::Interval::parse(text)?)),
         2950 => Ok(Value::Uuid(uuid(text)?)),
-        _ => anyhow::bail!("unsupported scalar codec for OID {oid}"),
+        _ => Err(crate::engine::execution::PlanFault("unsupported scalar codec").into()),
     }
 }
 fn uuid(text: &str) -> Result<[u8; 16]> {

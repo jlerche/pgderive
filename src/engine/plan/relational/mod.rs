@@ -361,7 +361,9 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         input: &[crate::engine::execution::Sealed<K, V>],
         result: Result<Prepared<K, V>>,
     ) -> Result<Prepared<K, V>> {
-        if result.as_ref().is_err_and(|error| !error.is::<MemtableFull>()) {
+        if result.as_ref().is_err_and(|error| {
+            !error.is::<MemtableFull>() && !error.is::<crate::engine::execution::EvaluationFailed>()
+        }) {
             for batch in input {
                 batch.retain_failure();
             }

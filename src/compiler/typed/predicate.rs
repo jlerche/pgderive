@@ -66,7 +66,7 @@ impl Typed {
         if let Value::Column(column) = &self.value {
             return Ok((if column.right { rows.1 } else { rows.0 })
                 .get(&column.name)
-                .context("compiled predicate column absent")?
+                .context(crate::engine::execution::PlanFault("compiled predicate column absent"))?
                 .is_none());
         }
         Ok(self.native_pair(rows)?.is_none())

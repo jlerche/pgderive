@@ -12,6 +12,7 @@ pub(in crate::worker) struct Input {
 }
 pub(in crate::worker) struct Collector<C = WallTime> {
     held: Option<Input>,
+    blocked: Option<Box<(Epoch, anyhow::Error)>>,
     clock: C,
     plan: std::sync::Arc<super::features::Keys>,
 }
@@ -50,10 +51,33 @@ pub(in crate::worker) struct Collected {
 }
 impl Collector {
     pub(in crate::worker) const fn new(plan: std::sync::Arc<super::features::Keys>) -> Self {
-        Self { held: None, clock: WallTime, plan }
+        Self { held: None, blocked: None, clock: WallTime, plan }
     }
 }
 impl<C: Clock> Collector<C> {
+    pub(in crate::worker) fn block(&mut self, epoch: Epoch, error: anyhow::Error) {
+        self.blocked = Some(Box::new((epoch, error)));
+    }
+    pub(in crate::worker) const fn blocked(&self) -> bool {
+        self.blocked.is_some()
+    }
+    fn open(&mut self, first: Input, bounds: &Bounds<'_>) -> Result<Epoch> {
+        let Some(blocked) = self.blocked.take() else {
+            return Epoch::at(
+                first.transaction,
+                first.decode_us,
+                Instant::now(),
+                self.clock.wall(),
+                self.plan.clone(),
+            );
+        };
+        let (mut epoch, error) = *blocked;
+        if !fits(&epoch, &first.transaction, bounds) {
+            return Err(error.context("blocked epoch reached its resource ceiling"));
+        }
+        epoch.push(first.transaction, first.decode_us, bounds.limits)?;
+        Ok(epoch)
+    }
     pub(in crate::worker) async fn recv(&mut self, stream: &mut impl InputStream) -> Result<Input> {
         if let Some(input) = self.held.take() {
             return Ok(input);
@@ -68,13 +92,7 @@ impl<C: Clock> Collector<C> {
         bounds: Bounds<'_>,
     ) -> Result<Collected> {
         scheduler.observe(first.transaction.commit_time_micros);
-        let mut epoch = Epoch::at(
-            first.transaction,
-            first.decode_us,
-            Instant::now(),
-            self.clock.wall(),
-            self.plan.clone(),
-        )?;
+        let mut epoch = self.open(first, &bounds)?;
         loop {
             let decision = scheduler.decision(&epoch);
             let reason = ceiling(&epoch, &bounds)

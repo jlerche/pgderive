@@ -2,12 +2,22 @@
 use super::{Typed, Value, check_width};
 use crate::{
     compiler::value::{self, Value as Native},
+    engine::execution::{EvaluationFailed, PlanFault},
     numeric::Numeric,
     transaction::Row,
 };
 use anyhow::{Context, Result, ensure};
 impl Typed {
     pub(in crate::compiler) fn native_pair(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
+        self.native_result(rows).map_err(|error| {
+            if error.is::<EvaluationFailed>() || error.is::<PlanFault>() {
+                error
+            } else {
+                error.context(EvaluationFailed)
+            }
+        })
+    }
+    fn native_result(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
         self.native_value(rows)?
             .map(|value| {
                 if self.oid == 1700 {
@@ -25,7 +35,7 @@ impl Typed {
             Value::Boolean(value) => value.evaluate(rows)?.map(Native::Boolean),
             Value::Column(column) => (if column.right { rows.1 } else { rows.0 })
                 .get(&column.name)
-                .context("compiled scalar column absent")?
+                .context(PlanFault("compiled scalar column absent"))?
                 .as_deref()
                 .map(|text| value::decode(column.oid, text))
                 .transpose()?,
@@ -39,7 +49,7 @@ impl Typed {
             Value::Average(column) => rows
                 .0
                 .get(&column.name)
-                .context("missing intermediate average")?
+                .context(PlanFault("missing intermediate average"))?
                 .as_deref()
                 .map(|text| -> Result<_> {
                     Ok(Native::Numeric(Numeric::parse(&Numeric::average(text)?)?))
@@ -92,7 +102,7 @@ impl Typed {
                     {
                         Some(super::calendar::evaluate(left, right, *operation)?)
                     }
-                    _ => anyhow::bail!("invalid arithmetic operands"),
+                    _ => return Err(PlanFault("invalid arithmetic operands").into()),
                 }
             }
             Value::Coalesce(_) | Value::Case { .. } => self.selected(rows)?,
@@ -117,7 +127,7 @@ impl Typed {
                 }
                 otherwise.native_pair(rows)
             }
-            _ => anyhow::bail!("invalid scalar control flow"),
+            _ => Err(PlanFault("invalid scalar control flow").into()),
         }
     }
     pub(super) fn text_pair(&self, rows: (&Row, &Row)) -> Result<Option<String>> {
@@ -128,6 +138,6 @@ fn numeric(value: Native) -> Result<Numeric> {
     match value {
         Native::Numeric(value) => Ok(value),
         Native::Integer(value) => Numeric::parse(&value.to_string()),
-        _ => anyhow::bail!("invalid numeric value"),
+        _ => Err(PlanFault("invalid numeric value").into()),
     }
 }

@@ -35,7 +35,7 @@ impl Temporal {
         row: &crate::transaction::Row,
     ) -> Result<Option<crate::temporal::Timestamp>> {
         row.get(&self.input.name)
-            .context("missing temporal input")?
+            .context(crate::engine::execution::PlanFault("missing temporal input"))?
             .as_deref()
             .map(|text| {
                 let mut value = crate::temporal::Timestamp::parse(text, self.input.oid)?;
@@ -45,7 +45,7 @@ impl Temporal {
                 let subtract = if let Some((index, duration)) = &self.shift {
                     row.get(&index.name)
                         .and_then(Option::as_deref)
-                        .context("missing hopping ordinal")?
+                        .context(crate::engine::execution::PlanFault("missing hopping ordinal"))?
                         .parse::<i64>()?
                         .checked_mul(*duration)
                         .context("hopping interval overflow")?

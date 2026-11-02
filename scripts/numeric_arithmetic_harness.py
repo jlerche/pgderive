@@ -176,14 +176,21 @@ def qualify(output, command, mode):
             worker = fixture.start(command,'expected-error'); worker.event('ready')
             value, divisor = ('1','0') if mode == 'division-error' else ('40000','1') if mode == 'integer-error' else ('99.95','1')
             fixture.sql(f'INSERT INTO {b} VALUES(999,77,{value},{divisor},0)')
-            worker.process.wait(timeout=60)
-            assert worker.process.returncode != 0, 'numeric runtime error was accepted'
+            error = worker.event('evaluation_blocked',60)['error'].lower()
+            assert worker.process.poll() is None, 'expression failure ended the worker'
+            assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
+            fixture.sql(f'DELETE FROM {b} WHERE id=999')
+            worker.event('published',60)
+            assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") != before
+            assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink
             worker.abort()
+            fixture.sql(f'INSERT INTO {b} VALUES(999,77,{value},{divisor},0)')
+            before = fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p")
             native = subprocess.run(fixture.pg+[fixture.query],env=fixture.environment,capture_output=True,text=True)
             assert native.returncode != 0, 'native PostgreSQL did not reject the same input'
             (output/'native-error.txt').write_text(native.stderr)
             diagnostic = 'division by zero' if mode == 'division-error' else 'overflow'
-            assert diagnostic in (output/'expected-error/stderr.log').read_text().lower()
+            assert diagnostic in error
             assert any(term in native.stderr.lower() for term in ('division by zero','out of range','overflow'))
             assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
             assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink

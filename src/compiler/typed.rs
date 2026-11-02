@@ -78,7 +78,7 @@ fn check_width(value: i64, oid: u32) -> Result<()> {
             i32::try_from(value).context("integer overflow")?;
         }
         20 => {}
-        _ => anyhow::bail!("unsupported integral width"),
+        _ => return Err(crate::engine::execution::PlanFault("unsupported integral width").into()),
     }
     Ok(())
 }

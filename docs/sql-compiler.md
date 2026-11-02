@@ -1212,6 +1212,15 @@ PostgreSQL optimizer-specific evaluation order is not promised. Use an explicit
 lazy CASE or an admitted derived-source filter to guard an operand. Errors retain
 the last sink/progress/ACK boundary.
 
+A row-dependent expression error does not end the worker. It keeps the failed epoch
+unpublished, reports `evaluation_blocked`, and merges each later committed source
+transaction into that epoch before retrying. Deleting or correcting the row
+therefore unblocks the view at a later boundary, as a later REFRESH would. Progress
+and the slot stay at the last durable boundary while blocked, so source WAL grows.
+A merged epoch that reaches its epoch ceiling fails through the ordinary retry path;
+one that exceeds a memtable or operator capacity limit fails permanently. Internal
+plan contradictions are not row-dependent and end the attempt immediately.
+
 AND and OR do not depend on written operand order. A deciding operand (FALSE for
 AND, TRUE for OR) decides the result even when another operand raises an error;
 the error is raised only when no operand decides. `x>0 AND 10/x<5` is therefore

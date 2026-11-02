@@ -68,6 +68,8 @@ backoff or exhausted phases, consecutive failures, retry limit and coarse failur
 category. This covers failures before the heartbeat starts, such as a missing
 slot or failed bootstrap. Database unavailability can prevent a new observation;
 a historical observation must not be interpreted as a current running worker.
+The heartbeat phase `evaluation_blocked` raises an `evaluation_blocked` alert and
+clears readiness while a row-dependent expression error holds publication.
 
 Scratch-cap qualification grows one join key through successful transactions,
 then changes a single source tuple so join fanout exceeds the configured scratch

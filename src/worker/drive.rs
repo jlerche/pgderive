@@ -256,13 +256,14 @@ async fn consume(
             .context("worker checkpoint timed out; recover retained WAL")??;
             stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
             deadline = tokio::time::Instant::now() + interval;
-            count.1.record(open, "ready")?;
+            count.1.record(open, epochs.idle_phase())?;
             if stopping {
                 return Ok(());
             }
             continue;
         }
         if admit(open, stream, (&mut *count.0, count.1), durable.stored.checkpoint.time).await? {
+            count.1.record(open, epochs.idle_phase())?;
             deadline = tokio::time::Instant::now() + interval;
             continue;
         }
@@ -291,14 +292,17 @@ async fn consume(
         if !pending {
             deadline = tokio::time::Instant::now() + interval;
         }
-        count.1.record(open, "publishing")?;
+        count.1.record(
+            open,
+            if epochs.collector.blocked() { "evaluation_blocked" } else { "publishing" },
+        )?;
         timeout(
             Duration::from_secs(settings.health.operation_timeout_secs),
             publish_group(open, stream, transaction, &mut epochs, (settings, stop, count.0)),
         )
         .await
         .context("worker publication timed out; recover retained WAL without ACK")??;
-        count.1.record(open, "ready")?;
+        count.1.record(open, epochs.idle_phase())?;
     }
 }
 
@@ -326,7 +330,6 @@ async fn admit(
     count.0.maintenance =
         count.0.maintenance.checked_add(1).context("maintenance counter overflow")?;
     stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
-    count.1.record(open, "ready")?;
     Ok(true)
 }
 
@@ -363,6 +366,11 @@ struct Epochs {
     collector: super::epoch::Collector,
     scheduler: super::epoch::Controller,
 }
+impl Epochs {
+    const fn idle_phase(&self) -> &'static str {
+        if self.collector.blocked() { "evaluation_blocked" } else { "ready" }
+    }
+}
 async fn publish_group(
     open: &mut Open,
     stream: &mut crate::acknowledged::Stream,
@@ -394,7 +402,18 @@ async fn publish_group(
     let age = grouped.epoch.age();
     let work = grouped.epoch.work();
     metrics.source.attempt(grouped.epoch.progress()?, grouped.epoch.transactions())?;
-    let observation = publish(open, &grouped.epoch, metrics).await?;
+    let observation = match publish(open, &grouped.epoch, metrics).await {
+        Ok(observation) => observation,
+        Err(error) if error.is::<crate::engine::execution::EvaluationFailed>() => {
+            metrics.source.abandon();
+            emit(
+                &json!({"event":"evaluation_blocked","time":open.query.time(),"end_lsn":grouped.epoch.transaction().end_lsn,"transactions":grouped.epoch.transactions(),"error":format!("{error:#}")}),
+            )?;
+            epochs.collector.block(grouped.epoch, error);
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     epochs.scheduler.record(work, observation);
     metrics.source.complete()?;
     metrics.failures = 0;

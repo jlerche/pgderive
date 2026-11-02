@@ -92,6 +92,14 @@ class EventStream:
         self.stderr.close()
 
 
+def blocked_diagnostic(worker):
+    """Wait for a row-dependent expression failure and stop the still-running worker."""
+    event = worker.event('evaluation_blocked',60)
+    assert worker.process.poll() is None,'expression failure ended the worker'
+    worker.abort()
+    return event['error'].lower()
+
+
 class Worker(EventStream):
     def __init__(self, command, config, output, environment):
         super().__init__(output)

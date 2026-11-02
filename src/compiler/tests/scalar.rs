@@ -102,3 +102,17 @@ fn deciding_boolean_operands_dominate_errors_in_any_written_order() -> Result<()
     }
     Ok(())
 }
+
+#[test]
+fn plan_contradictions_are_not_row_dependent_failures() -> Result<()> {
+    use crate::engine::execution::{EvaluationFailed, PlanFault};
+    let absent = Row::new();
+    let contradiction = expression("n>0")?.evaluate((&absent, &absent));
+    let contradiction = contradiction.err().context("absent column accepted")?;
+    assert!(contradiction.is::<PlanFault>() && !contradiction.is::<EvaluationFailed>());
+    let zero = Row::from([("n".into(), Some("0".to_owned()))]);
+    let failure = expression("10/n<5")?.evaluate((&zero, &zero));
+    let failure = failure.err().context("division accepted")?;
+    assert!(failure.is::<EvaluationFailed>() && !failure.is::<PlanFault>());
+    Ok(())
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned sequential projection CDC, native bag codec and restart qualification."""
-from worker_harness import History, run_cases
+from worker_harness import blocked_diagnostic, History, run_cases
 from harness_control import commit_proxy
 import collections
 import json
@@ -84,9 +84,7 @@ def qualify(output, command, local=False):
             bad = fixture.start(command, 'overflow')
             bad.event('ready')
             fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(999,'overflow',-2147483648,true)")
-            bad.process.wait(timeout=60)
-            assert bad.process.returncode != 0, 'local integer overflow was accepted'
-            bad.abort()
+            blocked_diagnostic(bad)
             assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
             assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink_before
             beyond = fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{ready['slot']}' AND confirmed_flush_lsn > (SELECT checkpoint_lsn FROM {fixture.name}.pgderive_progress)")

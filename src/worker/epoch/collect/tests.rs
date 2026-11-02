@@ -46,7 +46,8 @@ async fn virtual_time_coalesces_paced_commits_and_preserves_order() -> Result<()
         std::future::pending::<Result<()>>().await
     });
     let mut stream = Inputs(received);
-    let mut collector = Collector { held: None, clock: LogicalClock { origin }, plan: key_plan()? };
+    let mut collector =
+        Collector { held: None, blocked: None, clock: LogicalClock { origin }, plan: key_plan()? };
     let policy = Policy::default();
     let mut scheduler = controller(&policy);
     let (_stop, mut stop) = watch::channel(false);
@@ -93,7 +94,8 @@ async fn virtual_time_coalesces_paced_commits_and_preserves_order() -> Result<()
 #[tokio::test(start_paused = true)]
 async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
     let origin = Instant::now();
-    let mut collector = Collector { held: None, clock: LogicalClock { origin }, plan: key_plan()? };
+    let mut collector =
+        Collector { held: None, blocked: None, clock: LogicalClock { origin }, plan: key_plan()? };
     let policy = Policy { max_transactions: 2, ..Policy::default() };
     let mut scheduler = controller(&policy);
     let (send, received) = mpsc::channel(8);
@@ -144,7 +146,8 @@ async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
 #[tokio::test(start_paused = true)]
 async fn virtual_idle_uses_production_predicted_arrival_deadline() -> Result<()> {
     let origin = Instant::now();
-    let mut collector = Collector { held: None, clock: LogicalClock { origin }, plan: key_plan()? };
+    let mut collector =
+        Collector { held: None, blocked: None, clock: LogicalClock { origin }, plan: key_plan()? };
     let policy = Policy::default();
     let mut scheduler = controller(&policy);
     let (_send, received) = mpsc::channel(8);
@@ -169,5 +172,68 @@ async fn virtual_idle_uses_production_predicted_arrival_deadline() -> Result<()>
     // Tokio timers have millisecond granularity, even when time is paused.
     assert!(origin.elapsed() >= Duration::from_micros(1250));
     assert!(origin.elapsed() <= Duration::from_micros(2250));
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn blocked_epoch_extends_with_later_input_until_its_ceiling() -> Result<()> {
+    let origin = Instant::now();
+    let mut collector =
+        Collector { held: None, blocked: None, clock: LogicalClock { origin }, plan: key_plan()? };
+    let policy = Policy { max_transactions: 1, ..Policy::default() };
+    let mut scheduler = controller(&policy);
+    let (_send, received) = mpsc::channel(8);
+    let mut stream = Inputs(received);
+    let (_stop_send, mut stop) = watch::channel(false);
+    let first = collector
+        .gather(
+            input(1, 0)?,
+            &mut stream,
+            &mut scheduler,
+            Bounds {
+                limits: Limits::default(),
+                policy: &policy,
+                remaining: 8,
+                source_changes: 100,
+                stop: &mut stop,
+            },
+        )
+        .await?;
+    collector.block(first.epoch, anyhow::anyhow!("blocked by a row"));
+    assert!(collector.blocked());
+    let extended = collector
+        .gather(
+            input(2, 0)?,
+            &mut stream,
+            &mut scheduler,
+            Bounds {
+                limits: Limits::default(),
+                policy: &policy,
+                remaining: 8,
+                source_changes: 100,
+                stop: &mut stop,
+            },
+        )
+        .await?;
+    assert!(!collector.blocked());
+    assert_eq!(extended.epoch.transactions(), 2);
+    assert_eq!(extended.epoch.progress()?.xid, 2);
+    collector.block(extended.epoch, anyhow::anyhow!("blocked by a row"));
+    let refused = collector
+        .gather(
+            input(3, 0)?,
+            &mut stream,
+            &mut scheduler,
+            Bounds {
+                limits: Limits { output_bytes: 32, ..Limits::default() },
+                policy: &policy,
+                remaining: 8,
+                source_changes: 100,
+                stop: &mut stop,
+            },
+        )
+        .await;
+    let error = format!("{:#}", refused.err().context("ceiling accepted")?);
+    assert!(error.contains("resource ceiling") && error.contains("blocked by a row"), "{error}");
     Ok(())
 }

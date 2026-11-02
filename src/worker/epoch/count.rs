@@ -24,6 +24,9 @@ impl Count {
         self.total = self.total.checked_add(count).context("worker source counter overflow")?;
         Ok(())
     }
+    pub(in crate::worker) const fn abandon(&mut self) {
+        self.attempted = None;
+    }
     pub(in crate::worker) fn resolve(&mut self, durable: &Durable) -> Result<()> {
         if let Some((progress, _)) = &self.attempted {
             if durable.covers(progress)? {

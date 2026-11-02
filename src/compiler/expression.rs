@@ -234,7 +234,9 @@ impl Expr {
                 .native_pair(rows)?
                 .map(|value| {
                     let Value::Boolean(value) = value else {
-                        anyhow::bail!("nonboolean predicate");
+                        return Err(
+                            crate::engine::execution::PlanFault("nonboolean predicate").into()
+                        );
                     };
                     Ok(value)
                 })
@@ -274,6 +276,7 @@ fn logical(values: &[Expr], rows: (&Row, &Row), and: bool) -> Result<Option<bool
             Ok(Some(value)) if value != and => return Ok(Some(!and)),
             Ok(None) => unknown = true,
             Ok(Some(_)) => {}
+            Err(error) if error.is::<crate::engine::execution::PlanFault>() => return Err(error),
             Err(error) => failure = failure.or(Some(error)),
         }
     }

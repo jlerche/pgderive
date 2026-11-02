@@ -8,7 +8,7 @@ mod merge;
 pub(crate) mod service;
 pub use input::{OpenInput, SealedInput};
 mod sealed;
-pub use capacity::CapacityExceeded;
+pub use capacity::{CapacityExceeded, EvaluationFailed, PlanFault};
 pub(crate) use sealed::group;
 pub use sealed::{Sealed, SealedCursor};
 mod record;
@@ -154,8 +154,7 @@ impl<T: BatchData> Consolidator<T> {
     /// Returns invalid budget or scratch filesystem errors.
     pub fn new(limits: Limits) -> Result<Self> {
         let limits = limits.validate()?;
-        let mut directory = tempfile::Builder::new().prefix("pgderive-spill-").tempdir()?;
-        directory.disable_cleanup(true);
+        let directory = tempfile::Builder::new().prefix("pgderive-spill-").tempdir()?;
         Ok(Self {
             limits,
             directory,
@@ -177,6 +176,7 @@ impl<T: BatchData> Consolidator<T> {
         ensure!(!self.failed, "failed consolidator cannot be reused");
         let result = self.add_inner(tuple, weight.into());
         self.failed = result.is_err();
+        self.directory.disable_cleanup(self.failed);
         result.with_context(|| {
             format!("scratch retained on failure: {}", self.directory.path().display())
         })
@@ -251,9 +251,12 @@ impl<T: BatchData> Consolidator<T> {
         let result = self.finish_inner(visit);
         match result {
             Ok(()) => self.directory.close().context("removing successful operator scratch"),
-            Err(error) => Err(error).with_context(|| {
-                format!("scratch retained on failure: {}", self.directory.path().display())
-            }),
+            Err(error) => {
+                self.directory.disable_cleanup(true);
+                Err(error).with_context(|| {
+                    format!("scratch retained on failure: {}", self.directory.path().display())
+                })
+            }
         }
     }
     fn finish_inner(&mut self, visit: impl FnMut(T, BigInt, usize) -> Result<()>) -> Result<()> {
@@ -332,10 +335,12 @@ impl<K: BatchData, V: BatchData> Consolidator<(K, V)> {
     /// # Errors
     /// Returns scratch, integrity, capacity or final coefficient errors.
     pub fn seal(mut self) -> Result<Sealed<K, V>> {
+        ensure!(!self.failed, "failed consolidator cannot be sealed");
         if self.runs.is_empty() {
             return Ok(self.finish_batch()?.into());
         }
         let result = self.seal_disk();
+        self.directory.disable_cleanup(result.is_err());
         result.with_context(|| {
             format!("scratch retained on failure: {}", self.directory.path().display())
         })
@@ -359,7 +364,6 @@ impl<K: BatchData, V: BatchData> Consolidator<(K, V)> {
             std::fs::remove_file(&run.path)?;
         }
         if entries == 0 {
-            self.directory.disable_cleanup(false);
             return Ok(Batch::default().into());
         }
         let bytes = self.written.checked_sub(before).context("scratch byte count decreased")?;

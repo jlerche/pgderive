@@ -285,3 +285,22 @@ fn intermediate_spill_truncation_fails_before_finalization() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn abandoned_consolidators_remove_scratch_but_failed_ones_keep_it() -> Result<()> {
+    let mut abandoned = Consolidator::new(limits(1))?;
+    for key in 0..20 {
+        abandoned.add((key, key), 1)?;
+    }
+    let path = abandoned.directory.path().to_path_buf();
+    assert!(!abandoned.runs.is_empty());
+    drop(abandoned);
+    assert!(!path.exists());
+    let mut failed = Consolidator::new(Limits { scratch_bytes: 1, ..limits(1) })?;
+    let path = failed.directory.path().to_path_buf();
+    assert!((0..20).try_for_each(|key| failed.add((key, key), 1)).is_err());
+    drop(failed);
+    assert!(path.exists());
+    std::fs::remove_dir_all(path)?;
+    Ok(())
+}

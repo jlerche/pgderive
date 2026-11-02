@@ -54,7 +54,12 @@ pub(super) fn evaluate(left: Native, right: Native, operation: Arithmetic) -> Re
         (Native::Interval(left), Native::Interval(right)) => {
             Native::Interval(left.binary(right, subtract)?)
         }
-        _ => anyhow::bail!("invalid temporal arithmetic operands"),
+        _ => {
+            return Err(crate::engine::execution::PlanFault(
+                "invalid temporal arithmetic operands",
+            )
+            .into());
+        }
     })
 }
 pub(super) fn cast(value: Native, oid: u32) -> Result<Native> {

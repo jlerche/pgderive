@@ -4,7 +4,7 @@ import collections
 import decimal
 import json
 from sql_compiler_harness import SqlFixture
-from worker_harness import run_modes, History
+from worker_harness import blocked_diagnostic, run_modes, History
 
 MODES = ('statistics', 'distinct', 'ordered', 'mixed', 'computed-key', 'derived')
 GUARD = ' FILTER(WHERE price>0)'
@@ -106,9 +106,7 @@ def qualify(output, command, mode):
             bad = fixture.start(command, 'overflow')
             bad.event('ready')
             fixture.sql(f'INSERT INTO {fixture.name}.bid VALUES(999,-2147483648,1)')
-            bad.process.wait(timeout=60)
-            assert bad.process.returncode != 0, 'overflow was accepted'
-            bad.abort()
+            blocked_diagnostic(bad)
             assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
             assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink_before
             assert fixture.acknowledgement_ahead().strip() == '0'

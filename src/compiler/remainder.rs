@@ -12,7 +12,7 @@ impl Remainder {
     pub(super) fn integer_pair(&self, rows: (&Row, &Row)) -> Result<Option<i64>> {
         let row = if self.input.right { rows.1 } else { rows.0 };
         row.get(&self.input.name)
-            .context("compiled MOD input absent")?
+            .context(crate::engine::execution::PlanFault("compiled MOD input absent"))?
             .as_deref()
             .map(|text| {
                 let value = text.parse::<i64>()?;

@@ -26,18 +26,14 @@ enum Storage<K: BatchData, V: BatchData> {
     Scratch(Arc<Scratch>),
 }
 struct Scratch {
-    directory: Option<tempfile::TempDir>,
+    directory: tempfile::TempDir,
     run: record::Run,
     record_bytes: usize,
     failed: AtomicBool,
 }
 impl Drop for Scratch {
     fn drop(&mut self) {
-        if let Some(directory) = self.directory.take()
-            && !self.failed.load(Ordering::Relaxed)
-        {
-            let _cleanup = directory.close();
-        }
+        self.directory.disable_cleanup(self.failed.load(Ordering::Relaxed));
     }
 }
 impl<K: BatchData, V: BatchData> From<Batch<K, V>> for Sealed<K, V> {
@@ -55,7 +51,7 @@ impl<K: BatchData, V: BatchData> Sealed<K, V> {
         Self {
             entries,
             storage: Storage::Scratch(Arc::new(Scratch {
-                directory: Some(directory),
+                directory,
                 run,
                 record_bytes,
                 failed: AtomicBool::new(false),

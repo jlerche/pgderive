@@ -33,7 +33,10 @@ impl Timestamp {
     }
 
     pub(crate) fn parse(value: &str, oid: u32) -> Result<Self> {
-        ensure!(matches!(oid, 1114 | 1184), "invalid timestamp type");
+        ensure!(
+            matches!(oid, 1114 | 1184),
+            crate::engine::execution::PlanFault("invalid timestamp type")
+        );
         match value {
             "-infinity" => return Ok(Self(i64::MIN)),
             "infinity" => return Ok(Self(i64::MAX)),
@@ -136,7 +139,10 @@ impl Timestamp {
         self.0
     }
     pub(crate) fn json(self, oid: u32) -> Result<String> {
-        ensure!(matches!(oid, 1114 | 1184), "invalid timestamp type");
+        ensure!(
+            matches!(oid, 1114 | 1184),
+            crate::engine::execution::PlanFault("invalid timestamp type")
+        );
         match self.0 {
             i64::MIN => return Ok("-infinity".into()),
             i64::MAX => return Ok("infinity".into()),

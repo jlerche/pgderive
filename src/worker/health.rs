@@ -116,6 +116,11 @@ pub(super) async fn observe(
         alerts.push("worker_failed");
     }
     if worker.as_ref().is_some_and(|worker| {
+        worker.pointer("/diagnostics/phase").and_then(Value::as_str) == Some("evaluation_blocked")
+    }) {
+        alerts.push("evaluation_blocked");
+    }
+    if worker.as_ref().is_some_and(|worker| {
         worker.pointer("/diagnostics/failure/retry_budget_exhausted") == Some(&Value::Bool(true))
     }) {
         alerts.push("retry_budget_exhausted");

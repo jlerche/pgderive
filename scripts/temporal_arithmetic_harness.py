@@ -11,7 +11,7 @@ from sql_compiler_harness import SqlFixture
 from temporal_oracle import (Civil, Interval, parse_civil, parse_interval, encoded,
     date_integer, date_difference, timestamp_add, timestamp_difference,
     interval_add, negate, extract, truncate, special, compare)
-from worker_harness import History, run_modes
+from worker_harness import blocked_diagnostic, History, run_modes
 
 DATE_FIELDS = ('year','month','day','quarter','week','isoyear','dow','isodow','doy','decade','century','millennium','epoch','julian')
 STAMP_FIELDS = DATE_FIELDS+('hour','minute','second','milliseconds','microseconds')
@@ -324,9 +324,7 @@ def qualify(output, command, mode):
                 'trunc-error':"'2000-01-01','4714-11-24 00:00:00 BC','2000-01-01','PT0S','PT0S',0",
             }[mode]
             fixture.sql(f'INSERT INTO {b}(id,d,stamp,stamp2,iv,other,days) VALUES(999,{bad})')
-            worker.process.wait(timeout=60)
-            assert worker.process.returncode != 0,'invalid temporal result was published'
-            worker.abort()
+            blocked_diagnostic(worker)
             native = subprocess.run(fixture.pg+[fixture.query],env=fixture.environment,capture_output=True,text=True)
             (output/'native-error.txt').write_text(native.stderr)
             assert native.returncode != 0,'native PostgreSQL accepted temporal error input'
