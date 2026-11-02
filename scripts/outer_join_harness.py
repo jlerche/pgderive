@@ -24,6 +24,8 @@ class Case:
 
 CASES = {
     'right-on': Case('RIGHT'), 'full-on': Case(),
+    'full-on-mixed-numeric': Case(domain='mixed-numeric'),
+    'full-on-numeric-int': Case(domain='numeric-int'),
     'right-residual': Case('RIGHT', variant='residual'),
     'full-residual': Case(variant='residual'),
     'right-keyless': Case('RIGHT', variant='keyless'),

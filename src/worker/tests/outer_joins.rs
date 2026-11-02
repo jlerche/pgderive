@@ -239,3 +239,73 @@ fn full_join_admission_rejects_keyless_nonconstant_numeric_conditions() -> Resul
     .validate_execution()?;
     Ok(())
 }
+
+#[tokio::test]
+async fn residual_join_ticks_touch_only_rows_a_change_can_affect() -> Result<()> {
+    let native = native();
+    for kind in ["LEFT", "FULL"] {
+        let on = if kind == "FULL" { "a.other=b.auction AND a.id<b.price" } else { "a.id<b.price" };
+        let compiled = compile(
+            &format!("SELECT a.id,b.id FROM source.auction a {kind} JOIN source.bid b ON {on}"),
+            &native,
+        )?;
+        let ir = compiled.relational();
+        let size = 256_usize;
+        let left = |id: usize| {
+            row(&[("id", Some(&id.to_string())), ("category", None), ("other", Some("1"))])
+        };
+        let right = |id: usize, price: &str| {
+            row(&[("id", Some(&id.to_string())), ("auction", Some("1")), ("price", Some(price))])
+        };
+        let initial = batch(
+            (1..=size)
+                .map(|id| ("auction", left(id), 1))
+                .chain((1..=size).map(|id| ("bid", right(id, "0"), 1)))
+                .collect(),
+        );
+        let options = settings();
+        let mut query = relational::build(&native, &compiled, &options)?;
+        let prepared = query.prepare(relational::inputs(&initial, ir, 1)?).await?;
+        query.commit(prepared)?;
+        let mut limited = options.clone();
+        limited.limits.contributions = 20 * size;
+        super::restart_relational(&mut query, &native, &compiled, &limited).await?;
+        let added = batch(vec![("bid", right(size + 1, "2"), 1)]);
+        let prepared = query.prepare(relational::inputs(&added, ir, 2)?).await?;
+        let mut output = prepared
+            .output()
+            .batch
+            .iter()
+            .map(|((_, row), weight)| (row.values().cloned().collect::<Vec<_>>(), *weight))
+            .collect::<Vec<_>>();
+        output.sort();
+        let new_id = (size + 1).to_string();
+        assert_eq!(
+            output,
+            [(vec![Some("1".to_owned()), None], -1), (vec![Some("1".to_owned()), Some(new_id)], 1),],
+            "{kind}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn residual_join_skips_pairs_present_in_neither_state() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT a.id,b.id FROM source.auction a LEFT JOIN source.bid b ON 1/(b.price-a.id)>0",
+        &native,
+    )?;
+    let ir = compiled.relational();
+    let left = row(&[("id", Some("1")), ("category", None), ("other", None)]);
+    let right = row(&[("id", Some("2")), ("auction", None), ("price", Some("1"))]);
+    let mut query = relational::build(&native, &compiled, &settings())?;
+    let initial = batch(vec![("auction", left.clone(), 1)]);
+    let prepared = query.prepare(relational::inputs(&initial, ir, 1)?).await?;
+    query.commit(prepared)?;
+    let swap = batch(vec![("auction", left, -1), ("bid", right, 1)]);
+    let prepared = query.prepare(relational::inputs(&swap, ir, 2)?).await?;
+    assert_eq!(prepared.output().batch.iter().count(), 1);
+    assert!(prepared.output().batch.iter().all(|(_, weight)| *weight == -1));
+    Ok(())
+}

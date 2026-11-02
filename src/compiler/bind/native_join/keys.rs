@@ -55,6 +55,17 @@ impl<'a> Scope<'a> {
         Ok(Operand { sides: sides.get(), expression, collation })
     }
 }
+impl Operand {
+    fn widened_against(&self, other: &Self) -> Self {
+        let expression =
+            if matches!(self.expression.oid(), 20 | 21 | 23) && other.expression.oid() == 1700 {
+                self.expression.clone().widened_to_numeric()
+            } else {
+                self.expression.clone()
+            };
+        Self { sides: self.sides, expression, collation: self.collation }
+    }
+}
 impl Bound {
     const fn new() -> Self {
         Self { keys: Vec::new(), computed: [Vec::new(), Vec::new()], predicate: None }
@@ -64,6 +75,7 @@ impl Bound {
             return Ok(false);
         }
         let (a, b) = if a.sides == 1 { (a, b) } else { (b, a) };
+        let (a, b) = (a.widened_against(&b), b.widened_against(&a));
         let (aoid, boid) = (a.expression.oid(), b.expression.oid());
         let compatible = aoid == boid
             || (matches!(aoid, 20 | 21 | 23) && matches!(boid, 20 | 21 | 23))

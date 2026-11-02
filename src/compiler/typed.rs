@@ -349,6 +349,9 @@ impl Typed {
         }
         Ok(Self { oid, value: Value::Cast { input: Box::new(input), typmod: None } })
     }
+    pub(in crate::compiler) fn widened_to_numeric(self) -> Self {
+        Self { oid: 1700, value: Value::Cast { input: Box::new(self), typmod: None } }
+    }
     pub(in crate::compiler) fn union_literal(value: &Node, oid: u32) -> Result<Self> {
         let NodeEnum::AConst(value) = crate::compiler::parser::expressions::node(value)? else {
             anyhow::bail!("UNION contextual value is not a literal")

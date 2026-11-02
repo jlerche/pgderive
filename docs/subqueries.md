@@ -56,9 +56,12 @@ can each change the result. Projection preserves NULL; WHERE retains only TRUE.
 An aggregate RHS can contain one NULL row even when its base input is empty;
 HAVING/LIMIT suppression instead makes the RHS empty. These cases are distinct.
 
-Marks scan candidate rows in each affected correlation bucket under the existing
-work/storage budgets. Uncorrelated membership uses a global bucket; this slice
-does not add an indexed or constant-work membership algorithm.
+Marks read each affected correlation bucket under the existing work/storage
+budgets. Without a residual correlation, one scan collects the bucket's RHS values
+into a resident set bounded by the output-byte limit, so a tick costs time linear in the bucket
+for any comparison whose sides share a value domain. Uncorrelated membership uses
+a global bucket, so its tick still reads every outer and RHS row. A residual
+correlation or a cross-domain date/timestamp comparison scans the RHS per outer row.
 
 ## Evaluation and durability boundaries
 

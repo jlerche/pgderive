@@ -226,3 +226,42 @@ fn subquery_admission_scopes_contextual_literals_and_lazy_boundaries() -> Result
 fn correlated(left: &Row, right: &Row) -> bool {
     left["other"].is_some() && left["other"] == right["auction"]
 }
+
+#[tokio::test]
+async fn uncorrelated_membership_ticks_are_linear_in_the_affected_group() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT a.id FROM source.auction a WHERE a.other NOT IN (SELECT b.auction FROM source.bid b)",
+        &native,
+    )?;
+    let ir = compiled.relational();
+    let size = 256_usize;
+    let left = |id: usize| {
+        row(&[("id", Some(&id.to_string())), ("category", None), ("other", Some(&id.to_string()))])
+    };
+    let right = |id: usize, value: Option<&str>| {
+        row(&[("id", Some(&id.to_string())), ("auction", value), ("price", None)])
+    };
+    let initial = batch(
+        (0..size)
+            .map(|id| ("auction", left(id), 1))
+            .chain((0..size).map(|id| ("bid", right(id, Some("-1")), 1)))
+            .collect(),
+    );
+    let options = settings();
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let prepared = query.prepare(relational::inputs(&initial, ir, 1)?).await?;
+    query.commit(prepared)?;
+    let mut limited = options.clone();
+    limited.limits.contributions = 20 * size;
+    super::restart_relational(&mut query, &native, &compiled, &limited).await?;
+    let added = batch(vec![("auction", left(size), 1)]);
+    let prepared = query.prepare(relational::inputs(&added, ir, 2)?).await?;
+    assert_eq!(prepared.output().batch.iter().count(), 1);
+    query.commit(prepared)?;
+    let poison = batch(vec![("bid", right(size, None), 1)]);
+    let prepared = query.prepare(relational::inputs(&poison, ir, 3)?).await?;
+    assert_eq!(prepared.output().batch.iter().count(), size + 1);
+    assert!(prepared.output().batch.iter().all(|(_, weight)| *weight == -1));
+    Ok(())
+}
