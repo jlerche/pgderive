@@ -184,7 +184,13 @@ def qualify(output, command, mode):
             assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") != before
             assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink
             worker.abort()
+            fixture.sql(f'INSERT INTO {b} VALUES(998,77,0,1,0)')
             fixture.sql(f'INSERT INTO {b} VALUES(999,77,{value},{divisor},0)')
+            worker = fixture.start(command,'prefix-error')
+            worker.event('evaluation_blocked',60)
+            sink = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}")
+            assert '998' in sink, 'valid prefix was not published before the blocked transaction'
+            worker.abort()
             before = fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p")
             native = subprocess.run(fixture.pg+[fixture.query],env=fixture.environment,capture_output=True,text=True)
             assert native.returncode != 0, 'native PostgreSQL did not reject the same input'

@@ -8,7 +8,7 @@ from decimal import Decimal
 from native_mv_oracle import expected, binary_difference
 from numeric_arithmetic_oracle import number, average, clean
 from sql_compiler_harness import SqlFixture
-from worker_harness import blocked_diagnostic, History, run_modes
+from worker_harness import blocked_recovery, History, run_modes
 
 SCALAR = ('count','sum','avg','min','max','distinct','filter','having-zero','having',
           'limit-zero','computed','where','double','error','shadow','unaliased','self','order-alias','ordered-default','ordered-coalesce')
@@ -343,16 +343,14 @@ def qualify(output, command, mode):
             final=f'UPDATE {a} SET probe=99,n=99 WHERE id=101; DELETE FROM {b} WHERE id=201',
             normalized=f.query.replace('SELECT','select'),rejected=[]))
         if mode == 'scalar-error':
-            before = f.sql(f"SELECT to_jsonb(p)-'fence' FROM {f.name}.pgderive_progress p")
-            sink = f.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {f.bag_relation()}")
             worker = f.start(command,'expected-error');worker.event('ready')
-            f.sql(f'INSERT INTO {b}(id,auction,price) VALUES(999,2,0)')
-            assert 'division by zero' in blocked_diagnostic(worker)
+            poison = f'INSERT INTO {b}(id,auction,price) VALUES(999,2,0)'
+            f.sql(poison)
+            assert 'division by zero' in blocked_recovery(f,worker,f'DELETE FROM {b} WHERE id=999')
+            f.sql(poison)
             native = subprocess.run(f.pg+[f.query],env=f.environment,capture_output=True,text=True)
             (output/'native-error.txt').write_text(native.stderr)
             assert native.returncode != 0 and 'division by zero' in native.stderr.lower()
-            assert f.sql(f"SELECT to_jsonb(p)-'fence' FROM {f.name}.pgderive_progress p") == before
-            assert f.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {f.bag_relation()}") == sink
             assert f.acknowledgement_ahead().strip() == '0'
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_sql_send_metadata':True,
             'independent_raw_source_oracle':True,'null_poison_and_empty_rhs':True,

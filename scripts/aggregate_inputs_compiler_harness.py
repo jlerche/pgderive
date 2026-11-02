@@ -4,7 +4,7 @@ import collections
 import decimal
 import json
 from sql_compiler_harness import SqlFixture
-from worker_harness import blocked_diagnostic, run_modes, History
+from worker_harness import blocked_recovery, run_modes, History
 
 MODES = ('statistics', 'distinct', 'ordered', 'mixed', 'computed-key', 'derived')
 GUARD = ' FILTER(WHERE price>0)'
@@ -101,14 +101,12 @@ def qualify(output, command, mode):
             rejected=[],
         ))
         if mode == 'statistics':
-            before = fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p")
-            sink_before = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}")
             bad = fixture.start(command, 'overflow')
             bad.event('ready')
-            fixture.sql(f'INSERT INTO {fixture.name}.bid VALUES(999,-2147483648,1)')
-            blocked_diagnostic(bad)
-            assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
-            assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink_before
+            poison = f'INSERT INTO {fixture.name}.bid VALUES(999,-2147483648,1)'
+            fixture.sql(poison)
+            blocked_recovery(fixture, bad, f'DELETE FROM {fixture.name}.bid WHERE id=999')
+            fixture.sql(poison)
             assert fixture.acknowledgement_ahead().strip() == '0'
         (output/'result.json').write_text(json.dumps({'shape': mode, 'sql_oracle': 'refreshed native MV exact bag',
             'memory_oracle': 'independent grouped source bags', 'transactions': len(changes)+1,

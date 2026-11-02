@@ -42,6 +42,7 @@ struct Metrics {
     retries: u64,
     maintenance: u64,
     failures: u32,
+    narrow: Option<crate::catalog::Lsn>,
 }
 impl Metrics {
     const fn stopping(&self, settings: &Settings, requested: bool) -> bool {
@@ -78,6 +79,12 @@ async fn retry(
                 return emit(
                     &json!({"event":"stopped","time":time,"end_lsn":end,"transactions":metrics.source.total(),"retries":metrics.retries,"maintenance":metrics.maintenance,"elapsed_ms":started.elapsed().as_millis()}),
                 );
+            }
+            Err(error) if error.is::<super::epoch::collect::NarrowEpochs>() => {
+                tokio::select! {
+                    ()=sleep(Duration::from_millis(settings.retry_delay_ms)) => {}
+                    signal=stop.changed() => {signal.context("worker stop monitor closed")?;}
+                }
             }
             Err(error) => {
                 metrics.failures =
@@ -270,7 +277,7 @@ async fn consume(
         if super::checkpoint::due(open, pending, deadline)? {
             super::checkpoint::start(open, durable.stored.checkpoint.time).await?;
         }
-        let transaction =
+        let input =
             match next_event(open, stream, &mut epochs, (stop, count.0), (deadline, pending))
                 .await?
             {
@@ -279,16 +286,14 @@ async fn consume(
                     deadline = tokio::time::Instant::now() + interval;
                     continue;
                 }
-                Event::Transaction(transaction) => transaction,
+                Event::Retry => None,
+                Event::Transaction(transaction) => Some(transaction),
             };
-        let progress = Progress::new(
-            transaction.transaction.xid,
-            &transaction.transaction.commit_lsn,
-            &transaction.transaction.end_lsn,
-        )?;
-        if durable.covers(&progress)? {
+        let Pending::Attempt(input) =
+            pending_input(open, &mut epochs, input, (settings, stop, &*count.0), &durable)?
+        else {
             continue;
-        }
+        };
         if !pending {
             deadline = tokio::time::Instant::now() + interval;
         }
@@ -298,11 +303,62 @@ async fn consume(
         )?;
         timeout(
             Duration::from_secs(settings.health.operation_timeout_secs),
-            publish_group(open, stream, transaction, &mut epochs, (settings, stop, count.0)),
+            publish_group(open, stream, input, &mut epochs, (settings, stop, count.0)),
         )
         .await
         .context("worker publication timed out; recover retained WAL without ACK")??;
         count.1.record(open, epochs.idle_phase())?;
+    }
+}
+
+enum Pending {
+    Consumed,
+    Attempt(Option<super::epoch::collect::Input>),
+}
+/// Skip durable input and merge input that arrives during a blocked epoch's backoff.
+fn pending_input(
+    open: &Open,
+    epochs: &mut Epochs,
+    input: Option<super::epoch::collect::Input>,
+    control: (&Settings, &mut watch::Receiver<bool>, &Metrics),
+    durable: &crate::catalog::Durable,
+) -> Result<Pending> {
+    let Some(input) = input else {
+        return Ok(Pending::Attempt(None));
+    };
+    let progress = Progress::new(
+        input.transaction.xid,
+        &input.transaction.commit_lsn,
+        &input.transaction.end_lsn,
+    )?;
+    if durable.covers(&progress)? {
+        return Ok(Pending::Consumed);
+    }
+    let (settings, stop, metrics) = control;
+    let bounds = bounds(open, settings, stop, metrics);
+    Ok(epochs
+        .collector
+        .absorb(input, &mut epochs.scheduler, &bounds)?
+        .map_or(Pending::Consumed, |input| Pending::Attempt(Some(input))))
+}
+const fn bounds<'a>(
+    open: &Open,
+    settings: &'a Settings,
+    stop: &'a mut watch::Receiver<bool>,
+    metrics: &Metrics,
+) -> super::epoch::Bounds<'a> {
+    let remaining = if settings.max_transactions == 0 {
+        u64::MAX
+    } else {
+        settings.max_transactions.saturating_sub(metrics.source.total())
+    };
+    super::epoch::Bounds {
+        limits: open.replication.execution,
+        policy: &settings.epoch,
+        remaining,
+        source_changes: open.replication.listener.max_transaction_changes,
+        single: metrics.narrow.is_some(),
+        stop,
     }
 }
 
@@ -336,6 +392,7 @@ async fn admit(
 enum Event {
     Wake,
     Checkpoint,
+    Retry,
     Transaction(super::epoch::collect::Input),
 }
 async fn next_event(
@@ -347,7 +404,9 @@ async fn next_event(
 ) -> Result<Event> {
     let (stop, metrics) = control;
     let seconds = open.settings.health.operation_timeout_secs;
+    let retry = epochs.collector.retry_at();
     tokio::select! {
+        ()=tokio::time::sleep_until(retry.unwrap_or(timer.0)), if retry.is_some() => Ok(Event::Retry),
         signal=stop.changed() => {signal.context("worker stop monitor closed")?; Ok(Event::Wake)}
         ()=tokio::time::sleep_until(timer.0), if timer.1 && open.checkpoint.is_none() => Ok(Event::Wake),
         uploaded=super::checkpoint::ready(&mut open.checkpoint) => {
@@ -374,31 +433,14 @@ impl Epochs {
 async fn publish_group(
     open: &mut Open,
     stream: &mut crate::acknowledged::Stream,
-    transaction: super::epoch::collect::Input,
+    transaction: Option<super::epoch::collect::Input>,
     epochs: &mut Epochs,
     control: (&Settings, &mut watch::Receiver<bool>, &mut Metrics),
 ) -> Result<()> {
     let (settings, stop, metrics) = control;
-    let remaining = if settings.max_transactions == 0 {
-        u64::MAX
-    } else {
-        settings.max_transactions.saturating_sub(metrics.source.total())
-    };
-    let grouped = epochs
-        .collector
-        .gather(
-            transaction,
-            stream,
-            &mut epochs.scheduler,
-            super::epoch::Bounds {
-                limits: open.replication.execution,
-                policy: &settings.epoch,
-                remaining,
-                source_changes: open.replication.listener.max_transaction_changes,
-                stop,
-            },
-        )
-        .await?;
+    let collection = bounds(open, settings, stop, metrics);
+    let grouped =
+        epochs.collector.gather(transaction, stream, &mut epochs.scheduler, collection).await?;
     let age = grouped.epoch.age();
     let work = grouped.epoch.work();
     metrics.source.attempt(grouped.epoch.progress()?, grouped.epoch.transactions())?;
@@ -406,14 +448,39 @@ async fn publish_group(
         Ok(observation) => observation,
         Err(error) if error.is::<crate::engine::execution::EvaluationFailed>() => {
             metrics.source.abandon();
-            emit(
-                &json!({"event":"evaluation_blocked","time":open.query.time(),"end_lsn":grouped.epoch.transaction().end_lsn,"transactions":grouped.epoch.transactions(),"error":format!("{error:#}")}),
-            )?;
-            epochs.collector.block(grouped.epoch, error);
+            let narrowing = metrics.narrow.is_none() && grouped.epoch.transactions() > 1;
+            metrics.narrow.get_or_insert(grouped.epoch.progress()?.end);
+            if narrowing {
+                emit(
+                    &json!({"event":"epoch_narrowing","transactions":grouped.epoch.transactions()}),
+                )?;
+                return Err(error.context(super::epoch::collect::NarrowEpochs));
+            }
+            let limits = open.replication.execution;
+            let event = json!({
+                "event":"evaluation_blocked","time":open.query.time(),
+                "end_lsn":grouped.epoch.transaction().end_lsn,
+                "transactions":grouped.epoch.transactions(),
+                "source_bytes":grouped.epoch.bytes(),
+                "byte_ceiling":settings.epoch.max_bytes.min(limits.output_bytes),
+                "source_changes":grouped.epoch.transaction().changes.len(),
+                "change_ceiling":open.replication.listener.max_transaction_changes,
+                "source_updates":grouped.epoch.transaction().batch.updates.len(),
+                "update_ceiling":limits.output_entries.min(limits.contributions),
+                "oldest_source_age_ms":grouped.epoch.age().as_millis(),
+                "error":format!("{error:#}"),
+            });
+            let origin = epochs.collector.block(grouped.epoch, error);
+            let mut event = event;
+            event["origin"] = serde_json::to_value(origin)?;
+            emit(&event)?;
             return Ok(());
         }
         Err(error) => return Err(error),
     };
+    epochs.collector.published();
+    let published = grouped.epoch.progress()?.end;
+    metrics.narrow = metrics.narrow.filter(|through| published < *through);
     epochs.scheduler.record(work, observation);
     metrics.source.complete()?;
     metrics.failures = 0;

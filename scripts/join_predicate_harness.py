@@ -8,7 +8,7 @@ from decimal import Decimal
 from native_mv_oracle import expected, binary_difference
 from numeric_arithmetic_oracle import number, clean
 from sql_compiler_harness import SqlFixture
-from worker_harness import blocked_diagnostic, History, run_modes
+from worker_harness import blocked_recovery, History, run_modes
 
 MODES = ('same-side-text', 'mixed-equality-left', 'constant-equality-left', 'numeric-cast-left', 'numeric', 'numeric-typmods', 'numeric-computed', 'numeric-mixed', 'text', 'text-computed',
          'text-varchar', 'derived-text', 'composite', 'residual-inner', 'residual-left',
@@ -204,16 +204,14 @@ def qualify(output, command, mode):
             final=f'UPDATE {a} SET group_id=40 WHERE id=1; DELETE FROM {b} WHERE id=101',
             normalized=fixture.query.replace('SELECT','select'),rejected=[]))
         if mode == 'residual-error':
-            before = fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p")
-            sink = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}")
             worker = fixture.start(command,'expected-error'); worker.event('ready')
-            fixture.sql(f"INSERT INTO {b}(id,auction,price,nk,tk,vk) VALUES(999,1,999,1.20,'a-b','a-b')")
-            assert 'division by zero' in blocked_diagnostic(worker)
+            poison = f"INSERT INTO {b}(id,auction,price,nk,tk,vk) VALUES(999,1,999,1.20,'a-b','a-b')"
+            fixture.sql(poison)
+            assert 'division by zero' in blocked_recovery(fixture,worker,f'DELETE FROM {b} WHERE id=999')
+            fixture.sql(poison)
             native = subprocess.run(fixture.pg+[fixture.query],env=fixture.environment,capture_output=True,text=True)
             (output/'native-error.txt').write_text(native.stderr)
             assert native.returncode != 0 and 'division by zero' in native.stderr.lower()
-            assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
-            assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink
             assert fixture.acknowledgement_ahead().strip() == '0'
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':True,
             'send_bytes_and_metadata':True,'independent_nested_loop':True,

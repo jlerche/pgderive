@@ -100,6 +100,21 @@ def blocked_diagnostic(worker):
     return event['error'].lower()
 
 
+def blocked_recovery(fixture, worker, repair):
+    """Hold a blocked view at its boundary, repair the source, and require it to publish."""
+    progress = f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p"
+    bag = f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}"
+    before, sink = fixture.sql(progress), fixture.sql(bag)
+    event = worker.event('evaluation_blocked',60)
+    assert worker.process.poll() is None,'expression failure ended the worker'
+    assert fixture.sql(progress) == before and fixture.sql(bag) == sink
+    fixture.sql(repair)
+    worker.event('published',60)
+    assert fixture.sql(progress) != before and fixture.sql(bag) == sink
+    worker.abort()
+    return event['error'].lower()
+
+
 class Worker(EventStream):
     def __init__(self, command, config, output, environment):
         super().__init__(output)

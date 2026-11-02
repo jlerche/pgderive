@@ -1221,13 +1221,20 @@ lazy CASE or an admitted derived-source filter to guard an operand. Errors retai
 the last sink/progress/ACK boundary.
 
 A row-dependent expression error does not end the worker. It keeps the failed epoch
-unpublished, reports `evaluation_blocked`, and merges each later committed source
-transaction into that epoch before retrying. Deleting or correcting the row
-therefore unblocks the view at a later boundary, as a later REFRESH would. Progress
-and the slot stay at the last durable boundary while blocked, so source WAL grows.
-A merged epoch that reaches its epoch ceiling fails through the ordinary retry path;
-one that exceeds a memtable or operator capacity limit fails permanently. Internal
-plan contradictions are not row-dependent and end the attempt immediately.
+unpublished, reports `evaluation_blocked`, and merges later committed source transactions
+into that epoch. Deleting or correcting the row therefore unblocks the view at a later
+boundary, as a later REFRESH would, including when the repair changes the other side of a
+join. Retries run only after new input, on a backoff from 100 ms to 30 s, so a repair can
+take that long to publish. Progress and the slot stay at the last durable boundary while
+blocked, so source WAL grows. An epoch of several transactions first replays them one at
+a time, which publishes the valid prefix and holds only from the transaction that failed.
+Each `evaluation_blocked` event gives the LSN and relations where the block began, plus
+the merged size and ceilings. A merged epoch that reaches its ceiling fails permanently,
+because replay would reach it again and a later repair can no longer take effect, and a
+single transaction already over the ceiling leaves no room to merge one: repair the row
+and rebuild, or raise the epoch limits. An epoch that exceeds a memtable or operator limit
+also fails permanently. Internal plan contradictions are not row-dependent and end the
+attempt immediately.
 
 AND and OR follow PostgreSQL's evaluation order, so they raise the same errors.
 Operands run left to right and stop at the first deciding value, including inside

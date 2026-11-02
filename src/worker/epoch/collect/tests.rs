@@ -46,8 +46,13 @@ async fn virtual_time_coalesces_paced_commits_and_preserves_order() -> Result<()
         std::future::pending::<Result<()>>().await
     });
     let mut stream = Inputs(received);
-    let mut collector =
-        Collector { held: None, blocked: None, clock: LogicalClock { origin }, plan: key_plan()? };
+    let mut collector = Collector {
+        held: None,
+        blocked: None,
+        retry: Retry::default(),
+        clock: LogicalClock { origin },
+        plan: key_plan()?,
+    };
     let policy = Policy::default();
     let mut scheduler = controller(&policy);
     let (_stop, mut stop) = watch::channel(false);
@@ -57,7 +62,7 @@ async fn virtual_time_coalesces_paced_commits_and_preserves_order() -> Result<()
         let first = collector.recv(&mut stream).await?;
         let collected = collector
             .gather(
-                first,
+                Some(first),
                 &mut stream,
                 &mut scheduler,
                 Bounds {
@@ -65,6 +70,7 @@ async fn virtual_time_coalesces_paced_commits_and_preserves_order() -> Result<()
                     policy: &policy,
                     remaining: 2000 - transactions,
                     source_changes: 100_000,
+                    single: false,
                     stop: &mut stop,
                 },
             )
@@ -94,8 +100,13 @@ async fn virtual_time_coalesces_paced_commits_and_preserves_order() -> Result<()
 #[tokio::test(start_paused = true)]
 async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
     let origin = Instant::now();
-    let mut collector =
-        Collector { held: None, blocked: None, clock: LogicalClock { origin }, plan: key_plan()? };
+    let mut collector = Collector {
+        held: None,
+        blocked: None,
+        retry: Retry::default(),
+        clock: LogicalClock { origin },
+        plan: key_plan()?,
+    };
     let policy = Policy { max_transactions: 2, ..Policy::default() };
     let mut scheduler = controller(&policy);
     let (send, received) = mpsc::channel(8);
@@ -105,7 +116,7 @@ async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
     send.send(input(2, 0)?).await?;
     let collected = collector
         .gather(
-            first,
+            Some(first),
             &mut stream,
             &mut scheduler,
             Bounds {
@@ -113,6 +124,7 @@ async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
                 policy: &policy,
                 remaining: 2,
                 source_changes: 100,
+                single: false,
                 stop: &mut stop,
             },
         )
@@ -125,7 +137,7 @@ async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
     stop_send.send(true)?;
     let collected = collector
         .gather(
-            held,
+            Some(held),
             &mut stream,
             &mut scheduler,
             Bounds {
@@ -133,6 +145,7 @@ async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
                 policy: &policy,
                 remaining: 2,
                 source_changes: 100,
+                single: false,
                 stop: &mut stop,
             },
         )
@@ -146,8 +159,13 @@ async fn virtual_time_idle_deadline_shutdown_and_held_input() -> Result<()> {
 #[tokio::test(start_paused = true)]
 async fn virtual_idle_uses_production_predicted_arrival_deadline() -> Result<()> {
     let origin = Instant::now();
-    let mut collector =
-        Collector { held: None, blocked: None, clock: LogicalClock { origin }, plan: key_plan()? };
+    let mut collector = Collector {
+        held: None,
+        blocked: None,
+        retry: Retry::default(),
+        clock: LogicalClock { origin },
+        plan: key_plan()?,
+    };
     let policy = Policy::default();
     let mut scheduler = controller(&policy);
     let (_send, received) = mpsc::channel(8);
@@ -155,7 +173,7 @@ async fn virtual_idle_uses_production_predicted_arrival_deadline() -> Result<()>
     let (_stop_send, mut stop) = watch::channel(false);
     let collected = collector
         .gather(
-            input(1, 0)?,
+            Some(input(1, 0)?),
             &mut stream,
             &mut scheduler,
             Bounds {
@@ -163,6 +181,7 @@ async fn virtual_idle_uses_production_predicted_arrival_deadline() -> Result<()>
                 policy: &policy,
                 remaining: 100,
                 source_changes: 100,
+                single: false,
                 stop: &mut stop,
             },
         )
@@ -178,8 +197,13 @@ async fn virtual_idle_uses_production_predicted_arrival_deadline() -> Result<()>
 #[tokio::test(start_paused = true)]
 async fn blocked_epoch_extends_with_later_input_until_its_ceiling() -> Result<()> {
     let origin = Instant::now();
-    let mut collector =
-        Collector { held: None, blocked: None, clock: LogicalClock { origin }, plan: key_plan()? };
+    let mut collector = Collector {
+        held: None,
+        blocked: None,
+        retry: Retry::default(),
+        clock: LogicalClock { origin },
+        plan: key_plan()?,
+    };
     let policy = Policy { max_transactions: 1, ..Policy::default() };
     let mut scheduler = controller(&policy);
     let (_send, received) = mpsc::channel(8);
@@ -187,7 +211,7 @@ async fn blocked_epoch_extends_with_later_input_until_its_ceiling() -> Result<()
     let (_stop_send, mut stop) = watch::channel(false);
     let first = collector
         .gather(
-            input(1, 0)?,
+            Some(input(1, 0)?),
             &mut stream,
             &mut scheduler,
             Bounds {
@@ -195,6 +219,7 @@ async fn blocked_epoch_extends_with_later_input_until_its_ceiling() -> Result<()
                 policy: &policy,
                 remaining: 8,
                 source_changes: 100,
+                single: false,
                 stop: &mut stop,
             },
         )
@@ -203,7 +228,7 @@ async fn blocked_epoch_extends_with_later_input_until_its_ceiling() -> Result<()
     assert!(collector.blocked());
     let extended = collector
         .gather(
-            input(2, 0)?,
+            Some(input(2, 0)?),
             &mut stream,
             &mut scheduler,
             Bounds {
@@ -211,6 +236,7 @@ async fn blocked_epoch_extends_with_later_input_until_its_ceiling() -> Result<()
                 policy: &policy,
                 remaining: 8,
                 source_changes: 100,
+                single: false,
                 stop: &mut stop,
             },
         )
@@ -221,7 +247,7 @@ async fn blocked_epoch_extends_with_later_input_until_its_ceiling() -> Result<()
     collector.block(extended.epoch, anyhow::anyhow!("blocked by a row"));
     let refused = collector
         .gather(
-            input(3, 0)?,
+            Some(input(3, 0)?),
             &mut stream,
             &mut scheduler,
             Bounds {
@@ -229,11 +255,87 @@ async fn blocked_epoch_extends_with_later_input_until_its_ceiling() -> Result<()
                 policy: &policy,
                 remaining: 8,
                 source_changes: 100,
+                single: false,
                 stop: &mut stop,
             },
         )
         .await;
-    let error = format!("{:#}", refused.err().context("ceiling accepted")?);
+    let refused = refused.err().context("ceiling accepted")?;
+    let refused_permanently = refused.is::<crate::engine::execution::CapacityExceeded>();
+    let error = format!("{refused:#}");
     assert!(error.contains("resource ceiling") && error.contains("blocked by a row"), "{error}");
+    assert!(refused_permanently, "ceiling must be permanent");
+    Ok(())
+}
+
+fn bounds<'a>(policy: &'a Policy, stop: &'a mut watch::Receiver<bool>) -> Bounds<'a> {
+    Bounds {
+        limits: Limits::default(),
+        policy,
+        remaining: 8,
+        source_changes: 100,
+        single: false,
+        stop,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn blocked_input_merges_during_backoff_and_retries_once_when_it_passes() -> Result<()> {
+    let origin = Instant::now();
+    let mut collector = Collector {
+        held: None,
+        blocked: None,
+        retry: Retry::default(),
+        clock: LogicalClock { origin },
+        plan: key_plan()?,
+    };
+    let policy = Policy { max_transactions: 1, ..Policy::default() };
+    let mut scheduler = controller(&policy);
+    let (_send, received) = mpsc::channel(8);
+    let mut stream = Inputs(received);
+    let (_stop_send, mut stop) = watch::channel(false);
+    let first = collector
+        .gather(Some(input(1, 0)?), &mut stream, &mut scheduler, bounds(&policy, &mut stop))
+        .await?;
+    collector.block(first.epoch, anyhow::anyhow!("blocked by a row"));
+    assert!(collector.retry_at().is_none(), "unchanged input retried");
+    assert!(collector.absorb(input(2, 0)?, &mut scheduler, &bounds(&policy, &mut stop))?.is_none());
+    let retry_at = collector.retry_at().context("merged input has no retry")?;
+    assert_eq!(retry_at - Instant::now(), Duration::from_millis(100));
+    tokio::time::advance(Duration::from_millis(100)).await;
+    assert!(collector.absorb(input(3, 0)?, &mut scheduler, &bounds(&policy, &mut stop))?.is_some());
+    let retried =
+        collector.gather(None, &mut stream, &mut scheduler, bounds(&policy, &mut stop)).await?;
+    assert_eq!(retried.epoch.transactions(), 2);
+    collector.block(retried.epoch, anyhow::anyhow!("blocked by a row"));
+    assert!(collector.absorb(input(4, 0)?, &mut scheduler, &bounds(&policy, &mut stop))?.is_none());
+    let backoff = collector.retry_at().context("merged input has no retry")? - Instant::now();
+    assert_eq!(backoff, Duration::from_millis(200));
+    collector.published();
+    assert_eq!(collector.retry.failures, 0);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn narrowed_epochs_hold_one_transaction_despite_queued_input() -> Result<()> {
+    let origin = Instant::now();
+    let mut collector = Collector {
+        held: None,
+        blocked: None,
+        retry: Retry::default(),
+        clock: LogicalClock { origin },
+        plan: key_plan()?,
+    };
+    let policy = Policy::default();
+    let mut scheduler = controller(&policy);
+    let (send, received) = mpsc::channel(8);
+    let mut stream = Inputs(received);
+    send.send(input(2, 0)?).await?;
+    let (_stop_send, mut stop) = watch::channel(false);
+    let narrowed = Bounds { single: true, ..bounds(&policy, &mut stop) };
+    let collected =
+        collector.gather(Some(input(1, 0)?), &mut stream, &mut scheduler, narrowed).await?;
+    assert_eq!(collected.epoch.transactions(), 1);
+    assert_eq!(collected.reason, "single_transaction");
     Ok(())
 }
