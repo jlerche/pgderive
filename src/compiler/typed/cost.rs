@@ -1,0 +1,64 @@
+//! `PostgreSQL` per-tuple qual cost, in half operators, for ordering top-level quals.
+use super::{Typed, Value};
+
+pub const OPERATOR_COST: u64 = 2;
+
+impl Typed {
+    pub(in crate::compiler) fn cost(&self) -> u64 {
+        if self.is_constant() {
+            return 0;
+        }
+        match &self.value {
+            Value::Column(_)
+            | Value::Average(_)
+            | Value::Literal(_)
+            | Value::Numeric(_)
+            | Value::Text(_)
+            | Value::Encoded(_)
+            | Value::Interval(_) => 0,
+            Value::Boolean(value) => value.cost(),
+            Value::Remainder(_) | Value::Temporal(_) => OPERATOR_COST,
+            Value::Call(call) => call.arguments.iter().fold(OPERATOR_COST, |total, argument| {
+                total
+                    .saturating_add(argument.cost())
+                    .saturating_add(promotion(argument, call.input_oid))
+            }),
+            Value::Cast { input, typmod } => {
+                input.cost().saturating_add(cast_cost(input.oid, self.oid, typmod.is_some()))
+            }
+            Value::Binary { left, right, .. } => Self::operator_cost(left, right),
+            Value::Coalesce(values) => values.iter().map(Self::cost).sum(),
+            Value::Case { branches, otherwise } => branches
+                .iter()
+                .map(|(condition, value)| condition.cost().saturating_add(value.cost()))
+                .sum::<u64>()
+                .saturating_add(otherwise.cost()),
+        }
+    }
+    pub(in crate::compiler) fn operator_cost(left: &Self, right: &Self) -> u64 {
+        OPERATOR_COST
+            .saturating_add(left.cost())
+            .saturating_add(right.cost())
+            .saturating_add(promotion(left, right.oid))
+            .saturating_add(promotion(right, left.oid))
+    }
+}
+fn promotion(value: &Typed, target: u32) -> u64 {
+    if target == 1700 && matches!(value.oid, 20 | 21 | 23) && !value.is_constant() {
+        OPERATOR_COST
+    } else {
+        0
+    }
+}
+fn cast_cost(input: u32, output: u32, typmod: bool) -> u64 {
+    let text = |oid| matches!(oid, 25 | 1043);
+    if text(input) && text(output) && !typmod {
+        0
+    } else if input == output {
+        if typmod { OPERATOR_COST } else { 0 }
+    } else if text(input) || text(output) || typmod {
+        2 * OPERATOR_COST
+    } else {
+        OPERATOR_COST
+    }
+}

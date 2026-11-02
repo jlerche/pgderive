@@ -19,6 +19,7 @@ exists=$("${pg[@]}" -Atc "SELECT 1 FROM pg_database WHERE datname='pgderive_dev'
 if [[ "$exists" != 1 ]]; then
     "${pg[@]}" -c 'CREATE DATABASE pgderive_dev'
 fi
+python3 scripts/error_order_differential.py "${pg[@]}" -Atq
 if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
     harness=(cargo llvm-cov run --locked --no-report --bin replication_harness -- config.example.toml)
 else

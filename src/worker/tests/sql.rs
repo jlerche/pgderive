@@ -145,7 +145,7 @@ fn quoted_names_qualifiers_and_conjunctions() -> Result<()> {
         ),
         &native(),
     )?;
-    assert_eq!(
+    assert_ne!(
         program::plan(&native(), &first)?.identity(),
         program::plan(&native(), &second)?.identity()
     );

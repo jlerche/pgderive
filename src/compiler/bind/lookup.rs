@@ -46,7 +46,8 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     let predicate = parsed
         .predicate
         .map(|value| {
-            crate::compiler::expression::bind(&value, &outer).map(crate::compiler::Predicate::new)
+            crate::compiler::expression::bind_quals(&value, &outer)
+                .map(crate::compiler::Predicate::new)
         })
         .transpose()?;
     let left_keys =

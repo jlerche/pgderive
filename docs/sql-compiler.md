@@ -47,7 +47,7 @@ ordering, text column-to-column comparisons (which require collation resolution)
 and nondeterministic source collations are rejected. NULL comparison produces unknown;
 WHERE retains only true, including on retractions. No transform_null_equals
 session setting is applied. Logical expressions follow PostgreSQL three-valued
-truth tables; pure AND/OR trees are flattened, sorted and deduplicated for identity.
+truth tables; pure AND/OR trees are flattened and deduplicated, keeping written order.
 
 Integral comparisons also accept `mod(column, nonzero_integer_literal)` and
 `column % nonzero_integer_literal`, including `pg_catalog.mod`. Both forms
@@ -183,7 +183,7 @@ Function/operator spelling and redundant logical syntax normalize where supporte
 The resolved expression tree, including constants such as remainder divisors,
 participates directly in graph identity.
 
-Formatting, keyword case, comments, redundant identical conjuncts, conjunct order,
+Formatting, keyword case, comments, redundant identical conjuncts,
 source alias spelling and reversed equality operands normalize where supported.
 Visible output names and order are part of the layout for every query, including
 grouped joins. Semantic equivalence is not a general theorem prover.
@@ -902,7 +902,7 @@ WHERE runs after the join, and the common builder handles outer
 projection, grouping, and windows under their existing semantic restrictions.
 
 Scope boundaries, compound key expressions and complete native contracts belong
-to normalized graph identity. Equality operand direction, conjunction order and
+to normalized graph identity. Equality operand direction, key order and
 repeated equivalent keys normalize; changed key sets or inner semantics cannot
 reuse incompatible durable state.
 
@@ -1229,11 +1229,22 @@ A merged epoch that reaches its epoch ceiling fails through the ordinary retry p
 one that exceeds a memtable or operator capacity limit fails permanently. Internal
 plan contradictions are not row-dependent and end the attempt immediately.
 
-AND and OR do not depend on written operand order. A deciding operand (FALSE for
-AND, TRUE for OR) decides the result even when another operand raises an error;
-the error is raised only when no operand decides. `x>0 AND 10/x<5` is therefore
-safe at x=0 in either order, including inside CASE, where PostgreSQL would raise
-for `10/x<5 AND x>0`.
+AND and OR follow PostgreSQL's evaluation order, so they raise the same errors.
+Operands run left to right and stop at the first deciding value, including inside
+CASE and FILTER: `10/x<5 AND x>0` raises at x=0 and `x>0 AND 10/x<5` does not. Top-level
+WHERE, HAVING and ON conjuncts run as the planner orders them: NOT is pushed through OR,
+common OR factors are pulled out, conjuncts run cheapest first with equalities last among
+ties, and the first one that is not true stops the row, including NULL. Aggregate-free
+HAVING conjuncts of a grouped query join WHERE. An IN list with two or more constants
+tests them before its computed elements. A constant operand that decides an AND or OR
+removes the rest.
+
+Some cases still differ, because PostgreSQL's order also depends on its plan. A filter
+it pushes below a join raises for rows that never match, while Pgderive filters joined
+rows, so Pgderive can publish where PostgreSQL raises. PostgreSQL flattens derived tables
+and CTEs, merges ON with WHERE, and runs side filters before computed join keys, where
+Pgderive can block instead. A constant error such as `false AND 1/0>0` or an untaken
+`CASE` branch is rejected at registration. Non-default function costs are not modeled.
 
 
 ## M6 frame-aware and derived expressions

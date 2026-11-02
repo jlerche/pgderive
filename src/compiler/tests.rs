@@ -98,8 +98,9 @@ fn native_comparisons_literals_and_nulls() -> Result<()> {
 }
 #[test]
 fn normalization_and_fail_closed_types() -> Result<()> {
-    assert_eq!(expression("a AND (b AND a)")?, expression("b AND a")?);
-    assert_eq!(expression("a OR (b OR a)")?, expression("b OR a")?);
+    assert_eq!(expression("a AND (b AND a)")?, expression("a AND b")?);
+    assert_eq!(expression("a OR (b OR a)")?, expression("a OR b")?);
+    assert_ne!(expression("a AND b")?, expression("b AND a")?);
     assert_eq!(expression("a AND a")?, expression("a")?);
     for sql in [
         "n",

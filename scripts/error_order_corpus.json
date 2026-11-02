@@ -1,0 +1,282 @@
+[
+ {
+  "sql": "SELECT 1/other>0 AND other>0 AS v FROM source.auction",
+  "raises": true
+ },
+ {
+  "sql": "SELECT other>0 AND 1/other>0 AS v FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT 1/other>0 OR other=0 AS v FROM source.auction",
+  "raises": true
+ },
+ {
+  "sql": "SELECT other=0 OR 1/other>0 AS v FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT CASE WHEN 1/other>0 AND other>0 THEN 1 ELSE 0 END AS v FROM source.auction",
+  "raises": true
+ },
+ {
+  "sql": "SELECT CASE WHEN other>0 AND 1/other>0 THEN 1 ELSE 0 END AS v FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT other IN (0, 1/other) AS v FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT other IN (1/other, 0) AS v FROM source.auction",
+  "raises": true
+ },
+ {
+  "sql": "SELECT other IN (1/other, 0, 5) AS v FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT other NOT IN (1/other, 0, 5) AS v FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT 1/other IN (1, 2) AS v FROM source.auction",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE other>0 AND 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND other/1>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE other/1>0 AND 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 OR other=0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE other=0 OR 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND other IS NULL",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND other IS NOT NULL",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND other IN (5,6)",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND other IN (5,6,7,8,9)",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND other>0.5",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND NOT other=0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE (1/other>0 OR other=1) AND other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE (other>1 AND other>2) AND 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND (other>1 AND other>2)",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND mod(other,2)=1",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND (other+1+1+1)>5",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND other>1+1+1+1",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE other>0 AND 1/0>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE CASE WHEN other=0 THEN false ELSE 1/other>0 END AND other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND COALESCE(other,0)>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT count(*) AS c FROM source.auction GROUP BY other HAVING 1/other>0 AND other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT count(*) AS c FROM source.auction GROUP BY other HAVING other>0 AND 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT count(*) FILTER (WHERE 1/other>0 AND other>0) AS c FROM source.auction",
+  "raises": true
+ },
+ {
+  "sql": "SELECT count(*) FILTER (WHERE other>0 AND 1/other>0) AS c FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT a.id FROM source.auction a JOIN source.bid b ON b.auction=a.id AND 1/a.other>0 AND a.other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT a.id FROM source.auction a JOIN source.bid b ON b.auction=a.id AND a.other>0 AND 1/a.other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT a.id FROM source.auction a JOIN source.bid b ON b.auction=a.id AND 1/a.other>0 AND a.other/1>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT a.id FROM source.auction a JOIN source.bid b ON b.auction=a.id WHERE 1/a.other>0 AND a.other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT a.id FROM source.auction a JOIN source.bid b ON b.auction=a.id WHERE (1/a.other>0 OR a.id=b.id)",
+  "raises": true
+ },
+ {
+  "sql": "SELECT a.id FROM source.auction a JOIN source.bid b ON b.auction=a.id WHERE (a.id=b.id OR 1/a.other>0)",
+  "raises": false
+ },
+ {
+  "sql": "SELECT a.id FROM source.auction a LEFT JOIN source.bid b ON b.auction=a.id WHERE 1/a.other>0 AND a.other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE category='x' AND 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE category IN ('x','y') AND 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE abs(other)=5 AND 1/other>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE other*2=5 AND 1/other>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE other%2=1 AND 1/other>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE abs(other)>5 AND 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 OR true",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE NOT (1/other>0 OR other=0)",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE (other=1 AND 1/other>0) OR (other=2 AND 1/other>0)",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE (1/other>0 AND other=1) OR (1/other>0)",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE other IN (5,6,7,8,9,10,11,12,13) AND 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE other NOT IN (5,6,7,8,9,10,11,12,13) AND 1/other>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE other IN (5,6,7,8,9,10,11,12) AND 1/other>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE 1/other>0 AND true",
+  "raises": true
+ },
+ {
+  "sql": "SELECT id FROM source.auction WHERE NOT NOT (other>0) AND 1/other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT 1/other>0 AND false AS v FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT false AND 1/other>0 AS v FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT 1 IN (1/other,1) AS v FROM source.auction",
+  "raises": false
+ },
+ {
+  "sql": "SELECT other,count(*) AS c FROM source.auction GROUP BY other HAVING count(*)>5 AND 1/other>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT other,count(*) AS c FROM source.auction WHERE 1/other>0 GROUP BY other HAVING other>5",
+  "raises": false
+ },
+ {
+  "sql": "SELECT other,sum(1/other) AS c FROM source.auction GROUP BY other HAVING other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT count(*) AS c FROM source.auction HAVING 1/count(*)>0 AND count(*)>5",
+  "raises": false
+ },
+ {
+  "sql": "SELECT a.id FROM source.auction a JOIN source.bid b ON b.auction=a.id AND a.category='x' AND 1/a.other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT category,count(*) AS c FROM source.auction GROUP BY category,other HAVING count(*)=1 AND 1/(count(*)-1)>0 AND category='x'",
+  "raises": false
+ },
+ {
+  "sql": "SELECT other+1 AS x FROM source.auction GROUP BY other HAVING other>0",
+  "raises": false
+ },
+ {
+  "sql": "SELECT other+1 AS x FROM source.auction GROUP BY other HAVING 1/other>0",
+  "raises": true
+ },
+ {
+  "sql": "SELECT DISTINCT 1 AS x FROM source.auction GROUP BY other HAVING other>0",
+  "raises": false
+ }
+]

@@ -1,3 +1,4 @@
+mod quals;
 use super::{ColumnRef, parser::Name, syntax::Compare};
 use super::{
     typed::{self, Operand, Typed as Scalar},
@@ -18,6 +19,8 @@ pub(super) enum Expr {
     Compare(Compare, Scalar, Scalar),
     And(Vec<Self>),
     Or(Vec<Self>),
+    Array { and: bool, values: Vec<Self> },
+    Quals(Vec<Self>),
     Not(Box<Self>),
 }
 type Resolve<'a> = dyn Fn(&Name) -> Result<ColumnRef> + 'a;
@@ -36,6 +39,9 @@ pub(in crate::compiler) fn is_comparison(value: &pg_query::protobuf::AExpr) -> R
 }
 pub(super) fn bind(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Expr> {
     bind_ast(value, resolve, &mut 0, 0, None)
+}
+pub(super) fn bind_quals(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Expr> {
+    bind(value, resolve).map(Expr::ordered_quals)
 }
 pub(in crate::compiler) fn bind_join(
     value: &pg_query::Node,
@@ -204,24 +210,36 @@ fn membership(
     let probe = values.next().context("IN probe absent")??;
     let and = operator == "<>";
     let op = if and { Compare::Ne } else { Compare::Eq };
-    normalized(
-        values
-            .map(|value| compare_values(op.clone(), probe.clone(), value?, text))
-            .collect::<Result<_>>()?,
-        and,
-    )
+    let written = values
+        .map(|value| compare_values(op.clone(), probe.clone(), value?, text))
+        .collect::<Result<Vec<_>>>()?;
+    if written.iter().filter(|value| value.compares_constant()).count() < 2 {
+        return normalized(written, and);
+    }
+    let (constants, computed): (Vec<_>, Vec<_>) =
+        written.into_iter().partition(Expr::compares_constant);
+    let array = Expr::Array { and, values: constants };
+    normalized(std::iter::once(array).chain(computed).collect(), and)
 }
 fn normalized(args: Vec<Expr>, and: bool) -> Result<Expr> {
-    let mut values = Vec::new();
-    for arg in args {
-        match arg {
-            Expr::And(nested) if and => values.extend(nested),
-            Expr::Or(nested) if !and => values.extend(nested),
-            value => values.push(value),
+    let mut values: Vec<Expr> = Vec::new();
+    let mut neutral = None;
+    let flattened = args.into_iter().flat_map(|arg| match arg {
+        Expr::And(nested) if and => nested,
+        Expr::Or(nested) if !and => nested,
+        value => vec![value],
+    });
+    for value in flattened {
+        match value.constant_truth()? {
+            Some(decided) if decided != and => return Ok(value),
+            Some(_) => neutral = Some(value),
+            _ if values.contains(&value) => {}
+            _ => values.push(value),
         }
     }
-    values.sort();
-    values.dedup();
+    if values.is_empty() {
+        return neutral.context("empty normalized expression");
+    }
     if values.len() == 1 {
         return values.pop().context("empty normalized expression");
     }
@@ -265,22 +283,29 @@ impl Expr {
             Self::Not(value) => Ok(value.evaluate(rows)?.map(|value| !value)),
             Self::And(values) => logical(values, rows, true),
             Self::Or(values) => logical(values, rows, false),
+            Self::Array { and, values } => logical(values, rows, *and),
+            Self::Quals(values) => {
+                for value in values {
+                    match value.evaluate(rows)? {
+                        Some(true) => {}
+                        decided => return Ok(decided),
+                    }
+                }
+                Ok(Some(true))
+            }
         }
     }
 }
 fn logical(values: &[Expr], rows: (&Row, &Row), and: bool) -> Result<Option<bool>> {
     let mut unknown = false;
-    let mut failure = None;
     for value in values {
-        match value.evaluate(rows) {
-            Ok(Some(value)) if value != and => return Ok(Some(!and)),
-            Ok(None) => unknown = true,
-            Ok(Some(_)) => {}
-            Err(error) if error.is::<crate::engine::execution::PlanFault>() => return Err(error),
-            Err(error) => failure = failure.or(Some(error)),
+        match value.evaluate(rows)? {
+            Some(value) if value != and => return Ok(Some(!and)),
+            None => unknown = true,
+            Some(_) => {}
         }
     }
-    failure.map_or(Ok((!unknown).then_some(and)), Err)
+    Ok((!unknown).then_some(and))
 }
 const fn compare(op: &Compare, ordering: Ordering) -> bool {
     match op {
@@ -317,7 +342,7 @@ impl Predicate {
                         out.insert(c.name.clone());
                     }
                 }
-                Expr::And(values) => {
+                Expr::And(values) | Expr::Quals(values) => {
                     for value in values {
                         collect(value, out);
                     }
@@ -368,8 +393,40 @@ impl Expr {
         match self {
             Self::Value(value) | Self::Null(value, _) => value.is_constant(),
             Self::Compare(_, left, right) => left.is_constant() && right.is_constant(),
-            Self::And(values) | Self::Or(values) => values.iter().all(Self::is_constant),
+            Self::And(values)
+            | Self::Or(values)
+            | Self::Array { values, .. }
+            | Self::Quals(values) => values.iter().all(Self::is_constant),
             Self::Not(value) => value.is_constant(),
+        }
+    }
+    fn constant_truth(&self) -> Result<Option<bool>> {
+        if !self.is_constant() {
+            return Ok(None);
+        }
+        let row = Row::new();
+        self.evaluate((&row, &row))
+    }
+    fn compares_constant(&self) -> bool {
+        matches!(self, Self::Compare(_, _, value) if value.is_constant())
+    }
+    pub(in crate::compiler) fn cost(&self) -> u64 {
+        if self.is_constant() {
+            return 0;
+        }
+        match self {
+            Self::Value(value) | Self::Null(value, _) => value.cost(),
+            Self::Compare(_, left, right) => Scalar::operator_cost(left, right),
+            Self::And(values) | Self::Or(values) | Self::Quals(values) => {
+                values.iter().map(Self::cost).sum()
+            }
+            Self::Array { values, .. } => {
+                let probe = values.first().map_or(0, Self::cost);
+                let elements = u64::try_from(values.len()).unwrap_or(u64::MAX);
+                let lookup = if elements < 9 { elements } else { 2 * typed::OPERATOR_COST };
+                probe.saturating_sub(typed::OPERATOR_COST).saturating_add(lookup)
+            }
+            Self::Not(value) => value.cost(),
         }
     }
 }

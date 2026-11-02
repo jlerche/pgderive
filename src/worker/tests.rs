@@ -497,6 +497,7 @@ impl Probe {
     }
 }
 
+mod error_order;
 mod numeric_arithmetic;
 mod set_operations;
 mod sql_composition;

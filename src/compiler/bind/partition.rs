@@ -110,6 +110,10 @@ fn build(
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     context: Stage<'_>,
 ) -> Result<Compiled> {
+    if let Some(pushed) = having::pushdown(parsed) {
+        having::build(parsed, resolve, context.clone())?;
+        return having::build(&pushed, resolve, context);
+    }
     if having::required(parsed) {
         return having::build(parsed, resolve, context);
     }
@@ -205,7 +209,7 @@ fn source_predicate(
 ) -> Result<Option<crate::compiler::expression::Expr>> {
     let predicates = predicate
         .map(|expr| {
-            crate::compiler::expression::bind(&expr, &|name| {
+            crate::compiler::expression::bind_quals(&expr, &|name| {
                 let column = resolve(name)?;
                 ensure!(
                     column.name != crate::compiler::expansion::FIELD,
