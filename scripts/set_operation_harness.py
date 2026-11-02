@@ -12,7 +12,7 @@ from worker_harness import History, run_modes
 OPS = {'union':'UNION','intersect':'INTERSECT','except':'EXCEPT',
        'intersect-all':'INTERSECT ALL','except-all':'EXCEPT ALL'}
 MODES = tuple(domain+'-'+op for domain in ('tuple','numeric','widen','text') for op in OPS)+(
-    'text-default','text-icu','varchar','boolean','uuid','temporal','numeric-mixed','numeric-null','numeric-roundscale','numeric-group',
+    'text-default','text-icu','varchar','boolean','uuid','uuid-literal','temporal','numeric-mixed','numeric-null','numeric-roundscale','numeric-group',
     'explicit-union','explicit-intersect','explicit-except','self-except','self-intersect',
     'precedence','association','branch-limit','global-limit','cte-group','window','join','constant-empty')
 
@@ -71,11 +71,12 @@ class SetFixture(SqlFixture):
         first, second = select[self.domain]
         left, right = f'SELECT {first} FROM {a}', f'SELECT {second} FROM {b}'
         self.query = left+' '+OPS[self.op]+' '+right
-        if mode in ('varchar','boolean','uuid','temporal','numeric-mixed','numeric-null','numeric-roundscale','numeric-group'):
+        if mode in ('varchar','boolean','uuid','uuid-literal','temporal','numeric-mixed','numeric-null','numeric-roundscale','numeric-group'):
             self.labels = ['g']
             first, second, self.op = {
                 'varchar':('v','v','intersect'), 'boolean':('enabled','enabled','except-all'),
-                'uuid':('token','token','union'),'temporal':('plain','zoned','intersect-all'),
+                'uuid':('token','token','union'),
+                'uuid-literal':("'00000000-0000-0000-0000-000000000001'",'token','intersect'),'temporal':('plain','zoned','intersect-all'),
                 'numeric-mixed':('group_id::numeric(12,0)','auction','except-all'),
                 'numeric-null':('n','NULL','intersect'),
                 'numeric-roundscale':('n::numeric(8,-1)','n::numeric(10,0)','except-all'),
@@ -114,6 +115,10 @@ class SetFixture(SqlFixture):
         def value(row, side):
             key = row['group_id' if side == 0 else 'auction']
             label = row['category' if side == 0 else 'label']
+            if mode == 'uuid-literal' and side == 0:
+                return ('00000000-0000-0000-0000-000000000001',)
+            if mode == 'uuid-literal':
+                return (row['token'],)
             if mode in ('varchar','boolean','uuid'):
                 return (row[{'varchar':'v','boolean':'enabled','uuid':'token'}[mode]],)
             if mode == 'temporal':

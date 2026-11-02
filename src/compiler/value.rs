@@ -51,19 +51,24 @@ fn uuid(text: &str) -> Result<[u8; 16]> {
     Ok(value)
 }
 
+fn uuid_text(bytes: [u8; 16]) -> Result<String> {
+    use std::fmt::Write;
+    let mut text = String::with_capacity(36);
+    for (index, byte) in bytes.into_iter().enumerate() {
+        if matches!(index, 4 | 6 | 8 | 10) {
+            text.push('-');
+        }
+        write!(text, "{byte:02x}")?;
+    }
+    Ok(text)
+}
+
 pub(super) fn literal_text(oid: u32, text: &str) -> Result<String> {
     Ok(match decode(oid, text)? {
         Value::Date(value) => value.text(),
         Value::Interval(value) => value.text(),
         Value::Timestamp(value) => value.text(oid)?,
-        Value::Uuid(bytes) => {
-            use std::fmt::Write;
-            let mut text = String::with_capacity(32);
-            for byte in bytes {
-                write!(text, "{byte:02x}")?;
-            }
-            text
-        }
+        Value::Uuid(bytes) => uuid_text(bytes)?,
         Value::Numeric(value) => value.text(),
         _ => text.into(),
     })
@@ -77,14 +82,7 @@ impl Value {
             Self::Numeric(value) => value.text(),
             Self::Text(value) => value,
             Self::Timestamp(value) => value.text(oid)?,
-            Self::Uuid(bytes) => {
-                use std::fmt::Write;
-                let mut text = String::with_capacity(32);
-                for byte in bytes {
-                    write!(text, "{byte:02x}")?;
-                }
-                text
-            }
+            Self::Uuid(bytes) => uuid_text(bytes)?,
             Self::Interval(value) => value.text(),
             Self::Date(value) => value.text(),
         })

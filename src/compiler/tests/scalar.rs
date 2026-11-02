@@ -73,3 +73,14 @@ fn unsupported_overloads_explain_types_and_available_signatures() -> Result<()> 
     assert!(error.contains("abs(integer [OID 23])"), "{error}");
     Ok(())
 }
+
+#[test]
+fn uuid_literals_use_the_source_text_form() -> Result<()> {
+    for literal in ["a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "{A0EEBC999C0B4EF8BB6D6BB9BD380A11}"] {
+        assert_eq!(
+            crate::compiler::value::literal_text(2950, literal)?,
+            "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+        );
+    }
+    Ok(())
+}

@@ -162,6 +162,8 @@ class TemporalFixture(SqlFixture):
             self.sql(f"UPDATE {b} SET d='5874897-12-31' WHERE id=12")
         if mode == 'guarded':
             self.sql(f"UPDATE {b} SET iv='P1M' WHERE id=12")
+        if mode == 'interval-arithmetic':
+            self.sql(f"UPDATE {b} SET iv='PT2562047788H54.775806S',other='PT0.000001S' WHERE id=3; UPDATE {b} SET iv='PT-2562047788H-54.775807S',other='PT0.000001S' WHERE id=6")
         self.labels,self.query = self.statement()
 
     def statement(self):

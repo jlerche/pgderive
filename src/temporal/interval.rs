@@ -4,6 +4,7 @@ use super::DAY;
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use std::cmp::Ordering;
+const HOUR: i64 = 3_600_000_000;
 #[derive(Clone, Copy, Debug, Serialize)]
 pub enum Interval {
     NegativeInfinity,
@@ -33,8 +34,9 @@ impl Interval {
             Self::NegativeInfinity => "-infinity".into(),
             Self::PositiveInfinity => "infinity".into(),
             Self::Finite { months, days, micros } => {
-                let second = decimal(i128::from(micros), 6);
-                format!("P{months}M{days}DT{second}S")
+                let hours = micros / HOUR;
+                let second = decimal(i128::from(micros % HOUR), 6);
+                format!("P{months}M{days}DT{hours}H{second}S")
             }
         }
     }

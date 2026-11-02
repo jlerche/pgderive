@@ -141,7 +141,27 @@ fn native_dates_intervals_and_calendar_edges() -> Result<()> {
     assert_eq!(truncate("week", "2021-01-01 12:00:00", 1114)?, "2020-12-28 00:00:00");
     let later = Timestamp::parse("2000-01-03 01:00:00", 1114)?;
     let earlier = Timestamp::parse("2000-01-01 02:00:00", 1114)?;
-    assert_eq!(later.difference(earlier)?.text(), "P0M1DT82800.000000S");
+    assert_eq!(later.difference(earlier)?.text(), "P0M1DT23H0.000000S");
+    Ok(())
+}
+
+#[test]
+fn interval_text_keeps_exact_microseconds_through_parsing() -> Result<()> {
+    use super::Interval;
+    for (months, days, micros, text) in [
+        (0, 0, i64::MAX, "P0M0DT2562047788H54.775807S"),
+        (0, 0, i64::MIN, "P0M0DT-2562047788H-54.775808S"),
+        (1, -2, -1, "P1M-2DT0H-0.000001S"),
+        (0, 0, 0, "P0M0DT0H0.000000S"),
+    ] {
+        assert_eq!(Interval::finite(months, days, micros)?.text(), text);
+        let Interval::Finite { months: parsed_months, days: parsed_days, micros: parsed } =
+            Interval::parse(text)?
+        else {
+            anyhow::bail!("finite interval text parsed as infinity");
+        };
+        assert_eq!((parsed_months, parsed_days, parsed), (months, days, micros));
+    }
     Ok(())
 }
 
