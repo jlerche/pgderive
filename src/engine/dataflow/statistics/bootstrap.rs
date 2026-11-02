@@ -29,7 +29,7 @@ struct Resident<A> {
 }
 impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Grouped<K, V, S, A> {
     pub(super) fn new(algebra: Arc<Algebra<K, V, S, A>>, limits: Limits) -> Result<Self> {
-        ensure!((1..=129).contains(&algebra.width), "statistics width unsupported");
+        ensure!((1..=super::MAX_WIDTH).contains(&algebra.width), "statistics width unsupported");
         let partial_bytes = (limits.resident_bytes / 4).min(1024 * 1024).max(limits.record_bytes);
         ensure!(
             partial_bytes < limits.resident_bytes,

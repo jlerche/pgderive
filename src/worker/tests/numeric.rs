@@ -363,3 +363,101 @@ const MIXED_EXPECTED: [MixedExpected; 5] = [
     Some([Some("1"), Some("0"), None, Some("3"), Some("3.0000000000000000"), None, Some("1")]),
     None,
 ];
+
+fn published_prices(batch: &super::RowBatch) -> Vec<(String, i64)> {
+    let mut prices = batch
+        .iter()
+        .map(|(entry, weight)| {
+            (entry.1.get("0:price").cloned().flatten().unwrap_or_default(), *weight)
+        })
+        .collect::<Vec<_>>();
+    prices.sort();
+    prices
+}
+#[tokio::test]
+async fn numeric_group_keys_publish_a_retained_scale_without_group_scans() -> Result<()> {
+    let native = numeric_contract();
+    let price = |id: &str, price: &str| {
+        row(&[("id", Some(id)), ("auction", Some("1")), ("price", Some(price))])
+    };
+    let history = [
+        (price("1", "1.50"), 1, vec![("1.50", 1)]),
+        (price("2", "1.5000"), 1, vec![("1.50", -1), ("1.5000", 1)]),
+        (price("3", "1.5"), 1, vec![("1.5000", -1), ("1.5000", 1)]),
+        (price("2", "1.5000"), -1, vec![("1.50", 1), ("1.5000", -1)]),
+        (price("1", "1.50"), -1, vec![("1.5", 1), ("1.50", -1)]),
+        (price("3", "1.5"), -1, vec![("1.5", -1)]),
+    ];
+    for aggregate in ["COUNT(*)", "SUM(auction)", "AVG(auction)", "COUNT(DISTINCT auction)"] {
+        let compiled =
+            compile(&format!("SELECT price,{aggregate} FROM source.bid GROUP BY price"), &native)?;
+        assert!(
+            compiled
+                .relational()
+                .nodes
+                .iter()
+                .any(|node| matches!(node, crate::compiler::relational::Node::Statistics { .. }))
+        );
+        let ir = compiled.relational();
+        let mut query = relational::build(&native, &compiled, &settings())?;
+        for (time, (member, weight, expected)) in (1..).zip(history.iter().cloned()) {
+            let change = batch(vec![("bid", member, weight)]);
+            let prepared = query.prepare(relational::inputs(&change, ir, time)?).await?;
+            let unchanged =
+                (aggregate.contains("DISTINCT") || aggregate.starts_with("AVG")) && time == 3;
+            let expected = expected
+                .into_iter()
+                .filter(|_| !unchanged)
+                .map(|(text, weight)| (text.to_owned(), weight))
+                .collect::<Vec<_>>();
+            assert_eq!(published_prices(&prepared.output().batch), expected, "{aggregate}");
+            query.commit(prepared)?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn numeric_key_scales_that_exceed_the_statistics_width_use_the_partition_path() -> Result<()>
+{
+    let native = numeric_contract();
+    let additive = |compiled: &crate::compiler::Compiled| {
+        compiled
+            .relational()
+            .nodes
+            .iter()
+            .any(|node| matches!(node, crate::compiler::relational::Node::Statistics { .. }))
+    };
+    let targets = |count: usize, aggregate: &str| {
+        (0..count).map(|index| format!("{aggregate} AS c{index}")).collect::<Vec<_>>().join(",")
+    };
+    let fitting = compile(
+        &format!("SELECT {} FROM source.bid GROUP BY price", targets(63, "COUNT(*)")),
+        &native,
+    )?;
+    assert!(additive(&fitting));
+    let plain = compile(
+        &format!("SELECT {} FROM source.bid GROUP BY auction", targets(64, "COUNT(*)")),
+        &native,
+    )?;
+    assert!(additive(&plain));
+    let member = row(&[("id", Some("1")), ("auction", Some("7")), ("price", Some("1.50"))]);
+    for aggregate in ["COUNT(*)", "COUNT(DISTINCT auction)"] {
+        let compiled = compile(
+            &format!("SELECT {} FROM source.bid GROUP BY price", targets(64, aggregate)),
+            &native,
+        )?;
+        assert!(!additive(&compiled), "{aggregate}");
+        let query = relational::build(&native, &compiled, &settings())?;
+        let change = batch(vec![("bid", member.clone(), 1)]);
+        let prepared =
+            query.prepare(relational::inputs(&change, compiled.relational(), 1)?).await?;
+        let published = prepared.output().batch.iter().next().context("missing group")?;
+        assert_eq!(*published.1, 1);
+        assert_eq!(
+            published.0.1.values().filter(|value| value.as_deref() == Some("1")).count(),
+            64
+        );
+    }
+    Ok(())
+}

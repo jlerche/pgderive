@@ -474,10 +474,16 @@ fn nodes(
         return ordered::nodes(keys, spec, computed);
     }
     if distinct::supports(&spec) {
-        return distinct::nodes(keys, spec, computed);
+        return distinct::nodes(
+            keys,
+            crate::compiler::partition::statistics::with_key_scales(spec),
+            computed,
+        );
     }
-    let linear = matches!(spec.mode, Mode::Grouped { .. })
+    let linear = crate::compiler::partition::statistics::fits(&spec)
         && spec.aggregates.iter().all(crate::compiler::partition::statistics::supports);
+    let spec =
+        if linear { crate::compiler::partition::statistics::with_key_scales(spec) } else { spec };
     let aggregate = if linear {
         Node::Statistics {
             id: "statistics".into(),

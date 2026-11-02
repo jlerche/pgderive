@@ -66,7 +66,7 @@ impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Algebra<K, V, S, A> 
         }
     }
     pub(super) fn create(self: &Arc<Self>, limits: Limits) -> Result<FoldState<K, V, S>> {
-        ensure!((1..=129).contains(&self.width), "statistics width unsupported");
+        ensure!((1..=super::MAX_WIDTH).contains(&self.width), "statistics width unsupported");
         Ok(Box::new(Fold {
             algebra: self.clone(),
             values: vec![A::default(); self.width],

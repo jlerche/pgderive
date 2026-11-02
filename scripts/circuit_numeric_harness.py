@@ -57,6 +57,12 @@ class NumericFixture(PartitionFixture):
             history.rejected = [('changed', self.query.replace('(b.auction)', '(b.id)'))]
             super().run_history(command, history)
             return
+        if self.mode == 'group-key':
+            history.changes = [
+                f"INSERT INTO {self.name}.bid VALUES(900,1,42.50),(901,5,42.5000)",
+                f"DELETE FROM {self.name}.bid WHERE id=900",
+                f"DELETE FROM {self.name}.bid WHERE id=901",
+            ] + history.changes
         # Exercise inverse transitions, including display-only changes and masked
         # finite sums, through the same CDC/restart/oracle harness as other queries.
         history.changes = [
@@ -76,7 +82,7 @@ class NumericFixture(PartitionFixture):
         self.verify_sql(native)
         if self.mode in ('sum', 'sum-computed'):
             assert binary_difference(self) == '0', 'numeric SUM scale/send representation differs'
-        if self.mode.startswith('extrema-'):
+        if self.mode.startswith('extrema-') or self.mode == 'group-key':
             # PostgreSQL may emit any member's scale for an equal numeric key.
             # Require an actual retained spelling, without assuming heap order.
             assert self.sql(f'''SELECT count(*) FROM {self.name}.groups g WHERE NOT EXISTS(
@@ -155,7 +161,7 @@ class NumericFixture(PartitionFixture):
         return expected_memory
 
 if __name__ == '__main__':
-    modes = ('sum', 'sum-computed') if os.environ.get('PGDERIVE_CHECK_PROFILE') == 'core' else ('native', 'computed', 'sum', 'sum-computed', 'group-key', 'join-key')
+    modes = ('sum', 'sum-computed', 'group-key') if os.environ.get('PGDERIVE_CHECK_PROFILE') == 'core' else ('native', 'computed', 'sum', 'sum-computed', 'group-key', 'join-key')
     modes += ('extrema-min', 'extrema-max', 'extrema-mixed')
     run_cases(((mode, False, mode) for mode in modes),
               qualify, fixture_class=NumericFixture)

@@ -2,8 +2,8 @@
 use super::{aggregate::Linear, relational::Key};
 use crate::{
     compiler::partition::{
-        Function, Mode, Partition,
-        statistics::{count, field, sum, width},
+        Aggregate, Function, Mode, Partition,
+        statistics::{count, field, key_scale, sum, width},
     },
     engine::{
         dataflow::{Project, Statistics},
@@ -102,6 +102,20 @@ fn encode(
     Ok(Some(native.0.retain(row, &values)?))
 }
 
+fn rescale_key(output: &mut Row, aggregate: &Aggregate, sum: &Scalar) -> Result<()> {
+    let Scalar::Numeric(sum) = sum else {
+        return Ok(());
+    };
+    let key = aggregate.argument.as_ref().context("missing retained key column")?;
+    let field = output.get_mut(&key.name).context("missing rescaled statistics key")?;
+    if let (Some(text), Some(scale)) = (field.as_mut(), sum.display_scale()) {
+        let rounding = crate::numeric::Rounding::Nearest;
+        let value = crate::numeric::Numeric::parse(text)?;
+        *text = value.rounded(i32::try_from(scale)?, rounding)?.text();
+    }
+    Ok(())
+}
+
 pub(super) fn finalize(spec: &Partition, budget: Arc<NativeBudget>) -> Project<Key, Row, Key, Row> {
     let spec = spec.clone();
     let codec = super::native::Vector::new(
@@ -127,6 +141,10 @@ pub(super) fn finalize(spec: &Partition, budget: Arc<NativeBudget>) -> Project<K
         for (index, aggregate) in spec.aggregates.iter().enumerate() {
             let count = &values[count(index)];
             let sum = &values[sum(index)];
+            if key_scale(aggregate) {
+                rescale_key(&mut output, aggregate, sum)?;
+                continue;
+            }
             let value = match sum {
                 Scalar::Numeric(sum) if scalar::numeric(aggregate) => {
                     if matches!(aggregate.function, Function::Average) {

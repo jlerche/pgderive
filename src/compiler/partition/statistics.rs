@@ -12,6 +12,34 @@ pub const fn width(aggregates: usize) -> usize {
     1 + aggregates * 2
 }
 
+const KEY_SCALE: &str = "@key_scale_";
+/// Whether this aggregate only retains the display scales of a numeric group key.
+pub fn key_scale(aggregate: &super::Aggregate) -> bool {
+    aggregate.field.starts_with(KEY_SCALE)
+}
+/// Whether the aggregates and retained key scales fit the durable statistics width.
+pub fn fits(spec: &super::Partition) -> bool {
+    let super::Mode::Grouped { keys } = &spec.mode else { return false };
+    let scales = keys.iter().filter(|key| key.oid == 1700).count();
+    width(spec.aggregates.len() + scales) <= crate::engine::dataflow::MAX_STATISTICS_WIDTH
+}
+/// Additive state holds canonical keys, so numeric keys also retain member scales.
+pub fn with_key_scales(mut spec: super::Partition) -> super::Partition {
+    let super::Mode::Grouped { keys } = &spec.mode else { return spec };
+    let numeric = keys.iter().filter(|key| key.oid == 1700).cloned().collect::<Vec<_>>();
+    for (index, key) in numeric.into_iter().enumerate() {
+        spec.aggregates.push(super::Aggregate {
+            function: super::Function::Sum,
+            argument: Some(key),
+            filter: None,
+            expression: None,
+            field: format!("{KEY_SCALE}{index}"),
+            navigation: None,
+        });
+    }
+    spec
+}
+
 /// Aggregate families with reversible exact sufficient statistics.
 pub const fn supports(aggregate: &super::Aggregate) -> bool {
     matches!(

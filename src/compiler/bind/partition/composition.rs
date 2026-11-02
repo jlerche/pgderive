@@ -67,7 +67,11 @@ fn aggregate_base(relational: &Relational) -> Result<usize> {
         | Node::PrefixWindow { spec, .. }
         | Node::Finalize { spec, .. } = node
         {
-            for value in &spec.aggregates {
+            for value in spec
+                .aggregates
+                .iter()
+                .filter(|value| !crate::compiler::partition::statistics::key_scale(value))
+            {
                 let index: usize = value
                     .field
                     .strip_prefix("@aggregate_")

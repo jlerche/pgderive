@@ -11,6 +11,8 @@ use crate::engine::{
 };
 use anyhow::{Result, ensure};
 pub use bootstrap::SnapshotFold;
+/// Largest additive state: one group count plus 64 count/sum aggregate pairs.
+pub const MAX_WIDTH: usize = 129;
 pub type SnapshotFoldState<K, V, S> = Box<dyn SnapshotFold<K, V, S>>;
 type CreateSnapshot<K, V, S> = dyn Fn(Limits) -> Result<SnapshotFoldState<K, V, S>> + Send + Sync;
 use num_bigint::BigInt;

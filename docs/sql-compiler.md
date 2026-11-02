@@ -993,7 +993,15 @@ The maintained ordered arrangements are explicit graph state. Mixed aggregate
 and window queries retain their appropriate generic operators. A graph/layout
 change cannot silently adopt incompatible checkpoints.
 
-Numeric grouping keys use the existing affected-partition evaluator, including
+COUNT, SUM, AVG and COUNT(DISTINCT) over numeric grouping keys stay additive. A
+hidden retained SUM over each key tracks its members' display scales, and the
+published key takes the largest retained scale, so `1.50` is not trimmed to `1.5`.
+That spelling always belongs to a current member. A retraction can change it. The
+extra state doubles a COUNT(*) group's nonzero statistics, so fewer such groups fit
+one tick's `output_entries` and `contributions` budgets. A query whose aggregates
+and retained scales exceed the statistics width uses the affected-partition evaluator.
+
+MIN/MAX over numeric grouping keys use the existing affected-partition evaluator, including
 when the aggregate arguments are integral or timestamp values. Numeric-equal
 keys such as `1.20` and `1.2000` share one group while retaining full raw row
 identity. The evaluator takes all grouping fields from one retained member;

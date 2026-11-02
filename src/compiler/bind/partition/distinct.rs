@@ -1,12 +1,12 @@
 //! Lower exact grouped DISTINCT through sparse counts and membership deltas.
 use crate::compiler::{
     ColumnRef,
-    partition::{Function, Mode, Partition},
+    partition::{Function, Partition},
     relational::Node,
     scalar::Computed,
 };
 pub(super) fn supports(spec: &Partition) -> bool {
-    matches!(spec.mode, Mode::Grouped { .. })
+    crate::compiler::partition::statistics::fits(spec)
         && spec
             .aggregates
             .iter()

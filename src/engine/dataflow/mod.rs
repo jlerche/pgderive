@@ -21,7 +21,7 @@ pub use join::Join;
 pub use partition::{Partition, PartitionWork};
 pub use project::Project;
 pub use runtime::{Graph, PreparedGraph, PreparedMaintenance, Unregistered};
-pub use statistics::{Additive, Statistics};
+pub use statistics::{Additive, MAX_WIDTH as MAX_STATISTICS_WIDTH, Statistics};
 pub(crate) use statistics::{SnapshotFold, StatisticsOutput};
 pub use sum::{GroupSum, SumDelta, SumState};
 pub use union::Union;

@@ -45,6 +45,9 @@ impl Sum {
         self.positive += &other.positive * weight;
         self.negative += &other.negative * weight;
     }
+    pub(crate) fn display_scale(&self) -> Option<u32> {
+        self.scales.last_key_value().map(|(scale, _)| *scale)
+    }
     pub(crate) fn is_zero(&self) -> bool {
         self.coefficient == BigInt::default()
             && self.scales.is_empty()
