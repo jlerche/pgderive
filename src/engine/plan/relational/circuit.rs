@@ -2,7 +2,7 @@ pub(super) mod bootstrap;
 use super::{Entry, Execution, Operator, Operators, RelationalState};
 use crate::engine::{
     Batch,
-    dataflow::{Join, TimedBatch, Union},
+    dataflow::TimedBatch,
     plan::{Kind, Node, Plan},
     reader::{BatchCursor as _, BatchData, BatchReader as _},
 };
@@ -190,7 +190,7 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             self.union_sealed(values[&node.inputs[0]].as_ref(), values[&node.inputs[1]].as_ref())
                 .await?
         } else {
-            self.evaluate_binary(node, prior, values, time).await?.into()
+            self.evaluate_window(node, prior, values, time).await?.into()
         })
     }
     async fn validate_input_bag<'a>(
@@ -290,54 +290,29 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
         }
         Ok(candidate)
     }
-    async fn evaluate_binary(
+    async fn evaluate_window(
         &self,
         node: &Node,
         prior: &RelationalState<K, V>,
         values: &Values<K, V>,
         time: u64,
     ) -> Result<Batch<K, V>> {
-        let left = Arc::new(
-            values
-                .get(&node.inputs[0])
-                .context("missing left input")?
-                .materialize(self.limits)
-                .await?,
-        );
-        let right = Arc::new(
-            values
-                .get(&node.inputs[1])
-                .context("missing right input")?
-                .materialize(self.limits)
-                .await?,
-        );
-        let input = TimedBatch { time, batch: (left, right) };
-        if node.kind == Kind::Union {
-            return Ok(Union.evaluate(&input, self.limits)?.batch);
-        }
-        if let Some(Operator::Window(operator)) = self.operators.get(&node.id) {
-            return Ok(operator
-                .evaluate(
-                    &TimedBatch { time, batch: (&*input.batch.0, &*input.batch.1) },
-                    (self.prior(&node.inputs[0], prior)?, self.prior(&node.inputs[1], prior)?),
-                    self.limits,
-                )
-                .await?
-                .batch);
-        }
-        let Some(Operator::Join(operator)) = self.operators.get(&node.id) else {
-            anyhow::bail!("missing join mapper")
+        let left =
+            values.get(&node.inputs[0]).context("missing left input")?.materialize(self.limits);
+        let right =
+            values.get(&node.inputs[1]).context("missing right input")?.materialize(self.limits);
+        let (left, right) = (left.await?, right.await?);
+        let Some(Operator::Window(operator)) = self.operators.get(&node.id) else {
+            anyhow::bail!("missing window operator")
         };
-        let left = TimedBatch { time, batch: input.batch.0 };
-        let right = TimedBatch { time, batch: input.batch.1 };
-        let joined = Join
-            .evaluate_with_limits(
-                (&left, &right),
+        Ok(operator
+            .evaluate(
+                &TimedBatch { time, batch: (&left, &right) },
                 (self.prior(&node.inputs[0], prior)?, self.prior(&node.inputs[1], prior)?),
                 self.limits,
             )
-            .await?;
-        Ok(operator.evaluate_with_limits(&joined, self.limits)?.batch)
+            .await?
+            .batch)
     }
     pub(super) fn prior<'a>(
         &self,

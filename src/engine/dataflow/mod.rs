@@ -13,8 +13,9 @@ mod partition;
 mod project;
 mod runtime;
 mod statistics;
+#[cfg(test)]
+#[path = "tests/sum_fixture.rs"]
 mod sum;
-mod union;
 pub use arrangement::Arrangement;
 pub use expand::Expand;
 pub use join::Join;
@@ -23,8 +24,8 @@ pub use project::Project;
 pub use runtime::{Graph, PreparedGraph, PreparedMaintenance, Unregistered};
 pub use statistics::{Additive, MAX_WIDTH as MAX_STATISTICS_WIDTH, Statistics};
 pub(crate) use statistics::{SnapshotFold, StatisticsOutput};
+#[cfg(test)]
 pub use sum::{GroupSum, SumDelta, SumState};
-pub use union::Union;
 
 /// One complete logical delta batch at a tick. Empty batches still carry time.
 #[derive(Debug, Clone)]
@@ -53,10 +54,6 @@ mod budget_tests;
 #[cfg(test)]
 #[path = "tests/join_probes.rs"]
 mod join_probe_tests;
-
-#[cfg(test)]
-#[path = "tests/union.rs"]
-mod union_tests;
 
 #[cfg(test)]
 #[path = "tests/partition.rs"]

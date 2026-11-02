@@ -1,6 +1,6 @@
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, worker::program::relational};
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 const SQL: &str = "SELECT b.auction,COUNT(*),COUNT(b.price),SUM(b.price),AVG(b.price) FROM source.bid b GROUP BY b.auction";
 
@@ -297,6 +297,60 @@ async fn joined_statistics_match_strict_cross_terms_and_cold_restart() -> Result
         let mut restored = relational::build_committed(&native, &compiled, &options)?;
         restored.restore_checkpoint(checkpoint).await?;
         committed = restored;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn certified_statistics_match_strict_when_rows_project_to_one_tuple() -> Result<()> {
+    let mut native = contract();
+    native.relations[0].columns[2].oid = 23;
+    native.relations[0].columns[2].collation = 0;
+    let left = |id: &str| row(&[("id", Some(id)), ("category", Some("c")), ("other", Some("1"))]);
+    let right = |id: &str, auction: &str| {
+        row(&[("id", Some(id)), ("auction", Some(auction)), ("price", None)])
+    };
+    let histories = [
+        vec![
+            ("auction", left("1"), 1),
+            ("auction", left("2"), 1),
+            ("bid", right("1", "1"), 1),
+            ("bid", right("2", "2"), 1),
+            ("bid", right("4", "1"), 1),
+        ],
+        vec![("auction", left("3"), 1), ("bid", right("3", "3"), 1)],
+        vec![("bid", right("2", "2"), -1)],
+        vec![("auction", left("1"), -1), ("bid", right("1", "1"), -1)],
+        vec![("auction", left("2"), -1), ("auction", left("3"), -1)],
+    ];
+    for sql in [
+        "SELECT category,COUNT(*) AS n FROM source.auction GROUP BY category",
+        "SELECT d.category,COUNT(*) AS n FROM (SELECT category FROM source.auction) d GROUP BY d.category",
+        "SELECT d.r,COUNT(*) AS n FROM (SELECT other/2 AS r FROM source.auction) d GROUP BY d.r",
+        "WITH c AS (SELECT category FROM source.auction) SELECT category,COUNT(*) AS n FROM c GROUP BY category",
+        "SELECT a.category,COUNT(*) AS n FROM source.auction a JOIN source.bid b ON a.id=b.auction GROUP BY a.category",
+        "SELECT a.category,COUNT(*) AS n FROM source.auction a JOIN source.bid b ON a.other=b.auction GROUP BY a.category",
+        "SELECT a.category,COUNT(*) AS n FROM source.auction a LEFT JOIN source.bid b ON a.id=b.auction GROUP BY a.category",
+        "SELECT u.g,COUNT(*) AS n FROM (SELECT other AS g FROM source.auction UNION SELECT auction FROM source.bid) u GROUP BY u.g",
+    ] {
+        let compiled = compile(sql, &native)?;
+        assert_ne!(
+            relational::plan(&native, &compiled, compiled.relational())?.definition().revision,
+            relational::committed_plan(&native, &compiled)?.definition().revision,
+            "{sql}"
+        );
+        let options = settings();
+        let mut strict = relational::build(&native, &compiled, &options)?;
+        let mut committed = relational::build_committed(&native, &compiled, &options)?;
+        for updates in histories.clone() {
+            let delta = batch(updates);
+            let input = || relational::inputs(&delta, compiled.relational(), committed.time() + 1);
+            let expected = strict.prepare(input()?).await.with_context(|| sql.to_owned())?;
+            let actual = committed.prepare(input()?).await.with_context(|| sql.to_owned())?;
+            assert_eq!(actual.output().batch, expected.output().batch, "{sql}");
+            strict.commit(expected)?;
+            committed.commit(actual)?;
+        }
     }
     Ok(())
 }

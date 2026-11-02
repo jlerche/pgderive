@@ -6,7 +6,7 @@ use crate::{
     transaction::Row,
     worker::program::relational,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 fn expected(compiled: &Compiled, state: &JoinedState, operation: &str) -> Result<super::RowBatch> {
     let mut left = BTreeMap::<Option<String>, i64>::new();
@@ -197,5 +197,72 @@ async fn numeric_grouped_branch_materializes_declared_scale_before_set_alignment
             )
             .await?;
     }
+    Ok(())
+}
+
+fn union_all_native() -> crate::source::Contract {
+    let mut native = contract();
+    native.relations[0].columns[2].oid = 23;
+    native.relations[0].columns[2].collation = 0;
+    native
+}
+const UNION_ALL: &str =
+    "SELECT other AS v FROM source.auction UNION ALL SELECT auction FROM source.bid";
+fn union_left(id: &str, value: &str) -> Row {
+    row(&[("id", Some(id)), ("category", None), ("other", Some(value))])
+}
+fn union_right(id: &str, value: &str) -> Row {
+    row(&[("id", Some(id)), ("auction", Some(value)), ("price", None)])
+}
+#[tokio::test]
+async fn union_all_rejects_only_final_overflow_and_excess_contributions() -> Result<()> {
+    let native = union_all_native();
+    let compiled = compile(UNION_ALL, &native)?;
+    let ir = compiled.relational();
+    let (left, right) = (union_left("1", "7"), union_right("2", "7"));
+    let query = relational::build(&native, &compiled, &settings())?;
+    let overflow = batch(vec![("auction", left.clone(), i64::MAX), ("bid", right.clone(), 1)]);
+    let error = query
+        .prepare(relational::inputs(&overflow, ir, 1)?)
+        .await
+        .err()
+        .context("overflowing union accepted")?;
+    assert!(format!("{error:#}").contains("exceeds i64"), "{error:#}");
+    let mut limited = settings();
+    limited.limits.contributions = 1;
+    let query = relational::build(&native, &compiled, &limited)?;
+    let wide = batch(vec![("auction", left, 1), ("bid", right, 1)]);
+    let error =
+        query.prepare(relational::inputs(&wide, ir, 1)?).await.err().context("work accepted")?;
+    assert!(error.is::<crate::engine::execution::CapacityExceeded>(), "{error:#}");
+    Ok(())
+}
+#[tokio::test]
+async fn union_all_cancels_extreme_signed_branches_through_spill() -> Result<()> {
+    let native = union_all_native();
+    let compiled = compile(UNION_ALL, &native)?;
+    let ir = compiled.relational();
+    let mut options = settings();
+    options.limits.resident_entries = 1;
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let (cancelled, partial) = (union_left("1", "7"), union_left("2", "8"));
+    let initial =
+        batch(vec![("auction", cancelled.clone(), i64::MAX), ("auction", partial.clone(), 3)]);
+    let prepared = query.prepare(relational::inputs(&initial, ir, 1)?).await?;
+    query.commit(prepared)?;
+    let change = batch(vec![
+        ("auction", cancelled, -i64::MAX),
+        ("bid", union_right("3", "7"), i64::MAX),
+        ("auction", partial, -2),
+        ("bid", union_right("4", "8"), 1),
+    ]);
+    let prepared = query.prepare(relational::inputs(&change, ir, 2)?).await?;
+    let output = prepared
+        .output()
+        .batch
+        .iter()
+        .map(|((_, row), weight)| (row.values().cloned().collect::<Vec<_>>(), *weight))
+        .collect::<Vec<_>>();
+    assert_eq!(output, [(vec![Some("8".to_owned())], -1)]);
     Ok(())
 }

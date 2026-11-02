@@ -367,3 +367,58 @@ fn direct_scalar_identity_retains_modifiers_while_plain_numeric_cast_clears() ->
     }
     Ok(())
 }
+
+#[test]
+fn source_key_proofs_only_certify_inputs_with_unit_integrated_weights() -> Result<()> {
+    let native = contract();
+    for (expected, sql) in [
+        (true, "SELECT category,COUNT(*) FROM public.items GROUP BY category"),
+        (
+            true,
+            "SELECT d.category,COUNT(*) FROM (SELECT category FROM public.items) d GROUP BY d.category",
+        ),
+        (
+            true,
+            "SELECT d.r,COUNT(*) FROM (SELECT category/2 AS r FROM public.items) d GROUP BY d.r",
+        ),
+        (
+            true,
+            "WITH c AS (SELECT category FROM public.items) SELECT category,COUNT(*) FROM c GROUP BY category",
+        ),
+        (true, "SELECT category,COUNT(*) FROM public.items WHERE id>0 GROUP BY category"),
+        (
+            true,
+            "SELECT i.category,COUNT(*) FROM public.items i JOIN public.other o ON i.category=o.category GROUP BY i.category",
+        ),
+        (
+            true,
+            "SELECT i.category,COUNT(*) FROM public.items i LEFT JOIN public.other o ON i.category=o.category GROUP BY i.category",
+        ),
+        (
+            true,
+            "SELECT u.g,COUNT(*) FROM (SELECT category AS g FROM public.items UNION SELECT category FROM public.other) u GROUP BY u.g",
+        ),
+        (
+            false,
+            "SELECT i.category,COUNT(*) FROM public.items i FULL JOIN public.other o ON i.category=o.category GROUP BY i.category",
+        ),
+        (
+            false,
+            "SELECT u.g,COUNT(*) FROM (SELECT category AS g FROM public.items UNION ALL SELECT category FROM public.other) u GROUP BY u.g",
+        ),
+        (
+            false,
+            "SELECT u.g,COUNT(*) FROM (SELECT category AS g FROM public.items INTERSECT ALL SELECT category FROM public.other) u GROUP BY u.g",
+        ),
+        (
+            false,
+            "SELECT u.g,COUNT(*) FROM (SELECT category AS g FROM public.items EXCEPT ALL SELECT category FROM public.other) u GROUP BY u.g",
+        ),
+    ] {
+        let compiled = crate::compiler::compile(sql, &native)?;
+        let certified = Analysis::infer(&native, compiled.relational())?
+            .committed_statistics(compiled.relational())?;
+        assert_eq!(!certified.is_empty(), expected, "{sql}");
+    }
+    Ok(())
+}

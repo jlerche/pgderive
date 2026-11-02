@@ -462,7 +462,7 @@ fixtures compose the same operators while retaining independent source-map
 oracles.
 
 `Statistics` supplies exact grouped accumulation with separate input and state
-codecs. `GroupSum` binds its COUNT/non-NULL/SUM codec to this shared accumulator. Its immutable `SumState`
+codecs. A test fixture binds a COUNT/non-NULL/SUM codec to this shared accumulator. Its immutable `SumState`
 contains total row multiplicity, non-NULL multiplicity, and sum. Products and
 prior-state accumulation use arbitrary precision before final i64 checks. A
 present zero sum is retained, all-NULL groups emit NULL, and removing a group's
