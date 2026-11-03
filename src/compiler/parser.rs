@@ -28,6 +28,7 @@ pub(super) type Columns = Vec<(Name, String)>;
 pub(super) enum Parsed {
     With { bindings: Vec<Self>, inner: Box<Self> },
     Renamed { inner: Box<Self>, labels: Vec<String> },
+    Materialized(Box<Self>),
     SetOperation(setop::SetOperation),
     Ordered(ordering::Parsed),
     Membership { parsed: partition::Parsed, distinct: bool },
@@ -57,7 +58,11 @@ pub(super) fn parse(sql: &str) -> Result<Parsed> {
         bindings: validation
             .iter()
             .map(|(select, labels)| {
-                let parsed = query(select)?;
+                let mut select = select.clone();
+                let materialized = select.with_clause.take().is_some();
+                let parsed = query(&select)?;
+                let parsed =
+                    if materialized { Parsed::Materialized(Box::new(parsed)) } else { parsed };
                 Ok(Parsed::Renamed { inner: Box::new(parsed), labels: labels.clone() })
             })
             .collect::<Result<_>>()?,

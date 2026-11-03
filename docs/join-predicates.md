@@ -24,11 +24,12 @@ Conflicting collations reject. Text ordering requires C/POSIX byte order; no loc
 comparison approximation is introduced. Explicit COLLATE syntax remains rejected.
 Existing strictness, resource budgets and unsupported-overload checks still apply.
 
-Key maps retain complete source rows and evaluate eagerly on their own input.
-A key-expression error can therefore occur even with an empty opposite input;
-guard unsafe expressions with CASE or an admitted derived-source filter. ON
-residuals evaluate on candidate pairs. PostgreSQL optimizer-specific error order
-is not promised. Failed evaluation preserves the last published sink, root and
+Key maps retain complete source rows and evaluate on each input row that passes
+that input's filters. A key-expression error can therefore occur even with an
+empty opposite input, as under a merge join; guard unsafe expressions with a
+filter or CASE. Residuals over both inputs evaluate on candidate pairs. The
+[planner rewrites](sql-compiler.md#planner-rewrites) place every other condition.
+Failed evaluation preserves the last published sink, root and
 source progress, without acknowledging beyond that durable checkpoint.
 
 ## Incremental match semantics

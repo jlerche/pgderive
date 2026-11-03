@@ -10,6 +10,7 @@ mod case;
 pub(in crate::compiler) mod collation;
 mod cost;
 mod evaluate;
+mod fold;
 mod functions;
 mod join;
 mod operand;
@@ -18,6 +19,8 @@ pub(super) use cost::OPERATOR_COST;
 pub(super) use operand::{Operand, bind as operand, native_literal, navigation};
 pub(super) use types::common as comparison_type;
 mod types;
+mod visit;
+pub(super) use visit::Replace;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Typed {
     oid: u32,
@@ -85,19 +88,6 @@ fn check_width(value: i64, oid: u32) -> Result<()> {
     Ok(())
 }
 pub(super) fn bind(
-    value: &Node,
-    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
-    depth: usize,
-) -> Result<Typed> {
-    let result = bind_inner(value, resolve, depth)?;
-    if result.is_constant() {
-        result
-            .evaluate(&crate::transaction::Row::new())
-            .context("constant expression failed in-engine")?;
-    }
-    Ok(result)
-}
-fn bind_inner(
     value: &Node,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     depth: usize,

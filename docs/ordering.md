@@ -62,11 +62,11 @@ unordered limit path, not PostgreSQL heap order. It does not promise any row
 delivery order. Text in that arbitrary selection comparison uses byte order;
 it does not assert locale-sensitive SQL ordering.
 
-After binding and type validation, LIMIT 0 removes its upstream
+After binding, type validation and planning, LIMIT 0 removes its upstream
 maps, joins, windows and maintained state. Row-dependent expressions are not
-evaluated, including overflowing ABS arguments. Ordered scopes over a proven
-empty derived input are pruned too. One source remains as a transaction-tick
-anchor; the complete frozen publication contract still governs catalog checks,
+evaluated, including overflowing ABS arguments, while constant expressions PostgreSQL
+would fold still fail. Ordered scopes over a proven empty derived input are pruned too.
+One source remains as a transaction-tick anchor; the complete frozen publication contract still governs catalog checks,
 capture, plan identity and durable source progress. Constant-expression errors
 and unsupported syntax/types can still reject during binding.
 The changed sort codec/state and added POSIX semantic attestation require rebuild

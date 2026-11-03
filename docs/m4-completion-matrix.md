@@ -29,9 +29,9 @@ other databases or hosts. An interrupted rebuild from before maintenance can
 have an incompatible recorded signature; explicitly drop/recreate that pending
 query if ordinary rebuild cannot resume. Do not edit its journal to bypass this.
 
-Computed ON operands evaluate eagerly on each side, including when the opposite
-input is empty. The conservative local-map error contract applies; later WHERE
-clauses do not guard ON maps. The Rust history test empties both inputs, then
+Computed ON operands evaluate on each side's filtered rows, including when the
+opposite input is empty. A WHERE filter on that side guards them, as the planner
+rewrites describe. The Rust history test empties both inputs, then
 proves that an overflowing unmatched operand fails without changing its checkpoint.
 
 Qualification: `scripts/environment_harness.py` covers the maintenance protocol;

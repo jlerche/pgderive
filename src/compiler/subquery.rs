@@ -8,4 +8,5 @@ pub struct Mark {
     pub(crate) output: ColumnRef,
     pub(crate) comparison: Predicate,
     pub(crate) correlation: Option<Predicate>,
+    pub(crate) semijoin: bool,
 }

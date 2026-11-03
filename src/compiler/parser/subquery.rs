@@ -36,6 +36,9 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     if !rewrite.changed {
         return Ok(None);
     }
+    if let (Some(tree), Some(condition)) = (&mut rewrite.tree, checked.where_clause.as_deref()) {
+        mark_semijoins(tree, condition);
+    }
     let distinct = !checked.distinct_clause.is_empty();
     if distinct {
         ensure!(
@@ -59,6 +62,23 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     } else {
         Parsed::With { bindings: rewrite.validation, inner: Box::new(parsed) }
     }))
+}
+/// `PostgreSQL` pulls up IN as a semijoin only when it is a top-level WHERE conjunct.
+fn mark_semijoins(tree: &mut Tree, condition: &Node) {
+    let Tree::Mark { left, alias, semijoin, .. } = tree else { return };
+    *semijoin = conjunct(condition, &ast::column(alias, ast::VALUE));
+    mark_semijoins(left, condition);
+}
+fn conjunct(condition: &Node, column: &Node) -> bool {
+    match &condition.node {
+        Some(NodeEnum::BoolExpr(value)) if value.boolop == i32::from(pg::BoolExprType::AndExpr) => {
+            value.args.iter().any(|value| conjunct(value, column))
+        }
+        Some(NodeEnum::ColumnRef(value)) => {
+            matches!(&column.node, Some(NodeEnum::ColumnRef(wanted)) if wanted.fields == value.fields)
+        }
+        _ => false,
+    }
 }
 impl Rewrite<'_> {
     fn alias(&mut self) -> Result<String> {
@@ -253,6 +273,7 @@ impl Rewrite<'_> {
             probe: Box::new(probe),
             alias: alias.clone(),
             condition: ast::logical(conditions, true),
+            semijoin: false,
         });
         Ok(ast::column(&alias, ast::VALUE))
     }

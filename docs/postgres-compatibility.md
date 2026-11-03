@@ -112,7 +112,8 @@ back all visible deltas and progress; source errors do not get skipped. Uncertai
 COMMIT requires reconciliation, not blind application of result deltas again.
 
 Match values for successful evaluations. Do not claim identical PostgreSQL error
-messages or optimizer-specific expression order. Explicit lazy branches and
+messages. Expression order follows the rewrites and limits in the
+[SQL compiler contract](sql-compiler.md#planner-rewrites). Explicit lazy branches and
 unavoidable type/arithmetic errors are part of qualification. PostgreSQL planning
 can raise constant-folding errors even in branches unused at runtime; existing
 original-query EXPLAIN checks cover that boundary. Predicate normalization and

@@ -1,4 +1,4 @@
-//! Compose typed SQL scopes without merging their state or predicate placement.
+//! Compose typed SQL scopes; `compiler::plan` then decides where their predicates run.
 use super::{Body, Stage, build};
 use crate::{
     compiler::{

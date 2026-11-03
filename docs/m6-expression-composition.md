@@ -25,8 +25,8 @@ is an internal engine map, distinct from the final public-output rendering; each
 scope owns its field names. Public results retain ordinary query output columns.
 
 Outer/existence operands remain side-local integral expressions with exactly
-matching result OIDs. They run eagerly for each input row, including when the
-opposite side is empty; this retains the conservative ON-map error contract.
+matching result OIDs. They run for each input row that passes its filters,
+including when the opposite side is empty, as ON-map keys do.
 Unmatched right fields are NULL-extended by the existing outer operator. EXISTS
 and NOT EXISTS preserve each full left tuple's multiplicity while right-side
 membership is nonlinear. Mixed-input operands, residual ON predicates, implicit

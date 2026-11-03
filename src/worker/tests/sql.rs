@@ -145,9 +145,10 @@ fn quoted_names_qualifiers_and_conjunctions() -> Result<()> {
         ),
         &native(),
     )?;
-    assert_ne!(
+    assert_eq!(
         program::plan(&native(), &first)?.identity(),
-        program::plan(&native(), &second)?.identity()
+        program::plan(&native(), &second)?.identity(),
+        "each conjunct runs at its own input"
     );
     let mut names = native();
     names.relations[0].schema = "Source space".into();

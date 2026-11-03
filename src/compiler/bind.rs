@@ -22,7 +22,11 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     match parsed {
         Parsed::With { bindings, inner } => {
             for binding in bindings {
-                bind(binding, contract)?;
+                let planned = planned_binding(&binding);
+                let mut compiled = bind(binding, contract)?;
+                if planned {
+                    super::plan::rewrite(&mut compiled.relational, contract)?;
+                }
             }
             bind(*inner, contract)
         }
@@ -37,6 +41,11 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
             }
             Ok(compiled)
         }
+        Parsed::Materialized(inner) => {
+            let mut compiled = bind(*inner, contract)?;
+            boundary::materialize(&mut compiled.relational)?;
+            Ok(compiled)
+        }
         Parsed::SetOperation(parsed) => setop::bind(parsed, contract),
         Parsed::Ordered(parsed) => ordering::bind(parsed, contract),
         Parsed::Membership { parsed, distinct } => membership::bind(parsed, distinct, contract),
@@ -45,6 +54,13 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
     }
 }
 
+const fn planned_binding(binding: &Parsed) -> bool {
+    match binding {
+        Parsed::Renamed { inner, .. } => planned_binding(inner),
+        Parsed::Materialized(_) => true,
+        _ => false,
+    }
+}
 fn scope(table: Table, contract: &Contract) -> Result<Scope<'_>> {
     let relation = contract
         .relations

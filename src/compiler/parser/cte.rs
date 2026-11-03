@@ -8,6 +8,8 @@ use std::{
 };
 
 struct Definition {
+    order: usize,
+    materialized: bool,
     query: pg::SelectStmt,
     columns: Vec<Node>,
     bytes: usize,
@@ -16,14 +18,31 @@ struct Definition {
 }
 type Scope = BTreeMap<String, Arc<Definition>>;
 pub(super) type Definitions = Vec<(pg::SelectStmt, Vec<String>)>;
+#[derive(Default)]
 struct Expansion {
     remaining: usize,
     selects: usize,
     validation: Definitions,
+    declared: usize,
+    references: Vec<usize>,
+    materialized: BTreeSet<usize>,
+    referenced: BTreeSet<usize>,
 }
 
 pub(super) fn expand(query: &mut pg::SelectStmt) -> Result<Definitions> {
-    let mut expansion = Expansion { remaining: 1_048_576, selects: 0, validation: Vec::new() };
+    // PostgreSQL decides inlining by lexical reference count, known only after a full walk.
+    let mut counting = Expansion { remaining: 1_048_576, ..Expansion::default() };
+    counting.select(&mut query.clone(), &Scope::new(), 0)?;
+    let at_least = |least: usize| -> BTreeSet<usize> {
+        let counts = counting.references.iter().enumerate();
+        counts.filter(|(_, count)| **count >= least).map(|(order, _)| order).collect()
+    };
+    let mut expansion = Expansion {
+        remaining: 1_048_576,
+        materialized: at_least(2),
+        referenced: at_least(1),
+        ..Expansion::default()
+    };
     expansion.select(query, &Scope::new(), 0)?;
     Ok(expansion.validation)
 }
@@ -64,13 +83,27 @@ impl Expansion {
                 };
                 let mut query = (**query).clone();
                 self.select(&mut query, &scope, depth + 1)?;
+                let order = self.declared;
+                self.declared += 1;
+                self.references.push(0);
+                let materialization = pg::CteMaterialize::try_from(cte.ctematerialized)?;
+                let materialized = materialization == pg::CteMaterialize::Always
+                    || (materialization != pg::CteMaterialize::Never
+                        && self.materialized.contains(&order));
                 let bytes = serde_json::to_vec(&query)?.len();
                 self.charge(bytes)?;
-                self.validation.push((query.clone(), names(&cte.aliascolnames)?.0));
+                // A referenced materialized body is planned even if no reader of it ever runs.
+                let mut validated = query.clone();
+                if materialized && self.referenced.contains(&order) {
+                    validated.with_clause = Some(pg::WithClause::default());
+                }
+                self.validation.push((validated, names(&cte.aliascolnames)?.0));
                 let (height, count) = shape(&query);
                 scope.insert(
                     cte.ctename.clone(),
                     Arc::new(Definition {
+                        order,
+                        materialized,
                         query,
                         columns: cte.aliascolnames.clone(),
                         bytes,
@@ -114,6 +147,7 @@ impl Expansion {
             && let Some(definition) = scope.get(&range.relname)
         {
             ensure!(range.inh, "ONLY cannot reference a CTE");
+            self.references[definition.order] += 1;
             ensure!(depth + definition.height < 64, "expanded CTE depth budget exceeded");
             self.selects = self
                 .selects
@@ -137,7 +171,7 @@ impl Expansion {
             value.node = Some(NodeEnum::RangeSubselect(Box::new(pg::RangeSubselect {
                 alias: Some(alias),
                 subquery: Some(Box::new(Node {
-                    node: Some(NodeEnum::SelectStmt(Box::new(definition.query.clone()))),
+                    node: Some(NodeEnum::SelectStmt(Box::new(reference(definition)))),
                 })),
                 lateral: false,
             })));
@@ -211,6 +245,14 @@ impl Expansion {
     }
 }
 
+/// An empty WITH marks an inlined body as materialized; expansion consumed every real WITH.
+fn reference(definition: &Definition) -> pg::SelectStmt {
+    let mut query = definition.query.clone();
+    if definition.materialized {
+        query.with_clause = Some(pg::WithClause::default());
+    }
+    query
+}
 fn combined(children: impl Iterator<Item = (usize, usize)>) -> (usize, usize) {
     children.fold((0, 0), |(height, count), next| (height.max(next.0), count + next.1))
 }

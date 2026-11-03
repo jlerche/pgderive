@@ -17,9 +17,9 @@ impl Builder<'_> {
         &mut self,
         mut left: Edge,
         parsed: Box<Parsed>,
-        arguments: (&Ast, String, Option<&Ast>),
+        arguments: (&Ast, String, Option<&Ast>, bool),
     ) -> Result<Edge> {
-        let (probe, alias, condition) = arguments;
+        let (probe, alias, condition, semijoin) = arguments;
         let resolve_left = |name: &Name| Ok(resolve(name, &left.columns)?.value.clone());
         let operand = typed::operand(probe, &resolve_left)?;
         let right = self.derived(parsed, alias.clone())?;
@@ -48,8 +48,12 @@ impl Builder<'_> {
             typed::collation::common(collation, right.columns[0].collation)?;
         }
         let mut computed = Vec::new();
-        let probe =
-            scalar::register(probe, &mut computed, &format!("@mark_{}_probe_", self.joins))?;
+        let probe = match probe.as_column() {
+            Some(column) => column.clone(),
+            None => {
+                scalar::register(probe, &mut computed, &format!("@mark_{}_probe_", self.joins))?
+            }
+        };
         self.map(&mut left, computed, &format!("mark_{}_probe", self.joins));
         let comparison = Predicate::new(Expr::Compare(
             Compare::Eq,
@@ -74,6 +78,7 @@ impl Builder<'_> {
                 output: output.clone(),
                 comparison,
                 correlation: spec.predicate,
+                semijoin,
             }),
         });
         let mut columns = columns;

@@ -77,51 +77,74 @@ pub(super) fn apply(
         "interval ORDER BY/LIMIT tuple ordering is unsupported"
     );
     ir.output.columns.truncate(parsed.visible);
-    if parsed.limit == Some(0)
-        || crate::compiler::properties::occurrence(ir, contract)?.maximum_rows() == Some(0)
-    {
-        prune_empty(ir)?;
-        return Ok(compiled);
-    }
-    if parsed.limit.is_some() || parsed.offset > 0 {
-        let limit = parsed
-            .limit
-            .map(|limit| limit.checked_add(parsed.offset).context("LIMIT + OFFSET overflow"))
-            .transpose()?
-            .unwrap_or(usize::MAX);
-        let Some(Node::Output { id, input }) = ir.nodes.pop() else {
-            anyhow::bail!("ORDER BY requires final Output")
-        };
-        let prefix = format!("sort_{}", ir.nodes.len());
-        let global = format!("{prefix}_global");
-        let indexed = format!("{prefix}_input");
-        let selected = format!("{prefix}_selected");
-        let fields = identity
-            .iter()
-            .map(|column| crate::compiler::relational::Binding {
-                input: column.clone(),
-                output: column.clone(),
-            })
-            .collect();
-        let spec = Spec { order, field: None, limit, offset: parsed.offset, identity };
-        ir.nodes.push(Node::Rebind { id: global.clone(), input, fields });
-        ir.nodes.push(Node::TopKInput { id: indexed.clone(), input: global, spec: spec.clone() });
-        ir.nodes.push(Node::TopK { id: selected.clone(), input: indexed, spec });
-        ir.nodes.push(Node::Output { id, input: selected });
+    let sorted = order.iter().map(|value| value.column.clone()).collect();
+    let empty = crate::compiler::properties::occurrence(ir, contract)?.maximum_rows() == Some(0);
+    if parsed.limit == Some(0) || empty {
+        sort_marker(ir, sorted)?;
+        read_nothing(ir)?;
+    } else if parsed.limit.is_none() && parsed.offset == 0 {
+        sort_marker(ir, sorted)?;
+    } else {
+        top_k(ir, order, identity, (parsed.limit, parsed.offset))?;
     }
     Ok(compiled)
 }
-
-fn prune_empty(ir: &mut crate::compiler::relational::Relational) -> Result<()> {
-    let source = ir.sources.first().context("empty SQL scope requires a source")?.clone();
-    // The circuit requires one source to drive transaction ticks. All other
-    // operands and computation are dead; the complete publication contract still
-    // governs source capture and durable progress, including unrelated ticks.
-    ir.sources = vec![source];
-    ir.nodes = vec![
-        Node::Source { id: "source".into(), source: 0 },
-        Node::Empty { id: "empty".into(), input: "source".into() },
-        Node::Output { id: "project".into(), input: "empty".into() },
-    ];
+fn top_k(
+    ir: &mut crate::compiler::relational::Relational,
+    order: Vec<Order>,
+    identity: Vec<crate::compiler::ColumnRef>,
+    (limit, offset): (Option<usize>, usize),
+) -> Result<()> {
+    let limit = limit
+        .map(|limit| limit.checked_add(offset).context("LIMIT + OFFSET overflow"))
+        .transpose()?
+        .unwrap_or(usize::MAX);
+    let Some(Node::Output { id, input }) = ir.nodes.pop() else {
+        anyhow::bail!("ORDER BY requires final Output")
+    };
+    let prefix = format!("sort_{}", ir.nodes.len());
+    let global = format!("{prefix}_global");
+    let indexed = format!("{prefix}_input");
+    let selected = format!("{prefix}_selected");
+    let fields = identity
+        .iter()
+        .map(|column| crate::compiler::relational::Binding {
+            input: column.clone(),
+            output: column.clone(),
+        })
+        .collect();
+    let spec = Spec { order, field: None, limit, offset, identity };
+    ir.nodes.push(Node::Rebind { id: global.clone(), input, fields });
+    ir.nodes.push(Node::TopKInput { id: indexed.clone(), input: global, spec: spec.clone() });
+    ir.nodes.push(Node::TopK { id: selected.clone(), input: indexed, spec });
+    ir.nodes.push(Node::Output { id, input: selected });
+    Ok(())
+}
+/// `PostgreSQL` computes sort expressions even when nothing above reads them.
+fn sort_marker(
+    ir: &mut crate::compiler::relational::Relational,
+    columns: Vec<crate::compiler::ColumnRef>,
+) -> Result<()> {
+    if columns.is_empty() {
+        return Ok(());
+    }
+    let Some(Node::Output { id, input }) = ir.nodes.pop() else {
+        anyhow::bail!("ORDER BY requires final Output")
+    };
+    let sorted = format!("sort_{}_marker", ir.nodes.len());
+    ir.nodes.push(Node::Sorted { id: sorted.clone(), input, columns });
+    ir.nodes.push(Node::Output { id, input: sorted });
+    Ok(())
+}
+/// LIMIT 0 plans its input, so a constant still raises, and never runs it.
+fn read_nothing(ir: &mut crate::compiler::relational::Relational) -> Result<()> {
+    let Some(Node::Output { id, input }) = ir.nodes.pop() else {
+        anyhow::bail!("LIMIT requires final Output")
+    };
+    let filter = format!("{}_{}", ir.nodes.len(), crate::compiler::relational::ZERO_LIMIT);
+    let predicate =
+        crate::compiler::Predicate::new(crate::compiler::expression::Expr::Or(Vec::new()));
+    ir.nodes.push(Node::Filter { id: filter.clone(), input, predicate });
+    ir.nodes.push(Node::Output { id, input: filter });
     Ok(())
 }

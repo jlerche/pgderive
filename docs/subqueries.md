@@ -65,10 +65,10 @@ correlation or a cross-domain date/timestamp comparison scans the RHS per outer 
 
 ## Evaluation and durability boundaries
 
-Lifted RHS relations and probe maps are dataflow dependencies evaluated eagerly,
-including when the opposite input is empty or an outer filter removes its rows.
-As with existing computed join maps, PostgreSQL planner-specific error timing is
-not promised. Guard unsafe arithmetic inside the RHS with admitted filters/CASE.
+Lifted RHS relations and probe maps are dataflow dependencies evaluated even when
+the opposite input is empty. A constant equality on the probe filters the RHS, and
+the [planner rewrites](sql-compiler.md#planner-rewrites) place outer filters.
+Guard unsafe arithmetic inside the RHS with admitted filters/CASE.
 
 Subqueries inside lazy CASE results/defaults/later conditions, later COALESCE
 arguments, FILTER-guarded aggregate arguments and explicitly strict constant-NULL

@@ -11,6 +11,27 @@ impl Expr {
         }
         Self::Quals(quals)
     }
+    /// `simplify_and_arguments` stops at a constant false, before sorting can reorder a clause.
+    pub(in crate::compiler) fn until_false(self) -> Self {
+        let Self::And(values) = self else { return self };
+        let mut written = Vec::new();
+        for value in values.into_iter().map(Self::until_false) {
+            let conjuncts = if let Self::And(inner) = value { inner } else { vec![value] };
+            for value in conjuncts {
+                let decided = value.constant_false();
+                written.push(value);
+                if decided {
+                    return Self::And(written);
+                }
+            }
+        }
+        Self::And(written)
+    }
+    fn constant_false(&self) -> bool {
+        self.fold().is_ok_and(|value| {
+            value.is_constant() && matches!(value.constant_truth(), Ok(Some(false)))
+        })
+    }
     fn collect_quals(self, quals: &mut Vec<Self>) {
         match self {
             Self::And(values) => values.into_iter().for_each(|value| value.collect_quals(quals)),

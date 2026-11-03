@@ -27,3 +27,26 @@ pub(super) fn finalize(ir: &mut Relational, averages: &[String]) -> Result<()> {
     ir.nodes.insert(position, Node::Map { id, input: prior, computed });
     Ok(())
 }
+/// Keep a materialized CTE's outputs at its boundary, whichever of them its readers use.
+pub(super) fn materialize(ir: &mut Relational) -> Result<()> {
+    let mut seen = std::collections::BTreeSet::new();
+    let fields = ir
+        .output
+        .columns
+        .iter()
+        .filter(|output| seen.insert(output.column.name.clone()))
+        .map(|output| crate::compiler::relational::Binding {
+            input: output.column.clone(),
+            // A rebind keeps what its input proves; this flag only adds doubt.
+            output: crate::compiler::ColumnRef { nullable: false, ..output.column.clone() },
+        })
+        .collect();
+    let position = ir.nodes.len().checked_sub(1).context("missing materialized output")?;
+    let Node::Output { input, .. } = &mut ir.nodes[position] else {
+        anyhow::bail!("materialized scope requires final Output")
+    };
+    let id = format!("{position}_{}", crate::compiler::relational::MATERIALIZED);
+    let prior = std::mem::replace(input, id.clone());
+    ir.nodes.insert(position, Node::Rebind { id, input: prior, fields });
+    Ok(())
+}

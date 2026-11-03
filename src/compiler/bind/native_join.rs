@@ -80,9 +80,9 @@ impl Builder<'_> {
                 let bound = keys::condition(None, &left.columns, &right.columns, &id)?;
                 self.join(left, right, bound, Kind::Left)
             }
-            Tree::Mark { left, right, probe, alias, condition } => {
+            Tree::Mark { left, right, probe, alias, condition, semijoin } => {
                 let left = self.tree(*left)?;
-                self.mark(left, right, (&probe, alias, condition.as_deref()))
+                self.mark(left, right, (&probe, alias, condition.as_deref(), semijoin))
             }
             Tree::Join { left, right, condition, kind, using } => {
                 let left = self.tree(*left)?;

@@ -8,6 +8,7 @@ pub(crate) mod lookup;
 pub(crate) mod navigation;
 mod parser;
 pub(crate) mod partition;
+mod plan;
 pub(crate) mod properties;
 
 mod projection;
@@ -78,6 +79,7 @@ impl Compiled {
 pub fn compile(sql: &str, contract: &Contract) -> Result<Compiled> {
     contract.validate()?;
     let mut compiled = bind::bind(parser::parse(sql)?, contract)?;
+    plan::rewrite(&mut compiled.relational, contract)?;
     compiled.relational.bind_projection(contract)?;
     Ok(compiled)
 }

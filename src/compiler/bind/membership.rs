@@ -25,17 +25,11 @@ pub(super) fn bind(parsed: Parsed, distinct: bool, contract: &Contract) -> Resul
             .iter()
             .map(|output| output.column.clone())
             .collect::<Vec<_>>();
-        relational.nodes.push(Node::PartitionBy {
-            id: "distinct_key".into(),
-            input,
-            keys: columns.clone(),
-        });
-        relational.nodes.push(Node::SetDistinct {
-            id: "distinct".into(),
-            input: "distinct_key".into(),
-            columns,
-        });
-        relational.nodes.push(Node::Output { id, input: "distinct".into() });
+        let position = relational.nodes.len();
+        let (key, distinct) = (format!("distinct_key_{position}"), format!("distinct_{position}"));
+        relational.nodes.push(Node::PartitionBy { id: key.clone(), input, keys: columns.clone() });
+        relational.nodes.push(Node::SetDistinct { id: distinct.clone(), input: key, columns });
+        relational.nodes.push(Node::Output { id, input: distinct });
     }
     Ok(compiled)
 }

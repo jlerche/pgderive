@@ -41,43 +41,6 @@ fn key_node(key: &Key) -> Node {
         Key::Typed(value) => (**value).clone(),
     }
 }
-/// `PostgreSQL` runs aggregate-free HAVING conjuncts of a grouped query as WHERE quals.
-pub(super) fn pushdown(body: &Body) -> Option<Body> {
-    if body.groups.is_empty() || body.expansion.is_some() {
-        return None;
-    }
-    let mut conjuncts = Vec::new();
-    collect_conjuncts((**body.having.as_ref()?).clone(), &mut conjuncts);
-    let (kept, moved): (Vec<_>, Vec<_>) = conjuncts.into_iter().partition(contains_aggregate);
-    if moved.is_empty() {
-        return None;
-    }
-    let quals = body.predicate.as_deref().cloned().into_iter().chain(moved).collect();
-    Some(Body { predicate: conjunction(quals), having: conjunction(kept), ..body.clone() })
-}
-fn collect_conjuncts(value: Node, out: &mut Vec<Node>) {
-    match value.node {
-        Some(NodeEnum::BoolExpr(ref boolean))
-            if boolean.boolop == i32::from(pg::BoolExprType::AndExpr) =>
-        {
-            boolean.args.iter().cloned().for_each(|value| collect_conjuncts(value, out));
-        }
-        _ => out.push(value),
-    }
-}
-fn conjunction(mut values: Vec<Node>) -> Option<crate::compiler::syntax::Expr> {
-    if values.len() < 2 {
-        return values.pop().map(Box::new);
-    }
-    Some(Box::new(Node {
-        node: Some(NodeEnum::BoolExpr(Box::new(pg::BoolExpr {
-            xpr: None,
-            boolop: i32::from(pg::BoolExprType::AndExpr),
-            args: values,
-            location: 0,
-        }))),
-    }))
-}
 fn aggregate_function(value: &Node) -> bool {
     matches!(&value.node,Some(NodeEnum::FuncCall(call)) if call.over.is_none() && crate::compiler::parser::expressions::names(&call.funcname).ok().and_then(|n|crate::compiler::parser::expressions::builtin_name(&n.0).map(str::to_owned)).is_some_and(|name|matches!(name.as_str(),"count"|"sum"|"avg"|"min"|"max")))
 }

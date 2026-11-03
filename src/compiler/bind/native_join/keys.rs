@@ -144,7 +144,7 @@ pub(super) fn condition(
     bound.normalize();
     bound.predicate = match residual.len() {
         0 => None,
-        _ => Some(Predicate::new(expression::Expr::And(residual).ordered_quals())),
+        _ => Some(Predicate::new(expression::Expr::And(residual).until_false().ordered_quals())),
     };
     Ok(bound)
 }

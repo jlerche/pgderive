@@ -26,6 +26,12 @@ macro_rules! relational_nodes {
                     Self::Source { id, .. } $(| Self::$variant { id, .. })* => id,
                 }
             }
+            pub(crate) fn inputs(&self) -> Vec<&str> {
+                match self {
+                    Self::Source { .. } => Vec::new(),
+                    $(Self::$variant { $($input,)* .. } => vec![$($input.as_str()),*]),*
+                }
+            }
             pub(crate) fn rewrite(
                 &mut self,
                 rename: &impl Fn(&str) -> String,
@@ -55,6 +61,7 @@ macro_rules! relational_nodes {
 }
 relational_nodes! {
     Empty [input] => Project {},
+    Sorted [input] => Project { columns: Vec<ColumnRef> },
     Constant [input] => Project { rows: Vec<crate::transaction::Row> },
     Filter [input] => Project { predicate: super::Predicate },
     Expand [input] => Expand { series: super::expansion::Series },
@@ -100,6 +107,13 @@ pub struct Relational {
     pub(crate) nodes: Vec<Node>,
     pub(crate) output: Projected,
 }
+/// A materialized CTE: evaluated as written, so no rewrite crosses it.
+pub(super) const MATERIALIZED: &str = "materialized";
+pub(super) fn barrier(id: &str) -> bool {
+    id.ends_with(MATERIALIZED)
+}
+/// A filter standing for LIMIT 0: what it reads is planned and then discarded.
+pub(super) const ZERO_LIMIT: &str = "limit_zero";
 pub fn field(source: usize, name: &str) -> String {
     format!("{source}:{name}")
 }

@@ -134,8 +134,7 @@ async fn repeated_date_bin_maps_keep_scope_fields_distinct() -> Result<()> {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 2);
-    assert_ne!(names[0], names[1]);
+    assert_eq!(names.len(), 1, "the inner bucket is unread");
     let options = settings();
     let mut query = relational::build(&native, &compiled, &options)?;
     let a = row(&[("id", Some("1")), ("auction", None), ("price", Some("2000-01-01 00:00:01"))]);
@@ -145,7 +144,7 @@ async fn repeated_date_bin_maps_keep_scope_fields_distinct() -> Result<()> {
         (
             crate::worker::program::relational::Key::new(),
             [
-                (names[1].into(), Some("2000-01-01 00:00:00".into())),
+                (names[0].into(), Some("2000-01-01 00:00:00".into())),
                 ("@aggregate_0".into(), Some("2".into())),
             ]
             .into(),

@@ -33,33 +33,19 @@ pub(super) fn bind(
     if matches!(signature.operation, registry::Builtin::Extract | registry::Builtin::DateTrunc) {
         validate_calendar(&arguments, signature)?;
     }
-    let value = if constant_null(&arguments)? {
-        Value::Literal(None)
-    } else {
-        Value::Call(Call {
-            operation: signature.operation,
-            input_oid: if matches!(
-                signature.operation,
-                registry::Builtin::Extract | registry::Builtin::DateTrunc
-            ) {
-                signature.inputs[1]
-            } else {
-                signature.inputs[0]
-            },
-            arguments,
-        })
-    };
+    let value = Value::Call(Call {
+        operation: signature.operation,
+        input_oid: if matches!(
+            signature.operation,
+            registry::Builtin::Extract | registry::Builtin::DateTrunc
+        ) {
+            signature.inputs[1]
+        } else {
+            signature.inputs[0]
+        },
+        arguments,
+    });
     Ok(Typed { oid: signature.result, value })
-}
-fn constant_null(arguments: &[Typed]) -> Result<bool> {
-    // PostgreSQL folds strict calls with a constant NULL after simplifying their
-    // arguments. Binding already checked constant subtrees for errors.
-    for argument in arguments {
-        if argument.is_constant() && argument.evaluate(&crate::transaction::Row::new())?.is_none() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 impl Call {
     pub(super) fn evaluate(

@@ -622,8 +622,8 @@ projection/filter, GROUP BY and window stages. The compiler replaces the inner
 sink projection with a composable output boundary and removes that boundary when
 connecting the next stage. Full joined tuples remain the internal bag identity;
 name resolution exposes only the inner SELECT labels. Joined WHERE predicates
-become explicit filters after the join, before the outer scope. They are never
-pushed onto one input when they reference both sources.
+become explicit filters after the join, before the outer scope, and move as the
+planner rewrites describe. They stay above the join when they read both sources.
 
 Positional ROWS, ROW_NUMBER and navigation stages require explicit ordering by
 all fields of the proven logical occurrence identity. Hidden keys cannot satisfy
@@ -1213,12 +1213,9 @@ match-transition and resource boundaries. Restricted EXISTS/NOT EXISTS retains
 its existing equality-only correlation rules. Hidden relation reads and volatile
 or time-dependent expressions remain unsupported.
 
-ON maps evaluate each input row eagerly. An argument error can therefore stop
-the worker even when the opposite input is empty or a later WHERE would exclude
-the row. This is the conservative error boundary already used by local maps;
-PostgreSQL optimizer-specific evaluation order is not promised. Use an explicit
-lazy CASE or an admitted derived-source filter to guard an operand. Errors retain
-the last sink/progress/ACK boundary.
+ON maps evaluate each input row that survives its filters, even when the opposite input
+is empty, as a merge join does; see the planner rewrites below. Errors retain the last
+sink/progress/ACK boundary.
 
 A row-dependent expression error does not end the worker. It keeps the failed epoch
 unpublished, reports `evaluation_blocked`, and merges later committed source transactions
@@ -1246,12 +1243,95 @@ HAVING conjuncts of a grouped query join WHERE. An IN list with two or more cons
 tests them before its computed elements. A constant operand that decides an AND or OR
 removes the rest.
 
-Some cases still differ, because PostgreSQL's order also depends on its plan. A filter
-it pushes below a join raises for rows that never match, while Pgderive filters joined
-rows, so Pgderive can publish where PostgreSQL raises. PostgreSQL flattens derived tables
-and CTEs, merges ON with WHERE, and runs side filters before computed join keys, where
-Pgderive can block instead. A constant error such as `false AND 1/0>0` or an untaken
-`CASE` branch is rejected at registration. Non-default function costs are not modeled.
+### Planner rewrites
+
+`compiler::plan` applies the rewrites that decide which rows an expression sees, after
+binding and before execution, so the same query raises where PostgreSQL does:
+
+- A filter runs at the lowest scope it can: through derived tables, computed columns and
+  inner joins to the input it reads, to the preserved side of an outer join, through
+  UNION and INTERSECT arms but no set-operation tree containing EXCEPT, and below grouping
+  or window partitions when it reads only their keys. A filter on one input raises for its
+  rows that never match.
+- An ON conjunct on an outer join's nullable input moves to that input. One on the
+  preserved input stays a join condition and sees candidate pairs only.
+- WHERE and ON conjuncts of inner joins merge, so one guards another whichever clause it
+  was written in.
+- A strict filter on a nullable input reduces the outer join: LEFT or RIGHT to inner, FULL
+  to LEFT, RIGHT or inner.
+- Equality with a constant carries across chains of equijoin keys, an IN semijoin probe or
+  an EXISTS key. An OR over a join also filters an input when every arm restricts it.
+- A top-level `IN` conjunct of WHERE is a semijoin, so filters beside it run first. Any
+  other membership test, including `NOT IN`, stays a filter that runs before costlier
+  conjuncts on its own input.
+- Unread computed columns and aggregates are dropped, except a UNION ALL whose arms differ in
+  type, which keeps every output because PostgreSQL does not flatten it. Sort expressions and
+  the keys of an unread window still run, and filters stay above that window unless they read
+  its partition keys. A global aggregate with no result read returns its row without reading
+  its input when that input flattens to one relation or a simple UNION ALL, though constants in its
+  conditions still fail; over a join or an unflattened subquery it reads the input. A membership
+  output nothing reads goes away with its subquery. Computed outputs of a flattened
+  scope run above its joins, on joined rows only; a non-strict output over a nullable
+  input stays below the join, as a PlaceHolderVar does.
+- A LEFT or RIGHT join disappears, with its nullable input's filters, when that input goes
+  unread and is one base relation keyed by the join or a subquery grouped or distinct on it.
+  Constants in the condition and in a flattened input's filters still fail.
+- A CTE that is referenced twice or declared MATERIALIZED is a boundary: no rewrite crosses
+  it, so it evaluates every output and filter as written. Any other CTE is inlined.
+- Constants fold after these rewrites, so only what survives can fail, and a failure rejects
+  the query at registration as it raises during PostgreSQL planning. `false AND 1/0>0`, an
+  untaken constant `CASE` branch, and an unread `1/0` output register, unless that output is in
+  a UNION ALL arm of one relation with no WHERE; `1/0>0 AND false` and
+  `CASE WHEN x>0 THEN 1/0 END` do not. Each written clause folds on its own, so a failure in
+  one clause is not spared by a false in another, and an aggregate FILTER does not spare its
+  argument. A materialized CTE that is referenced folds even if no reader of it runs. LIMIT 0
+  plans its input, so its constants fail, then runs nothing. A strict operator over a constant NULL folds to NULL
+  without evaluating its other operand.
+- A constant false or NULL filter makes its scope read nothing, along with a join or semijoin
+  it empties, so other filters there never run. A constant row beside it still emits. A
+  constant false or NULL ON condition of a LEFT or RIGHT join never reads the nullable input.
+- `IS NOT NULL` on a NOT NULL base column that no outer join can null is true, and `IS NULL`
+  false, as in PostgreSQL 17, including as a whole arm of an OR. An OR rejects NULLs from an
+  input when each arm is strict on some column of that input.
+- A filter stays above a set operation that casts the column to a common type in any arm.
+
+`scripts/error_order_corpus.json` pins errors and result rows for each rewrite against real
+PostgreSQL, under a merge join, the plan that reads both inputs whole as Pgderive does.
+Other plans can differ, and these differences remain:
+
+- With an index probe, or an outer join input that is empty or filtered empty, PostgreSQL can
+  skip rows of the other input that Pgderive evaluates. An incremental join has to read both
+  inputs because either can change, so Pgderive can block even where every PostgreSQL plan
+  publishes: `a LEFT JOIN b ON NOT (10/(b.k-1)=0)` raises for `b` while `a` is empty. A join order
+  PostgreSQL chooses over the written one changes which pairs a two-sided condition sees.
+- PostgreSQL adds an OR restriction only when its statistics call it selective.
+- A merge join sorts on an extra computed equality such as `3/a.other=b.id`, so it raises for
+  rows Pgderive reaches only as candidate pairs.
+- Contradictory constants over a column, such as `x=1 AND x=5`, make PostgreSQL skip the
+  query. Pgderive still evaluates what runs before that filter.
+- When filters substitute into constants, Pgderive folds them after sorting, so
+  `1/0>0 AND 2=1` reached that way empties the scope where PostgreSQL's written order raises.
+- Expressions inlined past 16 KiB stay where they were written.
+- An unread computed column of a scope with LIMIT or OFFSET still runs, because it is part
+  of that scope's total order.
+- LIMIT 0 empties a join beside it, where a merge join still sorts the other input and can
+  raise.
+- A LEFT join whose ON keys are joined with a constant false is removed like any other, so a
+  failing constant in a grouped input goes unreported where PostgreSQL keeps the join and raises.
+- A subquery under a constant false or NULL filter still folds, so its failing constants reject
+  the query at registration where PostgreSQL may never plan that subquery.
+- A set operation wrapped in a plain subquery under UNION ALL counts as a nested one, so an
+  unread global aggregate over it reads its input where PostgreSQL does not.
+- A failing constant output of a UNION ALL arm over a derived subquery, such as
+  `SELECT g.id, 1/0 FROM (SELECT DISTINCT id FROM t) g`, goes unreported when unread; PostgreSQL
+  flattens that arm and raises.
+- A membership output a query does read runs below the joins of its scope, so it can raise for
+  rows PostgreSQL's join would have removed.
+- Reads of a column under a decided operand, such as `COALESCE(1,s.v)`, keep that computed
+  column, so a failure in it can raise where PostgreSQL folds the read away.
+- COUNT(DISTINCT), and MIN, MAX and prefix-window aggregates lowered to ordered state, are
+  not dropped when unread.
+- Non-default function costs are not modeled.
 
 
 ## M6 frame-aware and derived expressions

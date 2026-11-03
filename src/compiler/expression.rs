@@ -1,4 +1,6 @@
+mod fold;
 mod quals;
+mod visit;
 use super::{ColumnRef, parser::Name, syntax::Compare};
 use super::{
     typed::{self, Operand, Typed as Scalar},
@@ -118,10 +120,11 @@ fn boolean(
         .iter()
         .map(|value| bind_ast(value, resolve, visited, depth + 1, text))
         .collect::<Result<Vec<_>>>()?;
-    match pg::BoolExprType::try_from(value.boolop)? {
+    let operator = pg::BoolExprType::try_from(value.boolop)?;
+    match operator {
         pg::BoolExprType::AndExpr | pg::BoolExprType::OrExpr => {
             ensure!(args.len() >= 2, "invalid Boolean arity");
-            normalized(args, value.boolop == i32::from(pg::BoolExprType::AndExpr))
+            normalized(args, operator == pg::BoolExprType::AndExpr)
         }
         pg::BoolExprType::NotExpr => {
             ensure!(args.len() == 1, "invalid NOT arity");
@@ -230,9 +233,18 @@ fn normalized(args: Vec<Expr>, and: bool) -> Result<Expr> {
         value => vec![value],
     });
     for value in flattened {
-        match value.constant_truth()? {
-            Some(decided) if decided != and => return Ok(value),
-            Some(_) => neutral = Some(value),
+        match value.constant_truth() {
+            // Folding stops here, so the failure raises unless an earlier operand decided.
+            Err(_) => {
+                values.push(value);
+                break;
+            }
+            // A substitution can still put a failing constant in what came before.
+            Ok(Some(decided)) if decided != and => {
+                values.push(value);
+                break;
+            }
+            Ok(Some(_)) => neutral = Some(value),
             _ if values.contains(&value) => {}
             _ => values.push(value),
         }
@@ -400,7 +412,7 @@ impl Expr {
             Self::Not(value) => value.is_constant(),
         }
     }
-    fn constant_truth(&self) -> Result<Option<bool>> {
+    pub(in crate::compiler) fn constant_truth(&self) -> Result<Option<bool>> {
         if !self.is_constant() {
             return Ok(None);
         }

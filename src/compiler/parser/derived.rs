@@ -11,7 +11,13 @@ pub(super) fn source_query(source: &pg::RangeSubselect) -> Result<(Parsed, Strin
     else {
         anyhow::bail!("derived query requires SELECT");
     };
-    let mut inner = query(inner)?;
+    let mut inner = if inner.with_clause.is_some() {
+        let mut body = (**inner).clone();
+        body.with_clause = None;
+        super::Parsed::Materialized(Box::new(query(&body)?))
+    } else {
+        query(inner)?
+    };
     if !alias.colnames.is_empty() {
         inner = Parsed::Renamed {
             inner: Box::new(inner),

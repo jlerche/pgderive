@@ -25,6 +25,7 @@ pub(in crate::compiler) enum Tree {
         probe: Box<Node>,
         alias: String,
         condition: Option<Box<Node>>,
+        semijoin: bool,
     },
     Join {
         left: Box<Self>,

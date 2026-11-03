@@ -133,14 +133,14 @@ fn nested_scopes_expose_only_inner_labels() -> Result<()> {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(filters.len(), 2);
-    assert_ne!(filters[0].0, filters[1].0);
-    assert_eq!(filters[1].1, filters[0].0);
+    let [(filter, input)] = filters.as_slice() else {
+        anyhow::bail!("stacked outer filters merge into one");
+    };
     let last = ir.nodes.last().context("missing outer output")?;
     assert!(
-        matches!(last, crate::compiler::relational::Node::Output { input, .. } if input == filters[1].0)
+        matches!(last, crate::compiler::relational::Node::Output { input, .. } if input == filter)
     );
-    let first_input = ir.nodes.iter().find(|node| matches!(node, crate::compiler::relational::Node::Partition { id, .. } if id == filters[0].1));
+    let first_input = ir.nodes.iter().find(|node| matches!(node, crate::compiler::relational::Node::Partition { id, .. } if id == input));
     assert!(first_input.is_some(), "derived predicates must follow the ranked scope");
     assert_eq!(ir.output.columns[0].label, "Value");
     for invalid in [

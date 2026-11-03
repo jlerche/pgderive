@@ -49,14 +49,20 @@ impl Analysis {
                 }
                 facts
             }
-            Node::Empty { .. } => {
-                let mut facts = Properties { maximum: Some(0), ..Properties::default() };
+            Node::Empty { input, .. } => {
+                let mut facts = self.edge(input)?.clone();
+                facts.maximum = Some(0);
                 facts.add_key(BTreeSet::new());
+                let names = facts.columns.keys().cloned().collect::<Vec<_>>();
+                facts.non_null(names);
                 facts
             }
-            Node::Filter { input, predicate, .. } => {
+            Node::Filter { id, input, predicate, .. } => {
                 let mut facts = self.edge(input)?.clone();
                 facts.non_null(predicate.non_null_columns());
+                if id.ends_with(crate::compiler::relational::ZERO_LIMIT) {
+                    facts.maximum = Some(0);
+                }
                 facts
             }
             Node::Map { id, input, computed } => mapped(self.edge(input)?.clone(), id, computed)?,
@@ -89,6 +95,7 @@ impl Analysis {
             Node::Expand { id, input, series } => expanded(self.edge(input)?, id, series)?,
             Node::TopKInput { input, .. }
             | Node::PrefixInput { input, .. }
+            | Node::Sorted { input, .. }
             | Node::SetTag { input, .. } => self.edge(input)?.clone(),
             Node::TopK { id, input, spec } => ranked(self.edge(input)?, id, spec.field.as_deref()),
             Node::PrefixWindow { id, left, spec, .. } => partition(self.edge(left)?, id, spec)?,

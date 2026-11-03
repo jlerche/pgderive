@@ -27,7 +27,8 @@ pub(super) fn expression(sql: &str) -> Result<Typed> {
             })
         },
         0,
-    )
+    )?
+    .fold()
 }
 #[test]
 fn typed_integral_widths_nulls_and_lazy_coalesce() -> Result<()> {
