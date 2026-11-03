@@ -1,6 +1,6 @@
 use super::{
     BatchCursor, BatchData, BlockCache, Entry, ObjectBatch, ObjectRef, bounded,
-    format::{Block, Pack, TARGET_OBJECT_BYTES, hash, header_bytes, pack_bytes, validate},
+    format::{Block, Pack, TARGET_OBJECT_BYTES, header_bytes, pack_bytes, validate},
 };
 use anyhow::{Context, Result, ensure};
 use object_store::ObjectStore;
@@ -337,14 +337,14 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         }
         super::work::spend(self.payload.len()).await;
         let bytes = std::mem::take(&mut self.payload);
-        let digest = hash(&bytes);
-        let pack = Pack {
-            path: format!("pgderive/pack/{digest}"),
-            bytes: u64::try_from(bytes.len())?,
-            hash: digest,
-        };
-        bounded::put(&self.store, &pack.path, bytes).await?;
+        let (pack, offset) = super::packing::put(&self.store, bytes).await?;
         let index = self.payload_pack.take().context("missing pending data pack")?;
+        for block in &mut self.blocks {
+            if block.pack == index {
+                block.offset =
+                    block.offset.checked_add(offset).context("shared pack offset overflow")?;
+            }
+        }
         *self.packs.get_mut(index).context("missing pending pack slot")? =
             Pack { path: self.data_pack_path(&pack.hash), ..pack };
         Ok(())

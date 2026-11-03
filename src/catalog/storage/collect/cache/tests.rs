@@ -182,3 +182,40 @@ async fn extents_share_verified_physical_dependencies_without_losing_packs() -> 
     assert_eq!(store.reads.load(Ordering::SeqCst), before);
     Ok(())
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn shared_payload_packing_remains_marked_until_the_last_arrangement_root_retires()
+-> Result<()> {
+    let store = Arc::new(Store::unpaced());
+    let first = Batch::from_updates([((1_i64, "first".to_owned()), 1)])?;
+    let second = Batch::from_updates([((2_i64, "second".to_owned()), -2)])?;
+    let (left, right) = crate::engine::reader::packing::scope(store.clone(), None, 2, async {
+        let (left, right) = tokio::join!(
+            ObjectBatch::write(store.clone(), &first, "left-schema", 16),
+            ObjectBatch::write(store.clone(), &second, "right-schema", 16),
+        );
+        Ok((left?, right?))
+    })
+    .await?;
+    let remote: Arc<dyn ObjectStore> = store;
+    let left_dependencies = left.dependencies(&remote).await?;
+    let right_dependencies = right.dependencies(&remote).await?;
+    assert_eq!(left_dependencies.len(), 1);
+    assert_eq!(left_dependencies, right_dependencies);
+    let shared = &left_dependencies[0];
+    let mut cache = GcCache::default();
+    let limits = GcLimits::default();
+    let both = cache.mark_snapshot(&remote, vec![left.clone(), right.clone()], limits).await?;
+    assert_eq!(both.len(), 3);
+    // The catalog supplies this union for live arrangements, retained checkpoints
+    // and protected readers. Cached dependencies must never become live roots.
+    for roots in [vec![left.clone()], vec![right.clone()], vec![left, right]] {
+        let marked = cache.mark_snapshot(&remote, roots, limits).await?;
+        assert!(marked.contains(shared));
+    }
+    let retired = cache.mark_snapshot(&remote, vec![], limits).await?;
+    assert!(!retired.contains(shared));
+    assert!(retired.is_empty());
+    assert!(cache.entries.is_empty());
+    Ok(())
+}

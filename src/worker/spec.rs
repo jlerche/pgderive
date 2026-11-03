@@ -51,7 +51,7 @@ pub struct Settings {
     pub object_prefix: String,
     /// Maximum rows in one immutable data block.
     pub block_rows: usize,
-    /// Compact and collect after this many logical transactions (1..=64).
+    /// Schedule an object checkpoint after this many unsealed runs; zero disables this trigger.
     pub maintenance_ticks: u64,
     /// Maximum consecutive failed attempts before stopping without ACK.
     pub retry_attempts: u32,
@@ -71,6 +71,12 @@ pub struct Settings {
     /// Interval for scheduling checkpoint uploads; slow I/O is bounded by backpressure.
     #[serde(default = "default_checkpoint_interval")]
     pub checkpoint_interval_ms: u64,
+    /// Minimum interval between bounded physical GC passes, independent of checkpoints.
+    #[serde(default = "default_gc_interval")]
+    pub gc_interval_ms: u64,
+    /// Force checkpoint backpressure at this published WAL distance from its checkpoint.
+    #[serde(default = "default_checkpoint_wal_bytes")]
+    pub checkpoint_wal_bytes: u64,
     /// Adaptive committed-prefix publication policy.
     #[serde(default)]
     pub epoch: super::EpochPolicy,
@@ -86,6 +92,8 @@ impl Settings {
         self.epoch.validate()?;
         ensure!(self.memtable_bytes > 0, "invalid memtable byte limit");
         ensure!((1..=60_000).contains(&self.checkpoint_interval_ms), "invalid checkpoint interval");
+        ensure!((1000..=86_400_000).contains(&self.gc_interval_ms), "invalid GC interval");
+        ensure!(self.checkpoint_wal_bytes > 0, "invalid checkpoint WAL byte threshold");
         ensure!((1..=3600).contains(&self.startup_timeout_secs), "invalid worker startup timeout");
         ensure!(identifier(&self.catalog_schema), "invalid worker catalog schema");
         ensure!(
@@ -104,7 +112,7 @@ impl Settings {
             "invalid owned worker object prefix"
         );
         ensure!(
-            (1..=65_536).contains(&self.block_rows) && (1..=64).contains(&self.maintenance_ticks),
+            (1..=65_536).contains(&self.block_rows) && (0..=64).contains(&self.maintenance_ticks),
             "invalid worker maintenance/block limits"
         );
         ensure!(
@@ -122,5 +130,41 @@ const fn default_memtable_bytes() -> usize {
     64 * 1024 * 1024
 }
 const fn default_checkpoint_interval() -> u64 {
-    5000
+    60_000
+}
+const fn default_gc_interval() -> u64 {
+    300_000
+}
+const fn default_checkpoint_wal_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+    use anyhow::Result;
+    use serde_json::json;
+
+    #[test]
+    fn independent_cadence_defaults_and_disabled_run_trigger_validate() -> Result<()> {
+        let mut settings: Settings = serde_json::from_value(json!({
+            "catalog_schema":"demo", "query_id":"totals", "sink_table":"totals",
+            "object_prefix":"demo/totals", "block_rows":4096, "maintenance_ticks":0,
+            "retry_attempts":8, "retry_delay_ms":250, "max_transactions":0,
+            "query":{"sql":"SELECT * FROM source"}
+        }))?;
+        settings.validate()?;
+        assert_eq!(settings.checkpoint_interval_ms, 60_000);
+        assert_eq!(settings.gc_interval_ms, 300_000);
+        assert_eq!(settings.checkpoint_wal_bytes, 64 * 1024 * 1024);
+        settings.gc_interval_ms = 0;
+        assert!(settings.validate().is_err());
+        settings.gc_interval_ms = 300_000;
+        settings.checkpoint_wal_bytes = 0;
+        assert!(settings.validate().is_err());
+        settings.checkpoint_wal_bytes = 1;
+        settings.maintenance_ticks = 65;
+        assert!(settings.validate().is_err());
+        Ok(())
+    }
 }

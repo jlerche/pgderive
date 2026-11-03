@@ -9,6 +9,7 @@ mod hybrid;
 pub use hybrid::{CacheConfig, EncodedCache};
 mod index;
 mod object;
+pub(crate) mod packing;
 mod reachability;
 mod slices;
 mod streaming;
@@ -144,3 +145,7 @@ mod point_tests;
 #[cfg(test)]
 #[path = "tests/cooperative.rs"]
 mod cooperative_tests;
+
+#[cfg(test)]
+#[path = "tests/shared_packing.rs"]
+mod shared_packing_tests;

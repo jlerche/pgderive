@@ -135,7 +135,8 @@ async fn retry(
     }
 }
 fn permanent(error: &anyhow::Error) -> bool {
-    error.is::<crate::engine::execution::CapacityExceeded>()
+    crate::storage::operation_budget_exhausted(error)
+        || error.is::<crate::engine::execution::CapacityExceeded>()
         || error.downcast_ref::<std::io::Error>().is_some_and(|error| {
             matches!(
                 error.kind(),
@@ -249,11 +250,16 @@ async fn consume(
     let interval = Duration::from_millis(settings.checkpoint_interval_ms);
     let mut deadline = tokio::time::Instant::now() + interval;
     loop {
+        open.collector.start(
+            open.catalog.clone(),
+            open.store.clone(),
+            (settings.health.operation_timeout_secs, settings.gc_interval_ms),
+            open.query.workspaces(),
+        )?;
         let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
         let pending = durable.checkpoint_end < durable.end;
         let stopping = count.0.stopping(settings, *stop.borrow());
-        if stopping || super::checkpoint::must_drain(open, pending, durable.stored.checkpoint.time)
-        {
+        if stopping || super::checkpoint::must_drain(open, &durable) {
             count.1.record(open, "maintenance")?;
             timeout(
                 Duration::from_secs(settings.health.operation_timeout_secs),
@@ -416,6 +422,7 @@ async fn next_event(
             stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
             Ok(Event::Checkpoint)
         }
+        ()=tokio::time::sleep_until(open.collector.deadline()), if open.collector.waiting() => Ok(Event::Wake),
         collection=open.collector.completed() => {collection?; Ok(Event::Wake)}
         transaction=epochs.collector.recv(stream) => Ok(Event::Transaction(transaction?)),
     }

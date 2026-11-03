@@ -26,9 +26,16 @@ impl Drop for Pending {
         self.task.abort();
     }
 }
-pub(super) fn must_drain(open: &Open, pending: bool, checkpoint_time: u64) -> bool {
+pub(super) fn must_drain(open: &Open, durable: &crate::catalog::Durable) -> bool {
     let suffix_runs = if open.checkpoint.is_some() { open.query.unsealed_run_count() } else { 0 };
-    pending && bounded_work(open.query.run_count(), suffix_runs, open.query.time(), checkpoint_time)
+    durable.checkpoint_end < durable.end
+        && (bounded_work(
+            open.query.run_count(),
+            suffix_runs,
+            open.query.time(),
+            durable.stored.checkpoint.time,
+        ) || durable.end.bytes_since(durable.checkpoint_end)
+            >= open.settings.checkpoint_wal_bytes)
 }
 const fn bounded_work(runs: usize, suffix_runs: usize, time: u64, checkpoint_time: u64) -> bool {
     // Bound replay journal work independently of physical memory-run merging.
@@ -64,7 +71,10 @@ pub(super) fn due(open: &Open, pending: bool, deadline: tokio::time::Instant) ->
     Ok(pending
         && open.checkpoint.is_none()
         && (tokio::time::Instant::now() >= deadline
-            || u64::try_from(open.query.unsealed_run_count())? >= open.settings.maintenance_ticks))
+            || run_trigger(open.query.unsealed_run_count(), open.settings.maintenance_ticks)?))
+}
+fn run_trigger(unsealed: usize, threshold: u64) -> Result<bool> {
+    Ok(threshold != 0 && u64::try_from(unsealed)? >= threshold)
 }
 pub(super) async fn start(open: &mut Open, checkpoint_time: u64) -> Result<()> {
     ensure!(open.checkpoint.is_none(), "checkpoint already in flight");
@@ -114,15 +124,9 @@ pub(super) async fn complete(open: &mut Open, uploaded: Uploaded) -> Result<()> 
         .context("checkpoint upload protection missing")?
         .published(&mut open.session.client, &open.writer, open.query.plan(), checkpoint)
         .await?;
-    open.collector.start(
-        open.catalog.clone(),
-        open.store.clone(),
-        open.settings.health.operation_timeout_secs,
-        open.query.workspaces(),
-    )?;
     let mut event = serde_json::json!({"event":"maintenance","time":checkpoint.time,
         "published_time":open.query.time(),"epoch":open.writer.epoch(),
-        "previous_runs":pending.runs,"collection":"background","upload":"background","service":service});
+        "previous_runs":pending.runs,"collection":"independent","upload":"background","service":service});
     if open.settings.phase_metrics {
         event["merges"] = serde_json::to_value(open.query.cache_stats()?.merges)?;
         event["elapsed_us"] = serde_json::to_value(pending.started.elapsed().as_micros())?;

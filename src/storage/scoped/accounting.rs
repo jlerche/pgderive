@@ -15,6 +15,7 @@ pub struct ServiceStats {
     pub(crate) foreground: Report,
     pub(crate) maintenance: Report,
     pub(crate) admission: WorkspaceStats,
+    pub(crate) operation_budget: Option<crate::storage::budget::Stats>,
 }
 impl Accounting {
     pub(super) fn request(&self) -> Request {
@@ -27,6 +28,7 @@ impl Accounting {
             foreground: self.foreground.snapshot(),
             maintenance: self.maintenance.snapshot(),
             admission: pool.stats(),
+            operation_budget: None,
         }
     }
 }

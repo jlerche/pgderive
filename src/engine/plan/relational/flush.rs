@@ -102,10 +102,19 @@ impl<K: BatchData, V: BatchData> Execution<K, V> {
             }
         });
         // Finish every sibling before reporting failure: upload protection covers them all.
-        let completed = stream::iter(uploads)
-            .buffer_unordered(self.workspaces.capacity())
-            .collect::<Vec<_>>()
-            .await;
+        let store = self.writers.values().next().context("missing upload writer")?.store();
+        let completed = crate::engine::reader::packing::scope(
+            store,
+            namespace,
+            self.workspaces.capacity(),
+            async {
+                Ok(stream::iter(uploads)
+                    .buffer_unordered(self.workspaces.capacity())
+                    .collect::<Vec<_>>()
+                    .await)
+            },
+        )
+        .await?;
         Ok((RelationalState { entries: completed.into_iter().collect::<Result<_>>()? }, output))
     }
     pub(super) fn promote(
@@ -206,3 +215,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
 #[cfg(test)]
 #[path = "flush_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "packing_tests.rs"]
+mod packing_tests;

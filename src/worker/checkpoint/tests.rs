@@ -36,3 +36,21 @@ async fn virtual_checkpoint_timeout_retains_unresolved_upload_and_aborts_on_drop
     assert!(aborted.is_finished());
     Ok(())
 }
+
+#[test]
+fn run_count_trigger_can_be_disabled_without_changing_hard_replay_limits() -> anyhow::Result<()> {
+    assert!(!super::run_trigger(120, 0)?);
+    assert!(!super::run_trigger(15, 16)?);
+    assert!(super::run_trigger(16, 16)?);
+    assert!(super::bounded_work(122, 120, 120, 0));
+    Ok(())
+}
+
+#[test]
+fn wal_distance_does_not_conflate_addresses_with_epoch_time() -> anyhow::Result<()> {
+    let before: crate::catalog::Lsn = "A/FFFFFFF0".parse()?;
+    let after: crate::catalog::Lsn = "B/10".parse()?;
+    assert_eq!(after.bytes_since(before), 32);
+    assert_eq!(before.bytes_since(after), 0);
+    Ok(())
+}

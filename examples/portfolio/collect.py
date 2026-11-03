@@ -20,6 +20,8 @@ from queries import QUERIES
 ROOT = pathlib.Path(os.environ.get('DEMO_ROOT', pathlib.Path(__file__).resolve().parents[1]))
 PRIVATE = ROOT / 'metrics/sample.json'
 PUBLIC = ROOT / 'stack-r2/web/metrics.json'
+INVENTORY_INTERVAL_SECONDS = 3600
+INVENTORY_MAX_PAGES = 8
 def inventory(config):
     host = urllib.parse.urlsplit(config['object_store']['endpoint']).netloc
     bucket = config['object_store']['bucket']
@@ -27,7 +29,7 @@ def inventory(config):
     credentials = json.loads((ROOT / 'stack-r2/r2-credentials.json').read_text())
     count = size = 0
     params = {'list-type': '2', 'prefix': prefix.rstrip('/')+'/'}
-    while True:
+    for _page in range(INVENTORY_MAX_PAGES):
         now = datetime.datetime.now(datetime.timezone.utc)
         stamp, day = now.strftime('%Y%m%dT%H%M%SZ'), now.strftime('%Y%m%d')
         query = urllib.parse.urlencode(sorted(params.items()), quote_via=urllib.parse.quote, safe='~')
@@ -53,6 +55,7 @@ def inventory(config):
         if page.findtext('s:IsTruncated', namespaces=ns) != 'true':
             return {'observed_at': time.time(), 'objects': count, 'bytes': size}
         params['continuation-token'] = page.findtext('s:NextContinuationToken', namespaces=ns)
+    raise RuntimeError('monitor inventory page budget exceeded; increase interval or inspect manually')
 
 def log_samples(output, event, field='elapsed_ms'):
     values = []
@@ -205,7 +208,13 @@ def collect_query(spec, previous, sql, observer, generator, config):
     if result.get('latency') and not result['latency']['observer_healthy']:
         result['errors'].append('source-to-sink observer '+result['latency'].get('observer_status', 'unavailable'))
     result['state'] = previous.get('state')
-    if not result['state'] or time.time()-result['state']['observed_at'] >= 60:
+    now = time.time()
+    last_attempt = previous.get('inventory_attempted_at', (result['state'] or {}).get('observed_at', 0))
+    result['inventory_attempted_at'] = last_attempt
+    if now-last_attempt >= INVENTORY_INTERVAL_SECONDS or not last_attempt:
+        # Persist attempts as well as successes: an outage must not turn the
+        # metrics timer into an unbounded Class A retry loop.
+        result['inventory_attempted_at'] = now
         capture('state', lambda: inventory(config))
     return result
 

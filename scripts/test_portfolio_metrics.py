@@ -124,6 +124,22 @@ class PortfolioMetrics(unittest.TestCase):
         self.assertEqual(result['errors'], ['worker unavailable: RuntimeError'])
         self.assertEqual(result['flow']['transactions'], 7)
 
+    def test_failed_inventory_is_throttled_without_freshening_last_success(self):
+        collect = module('collect')
+        spec = {'schema': 'demo', 'table': 'products', 'container': 'engine'}
+        prior = {'state': {'observed_at': 1, 'bytes': 7}}
+        generator = {'transactions': 0, 'source_changes': 0}
+        with mock.patch.object(collect.time, 'time', return_value=4000), \
+             mock.patch.object(collect, 'worker_memory', return_value={}), \
+             mock.patch.object(collect, 'latency', return_value={'observer_healthy': True}), \
+             mock.patch.object(collect, 'inventory', side_effect=RuntimeError('offline')) as inventory:
+            first = collect.collect_query(spec, prior, lambda _: '{}', {}, generator, {})
+            second = collect.collect_query(spec, first, lambda _: '{}', {}, generator, {})
+        self.assertEqual(inventory.call_count, 1)
+        self.assertEqual(first['state'], prior['state'])
+        self.assertEqual(second['state']['observed_at'], 1)
+        self.assertEqual(second['inventory_attempted_at'], 4000)
+
     def test_history_is_per_query_and_omits_stale_values_without_fabricating_zero(self):
         history = module('history')
         with tempfile.TemporaryDirectory() as directory:

@@ -41,6 +41,9 @@ impl<K: BatchData, V: BatchData> Arrangement<K, V> {
         self.cache = cache;
         self
     }
+    pub(crate) fn store(&self) -> Arc<dyn ObjectStore> {
+        self.store.clone()
+    }
     pub(crate) fn cache(&self) -> Arc<BlockCache> {
         self.cache.clone()
     }

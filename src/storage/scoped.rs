@@ -11,6 +11,7 @@ use object_store::{
 };
 use std::sync::Arc;
 mod accounting;
+use super::budget::{Budget, Operation};
 use accounting::Accounting;
 pub use accounting::ServiceStats;
 
@@ -36,6 +37,7 @@ pub(super) struct Scoped {
     requests: Arc<Workspaces>,
     accounting: Accounting,
     prefix: Path,
+    budget: Option<Arc<Budget>>,
 }
 impl Scoped {
     pub(super) fn new(
@@ -50,7 +52,18 @@ impl Scoped {
             prefix,
             requests: Arc::new(Workspaces::new(requests)?),
             accounting: Accounting::default(),
+            budget: None,
         })
+    }
+    pub(super) fn with_budget(mut self, budget: Option<Arc<Budget>>) -> Self {
+        self.budget = budget;
+        self
+    }
+    async fn reserve(&self, operation: Operation) -> Result<()> {
+        if let Some(budget) = &self.budget {
+            budget.reserve(operation).await?;
+        }
+        Ok(())
     }
 }
 fn guarded<T: Send + 'static>(
@@ -70,7 +83,9 @@ impl std::fmt::Display for Scoped {
 #[async_trait]
 impl PageStore for Scoped {
     fn service_stats(&self) -> Option<ServiceStats> {
-        Some(self.accounting.stats(&self.requests))
+        let mut stats = self.accounting.stats(&self.requests);
+        stats.operation_budget = self.budget.as_ref().and_then(|budget| budget.stats());
+        Some(stats)
     }
     async fn page(
         &self,
@@ -85,6 +100,7 @@ impl PageStore for Scoped {
         } else {
             format!("{}/{prefix}", self.prefix)
         };
+        self.reserve(Operation::List).await?;
         let mut page = self.pages.page(&prefix, token, limit).await?;
         for object in &mut page.result.objects {
             let location = object
@@ -105,6 +121,7 @@ impl ObjectStore for Scoped {
     async fn put_opts(&self, path: &Path, data: PutPayload, opts: PutOptions) -> Result<PutResult> {
         let request = self.accounting.request();
         let _permit = request.permit(&self.requests).await?;
+        self.reserve(Operation::Put).await?;
         let bytes = data.content_length();
         request.writing(bytes);
         let result = self.inner.put_opts(path, data, opts).await;
@@ -194,6 +211,14 @@ impl ObjectStore for Scoped {
         .boxed()
     }
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        if self.budget.is_some() {
+            return futures_util::stream::once(async {
+                Err(object_store::Error::NotSupported {
+                    source: "operation budget requires explicit page() listing".into(),
+                })
+            })
+            .boxed();
+        }
         let prefix = prefix.cloned();
         let inner = self.inner.clone();
         let requests = self.requests.clone();
@@ -206,6 +231,11 @@ impl ObjectStore for Scoped {
         .boxed()
     }
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        if self.budget.is_some() {
+            return Err(object_store::Error::NotSupported {
+                source: "operation budget requires explicit page() listing".into(),
+            });
+        }
         let request = self.accounting.request();
         let _permit = request.permit(&self.requests).await?;
         self.inner.list_with_delimiter(prefix).await
@@ -213,6 +243,7 @@ impl ObjectStore for Scoped {
     async fn copy_opts(&self, from: &Path, to: &Path, opts: CopyOptions) -> Result<()> {
         let request = self.accounting.request();
         let _permit = request.permit(&self.requests).await?;
+        self.reserve(Operation::Copy).await?;
         self.inner.copy_opts(from, to, opts).await
     }
 }

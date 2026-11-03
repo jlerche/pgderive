@@ -20,6 +20,7 @@ type CollectionTask =
 pub(super) struct Collector {
     session: Option<Arc<Mutex<CollectionSession>>>,
     task: Option<CollectionTask>,
+    next: Option<tokio::time::Instant>,
 }
 struct CollectionSession {
     sql: Session,
@@ -33,20 +34,29 @@ impl Collector {
                 roots: GcCache::default(),
             }))),
             task: None,
+            next: Some(tokio::time::Instant::now()),
         })
     }
 
+    pub(super) fn deadline(&self) -> tokio::time::Instant {
+        self.next.unwrap_or_else(tokio::time::Instant::now)
+    }
+    pub(super) const fn waiting(&self) -> bool {
+        self.task.is_none()
+    }
     pub(super) fn start(
         &mut self,
         catalog: Catalog,
         store: Arc<dyn crate::storage::PageStore>,
-        seconds: u64,
+        timing: (u64, u64),
         workspaces: Arc<crate::engine::execution::Workspaces>,
     ) -> Result<()> {
-        if self.task.is_some() {
+        if self.task.is_some() || tokio::time::Instant::now() < self.deadline() {
             return Ok(());
         }
+        let (seconds, interval_ms) = timing;
         let session = self.session.as_ref().context("collector has no SQL session")?.clone();
+        self.next = Some(tokio::time::Instant::now() + Duration::from_millis(interval_ms));
         self.task = Some(tokio::spawn(async move {
             timeout(Duration::from_secs(seconds), async move {
                 let _workspace = workspaces.background().await?;

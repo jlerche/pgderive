@@ -74,6 +74,7 @@ def object_kill(output, command, index, restoring, collecting=False):
     try:
         if collecting:
             fixture.environment['PGDERIVE__WORKER__MAINTENANCE_TICKS'] = '1'
+            fixture.environment['PGDERIVE__WORKER__GC_INTERVAL_MS'] = '1000'
             fixture.environment['PGDERIVE__EXECUTION__WORKSPACE_SLOTS'] = '2'
             fixture.environment['PGDERIVE__EXECUTION__OBJECT_REQUESTS'] = '2'
             arm(gate, 'POST') # object_store batches GC via S3 DeleteObjects

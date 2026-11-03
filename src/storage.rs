@@ -6,8 +6,10 @@ use object_store::{
 use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc};
 use url::Url;
+mod budget;
 mod credentials;
 mod scoped;
+pub use budget::exhausted as operation_budget_exhausted;
 pub use scoped::PageStore;
 
 #[derive(Clone, Deserialize)]
@@ -20,10 +22,15 @@ pub struct Storage {
     #[serde(default)]
     ca_file: Option<PathBuf>,
     credentials_file: PathBuf,
+    #[serde(default)]
+    operation_budget: Option<Box<budget::Config>>,
 }
 impl Storage {
     pub fn validate(&self) -> Result<()> {
         let endpoint = self.endpoint()?;
+        if let Some(budget) = &self.operation_budget {
+            budget.validate()?;
+        }
         ensure!(
             (3..=63).contains(&self.bucket.len())
                 && self.bucket.bytes().all(|c| c.is_ascii_lowercase()
@@ -108,14 +115,25 @@ impl Storage {
         }
         let raw = Arc::new(builder.build()?);
         let inner = Arc::new(PrefixStore::new(raw.clone(), prefix));
-        Ok(Arc::new(scoped::Scoped::new(
-            inner,
-            raw,
-            object_store::path::Path::from(prefix),
-            requests,
-        )?))
+        let budget =
+            self.operation_budget.clone().map(|config| budget::Budget::new(*config)).transpose()?;
+        Ok(Arc::new(
+            scoped::Scoped::new(inner, raw, object_store::path::Path::from(prefix), requests)?
+                .with_budget(budget),
+        ))
     }
 }
 #[cfg(test)]
 #[path = "storage/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub fn budgeted_test_store(ledger: PathBuf, limit: u64) -> Result<Arc<dyn PageStore>> {
+    let raw = Arc::new(object_store::memory::InMemory::new());
+    let budget =
+        budget::Budget::new(budget::Config { ledger, class_a_limit: limit, window_secs: 3600 })?;
+    Ok(Arc::new(
+        scoped::Scoped::new(raw.clone(), raw, object_store::path::Path::default(), 8)?
+            .with_budget(Some(budget)),
+    ))
+}

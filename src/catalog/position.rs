@@ -5,6 +5,13 @@ use std::{fmt, str::FromStr};
 /// `PostgreSQL` WAL address, independent of the engine's logical clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Lsn(u64);
+impl Lsn {
+    /// WAL address distance, including unrelated writes; never a logical epoch count.
+    #[must_use]
+    pub const fn bytes_since(self, earlier: Self) -> u64 {
+        self.0.saturating_sub(earlier.0)
+    }
+}
 impl FromStr for Lsn {
     type Err = anyhow::Error;
     fn from_str(value: &str) -> Result<Self> {

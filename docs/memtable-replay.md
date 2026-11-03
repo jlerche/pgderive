@@ -50,10 +50,15 @@ At P, the exact transaction identity and reconstructed logical time must agree
 with PostgreSQL before readiness. New transactions then publish normally.
 
 The worker starts an upload when the unsealed memory-run count reaches
-`maintenance_ticks` or after `checkpoint_interval_ms` (default 5000 ms).
+`maintenance_ticks` (zero disables this trigger) or after
+`checkpoint_interval_ms` (default 60,000 ms). Independent physical collection
+uses `gc_interval_ms` (default 300,000 ms), including idle periods; a checkpoint
+does not itself schedule a listing. See [request cadence](request-cadence.md).
 Retained durable object roots do not retrigger uploads. This is a scheduling
 interval, not a hard bound on checkpoint age during slow I/O.
-Memory/run pressure waits for checkpoint completion. Graceful stop drains the
+Memory/run pressure and `checkpoint_wal_bytes` (default 64 MiB of published
+WAL address distance, with up to one epoch overshoot) wait for checkpoint completion.
+Graceful stop drains the
 in-flight checkpoint and then any newer suffix until C=P. `memtable_bytes`
 (default 64 MiB) caps retained serialized payload plus structural charges across
 arrangements. It is an estimate, not an RSS limit; temporary computations,

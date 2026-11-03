@@ -25,7 +25,7 @@ async fn cancelling_wait_retains_owned_task_and_shutdown_drains_it() -> Result<(
             crate::engine::execution::service::Report::default(),
         ))
     });
-    let mut collector = Collector { task: Some(task), session: None };
+    let mut collector = Collector { task: Some(task), session: None, next: None };
     assert!(timeout(Duration::from_millis(1), collector.completed()).await.is_err());
     assert!(collector.task.is_some());
     send.send(()).map_err(|()| anyhow::anyhow!("collector receiver closed"))?;
@@ -40,6 +40,7 @@ async fn collection_failure_is_consumed_once() -> Result<()> {
     let mut collector = Collector {
         task: Some(tokio::spawn(async { anyhow::bail!("injected collection failure") })),
         session: None,
+        next: None,
     };
     assert!(collector.completed().await.is_err());
     assert!(collector.task.is_none());
@@ -72,9 +73,23 @@ async fn dropping_collector_aborts_owned_task() -> Result<()> {
         let _closed = started.send(());
         std::future::pending::<Result<(Collection, usize, crate::engine::execution::service::Report)>>().await
     });
-    let collector = Collector { task: Some(task), session: None };
+    let collector = Collector { task: Some(task), session: None, next: None };
     ready.await?;
     drop(collector);
     timeout(Duration::from_secs(1), stopped).await??;
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn collection_cadence_is_independent_of_checkpoint_and_inflight_work() -> Result<()> {
+    let now = tokio::time::Instant::now();
+    let mut collector = Collector::default();
+    collector.next = Some(now + Duration::from_mins(5));
+    assert!(collector.waiting());
+    assert!(tokio::time::Instant::now() < collector.deadline());
+    tokio::time::advance(Duration::from_secs(299)).await;
+    assert!(tokio::time::Instant::now() < collector.deadline());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(tokio::time::Instant::now(), collector.deadline());
     Ok(())
 }

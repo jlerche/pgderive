@@ -1,0 +1,439 @@
+{
+  "source_artifact": "artifacts/request-cadence/totals-top10-budget-20261103/comparison.json",
+  "live_demo_used": false,
+  "cases": {
+    "five-second-control": {
+      "passed": true,
+      "query_workers": 2,
+      "same_sources": true,
+      "source_updates_per_worker": 13,
+      "input_interval_seconds": 5,
+      "publication_latency_seconds": {
+        "max": 0.0696338569978252,
+        "samples": [
+          0.030689815001096576,
+          0.032600320992060006,
+          0.0300291909952648,
+          0.03615093004191294,
+          0.03277701704064384,
+          0.0696338569978252,
+          0.04074429901083931,
+          0.030332125024870038,
+          0.03482145699672401,
+          0.032629124994855374,
+          0.03231149195926264,
+          0.03773039800580591,
+          0.03020083496812731
+        ]
+      },
+      "checkpoint_interval_ms": 5000,
+      "maintenance_ticks": 16,
+      "gc_interval_ms": 5000,
+      "before_shutdown": [
+        {
+          "query": "grouped",
+          "published_time": 14,
+          "checkpoint_time": 12,
+          "ack_safe": true
+        },
+        {
+          "query": "grouped",
+          "published_time": 14,
+          "checkpoint_time": 12,
+          "ack_safe": true
+        }
+      ],
+      "after_shutdown": [
+        {
+          "query": "grouped",
+          "published_time": 14,
+          "checkpoint_time": 14,
+          "ack_safe": true
+        },
+        {
+          "query": "grouped",
+          "published_time": 14,
+          "checkpoint_time": 14,
+          "ack_safe": true
+        }
+      ],
+      "checkpoint_events_including_shutdown": 16,
+      "worker_retries": 0,
+      "request_attempts_during_cadence": {
+        "GET": 82,
+        "PUT": 79,
+        "HEAD": 56,
+        "POST": 8,
+        "listing_pages": 26,
+        "conditional_put_412": 0,
+        "http_5xx": 0,
+        "class_a_attempts": 105
+      },
+      "request_attempts_including_shutdown_reopen": {
+        "GET": 113,
+        "PUT": 88,
+        "HEAD": 76,
+        "POST": 8,
+        "listing_pages": 27,
+        "conditional_put_412": 0,
+        "http_5xx": 0,
+        "class_a_attempts": 115
+      },
+      "request_attempts_including_bootstrap_shutdown_reopen": {
+        "PUT": 108,
+        "HEAD": 96,
+        "GET": 145,
+        "POST": 8,
+        "listing_pages": 29,
+        "conditional_put_412": 0,
+        "http_5xx": 0,
+        "class_a_attempts": 137
+      },
+      "scope": "current packing on both controls; aggregate and top10 workers share tiny isolated sources; cadence-only comparison, no live workload or compaction-rate claim",
+      "shared_budget_after_cold_reopen": {
+        "window_start": 1793664000,
+        "window_secs": 86400,
+        "class_a_limit": 10000,
+        "used": 137,
+        "remaining": 9863,
+        "puts": 108,
+        "listing_pages": 29,
+        "copies": 0
+      },
+      "budget_restart_retains_usage": true,
+      "compaction": {
+        "selected_runs_including_shutdown": 64,
+        "checkpoints_with_selected_runs_including_shutdown": 8,
+        "all_requests_in_those_checkpoints_including_shutdown": 44,
+        "scope": "checkpoint service includes flush, compaction, reads and writes; not an isolated PUT count for compaction alone"
+      }
+    },
+    "minute-checkpoint": {
+      "passed": true,
+      "query_workers": 2,
+      "same_sources": true,
+      "source_updates_per_worker": 13,
+      "input_interval_seconds": 5,
+      "publication_latency_seconds": {
+        "max": 0.04498825303744525,
+        "samples": [
+          0.03179054299835116,
+          0.030856841010972857,
+          0.03215960296802223,
+          0.03211358602857217,
+          0.03087214898550883,
+          0.030807256000116467,
+          0.029907307995017618,
+          0.030998939997516572,
+          0.04498825303744525,
+          0.031599880021531135,
+          0.032310258015058935,
+          0.028430404025129974,
+          0.035294322995468974
+        ]
+      },
+      "checkpoint_interval_ms": 60000,
+      "maintenance_ticks": 0,
+      "gc_interval_ms": 300000,
+      "before_shutdown": [
+        {
+          "query": "grouped",
+          "published_time": 14,
+          "checkpoint_time": 13,
+          "ack_safe": true
+        },
+        {
+          "query": "grouped",
+          "published_time": 14,
+          "checkpoint_time": 13,
+          "ack_safe": true
+        }
+      ],
+      "after_shutdown": [
+        {
+          "query": "grouped",
+          "published_time": 14,
+          "checkpoint_time": 14,
+          "ack_safe": true
+        },
+        {
+          "query": "grouped",
+          "published_time": 14,
+          "checkpoint_time": 14,
+          "ack_safe": true
+        }
+      ],
+      "checkpoint_events_including_shutdown": 4,
+      "worker_retries": 0,
+      "request_attempts_during_cadence": {
+        "PUT": 12,
+        "listing_pages": 0,
+        "conditional_put_412": 0,
+        "http_5xx": 0,
+        "class_a_attempts": 12
+      },
+      "request_attempts_including_shutdown_reopen": {
+        "PUT": 22,
+        "HEAD": 20,
+        "GET": 31,
+        "listing_pages": 1,
+        "conditional_put_412": 0,
+        "http_5xx": 0,
+        "class_a_attempts": 23
+      },
+      "request_attempts_including_bootstrap_shutdown_reopen": {
+        "PUT": 42,
+        "HEAD": 40,
+        "GET": 63,
+        "listing_pages": 3,
+        "conditional_put_412": 0,
+        "http_5xx": 0,
+        "class_a_attempts": 45
+      },
+      "scope": "current packing on both controls; aggregate and top10 workers share tiny isolated sources; cadence-only comparison, no live workload or compaction-rate claim",
+      "shared_budget_after_cold_reopen": {
+        "window_start": 1793664000,
+        "window_secs": 86400,
+        "class_a_limit": 10000,
+        "used": 45,
+        "remaining": 9955,
+        "puts": 42,
+        "listing_pages": 3,
+        "copies": 0
+      },
+      "budget_restart_retains_usage": true,
+      "compaction": {
+        "selected_runs_including_shutdown": 0,
+        "checkpoints_with_selected_runs_including_shutdown": 0,
+        "all_requests_in_those_checkpoints_including_shutdown": 0,
+        "scope": "checkpoint service includes flush, compaction, reads and writes; not an isolated PUT count for compaction alone"
+      }
+    }
+  },
+  "exact_demo": {
+    "source_artifact": "artifacts/request-cadence/exact-demo-20261103/comparison.json",
+    "live_demo_used": false,
+    "cases": {
+      "five-second-control": {
+        "passed": true,
+        "query_workers": 2,
+        "same_sources": true,
+        "source_updates_per_worker": 13,
+        "input_interval_seconds": 5,
+        "publication_latency_seconds": {
+          "max": 0.04028250899864361,
+          "samples": [
+            0.03248237702064216,
+            0.04028250899864361,
+            0.03385478199925274,
+            0.03445010201539844,
+            0.03841154801193625,
+            0.0333422789699398,
+            0.0327303180238232,
+            0.033257087983656675,
+            0.03471400198759511,
+            0.033029716985765845,
+            0.03517640003701672,
+            0.03404095600126311,
+            0.036350228008814156
+          ]
+        },
+        "checkpoint_interval_ms": 5000,
+        "maintenance_ticks": 16,
+        "gc_interval_ms": 5000,
+        "before_shutdown": [
+          {
+            "query": "grouped",
+            "published_time": 14,
+            "checkpoint_time": 13,
+            "ack_safe": true
+          },
+          {
+            "query": "grouped",
+            "published_time": 14,
+            "checkpoint_time": 13,
+            "ack_safe": true
+          }
+        ],
+        "after_shutdown": [
+          {
+            "query": "grouped",
+            "published_time": 14,
+            "checkpoint_time": 14,
+            "ack_safe": true
+          },
+          {
+            "query": "grouped",
+            "published_time": 14,
+            "checkpoint_time": 14,
+            "ack_safe": true
+          }
+        ],
+        "checkpoint_events_including_shutdown": 16,
+        "worker_retries": 0,
+        "request_attempts_during_cadence": {
+          "GET": 89,
+          "HEAD": 61,
+          "PUT": 84,
+          "POST": 6,
+          "listing_pages": 27,
+          "conditional_put_412": 0,
+          "http_5xx": 0,
+          "class_a_attempts": 111
+        },
+        "request_attempts_including_shutdown_reopen": {
+          "GET": 117,
+          "HEAD": 79,
+          "PUT": 94,
+          "POST": 6,
+          "listing_pages": 28,
+          "conditional_put_412": 0,
+          "http_5xx": 0,
+          "class_a_attempts": 122
+        },
+        "request_attempts_including_bootstrap_shutdown_reopen": {
+          "PUT": 114,
+          "HEAD": 99,
+          "GET": 147,
+          "POST": 6,
+          "listing_pages": 29,
+          "conditional_put_412": 1,
+          "http_5xx": 0,
+          "class_a_attempts": 143
+        },
+        "scope": "production storefront aggregate-before-catalog TOTALS_SQL and TOP10_SQL; 20-product production seed and five-second generator phases; isolated sources, SQL and shared independent memory oracles; current packing in both controls",
+        "demo_workload": {
+          "products": 20,
+          "transactions": 13,
+          "catalog_and_fact_changes_same_transaction": true,
+          "native_and_memory_oracles": true
+        },
+        "shared_budget_after_cold_reopen": {
+          "window_start": 1793664000,
+          "window_secs": 86400,
+          "class_a_limit": 10000,
+          "used": 143,
+          "remaining": 9857,
+          "puts": 114,
+          "listing_pages": 29,
+          "copies": 0
+        },
+        "budget_restart_retains_usage": true,
+        "compaction": {
+          "selected_runs_including_shutdown": 70,
+          "checkpoints_with_selected_runs_including_shutdown": 6,
+          "all_requests_in_those_checkpoints_including_shutdown": 39,
+          "scope": "checkpoint service includes flush, compaction, reads and writes; not an isolated PUT count for compaction alone"
+        }
+      },
+      "minute-checkpoint": {
+        "passed": true,
+        "query_workers": 2,
+        "same_sources": true,
+        "source_updates_per_worker": 13,
+        "input_interval_seconds": 5,
+        "publication_latency_seconds": {
+          "max": 0.036504399962723255,
+          "samples": [
+            0.036504399962723255,
+            0.033408836054150015,
+            0.03242805495392531,
+            0.03587082802550867,
+            0.03365184698486701,
+            0.03354853100609034,
+            0.03297823900356889,
+            0.03296706802211702,
+            0.03258822800125927,
+            0.03259463101858273,
+            0.03143000102136284,
+            0.03408384701469913,
+            0.0356388270156458
+          ]
+        },
+        "checkpoint_interval_ms": 60000,
+        "maintenance_ticks": 0,
+        "gc_interval_ms": 300000,
+        "before_shutdown": [
+          {
+            "query": "grouped",
+            "published_time": 14,
+            "checkpoint_time": 14,
+            "ack_safe": true
+          },
+          {
+            "query": "grouped",
+            "published_time": 14,
+            "checkpoint_time": 14,
+            "ack_safe": true
+          }
+        ],
+        "after_shutdown": [
+          {
+            "query": "grouped",
+            "published_time": 14,
+            "checkpoint_time": 14,
+            "ack_safe": true
+          },
+          {
+            "query": "grouped",
+            "published_time": 14,
+            "checkpoint_time": 14,
+            "ack_safe": true
+          }
+        ],
+        "checkpoint_events_including_shutdown": 2,
+        "worker_retries": 0,
+        "request_attempts_during_cadence": {
+          "GET": 1,
+          "PUT": 14,
+          "listing_pages": 1,
+          "conditional_put_412": 0,
+          "http_5xx": 0,
+          "class_a_attempts": 15
+        },
+        "request_attempts_including_shutdown_reopen": {
+          "GET": 26,
+          "PUT": 14,
+          "HEAD": 16,
+          "listing_pages": 2,
+          "conditional_put_412": 0,
+          "http_5xx": 0,
+          "class_a_attempts": 16
+        },
+        "request_attempts_including_bootstrap_shutdown_reopen": {
+          "PUT": 34,
+          "HEAD": 37,
+          "GET": 58,
+          "listing_pages": 3,
+          "conditional_put_412": 1,
+          "http_5xx": 0,
+          "class_a_attempts": 37
+        },
+        "scope": "production storefront aggregate-before-catalog TOTALS_SQL and TOP10_SQL; 20-product production seed and five-second generator phases; isolated sources, SQL and shared independent memory oracles; current packing in both controls",
+        "demo_workload": {
+          "products": 20,
+          "transactions": 13,
+          "catalog_and_fact_changes_same_transaction": true,
+          "native_and_memory_oracles": true
+        },
+        "shared_budget_after_cold_reopen": {
+          "window_start": 1793664000,
+          "window_secs": 86400,
+          "class_a_limit": 10000,
+          "used": 37,
+          "remaining": 9963,
+          "puts": 34,
+          "listing_pages": 3,
+          "copies": 0
+        },
+        "budget_restart_retains_usage": true,
+        "compaction": {
+          "selected_runs_including_shutdown": 0,
+          "checkpoints_with_selected_runs_including_shutdown": 0,
+          "all_requests_in_those_checkpoints_including_shutdown": 0,
+          "scope": "checkpoint service includes flush, compaction, reads and writes; not an isolated PUT count for compaction alone"
+        }
+      }
+    }
+  }
+}

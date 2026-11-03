@@ -8,9 +8,27 @@ import sys
 from harness_control import admin
 from worker_harness import Fixture, Worker, harness_arguments
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]/'examples/portfolio'))
-from render import TOTALS_SQL, TOP10_SQL
-from workload import initial_sql, changes_sql
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from examples.portfolio.render import TOTALS_SQL, TOP10_SQL
+from examples.portfolio.workload import initial_sql, changes_sql
+
+
+def memory_rows(fixture, products, lines, *, top10=False):
+    """Independent raw-source oracle shared by concurrent and cadence fixtures."""
+    catalog = {row['product_id']: row for row in json.loads(fixture.sql(f'SELECT json_agg(p) FROM {products} p'))}
+    facts = json.loads(fixture.sql(f'SELECT json_agg(l) FROM {lines} l'))
+    groups = collections.defaultdict(list)
+    for row in facts:
+        if row['product_id'] in catalog:
+            groups[row['product_id']].append(row)
+    memory = []
+    for product_id, values in groups.items():
+        product = catalog[product_id]
+        memory.append((product_id, product['name'], product['category'], len(values),
+            sum(row['quantity'] for row in values),sum(row['quantity']*row['unit_price_cents'] for row in values)))
+    if top10:
+        memory.sort(key=lambda row: (-row[5], row[0])); memory = memory[:10]
+    return memory
 
 
 def qualify(output, command):
@@ -58,19 +76,7 @@ def qualify(output, command):
             expected = fixture.name+'.native_'+name; actual = schema+'.groups'
             assert fixture.sql(f'''SELECT count(*) FROM ((SELECT * FROM {expected} EXCEPT ALL SELECT * FROM {actual})
                 UNION ALL (SELECT * FROM {actual} EXCEPT ALL SELECT * FROM {expected})) d''').strip() == '0'
-            catalog = {row['product_id']: row for row in json.loads(fixture.sql(f'SELECT json_agg(p) FROM {products} p'))}
-            facts = json.loads(fixture.sql(f'SELECT json_agg(l) FROM {lines} l'))
-            groups = collections.defaultdict(list)
-            for row in facts:
-                if row['product_id'] in catalog:
-                    groups[row['product_id']].append(row)
-            memory = []
-            for product_id, values in groups.items():
-                product = catalog[product_id]
-                memory.append((product_id, product['name'], product['category'], len(values),
-                    sum(row['quantity'] for row in values),sum(row['quantity']*row['unit_price_cents'] for row in values)))
-            if name == 'top10':
-                memory.sort(key=lambda row: (-row[5], row[0])); memory = memory[:10]
+            memory = memory_rows(fixture, products, lines, top10=name == 'top10')
             public = json.loads(fixture.sql(f'SELECT json_agg(g) FROM {actual} g'))
             assert collections.Counter((row['product_id'],row['name'],row['category'],row['order_lines'],row['net_units'],row['net_revenue_cents']) for row in public) == collections.Counter(memory)
             assert fixture.sql(f'''SELECT count(*)=1 AND bool_and(s.confirmed_flush_lsn<=p.checkpoint_lsn AND p.checkpoint_lsn<=p.end_lsn)

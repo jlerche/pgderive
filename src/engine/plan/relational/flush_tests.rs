@@ -3,12 +3,12 @@ use super::*;
 use crate::engine::{Batch, dataflow::TimedBatch, plan::Settings};
 use object_store::memory::InMemory;
 
-type Query = Relational<i64, Vec<i64>>;
+pub(super) type Query = Relational<i64, Vec<i64>>;
 async fn freeze(query: &mut Query) -> Result<FrozenFlush<i64, Vec<i64>>> {
     query.capture_flush("pgderive/upload-v1/frozen-test".into()).await
 }
 
-fn settings() -> Settings {
+pub(super) fn settings() -> Settings {
     Settings {
         store: Arc::new(InMemory::new()),
         block_rows: 16,
@@ -16,7 +16,7 @@ fn settings() -> Settings {
         encoded_cache: None,
     }
 }
-async fn tick(query: &mut Query, time: u64, weight: i64) -> Result<()> {
+pub(super) async fn tick(query: &mut Query, time: u64, weight: i64) -> Result<()> {
     let input = TimedBatch {
         time,
         batch: (1..=3)
@@ -108,8 +108,9 @@ async fn failed_upload_drains_siblings_without_changing_local_state() -> Result<
         (cache_after.bytes, cache_after.entries)
     );
     assert_eq!(store.active.load(Ordering::SeqCst), 0);
-    assert!(store.peak.load(Ordering::SeqCst) > 1);
-    assert!(store.puts.load(Ordering::SeqCst) > 1);
+    // A single failed shared PUT now covers every admitted sibling.
+    assert_eq!(store.peak.load(Ordering::SeqCst), 1);
+    assert_eq!(store.puts.load(Ordering::SeqCst), 1);
     assert_eq!(
         before.trace("abc")?.materialize().await?,
         query.snapshot().trace("abc")?.materialize().await?
@@ -118,7 +119,7 @@ async fn failed_upload_drains_siblings_without_changing_local_state() -> Result<
     Ok(())
 }
 
-fn sibling_plan() -> Result<crate::engine::plan::Plan> {
+pub(super) fn sibling_plan() -> Result<crate::engine::plan::Plan> {
     use crate::engine::plan::{Arrangement, Kind, Node, Plan};
     let mut definition = plan()?.definition().clone();
     for (id, input) in [("d", "abc"), ("e", "d"), ("f", "e")] {
@@ -137,7 +138,7 @@ fn sibling_plan() -> Result<crate::engine::plan::Plan> {
     definition.outputs = vec!["f".into()];
     Plan::new(definition)
 }
-fn sibling_operators() -> Result<super::super::Operators<i64, Vec<i64>>> {
+pub(super) fn sibling_operators() -> Result<super::super::Operators<i64, Vec<i64>>> {
     let mut callbacks = operators();
     for id in ["d", "e", "f"] {
         callbacks.insert(id.into(), operators().remove("a").context("missing identity project")?);
@@ -227,7 +228,7 @@ async fn one_shared_slot_allows_foreground_upload_rebase_and_parallel_preparatio
         Ok::<_, anyhow::Error>((first?, second?, uploaded?))
     };
     let (first, stale, uploaded) =
-        tokio::time::timeout(std::time::Duration::from_secs(5), simultaneous).await??;
+        tokio::time::timeout(std::time::Duration::from_secs(5), Box::pin(simultaneous)).await??;
     query.commit(first)?;
     assert!(query.commit(stale).is_err());
     let expected = query.snapshot().trace("abc")?.materialize().await?;
