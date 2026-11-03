@@ -4,8 +4,14 @@ use anyhow::Result;
 use std::collections::BTreeSet;
 impl Relational {
     pub(crate) fn bind_projection(&mut self, contract: &crate::source::Contract) -> Result<()> {
-        let mut names = BTreeSet::new();
-        collect(&serde_json::to_value(&*self)?, &mut names);
+        let names = column_names(&*self)?
+            .into_iter()
+            .map(|name| {
+                name.split_once(':')
+                    .filter(|(prefix, _)| prefix.parse::<usize>().is_ok())
+                    .map_or_else(|| name.clone(), |(_, name)| name.to_owned())
+            })
+            .collect::<BTreeSet<_>>();
         self.projection = self
             .sources
             .iter()
@@ -43,6 +49,12 @@ impl Relational {
             .collect()
     }
 }
+/// Column references in the canonical resolved schema, retaining their qualified names.
+pub(in crate::compiler) fn column_names(value: &impl serde::Serialize) -> Result<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    collect(&serde_json::to_value(value)?, &mut names);
+    Ok(names)
+}
 fn collect(value: &serde_json::Value, names: &mut BTreeSet<String>) {
     match value {
         serde_json::Value::Object(fields) => {
@@ -52,10 +64,6 @@ fn collect(value: &serde_json::Value, names: &mut BTreeSet<String>) {
                 && fields.get("oid").is_some_and(serde_json::Value::is_number)
                 && let Some(name) = fields.get("name").and_then(serde_json::Value::as_str)
             {
-                let name = name
-                    .split_once(':')
-                    .filter(|(prefix, _)| prefix.parse::<usize>().is_ok())
-                    .map_or(name, |(_, name)| name);
                 names.insert(name.to_owned());
             }
             for value in fields.values() {

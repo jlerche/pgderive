@@ -4,7 +4,7 @@ use crate::compiler::{
     left_join::Spec,
     partition::{Function, Mode, Partition, statistics::key_scale},
     properties::Analysis,
-    relational::{Node, barrier},
+    relational::{Node, barrier, column_names},
 };
 use crate::transaction::Row;
 use anyhow::{Context, Result};
@@ -17,7 +17,7 @@ pub(super) fn run(graph: &mut Graph<'_>, settled: bool) -> Result<bool> {
     graph.sort()?;
     let origin = computed_origin(graph, true);
     let unflattened = unflattened_arms(graph)?;
-    let single = graph.single_globals.clone();
+    let single = &graph.single_globals;
     let (mut globals, mut unread_marks) = (Vec::new(), Vec::new());
     let mut required =
         graph.ir.output.columns.iter().map(|output| output.column.name.clone()).collect::<Names>();
@@ -30,7 +30,7 @@ pub(super) fn run(graph: &mut Graph<'_>, settled: bool) -> Result<bool> {
         {
             removable.push(id.clone());
         }
-        if unread_global(node, &required, &single) {
+        if unread_global(node, &required, single) {
             globals.push(node.id().to_owned());
         }
         if let Node::Mark { id, spec, .. } = node
@@ -170,8 +170,7 @@ fn flattens(graph: &Graph<'_>, edge: &str) -> Result<bool> {
 }
 fn replace_globals(graph: &mut Graph<'_>, globals: &[String]) -> Result<bool> {
     for id in globals {
-        let mut below = BTreeSet::new();
-        reachable(graph, id, &mut below)?;
+        let below = graph.ancestors(id)?.iter().map(|node| node.id().to_owned()).collect::<Names>();
         for node in &mut graph.ir.nodes {
             if below.contains(node.id()) {
                 super::dummy::fold_node(&mut node.clone())?;
@@ -231,14 +230,6 @@ fn remove_marks(graph: &mut Graph<'_>, marks: &[String]) -> Result<bool> {
         graph.redirect(id, &below);
     }
     Ok(!marks.is_empty())
-}
-fn reachable(graph: &Graph<'_>, edge: &str, out: &mut BTreeSet<String>) -> Result<()> {
-    if out.insert(edge.to_owned()) {
-        for input in graph.node(edge)?.inputs() {
-            reachable(graph, input, out)?;
-        }
-    }
-    Ok(())
 }
 /// The markers only held their columns in place through the rewrites.
 pub(super) fn remove_sorted(graph: &mut Graph<'_>) -> Result<()> {
@@ -309,7 +300,7 @@ fn trim_aggregates(spec: &mut Partition, required: &Names) -> bool {
     if spec.aggregates.iter().any(|value| matches!(value.function, Function::CountDistinct)) {
         return false;
     }
-    let before = serde_json::to_vec(&spec.aggregates).ok();
+    let before = spec.aggregates.clone();
     let spare = spec.aggregates.iter().find(|value| !key_scale(value)).cloned();
     spec.aggregates.retain(|value| required.contains(&value.field) || key_scale(value));
     if spec.aggregates.iter().all(key_scale)
@@ -326,7 +317,7 @@ fn trim_aggregates(spec: &mut Partition, required: &Names) -> bool {
         spare.navigation = None;
         spec.aggregates.insert(0, spare);
     }
-    serde_json::to_vec(&spec.aggregates).ok() != before
+    spec.aggregates != before
 }
 fn reads(node: &Node) -> Result<Names> {
     let mut names = Names::new();
@@ -343,26 +334,11 @@ fn reads(node: &Node) -> Result<Names> {
         }
         Node::LeftJoin { spec, .. } => {
             let unlisted = Spec { left: Vec::new(), right: Vec::new(), ..spec.clone() };
-            collect(&serde_json::to_value(&unlisted)?, &mut names);
+            names.extend(column_names(&unlisted)?);
         }
-        node => collect(&serde_json::to_value(node)?, &mut names),
+        node => names.extend(column_names(node)?),
     }
     Ok(names)
-}
-fn collect(value: &serde_json::Value, names: &mut Names) {
-    match value {
-        serde_json::Value::Object(fields) => {
-            if fields.get("right").is_some_and(serde_json::Value::is_boolean)
-                && fields.get("oid").is_some_and(serde_json::Value::is_number)
-                && let Some(name) = fields.get("name").and_then(serde_json::Value::as_str)
-            {
-                names.insert(name.to_owned());
-            }
-            fields.values().for_each(|value| collect(value, names));
-        }
-        serde_json::Value::Array(values) => values.iter().for_each(|value| collect(value, names)),
-        _ => {}
-    }
 }
 fn remove_empty(graph: &mut Graph<'_>) -> Result<bool> {
     let empty = graph.ids(|node| matches!(node, Node::Map { computed, .. } if computed.is_empty()));

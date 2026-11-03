@@ -28,7 +28,7 @@ fn filter(graph: &mut Graph<'_>, id: &str) -> Result<bool> {
         return Ok(false);
     };
     let input = input.clone();
-    if graph.consumers(&input).len() != 1 {
+    if graph.only_consumer(&input).is_none() {
         return Ok(false);
     }
     match graph.node(&input)?.clone() {

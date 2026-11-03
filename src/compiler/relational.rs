@@ -1,6 +1,7 @@
 //! Resolved relational nodes lowered into executable durable circuits.
 mod projection;
 use super::{ColumnRef, Projected};
+pub(super) use projection::column_names;
 use serde::Serialize;
 #[derive(Clone, Serialize)]
 pub struct Source {

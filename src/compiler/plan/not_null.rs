@@ -8,11 +8,10 @@ use crate::compiler::{
 use anyhow::Result;
 
 pub(super) fn simplified(graph: &Graph<'_>, edge: &str, value: Expr) -> Result<Expr> {
-    if decided(graph, edge, &value)? == Some(true) {
-        return Ok(Expr::And(Vec::new()));
-    }
-    if decided(graph, edge, &value)? == Some(false) {
-        return Ok(Expr::Or(Vec::new()));
+    match decided(graph, edge, &value)? {
+        Some(true) => return Ok(Expr::And(Vec::new())),
+        Some(false) => return Ok(Expr::Or(Vec::new())),
+        None => {}
     }
     let Expr::Or(arms) = &value else { return Ok(value) };
     let mut all_false = true;

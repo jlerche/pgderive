@@ -40,14 +40,13 @@ impl<'a> Graph<'a> {
     pub(super) fn node_mut(&mut self, id: &str) -> Result<&mut Node> {
         self.ir.nodes.iter_mut().find(|node| node.id() == id).context("missing plan edge")
     }
-    pub(super) fn consumers(&self, edge: &str) -> Vec<&Node> {
-        self.ir.nodes.iter().filter(|node| node.inputs().contains(&edge)).collect()
+    pub(super) fn consumers(&self, edge: &str) -> impl Iterator<Item = &Node> {
+        self.ir.nodes.iter().filter(move |node| node.inputs().contains(&edge))
     }
     pub(super) fn only_consumer(&self, edge: &str) -> Option<&Node> {
-        match self.consumers(edge).as_slice() {
-            [node] => Some(node),
-            _ => None,
-        }
+        let mut consumers = self.consumers(edge);
+        let first = consumers.next()?;
+        consumers.next().is_none().then_some(first)
     }
     pub(super) fn ids(&self, select: impl Fn(&Node) -> bool) -> Vec<String> {
         self.ir.nodes.iter().filter(|node| select(node)).map(|node| node.id().to_owned()).collect()
@@ -134,10 +133,8 @@ impl<'a> Graph<'a> {
             _ => BTreeSet::new(),
         })
     }
-    fn source_columns(&self, source: usize) -> Result<BTreeSet<String>> {
-        let source = self.ir.sources.get(source).context("missing plan source")?;
-        let index = self.ir.sources.iter().position(|value| std::ptr::eq(value, source));
-        let index = index.context("missing plan source")?;
+    fn source_columns(&self, index: usize) -> Result<BTreeSet<String>> {
+        let source = self.ir.sources.get(index).context("missing plan source")?;
         let relation = self
             .contract
             .relations
@@ -150,9 +147,8 @@ impl<'a> Graph<'a> {
     pub(super) fn sort(&mut self) -> Result<()> {
         let output = self.ir.nodes.iter().find(|node| matches!(node, Node::Output { id, .. } if !self.ir.nodes.iter().any(|other| other.inputs().contains(&id.as_str()))));
         let output = output.context("missing plan output")?.id().to_owned();
-        let mut order = Vec::new();
-        let mut seen = BTreeSet::new();
-        self.visit(&output, &mut seen, &mut order)?;
+        let order =
+            self.ancestors(&output)?.iter().map(|node| node.id().to_owned()).collect::<Vec<_>>();
         let mut nodes = std::mem::take(&mut self.ir.nodes);
         self.ir.nodes = order
             .iter()
@@ -163,12 +159,32 @@ impl<'a> Graph<'a> {
             .collect::<Result<_>>()?;
         Ok(())
     }
-    fn visit(&self, id: &str, seen: &mut BTreeSet<String>, order: &mut Vec<String>) -> Result<()> {
+    /// Reachable nodes once each, inputs before consumers, including the edge itself.
+    pub(super) fn ancestors(&self, edge: &str) -> Result<Vec<&Node>> {
+        let mut order = Vec::new();
+        self.visit(edge, &mut BTreeSet::new(), &mut order)?;
+        Ok(order)
+    }
+    pub(super) fn sources(&self, edge: &str) -> Result<BTreeSet<String>> {
+        Ok(self
+            .ancestors(edge)?
+            .iter()
+            .filter(|node| matches!(node, Node::Source { .. }))
+            .map(|node| node.id().to_owned())
+            .collect())
+    }
+    fn visit<'b>(
+        &'b self,
+        id: &str,
+        seen: &mut BTreeSet<String>,
+        order: &mut Vec<&'b Node>,
+    ) -> Result<()> {
         if seen.insert(id.into()) {
-            for input in self.node(id)?.inputs() {
+            let node = self.node(id)?;
+            for input in node.inputs() {
                 self.visit(input, seen, order)?;
             }
-            order.push(id.into());
+            order.push(node);
         }
         Ok(())
     }

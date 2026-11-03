@@ -141,48 +141,23 @@ fn tagged(graph: &Graph<'_>, id: &str, edge: &str) -> Result<Option<String>> {
         _ => None,
     }))
 }
-fn sources(graph: &Graph<'_>, edge: &str, out: &mut BTreeSet<String>) -> Result<()> {
-    let node = graph.node(edge)?;
-    if matches!(node, Node::Source { .. }) {
-        out.insert(edge.to_owned());
-    }
-    for input in node.inputs() {
-        sources(graph, input, out)?;
-    }
-    Ok(())
-}
 fn silenced(graph: &Graph<'_>, source: &str) -> bool {
-    graph
-        .consumers(source)
-        .iter()
-        .all(|node| matches!(node, Node::Empty { .. } | Node::Constant { .. }))
+    graph.consumers(source).all(|node| matches!(node, Node::Empty { .. } | Node::Constant { .. }))
 }
 /// A constant emits its rows whether or not its source is silenced, so its scope is not empty.
 fn emits_nothing(graph: &Graph<'_>, edge: &str) -> Result<bool> {
-    if constant_within(graph, edge)? {
+    let ancestors = graph.ancestors(edge)?;
+    if ancestors.iter().any(|node| matches!(node, Node::Constant { .. })) {
         return Ok(false);
     }
-    let mut found = BTreeSet::new();
-    sources(graph, edge, &mut found)?;
-    Ok(found.iter().all(|source| silenced(graph, source)))
-}
-fn constant_within(graph: &Graph<'_>, edge: &str) -> Result<bool> {
-    let node = graph.node(edge)?;
-    if matches!(node, Node::Constant { .. }) {
-        return Ok(true);
-    }
-    for input in node.inputs() {
-        if constant_within(graph, input)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(ancestors
+        .iter()
+        .filter(|node| matches!(node, Node::Source { .. }))
+        .all(|node| silenced(graph, node.id())))
 }
 fn empty_sources(graph: &mut Graph<'_>, scope: &str) -> Result<bool> {
-    let mut found = BTreeSet::new();
-    sources(graph, scope, &mut found)?;
     let mut changed = false;
-    for source in found {
+    for source in graph.sources(scope)? {
         if silenced(graph, &source) {
             continue;
         }
@@ -266,9 +241,8 @@ pub(super) fn discard_zero_limits(graph: &mut Graph<'_>) -> Result<()> {
     for id in graph.ids(|node| node.id().ends_with(ZERO_LIMIT)) {
         let Node::Filter { input, .. } = graph.node(&id)? else { continue };
         let input = input.clone();
-        let mut found = BTreeSet::new();
-        sources(graph, &input, &mut found)?;
-        let source = found.into_iter().next().context("LIMIT 0 reads no source")?;
+        let source =
+            graph.sources(&input)?.into_iter().next().context("LIMIT 0 reads no source")?;
         let empty = graph.fresh("empty");
         graph.ir.nodes.push(Node::Empty { id: empty.clone(), input: source });
         let Node::Filter { input, .. } = graph.node_mut(&id)? else { continue };

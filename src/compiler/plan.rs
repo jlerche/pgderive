@@ -47,3 +47,6 @@ pub(super) fn rewrite(ir: &mut Relational, contract: &Contract) -> Result<()> {
     }
     anyhow::bail!("plan rewrite did not converge")
 }
+
+#[cfg(test)]
+mod tests;

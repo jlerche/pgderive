@@ -37,16 +37,20 @@ impl Required {
 pub(super) fn run(graph: &mut Graph<'_>) -> Result<bool> {
     let output = graph.ids(|node| matches!(node, Node::Output { .. }));
     let root = output.last().context("missing plan output")?.clone();
-    let before = outer_joins(graph);
+    let before = join_counts(graph);
     visit(graph, &root, &Required::default())?;
-    Ok(outer_joins(graph) != before)
+    Ok(join_counts(graph) != before)
 }
-fn outer_joins(graph: &Graph<'_>) -> Vec<String> {
-    graph
-        .ids(|node| matches!(node, Node::LeftJoin { spec, .. } if spec.full))
-        .into_iter()
-        .chain(graph.ids(|node| matches!(node, Node::LeftJoin { .. })))
-        .collect()
+/// Reductions only remove outer joins or turn FULL into LEFT, so counts detect every change.
+fn join_counts(graph: &Graph<'_>) -> (usize, usize) {
+    let mut counts = (0, 0);
+    for node in &graph.ir.nodes {
+        if let Node::LeftJoin { spec, .. } = node {
+            counts.0 += usize::from(spec.full);
+            counts.1 += 1;
+        }
+    }
+    counts
 }
 fn visit(graph: &mut Graph<'_>, id: &str, required: &Required) -> Result<()> {
     match graph.node(id)?.clone() {
