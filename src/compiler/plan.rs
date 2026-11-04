@@ -2,11 +2,13 @@
 mod dummy;
 mod graph;
 mod implied;
+mod join;
 mod lift;
 mod not_null;
 mod prune;
 mod push;
 mod reduce;
+mod scope;
 use super::relational::Relational;
 use crate::source::Contract;
 use anyhow::Result;
@@ -23,8 +25,7 @@ const EXPRESSION_BYTES: usize = 16_384;
 pub(super) fn rewrite(ir: &mut Relational, contract: &Contract) -> Result<()> {
     let mut graph = Graph::new(ir, contract);
     graph.ensure_unique()?;
-    graph.single_globals = prune::single_relation_globals(&graph)?;
-    graph.flat_arms = prune::flat_arms(&graph)?;
+    (graph.single_globals, graph.flat_arms) = prune::provenance(&graph)?;
     for _ in 0..PASSES {
         let emptied = dummy::run(&mut graph, true)?;
         let reduced = reduce::run(&mut graph)?;

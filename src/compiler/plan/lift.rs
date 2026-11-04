@@ -1,5 +1,5 @@
 //! Lift computed outputs above joins, where `PostgreSQL` evaluates flattened target lists.
-use super::graph::Graph;
+use super::{graph::Graph, join::Join};
 use crate::compiler::{
     ColumnRef,
     relational::{Binding, Node, barrier},
@@ -28,9 +28,11 @@ fn lift(graph: &mut Graph<'_>, id: &str) -> Result<bool> {
             through_rebind(graph, map, &rebind, fields)
         }
         Some(Node::Map { id: upper, computed, .. }) => merge(graph, &map, &upper, computed),
-        Some(Node::EquijoinKey { id: key, keys, .. }) => over_join(graph, &map, &key, &keys),
-        Some(Node::CrossKey { id: key, .. }) => over_join(graph, &map, &key, &[]),
-        Some(Node::LeftJoinInput { id: key, spec, .. }) => over_tagged(graph, &map, &key, &spec),
+        Some(
+            Node::EquijoinKey { id: key, .. }
+            | Node::CrossKey { id: key, .. }
+            | Node::LeftJoinInput { id: key, .. },
+        ) => over_join(graph, &map, &key),
         _ => Ok(false),
     }
 }
@@ -131,10 +133,6 @@ fn merge(graph: &mut Graph<'_>, map: &Lower, upper: &str, computed: Vec<Computed
     *computed = merged;
     Ok(true)
 }
-/// Keep what `pinned` names below; the remainder is what can be evaluated above the join.
-fn divide(map: &Lower, pinned: &BTreeSet<String>) -> (Vec<Computed>, Vec<Computed>) {
-    map.computed.iter().cloned().partition(|value| pinned.contains(&value.column.name))
-}
 fn settle(graph: &mut Graph<'_>, map: &Lower, low: Vec<Computed>) -> Result<()> {
     if low.is_empty() {
         graph.remove(&map.id)?;
@@ -153,71 +151,44 @@ fn rename(graph: &mut Graph<'_>, join: &str) -> Result<String> {
     graph.node_mut(join)?.rewrite(&move |_| renamed.clone(), &|edge| edge.into());
     Ok(below)
 }
-fn over_join(graph: &mut Graph<'_>, map: &Lower, key: &str, keys: &[ColumnRef]) -> Result<bool> {
-    let Some(Node::Join { id: join, .. }) = graph.only_consumer(key).cloned() else {
-        return Ok(false);
-    };
-    let pinned = keys.iter().map(|key| key.name.clone()).collect();
-    let (low, high) = divide(map, &pinned);
-    if high.is_empty() {
-        return Ok(false);
-    }
-    settle(graph, map, low)?;
-    let below = rename(graph, &join)?;
-    graph.ir.nodes.push(Node::Map { id: join, input: below, computed: high });
-    Ok(true)
-}
-fn over_tagged(
-    graph: &mut Graph<'_>,
-    map: &Lower,
-    key: &str,
-    spec: &crate::compiler::left_join::Input,
-) -> Result<bool> {
-    let Some(Node::Union { id: union, .. }) = graph.only_consumer(key).cloned() else {
-        return Ok(false);
-    };
-    let Some(owner) = graph.only_consumer(&union).cloned() else { return Ok(false) };
-    let mut pinned = spec.keys.iter().map(|key| key.name.clone()).collect::<BTreeSet<_>>();
-    let join = owner.id().to_owned();
-    let (full, reads_condition) = match &owner {
+fn over_join(graph: &mut Graph<'_>, map: &Lower, key: &str) -> Result<bool> {
+    let Some((join, left)) = Join::above(graph, key)? else { return Ok(false) };
+    let side = if left { &join.left } else { &join.right };
+    let mut pinned = side.keys.iter().map(|key| key.name.clone()).collect::<BTreeSet<_>>();
+    let nullable = match &join.node {
+        Node::Join { .. } => false,
         Node::LeftJoin { spec, .. } => {
-            pinned.extend(spec.predicate.clone().map_or_else(BTreeSet::new, |value| {
-                value
-                    .conjuncts()
-                    .iter()
-                    .flat_map(crate::compiler::expression::Expr::read_names)
-                    .collect()
-            }));
-            (spec.full, true)
+            if let Some(predicate) = &spec.predicate {
+                pinned.extend(
+                    predicate
+                        .clone()
+                        .conjuncts()
+                        .iter()
+                        .flat_map(crate::compiler::expression::Expr::read_names),
+                );
+            }
+            spec.full || !left
         }
-        Node::Existence { .. } => (false, false),
-        Node::Mark { spec: mark, .. } => {
+        Node::Existence { .. } if left => false,
+        Node::Mark { spec: mark, .. } if left => {
             pinned.insert(mark.probe.name.clone());
             pinned.insert(mark.value.name.clone());
-            (false, false)
+            false
         }
         _ => return Ok(false),
     };
-    if !spec.left && !reads_condition {
-        return Ok(false);
-    }
-    let nullable = full || !spec.left;
-    let (mut low, high) = divide(map, &pinned);
-    let mut lifted = Vec::new();
-    for value in high {
-        if nullable && !null_extends(&value.expression) {
-            low.push(value);
-        } else {
-            lifted.push(value);
-        }
-    }
+    let (low, lifted): (Vec<_>, Vec<_>) = map.computed.iter().cloned().partition(|value| {
+        pinned.contains(&value.column.name) || (nullable && !null_extends(&value.expression))
+    });
     if lifted.is_empty() {
         return Ok(false);
     }
     settle(graph, map, low)?;
-    adjust_lists(graph, &join, spec.left, &mut lifted, nullable)?;
-    let below = rename(graph, &join)?;
-    graph.ir.nodes.push(Node::Map { id: join, input: below, computed: lifted });
+    let id = join.node.id().to_owned();
+    let mut lifted = lifted;
+    adjust_lists(graph, &id, left, &mut lifted, nullable)?;
+    let below = rename(graph, &id)?;
+    graph.ir.nodes.push(Node::Map { id, input: below, computed: lifted });
     Ok(true)
 }
 /// Above a nullable input a lifted output must read NULL for null-extended rows, which takes

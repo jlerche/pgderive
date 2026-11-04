@@ -75,6 +75,10 @@ impl<'a> Graph<'a> {
         values: Vec<Expr>,
     ) -> Result<()> {
         let Some(predicate) = Predicate::from_conjuncts(values) else { return Ok(()) };
+        anyhow::ensure!(
+            self.node(consumer)?.inputs().contains(&edge),
+            "plan filter target no longer reads input"
+        );
         let id = self.fresh("filter");
         self.node_mut(consumer)?.rewrite(&|id| id.into(), &|input| {
             if input == edge { id.clone() } else { input.into() }

@@ -1,9 +1,8 @@
 //! Reduce outer joins whose null-extended rows a stricter consumer always rejects.
-use super::graph::Graph;
+use super::{graph::Graph, join::Join};
 use crate::compiler::{
     Predicate,
     expression::Expr,
-    left_join::Spec,
     relational::{Node, barrier},
 };
 use anyhow::{Context, Result};
@@ -37,22 +36,25 @@ impl Required {
 pub(super) fn run(graph: &mut Graph<'_>) -> Result<bool> {
     let output = graph.ids(|node| matches!(node, Node::Output { .. }));
     let root = output.last().context("missing plan output")?.clone();
-    let before = join_counts(graph);
-    visit(graph, &root, &Required::default())?;
-    Ok(join_counts(graph) != before)
+    visit(graph, &root, &Required::default())
 }
-/// Reductions only remove outer joins or turn FULL into LEFT, so counts detect every change.
-fn join_counts(graph: &Graph<'_>) -> (usize, usize) {
-    let mut counts = (0, 0);
-    for node in &graph.ir.nodes {
-        if let Node::LeftJoin { spec, .. } = node {
-            counts.0 += usize::from(spec.full);
-            counts.1 += 1;
-        }
+fn visit(graph: &mut Graph<'_>, id: &str, required: &Required) -> Result<bool> {
+    if let Some(join) = Join::at(graph, id)? {
+        return match &join.node {
+            Node::LeftJoin { .. } => left_join(graph, &join, required),
+            Node::Join { .. } => {
+                let mut changed = false;
+                for side in [&join.left, &join.right] {
+                    let mut local = required.clone();
+                    local.columns.extend(side.keys.iter().map(|key| key.name.clone()));
+                    changed |= visit(graph, &side.input, &local)?;
+                }
+                Ok(changed)
+            }
+            _ => Ok(visit(graph, &join.left.input, required)?
+                | visit(graph, &join.right.input, &Required::default())?),
+        };
     }
-    counts
-}
-fn visit(graph: &mut Graph<'_>, id: &str, required: &Required) -> Result<()> {
     match graph.node(id)?.clone() {
         Node::Filter { input, predicate, .. } => {
             let mut required = required.clone();
@@ -84,97 +86,53 @@ fn visit(graph: &mut Graph<'_>, id: &str, required: &Required) -> Result<()> {
             visit(graph, &input, &required)
         }
         Node::CrossKey { input, .. } => visit(graph, &input, required),
-        Node::Join { left, right, .. } => {
-            visit(graph, &left, required)?;
-            visit(graph, &right, required)
-        }
-        Node::LeftJoin { input, spec, .. } => left_join(graph, id, &input, &spec, required),
-        Node::Existence { input, .. } | Node::Mark { input, .. } => {
-            let Node::Union { left, right, .. } = graph.node(&input)?.clone() else {
-                return unrelated(graph, id);
-            };
-            let below = tagged_input(graph, &left)?;
-            visit(graph, &below, required)?;
-            let below = tagged_input(graph, &right);
-            visit(graph, &below?, &Required::default())
-        }
         _ => unrelated(graph, id),
     }
 }
-fn unrelated(graph: &mut Graph<'_>, id: &str) -> Result<()> {
+fn unrelated(graph: &mut Graph<'_>, id: &str) -> Result<bool> {
     let inputs = graph.node(id)?.inputs().into_iter().map(str::to_owned).collect::<Vec<_>>();
+    let mut changed = false;
     for input in inputs {
-        visit(graph, &input, &Required::default())?;
+        changed |= visit(graph, &input, &Required::default())?;
     }
-    Ok(())
-}
-fn tagged_input(graph: &Graph<'_>, id: &str) -> Result<String> {
-    match graph.node(id)? {
-        Node::LeftJoinInput { input, .. }
-        | Node::RightPresence { input, .. }
-        | Node::RightCounts { input, .. } => {
-            let input = input.clone();
-            if matches!(graph.node(&input)?, Node::RightCounts { .. } | Node::LeftJoinInput { .. })
-            {
-                return tagged_input(graph, &input);
-            }
-            Ok(input)
-        }
-        _ => anyhow::bail!("missing tagged join input"),
-    }
+    Ok(changed)
 }
 fn names(columns: &[crate::compiler::ColumnRef]) -> Names {
     columns.iter().map(|column| column.name.clone()).collect()
 }
-fn left_join(
-    graph: &mut Graph<'_>,
-    id: &str,
-    input: &str,
-    spec: &Spec,
-    required: &Required,
-) -> Result<()> {
-    let strict = |columns: &[crate::compiler::ColumnRef]| required.rejects(&names(columns));
-    let (left, right) = (strict(&spec.left), strict(&spec.right));
-    let Node::Union { left: left_edge, right: right_edge, .. } = graph.node(input)?.clone() else {
-        anyhow::bail!("missing tagged join union")
+fn left_join(graph: &mut Graph<'_>, join: &Join, required: &Required) -> Result<bool> {
+    let Node::LeftJoin { id, input: union, spec } = &join.node else {
+        anyhow::bail!("missing outer join")
     };
-    match (spec.full, left, right) {
-        (false, _, true) | (true, true, true) => {
-            inner(graph, id, input, &left_edge, &right_edge)?;
-            return visit(graph, id, required);
+    let (left, right) =
+        (required.rejects(&names(&spec.left)), required.rejects(&names(&spec.right)));
+    if right && (!spec.full || left) {
+        inner(graph, id, union, &join.left.id, &join.right.id)?;
+        visit(graph, id, required)?;
+        return Ok(true);
+    }
+    if spec.full && (left || right) {
+        if right {
+            swap(graph, id, union)?;
+        } else {
+            let Node::LeftJoin { spec, .. } = graph.node_mut(id)? else {
+                anyhow::bail!("missing left join")
+            };
+            spec.full = false;
         }
-        (true, true, false) => set_preserved(graph, id)?,
-        (true, false, true) => swap(graph, id, input)?,
-        _ => {}
+        visit(graph, id, required)?;
+        return Ok(true);
     }
-    let Node::LeftJoin { input, spec, .. } = graph.node(id)?.clone() else {
-        anyhow::bail!("missing left join")
-    };
-    let Node::Union { left: left_edge, right: right_edge, .. } = graph.node(&input)?.clone() else {
-        anyhow::bail!("missing tagged join union")
-    };
-    let (below_left, below_right) =
-        (tagged_input(graph, &left_edge)?, tagged_input(graph, &right_edge)?);
     if spec.full {
-        visit(graph, &below_left, &Required::default())?;
-        return visit(graph, &below_right, &Required::default());
+        return Ok(visit(graph, &join.left.input, &Required::default())?
+            | visit(graph, &join.right.input, &Required::default())?);
     }
-    visit(graph, &below_left, required)?;
-    let Node::LeftJoinInput { spec: keys, .. } = graph.node(&right_edge)? else {
-        anyhow::bail!("missing tagged join input")
-    };
-    let mut local = Required { columns: names(&keys.keys), any: Vec::new() };
+    let changed = visit(graph, &join.left.input, required)?;
+    let mut local = Required { columns: names(&join.right.keys), any: Vec::new() };
     if let Some(predicate) = &spec.predicate {
         local.add(predicate);
     }
-    visit(graph, &below_right, &local)
-}
-fn set_preserved(graph: &mut Graph<'_>, id: &str) -> Result<()> {
-    let Node::LeftJoin { spec, .. } = graph.node_mut(id)? else {
-        anyhow::bail!("missing left join")
-    };
-    spec.full = false;
-    Ok(())
+    Ok(changed | visit(graph, &join.right.input, &local)?)
 }
 fn swap(graph: &mut Graph<'_>, id: &str, input: &str) -> Result<()> {
     let Node::Union { left, right, .. } = graph.node_mut(input)? else {

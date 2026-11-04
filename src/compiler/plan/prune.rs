@@ -1,5 +1,5 @@
 //! Drop unread computed columns and left joins nothing above can observe.
-use super::graph::Graph;
+use super::{graph::Graph, join::Join, scope::Scopes};
 use crate::compiler::{
     left_join::Spec,
     partition::{Function, Mode, Partition, statistics::key_scale},
@@ -55,14 +55,14 @@ pub(super) fn run(graph: &mut Graph<'_>, settled: bool) -> Result<bool> {
 }
 /// `is_simple_union_all` refuses arms of differing types; such a set operation stays a subquery,
 /// whose outputs `remove_unused_subquery_outputs` keeps.
-fn unflattened_arms(graph: &Graph<'_>) -> Result<BTreeSet<String>> {
-    let mut pinned = BTreeSet::new();
+fn unflattened_arms(graph: &Graph<'_>) -> Result<Names> {
+    let scopes = Scopes::new(graph, graph.ir.nodes.iter().map(Node::id))?;
+    let mut pinned = Names::new();
     for id in graph.ids(|node| matches!(node, Node::Union { .. })) {
-        let mut arms = Vec::new();
-        arm_rebinds(graph, &id, &mut arms)?;
+        let arms = append_arms(graph, &id)?;
         let mut mixed = false;
         for arm in &arms {
-            mixed |= super::push::coerced_rebind(graph, arm)?;
+            mixed |= !scopes.at(arm)?.coerced.is_empty();
         }
         for arm in arms {
             if mixed || failing_output(graph, &arm)? {
@@ -72,27 +72,45 @@ fn unflattened_arms(graph: &Graph<'_>) -> Result<BTreeSet<String>> {
     }
     Ok(pinned)
 }
-/// `is_safe_append_member`: an arm of one relation with no WHERE flattens into an appendrel, whose
-/// outputs fold read or not. Taken from the plan as bound, before filters move onto arms.
-pub(super) fn flat_arms(graph: &Graph<'_>) -> Result<Names> {
+/// Capture `PostgreSQL`'s flattening decisions before rewrites move filters or remove joins.
+pub(super) fn provenance(graph: &Graph<'_>) -> Result<(Names, Names)> {
+    let scopes = Scopes::new(graph, graph.ir.nodes.iter().map(Node::id))?;
+    let mut single = Names::new();
     let mut flat = Names::new();
-    for id in graph.ids(|node| matches!(node, Node::Union { .. })) {
-        let mut arms = Vec::new();
-        arm_rebinds(graph, &id, &mut arms)?;
-        for arm in arms {
-            if one_relation(graph, &arm)? {
-                flat.insert(arm);
+    for node in &graph.ir.nodes {
+        match node {
+            Node::Partition { id, input, .. } | Node::Finalize { id, input, .. }
+                if scopes.at(input)?.flat =>
+            {
+                single.insert(id.clone());
             }
+            Node::Union { id, .. } => {
+                for arm in append_arms(graph, id)? {
+                    if scopes.at(&arm)?.single {
+                        flat.insert(arm);
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    Ok(flat)
+    Ok((single, flat))
 }
-fn one_relation(graph: &Graph<'_>, edge: &str) -> Result<bool> {
+/// Append arms are enumerated on demand; retaining every nested arm set would be quadratic.
+fn append_arms(graph: &Graph<'_>, edge: &str) -> Result<Names> {
     match graph.node(edge)? {
-        Node::Source { .. } | Node::Constant { .. } => Ok(true),
-        Node::Rebind { id, .. } if barrier(id) => Ok(false),
-        Node::Map { input, .. } | Node::Rebind { input, .. } => one_relation(graph, input),
-        _ => Ok(false),
+        Node::Union { left, right, .. } => {
+            let mut arms = append_arms(graph, left)?;
+            arms.extend(append_arms(graph, right)?);
+            Ok(arms)
+        }
+        Node::Filter { input, .. } => append_arms(graph, input),
+        Node::Rebind { id, fields, .. }
+            if fields.iter().any(|field| field.output.name.starts_with("@union_")) =>
+        {
+            Ok([id.clone()].into())
+        }
+        _ => Ok(Names::new()),
     }
 }
 /// A flattened arm's failing output stays until `fold_all`, which reports it if it is planned.
@@ -105,68 +123,12 @@ fn failing_output(graph: &Graph<'_>, arm: &str) -> Result<bool> {
         .iter()
         .any(|field| super::push::probe_expression(graph, input, &field.input).fold().is_err()))
 }
-fn arm_rebinds(graph: &Graph<'_>, edge: &str, out: &mut Vec<String>) -> Result<()> {
-    match graph.node(edge)? {
-        Node::Union { left, right, .. } => {
-            arm_rebinds(graph, left, out)?;
-            arm_rebinds(graph, right, out)?;
-        }
-        Node::Filter { input, .. } => arm_rebinds(graph, input, out)?,
-        Node::Rebind { id, fields, .. }
-            if fields.iter().any(|field| field.output.name.starts_with("@union_")) =>
-        {
-            out.push(id.clone());
-        }
-        _ => {}
-    }
-    Ok(())
-}
 /// A global aggregate none of whose results are read returns its one row without its input.
 fn unread_global(node: &Node, required: &Names, single: &Names) -> bool {
     let (Node::Partition { spec, .. } | Node::Finalize { spec, .. }) = node else { return false };
     single.contains(node.id())
         && matches!(&spec.mode, Mode::Grouped { keys } if keys.is_empty())
         && spec.aggregates.iter().all(|value| !required.contains(&value.field))
-}
-/// `PostgreSQL` skips only an input that flattens to one relation or appendrel, which it decides
-/// before removing joins, so this is taken from the plan as bound.
-pub(super) fn single_relation_globals(graph: &Graph<'_>) -> Result<Names> {
-    let mut single = Names::new();
-    for id in graph.ids(|node| matches!(node, Node::Partition { .. } | Node::Finalize { .. })) {
-        let input = graph.node(&id)?.inputs().into_iter().map(str::to_owned).collect::<Vec<_>>();
-        let mut flat = true;
-        for edge in input {
-            flat &= flattens(graph, &edge)?;
-        }
-        if flat {
-            single.insert(id);
-        }
-    }
-    Ok(single)
-}
-fn flattens(graph: &Graph<'_>, edge: &str) -> Result<bool> {
-    match graph.node(edge)? {
-        Node::Source { .. } | Node::Constant { .. } => Ok(true),
-        Node::Rebind { id, .. } if barrier(id) => Ok(false),
-        Node::Mark { input, spec, .. } if !spec.semijoin => {
-            let Node::Union { left, .. } = graph.node(input)? else { return Ok(false) };
-            flattens(graph, left)
-        }
-        Node::Rebind { id, .. } if super::push::coerced_rebind(graph, id)? => Ok(false),
-        Node::Filter { input, .. }
-        | Node::Map { input, .. }
-        | Node::Rebind { input, .. }
-        | Node::PartitionBy { input, .. }
-        | Node::LeftJoinInput { input, .. }
-        | Node::Statistics { input, .. } => flattens(graph, input),
-        Node::Union { left, right, .. } => {
-            if is_set_arm(graph, left)? && is_set_arm(graph, right)? {
-                return Ok(simple_arm(graph, left)? && simple_arm(graph, right)?);
-            }
-            Ok(flattens(graph, left)? && flattens(graph, right)?)
-        }
-        _ => Ok(false),
-    }
 }
 fn replace_globals(graph: &mut Graph<'_>, globals: &[String]) -> Result<bool> {
     for id in globals {
@@ -189,45 +151,12 @@ fn replace_globals(graph: &mut Graph<'_>, globals: &[String]) -> Result<bool> {
     }
     Ok(!globals.is_empty())
 }
-fn is_set_arm(graph: &Graph<'_>, edge: &str) -> Result<bool> {
-    Ok(match graph.node(edge)? {
-        Node::Filter { input, .. } => is_set_arm(graph, input)?,
-        Node::Rebind { fields, .. } => {
-            fields.iter().any(|field| field.output.name.starts_with("@union_"))
-        }
-        _ => false,
-    })
-}
-/// `is_simple_union_all`: any subquery can be an arm, but a nested non-ALL set operation cannot.
-fn simple_arm(graph: &Graph<'_>, edge: &str) -> Result<bool> {
-    match graph.node(edge)? {
-        Node::Rebind { id, .. } if super::push::coerced_rebind(graph, id)? => Ok(false),
-        Node::Rebind { id, input, .. } if !barrier(id) => simple_arm(graph, input),
-        Node::Filter { input, .. } | Node::Map { input, .. } => simple_arm(graph, input),
-        Node::Union { left, right, .. } => {
-            Ok(simple_arm(graph, left)? && simple_arm(graph, right)?)
-        }
-        Node::SetOperation { .. } => Ok(false),
-        Node::SetDistinct { input, .. } => {
-            let Node::PartitionBy { input, .. } = graph.node(input)? else { return Ok(true) };
-            let Node::Union { left, .. } = graph.node(input)? else { return Ok(true) };
-            Ok(!is_set_arm(graph, left)?)
-        }
-        _ => Ok(true),
-    }
-}
 /// `remove_unused_subquery_outputs` drops a subplan nothing reads, before planning it.
 fn remove_marks(graph: &mut Graph<'_>, marks: &[String]) -> Result<bool> {
     for id in marks {
-        let Node::Mark { input, .. } = graph.remove(id)? else { anyhow::bail!("missing mark") };
-        let Node::Union { left, .. } = graph.node(&input)? else {
-            anyhow::bail!("missing mark union")
-        };
-        let Node::LeftJoinInput { input: below, .. } = graph.node(left)? else {
-            anyhow::bail!("missing mark input")
-        };
-        let below = below.clone();
-        graph.redirect(id, &below);
+        let Some(join) = Join::at(graph, id)? else { anyhow::bail!("missing mark") };
+        graph.remove(id)?;
+        graph.redirect(id, &join.left.input);
     }
     Ok(!marks.is_empty())
 }
@@ -357,23 +286,12 @@ fn remove_joins(graph: &mut Graph<'_>, candidates: &[String]) -> Result<bool> {
     let analysis = Analysis::infer(graph.contract, graph.ir)?;
     let mut changed = false;
     for id in candidates {
-        let Some(Node::LeftJoin { input, .. }) =
-            graph.ir.nodes.iter().find(|node| node.id() == id).cloned()
-        else {
-            continue;
-        };
-        let Node::Union { left, right, .. } = graph.node(&input)?.clone() else { continue };
-        let Node::LeftJoinInput { input: below, spec, .. } = graph.node(&right)?.clone() else {
-            continue;
-        };
-        let keys = spec.keys.iter().map(|key| key.name.clone()).collect::<Vec<_>>();
-        if distinct_for(graph, &analysis, &below, keys)? {
-            let Node::LeftJoinInput { input: preserved, .. } = graph.node(&left)?.clone() else {
-                continue;
-            };
-            fold_removed(graph, id, &below)?;
+        let Some(join) = Join::at(graph, id)? else { continue };
+        let keys = join.right.keys.iter().map(|key| key.name.clone()).collect();
+        if distinct_for(graph, &analysis, &join.right.input, keys)? {
+            fold_removed(graph, id, &join.right.input)?;
             graph.remove(id)?;
-            graph.redirect(id, &preserved);
+            graph.redirect(id, &join.left.input);
             changed = true;
         }
     }
