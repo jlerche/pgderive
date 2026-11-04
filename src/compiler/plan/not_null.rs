@@ -1,5 +1,5 @@
 //! `restriction_is_always_true`: a NULL test on a NOT NULL base column is already decided.
-use super::graph::Graph;
+use super::{graph::Graph, join::Join};
 use crate::compiler::{
     ColumnRef,
     expression::Expr,
@@ -8,11 +8,10 @@ use crate::compiler::{
 use anyhow::Result;
 
 pub(super) fn simplified(graph: &Graph<'_>, edge: &str, value: Expr) -> Result<Expr> {
-    if decided(graph, edge, &value)? == Some(true) {
-        return Ok(Expr::And(Vec::new()));
-    }
-    if decided(graph, edge, &value)? == Some(false) {
-        return Ok(Expr::Or(Vec::new()));
+    match decided(graph, edge, &value)? {
+        Some(true) => return Ok(Expr::And(Vec::new())),
+        Some(false) => return Ok(Expr::Or(Vec::new())),
+        None => {}
     }
     let Expr::Or(arms) = &value else { return Ok(value) };
     let mut all_false = true;
@@ -54,18 +53,24 @@ fn base_not_null(graph: &Graph<'_>, edge: &str, column: &ColumnRef) -> Result<bo
             let field = fields.iter().find(|field| field.output.name == column.name);
             field.map_or(Ok(false), |field| base_not_null(graph, input, &field.input))
         }
-        Node::Join { left, right, .. } => {
-            let side = if graph.columns(left)?.contains(&column.name) { left } else { right };
-            base_not_null(graph, side, column)
+        _ => {
+            let Some(join) = Join::at(graph, edge)? else { return Ok(false) };
+            let side = match &join.node {
+                Node::Join { .. } => {
+                    if join.left.columns(graph)?.contains(&column.name) {
+                        &join.left
+                    } else {
+                        &join.right
+                    }
+                }
+                Node::LeftJoin { spec, .. }
+                    if !spec.full && join.left.columns(graph)?.contains(&column.name) =>
+                {
+                    &join.left
+                }
+                _ => return Ok(false),
+            };
+            base_not_null(graph, &side.input, column)
         }
-        Node::LeftJoin { input, spec, .. } if !spec.full => {
-            let Node::Union { left, .. } = graph.node(input)? else { return Ok(false) };
-            let Node::LeftJoinInput { input, .. } = graph.node(left)? else { return Ok(false) };
-            if !graph.columns(input)?.contains(&column.name) {
-                return Ok(false);
-            }
-            base_not_null(graph, input, column)
-        }
-        _ => Ok(false),
     }
 }

@@ -3,7 +3,7 @@ pub mod statistics;
 use super::{ColumnRef, Predicate};
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub enum Function {
     Count,
     CountDistinct,
@@ -25,7 +25,7 @@ impl Function {
         matches!(self, Self::Rank | Self::DenseRank | Self::RowNumber)
     }
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct Aggregate {
     pub(crate) function: Function,
     pub(crate) argument: Option<ColumnRef>,

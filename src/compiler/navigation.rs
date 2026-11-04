@@ -2,17 +2,17 @@
 use super::{ColumnRef, parser::Name, typed};
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub enum Offset {
     Constant(Option<i32>),
     Column(ColumnRef),
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub enum Default {
     Constant(Option<String>),
     Column(ColumnRef),
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct Navigation {
     pub offset: Offset,
     pub default: Default,

@@ -1295,6 +1295,25 @@ binding and before execution, so the same query raises where PostgreSQL does:
   input when each arm is strict on some column of that input.
 - A filter stays above a set operation that casts the column to a common type in any arm.
 
+The planner shares one join view over the existing relational graph. It resolves the
+execution tags, count/presence nodes and unions into input attachment points; passes
+use the original node for join semantics rather than maintaining a second join-kind IR.
+Inner/outer/semijoin filter placement uses one loop, with explicit allowed inputs and
+OR-restriction rules. Inferred equalities for all keys attach together, preventing a
+second insertion from targeting an edge the first insertion already replaced.
+
+One scope analysis computes append eligibility, flattening, alignment casts and EXCEPT
+boundaries. These are separate properties: a materialized subquery can be a simple
+UNION ALL member while still preventing flattening. Union pushdown analyzes only its
+current input roots; initial provenance includes all bound nodes. Initial flattening
+facts stay frozen when rewrites later remove joins or move filters.
+
+The deferred folding and settled-pruning phases remain intentional. Substitution and
+unused-output removal decide which expressions PostgreSQL plans, so folding earlier
+can report errors from outputs PostgreSQL discards. Planning before physical lowering
+would require a coordinated change to binder cardinality/key proofs; the shared views
+remove repeated decoding without introducing another execution path.
+
 `scripts/error_order_corpus.json` pins errors and result rows for each rewrite against real
 PostgreSQL, under a merge join, the plan that reads both inputs whole as Pgderive does.
 Other plans can differ, and these differences remain:

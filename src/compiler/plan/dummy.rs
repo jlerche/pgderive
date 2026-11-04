@@ -1,5 +1,5 @@
 //! A scope with a constant false or NULL filter reads nothing, as a dummy relation does.
-use super::{graph::Graph, not_null};
+use super::{graph::Graph, join::Join, not_null};
 use crate::compiler::{
     Predicate,
     expression::Expr,
@@ -52,13 +52,13 @@ fn filter(graph: &mut Graph<'_>, id: &str, computed: &BTreeSet<String>) -> Resul
 /// A constant false ON leaves nothing to match, so the nullable side is never read; a FULL
 /// join keeps both sides, so only the constant remains of its condition.
 fn join(graph: &mut Graph<'_>, id: &str) -> Result<bool> {
-    let Node::LeftJoin { input, spec, .. } = graph.node(id)? else { return Ok(false) };
-    let (input, full) = (input.clone(), spec.full);
-    let Some(values) = spec.predicate.clone().map(Predicate::conjuncts) else { return Ok(false) };
+    let Some(join) = Join::at(graph, id)? else { return Ok(false) };
+    let Node::LeftJoin { spec, .. } = join.node else { return Ok(false) };
+    let Some(values) = spec.predicate.map(Predicate::conjuncts) else { return Ok(false) };
     if !values.iter().map(folded).any(|value| never_true(&value)) {
         return Ok(false);
     }
-    if full {
+    if spec.full {
         let kept = values.iter().filter_map(|value| {
             value.fold().map_or_else(
                 |_| Some(value.clone()),
@@ -75,11 +75,7 @@ fn join(graph: &mut Graph<'_>, id: &str) -> Result<bool> {
         spec.predicate = Predicate::from_conjuncts(kept);
         return Ok(true);
     }
-    let Node::Union { right, .. } = graph.node(&input)? else {
-        anyhow::bail!("missing tagged join union")
-    };
-    let right = right.clone();
-    empty_sources(graph, &right)
+    empty_sources(graph, &join.right.input)
 }
 fn constant_true(value: &Expr) -> bool {
     value.is_constant() && matches!(value.constant_truth(), Ok(Some(true)))
@@ -132,57 +128,35 @@ fn tagged(graph: &Graph<'_>, id: &str, edge: &str) -> Result<Option<String>> {
         },
         _ => return Ok(None),
     };
-    let Node::Union { left, .. } = graph.node(union)? else { return Ok(None) };
-    let from_left = left == id || left == edge;
-    Ok(graph.only_consumer(union).and_then(|owner| match owner {
-        Node::LeftJoin { spec, .. } if !spec.full && from_left => Some(owner.id().to_owned()),
-        Node::Existence { anti, .. } if from_left || !anti => Some(owner.id().to_owned()),
-        Node::Mark { spec, .. } if from_left || spec.semijoin => Some(owner.id().to_owned()),
-        _ => None,
-    }))
-}
-fn sources(graph: &Graph<'_>, edge: &str, out: &mut BTreeSet<String>) -> Result<()> {
-    let node = graph.node(edge)?;
-    if matches!(node, Node::Source { .. }) {
-        out.insert(edge.to_owned());
-    }
-    for input in node.inputs() {
-        sources(graph, input, out)?;
-    }
-    Ok(())
+    let Some(owner) = graph.only_consumer(union) else { return Ok(None) };
+    let Some(join) = Join::at(graph, owner.id())? else { return Ok(None) };
+    let from_left = join.left.id == id || join.left.id == edge;
+    let owner = join.node.id().to_owned();
+    let emptied = match join.node {
+        Node::LeftJoin { spec, .. } => !spec.full && from_left,
+        Node::Existence { anti, .. } => from_left || !anti,
+        Node::Mark { spec, .. } => from_left || spec.semijoin,
+        _ => false,
+    };
+    Ok(emptied.then_some(owner))
 }
 fn silenced(graph: &Graph<'_>, source: &str) -> bool {
-    graph
-        .consumers(source)
-        .iter()
-        .all(|node| matches!(node, Node::Empty { .. } | Node::Constant { .. }))
+    graph.consumers(source).all(|node| matches!(node, Node::Empty { .. } | Node::Constant { .. }))
 }
 /// A constant emits its rows whether or not its source is silenced, so its scope is not empty.
 fn emits_nothing(graph: &Graph<'_>, edge: &str) -> Result<bool> {
-    if constant_within(graph, edge)? {
+    let ancestors = graph.ancestors(edge)?;
+    if ancestors.iter().any(|node| matches!(node, Node::Constant { .. })) {
         return Ok(false);
     }
-    let mut found = BTreeSet::new();
-    sources(graph, edge, &mut found)?;
-    Ok(found.iter().all(|source| silenced(graph, source)))
-}
-fn constant_within(graph: &Graph<'_>, edge: &str) -> Result<bool> {
-    let node = graph.node(edge)?;
-    if matches!(node, Node::Constant { .. }) {
-        return Ok(true);
-    }
-    for input in node.inputs() {
-        if constant_within(graph, input)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(ancestors
+        .iter()
+        .filter(|node| matches!(node, Node::Source { .. }))
+        .all(|node| silenced(graph, node.id())))
 }
 fn empty_sources(graph: &mut Graph<'_>, scope: &str) -> Result<bool> {
-    let mut found = BTreeSet::new();
-    sources(graph, scope, &mut found)?;
     let mut changed = false;
-    for source in found {
+    for source in graph.sources(scope)? {
         if silenced(graph, &source) {
             continue;
         }
@@ -266,9 +240,8 @@ pub(super) fn discard_zero_limits(graph: &mut Graph<'_>) -> Result<()> {
     for id in graph.ids(|node| node.id().ends_with(ZERO_LIMIT)) {
         let Node::Filter { input, .. } = graph.node(&id)? else { continue };
         let input = input.clone();
-        let mut found = BTreeSet::new();
-        sources(graph, &input, &mut found)?;
-        let source = found.into_iter().next().context("LIMIT 0 reads no source")?;
+        let source =
+            graph.sources(&input)?.into_iter().next().context("LIMIT 0 reads no source")?;
         let empty = graph.fresh("empty");
         graph.ir.nodes.push(Node::Empty { id: empty.clone(), input: source });
         let Node::Filter { input, .. } = graph.node_mut(&id)? else { continue };

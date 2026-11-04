@@ -1,11 +1,15 @@
 //! Move filters to the lowest scope `PostgreSQL` would run them at.
-use super::graph::Graph;
+use super::{
+    graph::Graph,
+    join::{Join, Side},
+    scope::Scopes,
+};
 use crate::compiler::{
     ColumnRef, Predicate,
     expression::Expr,
     relational::{Binding, Node},
     scalar::Computed,
-    setop::Kind,
+    setop::Kind as SetKind,
     subquery::Mark,
     typed::{self, Typed},
 };
@@ -28,7 +32,7 @@ fn filter(graph: &mut Graph<'_>, id: &str) -> Result<bool> {
         return Ok(false);
     };
     let input = input.clone();
-    if graph.consumers(&input).len() != 1 {
+    if graph.only_consumer(&input).is_none() {
         return Ok(false);
     }
     match graph.node(&input)?.clone() {
@@ -51,24 +55,12 @@ fn filter(graph: &mut Graph<'_>, id: &str) -> Result<bool> {
         Node::PartitionBy { input: below, keys, .. } => {
             below_keys(graph, id, (&input, &below), &keys)
         }
-        Node::Join { left, right, .. } => inner_join(graph, id, (&left, &right)),
-        Node::LeftJoin { input: union, spec, .. } => {
-            if spec.full {
-                return Ok(false);
-            }
-            outer_join(graph, id, &union)
-        }
-        Node::Existence { input: union, .. } => semi_join(graph, id, &union),
-        Node::Mark { input: union, spec, .. } => {
-            if spec.semijoin {
-                semi_join(graph, id, &union)
-            } else {
-                subplan(graph, id, &union, &spec)
-            }
+        Node::Join { .. } | Node::LeftJoin { .. } | Node::Existence { .. } | Node::Mark { .. } => {
+            join_filter(graph, id, &input)
         }
         Node::Union { left, right, .. } => union(graph, id, &input, (&left, &right)),
         Node::SetOperation { input: below, spec, .. } => {
-            if spec.kind == Kind::Except {
+            if spec.kind == SetKind::Except {
                 return Ok(false);
             }
             below_keys(graph, id, (&input, &below), &spec.columns)
@@ -193,44 +185,33 @@ fn finish(
     graph.keep(id, kept)?;
     Ok(true)
 }
-struct Side {
-    id: String,
-    input: String,
-    columns: BTreeSet<String>,
-}
-fn side(graph: &Graph<'_>, id: &str) -> Result<Side> {
-    let (Node::EquijoinKey { input, .. }
-    | Node::CrossKey { input, .. }
-    | Node::LeftJoinInput { input, .. }) = graph.node(id)?
-    else {
-        anyhow::bail!("missing join input")
+fn join_filter(graph: &mut Graph<'_>, id: &str, input: &str) -> Result<bool> {
+    let Some(join) = Join::at(graph, input)? else { return Ok(false) };
+    let derive = matches!(join.node, Node::Join { .. } | Node::LeftJoin { .. });
+    let sides = match &join.node {
+        Node::Join { .. } => vec![&join.left, &join.right],
+        Node::LeftJoin { spec, .. } if !spec.full => vec![&join.left],
+        Node::Mark { spec, .. } if !spec.semijoin => return subplan(graph, id, &join.left, spec),
+        Node::Existence { .. } | Node::Mark { .. } => vec![&join.left],
+        _ => return Ok(false),
     };
-    Ok(Side { id: id.into(), input: input.clone(), columns: graph.columns(input)? })
-}
-fn tagged(graph: &Graph<'_>, union: &str) -> Result<(Side, Side)> {
-    let Node::Union { left, right, .. } = graph.node(union)? else {
-        anyhow::bail!("missing tagged join union")
-    };
-    Ok((side(graph, left)?, side(graph, right)?))
-}
-fn inner_join(graph: &mut Graph<'_>, id: &str, keys: (&str, &str)) -> Result<bool> {
-    let (left, right) = (side(graph, keys.0)?, side(graph, keys.1)?);
-    let (mut lower_left, rest) = split(conjuncts(graph, id)?, &left.columns);
-    let (mut lower_right, kept) = split(rest, &right.columns);
-    implied_restrictions(graph, &kept, &left.columns, &mut lower_left);
-    implied_restrictions(graph, &kept, &right.columns, &mut lower_right);
-    finish(
-        graph,
-        id,
-        kept,
-        vec![(&left.id, &left.input, lower_left), (&right.id, &right.input, lower_right)],
-    )
-}
-fn outer_join(graph: &mut Graph<'_>, id: &str, union: &str) -> Result<bool> {
-    let (left, _) = tagged(graph, union)?;
-    let (mut lower, kept) = split(conjuncts(graph, id)?, &left.columns);
-    implied_restrictions(graph, &kept, &left.columns, &mut lower);
-    finish(graph, id, kept, vec![(&left.id, &left.input, lower)])
+    let mut kept = conjuncts(graph, id)?;
+    let mut lower = Vec::new();
+    for side in sides {
+        let columns = side.columns(graph)?;
+        let (moved, rest) = split(kept, &columns);
+        kept = rest;
+        lower.push((side, columns, moved));
+    }
+    // Derive restrictions only from conjuncts left above every eligible input.
+    let mut placements = Vec::new();
+    for (side, columns, mut moved) in lower {
+        if derive {
+            implied_restrictions(graph, &kept, &columns, &mut moved);
+        }
+        placements.push((side.id.as_str(), side.input.as_str(), moved));
+    }
+    finish(graph, id, kept, placements)
 }
 /// An OR over a join implies a restriction when every arm restricts the same input.
 fn implied_restrictions(
@@ -247,21 +228,10 @@ fn implied_restrictions(
         }
     }
 }
-fn left_input(graph: &Graph<'_>, union: &str) -> Result<Side> {
-    let Node::Union { left, .. } = graph.node(union)? else {
-        anyhow::bail!("missing tagged join union")
-    };
-    side(graph, left)
-}
-fn semi_join(graph: &mut Graph<'_>, id: &str, union: &str) -> Result<bool> {
-    let left = left_input(graph, union)?;
-    let (lower, kept) = split(conjuncts(graph, id)?, &left.columns);
-    finish(graph, id, kept, vec![(&left.id, &left.input, lower)])
-}
 /// A membership test that stays a filter orders by cost with the conjuncts beside it, unless
 /// a join below separates them onto different inputs.
-fn subplan(graph: &mut Graph<'_>, id: &str, union: &str, mark: &Mark) -> Result<bool> {
-    let left = left_input(graph, union)?;
+fn subplan(graph: &mut Graph<'_>, id: &str, left: &Side, mark: &Mark) -> Result<bool> {
+    let columns = left.columns(graph)?;
     let probe = probe_expression(graph, &left.input, &mark.probe);
     let threshold = typed::OPERATOR_COST.saturating_add(probe.cost());
     let mut reads = BTreeMap::new();
@@ -271,7 +241,7 @@ fn subplan(graph: &mut Graph<'_>, id: &str, union: &str, mark: &Mark) -> Result<
     let (mut lower, mut kept) = (Vec::new(), Vec::new());
     for value in conjuncts(graph, id)? {
         let names = value.read_names();
-        let local = !names.is_empty() && names.is_subset(&left.columns);
+        let local = !names.is_empty() && names.is_subset(&columns);
         if local && (value.cost() <= threshold || separated(&names, &probed, &sides)) {
             lower.push(value);
         } else {
@@ -299,10 +269,9 @@ pub(super) fn probe_expression(graph: &Graph<'_>, edge: &str, probe: &ColumnRef)
 fn join_sides(graph: &Graph<'_>, edge: &str) -> Result<Vec<BTreeSet<String>>> {
     Ok(match graph.node(edge)? {
         Node::Map { input, .. } | Node::Filter { input, .. } => join_sides(graph, input)?,
-        Node::Join { left, right, .. } => vec![graph.columns(left)?, graph.columns(right)?],
-        Node::LeftJoin { input, .. } => {
-            let (left, right) = tagged(graph, input)?;
-            vec![left.columns, right.columns]
+        Node::Join { .. } | Node::LeftJoin { .. } => {
+            let Some(join) = Join::at(graph, edge)? else { return Ok(Vec::new()) };
+            vec![join.left.columns(graph)?, join.right.columns(graph)?]
         }
         _ => Vec::new(),
     })
@@ -315,64 +284,18 @@ fn separated(
     sides.iter().any(|side| names.is_subset(side) && !probed.is_subset(side))
 }
 fn union(graph: &mut Graph<'_>, id: &str, child: &str, arms: (&str, &str)) -> Result<bool> {
-    if has_except(graph, arms.0)? || has_except(graph, arms.1)? {
+    let scopes = Scopes::new(graph, [arms.0, arms.1])?;
+    let (left, right) = (scopes.at(arms.0)?, scopes.at(arms.1)?);
+    if left.except || right.except {
         return Ok(false);
     }
     let values = conjuncts(graph, id)?;
     let (moved, kept): (Vec<_>, Vec<_>) = values.into_iter().partition(|value| {
         let names = value.read_names();
-        !names.is_empty()
-            && !names.iter().any(|name| {
-                coerced(graph, arms.0, name).unwrap_or(true)
-                    || coerced(graph, arms.1, name).unwrap_or(true)
-            })
+        !names.is_empty() && names.is_disjoint(&left.coerced) && names.is_disjoint(&right.coerced)
     });
     let placements = vec![(child, arms.0, moved.clone()), (child, arms.1, moved)];
     finish(graph, id, kept, placements)
-}
-/// `compare_tlist_datatypes`: a set-operation column an arm reaches through a cast is unsafe.
-pub(super) fn coerced(graph: &Graph<'_>, edge: &str, name: &str) -> Result<bool> {
-    Ok(match graph.node(edge)? {
-        Node::SetTag { input, .. } | Node::PartitionBy { input, .. } => {
-            coerced(graph, input, name)?
-        }
-        Node::Rebind { input, fields, .. } => {
-            let field = fields.iter().find(|field| field.output.name == name);
-            // A cast the query wrote already gave the arm the common type.
-            let aligned = field.filter(|field| field.input.name.contains("_cast_"));
-            let probe = aligned.map(|field| probe_expression(graph, input, &field.input));
-            probe.is_some_and(|value| value.casts_type())
-        }
-        _ => false,
-    })
-}
-pub(super) fn coerced_rebind(graph: &Graph<'_>, id: &str) -> Result<bool> {
-    let Node::Rebind { fields, .. } = graph.node(id)? else { return Ok(false) };
-    if !fields.iter().any(|field| field.output.name.starts_with("@union_")) {
-        return Ok(false);
-    }
-    for field in fields {
-        if coerced(graph, id, &field.output.name)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-/// `recurse_pushdown_safe` refuses a set-operation tree that contains EXCEPT anywhere.
-fn has_except(graph: &Graph<'_>, edge: &str) -> Result<bool> {
-    Ok(match graph.node(edge)? {
-        Node::SetOperation { spec, input, .. } => {
-            spec.kind == Kind::Except || has_except(graph, input)?
-        }
-        Node::Union { left, right, .. } => has_except(graph, left)? || has_except(graph, right)?,
-        Node::Rebind { input, .. }
-        | Node::Map { input, .. }
-        | Node::SetTag { input, .. }
-        | Node::PartitionBy { input, .. }
-        | Node::Sorted { input, .. }
-        | Node::SetDistinct { input, .. } => has_except(graph, input)?,
-        _ => false,
-    })
 }
 /// A grouped or windowed scope admits a filter over the keys that form its partitions.
 fn grouped(graph: &mut Graph<'_>, id: &str, child: &str) -> Result<bool> {
@@ -399,11 +322,11 @@ fn grouped(graph: &mut Graph<'_>, id: &str, child: &str) -> Result<bool> {
     }
 }
 fn join_condition(graph: &mut Graph<'_>, id: &str) -> Result<bool> {
-    let Node::LeftJoin { input, spec, .. } = graph.node(id)? else { return Ok(false) };
-    let Some(predicate) = spec.predicate.clone() else { return Ok(false) };
-    let input = input.clone();
-    let (_, right) = tagged(graph, &input)?;
-    let (lower, kept) = split(predicate.conjuncts(), &right.columns);
+    let Some(join) = Join::at(graph, id)? else { return Ok(false) };
+    let Node::LeftJoin { spec, .. } = join.node else { return Ok(false) };
+    let Some(predicate) = spec.predicate else { return Ok(false) };
+    let right = join.right;
+    let (lower, kept) = split(predicate.conjuncts(), &right.columns(graph)?);
     if lower.is_empty() {
         return Ok(false);
     }

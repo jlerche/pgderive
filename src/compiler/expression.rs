@@ -330,7 +330,7 @@ const fn compare(op: &Compare, ordering: Ordering) -> bool {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct Predicate(Expr);
 impl Predicate {
