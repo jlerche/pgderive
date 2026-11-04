@@ -53,6 +53,12 @@ pub(super) fn evaluate(
             .find(second()?)
             .map_or_else(|| Ok("0".into()), |index| count(first[..index].chars().count() + 1)),
         Builtin::StartsWith => Ok(if first.starts_with(second()?) { "t" } else { "f" }.into()),
+        Builtin::Lpad | Builtin::Rpad => pad(
+            first,
+            second()?.parse()?,
+            arguments.get(2).map_or(" ", String::as_str),
+            operation == Builtin::Lpad,
+        ),
         Builtin::Repeat => repeat(first, second()?.parse()?),
         Builtin::SplitPart => split(first, second()?, third()?.parse()?),
         Builtin::Substring => substring(
@@ -158,4 +164,25 @@ fn substring(text: &str, start: i32, length: Option<i32>) -> Result<String> {
         .transpose()?
         .unwrap_or(usize::MAX);
     Ok(text.chars().skip(skip).take(take).collect())
+}
+
+fn pad(text: &str, length: i32, fill: &str, left: bool) -> Result<String> {
+    let length = usize::try_from(length.max(0))?;
+    let prefix = text.chars().take(length).collect::<String>();
+    let missing = length.saturating_sub(prefix.chars().count());
+    if missing == 0 || fill.is_empty() {
+        return Ok(prefix);
+    }
+    let fill_length = fill.chars().count();
+    let cycles = missing / fill_length;
+    let remainder = fill.chars().take(missing % fill_length).collect::<String>();
+    let size = fill
+        .len()
+        .checked_mul(cycles)
+        .and_then(|size| size.checked_add(remainder.len()))
+        .and_then(|size| size.checked_add(prefix.len()))
+        .context("padding size overflow")?;
+    ensure!(size <= OUTPUT_LIMIT, "padding output exceeds 16 MiB engine budget");
+    let padding = fill.repeat(cycles) + &remainder;
+    Ok(if left { padding + &prefix } else { prefix + &padding })
 }

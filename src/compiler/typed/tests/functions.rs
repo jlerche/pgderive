@@ -69,6 +69,9 @@ fn text_functions_preserve_unicode_empty_and_null_semantics() -> Result<()> {
         "substring('x',1,NULL)",
         "starts_with(NULL,'')",
         "repeat('a',NULL)",
+        "lpad(NULL,2)",
+        "rpad('a',NULL)",
+        "lpad('a',2,NULL)",
     ] {
         assert_eq!(expression(sql)?.evaluate(&crate::transaction::Row::new())?, None, "{sql}");
     }
@@ -87,6 +90,8 @@ fn unsupported_signatures_and_function_errors_are_explicit() {
         "length(1)",
         "substr('x','x')",
         "left('a',1::bigint)",
+        "lpad('a',1::bigint)",
+        "rpad('a',2,1)",
         "public.length('a')",
         "upper('a')",
         "length('a','b')",
@@ -110,6 +115,8 @@ fn unsupported_signatures_and_function_errors_are_explicit() {
         "split_part('a',',',0)",
         "substr('a',1,0-1)",
         "repeat('xx',2147483647)",
+        "lpad('x',2147483647,'🙂')",
+        "rpad('x',2147483647)",
     ] {
         assert!(expression(sql).is_err(), "{sql}");
     }
@@ -128,5 +135,43 @@ fn strict_constant_null_folds_before_row_dependent_errors() -> Result<()> {
     }
     // Constant child errors still reject during binding, including in NULL calls.
     assert!(expression("left(NULL,32768::smallint)").is_err());
+    Ok(())
+}
+
+#[test]
+fn padding_budget_counts_bytes_and_lazy_branches_guard_expansion() -> Result<()> {
+    let row = [("a".into(), Some("2147483647".into()))].into();
+    for sql in ["CASE WHEN a>0 THEN 'ok' ELSE lpad('x',a) END", "COALESCE('ok',rpad('x',a))"] {
+        assert_eq!(expression(sql)?.evaluate(&row)?.as_deref(), Some("ok"));
+    }
+    assert!(expression("rpad('',a,'🙂')")?.evaluate(&row).is_err());
+    let row = [("a".into(), Some("4194304".into()))].into();
+    let value = expression("rpad('',a,'🙂')")?.evaluate(&row)?;
+    assert_eq!(value.as_ref().map(String::len), Some(16 * 1024 * 1024));
+    let row = [("a".into(), Some("4194305".into()))].into();
+    assert!(expression("lpad('',a,'🙂')")?.evaluate(&row).is_err());
+    Ok(())
+}
+
+#[test]
+fn padding_preserves_character_lengths_and_fill_semantics() -> Result<()> {
+    for (sql, expected) in [
+        ("lpad('é🙂x',5,'界ab')", "界aé🙂x"),
+        ("rpad('é🙂x',5,'界ab')", "é🙂x界a"),
+        ("lpad('é🙂x',2)", "é🙂"),
+        ("rpad('é',3)", "é  "),
+        ("lpad('é',3)", "  é"),
+        ("rpad('é🙂x',5,'')", "é🙂x"),
+        ("lpad('',3,'🙂é')", "🙂é🙂"),
+        ("rpad('abc',0,'x')", ""),
+        ("lpad('abc',-2147483648,'x')", ""),
+        ("rpad('é',2147483647,'')", "é"),
+    ] {
+        assert_eq!(
+            expression(sql)?.evaluate(&crate::transaction::Row::new())?.as_deref(),
+            Some(expected),
+            "{sql}"
+        );
+    }
     Ok(())
 }

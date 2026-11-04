@@ -11,7 +11,7 @@ from postgres_support_harness import evaluate, load_matrix
 class SupportMatrixTests(unittest.TestCase):
     def test_references_and_declared_signatures_are_complete(self):
         matrix = load_matrix()
-        self.assertEqual(len(matrix['scalar_functions']), 48)
+        self.assertEqual(len(matrix['scalar_functions']), 52)
         self.assertEqual({case['oid'] for case in matrix['source_rejections']},
                          set(matrix['unsupported_source_type_oids']))
         self.assertTrue(set(matrix['source_type_oids']).isdisjoint(matrix['unsupported_source_type_oids']))

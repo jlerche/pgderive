@@ -31,7 +31,7 @@ PostgreSQL computation fallback, or placement report.
 | Integer AVG | Local arbitrary-precision sum/count finalization with PostgreSQL scale selection and rounding; no SQL numeric_div call |
 | Fixed timestamp bins/offsets and integral MOD | Local qualified bounded implementations |
 | Calendar arithmetic, EXTRACT and date_trunc | [Native date/interval values, exact numeric fields and UTC calendar operations](temporal-arithmetic.md); type/coercion and relational restrictions remain explicit |
-| Pure integer/text functions | Checked integral ABS/to_hex; UTF8 length, trim, slice, replace, translate, reverse, split, repeat, code points and prefix checks; exact signatures in `src/compiler/capabilities.rs`; expansion budgets and right/MIN boundary in the roadmap |
+| Pure integer/text functions | Checked integral ABS/to_hex; UTF8 length, trim, slice, replace, translate, reverse, split, repeat, lpad/rpad, code points and prefix checks; exact signatures in `src/compiler/capabilities.rs`; expansion budgets and right/MIN boundary in the roadmap |
 | lower, upper, regexp, array extraction, calendar formatting and named zones | Not available in-engine; compile-time errors, no fallback |
 
 The scalar architecture uses one bound IR in `src/compiler/typed.rs` for maps and
@@ -100,3 +100,6 @@ Catalog scans remain initialization-only. Shared files require operator attestat
 and barriers in every affected database. Direct privileged mutation and automatic
 file attestation remain outside the deployment contract. Future capabilities must
 add their own dependencies before admission.
+
+The [SQL coverage inventory](sql-coverage-inventory.md) separates successful-result,
+admission and failure gaps and describes the UTF8 padding qualification slice.

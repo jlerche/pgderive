@@ -1158,5 +1158,11 @@
 {"sql": "SELECT k FROM (SELECT auction AS k FROM source.bid WHERE 1/0>0 GROUP BY auction HAVING false) g WHERE k>0", "raises": true},
 {"sql": "SELECT k FROM (SELECT auction AS k FROM source.bid WHERE 1/0>0 GROUP BY auction LIMIT 0) g WHERE k>0", "raises": true},
 {"sql": "SELECT a.id FROM source.auction a JOIN (SELECT auction, count(*) AS c FROM source.bid WHERE 1/0>0 GROUP BY auction) g ON a.id=g.auction WHERE false", "raises": true},
-{"sql": "SELECT a.id FROM source.auction a JOIN source.bid b ON a.id=b.auction AND a.other=b.id WHERE a.id=1 AND a.other=2 AND 1/b.price>0", "raises": false, "rows": ["1"], "auction": [[1, null, 2]], "bid": [[2, 1, 1], [3, 1, 0]]}
+{"sql": "SELECT a.id FROM source.auction a JOIN source.bid b ON a.id=b.auction AND a.other=b.id WHERE a.id=1 AND a.other=2 AND 1/b.price>0", "raises": false, "rows": ["1"], "auction": [[1, null, 2]], "bid": [[2, 1, 1], [3, 1, 0]]},
+{"sql": "SELECT lpad('x',1/other,'é') AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT rpad('x',1/0,'é') AS v FROM source.auction", "raises": true, "phase": "planning", "sqlstate": "22012"},
+{"sql": "SELECT CASE WHEN other=0 THEN 'ok' ELSE lpad('x',1/other) END AS v FROM source.auction", "raises": false, "rows": ["ok"]},
+{"sql": "SELECT COALESCE('ok',rpad('x',1/other)) AS v FROM source.auction", "raises": false, "rows": ["ok"]},
+{"sql": "SELECT lpad(NULL,1/other) AS v FROM source.auction", "raises": false, "rows": [""]},
+{"sql": "SELECT rpad('x',other,'界🙂') AS v FROM source.auction", "raises": false, "rows": [""]}
 ]

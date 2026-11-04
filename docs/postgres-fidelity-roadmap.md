@@ -204,7 +204,7 @@ The typed runtime now supports `abs(int2/int4/int8)`, `to_hex(int4/int8)`,
 and the following UTF8 text/varchar functions:
 `length`, `char_length`, `character_length`, `octet_length`, `bit_length`,
 `ascii`, `chr(int4)`, `reverse`, `left`, `right`, `ltrim`, `rtrim`, `btrim`,
-`replace`, `translate`, `strpos`, `starts_with`, `repeat`, `split_part`,
+`replace`, `translate`, `strpos`, `starts_with`, `repeat`, `lpad`, `rpad`, `split_part`,
 `substr` and the integral-position `substring` overloads. Text/varchar casts
 without modifiers, text CASE/COALESCE, nested calls and supported predicate
 positions use the same local evaluator. Unknown literals resolve only in the
@@ -239,3 +239,7 @@ The initialization catalog fingerprint includes these function families; existin
 registrations with the previous fingerprint require the normal explicit rebuild.
 
 The next milestones are tracked in the [M5–M9 application qualification and production roadmap](application-qualification-roadmap.md).
+
+The [SQL coverage inventory](sql-coverage-inventory.md) records the current padding
+slice and remaining planner/error boundaries. Padding uses the scalar 16 MiB UTF8
+output budget; its two- and three-argument signatures are listed in the support matrix.

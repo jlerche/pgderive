@@ -3,13 +3,14 @@
 import collections
 import json
 import pathlib
+import subprocess
 from decimal import Decimal
 from numeric_arithmetic_oracle import clean,number,rounding
 from temporal_oracle import parse_civil,parse_interval,extract,truncate,encoded
 from functions_compiler_harness import substring
 from native_mv_oracle import binary_difference, expected
 from sql_compiler_harness import SqlFixture
-from worker_harness import History, harness_arguments
+from worker_harness import History, harness_arguments, blocked_recovery
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MATRIX = ROOT / 'docs/postgres-support-matrix.json'
@@ -83,6 +84,13 @@ def evaluate(case, row):
         return text.find(rest[0]) + 1
     if name == 'starts_with':
         return text.startswith(rest[0])
+    if name in ['lpad', 'rpad']:
+        length = max(rest[0], 0)
+        prefix = text[:length]
+        fill = rest[1] if len(rest) > 1 else ' '
+        missing = length - len(prefix)
+        padding = (fill * (missing // len(fill)) + fill[:missing % len(fill)]) if fill else ''
+        return padding + prefix if name == 'lpad' else prefix + padding
     if name == 'repeat':
         return text * max(rest[0], 0)
     if name == 'split_part':
@@ -119,7 +127,7 @@ class SupportFixture(SqlFixture):
             UPDATE {self.name}.auction SET
             category=CASE WHEN id IN(1,2) THEN 'é🙂á é' WHEN id=3 THEN ''
                           WHEN id=4 THEN NULL ELSE 'skip me' END,
-            group_id=CASE WHEN id IN(1,2) THEN 2 WHEN id=3 THEN -2 ELSE NULL END,
+            group_id=CASE WHEN id IN(1,2) THEN 8 WHEN id=3 THEN -2 ELSE NULL END,
             small_value=CASE WHEN id=4 THEN NULL ELSE -7 END,
             large_value=CASE WHEN id=4 THEN NULL ELSE -2147483649 END,
             codepoint=CASE WHEN id=4 THEN NULL WHEN id=3 THEN 65 ELSE 128578 END,
@@ -180,13 +188,26 @@ def qualify(output, command):
             f"DELETE FROM {fixture.name}.auction WHERE id=1; UPDATE {fixture.name}.auction SET category='é🙂',group_id=0 WHERE id=3",
             f"INSERT INTO {fixture.name}.auction(id,category,group_id) VALUES(100,NULL,NULL),(101,'é🙂',0)",
             f"UPDATE {fixture.name}.auction SET category='skip now' WHERE id=2; UPDATE {fixture.name}.auction SET category='é🙂',group_id=2 WHERE id=5",
-            f"DELETE FROM {fixture.name}.auction WHERE id=100; UPDATE {fixture.name}.auction SET category='',group_id=-2 WHERE id=101",
+            f"DELETE FROM {fixture.name}.auction WHERE id=100; UPDATE {fixture.name}.auction SET category='',group_id=7 WHERE id=101",
         ]
         def initial():
             assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
         fixture.run_history(command, History(changes=changes,
-            final=f"UPDATE {fixture.name}.auction SET category='é🙂',group_id=1 WHERE id=101",
+            final=f"UPDATE {fixture.name}.auction SET category='é🙂',group_id=9 WHERE id=101",
             normalized=fixture.query, rejected=[]), initial=initial)
+        worker = fixture.start(command, 'scalar-failure-recovery')
+        worker.event('ready')
+        poison = f"INSERT INTO {fixture.name}.auction(id,category,group_id,small_value) VALUES(999,'x',1,-32768)"
+        # Isolate abs(int2) overflow from the separately restricted right(int4 MIN) boundary.
+        fixture.sql(poison)
+        native = subprocess.run(fixture.pg + [fixture.query], env=fixture.environment,
+                                             capture_output=True, text=True)
+        (output / 'native-scalar-error.txt').write_text(native.stderr)
+        assert native.returncode != 0 and 'out of range' in native.stderr
+        assert 'overflow' in blocked_recovery(fixture, worker,
+                                              f'DELETE FROM {fixture.name}.auction WHERE id=999')
+        fixture.verify()
+        assert fixture.acknowledgement_ahead().strip() == '0'
         (output / 'result.json').write_text(json.dumps({
             'strict_signatures': len(matrix['scalar_functions']),
             'coercion_cases': len(matrix['coercion_cases']), 'rejected_cases': len(matrix['rejections']),

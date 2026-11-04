@@ -6,6 +6,7 @@ const CORPUS: &str = include_str!("../../../scripts/error_order_corpus.json");
 struct Case {
     sql: String,
     raises: bool,
+    phase: Option<String>,
     #[serde(default)]
     rows: Vec<String>,
     #[serde(default = "auction_row")]
@@ -45,13 +46,13 @@ fn integers() -> crate::source::Contract {
     native
 }
 
-/// The sorted output lines, as `psql -At` prints them; `None` when the query raises.
-async fn outcome(case: &Case) -> Result<Option<Vec<String>>> {
+/// The failure phase, if any, and sorted output lines as `psql -At` prints them.
+async fn outcome(case: &Case) -> Result<(Option<&'static str>, Vec<String>)> {
     let native = integers();
     let compiled = match crate::compiler::compile(&case.sql, &native) {
         Ok(compiled) => compiled,
         Err(error) if format!("{error:#}").contains("constant expression failed") => {
-            return Ok(None);
+            return Ok((Some("planning"), Vec::new()));
         }
         Err(error) => return Err(error),
     };
@@ -62,7 +63,9 @@ async fn outcome(case: &Case) -> Result<Option<Vec<String>>> {
     let inputs = crate::worker::program::relational::inputs(&batch, compiled.relational(), 1)?;
     let prepared = match query.prepare(inputs).await {
         Ok(prepared) => prepared,
-        Err(error) if error.is::<crate::engine::execution::EvaluationFailed>() => return Ok(None),
+        Err(error) if error.is::<crate::engine::execution::EvaluationFailed>() => {
+            return Ok((Some("execution"), Vec::new()));
+        }
         Err(error) => return Err(error),
     };
     let mut lines = Vec::new();
@@ -75,7 +78,7 @@ async fn outcome(case: &Case) -> Result<Option<Vec<String>>> {
         lines.extend(std::iter::repeat_n(line, usize::try_from(*weight)?));
     }
     lines.sort();
-    Ok(Some(lines))
+    Ok((None, lines))
 }
 
 #[tokio::test]
@@ -84,7 +87,10 @@ async fn expression_errors_match_postgresql() -> Result<()> {
     for case in serde_json::from_str::<Vec<Case>>(CORPUS)? {
         let expected = (!case.raises).then(|| case.rows.clone());
         match outcome(&case).await {
-            Ok(result) if result == expected => {}
+            Ok((phase, rows))
+                if phase.is_some() == case.raises
+                    && (case.raises || Some(&rows) == expected.as_ref())
+                    && case.phase.as_deref().is_none_or(|expected| phase == Some(expected)) => {}
             result => different.push(format!(
                 "{} auction={:?} bid={:?} postgres={expected:?} pgderive={:?}",
                 case.sql,

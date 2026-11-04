@@ -779,6 +779,82 @@
           "literal": "UTC"
         }
       ]
+    },
+    {
+      "name": "lpad",
+      "input_oids": [
+        25,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "lpad(a.category,a.group_id)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "lpad",
+      "input_oids": [
+        25,
+        23,
+        25
+      ],
+      "result_oid": 25,
+      "expression": "lpad(a.category,a.group_id,'\u754c\ud83d\ude42')",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        },
+        {
+          "literal": "\u754c\ud83d\ude42"
+        }
+      ]
+    },
+    {
+      "name": "rpad",
+      "input_oids": [
+        25,
+        23
+      ],
+      "result_oid": 25,
+      "expression": "rpad(a.category,a.group_id)",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        }
+      ]
+    },
+    {
+      "name": "rpad",
+      "input_oids": [
+        25,
+        23,
+        25
+      ],
+      "result_oid": 25,
+      "expression": "rpad(a.category,a.group_id,'\u754c\ud83d\ude42')",
+      "arguments": [
+        {
+          "column": "category"
+        },
+        {
+          "column": "group_id"
+        },
+        {
+          "literal": "\u754c\ud83d\ude42"
+        }
+      ]
     }
   ],
   "coercion_cases": [
