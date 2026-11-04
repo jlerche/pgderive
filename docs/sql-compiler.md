@@ -1264,6 +1264,10 @@ binding and before execution, so the same query raises where PostgreSQL does:
 - A top-level `IN` conjunct of WHERE is a semijoin, so filters beside it run first. Any
   other membership test, including `NOT IN`, stays a filter that runs before costlier
   conjuncts on its own input.
+- Once movement settles, output maps simplify decided CASE/COALESCE and Boolean branches
+  before collecting their live inputs. Unread membership subplans and ordinary aggregate
+  inputs can then disappear. Failed simplification retains the original expression for
+  final folding; aggregate FILTER arguments retain their separate planning checks.
 - Unread computed columns and aggregates are dropped, except a UNION ALL whose arms differ in
   type, which keeps every output because PostgreSQL does not flatten it. Sort expressions and
   the keys of an unread window still run, and filters stay above that window unless they read
@@ -1346,8 +1350,6 @@ Other plans can differ, and these differences remain:
   flattens that arm and raises.
 - A membership output a query does read runs below the joins of its scope, so it can raise for
   rows PostgreSQL's join would have removed.
-- Reads of a column under a decided operand, such as `COALESCE(1,s.v)`, keep that computed
-  column, so a failure in it can raise where PostgreSQL folds the read away.
 - COUNT(DISTINCT), and MIN, MAX and prefix-window aggregates lowered to ordered state, are
   not dropped when unread.
 - Non-default function costs are not modeled.

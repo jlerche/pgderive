@@ -42,6 +42,9 @@ pub(super) fn run(graph: &mut Graph<'_>, settled: bool) -> Result<bool> {
         if !unflattened.contains(node.id()) {
             changed |= trim(node, &origin, &required);
         }
+        if settled {
+            changed |= simplify_map(node);
+        }
         required.extend(reads(node)?);
     }
     changed |= remove_empty(graph)?;
@@ -247,6 +250,21 @@ fn trim_aggregates(spec: &mut Partition, required: &Names) -> bool {
         spec.aggregates.insert(0, spare);
     }
     spec.aggregates != before
+}
+/// Decide lazy output branches before collecting their live inputs. Failed folding leaves
+/// the original expression intact for the authoritative final folding phase.
+fn simplify_map(node: &mut Node) -> bool {
+    let Node::Map { computed, .. } = node else { return false };
+    let mut changed = false;
+    for value in computed {
+        if let Ok(folded) = super::dummy::fold_computed(value)
+            && folded != value.expression
+        {
+            value.expression = folded;
+            changed = true;
+        }
+    }
+    changed
 }
 fn reads(node: &Node) -> Result<Names> {
     let mut names = Names::new();

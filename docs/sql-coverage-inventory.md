@@ -23,7 +23,7 @@ plan. Current planner implementation still documents the following differences:
 
 | Class | Cases | Disposition |
 | --- | --- | --- |
-| Compiler/planner candidates | Contradictory restrictions; folding after substitution; dead CASE/COALESCE reads; unread ordered aggregates/windows; nested set-operation flattening; subqueries under false/NULL filters; removed joins with failing constants | Retain documented limitations. Each needs a minimized native phase test before changing the shared planner. This slice does not assert these claims were independently requalified. |
+| Compiler/planner candidates | Contradictory restrictions; folding after substitution; unread ordered aggregates/windows; nested set-operation flattening; subqueries under false/NULL filters; removed joins with failing constants | Retain documented limitations. Each needs a minimized native phase test before changing the shared planner. This slice does not assert these claims were independently requalified. |
 | Execution-model decisions | Skipped join inputs/probes, join-order-dependent two-sided predicates, computed merge-sort equalities, LIMIT 0 beside joins, membership evaluated before joins eliminate rows | Incremental input maintenance can evaluate rows a selected native plan never reads; do not swallow errors to imitate that plan |
 | Environment-dependent planning | Statistics-dependent OR restrictions and non-default function costs | Existing cost/selectivity model remains bounded; one forced plan cannot establish universal error equivalence |
 | Resource domain | 16 KiB expression inlining boundary, bounded numeric/temporal/state domains and scalar expansion budgets | Declared engine limits, distinct from PostgreSQL semantic errors |
@@ -85,3 +85,59 @@ Independent sub-agent review found no remaining blockers after the fixture and
 SQLSTATE assertions were corrected. Padding resource failures are unit-qualified;
 the live recovery check covers shared scalar overflow, not native allocation-limit
 equivalence. No planner error-equivalence claim is added by this slice.
+
+
+## Settled output liveness slice
+
+At `0fda8dd`, native PostgreSQL 17.11 returns `true` for the following query with
+one auction row (`id=1`) and one bid row (`price=0`), while Pgderive reports an
+execution-time division by zero:
+
+```sql
+SELECT COALESCE(true,s.v) AS v
+FROM (SELECT id IN (SELECT 1/price FROM source.bid) AS v
+      FROM source.auction) s;
+```
+
+The outer output was folded only after liveness had kept the membership mark and
+its failing input alive. Settled pruning now applies the existing scalar folding
+to retained output maps before collecting reads. The existing mark/global-aggregate
+pruning then removes work those outputs no longer use. Failed speculative folding
+leaves the original expression intact for the final authoritative folding phase;
+shared aggregate-input folding preserves the separately planned FILTER argument.
+No evaluator, constant-propagation framework or second planner representation is
+added. Frozen flattening provenance and filter-movement phases remain unchanged.
+
+Qualification adds native-pinned controls for decided and needed membership reads,
+CASE with a NULL condition, Boolean operands, unread failing constants, materialized
+CTE boundaries and constant aggregate FILTER arguments. Empty input and duplicate
+outputs retain their native multiplicities. A live `dead-membership` composition
+fixture begins with a zero divisor in the unused input and compares native MV bags,
+column metadata and an independent memory oracle through simultaneous source writes,
+retractions, empty right input and cold restart. Existing live subquery failure and
+repair qualification continues to cover work that remains observable.
+
+The previous broad dead-read documentation was incomplete: a simple flattened
+`COALESCE(1,s.v)` over `SELECT 1/other AS v` already worked. Boundary cases exposed
+the real issue. This slice also fixes decided reads of ordinary global SUM outputs.
+Unread ordered aggregates/extrema and computed outputs kept by LIMIT ordering still
+have separate documented differences. Direct subqueries in lazy branches remain
+unsupported; row-dependent guards do not imply conditional subplan execution.
+Boolean casts outside the existing cast domain are not added. Physical plans that
+change require explicit rebuild under the existing registration identity contract.
+
+Minimized native and pre-fix engine evidence is retained in
+`artifacts/planner-dead-reads/reproduction-native.json` and
+`artifacts/planner-dead-reads/reproduction-engine.log`. The probe also preserved the
+separate LIMIT/ordered-MAX differences and direct-lazy-subquery admission rejection;
+those are not presented as fixed by this slice.
+
+Validation for this planner slice: `./scripts/check.sh` passed in the default core
+profile with 1,187 native comparison cases (21 additions), 498 live worker result
+records plus rebuild, and 97.02% production line coverage. Clippy and dependency
+checks passed. Independent review found no blockers; its requested empty-global-SUM
+cardinality control was added together with needed-SUM error/NULL controls.
+Evidence is indexed in `artifacts/planner-dead-reads/completion.json`; the passing
+gate is `artifacts/planner-dead-reads/check.log`, with worker evidence under
+`artifacts/worker/run-FuGHKViy` and coverage under `artifacts/coverage/run-7kS8lS60`.
+This is core regression qualification, not the full release profile.

@@ -186,10 +186,7 @@ pub(super) fn fold_node(node: &mut Node) -> Result<()> {
     match node {
         Node::Map { computed, .. } => {
             for value in computed {
-                if value.column.name.starts_with(AGGREGATE_INPUT) {
-                    value.expression.fold_filtered()?;
-                }
-                value.expression = value.expression.fold()?;
+                value.expression = fold_computed(value)?;
             }
         }
         Node::Partition { spec, .. }
@@ -214,6 +211,15 @@ pub(super) fn fold_node(node: &mut Node) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+/// Preserve the separately planned aggregate argument even when FILTER folds to false.
+pub(super) fn fold_computed(
+    value: &crate::compiler::scalar::Computed,
+) -> Result<crate::compiler::typed::Typed> {
+    if value.column.name.starts_with(AGGREGATE_INPUT) {
+        value.expression.fold_filtered()?;
+    }
+    value.expression.fold()
 }
 const AGGREGATE_INPUT: &str = "@aggregate_input_";
 /// Conditions are planned even in a scope whose rows are never asked for.

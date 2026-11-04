@@ -14,7 +14,7 @@ MODES = (
     'cte-chain', 'cte-repeated-join', 'cte-shadow', 'cte-alias', 'cte-repeated-union',
     'union-duplicates', 'union-null', 'union-widen', 'union-numeric',
     'union-group', 'union-window', 'union-branch-limit', 'union-limit',
-    'union-constant', 'union-varchar', 'union-boolean', 'union-temporal', 'combined',
+    'union-constant', 'union-varchar', 'union-boolean', 'union-temporal', 'combined', 'dead-membership',
 )
 
 
@@ -76,7 +76,13 @@ class CompositionFixture(SqlFixture):
             'union-temporal': f'SELECT a.plain AS g FROM {a} a UNION ALL SELECT a.zoned FROM {a} a',
             'combined': f'WITH c AS ({union}), d AS (SELECT c.g,COUNT(*) AS n FROM c GROUP BY c.g HAVING COUNT(*)>=2) SELECT d.g,d.n FROM d ORDER BY n DESC,g ASC NULLS LAST LIMIT 4',
         }
+        queries['dead-membership'] = (f'SELECT COALESCE(true,q.v) AS g,'
+            f'CASE WHEN NULL THEN q.v ELSE false END AS v FROM '
+            f'(SELECT a.id IN(SELECT 10/b.price FROM {b} b) AS v FROM {a} a) q')
         self.query = queries[mode]
+        if mode == 'dead-membership':
+            self.labels = ['g', 'v']
+            self.sql(f'INSERT INTO {b}(id,auction,price) VALUES(999,1,0)')
         if mode in ('having-count', 'cte-chain', 'union-group', 'union-window', 'combined'):
             self.labels = ['g', 'n']
         elif mode == 'having-window':
@@ -101,7 +107,9 @@ class CompositionFixture(SqlFixture):
         mode = self.mode
         groups = grouped(rows)
         result = collections.Counter()
-        if mode.startswith('having-') or mode == 'cte-chain':
+        if mode == 'dead-membership':
+            result.update((True, False) for _ in catalog)
+        elif mode.startswith('having-') or mode == 'cte-chain':
             selected = []
             for key, members in groups.items():
                 count = len(members)
@@ -199,7 +207,7 @@ def qualify(output, command, mode):
         (output/'result.json').write_text(json.dumps({'mode': mode, 'original_sql_mv': True,
             'raw_row_memory_oracle': True, 'metadata': True, 'empty_and_null_inputs': True,
             'weighted_duplicates': True,
-            'same_transaction_sources': mode in ('union-widen', 'union-numeric', 'union-group', 'union-window', 'combined'),
+            'same_transaction_sources': mode in ('union-widen', 'union-numeric', 'union-group', 'union-window', 'combined', 'dead-membership'),
             'cold_restart': True})+'\n')
 
 
