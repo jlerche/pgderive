@@ -110,7 +110,7 @@ async fn average(sql: &Client) -> Result<()> {
         let sum: num_bigint::BigInt =
             values.iter().map(|value| num_bigint::BigInt::from(*value)).sum();
         let ratio = format!("{sum}/{}", values.len());
-        let local = crate::numeric::Numeric::average(&ratio)?;
+        let local = crate::numeric::Numeric::average(&ratio)?.text();
         let expected: String = sql
             .query_one("SELECT avg(value)::text FROM unnest($1::bigint[]) AS value", &[&values])
             .await?

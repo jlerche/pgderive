@@ -184,15 +184,14 @@ impl Ord for Numeric {
     }
 }
 impl Numeric {
-    pub(crate) fn average(ratio: &str) -> Result<String> {
+    pub(crate) fn average(ratio: &str) -> Result<Self> {
         let (sum, count) = ratio.split_once('/').context("invalid engine AVG operand")?;
         let denominator = count.parse::<i64>()?;
         ensure!(denominator > 0, "invalid engine AVG count");
         // Aligned sums can span both input digit extremes plus an i64 count;
         // only the final quotient must fit the public result/display budget.
-        Ok(Self::parse_bounded(sum, 2 * LIMIT + 32)?
-            .divide(&Self::parse(&denominator.to_string())?)?
-            .text())
+        Self::parse_bounded(sum, 2 * LIMIT + 32)?
+            .divide(&Self::Finite { coefficient: denominator.into(), scale: 0 })
     }
 }
 

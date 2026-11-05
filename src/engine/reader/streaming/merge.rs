@@ -194,14 +194,13 @@ async fn consolidate<K: BatchData, V: BatchData>(
     let (key, value) = inputs[ordinal].first().context("missing compaction head")?;
     let tuple = (key.clone(), value.clone());
     let mut weight = num_bigint::BigInt::default();
-    let loads = inputs
-        .iter()
-        .enumerate()
-        .filter(|(_, input)| input.cursor.is_none() && input.first() == Some((&tuple.0, &tuple.1)))
-        .map(|(index, _)| (index, coalesces(inputs, index)))
-        .collect::<Vec<_>>();
-    for (index, read_ahead) in loads {
-        inputs[index].load(read_ahead).await?;
+    for index in 0..inputs.len() {
+        if inputs[index].cursor.is_none() && inputs[index].first() == Some((&tuple.0, &tuple.1)) {
+            // Loading preserves authenticated first/last fences, so later
+            // coalescing decisions see the same boundaries without a plan Vec.
+            let read_ahead = coalesces(inputs, index);
+            inputs[index].load(read_ahead).await?;
+        }
     }
     for input in inputs {
         if input.first() != Some((&tuple.0, &tuple.1)) {

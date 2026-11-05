@@ -15,6 +15,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use num_bigint::BigInt;
+use std::sync::Arc;
 const SIDE: &str = "\0left_join_side";
 fn is_left(row: &Row) -> Result<bool> {
     match row.get(SIDE).and_then(Option::as_deref) {
@@ -35,9 +36,9 @@ pub(super) fn project(columns: &[ColumnRef], row: &Row) -> Result<Row> {
         .collect()
 }
 pub(super) fn distinct(columns: &[ColumnRef]) -> Group<Key, Row> {
-    let columns = columns.to_vec();
+    let columns: Arc<[ColumnRef]> = Arc::from(columns);
     Group::new(move |input, work| {
-        let columns = columns.clone();
+        let columns = Arc::clone(&columns);
         Box::pin(async move {
             let mut output = Vec::new();
             for (mut cursor, sign) in [(input.before().await?, -1), (input.after().await?, 1)] {
@@ -130,9 +131,9 @@ pub(super) fn left_join(spec: &Spec) -> Group<Key, Row> {
     if spec.predicate.is_some() || spec.full {
         return residual_join::operator(spec);
     }
-    let spec = spec.clone();
+    let spec = Arc::new(spec.clone());
     Group::new(move |input, work| {
-        let spec = spec.clone();
+        let spec = Arc::clone(&spec);
         Box::pin(async move {
             let mut output = Consolidator::new(input.limits)?;
             let (left, right) = split(input.delta)?;

@@ -51,9 +51,7 @@ impl Typed {
                 .get(&column.name)
                 .context(PlanFault("missing intermediate average"))?
                 .as_deref()
-                .map(|text| -> Result<_> {
-                    Ok(Native::Numeric(Numeric::parse(&Numeric::average(text)?)?))
-                })
+                .map(|text| -> Result<_> { Ok(Native::Numeric(Numeric::average(text)?)) })
                 .transpose()?,
             Value::Remainder(value) => value.integer_pair(rows)?.map(Native::Integer),
             Value::Temporal(value) => value.evaluate(rows.0)?.map(Native::Timestamp),

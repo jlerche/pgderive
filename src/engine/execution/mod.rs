@@ -184,12 +184,16 @@ impl<T: BatchData> Consolidator<T> {
     fn add_inner(&mut self, tuple: T, weight: BigInt) -> Result<()> {
         charge_contribution(&mut self.contributions, self.limits.contributions)?;
         let previous = self.entries.get(&tuple);
-        let next = previous.map_or_else(|| weight.clone(), |old| &old.weight + &weight);
+        let next = previous.map(|old| &old.weight + &weight);
         let tuple_bytes = previous.map_or_else(
             || record::size_value(&tuple, self.limits.record_bytes),
             |old| Ok(old.tuple_bytes),
         )?;
-        let bytes = record::weighted_size(tuple_bytes, &next, self.limits.record_bytes)?;
+        let bytes = record::weighted_size(
+            tuple_bytes,
+            next.as_ref().unwrap_or(&weight),
+            self.limits.record_bytes,
+        )?;
         let old_bytes = previous.map_or(0, |old| old.bytes);
         let required = self
             .bytes
@@ -209,7 +213,8 @@ impl<T: BatchData> Consolidator<T> {
             self.entries.insert(tuple, Resident { weight, tuple_bytes, bytes });
         } else {
             self.bytes = required;
-            self.entries.insert(tuple, Resident { weight: next, tuple_bytes, bytes });
+            self.entries
+                .insert(tuple, Resident { weight: next.unwrap_or(weight), tuple_bytes, bytes });
         }
         Ok(())
     }

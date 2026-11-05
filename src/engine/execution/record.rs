@@ -73,11 +73,18 @@ pub(super) fn size_value(value: &impl Serialize, limit: usize) -> Result<usize> 
 pub(super) fn weighted_size(tuple_bytes: usize, weight: &BigInt, limit: usize) -> Result<usize> {
     check_weight(weight, limit)?;
     let bytes = tuple_bytes
-        .checked_add(weight.to_string().len())
+        .checked_add(decimal_len(weight)?)
         .and_then(|bytes| bytes.checked_add(5))
         .context("scratch record size overflow")?;
     ensure!(bytes <= limit, CapacityExceeded("scratch record limit exceeded"));
     Ok(bytes)
+}
+fn decimal_len(weight: &BigInt) -> Result<usize> {
+    let Ok(weight) = i128::try_from(weight) else {
+        return Ok(weight.to_string().len());
+    };
+    let digits = weight.unsigned_abs().checked_ilog10().map_or(1, |log| log + 1);
+    Ok(usize::try_from(digits)? + usize::from(weight < 0))
 }
 pub(super) fn size(tuple: &impl Serialize, weight: &BigInt, limit: usize) -> Result<usize> {
     check_weight(weight, limit)?;

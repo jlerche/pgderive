@@ -151,3 +151,16 @@ async fn join_narrows_after_all_cross_terms() -> Result<()> {
     assert_eq!(step.batch, Batch::from_updates([((1, (1, 1)), 2)])?);
     Ok(())
 }
+
+#[tokio::test]
+async fn cross_term_scans_repeated_and_disjoint_keys() -> Result<()> {
+    let mut engine = graph()?;
+    let left = [((0, 0), 1), ((2, 1), -2), ((2, 2), 3), ((4, 3), 1), ((8, 4), 2)];
+    let right = [((1, 0), 1), ((2, 1), 4), ((2, 2), -3), ((3, 3), 2), ((7, 4), 1)];
+    let step = engine.commit(engine.prepare(tick(1, left, right)?).await?)?;
+    assert_eq!(
+        step.batch.iter().map(|(tuple, weight)| (*tuple, *weight)).collect::<Output>(),
+        oracle(&left, &right)
+    );
+    Ok(())
+}

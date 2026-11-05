@@ -1,4 +1,5 @@
-use super::{CacheConfig, EncodedCache, hash};
+use super::{CacheConfig, EncodedCache};
+use crate::engine::reader::format::hash;
 use anyhow::{Result, bail};
 use std::time::Duration;
 

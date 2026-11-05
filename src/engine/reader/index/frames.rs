@@ -1,5 +1,5 @@
 //! Exact authenticated compressed nodes; namespace-independent content identity.
-use super::super::format::hash;
+use super::super::format::hash_matches;
 use anyhow::{Result, ensure};
 use std::sync::Arc;
 
@@ -33,7 +33,7 @@ impl Frames {
     }
     pub(super) fn insert(&self, digest: &str, length: u64, bytes: Arc<Vec<u8>>) -> Result<()> {
         ensure!(u64::try_from(bytes.len())? == length, "index frame length mismatch");
-        ensure!(hash(&bytes) == digest, "index frame checksum mismatch");
+        ensure!(hash_matches(&bytes, digest), "index frame checksum mismatch");
         let identity = (digest.into(), length);
         if Self::charge(&identity, bytes.len()).max(self.minimum) <= self.bytes {
             drop(self.cache.insert(identity, bytes));
@@ -49,6 +49,7 @@ impl Frames {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::reader::format::hash;
 
     #[test]
     fn only_authenticated_frames_are_retained_under_weight_and_entry_caps() -> Result<()> {

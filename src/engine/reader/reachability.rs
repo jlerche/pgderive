@@ -1,6 +1,6 @@
 use super::{
     ObjectRef,
-    format::hash,
+    format::hash_matches,
     index::{Address, Node, Root},
 };
 use anyhow::{Context as _, Result, ensure};
@@ -38,7 +38,7 @@ impl ObjectRef {
         let path = self.child_path(&pack.path);
         let packed = store.get_range(&Path::from(path.clone()), 0..pack.bytes).await?;
         ensure!(
-            u64::try_from(packed.len())? == pack.bytes && hash(&packed) == pack.hash,
+            u64::try_from(packed.len())? == pack.bytes && hash_matches(&packed, &pack.hash),
             "reachability index pack checksum/length mismatch"
         );
         let mut dependencies = BTreeSet::from([path]);
@@ -54,7 +54,10 @@ impl ObjectRef {
                 .checked_add(usize::try_from(address.length)?)
                 .context("reachability node range overflow")?;
             let bytes = packed.get(start..end).context("reachability node exceeds packed index")?;
-            ensure!(hash(bytes) == address.hash, "reachability index page checksum mismatch");
+            ensure!(
+                hash_matches(bytes, &address.hash),
+                "reachability index page checksum mismatch"
+            );
             let node: Node<serde_json::Value> =
                 serde_json::from_slice(&super::compression::decode(bytes)?)?;
             node.validate_structure(&address, pack.bytes)?;

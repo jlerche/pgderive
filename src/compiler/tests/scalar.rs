@@ -76,13 +76,36 @@ fn unsupported_overloads_explain_types_and_available_signatures() -> Result<()> 
 
 #[test]
 fn uuid_literals_use_the_source_text_form() -> Result<()> {
-    for literal in ["a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "{A0EEBC999C0B4EF8BB6D6BB9BD380A11}"] {
+    for literal in [
+        "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+        "{A0EEBC999C0B4EF8BB6D6BB9BD380A11}",
+        "a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11",
+    ] {
         assert_eq!(
             crate::compiler::value::literal_text(2950, literal)?,
             "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
         );
     }
     Ok(())
+}
+
+#[test]
+fn uuid_decode_rejects_invalid_digits_separators_and_lengths() {
+    for literal in [
+        "",
+        "a0eebc999c0b4ef8bb6d6bb9bd380a1",
+        "a0eebc999c0b4ef8bb6d6bb9bd380a111",
+        "a0eebc999c0b4ef8bb6d6bb9bd380a1é",
+        "a0eebc999c0b4ef8bb6d6bb9bd380a1g",
+        "-a0eebc999c0b4ef8bb6d6bb9bd380a11",
+        "a0eebc999c0b4ef8bb6d6bb9bd380a11-",
+        "a0ee--bc999c0b4ef8bb6d6bb9bd380a11",
+        "a0-eebc999c0b4ef8bb6d6bb9bd380a11",
+        "{a0eebc999c0b4ef8bb6d6bb9bd380a11",
+        "a0eebc999c0b4ef8bb6d6bb9bd380a11}",
+    ] {
+        assert!(crate::compiler::value::decode(2950, literal).is_err(), "{literal}");
+    }
 }
 
 #[test]

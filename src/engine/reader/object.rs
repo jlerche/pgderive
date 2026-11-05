@@ -1,6 +1,6 @@
 use super::{
     BatchData, BatchReader, BlockCache, Cursor, Entry,
-    format::{Block, Pack, hash, validate},
+    format::{Block, Pack, hash, hash_matches, validate},
     index::{Address, Authenticated, Leaf, Node, Root},
 };
 use crate::engine::Batch;
@@ -87,7 +87,7 @@ impl ObjectRef {
         let path = Path::from(self.path.clone());
         ensure!(store.head(&path).await?.size == self.bytes, "root size mismatch");
         let bytes = store.get_range(&path, 0..self.bytes).await?;
-        ensure!(hash(&bytes) == self.hash, "root checksum mismatch");
+        ensure!(hash_matches(&bytes, &self.hash), "root checksum mismatch");
         Ok(bytes.to_vec())
     }
     /// Content-addressed object path.
@@ -665,7 +665,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             } else {
                 self.cache.ranges.read_exact(&self.store, &leaf.pack, range.clone()).await?
             };
-            if hash(&bytes) != block.hash {
+            if !hash_matches(&bytes, &block.hash) {
                 self.cache.ranges.invalidate(&leaf.pack, &range)?;
                 anyhow::bail!("object block checksum mismatch");
             }
@@ -677,7 +677,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             bytes
         };
         ensure!(u64::try_from(bytes.len())? == block.length, "object range length mismatch");
-        ensure!(hash(&bytes) == block.hash, "object block checksum mismatch");
+        ensure!(hash_matches(&bytes, &block.hash), "object block checksum mismatch");
         Ok(bytes)
     }
     pub(crate) async fn read(&self, ordinal: usize) -> Result<Arc<Vec<Entry<K, V>>>> {

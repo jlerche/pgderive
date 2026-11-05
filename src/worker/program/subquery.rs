@@ -13,7 +13,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 const SIDE: &str = "\0left_join_side";
 const VALUE_OVERHEAD: u64 = 64;
 fn left(row: &Row) -> Result<bool> {
@@ -89,9 +89,9 @@ fn indexed_membership(spec: &Mark, probe: &Row, set: &RightValues) -> Result<Opt
     })
 }
 pub(super) fn mark(spec: &Mark) -> Group<Key, Row> {
-    let spec = spec.clone();
+    let spec = Arc::new(spec.clone());
     Group::new(move |input, work| {
-        let spec = spec.clone();
+        let spec = Arc::clone(&spec);
         Box::pin(async move {
             let mut output = Consolidator::new(input.limits)?;
             for (cursor, sign) in [(input.before().await?, -1), (input.after().await?, 1)] {

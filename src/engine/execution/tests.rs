@@ -304,3 +304,29 @@ fn abandoned_consolidators_remove_scratch_but_failed_ones_keep_it() -> Result<()
     std::fs::remove_dir_all(path)?;
     Ok(())
 }
+
+#[test]
+fn decimal_weight_sizes_are_exact_at_powers_and_fixed_width_boundaries() -> Result<()> {
+    let mut weights = vec![
+        BigInt::from(0),
+        BigInt::from(i128::MIN),
+        BigInt::from(i128::MAX),
+        BigInt::from(i128::MIN) - 1,
+        BigInt::from(i128::MAX) + 1,
+    ];
+    let mut power = BigInt::from(1);
+    for _ in 0..=40 {
+        for delta in [-1, 0, 1] {
+            let weight: BigInt = &power + delta;
+            weights.push(weight.clone());
+            weights.push(-weight);
+        }
+        power *= 10;
+    }
+    for weight in weights {
+        let expected = super::record::encode(&(1, 2), &weight, 4096)?.len();
+        assert_eq!(super::record::weighted_size(5, &weight, expected)?, expected);
+        assert!(super::record::weighted_size(5, &weight, expected - 1).is_err());
+    }
+    Ok(())
+}

@@ -116,14 +116,16 @@ fn cross<K: BatchData, L: BatchData, R: BatchData>(
     right: &Batch<K, R>,
     output: &mut JoinWeights<K, L, R>,
 ) -> Result<()> {
-    let right = right.iter().collect::<Vec<_>>();
+    let mut right = right.iter().peekable();
     for ((key, value), weight) in left.iter() {
-        let start = right.partition_point(|((other, _), _)| other < key);
-        let end = right.partition_point(|((other, _), _)| other <= key);
-        for ((_, other), other_weight) in &right[start..end] {
+        while right.peek().is_some_and(|((other, _), _)| other < key) {
+            right.next();
+        }
+        let group = right.clone().take_while(|((other, _), _)| other == key);
+        for ((_, other), other_weight) in group {
             output.add(
                 (key.clone(), (value.clone(), other.clone())),
-                BigInt::from(*weight) * **other_weight,
+                BigInt::from(*weight) * *other_weight,
             )?;
         }
     }

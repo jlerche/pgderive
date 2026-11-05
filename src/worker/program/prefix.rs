@@ -74,9 +74,9 @@ pub(super) fn statistics(
 }
 pub(super) fn window(spec: &Partition, budget: Arc<NativeBudget>) -> Binary<Key, Row> {
     let native = super::native::Vector::new("sql-prefix-statistics-v1", width(spec), budget);
-    let spec = spec.clone();
+    let spec = Arc::new(spec.clone());
     Binary::new(move |input, work| {
-        let spec = spec.clone();
+        let spec = Arc::clone(&spec);
         let native = native.clone();
         Box::pin(async move { evaluate::evaluate(&spec, input, work, &native).await })
     })

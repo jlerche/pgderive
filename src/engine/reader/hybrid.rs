@@ -1,4 +1,4 @@
-use super::format::hash;
+use super::format::hash_matches;
 use anyhow::{Context, Result, ensure};
 use foyer::{
     BlockEngineConfig, DeviceBuilder as _, FsDeviceBuilder, HybridCache, PsyncIoEngineConfig,
@@ -75,7 +75,7 @@ impl EncodedCache {
 
     pub(super) async fn get(&self, key: &str, digest: &str) -> Option<Vec<u8>> {
         let entry = self.cache.get(key).await.ok().flatten()?;
-        if hash(entry.value()) != digest {
+        if !hash_matches(entry.value(), digest) {
             self.cache.remove(key);
             return None;
         }

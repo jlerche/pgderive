@@ -14,7 +14,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 const OLD: usize = 0;
 const NEW: usize = 1;
@@ -84,9 +84,9 @@ struct Scan<'a> {
 }
 
 pub(super) fn operator(spec: &Spec) -> Group<Key, Row> {
-    let spec = spec.clone();
+    let spec = Arc::new(spec.clone());
     Group::new(move |input, work| {
-        let spec = spec.clone();
+        let spec = Arc::clone(&spec);
         Box::pin(async move {
             let (left, right) = split(input.delta)?;
             let limit = input.limits.output_bytes;

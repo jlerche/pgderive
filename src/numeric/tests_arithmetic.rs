@@ -24,9 +24,29 @@ fn division_matches_pg_significant_scale_and_special_values() -> Result<()> {
     for left in ["0", "1", "Infinity", "-Infinity"] {
         assert!(Numeric::parse(left)?.divide(&Numeric::parse("0")?).is_err());
     }
-    assert_eq!(Numeric::average("1.200000000000000000000000/2")?, "0.600000000000000000000000");
+    assert_eq!(
+        Numeric::average("1.200000000000000000000000/2")?.text(),
+        "0.600000000000000000000000"
+    );
     Ok(())
 }
+#[test]
+fn average_preserves_native_values_and_validates_count() -> Result<()> {
+    for (ratio, expected) in [
+        ("-15.00/10", "-1.5000000000000000"),
+        ("1/9223372036854775807", "0.000000000000000000108420217248550443"),
+        ("NaN/1", "NaN"),
+        ("Infinity/2", "Infinity"),
+        ("-Infinity/2", "-Infinity"),
+    ] {
+        assert_eq!(Numeric::average(ratio)?.text(), expected, "{ratio}");
+    }
+    for ratio in ["1", "1/0", "1/-1", "1/9223372036854775808", "1/x"] {
+        assert!(Numeric::average(ratio).is_err(), "{ratio}");
+    }
+    Ok(())
+}
+
 #[test]
 fn quantization_preserves_display_scale_rounding_and_extremes() -> Result<()> {
     for (value, scale, mode, expected) in [
@@ -85,7 +105,7 @@ fn numeric_average_bounds_the_final_value_instead_of_the_intermediate_sum() -> R
     assert!(total.result(&2.into()).is_err());
     let ratio =
         total.average_ratio(&2.into())?.ok_or_else(|| anyhow::anyhow!("missing average"))?;
-    assert_eq!(Numeric::average(&ratio)?, text);
+    assert_eq!(Numeric::average(&ratio)?.text(), text);
     Ok(())
 }
 
@@ -98,6 +118,9 @@ fn average_keeps_aligned_sum_spanning_both_input_digit_extremes() -> Result<()> 
     assert!(total.result(&2.into()).is_err());
     let ratio =
         total.average_ratio(&2.into())?.ok_or_else(|| anyhow::anyhow!("missing average"))?;
-    assert_eq!(Numeric::average(&ratio)?, format!("5{}.{}", "0".repeat(99), "0".repeat(1000)));
+    assert_eq!(
+        Numeric::average(&ratio)?.text(),
+        format!("5{}.{}", "0".repeat(99), "0".repeat(1000))
+    );
     Ok(())
 }

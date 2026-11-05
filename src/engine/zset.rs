@@ -122,6 +122,13 @@ impl<T: Ord + Clone> ZSet<T> {
     /// # Errors
     /// Returns an error on weight overflow.
     pub fn apply(&mut self, delta: &Self) -> Result<()> {
+        if delta.entries.is_empty() {
+            return Ok(());
+        }
+        if self.entries.is_empty() {
+            self.clone_from(delta);
+            return Ok(());
+        }
         let next = merge_canonical(&self.entries, &delta.entries)?;
         self.max_weight = next.iter().map(|(_, weight)| weight.unsigned_abs()).max().unwrap_or(0);
         self.entries = Arc::new(next);
@@ -162,6 +169,23 @@ mod tests {
     use super::merge_canonical;
     use crate::engine::{Batch, BatchBuilder};
     use anyhow::Result;
+    #[test]
+    fn empty_integration_reuses_canonical_storage() -> Result<()> {
+        let delta = Batch::from_updates([((1, String::from("payload")), -3)])?;
+        let mut state = Batch::default();
+        state.apply(&delta)?;
+        assert!(std::sync::Arc::ptr_eq(&state.entries, &delta.entries));
+        assert!(std::sync::Arc::ptr_eq(&state.sizing, &delta.sizing));
+        assert_eq!(state.max_weight(), 3);
+        let before = state.clone();
+        state.apply(&Batch::default())?;
+        assert!(std::sync::Arc::ptr_eq(&state.entries, &before.entries));
+        assert!(std::sync::Arc::ptr_eq(&state.sizing, &before.sizing));
+        state.apply(&Batch::from_updates([((1, String::from("payload")), 3)])?)?;
+        assert_eq!(state, Batch::default());
+        assert_eq!(delta, before);
+        Ok(())
+    }
     #[test]
     fn canonical_merge_matches_exact_accumulation_for_signed_full_tuples() -> Result<()> {
         for before in [i64::MIN, -1, 0, 1, i64::MAX] {

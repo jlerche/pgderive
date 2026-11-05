@@ -46,7 +46,7 @@ impl<T: BatchData> Merge<T> {
     }
     pub(super) fn next(&mut self) -> Result<Option<(T, BigInt)>> {
         while let Some(Reverse((tuple, ordinal))) = self.heap.pop() {
-            let mut weight = self.runs[ordinal].weight.clone();
+            let mut weight = std::mem::take(&mut self.runs[ordinal].weight);
             self.advance(ordinal)?;
             while self.heap.peek().is_some_and(|Reverse((other, _))| other == &tuple) {
                 if let Some(Reverse((_, ordinal))) = self.heap.pop() {

@@ -1,7 +1,7 @@
 //! Authenticated, range-readable immutable index trees.
 use super::{
     BatchData, bounded,
-    format::{Block, Pack, hash},
+    format::{Block, Pack, hash, hash_matches},
 };
 use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -415,7 +415,7 @@ impl Cache {
             } else {
                 scan.read_exact(store, pack, range.clone()).await?
             };
-            if u64::try_from(bytes.len())? != length || hash(&bytes) != digest {
+            if u64::try_from(bytes.len())? != length || !hash_matches(&bytes, digest) {
                 scan.invalidate(pack, &range)?;
                 anyhow::bail!("index frame checksum/length mismatch");
             }

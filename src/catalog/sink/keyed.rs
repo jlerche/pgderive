@@ -56,11 +56,11 @@ pub(super) async fn apply(
     let statement = program.update.as_ref().context("missing keyed UPDATE program")?;
     let mut chunk = batching::Chunk::default();
     for pair in replacements {
-        let size = serde_json::to_vec(&pair)?.len().saturating_add(32);
+        let size = crate::engine::execution::record_size(&pair, usize::MAX)?.saturating_add(32);
         if chunk.full(size) {
             batching::execute(tx, statement, &mut chunk, sink.output, &Value::Null).await?;
         }
-        chunk.push(&pair, 1, size)?;
+        chunk.push(pair, 1, size)?;
     }
     batching::execute(tx, statement, &mut chunk, sink.output, &Value::Null).await?;
     Ok(counts)

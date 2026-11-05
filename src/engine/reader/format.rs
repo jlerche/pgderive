@@ -50,6 +50,15 @@ pub(super) fn pack_bytes() -> Result<usize> {
 pub(super) fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
+/// Compare a canonical lowercase digest without allocating its hexadecimal text.
+pub(super) fn hash_matches(bytes: &[u8], expected: &str) -> bool {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    expected.len() == 64
+        && Sha256::digest(bytes)
+            .iter()
+            .flat_map(|byte| [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 15)]])
+            .eq(expected.bytes())
+}
 pub(super) fn valid_hash(hash: &str) -> bool {
     hash.len() == 64
         && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -164,5 +173,23 @@ mod location_tests {
             assert!(Pack { path, bytes: 1, hash: digest.clone() }.validate().is_err());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod digest_tests {
+    use super::{hash, hash_matches};
+
+    #[test]
+    fn digest_comparison_requires_exact_canonical_lowercase_hex() {
+        for bytes in [b"".as_slice(), b"payload", &[0, 255, 32]] {
+            let expected = hash(bytes);
+            assert!(hash_matches(bytes, &expected));
+            assert!(!hash_matches(b"different", &expected));
+            assert!(!hash_matches(bytes, &expected.to_uppercase()));
+            assert!(!hash_matches(bytes, &expected[..63]));
+            assert!(!hash_matches(bytes, &format!("{expected}0")));
+            assert!(!hash_matches(bytes, &"z".repeat(64)));
+        }
     }
 }

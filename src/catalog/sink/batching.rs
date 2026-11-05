@@ -1,7 +1,7 @@
 //! Bounded occurrence DML chunks share the caller's atomic publication transaction.
 use super::{Sink, layout::Layout};
 use anyhow::{Result, ensure};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio_postgres::Transaction;
 const IDENTITIES: usize = 512;
 const BYTES: usize = 4 * 1024 * 1024;
@@ -16,8 +16,8 @@ impl Chunk {
         !self.values.is_empty()
             && (self.values.len() >= IDENTITIES || self.bytes.saturating_add(bytes) > BYTES)
     }
-    pub(super) fn push(&mut self, tuple: &Value, count: i64, bytes: usize) -> Result<()> {
-        self.values.push(json!([tuple, count]));
+    pub(super) fn push(&mut self, tuple: Value, count: i64, bytes: usize) -> Result<()> {
+        self.values.push(Value::Array(vec![tuple, Value::from(count)]));
         self.bytes = self
             .bytes
             .checked_add(bytes)
@@ -67,11 +67,12 @@ pub(super) async fn apply_rows(
             }
             let count =
                 delta.checked_abs().ok_or_else(|| anyhow::anyhow!("result occurrence overflow"))?;
-            let bytes = serde_json::to_vec(tuple)?.len().saturating_add(32);
+            let bytes =
+                crate::engine::execution::record_size(tuple, usize::MAX)?.saturating_add(32);
             if chunk.full(bytes) {
                 execute(tx, statement, &mut chunk, sink.output, context).await?;
             }
-            chunk.push(tuple, count, bytes)?;
+            chunk.push(tuple.clone(), count, bytes)?;
         }
         execute(tx, statement, &mut chunk, sink.output, context).await?;
     }
@@ -150,7 +151,7 @@ mod tests {
         assert!(deletion.contains("LIMIT r.n FOR UPDATE"));
         assert!(!statement("owned.results", &layout, true).contains("INSERT INTO owned.results(n"));
         let mut chunk = Chunk::default();
-        chunk.push(&serde_json::json!([null, ["1.00"]]), 3, 32)?;
+        chunk.push(serde_json::json!([null, ["1.00"]]), 3, 32)?;
         assert_eq!(chunk.occurrences, 3);
         assert_eq!(chunk.values, vec![serde_json::json!([[null, ["1.00"]], 3])]);
         Ok(())

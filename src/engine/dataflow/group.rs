@@ -3,7 +3,7 @@ use super::{PartitionWork, TimedBatch};
 use crate::engine::{
     Batch,
     execution::{Consolidator, Limits},
-    reader::BatchData,
+    reader::{BatchData, Entry},
     trace::{KeyCursor, TraceSnapshot},
 };
 use anyhow::{Context, Result, ensure};
@@ -42,9 +42,7 @@ impl<K: BatchData, V: BatchData> GroupInput<'_, K, V> {
     pub async fn after(&self) -> Result<GroupCursor<K, V>> {
         Ok(GroupCursor {
             prior: self.prior.key_cursor(self.key).await?,
-            delta: Arc::new(
-                self.delta.iter().map(|(((), value), weight)| (value.clone(), *weight)).collect(),
-            ),
+            delta: self.delta.shared_entries(),
             index: 0,
         })
     }
@@ -53,7 +51,7 @@ impl<K: BatchData, V: BatchData> GroupInput<'_, K, V> {
 #[derive(Clone)]
 pub struct GroupCursor<K: BatchData, V: BatchData> {
     prior: KeyCursor<K, V>,
-    delta: Arc<Vec<(V, i64)>>,
+    delta: Arc<Vec<Entry<(), V>>>,
     index: usize,
 }
 impl<K: BatchData, V: BatchData> GroupCursor<K, V> {
@@ -69,22 +67,21 @@ impl<K: BatchData, V: BatchData> GroupCursor<K, V> {
     }
     async fn next_inner(&mut self, work: &mut PartitionWork) -> Result<Option<(V, i64)>> {
         loop {
-            let old = self.prior.current().map(|(_, value, weight)| (value.clone(), weight));
-            let changed = self.delta.get(self.index);
+            let old = self.prior.current().map(|(_, value, weight)| (value, weight));
+            let changed = self.delta.get(self.index).map(|(((), value), weight)| (value, weight));
             let value = old
-                .as_ref()
-                .map(|entry| &entry.0)
+                .map(|entry| entry.0)
                 .into_iter()
-                .chain(changed.map(|entry| &entry.0))
+                .chain(changed.map(|entry| entry.0))
                 .min()
                 .cloned();
             let Some(value) = value else { return Ok(None) };
             work.charge(1)?;
             let mut weight = 0_i64;
-            if let Some((candidate, coefficient)) = &old
+            if let Some((candidate, coefficient)) = old
                 && candidate == &value
             {
-                weight = *coefficient;
+                weight = coefficient;
                 self.prior.advance().await?;
             }
             if let Some((candidate, coefficient)) = changed
@@ -149,7 +146,7 @@ impl<K: BatchData, V: BatchData> Group<K, V> {
         }
         for (key, changes) in groups {
             work.charge(changes.len())?;
-            let delta = Batch::from_updates(changes)?;
+            let delta = Batch::from_canonical(changes)?;
             let result =
                 (self.transform)(GroupInput { key: &key, delta: &delta, prior, limits }, work)
                     .await?;
@@ -158,6 +155,26 @@ impl<K: BatchData, V: BatchData> Group<K, V> {
                 output.add((key.clone(), value.clone()), *weight)?;
             }
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::GroupInput;
+    use crate::engine::{Batch, execution::Limits, trace::TraceSnapshot};
+    use anyhow::Result;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn overlays_share_the_canonical_delta() -> Result<()> {
+        let delta = Batch::from_updates([(((), String::from("payload")), 2)])?;
+        let prior = TraceSnapshot::<i64, String>::empty();
+        let input = GroupInput { key: &7, delta: &delta, prior: &prior, limits: Limits::default() };
+        let first = input.after().await?;
+        let second = input.after().await?;
+        assert!(Arc::ptr_eq(&first.delta, &delta.shared_entries()));
+        assert!(Arc::ptr_eq(&first.delta, &second.delta));
         Ok(())
     }
 }

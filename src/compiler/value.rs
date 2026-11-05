@@ -31,22 +31,23 @@ pub fn decode(oid: u32, text: &str) -> Result<Value> {
 }
 fn uuid(text: &str) -> Result<[u8; 16]> {
     let text = text.strip_prefix('{').and_then(|text| text.strip_suffix('}')).unwrap_or(text);
-    let mut digits = String::new();
+    let mut digits = [0_u8; 32];
+    let mut length: usize = 0;
     for byte in text.bytes() {
         if byte == b'-' {
-            ensure!(!digits.is_empty() && digits.len().is_multiple_of(4), "invalid UUID separator");
+            ensure!(length != 0 && length.is_multiple_of(4), "invalid UUID separator");
         } else {
             ensure!(byte.is_ascii_hexdigit(), "invalid UUID digit");
-            digits.push(char::from(byte));
+            if let Some(digit) = digits.get_mut(length) {
+                *digit = byte;
+            }
+            length += 1;
         }
     }
-    ensure!(
-        digits.len() == 32 && !text.ends_with('-') && !text.contains("--"),
-        "invalid UUID length"
-    );
+    ensure!(length == 32 && !text.ends_with('-') && !text.contains("--"), "invalid UUID length");
     let mut value = [0_u8; 16];
     for (index, byte) in value.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&digits[index * 2..index * 2 + 2], 16)?;
+        *byte = u8::from_str_radix(std::str::from_utf8(&digits[index * 2..index * 2 + 2])?, 16)?;
     }
     Ok(value)
 }
