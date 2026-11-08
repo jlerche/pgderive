@@ -274,8 +274,9 @@ def namespace_race(output, command):
         winner = next(worker for worker in workers if worker not in losers)
         winner.event('ready')
         winner.finish(graceful=True)
-        assert fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_worker_registration').strip() == '1'
-        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '1'
+        registered = fixture.sql(f'SELECT slot_name FROM {fixture.name}.pgderive_worker_registration ORDER BY slot_name').splitlines()
+        physical = fixture.sql(f"SELECT slot_name FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ORDER BY slot_name").splitlines()
+        assert len(registered) == 1 and physical == registered, (physical, registered)
         (output/'qualification.json').write_text(json.dumps({'contending_creates':2,'registered':1,'physical_slots':1})+'\n')
         index = workers.index(winner)
         retired = inspect(command, fixture, 'drop', output/f'create-{index}.toml')

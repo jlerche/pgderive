@@ -6,6 +6,7 @@ use std::sync::Arc;
 type Identity = (String, u64);
 #[derive(Debug)]
 pub(super) struct Frames {
+    pub(super) capacity: Option<crate::engine::capacity::Admission>,
     cache: foyer::Cache<Identity, Arc<Vec<u8>>>,
     bytes: usize,
     minimum: usize,
@@ -20,7 +21,7 @@ impl Frames {
                 Self::charge(identity, bytes.len()).max(minimum)
             })
             .build();
-        Self { cache, bytes: if entries == 0 { 0 } else { bytes }, minimum }
+        Self { capacity: None, cache, bytes: if entries == 0 { 0 } else { bytes }, minimum }
     }
     const fn charge(identity: &Identity, length: usize) -> usize {
         length.saturating_add(identity.0.len()).saturating_add(256)
@@ -35,12 +36,17 @@ impl Frames {
         ensure!(u64::try_from(bytes.len())? == length, "index frame length mismatch");
         ensure!(hash_matches(&bytes, digest), "index frame checksum mismatch");
         let identity = (digest.into(), length);
+        if let Some(pool) = &self.capacity
+            && !pool
+                .retain(bytes.clone(), Self::charge(&identity, bytes.len()).max(self.minimum))?
+        {
+            return Ok(());
+        }
         if Self::charge(&identity, bytes.len()).max(self.minimum) <= self.bytes {
             drop(self.cache.insert(identity, bytes));
         }
         Ok(())
     }
-    #[cfg(test)]
     pub(super) fn clear(&self) {
         self.cache.clear();
     }

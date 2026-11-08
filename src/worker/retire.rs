@@ -31,7 +31,7 @@ pub(super) async fn execute(
     session: &mut Session,
     state: &mut super::lifecycle::State,
 ) -> Result<()> {
-    session.own(&settings.catalog_schema, &settings.query_id).await?;
+    session.own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id).await?;
     if state.removal.is_none() {
         intent(&mut session.client, settings, logical, state).await?;
     }

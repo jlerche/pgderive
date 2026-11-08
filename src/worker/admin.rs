@@ -12,17 +12,21 @@ use serde_json::{Value, json};
 ///
 /// # Errors
 /// Rejects occupied creation, missing restart, incompatible state or worker failures.
-pub async fn start(config: Config, restart: bool) -> Result<()> {
+pub async fn start(mut config: Config, restart: bool) -> Result<()> {
     config.validate()?;
+    super::resources::install(std::slice::from_mut(&mut config), &super::ProcessLimits::default())?;
+    let shutdown = super::shutdown::listen().context("installing worker shutdown handlers")?;
     let settings = config.worker.clone().context("configuration requires a worker section")?;
     let storage = config.object_store.as_ref().context("worker requires durable object storage")?;
     let store = storage.build(&settings.object_prefix, config.execution.object_requests)?;
     storage.preflight(store.as_ref()).await?;
     let mut session = Session::connect(&config).await?;
-    session.own(&settings.catalog_schema, &settings.query_id).await?;
+    session.own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id).await?;
+    super::tenant::namespace(&config, &settings, &session).await?;
     if !restart && super::lifecycle::recreate(&*session.client, &settings).await? {
         session = super::lifecycle::rebuild_owned(&config, &settings, session, true).await?;
-        return super::drive::run_initial(config, settings, Some(session)).await;
+        return Box::pin(super::drive::run_initial(config, settings, Some(session), shutdown))
+            .await;
     }
     let resolved = super::lifecycle::resolve(&*session.client, &config, &settings).await?;
     let native = &resolved.settings;
@@ -53,7 +57,7 @@ pub async fn start(config: Config, restart: bool) -> Result<()> {
         // journal COMMIT returns an error and requires explicit status/restart.
         super::registration::source(&mut session.client, &config, &settings).await?;
     }
-    super::drive::run_initial(config, settings, Some(session)).await
+    Box::pin(super::drive::run_initial(config, settings, Some(session), shutdown)).await
 }
 
 /// Resolve and describe a query against `PostgreSQL` without durable registration.
@@ -68,6 +72,7 @@ pub async fn validate(config: &Config) -> Result<Value> {
     let settings = config.worker.as_ref().context("configuration requires a worker section")?;
     let mut session = Session::connect(config).await?;
     crate::semantics::lease(&*session.client).await?;
+    super::tenant::verify(&*session.client, &settings.catalog_schema, &settings.tenant_id).await?;
     super::lifecycle::require_public(&*session.client, settings).await?;
     let identity = Identity::inspect(config).await?;
     let tx = session

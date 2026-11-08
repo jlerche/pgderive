@@ -60,11 +60,14 @@ window_secs=86400
             worker = fixture.start(command, label)
             observation = exhausted(worker, output, label)
             saved = json.loads(ledger.read_text())
-            assert saved['used'] == saved['puts'] == 1 and saved['remaining'] == 0, saved
+            # Fresh namespace ownership first probes for unbound objects. Its
+            # marker PUT must fail locally once that one LIST uses the allowance.
+            assert saved['used'] == saved['listing_pages'] == 1 and saved['puts'] == 0 and saved['remaining'] == 0, saved
             calls = attempts(output/'proxy.jsonl', started)
-            assert len(calls) == 1 and calls[0]['method'] == 'PUT', calls
+            assert len(calls) == 1 and calls[0]['listing'], calls
             # An incomplete bootstrap must publish neither durable progress nor a result epoch.
-            count = fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_progress').strip()
+            present = fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_progress') IS NOT NULL").strip() == 't'
+            count = fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_progress').strip() if present else '0'
             assert count == '0', count
             observations.append({**observation, 'class_a_attempts_total': len(calls)})
         allowance = 1000

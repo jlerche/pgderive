@@ -19,6 +19,7 @@ type Identity = (&'static str, String, String, TypeId);
 /// payload length as a heap estimate; they are not an allocator or RSS bound.
 #[derive(Debug)]
 pub struct BlockCache {
+    pub(crate) capacity: Option<crate::engine::capacity::Admission>,
     bytes: usize,
     entries: usize,
     pub(super) ranges: Arc<range::Ranges>,
@@ -104,6 +105,26 @@ pub struct CacheStats {
     pub index_requested_bytes: u64,
 }
 impl BlockCache {
+    pub(crate) fn with_capacity(
+        mut self,
+        capacity: Option<crate::engine::capacity::Admission>,
+    ) -> Result<Self> {
+        self.capacity.clone_from(&capacity);
+        Arc::get_mut(&mut self.index)
+            .context("shared index initialization")?
+            .set_capacity(capacity.clone());
+        Arc::get_mut(&mut self.ranges)
+            .context("shared range initialization")?
+            .capacity
+            .clone_from(&capacity);
+        Arc::get_mut(&mut self.filters)
+            .context("shared filter initialization")?
+            .capacity
+            .clone_from(&capacity);
+        Arc::get_mut(&mut self.points).context("shared point initialization")?.capacity = capacity;
+        Ok(self)
+    }
+
     #[cfg(test)]
     pub(crate) fn enable_merge_probes(&self) -> Result<()> {
         self.ranges.metrics.enable_merge_probes()
@@ -133,6 +154,7 @@ impl BlockCache {
     #[must_use]
     pub fn new(bytes: usize, entries: usize) -> Self {
         Self {
+            capacity: None,
             bytes,
             entries,
             index: Arc::new(super::index::Cache::new(
@@ -325,6 +347,11 @@ impl BlockCache {
             .checked_mul(std::mem::size_of::<Entry<K, V>>())
             .and_then(|bytes| bytes.checked_add(encoded_bytes))
             .context("decoded cache charge overflow")?;
+        if let Some(pool) = &self.capacity
+            && !pool.retain(rows.clone(), charge)?
+        {
+            return Ok(());
+        }
         let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
         let identity = (ROW_CODEC, schema.to_owned(), hash, TypeId::of::<Vec<Entry<K, V>>>());
         if self.staged {
@@ -418,6 +445,23 @@ pub(super) mod points;
 pub use metrics::ReadStats;
 mod handoff;
 pub(super) mod range;
+
+impl crate::engine::capacity::Reclaim for BlockCache {
+    fn reclaim(&self) {
+        if let Ok(mut state) = self.state.try_lock() {
+            for (_, entry) in std::mem::take(&mut state.blocks) {
+                state.track(&entry.rows, entry.charge);
+            }
+            state.recency.clear();
+            state.stats.bytes = 0;
+            state.stats.entries = 0;
+        }
+        self.index.reclaim();
+        self.ranges.reclaim();
+        self.filters.reclaim();
+        self.points.reclaim();
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -537,3 +581,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "cache/tests/pooling.rs"]
+mod pooling_tests;

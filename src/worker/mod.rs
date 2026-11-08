@@ -8,7 +8,9 @@ pub use epoch::Policy as EpochPolicy;
 mod health;
 mod lifecycle;
 mod replay;
+pub(crate) mod resources;
 pub use health::Policy as HealthPolicy;
+pub use resources::Limits as ProcessLimits;
 mod measurements;
 mod multiple;
 pub use multiple::run_many;
@@ -17,8 +19,10 @@ mod program;
 mod registration;
 mod results;
 mod retire;
+mod shutdown;
 mod spec;
 mod sql;
+mod tenant;
 use crate::Config;
 pub use admin::{environment, start, status, validate};
 use anyhow::Result;
@@ -34,7 +38,7 @@ pub use spec::{QueryDefinition, Settings};
 /// # Errors
 /// Returns configuration, source contract, bootstrap, retry exhaustion or output errors.
 pub async fn run(config: Config) -> Result<()> {
-    run_many(vec![config]).await
+    run_many(vec![config], ProcessLimits::default()).await
 }
 
 #[cfg(test)]

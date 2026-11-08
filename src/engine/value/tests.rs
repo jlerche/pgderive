@@ -139,3 +139,116 @@ fn clones_mutate_independently_and_keep_canonical_wire_ordering() -> Result<()> 
     assert!(set.contains(&restored));
     Ok(())
 }
+
+#[test]
+fn shared_native_credit_follows_last_decoded_owner_without_registry_entries() -> Result<()> {
+    let pool = crate::engine::capacity::Pool::new(8192, 4096)?;
+    let budget = NativeBudget::with_capacity(4096, Some(pool.tenant("alice")));
+    let row = value(&budget);
+    let pin =
+        row.decode::<Vec<u64>>("numbers-v1", &budget, |_| anyhow::bail!("unexpected decode"))?;
+    let bytes = budget.used();
+    assert!(bytes > 0);
+    assert_eq!(pool.stats()?.used, bytes);
+    drop(row);
+    assert_eq!(pool.stats()?.used, bytes);
+    drop(pin);
+    assert_eq!(pool.stats()?.used, 0);
+    Ok(())
+}
+
+#[test]
+#[ignore = "manual retained-state admission and diagnostics scaling evidence"]
+fn pooled_native_admission_scaling() -> Result<()> {
+    use std::time::Instant;
+    for (count, queries) in [(1000, 1), (10_000, 7), (100_000, 63)] {
+        let pool = crate::engine::capacity::Pool::new(64 * 1024 * 1024, 64 * 1024 * 1024)?;
+        let idle = (0..queries)
+            .map(|index| {
+                NativeBudget::with_capacity(
+                    4 * 1024 * 1024,
+                    Some(pool.tenant(&format!("idle-{index}"))),
+                )
+            })
+            .collect::<Vec<_>>();
+        let active = NativeBudget::with_capacity(1024 * 1024, Some(pool.tenant("active")));
+        let began = Instant::now();
+        let rows = (0..count).map(|index| value(&idle[index % idle.len()])).collect::<Vec<_>>();
+        let build_us = began.elapsed().as_micros();
+        let expected = idle.iter().map(|budget| budget.used()).sum::<usize>();
+        assert!(expected > 0);
+        let (active_us, diagnostics_us, stats_us) = sample_pool(&pool, &active, expected)?;
+        eprintln!(
+            "{}",
+            serde_json::json!({"retained_values":count,"idle_queries":queries,"build_us":build_us,"active_20k_us":active_us,"diagnostics_1k_us":diagnostics_us,"stats_1k_us":stats_us,"retained_bytes":expected})
+        );
+        drop(rows);
+        assert_eq!(pool.stats()?.used, 0);
+    }
+    Ok(())
+}
+
+fn sample_pool(
+    pool: &crate::engine::capacity::Pool,
+    active: &Arc<NativeBudget>,
+    expected: usize,
+) -> Result<(u128, u128, u128)> {
+    use std::time::Instant;
+    let began = Instant::now();
+    for _ in 0..20_000 {
+        drop(value(active));
+    }
+    let active_us = began.elapsed().as_micros();
+    let expected_json = serde_json::json!(expected);
+    let began = Instant::now();
+    for _ in 0..1000 {
+        let observed = serde_json::to_value(pool.observation("active")?)?;
+        assert_eq!(observed["used"], expected_json);
+    }
+    let diagnostics_us = began.elapsed().as_micros();
+    let began = Instant::now();
+    for _ in 0..1000 {
+        assert_eq!(pool.stats()?.used, expected);
+    }
+    Ok((active_us, diagnostics_us, began.elapsed().as_micros()))
+}
+
+#[test]
+#[ignore = "manual weak-cache retained-state admission scaling evidence"]
+fn pooled_weak_cache_admission_scaling() -> Result<()> {
+    let pool = crate::engine::capacity::Pool::new(64 * 1024 * 1024, 64 * 1024 * 1024)?;
+    let admission = pool.tenant("idle");
+    let rows = (0..100_000).map(|_| Arc::new(vec![42_u8])).collect::<Vec<_>>();
+    for row in &rows {
+        assert!(admission.try_admit(row.clone(), 256)?);
+    }
+    let active = NativeBudget::with_capacity(1024 * 1024, Some(pool.tenant("active")));
+    let expected = 256 * rows.len();
+    let (active_us, diagnostics_us, stats_us) = sample_pool(&pool, &active, expected)?;
+    eprintln!(
+        "{}",
+        serde_json::json!({"retained_cache_entries":rows.len(),"active_20k_us":active_us,"diagnostics_1k_us":diagnostics_us,"explicit_stats_1k_us":stats_us})
+    );
+    drop(rows);
+    assert_eq!(pool.stats()?.used, 0);
+    Ok(())
+}
+
+#[test]
+fn failed_native_pool_admission_rolls_back_local_reservation() -> Result<()> {
+    let pool = crate::engine::capacity::Pool::new(1, 1)?;
+    let budget = NativeBudget::with_capacity(4096, Some(pool.tenant("alice")));
+    let row = value(&budget);
+    assert_eq!(budget.used(), 0);
+    assert_eq!(pool.stats()?.used, 0);
+    let decoded = row.decode::<Vec<u64>>("numbers-v1", &budget, |wire| {
+        Ok(wire
+            .iter()
+            .map(|item| item.parse::<u64>())
+            .collect::<std::result::Result<Vec<_>, _>>()?)
+    })?;
+    assert_eq!(*decoded, vec![7]);
+    assert_eq!(budget.used(), 0);
+    assert_eq!(pool.stats()?.used, 0);
+    Ok(())
+}

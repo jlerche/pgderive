@@ -248,3 +248,23 @@ class EventStreamTests(unittest.TestCase):
             stream.close_logs()
             process.stdout.close()
             self.assertEqual([json.loads(line) for line in (output/'metrics.jsonl').read_text().splitlines()], events)
+
+class NamespaceTests(unittest.TestCase):
+    def test_roots_are_unique_stable_and_fit_physical_slot_prefixes(self):
+        import pathlib
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory, patch.object(Fixture, 'sql'):
+            first = Fixture(pathlib.Path(directory), 'same', rows=0, auctions=1)
+            second = Fixture(pathlib.Path(directory), 'same', rows=0, auctions=1)
+            self.assertNotEqual(first.name, second.name)
+            self.assertLessEqual(len(first.name), 30)
+            # Alias rewrites such as b. must never match the schema suffix.
+            self.assertTrue(first.name.endswith('_'))
+            for alias in 'abcdef':
+                qualified = first.name + '.bid'
+                self.assertEqual(qualified.replace(alias + '.', '"ALIAS".'), qualified)
+            name = first.name
+            first.config()
+            first.config()
+            self.assertEqual(first.name, name)

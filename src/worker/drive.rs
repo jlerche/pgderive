@@ -1,3 +1,5 @@
+mod admission;
+mod startup;
 use super::epoch::model::Observation;
 use super::{open::Open, program::relational, spec::Settings, sql::Session};
 use crate::{Config, catalog::Progress};
@@ -17,27 +19,26 @@ pub(super) async fn run_controlled(
     settings: Settings,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
-    retry(&config, &settings, &mut stop, None).await
+    let identity = crate::diagnostics::Identity::new(&config, &settings);
+    Box::pin(crate::diagnostics::scope(identity, retry(&config, &settings, &mut stop, None))).await
 }
-pub(super) async fn run_initial(
+pub(super) async fn run_initial<S: std::future::Future<Output = std::io::Result<()>>>(
     config: Config,
     settings: Settings,
     initial: Option<Session>,
+    shutdown: S,
 ) -> Result<()> {
     let (signal, mut stop) = watch::channel(false);
-    let monitor = Signal(tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.context("worker Ctrl-C monitor failed")?;
-        let _closed = signal.send(true);
-        Ok(())
-    }));
-    let result = retry(&config, &settings, &mut stop, initial).await;
-    drop(monitor);
-    result
-}
-struct Signal(tokio::task::JoinHandle<Result<()>>);
-impl Drop for Signal {
-    fn drop(&mut self) {
-        self.0.abort();
+    let identity = crate::diagnostics::Identity::new(&config, &settings);
+    let work = crate::diagnostics::scope(identity, retry(&config, &settings, &mut stop, initial));
+    tokio::pin!(work);
+    tokio::pin!(shutdown);
+    tokio::select! {
+        result = &mut work => result,
+        result = &mut shutdown => {
+            signal.send_replace(true);
+            crate::outcome::combine(work.await, result.context("worker shutdown monitor failed"), "worker shutdown monitor")
+        }
     }
 }
 #[derive(Default)]
@@ -84,32 +85,23 @@ async fn retry(
                     &json!({"event":"stopped","time":time,"end_lsn":end,"transactions":metrics.source.total(),"retries":metrics.retries,"maintenance":metrics.maintenance,"elapsed_ms":started.elapsed().as_millis()}),
                 );
             }
-            Err(error) if error.is::<super::epoch::collect::NarrowEpochs>() => {
+            Err(error)
+                if error.is::<super::epoch::collect::NarrowEpochs>()
+                    || (error.is::<crate::engine::plan::relational::PooledMemtableFull>()
+                        && !permanent(&error)) =>
+            {
                 tokio::select! {
                     ()=sleep(Duration::from_millis(settings.retry_delay_ms)) => {}
                     signal=stop.changed() => {signal.context("worker stop monitor closed")?;}
                 }
+                drop(require_running(error, *stop.borrow())?);
             }
             Err(error) => {
                 metrics.failures =
                     metrics.failures.checked_add(1).context("worker retry counter overflow")?;
                 let attempts = metrics.failures;
-                let observation = timeout(
-                    Duration::from_secs(settings.health.stale_secs),
-                    ticket.failure(config, settings, attempts, &error),
-                )
-                .await
-                .context("worker failure observation timed out")
-                .and_then(std::convert::identity);
-                match observation {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        return Err(error.context("query attempt superseded by another owner"));
-                    }
-                    Err(diagnostic) => emit(
-                        &json!({"event":"diagnostic_failure","attempt":attempts,"error":format!("{diagnostic:#}")}),
-                    )?,
-                }
+                observe_failure(config, settings, &ticket, attempts, &error).await?;
+                let error = require_running(error, *stop.borrow())?;
                 if permanent(&error) {
                     emit(
                         &json!({"event":"capacity_exceeded","attempt":attempts,"error":format!("{error:#}")}),
@@ -134,12 +126,42 @@ async fn retry(
                     ()=sleep(Duration::from_millis(delay)) => {}
                     signal=stop.changed() => {signal.context("worker stop monitor closed")?;}
                 }
+                drop(require_running(error, *stop.borrow())?);
             }
         }
     }
 }
+async fn observe_failure(
+    config: &Config,
+    settings: &Settings,
+    ticket: &super::health::attempts::Ticket,
+    attempts: u32,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let observation = timeout(
+        Duration::from_secs(settings.health.stale_secs),
+        ticket.failure(config, settings, attempts, error),
+    )
+    .await
+    .context("worker failure observation timed out")
+    .and_then(std::convert::identity);
+    match observation {
+        Ok(true) => Ok(()),
+        Ok(false) => anyhow::bail!("query attempt superseded by another owner: {error:#}"),
+        Err(diagnostic) => emit(
+            &json!({"event":"diagnostic_failure","attempt":attempts,"error":format!("{diagnostic:#}")}),
+        ),
+    }
+}
+fn require_running(error: anyhow::Error, stopping: bool) -> Result<anyhow::Error> {
+    if stopping {
+        return Err(error.context("worker stopped with an incomplete durable drain"));
+    }
+    Ok(error)
+}
 fn permanent(error: &anyhow::Error) -> bool {
-    crate::storage::operation_budget_exhausted(error)
+    error.is::<crate::engine::capacity::Invariant>()
+        || crate::storage::operation_budget_exhausted(error)
         || error.is::<crate::engine::execution::CapacityExceeded>()
         || error.downcast_ref::<std::io::Error>().is_some_and(|error| {
             matches!(
@@ -157,17 +179,11 @@ async fn attempt(
 ) -> Result<(u64, String)> {
     let ticket = initial.1;
     let mut startup = crate::timing::Clock::new(settings.phase_metrics);
-    let opening = Open::connect_with_session(config, settings, initial.0);
-    let mut open = timeout(Duration::from_secs(settings.startup_timeout_secs), Box::pin(opening))
-        .await
-        .context("worker startup/recovery timed out")??;
-    let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
-    metrics.source.resolve(&durable)?;
-    let mut stream = crate::acknowledged::Stream::connect(&open.replication, &durable).await?;
-    if !super::replay::monitored(&mut open, &mut stream, &durable, stop).await? {
+    let startup::Opened { mut open, mut stream, durable, running } =
+        startup::open(config, settings, initial.0, (stop, &mut metrics.source)).await?;
+    if !running {
         return Ok((open.query.time(), durable.end.to_string()));
     }
-    let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
     let mut health = super::health::Monitor::start(config, &open, &durable).await?;
     let reporter = health.reporter();
     ensure!(
@@ -253,17 +269,15 @@ async fn consume(
     };
     let interval = Duration::from_millis(settings.checkpoint_interval_ms);
     let mut deadline = tokio::time::Instant::now() + interval;
+    let mut pressure = Pressure::new(open);
     loop {
-        open.collector.start(
-            open.catalog.clone(),
-            open.store.clone(),
-            (settings.health.operation_timeout_secs, settings.gc_interval_ms),
-            open.query.workspaces(),
-        )?;
+        start_collector(open, settings)?;
         let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
         let pending = durable.checkpoint_end < durable.end;
         let stopping = count.0.stopping(settings, *stop.borrow());
-        if stopping || super::checkpoint::must_drain(open, &durable) {
+        let pooled_pressure = pressure.requested()?;
+        if stopping || (pooled_pressure && pending) || super::checkpoint::must_drain(open, &durable)
+        {
             count.1.record(open, "maintenance")?;
             timeout(
                 Duration::from_secs(settings.health.operation_timeout_secs),
@@ -287,18 +301,23 @@ async fn consume(
         if super::checkpoint::due(open, pending, deadline)? {
             super::checkpoint::start(open, durable.stored.checkpoint.time).await?;
         }
-        let input =
-            match next_event(open, stream, &mut epochs, (stop, count.0), (deadline, pending))
-                .await?
-            {
-                Event::Wake => continue,
-                Event::Checkpoint => {
-                    deadline = tokio::time::Instant::now() + interval;
-                    continue;
-                }
-                Event::Retry => None,
-                Event::Transaction(transaction) => Some(transaction),
-            };
+        let input = match next_event(
+            open,
+            stream,
+            &mut epochs,
+            (stop, count.0, &mut pressure),
+            (deadline, pending),
+        )
+        .await?
+        {
+            Event::Wake => continue,
+            Event::Checkpoint => {
+                deadline = tokio::time::Instant::now() + interval;
+                continue;
+            }
+            Event::Retry => None,
+            Event::Transaction(transaction) => Some(transaction),
+        };
         let Pending::Attempt(input) =
             pending_input(open, &mut epochs, input, (settings, stop, &*count.0), &durable)?
         else {
@@ -319,6 +338,15 @@ async fn consume(
         .context("worker publication timed out; recover retained WAL without ACK")??;
         count.1.record(open, epochs.idle_phase())?;
     }
+}
+
+fn start_collector(open: &mut Open, settings: &Settings) -> Result<()> {
+    open.collector.start(
+        open.catalog.clone(),
+        open.store.clone(),
+        (settings.health.operation_timeout_secs, settings.gc_interval_ms),
+        open.query.workspaces(),
+    )
 }
 
 enum Pending {
@@ -405,17 +433,19 @@ enum Event {
     Retry,
     Transaction(super::epoch::collect::Input),
 }
+type Control<'a> = (&'a mut watch::Receiver<bool>, &'a mut Metrics, &'a mut Pressure);
 async fn next_event(
     open: &mut Open,
     stream: &mut crate::acknowledged::Stream,
     epochs: &mut Epochs,
-    control: (&mut watch::Receiver<bool>, &mut Metrics),
+    control: Control<'_>,
     timer: (tokio::time::Instant, bool),
 ) -> Result<Event> {
-    let (stop, metrics) = control;
+    let (stop, metrics, pressure) = control;
     let seconds = open.settings.health.operation_timeout_secs;
     let retry = epochs.collector.retry_at();
     tokio::select! {
+        changed=pressure.changed() => { changed.context("capacity monitor closed")?; Ok(Event::Wake) },
         ()=tokio::time::sleep_until(retry.unwrap_or(timer.0)), if retry.is_some() => Ok(Event::Retry),
         signal=stop.changed() => {signal.context("worker stop monitor closed")?; Ok(Event::Wake)}
         ()=tokio::time::sleep_until(timer.0), if timer.1 && open.checkpoint.is_none() => Ok(Event::Wake),
@@ -428,7 +458,7 @@ async fn next_event(
         }
         ()=tokio::time::sleep_until(open.collector.deadline()), if open.collector.waiting() => Ok(Event::Wake),
         collection=open.collector.completed() => {collection?; Ok(Event::Wake)}
-        transaction=epochs.collector.recv(stream) => Ok(Event::Transaction(transaction?)),
+        transaction=epochs.collector.recv(stream), if !epochs.collector.capacity_blocked() => Ok(Event::Transaction(transaction?)),
     }
 }
 
@@ -437,8 +467,14 @@ struct Epochs {
     scheduler: super::epoch::Controller,
 }
 impl Epochs {
-    const fn idle_phase(&self) -> &'static str {
-        if self.collector.blocked() { "evaluation_blocked" } else { "ready" }
+    fn idle_phase(&self) -> &'static str {
+        if self.collector.capacity_blocked() {
+            "capacity_blocked"
+        } else if self.collector.blocked() {
+            "evaluation_blocked"
+        } else {
+            "ready"
+        }
     }
 }
 async fn publish_group(
@@ -457,6 +493,17 @@ async fn publish_group(
     metrics.source.attempt(grouped.epoch.progress()?, grouped.epoch.transactions())?;
     let observation = match publish(open, &grouped.epoch, metrics).await {
         Ok(observation) => observation,
+        Err(error)
+            if error.is::<crate::engine::plan::relational::PooledMemtableFull>()
+                && !permanent(&error) =>
+        {
+            metrics.source.abandon();
+            epochs.collector.block_capacity(grouped.epoch, error);
+            emit(
+                &json!({"event":"capacity_blocked","time":open.query.time(),"reason":"shared_memtable"}),
+            )?;
+            return Ok(());
+        }
         Err(error) if error.is::<crate::engine::execution::EvaluationFailed>() => {
             metrics.source.abandon();
             let narrowing = metrics.narrow.is_none() && grouped.epoch.transactions() > 1;
@@ -516,42 +563,8 @@ async fn publish(
     let input = open.input(&transaction.batch, time, &mut preparation).await?;
     phases.mark("inputs");
     preparation.reset_clock();
-    let preparing = Instant::now();
-    let initial_admission = preparation.admission();
-    let mut disruption = Duration::ZERO;
-    let prepared = match open
-        .query
-        .prepare_memtable_profiled(input.clone(), open.settings.memtable_bytes, &mut preparation)
-        .await
-    {
-        Ok(work) => work,
-        Err(error) if error.is::<crate::engine::plan::relational::MemtableFull>() => {
-            disruption = preparing
-                .elapsed()
-                .saturating_sub(preparation.admission().saturating_sub(initial_admission));
-            let maintenance = Instant::now();
-            preparation.mark("failed_preparation_tail");
-            emit(
-                &json!({"event":"checkpoint_backpressure","reason":"memtable_bytes", "time":open.query.time(),"checkpoint_in_flight":open.checkpoint.is_some()}),
-            )?;
-            maintain(open, metrics).await?;
-            disruption = disruption.saturating_add(maintenance.elapsed());
-            preparation.mark("forced_maintenance");
-            open.query
-                .prepare_memtable_profiled(input, open.settings.memtable_bytes, &mut preparation)
-                .await
-                .map_err(|error| {
-                    if error.is::<crate::engine::plan::relational::MemtableFull>() {
-                        error.context(crate::engine::execution::CapacityExceeded(
-                            "single logical input exceeds memtable capacity after checkpoint",
-                        ))
-                    } else {
-                        error
-                    }
-                })?
-        }
-        Err(error) => return Err(error),
-    };
+    let admission::Prepared { work: prepared, disruption } =
+        admission::prepare(open, input, metrics, &mut preparation).await?;
     preparation.mark("candidate_validation");
     phases.mark("prepare_including_object_io");
     let deltas =
@@ -591,14 +604,71 @@ async fn maintain(open: &mut Open, metrics: &mut Metrics) -> Result<()> {
 }
 pub(super) fn emit(event: &Value) -> Result<()> {
     let mut output = io::stdout().lock();
-    serde_json::to_writer(&mut output, event)?;
+    crate::diagnostics::write(&mut output, event)?;
     writeln!(output)?;
     output.flush()?;
     Ok(())
 }
 
+async fn pooled_pressure(
+    receiver: Option<&mut watch::Receiver<u64>>,
+) -> Result<(), watch::error::RecvError> {
+    match receiver {
+        Some(receiver) => receiver.changed().await,
+        None => std::future::pending().await,
+    }
+}
+
+struct Pressure(Option<watch::Receiver<u64>>, bool);
+impl Pressure {
+    async fn changed(&mut self) -> Result<(), watch::error::RecvError> {
+        pooled_pressure(self.0.as_mut()).await?;
+        self.1 = true;
+        Ok(())
+    }
+    fn new(open: &Open) -> Self {
+        Self(
+            open.replication.capacity.as_ref().map(|resources| resources.pressure.subscribe()),
+            false,
+        )
+    }
+    fn requested(&mut self) -> Result<bool> {
+        let changed = std::mem::take(&mut self.1)
+            || self.0.as_ref().map(watch::Receiver::has_changed).transpose()?.unwrap_or(false);
+        if let Some(receiver) = &mut self.0 {
+            drop(receiver.borrow_and_update());
+        }
+        Ok(changed)
+    }
+}
+
 #[cfg(test)]
 mod retry_tests {
+    #[tokio::test]
+    async fn observed_pressure_still_requests_a_checkpoint() -> anyhow::Result<()> {
+        let (sender, receiver) = tokio::sync::watch::channel(0);
+        let mut pressure = super::Pressure(Some(receiver), false);
+        sender.send_replace(1);
+        pressure.changed().await?;
+        assert!(pressure.requested()?);
+        assert!(!pressure.requested()?);
+        Ok(())
+    }
+    #[test]
+    fn intrinsically_oversized_pooled_input_is_permanent() {
+        let error = anyhow::Error::new(crate::engine::capacity::MemoryPressure {
+            required: 2,
+            limit: 1,
+            tenant_only: true,
+        })
+        .context(crate::engine::execution::CapacityExceeded("single input too large"));
+        assert!(error.is::<crate::engine::plan::relational::PooledMemtableFull>());
+        assert!(super::permanent(&error));
+    }
+    #[test]
+    fn failed_drain_cannot_be_reported_as_clean_shutdown() {
+        assert!(super::require_running(anyhow::anyhow!("checkpoint failed"), true).is_err());
+    }
     #[test]
     fn resource_policy_and_exhausted_storage_are_permanent_but_transient_io_is_not() {
         use std::io::{Error, ErrorKind};

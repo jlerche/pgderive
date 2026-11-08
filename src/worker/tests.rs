@@ -54,6 +54,7 @@ pub(super) fn settings() -> Settings {
         store: Arc::new(InMemory::new()),
         block_rows: 1,
         limits: crate::engine::execution::Limits::default(),
+        capacity: None,
         encoded_cache: None,
     }
 }

@@ -24,7 +24,8 @@ impl Ticket {
     ) -> Result<Session> {
         let session =
             if let Some(session) = initial { session } else { Session::connect(config).await? };
-        session.own(&settings.catalog_schema, &settings.query_id).await?;
+        session.own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id).await?;
+        super::super::tenant::namespace(config, settings, &session).await?;
         self.token = session
             .client
             .query_one("SELECT pg_catalog.gen_random_uuid()::text", &[])
@@ -45,7 +46,10 @@ impl Ticket {
     ) -> Result<bool> {
         anyhow::ensure!(self.installed, "attempt has no persistence identity");
         let session = Session::connect(config).await?;
-        if !session.try_own(&settings.catalog_schema, &settings.query_id).await? {
+        if !session
+            .try_own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id)
+            .await?
+        {
             return Ok(false);
         }
         self.record(

@@ -229,6 +229,8 @@ mod tests;
 /// Object backend and resource configuration for query creation and recovery.
 #[derive(Clone)]
 pub struct Settings {
+    /// Optional process capacity; generic standalone engine callers own their limits.
+    pub capacity: Option<crate::engine::capacity::Query>,
     /// Backend scoped to the query's immutable object namespace.
     pub store: std::sync::Arc<dyn object_store::ObjectStore>,
     /// Maximum rows in one data block.

@@ -1,0 +1,7 @@
+# Trusted process-wide capacity policy, separate from tenant query configurations.
+max_queries = 64
+max_queries_per_tenant = 16
+cache_bytes = 134217728
+cache_bytes_per_tenant = 67108864
+memtable_bytes = 134217728
+memtable_bytes_per_tenant = 67108864

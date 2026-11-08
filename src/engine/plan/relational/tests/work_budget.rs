@@ -16,6 +16,7 @@ fn settings(resident_entries: usize, contributions: usize) -> Settings {
         store: Arc::new(InMemory::new()),
         block_rows: 16,
         limits: Limits { resident_entries, contributions, ..Limits::default() },
+        capacity: None,
         encoded_cache: None,
     }
 }

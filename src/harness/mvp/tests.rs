@@ -10,6 +10,7 @@ async fn relational_fixture_preserves_simultaneous_changes_and_cold_restart() ->
         store: Arc::new(InMemory::new()),
         block_rows: 1,
         limits: Limits::default(),
+        capacity: None,
         encoded_cache: None,
     };
     let mut graph = Query::new(registered_plan()?, operators(), &settings)?;

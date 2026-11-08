@@ -35,6 +35,8 @@ impl QueryDefinition {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
+    /// Explicit `SaaS` tenant owning this catalog; never inferred from connection details.
+    pub tenant_id: String,
     /// Existing owned catalog/destination schema.
     pub catalog_schema: String,
     /// Stable registered query name.
@@ -88,6 +90,15 @@ pub struct Settings {
 }
 impl Settings {
     pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.tenant_id.is_empty()
+                && self.tenant_id.len() <= 128
+                && self
+                    .tenant_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')),
+            "invalid worker tenant ID"
+        );
         self.health.validate()?;
         self.epoch.validate()?;
         ensure!(self.memtable_bytes > 0, "invalid memtable byte limit");
@@ -148,7 +159,7 @@ mod tests {
     #[test]
     fn independent_cadence_defaults_and_disabled_run_trigger_validate() -> Result<()> {
         let mut settings: Settings = serde_json::from_value(json!({
-            "catalog_schema":"demo", "query_id":"totals", "sink_table":"totals",
+            "tenant_id":"fixture", "catalog_schema":"demo", "query_id":"totals", "sink_table":"totals",
             "object_prefix":"demo/totals", "block_rows":4096, "maintenance_ticks":0,
             "retry_attempts":8, "retry_delay_ms":250, "max_transactions":0,
             "query":{"sql":"SELECT * FROM source"}

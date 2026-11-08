@@ -67,8 +67,9 @@ class Proxy(ThreadingHTTPServer):
         self.gate = None
         super().__init__(address, Handler)
 
-    def hold(self, method):
-        if self.gate is None:
+    def hold(self, method, path):
+        # Crash witnesses target data upload/recovery, after namespace ownership.
+        if self.gate is None or "/.pgderive-ownership/" in urlsplit(path).path:
             return
         arm = pathlib.Path(str(self.gate) + '.arm')
         pending = pathlib.Path(str(self.gate) + '.pending')
@@ -106,7 +107,7 @@ class Handler(BaseHTTPRequestHandler):
         response_bytes = 0
         parsed = urlsplit(self.path)
         try:
-            self.server.hold(self.command)
+            self.server.hold(self.command, self.path)
             if fail:
                 self.send_error(503, "injected object request failure")
                 status = 503

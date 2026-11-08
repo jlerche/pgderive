@@ -33,6 +33,7 @@ pub(super) async fn check(
             store: recovery.store.clone(),
             block_rows: 3,
             limits: config.execution,
+            capacity: None,
             encoded_cache: None,
         },
     )?;

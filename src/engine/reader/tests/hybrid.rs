@@ -15,9 +15,9 @@ async fn disk_reopen_integrity_and_exclusive_shutdown() -> Result<()> {
     assert!(settings.open().await.is_err());
     let payload = vec![42; 1024];
     let digest = hash(&payload);
-    cache.insert("block".into(), payload.clone());
+    cache.insert("block", payload.clone());
     assert_eq!(cache.get("block", &digest).await, Some(payload.clone()));
-    cache.insert("bad".into(), vec![0]);
+    cache.insert("bad", vec![0]);
     assert!(cache.get("bad", &digest).await.is_none());
     assert!(cache.get("missing", &digest).await.is_none());
     // No explicit close: the directory lease must survive asynchronous drop.
@@ -111,9 +111,13 @@ async fn disk_hit_never_masks_missing_or_corrupt_durable_state() -> Result<()> {
 }
 
 async fn reopen(settings: &CacheConfig) -> Result<EncodedCache> {
+    reopen_scoped(settings, None).await
+}
+async fn reopen_scoped(settings: &CacheConfig, namespace: Option<&str>) -> Result<EncodedCache> {
     Ok(tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            if let Ok(cache) = settings.open().await {
+            if let Ok(cache) = settings.open_with_capacity(None, namespace.map(str::to_owned)).await
+            {
                 return cache;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -132,7 +136,7 @@ async fn canceled_close_keeps_shutdown_owned() -> Result<()> {
         disk_bytes: 64 * 1024 * 1024,
     };
     let cache = Arc::new(settings.open().await?);
-    cache.insert("pending".into(), vec![42; 512 * 1024]);
+    cache.insert("pending", vec![42; 512 * 1024]);
     let closing = tokio::spawn(async move { cache.close().await });
     tokio::task::yield_now().await;
     closing.abort();
@@ -201,5 +205,32 @@ async fn point_prefetch_respects_encoded_cache_without_redundant_object_reads() 
     assert_eq!(probes.cursor(&2).await?.current(), Some((&2, &8, 1)));
     assert_eq!(store.reads.load(Ordering::SeqCst), reads);
     encoded.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn persisted_cache_reuse_never_crosses_tenant_or_catalog_scope() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let settings = CacheConfig {
+        directory: directory.path().into(),
+        memory_bytes: 1024 * 1024,
+        disk_bytes: 64 * 1024 * 1024,
+    };
+    let bytes = vec![42; 1024];
+    let digest = hash(&bytes);
+    let alice = reopen_scoped(&settings, Some("alice/catalog-a")).await?;
+    alice.insert("same-hash", bytes.clone());
+    assert!(alice.may_contain("same-hash"));
+    alice.close().await?;
+    drop(alice);
+    for namespace in ["bob/catalog-b", "alice/catalog-b"] {
+        let foreign = reopen_scoped(&settings, Some(namespace)).await?;
+        assert!(foreign.get("same-hash", &digest).await.is_none());
+        foreign.close().await?;
+        drop(foreign);
+    }
+    let alice = reopen_scoped(&settings, Some("alice/catalog-a")).await?;
+    assert_eq!(alice.get("same-hash", &digest).await, Some(bytes));
+    alice.close().await?;
     Ok(())
 }

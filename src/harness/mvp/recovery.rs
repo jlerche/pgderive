@@ -131,7 +131,7 @@ pub(in crate::harness) async fn recover_plan(
     let mut graph = Query::new(
         plan,
         operators(),
-        &Settings { store, block_rows: 3, limits, encoded_cache: None },
+        &Settings { store, block_rows: 3, limits, capacity: None, encoded_cache: None },
     )?;
     graph.restore_checkpoint(checkpoint.clone()).await?;
     let state = graph.snapshot();

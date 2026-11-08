@@ -84,6 +84,7 @@ async fn chained_join_statistics_emit_snapshot_differences_and_restore() -> Resu
         store: Arc::new(InMemory::new()),
         block_rows: 1,
         limits: crate::engine::execution::Limits::default(),
+        capacity: None,
         encoded_cache: None,
     };
     let mut query = Relational::new(plan()?, operators(), &settings)?;

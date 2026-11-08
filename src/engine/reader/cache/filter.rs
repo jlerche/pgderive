@@ -62,7 +62,7 @@ impl Bloom {
 }
 #[derive(Debug)]
 struct Cached {
-    bloom: Bloom,
+    bloom: Arc<Bloom>,
     charge: usize,
     referenced: bool,
 }
@@ -76,13 +76,19 @@ struct State {
 }
 #[derive(Debug)]
 pub(super) struct Filters {
+    pub(super) capacity: Option<crate::engine::capacity::Admission>,
     bytes: usize,
     entries: usize,
     state: Mutex<State>,
 }
 impl Filters {
     pub(super) fn new(bytes: usize, entries: usize) -> Self {
-        Self { bytes: bytes / 4, entries: entries.saturating_mul(16), state: Mutex::default() }
+        Self {
+            capacity: None,
+            bytes: bytes / 4,
+            entries: entries.saturating_mul(16),
+            state: Mutex::default(),
+        }
     }
     pub(super) const fn enabled(&self) -> bool {
         self.bytes > 0 && self.entries > 0
@@ -146,7 +152,9 @@ impl Filters {
         self.insert(identity, Bloom::new(rows)?)
     }
     pub(super) fn insert(&self, identity: Identity, bloom: Bloom) -> Result<()> {
-        let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("filter lock poisoned"))?;
+        self.insert_shared(identity, Arc::new(bloom))
+    }
+    fn insert_shared(&self, identity: Identity, bloom: Arc<Bloom>) -> Result<()> {
         let charge = std::mem::size_of::<(Identity, Cached)>()
             .checked_add(3 * std::mem::size_of::<usize>())
             .context("filter identity charge overflow")?
@@ -155,9 +163,15 @@ impl Filters {
             .and_then(|n| n.checked_add(bloom.bits.capacity().checked_mul(8)?))
             .and_then(|n| n.checked_add(bloom.metadata_bytes))
             .context("filter cache charge overflow")?;
+        if let Some(pool) = &self.capacity
+            && !pool.retain(bloom.clone(), charge)?
+        {
+            return Ok(());
+        }
         if charge > self.bytes || self.entries == 0 {
             return Ok(());
         }
+        let mut state = self.state.lock().map_err(|_| anyhow::anyhow!("filter lock poisoned"))?;
         if let Some((key, old)) = state.entries.remove_entry(&identity) {
             if state.hand.as_ref().is_some_and(|hand| hand == &key) {
                 state.hand = None;
@@ -181,7 +195,7 @@ impl Filters {
             std::mem::take(&mut state.entries)
         };
         for (identity, entry) in entries {
-            parent.insert(Arc::unwrap_or_clone(identity), entry.bloom)?;
+            parent.insert_shared(Arc::unwrap_or_clone(identity), entry.bloom)?;
         }
         Ok(())
     }
@@ -224,3 +238,13 @@ fn evict(state: &mut State) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+impl Filters {
+    pub(super) fn reclaim(&self) {
+        if let Ok(mut state) = self.state.try_lock() {
+            state.entries.clear();
+            state.bytes = 0;
+            state.hand = None;
+        }
+    }
+}

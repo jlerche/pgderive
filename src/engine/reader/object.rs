@@ -671,7 +671,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             if self.cache.admits_encoded()
                 && let Some(cache) = &self.cache.encoded
             {
-                cache.insert(key, bytes.clone());
+                cache.insert(&key, bytes.clone());
             }
             bytes
         };

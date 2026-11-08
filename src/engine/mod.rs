@@ -2,6 +2,7 @@
 //!
 //! Local visibility is not durable catalog publication; no recursive scheduling.
 mod batch;
+pub mod capacity;
 pub mod dataflow;
 pub mod execution;
 pub mod plan;

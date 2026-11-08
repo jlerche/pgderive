@@ -26,6 +26,16 @@ pub struct Storage {
     operation_budget: Option<Box<budget::Config>>,
 }
 impl Storage {
+    pub(crate) fn same_namespace(&self, other: &Self) -> Result<bool> {
+        let canonical = |storage: &Self| -> Result<Url> {
+            let mut url = storage.endpoint()?;
+            if url.host_str() == Some("localhost") {
+                url.set_host(Some("127.0.0.1")).context("invalid object host")?;
+            }
+            Ok(url)
+        };
+        Ok(self.bucket == other.bucket && canonical(self)? == canonical(other)?)
+    }
     pub fn validate(&self) -> Result<()> {
         let endpoint = self.endpoint()?;
         if let Some(budget) = &self.operation_budget {

@@ -31,6 +31,7 @@ struct Blocked {
     error: anyhow::Error,
     retry_at: Instant,
     merged: bool,
+    capacity: bool,
 }
 #[derive(Default)]
 pub(in crate::worker) struct Retry {
@@ -108,18 +109,34 @@ impl<C: Clock> Collector<C> {
             FIRST_RETRY.saturating_mul(1_u32.checked_shl(self.retry.failures).unwrap_or(u32::MAX));
         self.retry.failures = self.retry.failures.saturating_add(1);
         let retry_at = Instant::now() + doubled.min(LAST_RETRY);
-        self.blocked = Some(Box::new(Blocked { epoch, error, retry_at, merged: false }));
+        self.blocked =
+            Some(Box::new(Blocked { epoch, error, retry_at, merged: false, capacity: false }));
         origin
     }
     pub(in crate::worker) const fn blocked(&self) -> bool {
         self.blocked.is_some()
+    }
+    pub(in crate::worker) fn capacity_blocked(&self) -> bool {
+        self.blocked.as_ref().is_some_and(|blocked| blocked.capacity)
+    }
+    pub(in crate::worker) fn block_capacity(&mut self, epoch: Epoch, error: anyhow::Error) {
+        self.blocked = Some(Box::new(Blocked {
+            epoch,
+            error,
+            retry_at: Instant::now() + Duration::from_millis(50),
+            merged: false,
+            capacity: true,
+        }));
     }
     pub(in crate::worker) fn published(&mut self) {
         self.retry = Retry::default();
     }
     /// When to retry input already merged into the blocked epoch; unchanged input cannot pass.
     pub(in crate::worker) fn retry_at(&self) -> Option<Instant> {
-        self.blocked.as_ref().filter(|blocked| blocked.merged).map(|blocked| blocked.retry_at)
+        self.blocked
+            .as_ref()
+            .filter(|blocked| blocked.merged || blocked.capacity)
+            .map(|blocked| blocked.retry_at)
     }
     /// Merge input while the backoff runs, or return it for an immediate attempt.
     pub(in crate::worker) fn absorb(
@@ -173,7 +190,16 @@ impl<C: Clock> Collector<C> {
         if let Some(first) = &first {
             scheduler.observe(first.transaction.commit_time_micros);
         }
+        let capacity_retry = self.capacity_blocked();
         let mut epoch = self.open(first, &bounds)?;
+        if capacity_retry {
+            let decision = scheduler.decision(&epoch);
+            return Ok(Collected {
+                epoch,
+                reason: "shared_capacity_retry",
+                predicted: decision.predicted,
+            });
+        }
         loop {
             let decision = scheduler.decision(&epoch);
             let reason = ceiling(&epoch, &bounds)

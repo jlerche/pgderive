@@ -39,7 +39,7 @@ def start(command, fixtures, paths, output, mode, label):
 def configure(fixture, source=None):
     source = source or fixture
     path = fixture.config()
-    text = path.read_text().replace(f'publication="{fixture.name}"', f'publication="{source.name}"')
+    text = path.read_text().replace('tenant_id="fixture"', 'tenant_id='+json.dumps(getattr(fixture, 'tenant_id', 'fixture'))).replace(f'publication="{fixture.name}"', f'publication="{source.name}"')
     text = text.split('[execution]', 1)[0]
     text = text.replace('maintenance_ticks=4',
                         'maintenance_ticks=0\ncheckpoint_interval_ms=60000\ngc_interval_ms=300000\nmemtable_bytes=33554432')

@@ -62,6 +62,7 @@ def fixture_group(cleanup, directory, tenant, db):
               FROM generate_series(0,599) i;
               UPDATE {fixture.name}.auction SET category='tenant_{tenant}_'||id::text''')
             streams.append((fixture, fixture.name+'.bid', 'price', 'id BETWEEN 7000000 AND 7000599', [fixture]))
+        fixture.tenant_id = f"tenant-{tenant}"
         fixtures.append(cleanup.enter_context(fixture.managed()))
     return fixtures, streams
 

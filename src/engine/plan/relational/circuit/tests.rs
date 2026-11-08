@@ -48,8 +48,13 @@ fn execution(store: Arc<dyn object_store::ObjectStore>) -> Result<Arc<Execution<
     ]
     .into_iter()
     .collect();
-    let settings =
-        Settings { store, block_rows: 4096, limits: Limits::default(), encoded_cache: None };
+    let settings = Settings {
+        store,
+        block_rows: 4096,
+        limits: Limits::default(),
+        capacity: None,
+        encoded_cache: None,
+    };
     Ok(super::super::Relational::new(plan, operators, &settings)?.execution)
 }
 async fn fixture(
