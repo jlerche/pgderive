@@ -12,8 +12,8 @@ PORTFOLIO = pathlib.Path(__file__).resolve().parents[1]/'examples/portfolio'
 class DemoFixture(Fixture):
     product_count = len(PRODUCTS)
 
-    def __init__(self, output, index, *, source=None, top10=False):
-        super().__init__(output, index, rows=0, auctions=0)
+    def __init__(self, output, index, *, source=None, top10=False, database='pgderive_dev'):
+        super().__init__(output, index, rows=0, auctions=0, database=database)
         self.source = source or self
         self.top10 = top10
         self.query = self.local(TOP10_SQL if top10 else TOTALS_SQL)

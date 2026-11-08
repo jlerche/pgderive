@@ -42,6 +42,8 @@ PGDERIVE_S3_LATENCY_SCALE=0 run_qualification async-checkpoints \
     python3 scripts/async_checkpoint_harness.py "$output/async-checkpoints" -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification operation-budget \
     python3 scripts/operation_budget_harness.py "$output/operation-budget" -- "${worker[@]}"
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification multi-query \
+    python3 scripts/multi_query_memory_harness.py "$output/multi-query" --counts 2 --seconds 2 --mode shared -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \
     python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 \
     "$output/transactions" -- "${worker[@]}"

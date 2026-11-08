@@ -29,16 +29,16 @@ class DifferentialFailure(AssertionError):
 
 
 class ApplicationFixture(SqlFixture):
-    def __init__(self, output, trace):
-        self.initialize_sources(output, trace)
+    def __init__(self, output, trace, *, database='pgderive_dev'):
+        self.initialize_sources(output, trace, database=database)
         self.query = self.query_specification['sql'].format(schema=self.name)
         self.labels = self.output_labels
 
     def create_sources(self):
         self.sql(f'ALTER TABLE {self.name}.auction RENAME TO account; ALTER TABLE {self.name}.account RENAME COLUMN category TO label; ALTER TABLE {self.name}.account ADD COLUMN cohort integer; ALTER TABLE {self.name}.bid RENAME TO entry; ALTER TABLE {self.name}.entry RENAME COLUMN auction TO account_id; ALTER TABLE {self.name}.entry RENAME COLUMN price TO amount')
 
-    def initialize_sources(self, output, trace):
-        Fixture.__init__(self, output, f'app_{next(SERIAL)}', rows=0, auctions=0)
+    def initialize_sources(self, output, trace, *, database='pgderive_dev'):
+        Fixture.__init__(self, output, f'app_{next(SERIAL)}', rows=0, auctions=0, database=database)
         self.create_sources()
         self.trace = trace
         self.model = state(trace['initial'])

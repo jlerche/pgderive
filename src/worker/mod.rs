@@ -10,6 +10,8 @@ mod lifecycle;
 mod replay;
 pub use health::Policy as HealthPolicy;
 mod measurements;
+mod multiple;
+pub use multiple::run_many;
 mod open;
 mod program;
 mod registration;
@@ -19,7 +21,7 @@ mod spec;
 mod sql;
 use crate::Config;
 pub use admin::{environment, start, status, validate};
-use anyhow::{Context, Result};
+use anyhow::Result;
 pub use lifecycle::{drop_query, rebuild};
 pub use spec::{QueryDefinition, Settings};
 
@@ -32,9 +34,7 @@ pub use spec::{QueryDefinition, Settings};
 /// # Errors
 /// Returns configuration, source contract, bootstrap, retry exhaustion or output errors.
 pub async fn run(config: Config) -> Result<()> {
-    config.validate()?;
-    let settings = config.worker.clone().context("configuration requires a worker section")?;
-    Box::pin(drive::run(config, settings)).await
+    run_many(vec![config]).await
 }
 
 #[cfg(test)]

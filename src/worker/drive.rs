@@ -12,8 +12,12 @@ use tokio::{
     time::{Duration, sleep, timeout},
 };
 
-pub(super) async fn run(config: Config, settings: Settings) -> Result<()> {
-    run_initial(config, settings, None).await
+pub(super) async fn run_controlled(
+    config: Config,
+    settings: Settings,
+    mut stop: watch::Receiver<bool>,
+) -> Result<()> {
+    retry(&config, &settings, &mut stop, None).await
 }
 pub(super) async fn run_initial(
     config: Config,

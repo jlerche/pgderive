@@ -5,8 +5,8 @@ from worker_harness import Fixture, Worker, run_cases, History
 
 
 class SqlFixture(Fixture):
-    def __init__(self, output, null_only, typed=False, remainder=False):
-        super().__init__(output, 'sql', rows=32, auctions=8)
+    def __init__(self, output, null_only, typed=False, remainder=False, *, database='pgderive_dev', index='sql'):
+        super().__init__(output, index, rows=32, auctions=8, database=database)
         self.null_only = null_only
         self.typed = typed
         self.remainder = remainder

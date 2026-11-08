@@ -2,6 +2,10 @@
 use anyhow::Result;
 #[tokio::main]
 async fn main() -> Result<()> {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "config.local.toml".into());
-    Box::pin(pgderive::worker::run(pgderive::Config::load(path)?)).await
+    let mut paths = std::env::args().skip(1).collect::<Vec<_>>();
+    if paths.is_empty() {
+        paths.push("config.local.toml".into());
+    }
+    let configs = paths.into_iter().map(pgderive::Config::load).collect::<Result<Vec<_>>>()?;
+    Box::pin(pgderive::worker::run_many(configs)).await
 }
