@@ -152,6 +152,22 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         let prepared = self.prepare_key(key, 128 * 1024).await?;
         self.cursor_prepared(&prepared).await
     }
+    // Join visits canonical keys once. Keep only heads selected for this key,
+    // so disjoint runs cannot accumulate pinned decoded blocks across the tick.
+    // Install the narrower retention set only after a successful probe.
+    pub(crate) async fn cursor_releasing_unselected(&mut self, key: &K) -> Result<KeyCursor<K, V>> {
+        let cursor = self.cursor(key).await?;
+        for head in &mut self.heads {
+            if head
+                .as_ref()
+                .is_none_or(|head| head.current().is_none_or(|(selected, _, _)| selected != key))
+            {
+                *head = None;
+            }
+        }
+        self.current = None;
+        Ok(cursor)
+    }
     pub(crate) async fn cursor_prepared(
         &mut self,
         prepared: &PreparedKey<K, V>,
@@ -212,5 +228,52 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         self.heads = heads;
         self.current = Some(LastProbe { key: key.key().clone(), cursor: cursor.clone() });
         Ok(cursor)
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use crate::engine::{
+        Batch,
+        reader::{BlockCache, ObjectBatch},
+        trace::{Run, TraceSnapshot},
+    };
+    use anyhow::Result;
+    use object_store::{ObjectStore, memory::InMemory};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn scoped_probes_release_disjoint_heads_and_preserve_failed_position() -> Result<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let cache = Arc::new(BlockCache::new(0, 0));
+        let mut runs = Vec::new();
+        for key in 0..8_i64 {
+            let batch = Batch::from_updates([((key, key), 1)])?;
+            let reference = ObjectBatch::write(store.clone(), &batch, "ints", 1).await?;
+            let object =
+                ObjectBatch::open_with_cache(store.clone(), reference, "ints", cache.clone())
+                    .await?;
+            runs.push(Run::Object(object));
+        }
+        let trace = TraceSnapshot::from_runs(runs, 1, 1)?;
+        let mut probes = trace.probes();
+        for key in 0..7 {
+            let cursor = probes.cursor_releasing_unselected(&key).await?;
+            assert_eq!(cursor.current(), Some((&key, &key, 1)));
+            assert_eq!(probes.heads.iter().flatten().count(), 1);
+            assert!(probes.current.is_none());
+        }
+        let Run::Object(last) = &trace.runs[7] else { anyhow::bail!("expected object") };
+        crate::engine::tests::store::corrupt_block(store.as_ref(), last, 0).await?;
+        assert!(probes.cursor_releasing_unselected(&7).await.is_err());
+        assert_eq!(probes.heads.iter().flatten().count(), 1);
+        assert_eq!(
+            probes.heads[6].as_ref().and_then(crate::engine::reader::Cursor::current),
+            Some((&6, &6, 1))
+        );
+        probes.cursor_releasing_unselected(&99).await?;
+        assert!(probes.heads.iter().all(Option::is_none));
+        assert_eq!(cache.stats()?.bytes, 0);
+        Ok(())
     }
 }

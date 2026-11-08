@@ -7,7 +7,7 @@ use crate::engine::{
     trace::TraceSnapshot,
 };
 use anyhow::{Context, Result, ensure};
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 /// Per-tick record/evaluation work budget shared across affected partitions.
 pub struct PartitionWork {
     remaining: usize,
@@ -133,32 +133,34 @@ impl<K: BatchData, V: BatchData> Partition<K, V> {
         }
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order partition tick");
         limits.check_batch(&input.batch)?;
-        let mut changes = BTreeMap::<K, Vec<(((), V), i64)>>::new();
-        for ((key, row), weight) in input.batch.iter() {
-            changes.entry(key.clone()).or_default().push((((), row.clone()), *weight));
-        }
-        for (key, changes) in changes {
-            let before = read(prior, &key, limits, work).await?;
+        let mut entries = input.batch.iter().peekable();
+        while let Some(((key, _), _)) = entries.peek().copied() {
+            let mut changes = Vec::new();
+            while let Some(((_, row), weight)) = entries.next_if(|((other, _), _)| other == key) {
+                changes.push((((), row.clone()), *weight));
+            }
+            let before = read(prior, key, limits, work).await?;
             work.charge(changes.len())?;
-            let after = Batch::from_updates(
-                before.iter().map(|(tuple, weight)| (tuple.clone(), *weight)).chain(changes),
-            )?;
+            // apply() keeps the incoming representative on equal identities.
+            // Preserve the old bag's representative, as exact tree consolidation did.
+            let mut after = Batch::from_canonical(changes)?;
+            after.apply(&before)?;
             limits.check_batch(&after)?;
             ensure!(
                 after.iter().all(|(_, weight)| *weight > 0),
                 "negative partition row multiplicity"
             );
             let old_output = if let Some(retained) = retained {
-                let output = read(retained, &key, limits, work).await?;
+                let output = read(retained, key, limits, work).await?;
                 ensure!(
                     before.iter().next().is_some() || output.iter().next().is_none(),
                     "retained output for empty partition"
                 );
                 output
             } else {
-                (self.transform)(&key, &before, work)?
+                (self.transform)(key, &before, work)?
             };
-            let new_output = (self.transform)(&key, &after, work)?;
+            let new_output = (self.transform)(key, &after, work)?;
             for output in [&old_output, &new_output] {
                 limits.check_batch(output)?;
                 ensure!(
@@ -187,7 +189,7 @@ async fn read<K: BatchData, V: BatchData>(
     work: &mut PartitionWork,
 ) -> Result<Batch<(), V>> {
     let mut cursor = prior.key_cursor(key).await?;
-    let mut rows = BTreeMap::new();
+    let mut rows = Vec::new();
     let mut bytes = 0_u64;
     while let Some((_, value, weight)) = cursor.current() {
         work.charge(1)?;
@@ -206,8 +208,8 @@ async fn read<K: BatchData, V: BatchData>(
             bytes <= limits.output_bytes,
             crate::engine::execution::CapacityExceeded("partition byte limit exceeded")
         );
-        rows.insert(((), value.clone()), weight);
+        rows.push((((), value.clone()), weight));
         cursor.advance().await?;
     }
-    Batch::from_updates(rows)
+    Batch::from_canonical(rows)
 }

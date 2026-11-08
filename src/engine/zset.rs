@@ -148,7 +148,7 @@ pub(super) fn merge_canonical<T: Ord + Clone>(
     delta: &[(T, i64)],
 ) -> Result<Vec<(T, i64)>> {
     let mut prior = prior.iter().peekable();
-    let mut next = Vec::with_capacity(prior.len());
+    let mut next = Vec::with_capacity(prior.len().max(delta.len()));
     for (tuple, weight) in delta {
         while let Some(entry) = prior.next_if(|entry| &entry.0 < tuple) {
             next.push(entry.clone());

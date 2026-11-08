@@ -91,9 +91,13 @@ async fn prior_join<K: BatchData, D: BatchData, P: BatchData, L: BatchData, R: B
     pair: impl Fn(&D, &P) -> (L, R),
 ) -> Result<()> {
     let mut entries = delta.iter().peekable();
+    if entries.peek().is_none() {
+        return Ok(());
+    }
+    let mut probes = prior.probes();
     while let Some(((key, _), _)) = entries.peek().copied() {
         let group = entries.clone().take_while(|((candidate, _), _)| candidate == key);
-        let mut cursor = prior.key_cursor(key).await?;
+        let mut cursor = probes.cursor_releasing_unselected(key).await?;
         while let Some((other_key, other, other_weight)) = cursor.current() {
             if other_key != key {
                 break;

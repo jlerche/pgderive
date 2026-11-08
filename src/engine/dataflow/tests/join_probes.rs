@@ -53,3 +53,30 @@ async fn repeated_delta_keys_read_prior_blocks_once_without_cache() -> Result<()
     assert_eq!(joined.time, 2);
     Ok(())
 }
+
+#[tokio::test]
+async fn adjacent_delta_keys_reuse_verified_heads_without_resident_cache() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let cache = Arc::new(BlockCache::new(0, 0));
+    let rows = Batch::from_updates((0..16_i64).map(|key| ((key, key + 100), 2)))?;
+    let reference = ObjectBatch::write(store.clone(), &rows, "ints", 16).await?;
+    let object = ObjectBatch::open_with_cache(store, reference, "ints", cache.clone()).await?;
+    let right = TraceSnapshot::empty().append_validated(Run::Object(object), 1)?;
+    let left = TraceSnapshot::empty()
+        .append_validated(Run::Memory(Arc::new(Batch::from_updates([])?)), 1)?;
+    let delta = TimedBatch {
+        time: 2,
+        batch: Batch::from_updates((0..16_i64).map(|key| ((key, key), -1)))?,
+    };
+    let before = cache.stats()?.misses;
+    let output = Join
+        .evaluate(&delta, &TimedBatch { time: 2, batch: Batch::from_updates([])? }, &left, &right)
+        .await?;
+    assert_eq!(cache.stats()?.misses - before, 1);
+    assert_eq!(cache.stats()?.bytes, 0);
+    assert_eq!(
+        output.batch,
+        Batch::from_updates((0..16_i64).map(|key| ((key, (key, key + 100)), -2)))?
+    );
+    Ok(())
+}

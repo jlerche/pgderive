@@ -194,3 +194,52 @@ async fn retained_output_reduces_callback_visits_against_recomputation() -> Resu
     assert_eq!(retained_visits.load(Ordering::Relaxed), 1001);
     Ok(())
 }
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct Representative {
+    id: i64,
+    text: String,
+}
+impl PartialEq for Representative {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for Representative {}
+impl std::hash::Hash for Representative {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.id, state);
+    }
+}
+impl PartialOrd for Representative {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Representative {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+#[tokio::test]
+async fn partition_preserves_old_ordering_representative() -> Result<()> {
+    use crate::engine::trace::{Run, TraceSnapshot};
+    let old = Representative { id: 1, text: "old".into() };
+    let changed = Representative { id: 1, text: "incoming".into() };
+    let prior = TraceSnapshot::empty()
+        .append_validated(Run::Memory(Arc::new(Batch::from_updates([((0, old), 1)])?)), 1)?;
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let callback = seen.clone();
+    let op = Partition::new(move |_: &i64, bag: &Batch<(), Representative>, _| {
+        let text = bag.iter().next().map(|(((), v), _)| v.text.clone());
+        callback.lock().map_err(|_| anyhow::anyhow!("poisoned fixture"))?.push(text);
+        Batch::from_updates([])
+    });
+    let delta = TimedBatch { time: 2, batch: Batch::from_updates([((0, changed), 1)])? };
+    op.evaluate(&delta, &prior, Limits::default()).await?;
+    assert_eq!(
+        *seen.lock().map_err(|_| anyhow::anyhow!("poisoned fixture"))?,
+        vec![Some("old".into()), Some("old".into())]
+    );
+    Ok(())
+}
