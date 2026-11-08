@@ -88,7 +88,20 @@ impl Ranges {
         Ok((retained.0, retained.1, self.metrics.snapshot().0))
     }
     pub(in crate::engine::reader) fn scan(metrics: Arc<super::metrics::Metrics>) -> Self {
-        Self { metrics, scan: true, ..Self::new(WINDOW_BYTES + 4096, 1) }
+        let bytes = WINDOW_BYTES + 4096;
+        Self {
+            capacity: None,
+            bytes,
+            entries: 1,
+            #[cfg(test)]
+            coalesce: true,
+            #[cfg(test)]
+            probe_enabled: std::sync::atomic::AtomicBool::new(false),
+            metrics,
+            scan: true,
+            state: Mutex::new(State::new(bytes, 1)),
+            flights: std::array::from_fn(|_| tokio::sync::Mutex::new(())),
+        }
     }
     #[cfg(test)]
     pub(in crate::engine::reader) const fn disable_coalescing(&mut self) {

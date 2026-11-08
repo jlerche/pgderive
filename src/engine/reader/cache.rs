@@ -183,13 +183,17 @@ impl BlockCache {
     pub(crate) fn scan(parent: Arc<Self>) -> Arc<Self> {
         let parent = parent.parent.clone().unwrap_or(parent);
         Arc::new(Self {
+            capacity: None,
+            bytes: 0,
+            entries: 0,
             index: Arc::new(super::index::Cache::scan(parent.index.clone())),
             encoded: parent.encoded.clone(),
             points: parent.points.clone(),
             ranges: Arc::new(range::Ranges::scan(parent.ranges.metrics.clone())),
             filters: parent.filters.clone(),
             parent: Some(parent),
-            ..Self::new(0, 0)
+            staged: false,
+            state: Arc::new(Mutex::new(State::default())),
         })
     }
     pub(super) fn cursor(parent: Arc<Self>) -> Arc<Self> {
@@ -202,12 +206,17 @@ impl BlockCache {
         // A disabled decoded cache still needs bounded cold-scan read-ahead.
         // Preserve its encoded admission policy; ordinary scans can warm Foyer.
         Arc::new(Self {
+            capacity: None,
+            bytes: 0,
+            entries: 0,
             index: parent.index.clone(),
             encoded: parent.encoded.clone(),
             points: parent.points.clone(),
             ranges: Arc::new(range::Ranges::scan(parent.ranges.metrics.clone())),
+            filters: Arc::new(filter::Filters::new(0, 0)),
+            parent: None,
+            staged: false,
             state: parent.state.clone(),
-            ..Self::new(0, 0)
         })
     }
     pub(crate) const fn admits_points(&self) -> bool {
@@ -518,6 +527,49 @@ mod tests {
         assert_eq!(cache.stats()?.pins, 1);
         drop(first);
         assert_eq!(cache.stats()?.pins, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn scans_share_foreground_policies_and_keep_private_state() -> Result<()> {
+        let pool = crate::engine::capacity::Pool::new(1024 * 1024, 1024 * 1024)?;
+        let foreground =
+            Arc::new(BlockCache::new(4096, 2).with_capacity(Some(pool.tenant("foreground")))?);
+        assert!(Arc::ptr_eq(&BlockCache::cursor(foreground.clone()), &foreground));
+        let scan = BlockCache::scan(foreground.clone());
+        assert!(foreground.capacity.is_some());
+        assert!(scan.capacity.is_none());
+        assert!(scan.ranges.capacity.is_none());
+        assert!(Arc::ptr_eq(&scan.points, &foreground.points));
+        assert!(Arc::ptr_eq(&scan.filters, &foreground.filters));
+        assert!(!Arc::ptr_eq(&scan.index, &foreground.index));
+        assert!(!Arc::ptr_eq(&scan.ranges, &foreground.ranges));
+        assert!(!Arc::ptr_eq(&scan.state, &foreground.state));
+        assert!(Arc::ptr_eq(&scan.ranges.metrics, &foreground.ranges.metrics));
+        let nested = BlockCache::cursor(scan.clone());
+        assert!(nested.parent.as_ref().is_some_and(|root| Arc::ptr_eq(root, &foreground)));
+        assert!(!Arc::ptr_eq(&nested.state, &scan.state));
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_cursors_share_decoded_state_and_keep_private_scan_ranges() -> Result<()> {
+        let pool = crate::engine::capacity::Pool::new(1024 * 1024, 1024 * 1024)?;
+        let disabled =
+            Arc::new(BlockCache::new(0, 0).with_capacity(Some(pool.tenant("foreground")))?);
+        let cursor = BlockCache::cursor(disabled.clone());
+        assert!(disabled.capacity.is_some());
+        assert!(cursor.capacity.is_none());
+        assert!(cursor.ranges.capacity.is_none());
+        assert!(Arc::ptr_eq(&cursor.state, &disabled.state));
+        assert!(Arc::ptr_eq(&cursor.index, &disabled.index));
+        assert!(Arc::ptr_eq(&cursor.points, &disabled.points));
+        assert!(!Arc::ptr_eq(&cursor.filters, &disabled.filters));
+        assert!(!Arc::ptr_eq(&cursor.ranges, &disabled.ranges));
+        assert!(Arc::ptr_eq(&cursor.ranges.metrics, &disabled.ranges.metrics));
+        assert!(cursor.parent.is_none());
+        assert!(cursor.admits_encoded());
+        assert!(!cursor.admits_points());
         Ok(())
     }
 

@@ -67,6 +67,27 @@ async fn minimum_selection_and_cursor_movement_borrow_pinned_identities() -> Res
     assert_eq!(merged.current(), Some((&0, &Counted(3), 1)));
     assert_eq!(CLONES.load(Ordering::Relaxed), 0);
 
+    // Two canceled identities use their last matching pinned head as the
+    // witness. Interleaved nonmatching heads must not advance with that group.
+    let updates = [
+        vec![((0_i64, Counted(0)), 1), ((1, Counted(1)), i64::MAX), ((3, Counted(3)), 1)],
+        vec![((2, Counted(2)), 1)],
+        vec![((0, Counted(0)), -1), ((1, Counted(1)), 1)],
+        vec![((1, Counted(1)), i64::MIN)],
+    ];
+    let mut cursors = Vec::new();
+    for rows in updates {
+        cursors.push(Batch::from_updates(rows)?.cursor().await?);
+    }
+    let mut cancelled = MergedCursor::new(cursors);
+    CLONES.store(0, Ordering::Relaxed);
+    cancelled.find().await?;
+    assert_eq!(cancelled.current(), Some((&2, &Counted(2), 1)));
+    assert_eq!(CLONES.load(Ordering::Relaxed), 0);
+    cancelled.advance().await?;
+    assert_eq!(cancelled.current(), Some((&3, &Counted(3), 1)));
+    assert_eq!(CLONES.load(Ordering::Relaxed), 0);
+
     let batch = Batch::from_updates((0..3).map(|key| ((key, Counted(key)), 1)))?;
     let mut merged = MergedCursor::new(vec![batch.cursor().await?]);
     merged.find().await?;

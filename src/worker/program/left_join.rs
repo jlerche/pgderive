@@ -97,8 +97,13 @@ pub(super) fn stripped(row: &Row) -> Row {
 
 pub(super) fn pair(left: &Row, right: &Row) -> Result<Row> {
     let mut result = stripped(left);
-    for (field, value) in stripped(right) {
-        ensure!(result.insert(field, value).is_none(), "left join field collision");
+    for (field, value) in right {
+        if field != SIDE {
+            ensure!(
+                result.insert(field.clone(), value.clone()).is_none(),
+                "left join field collision"
+            );
+        }
     }
     Ok(result)
 }
@@ -117,4 +122,30 @@ pub(super) fn null_extend(columns: &[ColumnRef], row: &Row) -> Result<Row> {
         ensure!(result.insert(column.name.clone(), None).is_none(), "outer join field collision");
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SIDE, pair};
+    use crate::transaction::Row;
+    use anyhow::Result;
+
+    #[test]
+    fn pairs_strip_side_tags_preserve_fields_and_reject_collisions() -> Result<()> {
+        let left = Row::from([(SIDE.into(), Some("left".into())), ("a".into(), None)]);
+        let right = Row::from([
+            (SIDE.into(), Some("right".into())),
+            ("b".into(), Some("quoted\"λ".into())),
+        ]);
+        let joined = pair(&left, &right)?;
+        assert_eq!(joined, Row::from([("a".into(), None), ("b".into(), Some("quoted\"λ".into()))]));
+        let collision = Row::from([("a".into(), Some("value".into()))]);
+        assert_eq!(
+            pair(&left, &collision).err().map(|error| error.to_string()),
+            Some("left join field collision".into())
+        );
+        assert_eq!(left.len(), 2);
+        assert_eq!(right.len(), 2);
+        Ok(())
+    }
 }

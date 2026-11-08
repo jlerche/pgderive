@@ -34,7 +34,7 @@ impl Bloom {
             max_weight: rows.iter().map(|(_, weight)| weight.unsigned_abs()).max().unwrap_or(0),
         };
         let metadata_bytes = std::mem::size_of_val(&metadata)
-            .checked_add(serde_json::to_vec(&metadata)?.len())
+            .checked_add(crate::engine::execution::record_size(&metadata, usize::MAX)?)
             .context("filter metadata overflow")?;
         let mut bloom = Self { bits: vec![0; words], metadata: Arc::new(metadata), metadata_bytes };
         for ((key, _), _) in rows {

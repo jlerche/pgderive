@@ -371,12 +371,15 @@ impl Cache {
     pub(super) fn scan(parent: std::sync::Arc<Self>) -> Self {
         let parent = parent.parent.clone().unwrap_or(parent);
         Self {
+            capacity: None,
+            state: std::sync::Mutex::default(),
+            frames: frames::Frames::new(0, 0),
             scan: Some(super::cache::range::Ranges::scan(parent.metrics.clone())),
             metrics: parent.metrics.clone(),
             parent: Some(parent),
             bytes: 256 * 1024,
             entries: 17,
-            ..Self::new(0, 0)
+            flights: std::array::from_fn(|_| tokio::sync::Mutex::new(())),
         }
     }
     pub(super) fn stats(&self) -> Result<Stats> {

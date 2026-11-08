@@ -429,3 +429,22 @@ async fn held_probe_heads_reference_synopses_before_clock_pressure() -> Result<(
     drop(state);
     Ok(())
 }
+
+#[test]
+fn metadata_size_count_preserves_unbounded_json_charge() -> Result<()> {
+    for text in ["quoted\"\nλ".to_owned(), "x".repeat(4 * 1024 * 1024)] {
+        let large = text.len() > 1024;
+        let rows = vec![((7_i64, text), -3_i64)];
+        let bloom = Bloom::new(&rows)?;
+        let metadata = bloom
+            .metadata
+            .downcast_ref::<super::Metadata<i64, String>>()
+            .context("missing filter metadata")?;
+        let encoded = serde_json::to_vec(metadata)?;
+        if large {
+            assert!(encoded.len() > crate::engine::reader::bounded::MAX_BYTES);
+        }
+        assert_eq!(bloom.metadata_bytes, std::mem::size_of_val(metadata) + encoded.len());
+    }
+    Ok(())
+}

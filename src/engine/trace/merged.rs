@@ -1,6 +1,6 @@
 use super::Run;
 use crate::engine::reader::{BatchCursor, BatchData, BatchReader, Cursor, Entry, KeyIdentity};
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use num_bigint::BigInt;
 use std::sync::Arc;
 
@@ -61,11 +61,13 @@ impl<K: BatchData, V: BatchData> Position<K, V> {
                 return Ok(());
             };
             let mut weight = BigInt::default();
-            for cursor in &self.cursors {
+            let mut last = ordinal;
+            for (index, cursor) in self.cursors.iter().enumerate() {
                 if let Some((other_key, other_val, coefficient)) = cursor.current()
                     && (other_key, other_val) == (key, val)
                 {
                     weight += coefficient;
+                    last = index;
                 }
             }
             if weight != BigInt::default() {
@@ -73,12 +75,20 @@ impl<K: BatchData, V: BatchData> Position<K, V> {
                 self.row = Some((ordinal, weight));
                 return Ok(());
             }
-            let tuple = (key.clone(), val.clone());
-            self.skip((&tuple.0, &tuple.1)).await?;
+            self.skip_cancelled(last).await?;
         }
     }
-    async fn skip(&mut self, tuple: (&K, &V)) -> Result<()> {
-        for cursor in &mut self.cursors {
+    async fn skip_cancelled(&mut self, last: usize) -> Result<()> {
+        // The last matching head pins the identity until all earlier matches
+        // advance. Advancing the witness last preserves the original GET order.
+        let (earlier, remaining) = self.cursors.split_at_mut(last);
+        let witness = &mut remaining[0];
+        let (key, value, _) = witness.current().context("missing canceled identity witness")?;
+        Self::skip(earlier, (key, value)).await?;
+        witness.advance().await
+    }
+    async fn skip(cursors: &mut [Cursor<K, V>], tuple: (&K, &V)) -> Result<()> {
+        for cursor in cursors {
             if let Some((key, val, _)) = cursor.current()
                 && (key, val) == tuple
             {
@@ -149,7 +159,7 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
     async fn staged_advance(&mut self) -> Result<Stage<'_, K, V>> {
         let stage = self.stage();
         if let Some((key, value, _)) = stage.position.current() {
-            stage.workspace.skip((key, value)).await?;
+            Position::skip(&mut stage.workspace.cursors, (key, value)).await?;
         }
         stage.workspace.find().await?;
         Ok(stage)
