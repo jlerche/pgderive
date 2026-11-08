@@ -311,3 +311,29 @@ class DependencyAndFixtureIntegrityTests(unittest.TestCase):
             path = self.write('replay.json', json.dumps([dict(base, lifecycle=lifecycle)]))
             with self.assertRaisesRegex(RuntimeError, 'replay.*(evidence|counter)'):
                 profile.object_metrics('replay', self.root/'unused', path)
+
+
+class ProcessingFixtureTests(unittest.TestCase):
+    def test_processing_workloads_include_their_existing_oracle_helpers(self):
+        for workload, helper in [('processing', 'operators'), ('join', 'oracle'),
+                                 ('statistics', 'aggregate'), ('group', 'drain'),
+                                 ('spill_strings', 'limits')]:
+            hashes = profile.fixture_hashes(profile.ROOT, [workload])[workload]
+            relative = profile.WORKLOADS[workload][0]
+            self.assertIn(relative + ':' + helper, hashes)
+
+    def test_new_workload_selectors_match_their_rust_module_paths(self):
+        for workload, module in [('group', 'engine::dataflow::group_tests'),
+                                 ('join', 'engine::dataflow::join_tests'),
+                                 ('topk', 'engine::dataflow::topk_tests'),
+                                 ('processing', 'engine::plan::tests::typed'),
+                                 ('statistics', 'engine::dataflow::statistics::tests'),
+                                 ('spill_strings', 'engine::execution::tests')]:
+            relative, function, selector, _ = profile.WORKLOADS[workload]
+            self.assertEqual(selector, f'{module}::{function}')
+            hashes = profile.fixture_hashes(profile.ROOT, [workload])[workload]
+            self.assertIn(relative, hashes)
+
+    def test_multiline_generic_helpers_are_fingerprinted_completely(self):
+        text = 'fn helper<T>(\n    input: T,\n) -> Result<T> {\n    Ok(input)\n}\nfn other() {}\n'
+        self.assertEqual(profile.fixture_body(text, 'helper'), text[:text.index('\nfn other')])

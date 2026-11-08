@@ -25,6 +25,24 @@ WORKLOADS = {
               'engine::execution::tests::spill_boundaries_never_finalize_intermediate_weights', False),
     'numeric': ('src/numeric.rs', 'exact_numeric_keys_order_scale_and_limits',
                 'numeric::tests::exact_numeric_keys_order_scale_and_limits', False),
+    'spill_strings': ('src/engine/execution/tests.rs',
+                      'canonical_sizes_match_after_cross_run_cancellation',
+                      'engine::execution::tests::canonical_sizes_match_after_cross_run_cancellation', False),
+    'topk': ('src/engine/dataflow/tests/topk.rs',
+             'top_k_counts_occurrences_clips_cutoffs_and_reopens',
+             'engine::dataflow::topk_tests::top_k_counts_occurrences_clips_cutoffs_and_reopens', False),
+    'group': ('src/engine/dataflow/tests/group.rs',
+              'cursor_overlay_matches_weighted_recomputation_and_cold_restore',
+              'engine::dataflow::group_tests::cursor_overlay_matches_weighted_recomputation_and_cold_restore', False),
+    'processing': ('src/engine/plan/tests/typed.rs',
+                   'chained_join_statistics_emit_snapshot_differences_and_restore',
+                   'engine::plan::tests::typed::chained_join_statistics_emit_snapshot_differences_and_restore', False),
+    'join': ('src/engine/dataflow/tests/join.rs',
+             'simultaneous_signed_inputs_match_independent_oracle',
+             'engine::dataflow::join_tests::simultaneous_signed_inputs_match_independent_oracle', False),
+    'statistics': ('src/engine/dataflow/statistics/tests.rs',
+                   'ordered_and_spilled_statistics_match_independent_group_state',
+                   'engine::dataflow::statistics::tests::ordered_and_spilled_statistics_match_independent_group_state', False),
     'batch': ('src/engine/batch/tests.rs', 'exact_merge_trees_preserve_identity_and_physical_grouping',
               'engine::batch::tests::exact_merge_trees_preserve_identity_and_physical_grouping', False),
 }
@@ -298,7 +316,7 @@ def prepare_measurement(source, workloads):
 
 
 def fixture_body(text, function):
-    match = re.search(r'^( *)(?:async )?fn ' + re.escape(function) + r'\b[^\n]*\{ *$', text, re.MULTILINE)
+    match = re.search(r'^( *)(?:async )?fn ' + re.escape(function) + r'\b[^\{]*\{ *$', text, re.MULTILINE)
     if not match:
         raise RuntimeError(f'Workload fixture changed: {function}')
     end = re.search(r'^' + re.escape(match[1]) + r'\}$', text[match.end():], re.MULTILINE)
@@ -379,9 +397,21 @@ def fixture_hashes(source, workloads):
         if name in ('reader', 'replay'):
             relative_store = 'src/engine/tests/store.rs'
             hashes[relative_store] = digest(source / relative_store)
-        if name == 'spill':
+        if name in ('spill', 'spill_strings'):
             helper = fixture_body((source / relative).read_text(), 'limits')
             hashes[relative + ':limits'] = hashlib.sha256(helper.encode()).hexdigest()
+        helpers = {
+            'processing': ('plan', 'operators', 'expected'),
+            'join': ('graph', 'tick', 'oracle'),
+            'statistics': ('aggregate',),
+            'group': ('drain',),
+        }
+        for function in helpers.get(name, ()):
+            body = fixture_body((source / relative).read_text(), function)
+            hashes[relative + ':' + function] = hashlib.sha256(body.encode()).hexdigest()
+        if name == 'processing':
+            for helper_path in ('src/engine/plan/tests/contract.rs', 'src/engine/tests/mod.rs'):
+                hashes[helper_path] = digest(source / helper_path)
         if name == 'replay':
             relative_setup = 'src/worker/tests.rs'
             hashes[relative_setup] = digest(source / relative_setup)
