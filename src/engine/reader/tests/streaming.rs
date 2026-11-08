@@ -333,3 +333,64 @@ async fn failed_merged_span_load_keeps_consolidated_position_for_retry() -> Resu
     assert_eq!(cursor.current(), Some((&2, &2, 3)));
     Ok(())
 }
+
+#[tokio::test]
+async fn writer_moves_pending_boundary_identity_and_validates_across_flushes() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut writer =
+        super::Writer::new(&store, "writer-boundaries", (None, WriteLimits::default()), None)?;
+    writer.push(((0_i64, "first".to_owned()), 1)).await?;
+    assert!(writer.previous.is_none());
+    assert!(writer.push(((0, "first".to_owned()), 1)).await.is_err());
+    assert!(writer.push(((0, "earlier".to_owned()), 1)).await.is_err());
+    let last = "last".to_owned();
+    let address = last.as_ptr().addr();
+    writer.push(((0, last), 1)).await?;
+    writer.flush_block().await?;
+    let previous = writer.previous.as_ref().context("missing flushed boundary")?;
+    assert_eq!(previous.1.as_ptr().addr(), address);
+    assert!(writer.rows.is_empty());
+    assert!(writer.push(((0, "last".to_owned()), 1)).await.is_err());
+    writer.flush_root().await?;
+    assert!(writer.push(((0, "last".to_owned()), 1)).await.is_err());
+    writer.push(((1, "next".to_owned()), 1)).await?;
+    assert!(writer.previous.is_none());
+    assert!(writer.push(((0, "later".to_owned()), 1)).await.is_err());
+    let roots = writer.finish(&store).await?.0;
+    assert_eq!(roots.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn writer_reuse_validates_pending_rows_and_then_supplies_the_boundary() -> Result<()> {
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let mut leaves = Vec::new();
+    for key in [4_i64, 6] {
+        let reference = ObjectBatch::write(
+            store.clone(),
+            &Batch::from_updates([((key, "reused".to_owned()), 1)])?,
+            "writer-reuse-boundaries",
+            1,
+        )
+        .await?;
+        let object =
+            ObjectBatch::<i64, String>::open(store.clone(), reference, "writer-reuse-boundaries")
+                .await?;
+        leaves.push(object.leaf(0).await?);
+    }
+    let mut writer = super::Writer::new(
+        &store,
+        "writer-reuse-boundaries",
+        (None, WriteLimits::default()),
+        None,
+    )?;
+    writer.push(((5_i64, "pending".to_owned()), 1)).await?;
+    assert!(writer.reuse(leaves.remove(0)).await.is_err());
+    assert_eq!(writer.rows.len(), 1);
+    writer.reuse(leaves.remove(0)).await?;
+    assert!(writer.push(((6, "reused".to_owned()), 1)).await.is_err());
+    writer.push(((7, "following".to_owned()), 1)).await?;
+    let roots = writer.finish(&store).await?.0;
+    assert_eq!(roots.len(), 1);
+    Ok(())
+}

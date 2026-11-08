@@ -158,10 +158,11 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
     ) -> Result<KeyCursor<K, V>> {
         let key = &prepared.key;
         if let Some(rows) = &prepared.complete {
-            let mut cursor = MergedCursor {
-                cursors: vec![Cursor::memory_key_reusing(rows.rows.clone(), key.key(), None)],
-                row: None,
-            };
+            let mut cursor = MergedCursor::new(vec![Cursor::memory_key_reusing(
+                rows.rows.clone(),
+                key.key(),
+                None,
+            )]);
             cursor.find().await?;
             return Ok(KeyCursor::new(cursor, None, key.clone(), 0));
         }
@@ -205,7 +206,7 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
                 cursors.push(cursor.clone());
             }
         }
-        let mut cursor = MergedCursor { cursors, row: None };
+        let mut cursor = MergedCursor::new(cursors);
         cursor.find().await?;
         let cursor =
             KeyCursor::new(cursor, prepared.ticket.clone(), key.clone(), prepared.collector_limit);

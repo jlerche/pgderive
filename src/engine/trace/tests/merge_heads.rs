@@ -47,8 +47,8 @@ async fn minimum_selection_and_cursor_movement_borrow_pinned_identities() -> Res
         let batch = Batch::from_updates([((0_i64, Counted(value)), 1)])?;
         cursors.push(batch.cursor().await?);
     }
-    let mut merged = MergedCursor { cursors, row: None };
-    assert_eq!(previous_selection_clones(&merged.cursors)?, 17);
+    let mut merged = MergedCursor::new(cursors);
+    assert_eq!(previous_selection_clones(&merged.position.cursors)?, 17);
     CLONES.store(0, Ordering::Relaxed);
     merged.find().await?;
     assert_eq!(merged.current(), Some((&0, &Counted(0), 1)));
@@ -56,19 +56,19 @@ async fn minimum_selection_and_cursor_movement_borrow_pinned_identities() -> Res
 
     // Several matching heads still borrow the selected pinned identity. Exact
     // summation must allow cancellable intermediate overflow.
-    merged.cursors.clear();
+    merged.position.cursors.clear();
     for weight in [i64::MAX, 1, -i64::MAX] {
         let batch = Batch::from_updates([((0_i64, Counted(3)), weight)])?;
-        merged.cursors.push(batch.cursor().await?);
+        merged.position.cursors.push(batch.cursor().await?);
     }
-    assert_eq!(previous_selection_clones(&merged.cursors)?, 6);
+    assert_eq!(previous_selection_clones(&merged.position.cursors)?, 6);
     CLONES.store(0, Ordering::Relaxed);
     merged.find().await?;
     assert_eq!(merged.current(), Some((&0, &Counted(3), 1)));
     assert_eq!(CLONES.load(Ordering::Relaxed), 0);
 
     let batch = Batch::from_updates((0..3).map(|key| ((key, Counted(key)), 1)))?;
-    let mut merged = MergedCursor { cursors: vec![batch.cursor().await?], row: None };
+    let mut merged = MergedCursor::new(vec![batch.cursor().await?]);
     merged.find().await?;
     CLONES.store(0, Ordering::Relaxed);
     let pinned = merged.clone();
