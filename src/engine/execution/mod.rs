@@ -3,6 +3,8 @@ mod capacity;
 mod workspaces;
 pub use workspaces::{WorkspacePermit, WorkspaceStats, Workspaces};
 mod input;
+mod output;
+pub(crate) use output::Ordered;
 mod levels;
 mod merge;
 pub(crate) mod service;

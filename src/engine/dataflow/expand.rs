@@ -2,7 +2,7 @@
 use super::TimedBatch;
 use crate::engine::{
     Batch,
-    execution::{Consolidator, Limits},
+    execution::{Consolidator, Limits, Ordered, SealedCursor},
     reader::BatchData,
 };
 use anyhow::Result;
@@ -14,13 +14,14 @@ type Mapper<K, V, A, B> = dyn for<'a> Fn(&K, &V, &mut Emit<'a, A, B>) -> Result<
 #[derive(Clone)]
 pub struct Expand<K: BatchData, V: BatchData, A: BatchData, B: BatchData> {
     map: Arc<Mapper<K, V, A, B>>,
+    ordered: bool,
 }
 impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Expand<K, V, A, B> {
     /// Bind a deterministic pure expansion whose semantics bind the plan revision.
     pub fn new(
         map: impl for<'a> Fn(&K, &V, &mut Emit<'a, A, B>) -> Result<()> + Send + Sync + 'static,
     ) -> Self {
-        Self { map: Arc::new(map) }
+        Self { map: Arc::new(map), ordered: false }
     }
     /// Preserve signed multiplicities and consolidate all expansion collisions.
     ///
@@ -32,9 +33,24 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Expand<K, V, A, B> 
         limits: Limits,
     ) -> Result<TimedBatch<Batch<A, B>>> {
         limits.check_batch(input.batch.borrow())?;
+        if self.ordered {
+            return self.evaluate_ordered(input, Ordered::new(limits)?);
+        }
         let mut output = Consolidator::new(limits)?;
         for ((key, value), weight) in input.batch.borrow().iter() {
             (self.map)(key, value, &mut |tuple| output.add(tuple, *weight))?;
+        }
+        Ok(TimedBatch { time: input.time, batch: output.finish_batch()? })
+    }
+    fn evaluate_ordered<I: Borrow<Batch<K, V>>>(
+        &self,
+        input: &TimedBatch<I>,
+        mut output: Ordered<A, B>,
+    ) -> Result<TimedBatch<Batch<A, B>>> {
+        for ((key, value), weight) in input.batch.borrow().iter() {
+            if let Err(error) = (self.map)(key, value, &mut |tuple| output.add(tuple, *weight)) {
+                return Err(output.failure(error));
+            }
         }
         Ok(TimedBatch { time: input.time, batch: output.finish_batch()? })
     }
@@ -56,6 +72,11 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Expand<K, V, A, B> 
     ) -> Result<crate::engine::execution::Sealed<A, B>> {
         use crate::engine::reader::{BatchCursor as _, BatchReader as _};
         let mut cursor = input.cursor().await?;
+        if self.ordered {
+            return self
+                .seal_ordered(cursor, Ordered::new(limits)?, limits.contributions, contributions)
+                .await;
+        }
         let mut output = Consolidator::new(limits)?;
         while let Some((key, value, weight)) = cursor.current() {
             (self.map)(key, value, &mut |tuple| {
@@ -65,5 +86,43 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Expand<K, V, A, B> 
             cursor.advance().await?;
         }
         output.seal()
+    }
+    async fn seal_ordered(
+        &self,
+        mut cursor: SealedCursor<K, V>,
+        mut output: Ordered<A, B>,
+        limit: usize,
+        contributions: &mut usize,
+    ) -> Result<crate::engine::execution::Sealed<A, B>> {
+        use crate::engine::reader::BatchCursor as _;
+        while let Some((key, value, weight)) = cursor.current() {
+            let mapped = (self.map)(key, value, &mut |tuple| {
+                crate::engine::execution::charge_contribution(contributions, limit)?;
+                output.add(tuple, weight)
+            });
+            if let Err(error) = mapped {
+                return Err(output.failure(error));
+            }
+            if let Err(error) = cursor.advance().await {
+                return Err(output.failure(error));
+            }
+        }
+        output.seal()
+    }
+}
+
+impl<Key: BatchData, Value: BatchData> Expand<Key, Value, Key, Value> {
+    pub(super) fn filter(
+        predicate: impl Fn(&Key, &Value) -> Result<bool> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            map: Arc::new(move |key, value, emit| {
+                if predicate(key, value)? {
+                    emit((key.clone(), value.clone()))?;
+                }
+                Ok(())
+            }),
+            ordered: true,
+        }
     }
 }

@@ -57,3 +57,13 @@ impl<K: BatchData, V: BatchData, A: BatchData, B: BatchData> Project<K, V, A, B>
         self.expansion.evaluate_sealed_counted(input, limits, contributions).await
     }
 }
+
+impl<Key: BatchData, Value: BatchData> Project<Key, Value, Key, Value> {
+    /// Filter unchanged full identities and weights, preserving canonical order.
+    /// The predicate cannot project, duplicate or reorder identities.
+    pub fn filter(
+        predicate: impl Fn(&Key, &Value) -> Result<bool> + Send + Sync + 'static,
+    ) -> Self {
+        Self { expansion: Expand::filter(predicate) }
+    }
+}
