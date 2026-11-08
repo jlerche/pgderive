@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(skip)]
+    pub(crate) capacity: Option<std::sync::Arc<crate::worker::resources::Resources>>,
+    #[serde(skip)]
     pub(super) source_path: Option<PathBuf>,
     #[serde(default)]
     pub(super) execution: crate::engine::execution::Limits,

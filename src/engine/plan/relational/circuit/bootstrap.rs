@@ -328,6 +328,7 @@ mod tests {
             store: Arc::new(object_store::memory::InMemory::new()),
             block_rows: 4096,
             limits: Limits { workspace_slots: 1, ..limits },
+            capacity: None,
             encoded_cache: None,
         };
         super::super::super::Relational::new(plan, operators, &settings)

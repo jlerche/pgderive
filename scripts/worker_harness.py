@@ -9,6 +9,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from harness_control import commit_proxy
 import json
+import uuid
 import os
 import pathlib
 import queue
@@ -139,7 +140,8 @@ class Fixture:
     def __init__(self, output, index, rows=256, auctions=32, database="pgderive_dev"):
         self.output = output
         self.database = database
-        self.name = f'pgderive_worker_{os.getpid()}_{index}'
+        # Ownership outlives cleanup; unique roots must also fit the physical slot prefix.
+        self.name = f'pgderive_{uuid.uuid4().hex[:16]}_'
         self.environment = os.environ.copy()
         self.environment['PGPASSWORD'] = os.environ.get('PGPASSWORD', 'postgres')
         self.environment['PGDERIVE__POSTGRES__PASSWORD'] = self.environment['PGPASSWORD']
@@ -189,6 +191,7 @@ endpoint="http://127.0.0.1:8333"
 bucket="pgderive-mvp-tests"
 credentials_file={json.dumps(str(credentials.resolve()))}
 [worker]
+tenant_id="fixture"
 catalog_schema="{self.name}"
 query_id="grouped"
 sink_table="groups"

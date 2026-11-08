@@ -40,7 +40,7 @@ pub(in crate::worker) async fn run_owned(
         let generation =
             state.pending.clone().context("building lifecycle has no pending generation")?;
         if let Some(old) = &state.active {
-            session.own(&settings.catalog_schema, &old.query).await?;
+            session.own(&settings.catalog_schema, &old.query, &settings.tenant_id).await?;
         }
         let (native_config, native_settings) = generation.apply(config, settings)?;
         let mut opened = Open::raw(&native_config, &native_settings, session).await?;

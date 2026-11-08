@@ -9,6 +9,7 @@ use std::{
 
 /// Query-wide cap on native payloads retained by immutable values.
 pub struct NativeBudget {
+    capacity: Option<crate::engine::capacity::Admission>,
     limit: usize,
     used: AtomicUsize,
 }
@@ -16,7 +17,13 @@ impl NativeBudget {
     /// Create a budget; zero disables retained native views.
     #[must_use]
     pub fn new(limit: usize) -> Arc<Self> {
-        Arc::new(Self { limit, used: AtomicUsize::new(0) })
+        Arc::new(Self { capacity: None, limit, used: AtomicUsize::new(0) })
+    }
+    pub(crate) fn with_capacity(
+        limit: usize,
+        capacity: Option<crate::engine::capacity::Admission>,
+    ) -> Arc<Self> {
+        Arc::new(Self { capacity, limit, used: AtomicUsize::new(0) })
     }
     /// Reserved bytes, including values pinned by outstanding decoded handles.
     #[must_use]
@@ -36,19 +43,35 @@ impl NativeBudget {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return Some(Reservation { budget: self.clone(), bytes }),
+                Ok(_) => return self.finish_reservation(bytes),
                 Err(current) => previous = current,
             }
         }
     }
+    fn finish_reservation(self: &Arc<Self>, bytes: usize) -> Option<Reservation> {
+        let mut reservation = Reservation { budget: self.clone(), bytes, pooled: false };
+        if let Some(capacity) = &self.capacity {
+            if !capacity.reserve(bytes).ok()? {
+                return None;
+            }
+            reservation.pooled = true;
+        }
+        Some(reservation)
+    }
 }
 struct Reservation {
+    pooled: bool,
     budget: Arc<NativeBudget>,
     bytes: usize,
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
         self.budget.used.fetch_sub(self.bytes, Ordering::AcqRel);
+        if self.pooled
+            && let Some(capacity) = &self.budget.capacity
+        {
+            capacity.release(self.bytes);
+        }
     }
 }
 pub(super) struct Charged<T> {

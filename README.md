@@ -832,6 +832,9 @@ qualification remain separate work.
 
 ## Continuous worker
 
+For concurrent queries, tenant ownership and shared capacity limits, see
+[the multi-tenant worker](docs/multi-tenant-worker.md).
+
 `cargo run --locked --bin pgderive_worker -- worker.local.toml` runs the explicit
 native-bound grouped inner join described in `worker.example.toml`. Create the
 source tables, their two-table publication and an empty owned catalog schema

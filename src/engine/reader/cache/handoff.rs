@@ -10,14 +10,17 @@ impl BlockCache {
             return parent;
         }
         let parent = parent.parent.clone().unwrap_or(parent);
+        let mut filters = super::filter::Filters::new(parent.bytes, parent.entries);
+        filters.capacity.clone_from(&parent.capacity);
         Arc::new(Self {
+            capacity: parent.capacity.clone(),
             index: parent.index.clone(),
             bytes: parent.bytes,
             entries: parent.entries,
             encoded: parent.encoded.clone(),
             ranges: parent.ranges.clone(),
             points: parent.points.clone(),
-            filters: Arc::new(super::filter::Filters::new(parent.bytes, parent.entries)),
+            filters: Arc::new(filters),
             parent: Some(parent),
             staged: true,
             state: Arc::default(),

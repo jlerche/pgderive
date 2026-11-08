@@ -77,6 +77,7 @@ async fn chained_join_complete_deltas_recovery_and_ownership() -> Result<()> {
         store: Arc::new(InMemory::new()),
         block_rows: 1,
         limits: crate::engine::execution::Limits::default(),
+        capacity: None,
         encoded_cache: None,
     };
     let mut query = Relational::new(plan()?, operators(), &settings)?;
@@ -146,6 +147,7 @@ async fn wrong_source_arity_rejects_before_any_staged_objects() -> Result<()> {
         store: store.clone(),
         block_rows: 1,
         limits: crate::engine::execution::Limits::default(),
+        capacity: None,
         encoded_cache: None,
     };
     let query = Relational::new(plan()?, operators(), &settings)?;
@@ -214,6 +216,7 @@ async fn fanout_self_join_keeps_prior_isolation_and_retries_downstream_failure()
         store: Arc::new(InMemory::new()),
         block_rows: 1,
         limits: crate::engine::execution::Limits::default(),
+        capacity: None,
         encoded_cache: None,
     };
     let mut query = Relational::new(Plan::new(definition)?, operators, &settings)?;
@@ -253,6 +256,7 @@ async fn independent_uploads_overlap_and_failures_drain_without_state_advance() 
             store: store.clone(),
             block_rows: 2,
             limits: crate::engine::execution::Limits::default(),
+            capacity: None,
             encoded_cache: None,
         };
         let mut query = Relational::new(plan()?, operators(), &settings)?;
@@ -287,6 +291,7 @@ async fn memtable_preserves_join_cross_terms_duplicates_and_flushes_to_reopenabl
         store: store.clone(),
         block_rows: 16,
         limits: crate::engine::execution::Limits::default(),
+        capacity: None,
         encoded_cache: None,
     };
     let mut query = Relational::new(plan()?, operators(), &settings)?;

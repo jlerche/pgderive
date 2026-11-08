@@ -43,7 +43,7 @@ impl Open {
         settings: &Settings,
         session: Session,
     ) -> Result<Self> {
-        session.own(&settings.catalog_schema, &settings.query_id).await?;
+        session.own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id).await?;
         let resolved = super::lifecycle::resolve(&*session.client, config, settings).await?;
         Self::raw(&resolved.config, &resolved.settings, session).await
     }
@@ -65,14 +65,21 @@ impl Open {
             .context("worker requires durable object storage")?
             .preflight(store.as_ref())
             .await?;
-        session.own(&settings.catalog_schema, &settings.query_id).await?;
+        session.own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id).await?;
         let catalog = Catalog::new(&settings.catalog_schema, &settings.query_id)?;
         catalog.install(&session.client).await?;
         let contract = registration::source(&mut session.client, config, settings).await?;
         let mut replication = config.clone();
         replication.replication.slot = contract.slot.clone();
         let encoded_cache = match &config.encoded_cache {
-            Some(cache) => Some(Arc::new(cache.open().await?)),
+            Some(cache) => Some(Arc::new(
+                cache
+                    .open_with_capacity(
+                        config.capacity.as_ref().and_then(|resources| resources.encoded.clone()),
+                        Some(super::tenant::cache_scope(&*session.client, settings).await?),
+                    )
+                    .await?,
+            )),
             None => None,
         };
         let options = EngineSettings {
@@ -80,6 +87,7 @@ impl Open {
             block_rows: settings.block_rows,
             limits: config.execution,
             encoded_cache,
+            capacity: config.capacity.as_ref().map(|resources| resources.query.clone()),
         };
         let compiled = settings.query.compile_bound(&*session.client, &contract).await?;
         let mut query = relational::build_committed(&contract, &compiled, &options)?;
@@ -289,6 +297,7 @@ fn verify_snapshot_plan(
                 .build(&settings.object_prefix, config.execution.object_requests)?,
             block_rows: settings.block_rows,
             limits: config.execution,
+            capacity: None,
             encoded_cache: None,
         },
     )?;

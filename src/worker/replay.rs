@@ -87,9 +87,53 @@ async fn recover_epoch(
     let input = open
         .input(&epoch.transaction().batch, boundary.time, &mut crate::timing::Profile::new(false))
         .await?;
-    let work = open.query.prepare_memtable(input, open.settings.memtable_bytes).await?;
+    let work = prepare(open, stream, input).await?;
     open.query.commit(work).map(|_| ())
 }
+async fn prepare(
+    open: &mut Open,
+    stream: &mut Stream,
+    input: super::program::relational::Inputs,
+) -> Result<
+    crate::engine::plan::relational::Prepared<
+        super::program::relational::Key,
+        crate::transaction::Row,
+    >,
+> {
+    use crate::engine::plan::relational::{MemtableFull, PooledMemtableFull};
+    loop {
+        let error =
+            match open.query.prepare_memtable(input.clone(), open.settings.memtable_bytes).await {
+                Ok(work) => return Ok(work),
+                Err(error) if error.is::<MemtableFull>() || error.is::<PooledMemtableFull>() => {
+                    error
+                }
+                Err(error) => return Err(error),
+            };
+        if let Some(resources) = &open.replication.capacity
+            && let Some(pressure) = error.downcast_ref::<PooledMemtableFull>()
+        {
+            resources.pressure(pressure.tenant_only);
+        }
+        let durable = open.writer.confirmed(&mut open.session.client, open.query.plan()).await?;
+        if open.query.time() > durable.stored.checkpoint.time {
+            super::checkpoint::flush(open).await?;
+            stream.acknowledge(&mut open.session.client, &open.writer, open.query.plan()).await?;
+            continue;
+        }
+        if error.is::<MemtableFull>()
+            || error
+                .downcast_ref::<PooledMemtableFull>()
+                .is_some_and(|pressure| pressure.required > pressure.limit)
+        {
+            return Err(error.context(crate::engine::execution::CapacityExceeded(
+                "replay epoch exceeds tenant/process memtable capacity after checkpoint",
+            )));
+        }
+        return Err(error);
+    }
+}
+
 struct Replay {
     durable: Durable,
     applied: Lsn,

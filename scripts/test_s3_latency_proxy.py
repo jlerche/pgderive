@@ -21,9 +21,10 @@ class LatencyTests(unittest.TestCase):
             proxy = Proxy(('127.0.0.1', 0), 'http://127.0.0.1:8333', Model())
             proxy.gate = gate
             try:
-                proxy.hold('GET')
+                proxy.hold('PUT', '/bucket/.pgderive-ownership/catalog.json')
+                proxy.hold('GET', '/bucket/data')
                 self.assertTrue(arm.exists())
-                thread = threading.Thread(target=proxy.hold, args=('PUT',))
+                thread = threading.Thread(target=proxy.hold, args=('PUT', '/bucket/data'))
                 thread.start()
                 deadline = time.monotonic() + 2
                 while not pending.exists() and time.monotonic() < deadline:
@@ -32,7 +33,7 @@ class LatencyTests(unittest.TestCase):
                 self.assertFalse(arm.exists())
                 self.assertTrue(thread.is_alive())
                 # A second request cannot consume the same gate reservation.
-                proxy.hold('PUT')
+                proxy.hold('PUT', '/bucket/data')
                 gate.touch()
                 thread.join(timeout=2)
                 self.assertFalse(thread.is_alive())

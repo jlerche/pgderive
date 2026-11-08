@@ -404,8 +404,12 @@ mod growth;
 async fn held_probe_heads_reference_synopses_before_clock_pressure() -> Result<()> {
     let store = Arc::new(Store::unpaced());
     let mut cache = BlockCache::new(64 * 1024, 1);
-    cache.filters =
-        Arc::new(Filters { bytes: 64 * 1024, entries: 2, state: std::sync::Mutex::default() });
+    cache.filters = Arc::new(Filters {
+        capacity: None,
+        bytes: 64 * 1024,
+        entries: 2,
+        state: std::sync::Mutex::default(),
+    });
     let cache = Arc::new(cache);
     let input = Batch::from_updates([((2_i64, 0_i64), 1), ((4, 0), 1)])?;
     let reference = ObjectBatch::write(store.clone(), &input, "a-held", 4096).await?;

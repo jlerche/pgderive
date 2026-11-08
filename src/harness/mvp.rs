@@ -30,8 +30,13 @@ impl MvpFixture {
         limits: crate::engine::execution::Limits,
     ) -> Result<Self> {
         let plan = registered_plan()?;
-        let settings =
-            crate::engine::plan::Settings { store, block_rows: 3, limits, encoded_cache: None };
+        let settings = crate::engine::plan::Settings {
+            store,
+            block_rows: 3,
+            limits,
+            capacity: None,
+            encoded_cache: None,
+        };
         let graph = Query::new(plan.clone(), operators(), &settings)?;
         let bag_graph = Query::new(plan, operators(), &settings)?;
         eprintln!("registered engine query: {}", graph.plan().identity());

@@ -45,6 +45,7 @@ struct State {
     flight_stripes: usize,
 }
 pub(in crate::engine::reader) struct Ranges {
+    pub(in crate::engine::reader) capacity: Option<crate::engine::capacity::Admission>,
     bytes: usize,
     entries: usize,
     #[cfg(test)]
@@ -67,6 +68,7 @@ impl std::fmt::Debug for Ranges {
 impl Ranges {
     pub(in crate::engine::reader) fn new(bytes: usize, entries: usize) -> Self {
         Self {
+            capacity: None,
             bytes,
             entries,
             #[cfg(test)]
@@ -370,6 +372,11 @@ impl Ranges {
         Ok(usize::try_from(hash.finish() % u64::try_from(STRIPES)?)?)
     }
     fn retain(&self, identity: Identity, window: Window) -> Result<()> {
+        if let Some(pool) = &self.capacity
+            && !pool.retain(window.bytes.clone(), Window::charge(&identity, window.bytes.len()))?
+        {
+            return Ok(());
+        }
         if self.entries == 0 || Window::charge(&identity, window.bytes.len()) > self.bytes {
             return Ok(());
         }
@@ -535,3 +542,15 @@ fn same_pack(left: &Identity, right: &Identity) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+impl Ranges {
+    pub(in crate::engine::reader) fn reclaim(&self) {
+        if let Ok(mut state) = self.state.try_lock() {
+            let pins = std::mem::take(&mut state.pins);
+            let width = state.width;
+            *state = State::new(self.bytes, self.entries);
+            state.pins = pins;
+            state.width = width;
+        }
+    }
+}

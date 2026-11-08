@@ -84,7 +84,7 @@ fn query(settings: &Settings) -> Result<Query> {
     )
 }
 fn settings(store: Arc<dyn ObjectStore>, limits: Limits) -> Settings {
-    Settings { store, block_rows: 1, limits, encoded_cache: None }
+    Settings { store, block_rows: 1, limits, capacity: None, encoded_cache: None }
 }
 fn tag_batches(left: Batch<i64, i64>, right: Batch<i64, i64>) -> Result<SourceBatches> {
     [left, right]
@@ -262,8 +262,13 @@ async fn incompatible_checkpoint_memberships_fail_before_reopening() -> Result<(
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let original = query(&settings(store.clone(), Limits::default()))?;
     let checkpoint = original.checkpoint()?;
-    let settings =
-        Settings { store, block_rows: 1, limits: Limits::default(), encoded_cache: None };
+    let settings = Settings {
+        store,
+        block_rows: 1,
+        limits: Limits::default(),
+        capacity: None,
+        encoded_cache: None,
+    };
     let mut incompatible = checkpoint.clone();
     incompatible.version = 9;
     assert!(reopen(&settings, incompatible).await.is_err());

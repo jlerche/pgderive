@@ -21,8 +21,13 @@ pub struct CacheConfig {
 #[derive(Debug)]
 pub struct EncodedCache {
     cache: HybridCache<String, Vec<u8>>,
+    namespace: Option<String>,
     // Retain ownership until the hybrid cache has been dropped/closed.
     ownership: Arc<File>,
+}
+struct DeviceOwnership {
+    lock: Arc<File>,
+    _capacity: Option<Arc<()>>,
 }
 impl CacheConfig {
     pub(crate) fn validate(&self) -> Result<()> {
@@ -40,6 +45,13 @@ impl CacheConfig {
     /// # Errors
     /// Returns invalid configuration, directory ownership or Foyer initialization errors.
     pub async fn open(&self) -> Result<EncodedCache> {
+        self.open_with_capacity(None, None).await
+    }
+    pub(crate) async fn open_with_capacity(
+        &self,
+        capacity: Option<Arc<()>>,
+        namespace: Option<String>,
+    ) -> Result<EncodedCache> {
         self.validate()?;
         std::fs::create_dir_all(&self.directory)?;
         let lock = File::options()
@@ -50,39 +62,45 @@ impl CacheConfig {
             .open(self.directory.join("pgderive.lock"))?;
         lock.try_lock().context("Foyer directory already owned by another worker")?;
         let lock = Arc::new(lock);
-        let ownership = lock.clone();
+        let ownership = Arc::new(DeviceOwnership { lock: lock.clone(), _capacity: capacity });
         let device = FsDeviceBuilder::new(self.directory.join("blocks"))
             .with_capacity(self.disk_bytes)
             .build()?;
         let cache = HybridCache::<String, Vec<u8>>::builder()
             .with_name("pgderive-encoded-v1")
             .memory(self.memory_bytes)
-            .with_weighter(move |key: &String, value: &Vec<u8>| charge(&ownership, key, value))
+            .with_weighter(move |key: &String, value: &Vec<u8>| charge(&ownership.lock, key, value))
             .storage()
             .with_io_engine_config(PsyncIoEngineConfig::new())
             .with_engine_config(BlockEngineConfig::new(device).with_block_size(16 * 1024 * 1024))
             .build()
             .await?;
-        Ok(EncodedCache { cache, ownership: lock })
+        Ok(EncodedCache { cache, namespace, ownership: lock })
     }
 }
 impl EncodedCache {
+    fn key(&self, key: &str) -> String {
+        self.namespace
+            .as_ref()
+            .map_or_else(|| key.to_owned(), |namespace| format!("{namespace}:{key}"))
+    }
     // An approximate presence check only suppresses speculative object reads.
     // The ordinary read still verifies cached payload integrity or fetches it.
     pub(super) fn may_contain(&self, key: &str) -> bool {
-        self.cache.contains(key)
+        self.cache.contains(&self.key(key))
     }
 
     pub(super) async fn get(&self, key: &str, digest: &str) -> Option<Vec<u8>> {
-        let entry = self.cache.get(key).await.ok().flatten()?;
+        let key = self.key(key);
+        let entry = self.cache.get(&key).await.ok().flatten()?;
         if !hash_matches(entry.value(), digest) {
-            self.cache.remove(key);
+            self.cache.remove(&key);
             return None;
         }
         Some(entry.value().clone())
     }
-    pub(super) fn insert(&self, key: String, value: Vec<u8>) {
-        self.cache.insert(key, value);
+    pub(super) fn insert(&self, key: &str, value: Vec<u8>) {
+        self.cache.insert(self.key(key), value);
     }
     /// Flush pending cache writes and stop disk workers before directory reuse.
     ///

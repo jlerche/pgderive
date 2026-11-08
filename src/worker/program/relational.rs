@@ -58,7 +58,10 @@ pub(in crate::worker) fn committed_plan(contract: &Contract, compiled: &Compiled
     )
 }
 fn operators(ir: &Relational, settings: &Settings) -> Result<Operators<Key, Row>> {
-    let native = crate::engine::value::NativeBudget::new(settings.limits.native_cache_bytes);
+    let native = crate::engine::value::NativeBudget::with_capacity(
+        settings.limits.native_cache_bytes,
+        settings.capacity.as_ref().map(|capacity| capacity.cache.clone()),
+    );
     let mut operators = Operators::new();
     for node in &ir.nodes {
         if let Some(operator) = bind(node, &ir.output, settings, &native)? {

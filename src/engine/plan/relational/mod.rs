@@ -104,6 +104,7 @@ type Runtime<K, V> =
     Engine<RelationalState<K, V>, Vec<crate::engine::execution::Sealed<K, V>>, Batch<K, V>>;
 #[derive(Clone)]
 struct Execution<K: BatchData, V: BatchData> {
+    capacity: Option<crate::engine::capacity::Query>,
     plan: Plan,
     operators: Arc<Operators<K, V>>,
     writers: BTreeMap<String, Arrangement<K, V>>,
@@ -120,6 +121,7 @@ impl std::fmt::Display for MemtableFull {
     }
 }
 impl std::error::Error for MemtableFull {}
+pub(crate) use crate::engine::capacity::MemoryPressure as PooledMemtableFull;
 /// Reusable durable circuit; source deltas follow declared source-node order.
 /// Every source is supplied on every tick, including empty deltas.
 pub struct Relational<K: BatchData, V: BatchData> {
@@ -148,8 +150,13 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         let limits = settings.limits.validate()?;
         let cache = Arc::new(
             BlockCache::new(limits.cache_bytes, limits.cache_entries)
-                .with_encoded(settings.encoded_cache.clone()),
+                .with_encoded(settings.encoded_cache.clone())
+                .with_capacity(settings.capacity.as_ref().map(|capacity| capacity.cache.clone()))?,
         );
+        if let Some(capacity) = &settings.capacity {
+            let owner: Arc<dyn crate::engine::capacity::Reclaim> = cache.clone();
+            capacity.cache.register(&owner)?;
+        }
         let writers = plan
             .definition()
             .arrangements
@@ -179,6 +186,7 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         let execution = Arc::new(Execution {
+            capacity: settings.capacity.clone(),
             plan,
             operators: Arc::new(operators),
             writers,
@@ -352,6 +360,13 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
                     ensure!(bytes <= byte_limit, MemtableFull);
                 }
                 profile.mark("memory_accounting");
+                if let Some(capacity) = &execution.capacity {
+                    let mut allocations = Vec::new();
+                    for entry in candidate.entries.values() {
+                        allocations.extend(entry.trace.memory_allocations()?);
+                    }
+                    capacity.memtable.admit_memory(allocations)?;
+                }
                 Ok((candidate, output))
             })
             .await;
@@ -362,7 +377,9 @@ impl<K: BatchData, V: BatchData> Relational<K, V> {
         result: Result<Prepared<K, V>>,
     ) -> Result<Prepared<K, V>> {
         if result.as_ref().is_err_and(|error| {
-            !error.is::<MemtableFull>() && !error.is::<crate::engine::execution::EvaluationFailed>()
+            !error.is::<MemtableFull>()
+                && !error.is::<PooledMemtableFull>()
+                && !error.is::<crate::engine::execution::EvaluationFailed>()
         }) {
             for batch in input {
                 batch.retain_failure();

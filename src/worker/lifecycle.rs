@@ -173,6 +173,7 @@ pub(super) async fn resolve(
     config: &Config,
     settings: &Settings,
 ) -> Result<Resolved> {
+    super::tenant::verify(sql, &settings.catalog_schema, &settings.tenant_id).await?;
     require_public(sql, settings).await?;
     let Some(state) = read(sql, settings).await? else {
         return Ok(Resolved { config: config.clone(), settings: settings.clone() });
@@ -204,6 +205,7 @@ pub(super) async fn current(
     sql: &(impl GenericClient + Sync),
     settings: &Settings,
 ) -> Result<(String, Option<Value>)> {
+    super::tenant::verify(sql, &settings.catalog_schema, &settings.tenant_id).await?;
     require_public(sql, settings).await?;
     let state = read(sql, settings).await?;
     let query = state
@@ -216,6 +218,7 @@ pub(super) async fn recreate(
     sql: &(impl GenericClient + Sync),
     settings: &Settings,
 ) -> Result<bool> {
+    super::tenant::verify(sql, &settings.catalog_schema, &settings.tenant_id).await?;
     require_public(sql, settings).await?;
     if let Some(state) = read(sql, settings).await? {
         return Ok(state.phase == Phase::Dropped
@@ -227,7 +230,8 @@ async fn own(config: &Config) -> Result<(Session, Settings)> {
     config.validate()?;
     let settings = config.worker.clone().context("configuration requires a worker section")?;
     let session = Session::connect(config).await?;
-    session.own(&settings.catalog_schema, &settings.query_id).await?;
+    session.own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id).await?;
+    super::tenant::namespace(config, &settings, &session).await?;
     require_public(&*session.client, &settings).await?;
     Ok((session, settings))
 }

@@ -53,6 +53,7 @@ async fn retained_partition_circuit_restore_collisions_and_atomic_failure() -> R
         store: Arc::new(InMemory::new()),
         block_rows: 1,
         limits: crate::engine::execution::Limits::default(),
+        capacity: None,
         encoded_cache: None,
     };
     let mut query = Relational::new(plan()?, operators(&calls), &settings)?;

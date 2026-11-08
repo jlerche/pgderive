@@ -315,6 +315,7 @@ pub(super) async fn build<K: BatchData, V: BatchData>(
 
 #[derive(Debug)]
 pub(super) struct Cache {
+    capacity: Option<crate::engine::capacity::Admission>,
     state: std::sync::Mutex<CacheState>,
     bytes: usize,
     entries: usize,
@@ -353,6 +354,7 @@ pub(super) struct FrameRead<'a> {
 impl Cache {
     pub(super) fn new(bytes: usize, entries: usize) -> Self {
         Self {
+            capacity: None,
             bytes: bytes / 4,
             entries,
             state: std::sync::Mutex::default(),
@@ -507,6 +509,11 @@ impl Cache {
         if self.entries == 0 || charge > self.bytes {
             return Ok(());
         }
+        if let Some(pool) = &self.capacity
+            && !pool.retain(node.clone(), charge)?
+        {
+            return Ok(());
+        }
         let mut state =
             self.state.lock().map_err(|_| anyhow::anyhow!("index cache lock poisoned"))?;
         let identity = (hash.into(), length, kind);
@@ -645,6 +652,20 @@ pub(super) fn inline_identity(node: &impl Serialize) -> Result<(u64, String)> {
     // inline identity identical for typed nodes and their opaque JSON views.
     let bytes = bounded::encode(&serde_json::to_value(node)?)?;
     Ok((u64::try_from(bytes.len())?, hash(&bytes)))
+}
+
+impl Cache {
+    pub(super) fn set_capacity(&mut self, capacity: Option<crate::engine::capacity::Admission>) {
+        self.capacity.clone_from(&capacity);
+        self.frames.capacity = capacity;
+    }
+    pub(super) fn reclaim(&self) {
+        if let Ok(mut state) = self.state.try_lock() {
+            state.entries.clear();
+            state.bytes = 0;
+        }
+        self.frames.clear();
+    }
 }
 
 #[cfg(test)]

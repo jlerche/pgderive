@@ -1,4 +1,7 @@
-# Experimental in-process query memory
+# Historical in-process query memory experiment
+
+These measurements describe commit `e3d8d59`, before production tenant ownership
+and pooled capacity. See [current worker behavior](multi-tenant-worker.md).
 
 The throwaway `jacob/experiment-multi-query-memory` branch starts from local main
 `6e344cf`. It runs each existing worker in its own task on one Tokio runtime:

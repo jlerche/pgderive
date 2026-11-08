@@ -4,6 +4,7 @@ mod acknowledged;
 pub mod catalog;
 pub mod compiler;
 mod configuration;
+mod diagnostics;
 pub mod engine;
 mod harness;
 mod listener;

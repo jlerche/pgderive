@@ -24,6 +24,7 @@ scratch_bytes=536870912
 output_bytes=67108864
 output_entries=250000
 [worker]
+tenant_id="fixture"
 catalog_schema=$schema
 query_id=$query_id
 sink_table=$table

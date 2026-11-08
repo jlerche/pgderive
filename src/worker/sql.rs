@@ -39,12 +39,13 @@ impl Session {
         crate::source::Environment::configure(&*session.client).await?;
         Ok(session)
     }
-    pub(super) async fn own(&self, schema: &str, query: &str) -> Result<()> {
-        ensure!(self.try_own(schema, query).await?, "another worker owns this query");
+    pub(super) async fn own(&self, schema: &str, query: &str, tenant: &str) -> Result<()> {
+        ensure!(self.try_own(schema, query, tenant).await?, "another worker owns this query");
         Ok(())
     }
-    pub(super) async fn try_own(&self, schema: &str, query: &str) -> Result<bool> {
+    pub(super) async fn try_own(&self, schema: &str, query: &str, tenant: &str) -> Result<bool> {
         crate::semantics::lease(&*self.client).await?;
+        super::tenant::claim(&*self.client, schema, tenant).await?;
         let scope = format!("pgderive-worker:{schema}:{query}");
         let row = timeout(
             Duration::from_secs(10),

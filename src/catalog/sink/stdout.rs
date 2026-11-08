@@ -27,7 +27,7 @@ fn write(
     payload: &Value,
     occurrences: u64,
 ) -> Result<()> {
-    serde_json::to_writer(
+    crate::diagnostics::write(
         &mut *output,
         &json!({
             "event":"sink_batch", "version":1, "status":"attempted",

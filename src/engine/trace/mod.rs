@@ -80,6 +80,19 @@ pub struct TraceSnapshot<K: BatchData, V: BatchData> {
 }
 
 impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
+    pub(crate) fn memory_allocations(
+        &self,
+    ) -> Result<Vec<crate::engine::capacity::ChargedAllocation>> {
+        let mut allocations = Vec::new();
+        for run in &self.runs {
+            if let Run::Memory(batch) = run {
+                let allocation: std::sync::Arc<dyn std::any::Any + Send + Sync> =
+                    batch.shared_entries();
+                allocations.push((allocation, memory_run_charge(run)?));
+            }
+        }
+        Ok(allocations)
+    }
     pub(super) const fn empty() -> Self {
         Self {
             runs: Vec::new(),

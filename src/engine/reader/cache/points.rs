@@ -62,6 +62,7 @@ struct Cached {
 }
 #[derive(Debug)]
 pub struct Points {
+    pub(super) capacity: Option<crate::engine::capacity::Admission>,
     cache: foyer::Cache<Identity, Cached>,
     bytes: usize,
     hits: std::sync::atomic::AtomicU64,
@@ -73,7 +74,7 @@ impl Points {
             .with_eviction_config(foyer::S3FifoConfig::default())
             .with_weighter(|_: &Identity, entry: &Cached| entry.charge)
             .build();
-        Self { cache, bytes, hits: std::sync::atomic::AtomicU64::new(0) }
+        Self { capacity: None, cache, bytes, hits: std::sync::atomic::AtomicU64::new(0) }
     }
     pub(super) fn stats(&self) -> (usize, usize, u64) {
         (
@@ -150,8 +151,19 @@ impl Points {
         }
         super::super::format::validate(&rows)?;
         ensure!(rows.iter().all(|row| &row.0.0 == key.key()), "incomplete point cache key slice");
+        if let Some(pool) = &self.capacity
+            && !pool.retain(rows.clone(), charge)?
+        {
+            return Ok(false);
+        }
         drop(self.cache.insert(identity, Cached { rows, charge }));
         Ok(true)
+    }
+}
+
+impl Points {
+    pub(super) fn reclaim(&self) {
+        self.cache.clear();
     }
 }
 
