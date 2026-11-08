@@ -2,9 +2,10 @@ use super::CapacityExceeded;
 use crate::engine::reader::BatchData;
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     io::{self, Read, Seek, Write},
     path::PathBuf,
 };
@@ -98,6 +99,16 @@ fn check_weight(weight: &BigInt, limit: usize) -> Result<()> {
     );
     Ok(())
 }
+// Keep the coefficient a decimal JSON string without allocating that string.
+struct Decimal<'a>(&'a BigInt);
+impl Serialize for Decimal<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match i128::try_from(self.0) {
+            Ok(weight) => serializer.collect_str(&weight),
+            Err(_) => serializer.collect_str(self.0),
+        }
+    }
+}
 pub(super) fn encode(
     tuple: &impl Serialize,
     weight: &BigInt,
@@ -107,7 +118,7 @@ pub(super) fn encode(
     bytes.clear();
     check_weight(weight, limit)?;
     let mut buffer = Buffer { bytes, limit, exceeded: false };
-    let encoded = serde_json::to_writer(&mut buffer, &(tuple, weight.to_string()));
+    let encoded = serde_json::to_writer(&mut buffer, &(tuple, Decimal(weight)));
     ensure!(!buffer.exceeded, CapacityExceeded("scratch record limit exceeded"));
     encoded?;
     Ok(())
@@ -147,6 +158,10 @@ pub(super) fn read<T: BatchData>(
     bytes.resize(length, 0);
     reader.read_exact(bytes)?;
     ensure!(Sha256::digest(bytes.as_slice()).as_slice() == expected, "scratch checksum mismatch");
-    let (tuple, weight): (T, String) = serde_json::from_slice(bytes)?;
+    let Decoded(tuple, weight): Decoded<'_, T> = serde_json::from_slice(bytes)?;
     Ok(Some((tuple, weight.parse()?)))
 }
+
+// Borrow decimal strings directly; JSON escapes use the deserializer scratch buffer.
+#[derive(Deserialize)]
+struct Decoded<'a, T>(T, #[serde(borrow)] Cow<'a, str>);

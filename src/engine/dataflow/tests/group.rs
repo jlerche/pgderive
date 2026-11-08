@@ -13,6 +13,33 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 #[tokio::test]
+async fn canonical_groups_borrow_input_keys_and_preserve_complete_deltas() -> Result<()> {
+    let batch = Batch::from_updates([
+        ((String::from("b"), 2), 3),
+        ((String::from("a"), 4), 2),
+        ((String::from("a"), 1), 1),
+        ((String::from("c"), 8), 4),
+    ])?;
+    let addresses: Vec<_> =
+        batch.iter().map(|((key, _), _)| (key.clone(), std::ptr::from_ref(key).addr())).collect();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let measured = calls.clone();
+    let operator = Group::<String, i32>::new(move |input, _| {
+        let expected = addresses.iter().find(|(key, _)| key == input.key);
+        assert_eq!(expected.map(|entry| entry.1), Some(std::ptr::from_ref(input.key).addr()));
+        let ordinal = measured.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(input.key, ["a", "b", "c"][ordinal]);
+        Box::pin(async move { Ok(input.delta.clone()) })
+    });
+    let input = TimedBatch { time: 1, batch };
+    let prior = TraceSnapshot::empty();
+    let output = operator.evaluate(&input, &prior, Limits::default()).await?;
+    assert_eq!(output.batch, input.batch);
+    assert_eq!(calls.load(Ordering::Relaxed), 3);
+    assert_eq!(prior.time(), 0);
+    Ok(())
+}
+#[tokio::test]
 async fn cursor_overlay_matches_weighted_recomputation_and_cold_restore() -> Result<()> {
     let writer = Arrangement::<i64, i64>::new(Arc::new(InMemory::new()), "group-v1".into(), 1)?;
     let operator = Group::new(|input, work| {

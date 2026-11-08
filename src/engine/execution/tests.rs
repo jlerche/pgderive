@@ -415,3 +415,62 @@ fn resident_evaluations_do_not_create_scratch_even_on_failure() -> Result<()> {
     assert!(invalid.finish_batch().is_err());
     Ok(())
 }
+
+#[test]
+fn decimal_scratch_weights_preserve_exact_wire_and_json_escapes() -> Result<()> {
+    for weight in [
+        BigInt::from(0),
+        BigInt::from(i128::MIN),
+        BigInt::from(i128::MAX),
+        BigInt::from(i128::MIN) - 1,
+        BigInt::from(i128::MAX) + 1,
+    ] {
+        let wire = encode(&"tuple", &weight, 4096)?;
+        assert_eq!(wire, serde_json::to_vec(&("tuple", weight.to_string()))?);
+        let mut framed = Vec::new();
+        super::record::write(&mut framed, &wire, 0, 8192)?;
+        let decoded = super::record::read::<String>(
+            &mut std::io::Cursor::new(framed),
+            4096,
+            &mut Vec::new(),
+        )?;
+        assert_eq!(decoded, Some((String::from("tuple"), weight)));
+    }
+    for (wire, expected) in [
+        (r#"["tuple","\u002d\u0031"]"#, Some(-1)),
+        (r#"["tuple","+1"]"#, Some(1)),
+        (r#"["tuple","invalid"]"#, None),
+        (r#"["tuple",1]"#, None),
+    ] {
+        let mut framed = Vec::new();
+        super::record::write(&mut framed, wire.as_bytes(), 0, 8192)?;
+        let decoded =
+            super::record::read::<String>(&mut std::io::Cursor::new(framed), 4096, &mut Vec::new());
+        if let Some(weight) = expected {
+            assert_eq!(decoded?, Some((String::from("tuple"), BigInt::from(weight))));
+        } else {
+            assert!(decoded.is_err());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn scratch_merge_rejects_duplicate_and_descending_run_identities() -> Result<()> {
+    for tuples in [["a", "a"], ["b", "a"]] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("invalid-run");
+        let mut writer = std::fs::File::create_new(&path)?;
+        let mut bytes = 0;
+        for tuple in tuples {
+            let encoded = encode(&tuple, &BigInt::from(1), 4096)?;
+            bytes = super::record::write(&mut writer, &encoded, bytes, 8192)?;
+        }
+        drop(writer);
+        let mut merge =
+            super::merge::Merge::<String>::open(&[super::record::Run { path, bytes }], 4096)?;
+        let error = merge.next().err().context("accepted noncanonical run")?;
+        assert!(error.to_string().contains("noncanonical scratch run"));
+    }
+    Ok(())
+}

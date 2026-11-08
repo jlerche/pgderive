@@ -134,3 +134,33 @@ async fn top_k_reads_selected_prefix_instead_of_full_partition() -> Result<()> {
     assert_eq!(cache.stats()?.bytes, 0);
     Ok(())
 }
+
+#[tokio::test]
+async fn top_k_borrows_canonical_delta_groups_and_selected_values() -> Result<()> {
+    let input = TimedBatch {
+        time: 1,
+        batch: Batch::from_updates([
+            (("a".to_owned(), "first".to_owned()), 2),
+            (("a".to_owned(), "second".to_owned()), 1),
+            (("b".to_owned(), "third".to_owned()), 1),
+        ])?,
+    };
+    let addresses: Vec<_> = input
+        .batch
+        .iter()
+        .map(|((key, value), _)| {
+            (key.clone(), value.clone(), key.as_ptr().addr(), value.as_ptr().addr())
+        })
+        .collect();
+    let operator = OrderedSelection::new(3, move |key: &String, value: &String, _| {
+        let expected = addresses.iter().find(|entry| (&entry.0, &entry.1) == (key, value));
+        let group = addresses.iter().find(|entry| &entry.0 == key);
+        assert_eq!(group.map(|entry| entry.2), Some(key.as_ptr().addr()));
+        assert_eq!(expected.map(|entry| entry.3), Some(value.as_ptr().addr()));
+        Ok((key.clone(), value.clone()))
+    });
+    let empty = crate::engine::trace::TraceSnapshot::empty();
+    let selected = operator.evaluate(&input, &empty, &empty, Limits::default()).await?;
+    assert_eq!(selected.batch, input.batch);
+    Ok(())
+}

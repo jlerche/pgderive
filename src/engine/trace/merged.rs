@@ -20,7 +20,8 @@ type UncontendedSpan<'a, K, V> = Option<(usize, &'a [Entry<K, V>])>;
 #[derive(Clone)]
 pub struct MergedCursor<K: BatchData, V: BatchData> {
     pub(super) cursors: Vec<Cursor<K, V>>,
-    pub(super) row: Option<Entry<K, V>>,
+    // The selected run pins the identity; only its consolidated weight is owned.
+    pub(super) row: Option<(usize, i64)>,
 }
 
 impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
@@ -36,7 +37,9 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
     /// Current consolidated full identity, or None when exhausted.
     #[must_use]
     pub fn current(&self) -> Option<(&K, &V, i64)> {
-        self.row.as_ref().map(|((key, val), weight)| (key, val, *weight))
+        self.row.and_then(|(ordinal, weight)| {
+            self.cursors[ordinal].current().map(|(key, val, _)| (key, val, weight))
+        })
     }
     pub(super) async fn find(&mut self) -> Result<()> {
         loop {
@@ -44,9 +47,14 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
             let tuple = self
                 .cursors
                 .iter()
-                .filter_map(|cursor| cursor.current().map(|(key, val, _)| (key, val)))
-                .min();
-            let Some((key, val)) = tuple else {
+                .enumerate()
+                .filter_map(|(ordinal, cursor)| {
+                    cursor.current().map(|(key, val, _)| (ordinal, key, val))
+                })
+                .min_by(|(_, key, val), (_, other_key, other_val)| {
+                    (key, val).cmp(&(other_key, other_val))
+                });
+            let Some((ordinal, key, val)) = tuple else {
                 self.row = None;
                 return Ok(());
             };
@@ -58,19 +66,19 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
                     weight += coefficient;
                 }
             }
-            let tuple = (key.clone(), val.clone());
             if weight != BigInt::default() {
                 let weight = i64::try_from(weight).map_err(|_| CoefficientOverflow)?;
-                self.row = Some((tuple, weight));
+                self.row = Some((ordinal, weight));
                 return Ok(());
             }
-            self.skip(&tuple).await?;
+            let tuple = (key.clone(), val.clone());
+            self.skip((&tuple.0, &tuple.1)).await?;
         }
     }
-    async fn skip(&mut self, tuple: &(K, V)) -> Result<()> {
+    async fn skip(&mut self, tuple: (&K, &V)) -> Result<()> {
         for cursor in &mut self.cursors {
             if let Some((key, val, _)) = cursor.current()
-                && (key, val) == (&tuple.0, &tuple.1)
+                && (key, val) == tuple
             {
                 cursor.advance().await?;
             }
@@ -78,10 +86,7 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
         Ok(())
     }
     fn uncontended_span(&self) -> UncontendedSpan<'_, K, V> {
-        let (tuple, _) = self.row.as_ref()?;
-        let ordinal = self.cursors.iter().position(|cursor| {
-            cursor.current().is_some_and(|(key, value, _)| (key, value) == (&tuple.0, &tuple.1))
-        })?;
+        let (ordinal, _) = self.row?;
         let span = self.cursors[ordinal].current_span();
         let other = self
             .cursors
@@ -105,8 +110,8 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
     }
     async fn advanced(&self) -> Result<Self> {
         let mut next = Self { cursors: self.cursors.clone(), row: None };
-        if let Some((tuple, _)) = &self.row {
-            next.skip(tuple).await?;
+        if let Some((key, val, _)) = self.current() {
+            next.skip((key, val)).await?;
         }
         next.find().await?;
         Ok(next)
@@ -205,9 +210,10 @@ impl<K: BatchData, V: BatchData> KeyCursor<K, V> {
     pub async fn advance(&mut self) -> Result<()> {
         let next = self.cursor.advanced().await?;
         if let Some(collector) = &mut self.collector {
-            if let Some(row) = &self.cursor.row {
+            if let Some((key, value, weight)) = self.cursor.current() {
+                let row = ((key, value), weight);
                 let charge = crate::engine::execution::record_size(
-                    row,
+                    &row,
                     collector.limit.saturating_sub(collector.charge) / 2,
                 )
                 .ok()
@@ -218,7 +224,7 @@ impl<K: BatchData, V: BatchData> KeyCursor<K, V> {
                 })
                 .and_then(|bytes| collector.charge.checked_add(bytes));
                 if let Some(charge) = charge.filter(|charge| *charge <= collector.limit) {
-                    collector.rows.push(row.clone());
+                    collector.rows.push(((key.clone(), value.clone()), weight));
                     collector.charge = charge;
                 } else {
                     self.collector = None;

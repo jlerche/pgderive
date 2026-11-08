@@ -3,12 +3,12 @@ use super::{PartitionWork, Project, TimedBatch};
 use crate::engine::{
     Batch,
     execution::{Consolidator, Limits},
-    reader::BatchData,
+    reader::{BatchData, Entry},
     trace::TraceSnapshot,
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 type SelectionPrior<'a, K, V> = (&'a TraceSnapshot<K, V>, &'a TraceSnapshot<K, V>);
 type Selection<K, V> = dyn Fn(&K, &V, usize, Limits) -> Result<Option<(K, V)>> + Send + Sync;
 /// Retractable first K row occurrences per key in physical codec order.
@@ -95,13 +95,13 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         );
         limits.check_batch(&input.batch)?;
         prior.validate_bag_delta(&input.batch).await?;
-        let mut groups = BTreeMap::<K, BTreeMap<V, i64>>::new();
-        for ((key, value), weight) in input.batch.iter() {
-            groups.entry(key.clone()).or_default().insert(value.clone(), *weight);
-        }
+        let entries = input.batch.shared_entries();
+        let mut remaining = entries.as_slice();
         let mut progress = Progress { changes, work, limits };
-        for (key, delta) in groups {
-            let mut cursor = output.key_cursor(&key).await?;
+        while let Some(((key, _), _)) = remaining.first() {
+            let length = remaining.partition_point(|((candidate, _), _)| candidate == key);
+            let (delta, rest) = remaining.split_at(length);
+            let mut cursor = output.key_cursor(key).await?;
             let mut retained = 0usize;
             while let Some((_, value, weight)) = cursor.current() {
                 if !self.first {
@@ -115,7 +115,8 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
                 progress.changes.add((key.clone(), value.clone()), -weight)?;
                 cursor.advance().await?;
             }
-            self.selected(prior, &key, &delta, &mut progress).await?;
+            self.selected(prior, key, delta, &mut progress).await?;
+            remaining = rest;
         }
         Ok(())
     }
@@ -123,7 +124,7 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         &self,
         prior: &TraceSnapshot<K, V>,
         key: &K,
-        delta: &BTreeMap<V, i64>,
+        delta: &[Entry<K, V>],
         progress: &mut Progress<'_, K, V>,
     ) -> Result<()> {
         let mut cursor = prior.key_cursor(key).await?;
@@ -131,15 +132,14 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         let mut position = 0;
         while position < self.limit {
             progress.work.charge(1)?;
-            let old = cursor.current().map(|(_, value, weight)| (value.clone(), weight));
-            let new = changed.peek().map(|(value, weight)| ((*value).clone(), **weight));
+            let old = cursor.current().map(|(_, value, weight)| (value, weight));
+            let new = changed.peek().map(|((_, value), weight)| (value, *weight));
             let Some(value) = old
                 .as_ref()
-                .map(|entry| &entry.0)
+                .map(|entry| entry.0)
                 .into_iter()
-                .chain(new.as_ref().map(|entry| &entry.0))
+                .chain(new.as_ref().map(|entry| entry.0))
                 .min()
-                .cloned()
             else {
                 break;
             };
@@ -150,9 +150,9 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
                 ensure!(weight > 0, "negative prior top-k membership");
                 coefficient += weight;
             }
-            if new.as_ref().is_some_and(|entry| entry.0 == value) {
+            let advance_changed = new.as_ref().is_some_and(|entry| entry.0 == value);
+            if advance_changed {
                 coefficient += new.as_ref().context("missing changed top-k row")?.1;
-                changed.next();
             }
             ensure!(coefficient >= BigInt::from(0), "negative top-k membership");
             let count = usize::try_from(coefficient.min(BigInt::from(self.limit - position)))?;
@@ -161,10 +161,13 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
                     progress.work.charge(1)?;
                 }
                 position += 1;
-                if let Some(selected) = (self.select)(key, &value, position, progress.limits)? {
+                if let Some(selected) = (self.select)(key, value, position, progress.limits)? {
                     ensure!(&selected.0 == key, "ordered selection must preserve key");
                     progress.changes.add(selected, 1)?;
                 }
+            }
+            if advance_changed {
+                changed.next();
             }
             if advance_prior && position < self.limit {
                 cursor.advance().await?;

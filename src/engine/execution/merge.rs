@@ -4,14 +4,13 @@ use anyhow::{Result, ensure};
 use num_bigint::BigInt;
 use std::{cmp::Reverse, collections::BinaryHeap, fs::File, io::BufReader};
 
-struct Run<T> {
+struct Run {
     reader: BufReader<File>,
     weight: BigInt,
-    previous: Option<T>,
     bytes: u64,
 }
 pub(super) struct Merge<T: BatchData> {
-    runs: Vec<Run<T>>,
+    runs: Vec<Run>,
     heap: BinaryHeap<Reverse<(T, usize)>>,
     limit: usize,
     record_buffer: Vec<u8>,
@@ -24,14 +23,13 @@ impl<T: BatchData> Merge<T> {
             merge.runs.push(Run {
                 reader: BufReader::new(File::open(&path.path)?),
                 weight: BigInt::default(),
-                previous: None,
                 bytes: path.bytes,
             });
-            merge.advance(merge.runs.len() - 1)?;
+            merge.advance(merge.runs.len() - 1, None)?;
         }
         Ok(merge)
     }
-    fn advance(&mut self, ordinal: usize) -> Result<()> {
+    fn advance(&mut self, ordinal: usize, previous: Option<&T>) -> Result<()> {
         let run = &mut self.runs[ordinal];
         if let Some((tuple, weight)) = record::read_complete::<T>(
             &mut run.reader,
@@ -39,11 +37,7 @@ impl<T: BatchData> Merge<T> {
             run.bytes,
             &mut self.record_buffer,
         )? {
-            ensure!(
-                run.previous.as_ref().is_none_or(|previous| previous < &tuple),
-                "noncanonical scratch run"
-            );
-            run.previous = Some(tuple.clone());
+            ensure!(previous.is_none_or(|previous| previous < &tuple), "noncanonical scratch run");
             run.weight = weight;
             self.heap.push(Reverse((tuple, ordinal)));
         }
@@ -52,11 +46,11 @@ impl<T: BatchData> Merge<T> {
     pub(super) fn next(&mut self) -> Result<Option<(T, BigInt)>> {
         while let Some(Reverse((tuple, ordinal))) = self.heap.pop() {
             let mut weight = std::mem::take(&mut self.runs[ordinal].weight);
-            self.advance(ordinal)?;
+            self.advance(ordinal, Some(&tuple))?;
             while self.heap.peek().is_some_and(|Reverse((other, _))| other == &tuple) {
                 if let Some(Reverse((_, ordinal))) = self.heap.pop() {
                     weight += &self.runs[ordinal].weight;
-                    self.advance(ordinal)?;
+                    self.advance(ordinal, Some(&tuple))?;
                 }
             }
             if weight != BigInt::default() {

@@ -7,7 +7,7 @@ use crate::engine::{
     trace::{KeyCursor, TraceSnapshot},
 };
 use anyhow::{Context, Result, ensure};
-use std::{borrow::Borrow, collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
+use std::{borrow::Borrow, future::Future, pin::Pin, sync::Arc};
 /// Asynchronous result of one affected group's direct delta evaluation.
 pub type GroupFuture<'a, V> = Pin<Box<dyn Future<Output = Result<Batch<(), V>>> + Send + 'a>>;
 type Transform<K, V> =
@@ -140,20 +140,24 @@ impl<K: BatchData, V: BatchData> Group<K, V> {
         ensure!(prior.time().checked_add(1) == Some(input.time), "out-of-order group tick");
         limits.check_batch(input.batch.borrow())?;
         prior.validate_bag_delta(input.batch.borrow()).await?;
-        let mut groups = BTreeMap::<K, Vec<(((), V), i64)>>::new();
-        for ((key, value), weight) in input.batch.borrow().iter() {
-            groups.entry(key.clone()).or_default().push((((), value.clone()), *weight));
-        }
-        for (key, changes) in groups {
+        let entries = input.batch.borrow().shared_entries();
+        let mut remaining = entries.as_slice();
+        while let Some(((key, _), _)) = remaining.first() {
+            // Canonical full identities already put every navigation key in one
+            // contiguous range. Retain the input instead of rebuilding a map.
+            let length = remaining.partition_point(|((candidate, _), _)| candidate == key);
+            let (changes, rest) = remaining.split_at(length);
             work.charge(changes.len())?;
-            let delta = Batch::from_canonical(changes)?;
+            let delta = Batch::from_canonical(
+                changes.iter().map(|((_, value), weight)| (((), value.clone()), *weight)).collect(),
+            )?;
             let result =
-                (self.transform)(GroupInput { key: &key, delta: &delta, prior, limits }, work)
-                    .await?;
+                (self.transform)(GroupInput { key, delta: &delta, prior, limits }, work).await?;
             limits.check_batch(&result)?;
             for (((), value), weight) in result.iter() {
                 output.add((key.clone(), value.clone()), *weight)?;
             }
+            remaining = rest;
         }
         Ok(())
     }
