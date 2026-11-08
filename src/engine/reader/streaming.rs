@@ -199,7 +199,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             row.1 != 0 && self.previous.as_ref().is_none_or(|previous| previous < &row.0),
             "noncanonical streaming input"
         );
-        let bytes = bounded::encode(&row)?.len();
+        let bytes = bounded::encoded_len(&row)?;
         ensure!(
             bytes.checked_add(2).is_some_and(|bytes| bytes <= self.limits.block_bytes),
             crate::engine::execution::CapacityExceeded("streaming row exceeds block byte limit")
@@ -262,7 +262,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
                 super::index::build(&self.schema, self.limits.index_bytes, &[pack], &[single])
                     .await?;
             ensure!(
-                bounded::encode(&root)?.len() <= self.limits.index_bytes
+                bounded::encoded_len(&root)? <= self.limits.index_bytes
                     && packed.len() <= self.limits.index_bytes,
                 crate::engine::execution::CapacityExceeded("streaming fence exceeds index budget")
             );
@@ -309,8 +309,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
     }
     fn fence_charge(&self, block: &Block<(K, V)>) -> Result<usize> {
         // Leaf payload plus repeated boundary fences through the bounded tree.
-        bounded::encode(block)?
-            .len()
+        bounded::encoded_len(block)?
             .checked_mul(3)
             .and_then(|bytes| bytes.checked_add(self.pack_bytes))
             .and_then(|bytes| bytes.checked_add(128))
@@ -368,7 +367,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         self.flush_block().await?;
         let mut block = leaf.block;
         crate::engine::execution::service::retained(block.length);
-        let pack_charge = bounded::encode(&leaf.pack)?.len();
+        let pack_charge = bounded::encoded_len(&leaf.pack)?;
         let bytes = self
             .fence_charge(&block)?
             .checked_add(pack_charge)
@@ -429,7 +428,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
                     &address.hash,
                     address.length,
                     head.clone(),
-                    bounded::encode(head.node())?.len(),
+                    bounded::encoded_len(head.node())?,
                 )?;
             }
             let head = if index.pack.is_none() { head } else { None };

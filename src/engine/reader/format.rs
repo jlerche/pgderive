@@ -29,23 +29,22 @@ pub(super) struct Block<T> {
 }
 pub(super) fn header_bytes(schema: &str) -> Result<usize> {
     // Covers fixed root/address framing; tuple fences are charged separately.
-    super::bounded::encode(&super::index::Root::<()> {
+    super::bounded::encoded_len(&super::index::Root::<()> {
         schema: schema.into(),
         pack: None,
         node: None,
         inline: None,
     })
-    .map(|bytes| bytes.len() + 512)
+    .map(|bytes| bytes + 512)
 }
 pub(super) fn pack_bytes() -> Result<usize> {
     // Reserve the largest descriptor's decimal byte count before its digest is known.
     let digest = "0".repeat(64);
-    super::bounded::encode(&Pack {
+    super::bounded::encoded_len(&Pack {
         path: format!("pgderive/pack/{digest}"),
         bytes: u64::try_from(super::compression::STORED_LIMIT)?,
         hash: digest,
     })
-    .map(|bytes| bytes.len())
 }
 pub(super) fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))

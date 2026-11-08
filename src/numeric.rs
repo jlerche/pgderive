@@ -77,13 +77,23 @@ impl Numeric {
         Self::finite_bounded(coefficient, scale, LIMIT)
     }
     fn finite_bounded(coefficient: BigInt, scale: u32, budget: usize) -> Result<Self> {
+        let text = coefficient.to_string();
+        let scale_bytes = usize::try_from(scale)?;
         ensure!(
-            coefficient.to_string().len() <= budget && usize::try_from(scale)? <= budget,
+            text.len() <= budget && scale_bytes <= budget,
             "numeric result exceeds digit budget"
         );
-        let value = Self::Finite { coefficient, scale };
-        ensure!(value.text().len() <= budget, "numeric display exceeds budget");
-        Ok(value)
+        let display_bytes = if scale == 0 {
+            text.len()
+        } else {
+            let sign = usize::from(text.starts_with('-'));
+            (text.len() - sign)
+                .max(scale_bytes.checked_add(1).context("numeric display size overflow")?)
+                .checked_add(sign + 1)
+                .context("numeric display size overflow")?
+        };
+        ensure!(display_bytes <= budget, "numeric display exceeds budget");
+        Ok(Self::Finite { coefficient, scale })
     }
     pub(crate) fn text(&self) -> String {
         let Self::Finite { coefficient, scale } = self else {

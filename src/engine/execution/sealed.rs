@@ -103,14 +103,20 @@ pub struct SealedCursor<K: BatchData, V: BatchData> {
 }
 enum CursorState<K: BatchData, V: BatchData> {
     Resident(Cursor<K, V>),
-    Scratch { owner: Arc<Scratch>, reader: BufReader<File>, current: Option<Entry<K, V>> },
+    Scratch {
+        owner: Arc<Scratch>,
+        reader: BufReader<File>,
+        current: Option<Entry<K, V>>,
+        record_buffer: Vec<u8>,
+    },
 }
 fn read<K: BatchData, V: BatchData>(
     reader: &mut BufReader<File>,
     limit: usize,
     file_bytes: u64,
+    buffer: &mut Vec<u8>,
 ) -> Result<Option<Entry<K, V>>> {
-    record::read_complete::<(K, V)>(reader, limit, file_bytes)?
+    record::read_complete::<(K, V)>(reader, limit, file_bytes, buffer)?
         .map(|(tuple, weight)| Ok((tuple, i64::try_from(weight)?)))
         .transpose()
 }
@@ -124,13 +130,15 @@ impl<K: BatchData, V: BatchData> BatchReader for Sealed<K, V> {
             Storage::Scratch(owner) => {
                 let opened = (|| -> Result<_> {
                     let mut reader = BufReader::new(File::open(&owner.run.path)?);
-                    let current = read(&mut reader, owner.record_bytes, owner.run.bytes)?;
-                    Ok((reader, current))
+                    let mut record_buffer = Vec::new();
+                    let current =
+                        read(&mut reader, owner.record_bytes, owner.run.bytes, &mut record_buffer)?;
+                    Ok((reader, current, record_buffer))
                 })();
-                let (reader, current) = opened.inspect_err(|_| {
+                let (reader, current, record_buffer) = opened.inspect_err(|_| {
                     owner.failed.store(true, Ordering::Relaxed);
                 })?;
-                CursorState::Scratch { owner: owner.clone(), reader, current }
+                CursorState::Scratch { owner: owner.clone(), reader, current, record_buffer }
             }
         };
         Ok(SealedCursor { state })
@@ -148,10 +156,11 @@ impl<K: BatchData, V: BatchData> BatchCursor for SealedCursor<K, V> {
     async fn advance(&mut self) -> Result<()> {
         match &mut self.state {
             CursorState::Resident(cursor) => cursor.advance().await,
-            CursorState::Scratch { owner, reader, current } => {
+            CursorState::Scratch { owner, reader, current, record_buffer } => {
                 let position = reader.stream_position()?;
                 let loaded: Result<Option<Entry<K, V>>> = (|| {
-                    let next = read::<K, V>(reader, owner.record_bytes, owner.run.bytes)?;
+                    let next =
+                        read::<K, V>(reader, owner.record_bytes, owner.run.bytes, record_buffer)?;
                     ensure!(
                         current
                             .as_ref()
@@ -180,13 +189,22 @@ impl<K: BatchData, V: BatchData> BatchCursor for SealedCursor<K, V> {
         if let CursorState::Resident(cursor) = &mut self.state {
             return cursor.seek_key(key).await;
         }
-        if let CursorState::Scratch { owner, reader, current } = &mut self.state {
+        if let CursorState::Scratch { owner, reader, current, record_buffer } = &mut self.state {
             let loaded = (|| -> Result<_> {
                 let mut replacement = BufReader::new(File::open(&owner.run.path)?);
-                let mut next = read::<K, V>(&mut replacement, owner.record_bytes, owner.run.bytes)?;
+                let mut next = read::<K, V>(
+                    &mut replacement,
+                    owner.record_bytes,
+                    owner.run.bytes,
+                    record_buffer,
+                )?;
                 while next.as_ref().is_some_and(|((found, _), _)| found < key) {
-                    let following =
-                        read::<K, V>(&mut replacement, owner.record_bytes, owner.run.bytes)?;
+                    let following = read::<K, V>(
+                        &mut replacement,
+                        owner.record_bytes,
+                        owner.run.bytes,
+                        record_buffer,
+                    )?;
                     ensure!(
                         next.as_ref()
                             .zip(following.as_ref())

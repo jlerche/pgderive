@@ -104,7 +104,7 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
         Ok(())
     }
     async fn advanced(&self) -> Result<Self> {
-        let mut next = self.clone();
+        let mut next = Self { cursors: self.cursors.clone(), row: None };
         if let Some((tuple, _)) = &self.row {
             next.skip(tuple).await?;
         }
@@ -116,7 +116,7 @@ impl<K: BatchData, V: BatchData> MergedCursor<K, V> {
     /// # Errors
     /// Returns read/corruption/final coefficient errors, retaining prior position.
     pub async fn seek_key(&mut self, key: &K) -> Result<()> {
-        let mut next = self.clone();
+        let mut next = Self { cursors: self.cursors.clone(), row: None };
         for cursor in &mut next.cursors {
             cursor.seek_key(key).await?;
         }
@@ -139,7 +139,7 @@ impl<K: BatchData, V: BatchData> BatchCursor for MergedCursor<K, V> {
             return self.advance().await;
         };
         let count = span.len();
-        let mut next = self.clone();
+        let mut next = Self { cursors: self.cursors.clone(), row: None };
         next.cursors[ordinal].advance_rows(count).await?;
         next.find().await?;
         *self = next;

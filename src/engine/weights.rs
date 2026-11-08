@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use num_bigint::BigInt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, btree_map::Entry};
 
 // Exact intermediates. Narrow only at a declared logical collection boundary.
 #[derive(Debug, Clone)]
@@ -16,7 +16,15 @@ impl<T: Ord> Default for Accumulator<T> {
 
 impl<T: Ord> Accumulator<T> {
     pub(super) fn add(&mut self, tuple: T, weight: impl Into<BigInt>) {
-        *self.entries.entry(tuple).or_default() += weight.into();
+        let weight = weight.into();
+        match self.entries.entry(tuple) {
+            Entry::Vacant(entry) => {
+                entry.insert(weight);
+            }
+            Entry::Occupied(mut entry) => {
+                *entry.get_mut() = std::mem::take(entry.get_mut()) + weight;
+            }
+        }
     }
 
     pub(super) fn merge(&mut self, other: Self) {

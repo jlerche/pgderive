@@ -169,8 +169,8 @@ fn source_count_resolves_uncertain_epoch_commits_once() -> Result<()> {
     assert_eq!(count.total(), 9);
     Ok(())
 }
-#[test]
-fn controller_bounds_exploration_and_uses_freshness_slack() -> Result<()> {
+#[tokio::test(start_paused = true)]
+async fn controller_bounds_exploration_and_uses_freshness_slack() -> Result<()> {
     let mut epoch =
         Epoch::new(transaction(1, vec![insert("bid", &[("id", Some("1"))])])?, 0, key_plan()?)?;
     let mut controller = Controller::new(Policy::default());

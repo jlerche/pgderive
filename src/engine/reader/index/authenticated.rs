@@ -27,8 +27,7 @@ impl<T: Ord + Clone + Serialize> Authenticated<T> {
                 ))
             })?,
         };
-        let charge = super::bounded::encode(address)?
-            .len()
+        let charge = super::bounded::encoded_len(address)?
             .checked_mul(2)
             .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
             .context("authenticated index charge overflow")?;

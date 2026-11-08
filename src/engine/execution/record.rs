@@ -19,20 +19,21 @@ pub(super) fn read_complete<T: BatchData>(
     reader: &mut (impl Read + Seek),
     limit: usize,
     bytes: u64,
+    buffer: &mut Vec<u8>,
 ) -> Result<Option<(T, BigInt)>> {
-    let record = read(reader, limit)?;
+    let record = read(reader, limit, buffer)?;
     if record.is_none() {
         ensure!(reader.stream_position()? == bytes, "scratch run length mismatch");
     }
     Ok(record)
 }
 
-struct Buffer {
-    bytes: Vec<u8>,
+struct Buffer<'a> {
+    bytes: &'a mut Vec<u8>,
     limit: usize,
     exceeded: bool,
 }
-impl Write for Buffer {
+impl Write for Buffer<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
             self.exceeded = true;
@@ -97,16 +98,19 @@ fn check_weight(weight: &BigInt, limit: usize) -> Result<()> {
     );
     Ok(())
 }
-pub(super) fn encode(tuple: &impl Serialize, weight: &BigInt, limit: usize) -> Result<Vec<u8>> {
+pub(super) fn encode(
+    tuple: &impl Serialize,
+    weight: &BigInt,
+    limit: usize,
+    bytes: &mut Vec<u8>,
+) -> Result<()> {
+    bytes.clear();
     check_weight(weight, limit)?;
-    encode_value(&(tuple, weight.to_string()), limit)
-}
-pub(super) fn encode_value(value: &impl Serialize, limit: usize) -> Result<Vec<u8>> {
-    let mut buffer = Buffer { bytes: Vec::new(), limit, exceeded: false };
-    let encoded = serde_json::to_writer(&mut buffer, value);
+    let mut buffer = Buffer { bytes, limit, exceeded: false };
+    let encoded = serde_json::to_writer(&mut buffer, &(tuple, weight.to_string()));
     ensure!(!buffer.exceeded, CapacityExceeded("scratch record limit exceeded"));
     encoded?;
-    Ok(buffer.bytes)
+    Ok(())
 }
 pub(super) fn write(
     writer: &mut impl Write,
@@ -126,7 +130,9 @@ pub(super) fn write(
 pub(super) fn read<T: BatchData>(
     reader: &mut impl Read,
     limit: usize,
+    bytes: &mut Vec<u8>,
 ) -> Result<Option<(T, BigInt)>> {
+    bytes.clear();
     let mut first = [0_u8; 1];
     if reader.read(&mut first)? == 0 {
         return Ok(None);
@@ -138,9 +144,9 @@ pub(super) fn read<T: BatchData>(
     ensure!(length <= limit, CapacityExceeded("scratch record limit exceeded"));
     let mut expected = [0_u8; 32];
     reader.read_exact(&mut expected)?;
-    let mut bytes = vec![0_u8; length];
-    reader.read_exact(&mut bytes)?;
-    ensure!(Sha256::digest(&bytes).as_slice() == expected, "scratch checksum mismatch");
-    let (tuple, weight): (T, String) = serde_json::from_slice(&bytes)?;
+    bytes.resize(length, 0);
+    reader.read_exact(bytes)?;
+    ensure!(Sha256::digest(bytes.as_slice()).as_slice() == expected, "scratch checksum mismatch");
+    let (tuple, weight): (T, String) = serde_json::from_slice(bytes)?;
     Ok(Some((tuple, weight.parse()?)))
 }

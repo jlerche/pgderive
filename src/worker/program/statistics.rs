@@ -57,7 +57,13 @@ fn measure(spec: &Partition, row: &Row) -> Result<Vec<Scalar>> {
     Ok(values)
 }
 pub(super) fn measure_integers(spec: &Partition, row: &Row) -> Result<Vec<BigInt>> {
-    measure(spec, row)?.into_iter().map(|value| value.integer().cloned()).collect()
+    measure(spec, row)?
+        .into_iter()
+        .map(|value| match value {
+            Scalar::Integer(value) => Ok(value),
+            Scalar::Numeric(_) => anyhow::bail!("expected integer statistic"),
+        })
+        .collect()
 }
 fn decode(row: &Row, width: usize, codec: &super::native::Vector) -> Result<Decoded<Vec<Scalar>>> {
     codec.decode(row, |row| scalar::decode_fields(row, width))

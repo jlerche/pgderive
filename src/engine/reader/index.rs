@@ -299,7 +299,7 @@ pub(super) async fn build<K: BatchData, V: BatchData>(
             node: Some(inline_address),
             inline: Some(inline),
         };
-        if decoded.len() <= INLINE_BYTES && bounded::encode(&candidate)?.len() <= limit {
+        if decoded.len() <= INLINE_BYTES && bounded::encoded_len(&candidate)? <= limit {
             return Ok((candidate, Vec::new()));
         }
     }

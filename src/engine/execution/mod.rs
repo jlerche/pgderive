@@ -133,11 +133,16 @@ struct Resident {
     bytes: usize,
 }
 
+struct Scratch {
+    directory: TempDir,
+    record_buffer: Vec<u8>,
+}
+
 /// Exact, spillable full-identity consolidation for one logical batch.
 /// No i64 representability check occurs until the complete merged result exists.
 pub struct Consolidator<T: BatchData> {
     limits: Limits,
-    directory: TempDir,
+    scratch: Option<Box<Scratch>>,
     entries: BTreeMap<T, Resident>,
     bytes: usize,
     contributions: usize,
@@ -148,16 +153,15 @@ pub struct Consolidator<T: BatchData> {
     failed: bool,
 }
 impl<T: BatchData> Consolidator<T> {
-    /// Create isolated disposable scratch for one operator evaluation.
+    /// Create one operator evaluation; disposable scratch opens only on spill.
     ///
     /// # Errors
-    /// Returns invalid budget or scratch filesystem errors.
+    /// Returns invalid budget errors.
     pub fn new(limits: Limits) -> Result<Self> {
         let limits = limits.validate()?;
-        let directory = tempfile::Builder::new().prefix("pgderive-spill-").tempdir()?;
         Ok(Self {
             limits,
-            directory,
+            scratch: None,
             entries: BTreeMap::new(),
             bytes: 0,
             contributions: 0,
@@ -176,10 +180,25 @@ impl<T: BatchData> Consolidator<T> {
         ensure!(!self.failed, "failed consolidator cannot be reused");
         let result = self.add_inner(tuple, weight.into());
         self.failed = result.is_err();
-        self.directory.disable_cleanup(self.failed);
-        result.with_context(|| {
-            format!("scratch retained on failure: {}", self.directory.path().display())
-        })
+        result.with_context(|| self.failure_context())
+    }
+    fn scratch(&mut self) -> Result<&mut Scratch> {
+        if self.scratch.is_none() {
+            self.scratch = Some(Box::new(Scratch {
+                directory: tempfile::Builder::new().prefix("pgderive-spill-").tempdir()?,
+                record_buffer: Vec::new(),
+            }));
+        }
+        self.scratch.as_deref_mut().context("missing operator scratch")
+    }
+    fn failure_context(&mut self) -> String {
+        self.scratch.as_mut().map_or_else(
+            || "operator failed before creating scratch".into(),
+            |scratch| {
+                scratch.directory.disable_cleanup(true);
+                format!("scratch retained on failure: {}", scratch.directory.path().display())
+            },
+        )
     }
     fn add_inner(&mut self, tuple: T, weight: BigInt) -> Result<()> {
         charge_contribution(&mut self.contributions, self.limits.contributions)?;
@@ -225,10 +244,20 @@ impl<T: BatchData> Consolidator<T> {
         let path = self.next_path()?;
         let before = self.written;
         let mut writer = BufWriter::new(File::create_new(&path)?);
+        let scratch = self.scratch.as_deref_mut().context("missing operator scratch")?;
         for (tuple, resident) in &self.entries {
-            let bytes = record::encode(tuple, &resident.weight, self.limits.record_bytes)?;
-            self.written =
-                record::write(&mut writer, &bytes, self.written, self.limits.scratch_bytes)?;
+            record::encode(
+                tuple,
+                &resident.weight,
+                self.limits.record_bytes,
+                &mut scratch.record_buffer,
+            )?;
+            self.written = record::write(
+                &mut writer,
+                &scratch.record_buffer,
+                self.written,
+                self.limits.scratch_bytes,
+            )?;
         }
         std::io::Write::flush(&mut writer)?;
         drop(writer);
@@ -255,13 +284,10 @@ impl<T: BatchData> Consolidator<T> {
     fn finish_sized(mut self, visit: impl FnMut(T, BigInt, usize) -> Result<()>) -> Result<()> {
         let result = self.finish_inner(visit);
         match result {
-            Ok(()) => self.directory.close().context("removing successful operator scratch"),
-            Err(error) => {
-                self.directory.disable_cleanup(true);
-                Err(error).with_context(|| {
-                    format!("scratch retained on failure: {}", self.directory.path().display())
-                })
-            }
+            Ok(()) => self.scratch.take().map_or(Ok(()), |scratch| {
+                scratch.directory.close().context("removing successful operator scratch")
+            }),
+            Err(error) => Err(error).with_context(|| self.failure_context()),
         }
     }
     fn finish_inner(&mut self, visit: impl FnMut(T, BigInt, usize) -> Result<()>) -> Result<()> {
@@ -345,23 +371,30 @@ impl<K: BatchData, V: BatchData> Consolidator<(K, V)> {
             return Ok(self.finish_batch()?.into());
         }
         let result = self.seal_disk();
-        self.directory.disable_cleanup(result.is_err());
-        result.with_context(|| {
-            format!("scratch retained on failure: {}", self.directory.path().display())
-        })
+        result.with_context(|| self.failure_context())
     }
     fn seal_disk(&mut self) -> Result<Sealed<K, V>> {
         self.spill()?;
         let mut merge = merge::Merge::<(K, V)>::open(&self.runs, self.limits.record_bytes)?;
-        let path = self.directory.path().join("sealed");
+        let scratch = self.scratch.as_deref_mut().context("missing operator scratch")?;
+        let path = scratch.directory.path().join("sealed");
         let before = self.written;
         let mut writer = BufWriter::new(File::create_new(&path)?);
         let mut entries = 0_usize;
         while let Some((tuple, weight)) = merge.next()? {
             let checked = i64::try_from(weight)?;
-            let bytes = record::encode(&tuple, &BigInt::from(checked), self.limits.record_bytes)?;
-            self.written =
-                record::write(&mut writer, &bytes, self.written, self.limits.scratch_bytes)?;
+            record::encode(
+                &tuple,
+                &BigInt::from(checked),
+                self.limits.record_bytes,
+                &mut scratch.record_buffer,
+            )?;
+            self.written = record::write(
+                &mut writer,
+                &scratch.record_buffer,
+                self.written,
+                self.limits.scratch_bytes,
+            )?;
             entries = entries.checked_add(1).context("sealed entry count overflow")?;
         }
         std::io::Write::flush(&mut writer)?;
@@ -372,8 +405,8 @@ impl<K: BatchData, V: BatchData> Consolidator<(K, V)> {
             return Ok(Batch::default().into());
         }
         let bytes = self.written.checked_sub(before).context("scratch byte count decreased")?;
-        let replacement = tempfile::Builder::new().prefix("pgderive-sealed-move-").tempdir()?;
-        let directory = std::mem::replace(&mut self.directory, replacement);
+        let scratch = self.scratch.take().context("missing operator scratch")?;
+        let Scratch { directory, .. } = *scratch;
         Ok(Sealed::scratch(
             directory,
             record::Run { path, bytes },

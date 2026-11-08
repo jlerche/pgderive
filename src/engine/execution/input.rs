@@ -13,7 +13,7 @@ impl<K: BatchData, V: BatchData> OpenInput<K, V> {
     /// Open all source edges of one complete logical transaction or snapshot.
     ///
     /// # Errors
-    /// Returns invalid counts, limits or scratch creation failures.
+    /// Returns invalid counts or limits.
     pub fn new(sources: usize, limits: Limits) -> Result<Self> {
         ensure!(sources > 0, "logical input requires sources");
         Ok(Self {

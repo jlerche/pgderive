@@ -46,10 +46,15 @@ impl<T: BatchData> Consolidator<T> {
         let path = self.next_path()?;
         let before = self.written;
         let mut output = BufWriter::new(File::create_new(&path)?);
+        let scratch = self.scratch.as_deref_mut().context("missing operator scratch")?;
         while let Some((tuple, weight)) = merge.next()? {
-            let bytes = record::encode(&tuple, &weight, self.limits.record_bytes)?;
-            self.written =
-                record::write(&mut output, &bytes, self.written, self.limits.scratch_bytes)?;
+            record::encode(&tuple, &weight, self.limits.record_bytes, &mut scratch.record_buffer)?;
+            self.written = record::write(
+                &mut output,
+                &scratch.record_buffer,
+                self.written,
+                self.limits.scratch_bytes,
+            )?;
         }
         std::io::Write::flush(&mut output)?;
         drop(output);
@@ -75,6 +80,6 @@ impl<T: BatchData> Consolidator<T> {
     pub(super) fn next_path(&mut self) -> Result<std::path::PathBuf> {
         let next = self.next_run;
         self.next_run = self.next_run.checked_add(1).context("scratch run counter overflow")?;
-        Ok(self.directory.path().join(format!("run-{next}")))
+        Ok(self.scratch()?.directory.path().join(format!("run-{next}")))
     }
 }

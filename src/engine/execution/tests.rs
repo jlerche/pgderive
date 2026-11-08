@@ -1,5 +1,5 @@
 use super::{Consolidator, Limits};
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use num_bigint::BigInt;
 
 fn limits(entries: usize) -> Limits {
@@ -56,17 +56,24 @@ fn cancellation_and_resource_failures_are_explicit() -> Result<()> {
 #[test]
 fn malformed_scratch_fails_closed() -> Result<()> {
     use std::io::Cursor;
-    let bytes = super::record::encode(&(1, 2), &BigInt::from(3), 100)?;
+    let bytes = encode(&(1, 2), &BigInt::from(3), 100)?;
     let mut record = Vec::new();
     super::record::write(&mut record, &bytes, 0, 1024)?;
     assert_eq!(
-        super::record::read::<(i64, i64)>(&mut Cursor::new(&record), 100)?,
+        super::record::read::<(i64, i64)>(&mut Cursor::new(&record), 100, &mut Vec::new())?,
         Some(((1, 2), BigInt::from(3)))
     );
     record[36] ^= 1;
-    assert!(super::record::read::<(i64, i64)>(&mut Cursor::new(&record), 100).is_err());
-    assert!(super::record::read::<(i64, i64)>(&mut Cursor::new(&record[..8]), 100).is_err());
-    assert!(super::record::read::<(i64, i64)>(&mut Cursor::new(&record), 1).is_err());
+    assert!(
+        super::record::read::<(i64, i64)>(&mut Cursor::new(&record), 100, &mut Vec::new()).is_err()
+    );
+    assert!(
+        super::record::read::<(i64, i64)>(&mut Cursor::new(&record[..8]), 100, &mut Vec::new())
+            .is_err()
+    );
+    assert!(
+        super::record::read::<(i64, i64)>(&mut Cursor::new(&record), 1, &mut Vec::new()).is_err()
+    );
     Ok(())
 }
 
@@ -118,10 +125,10 @@ fn weighted_sizes_match_wire_encoding_at_exact_boundaries() -> Result<()> {
         BigInt::from(1) << 256_usize,
         -(BigInt::from(1) << 256_usize),
     ] {
-        let expected = super::record::encode(&tuple, &weight, 4096)?.len();
+        let expected = encode(&tuple, &weight, 4096)?.len();
         assert_eq!(super::record::size(&tuple, &weight, expected)?, expected);
         assert!(super::record::size(&tuple, &weight, expected - 1).is_err());
-        assert!(super::record::encode(&tuple, &weight, expected - 1).is_err());
+        assert!(encode(&tuple, &weight, expected - 1).is_err());
     }
     assert!(super::record::weighted_size(usize::MAX, &BigInt::from(1), usize::MAX).is_err());
     Ok(())
@@ -239,8 +246,8 @@ impl Ord for Representative {
 fn occupied_spill_rechecks_the_new_representative_size() -> Result<()> {
     let a = Representative { id: 0, payload: "a".into() };
     let b = Representative { id: 1, payload: "b".into() };
-    let bound = super::record::encode(&(a.clone(), ()), &BigInt::from(9), 4096)?.len()
-        + super::record::encode(&(b.clone(), ()), &BigInt::from(9), 4096)?.len();
+    let bound = encode(&(a.clone(), ()), &BigInt::from(9), 4096)?.len()
+        + encode(&(b.clone(), ()), &BigInt::from(9), 4096)?.len();
     let mut weights = Consolidator::new(Limits {
         resident_bytes: bound,
         record_bytes: bound,
@@ -259,7 +266,6 @@ fn occupied_spill_rechecks_the_new_representative_size() -> Result<()> {
 
 #[test]
 fn intermediate_spill_truncation_fails_before_finalization() -> Result<()> {
-    use anyhow::Context as _;
     use std::{fs::File, io::Read as _};
     for fanin in [2, 128] {
         for seal in [false, true] {
@@ -267,7 +273,13 @@ fn intermediate_spill_truncation_fails_before_finalization() -> Result<()> {
             for key in 0..20 {
                 builder.add((key, key), 1)?;
             }
-            let directory = builder.directory.path().to_path_buf();
+            let directory = builder
+                .scratch
+                .as_ref()
+                .context("fixture did not spill")?
+                .directory
+                .path()
+                .to_path_buf();
             let run = builder.runs.first().context("fixture did not spill")?;
             let mut length = [0; 4];
             File::open(&run.path)?.read_exact(&mut length)?;
@@ -292,13 +304,15 @@ fn abandoned_consolidators_remove_scratch_but_failed_ones_keep_it() -> Result<()
     for key in 0..20 {
         abandoned.add((key, key), 1)?;
     }
-    let path = abandoned.directory.path().to_path_buf();
+    let path =
+        abandoned.scratch.as_ref().context("fixture did not spill")?.directory.path().to_path_buf();
     assert!(!abandoned.runs.is_empty());
     drop(abandoned);
     assert!(!path.exists());
     let mut failed = Consolidator::new(Limits { scratch_bytes: 1, ..limits(1) })?;
-    let path = failed.directory.path().to_path_buf();
     assert!((0..20).try_for_each(|key| failed.add((key, key), 1)).is_err());
+    let path =
+        failed.scratch.as_ref().context("fixture did not spill")?.directory.path().to_path_buf();
     drop(failed);
     assert!(path.exists());
     std::fs::remove_dir_all(path)?;
@@ -324,9 +338,80 @@ fn decimal_weight_sizes_are_exact_at_powers_and_fixed_width_boundaries() -> Resu
         power *= 10;
     }
     for weight in weights {
-        let expected = super::record::encode(&(1, 2), &weight, 4096)?.len();
+        let expected = encode(&(1, 2), &weight, 4096)?.len();
         assert_eq!(super::record::weighted_size(5, &weight, expected)?, expected);
         assert!(super::record::weighted_size(5, &weight, expected - 1).is_err());
     }
+    Ok(())
+}
+
+fn encode(tuple: &impl serde::Serialize, weight: &BigInt, limit: usize) -> Result<Vec<u8>> {
+    let mut buffer = Vec::new();
+    super::record::encode(tuple, weight, limit, &mut buffer)?;
+    Ok(buffer)
+}
+
+#[test]
+fn scratch_codecs_reuse_capacity_and_clear_prior_record_bytes() -> Result<()> {
+    use std::io::Cursor;
+    let mut encoded = Vec::new();
+    let mut decoded = Vec::new();
+    let mut wire = Vec::new();
+    let mut written = 0;
+    let mut encode_capacity = 0;
+    let mut decode_capacity = 0;
+    for length in [128, 1, 64, 0] {
+        let tuple = (length, "x".repeat(length));
+        let weight = BigInt::from(3);
+        super::record::encode(&tuple, &weight, 4096, &mut encoded)?;
+        if encode_capacity == 0 {
+            encode_capacity = encoded.capacity();
+        }
+        assert_eq!(encoded.capacity(), encode_capacity);
+        assert_eq!(encoded, serde_json::to_vec(&(&tuple, "3"))?);
+        written = super::record::write(&mut wire, &encoded, written, 4096)?;
+        let mut reader = Cursor::new(&wire);
+        reader.set_position(written - u64::try_from(encoded.len())? - 36);
+        let read = super::record::read_complete::<(usize, String)>(
+            &mut reader,
+            4096,
+            written,
+            &mut decoded,
+        )?;
+        assert_eq!(read, Some((tuple, weight)));
+        if decode_capacity == 0 {
+            decode_capacity = decoded.capacity();
+        }
+        assert_eq!(decoded.capacity(), decode_capacity);
+        assert!(
+            super::record::read_complete::<(usize, String)>(
+                &mut reader,
+                4096,
+                written,
+                &mut decoded,
+            )?
+            .is_none()
+        );
+        assert!(decoded.is_empty());
+    }
+    assert!(super::record::encode(&(1, "too large"), &BigInt::from(1), 1, &mut encoded).is_err());
+    super::record::encode(&(0, ""), &BigInt::from(0), 4096, &mut encoded)?;
+    assert_eq!(encoded, serde_json::to_vec(&((0, ""), "0"))?);
+    Ok(())
+}
+
+#[test]
+fn resident_evaluations_do_not_create_scratch_even_on_failure() -> Result<()> {
+    let mut resident = Consolidator::new(Limits::default())?;
+    assert!(resident.scratch.is_none());
+    resident.add((1, 2), 3)?;
+    assert!(resident.scratch.is_none());
+    assert_eq!(resident.finish_batch()?, crate::engine::Batch::from_updates([((1, 2), 3)])?);
+    let mut invalid = Consolidator::new(Limits { contributions: 1, ..Limits::default() })?;
+    invalid.add((1, 2), 3)?;
+    let error = invalid.add((1, 2), 4).err().context("fixture did not fail")?;
+    assert!(invalid.scratch.is_none());
+    assert!(error.to_string().contains("before creating scratch"));
+    assert!(invalid.finish_batch().is_err());
     Ok(())
 }

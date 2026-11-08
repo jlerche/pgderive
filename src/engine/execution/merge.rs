@@ -14,10 +14,12 @@ pub(super) struct Merge<T: BatchData> {
     runs: Vec<Run<T>>,
     heap: BinaryHeap<Reverse<(T, usize)>>,
     limit: usize,
+    record_buffer: Vec<u8>,
 }
 impl<T: BatchData> Merge<T> {
     pub(super) fn open(paths: &[record::Run], limit: usize) -> Result<Self> {
-        let mut merge = Self { runs: Vec::new(), heap: BinaryHeap::new(), limit };
+        let mut merge =
+            Self { runs: Vec::new(), heap: BinaryHeap::new(), limit, record_buffer: Vec::new() };
         for path in paths {
             merge.runs.push(Run {
                 reader: BufReader::new(File::open(&path.path)?),
@@ -31,9 +33,12 @@ impl<T: BatchData> Merge<T> {
     }
     fn advance(&mut self, ordinal: usize) -> Result<()> {
         let run = &mut self.runs[ordinal];
-        if let Some((tuple, weight)) =
-            record::read_complete::<T>(&mut run.reader, self.limit, run.bytes)?
-        {
+        if let Some((tuple, weight)) = record::read_complete::<T>(
+            &mut run.reader,
+            self.limit,
+            run.bytes,
+            &mut self.record_buffer,
+        )? {
             ensure!(
                 run.previous.as_ref().is_none_or(|previous| previous < &tuple),
                 "noncanonical scratch run"

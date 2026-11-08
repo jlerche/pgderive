@@ -26,10 +26,9 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let Some(span) = &self.span else {
             return Ok(0);
         };
-        let first = bounded::encode(&span.first)?.len();
-        let last = bounded::encode(&span.last)?.len();
-        let pages =
-            span.pages.as_deref().map(bounded::encode).transpose()?.map_or(0, |bytes| bytes.len());
+        let first = bounded::encoded_len(&span.first)?;
+        let last = bounded::encoded_len(&span.last)?;
+        let pages = span.pages.as_deref().map(bounded::encoded_len).transpose()?.unwrap_or(0);
         first
             .checked_add(last)
             .and_then(|bytes| bytes.checked_add(pages))
@@ -123,7 +122,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         for ordinal in range.clone() {
             let leaf = self.leaf(ordinal).await?;
             bytes = bytes
-                .checked_add(bounded::encode(&leaf)?.len())
+                .checked_add(bounded::encoded_len(&leaf)?)
                 .and_then(|bytes| bytes.checked_add(usize::from(!pages.is_empty())))
                 .context("extent fence charge overflow")?;
             if bytes > super::index::INLINE_BYTES {

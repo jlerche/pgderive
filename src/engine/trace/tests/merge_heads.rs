@@ -1,7 +1,7 @@
 use super::MergedCursor;
 use crate::engine::{
     Batch,
-    reader::{BatchReader, Cursor},
+    reader::{BatchCursor as _, BatchReader, Cursor},
     weights::Accumulator,
 };
 use anyhow::Result;
@@ -66,5 +66,26 @@ async fn minimum_selection_borrows_heads_and_clones_only_selected_identity() -> 
     merged.find().await?;
     assert_eq!(merged.current(), Some((&0, &Counted(3), 1)));
     assert_eq!(CLONES.load(Ordering::Relaxed), 1);
+
+    let batch = Batch::from_updates((0..3).map(|key| ((key, Counted(key)), 1)))?;
+    let mut merged = MergedCursor { cursors: vec![batch.cursor().await?], row: None };
+    merged.find().await?;
+    CLONES.store(0, Ordering::Relaxed);
+    let pinned = merged.clone();
+    assert_eq!(CLONES.load(Ordering::Relaxed), 1);
+    CLONES.store(0, Ordering::Relaxed);
+    merged.advance().await?;
+    assert_eq!(merged.current(), Some((&1, &Counted(1), 1)));
+    assert_eq!(CLONES.load(Ordering::Relaxed), 1);
+    assert_eq!(pinned.current(), Some((&0, &Counted(0), 1)));
+    CLONES.store(0, Ordering::Relaxed);
+    merged.seek_key(&0).await?;
+    assert_eq!(merged.current(), Some((&0, &Counted(0), 1)));
+    assert_eq!(CLONES.load(Ordering::Relaxed), 1);
+    CLONES.store(0, Ordering::Relaxed);
+    merged.advance_span().await?;
+    assert!(merged.current().is_none());
+    assert_eq!(CLONES.load(Ordering::Relaxed), 0);
+    assert_eq!(pinned.current(), Some((&0, &Counted(0), 1)));
     Ok(())
 }

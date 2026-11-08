@@ -124,3 +124,28 @@ fn average_keeps_aligned_sum_spanning_both_input_digit_extremes() -> Result<()> 
     );
     Ok(())
 }
+
+#[test]
+fn finite_budget_matches_actual_signed_and_scaled_display() -> Result<()> {
+    for coefficient in [0_i64, 1, -1, 10, -10, 12345, -12345] {
+        for scale in [0, 1, 2, 4, 8, 4093, 4094, 4095, 4096] {
+            let value = Numeric::Finite { coefficient: coefficient.into(), scale };
+            let display = value.text();
+            for budget in [0, 1, 2, 3, 6, 8, 16, 20, 4096] {
+                let accepted = coefficient.to_string().len() <= budget
+                    && usize::try_from(scale)? <= budget
+                    && display.len() <= budget;
+                let actual = Numeric::finite_bounded(coefficient.into(), scale, budget);
+                assert_eq!(
+                    actual.is_ok(),
+                    accepted,
+                    "{coefficient}, scale={scale}, budget={budget}"
+                );
+                if let Ok(actual) = actual {
+                    assert_eq!(actual.text(), display);
+                }
+            }
+        }
+    }
+    Ok(())
+}

@@ -123,8 +123,7 @@ pub struct SelectedBlock<K: BatchData, V: BatchData> {
 
 impl<K: BatchData, V: BatchData> SelectedBlock<K, V> {
     pub(crate) fn charge(&self) -> Result<usize> {
-        super::bounded::encode(&self.leaf)?
-            .len()
+        super::bounded::encoded_len(&self.leaf)?
             .checked_mul(2)
             .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
             .context("selected index page charge overflow")
@@ -347,7 +346,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
     /// # Errors
     /// Returns an encoding or checked-size error.
     pub fn resident_index_bytes(&self) -> Result<usize> {
-        let root = super::bounded::encode(self.index.as_ref())?.len();
+        let root = super::bounded::encoded_len(self.index.as_ref())?;
         let root = root.checked_add(self.span_charge()?).context("span charge overflow")?;
         let head = self
             .head
