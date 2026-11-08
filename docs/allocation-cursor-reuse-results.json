@@ -1,0 +1,2749 @@
+{
+  "version": 1,
+  "baseline_commit": "cba1c86c81ecc3ed7676cc1f76ff91ba7914ed4a",
+  "comparison_report": "artifacts/allocation-round4/paired/report.json",
+  "comparison_report_sha256": "b19e341b8c4fd2e6845a60cf3f18f0c05496f124fdcc2599a54479568520e235",
+  "repeats_per_side_mode_workload": 3,
+  "paired_process_runs": 108,
+  "scope": "Serialized paired process runs of frozen executables. GNU time is uninstrumented; CPU timings are diagnostics, not a regression qualification.",
+  "inputs": {
+    "baseline": {
+      "head": "cba1c86c81ecc3ed7676cc1f76ff91ba7914ed4a",
+      "revision": "cba1c86",
+      "original_source_sha256": "9dbf9b30f5c5cbeee265cccfbb0362affd59d2b1a444d6875293509164703412",
+      "source_sha256": "907755edb9981eef5e44918d51bd2c8d14973b8dbe38b7fbb36aa6eae0cfbe8a",
+      "instrumented_source_sha256": "e9c35d21dfaabd412d6602270b71b243f5c15d58cde1d34e1afaf0f6b7c95420",
+      "plain_binary_sha256": "0c6ebe6084b730d2edc7d2d71714fe7ab6fcb37b3afb38fee875882a503f4536",
+      "profiled_binary_sha256": "0123cd05fee7b1de1b51870dbb23c51d7f0e8aea4b5383e50e48ca12070ea390",
+      "original_lock_sha256": "579fbd2d43e2ca9c7dd61837b96b712a75f91a83658d37d5abad40d5726ca01e",
+      "instrumented_lock_sha256": "034af9c3a53ac9905e0a451d20d8c68776f89ed45b384723026bdec6773493f7",
+      "script_sha256": "6156d231c2c3fd1679daae92e4072539c7b4f758cece8404756599f1fb1866ba",
+      "measurement_probe_version": 1,
+      "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.95.0\nLLVM version: 22.1.2",
+      "dhat": "0.3.3"
+    },
+    "candidate": {
+      "head": "cba1c86c81ecc3ed7676cc1f76ff91ba7914ed4a",
+      "revision": "working-tree",
+      "original_source_sha256": "6bf5199c5843a46fd746955f008a9ea208f402c72a90ec59ea0e0c47fe4ae797",
+      "source_sha256": "656b84a23d2ed9b2ac2498a04d99982182a2a36097afd4ec27f6d759b21b19bc",
+      "instrumented_source_sha256": "30ef2a24156f12f9ba4b86174edfcbb9abf204bdda8b20bcd312eba4c3b7dcae",
+      "plain_binary_sha256": "c56c737a442d84335035a3ab9a2c9ac34916598c468df484c00d56e198f8492d",
+      "profiled_binary_sha256": "2c91060060f87cd5cb6e8ad6b0dc1dcd643c009e6671e0c691f90f96d787baf5",
+      "original_lock_sha256": "579fbd2d43e2ca9c7dd61837b96b712a75f91a83658d37d5abad40d5726ca01e",
+      "instrumented_lock_sha256": "034af9c3a53ac9905e0a451d20d8c68776f89ed45b384723026bdec6773493f7",
+      "script_sha256": "6156d231c2c3fd1679daae92e4072539c7b4f758cece8404756599f1fb1866ba",
+      "measurement_probe_version": 1,
+      "rustc": "rustc 1.95.0 (59807616e 2026-04-14)\nbinary: rustc\ncommit-hash: 59807616e1fa2540724bfbac14d7976d7e4a3860\ncommit-date: 2026-04-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.95.0\nLLVM version: 22.1.2",
+      "dhat": "0.3.3"
+    }
+  },
+  "metrics": {
+    "reader": {
+      "end_blocks": {
+        "baseline": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "candidate": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "median_change_percent": 0.0
+      },
+      "end_bytes": {
+        "baseline": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "candidate": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "median_change_percent": 0.0
+      },
+      "object_delete_batches": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "object_put_bytes": {
+        "baseline": {
+          "median": 227859,
+          "minimum": 227859,
+          "maximum": 227859
+        },
+        "candidate": {
+          "median": 227859,
+          "minimum": 227859,
+          "maximum": 227859
+        },
+        "median_change_percent": 0.0
+      },
+      "object_puts": {
+        "baseline": {
+          "median": 66,
+          "minimum": 66,
+          "maximum": 66
+        },
+        "candidate": {
+          "median": 66,
+          "minimum": 66,
+          "maximum": 66
+        },
+        "median_change_percent": 0.0
+      },
+      "object_range_bytes": {
+        "baseline": {
+          "median": 724908,
+          "minimum": 724908,
+          "maximum": 724908
+        },
+        "candidate": {
+          "median": 724908,
+          "minimum": 724908,
+          "maximum": 724908
+        },
+        "median_change_percent": 0.0
+      },
+      "object_reads": {
+        "baseline": {
+          "median": 330,
+          "minimum": 330,
+          "maximum": 330
+        },
+        "candidate": {
+          "median": 330,
+          "minimum": 330,
+          "maximum": 330
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_blocks": {
+        "baseline": {
+          "median": 32173,
+          "minimum": 32173,
+          "maximum": 32173
+        },
+        "candidate": {
+          "median": 32174,
+          "minimum": 32174,
+          "maximum": 32174
+        },
+        "median_change_percent": 0.003108
+      },
+      "peak_bytes": {
+        "baseline": {
+          "median": 4165699,
+          "minimum": 4165699,
+          "maximum": 4165699
+        },
+        "candidate": {
+          "median": 4166035,
+          "minimum": 4166035,
+          "maximum": 4166035
+        },
+        "median_change_percent": 0.008066
+      },
+      "total_blocks": {
+        "baseline": {
+          "median": 1182217,
+          "minimum": 1182217,
+          "maximum": 1182217
+        },
+        "candidate": {
+          "median": 790759,
+          "minimum": 790759,
+          "maximum": 790759
+        },
+        "median_change_percent": -33.112195
+      },
+      "total_bytes": {
+        "baseline": {
+          "median": 182877166,
+          "minimum": 182877166,
+          "maximum": 182877166
+        },
+        "candidate": {
+          "median": 145485054,
+          "minimum": 145485054,
+          "maximum": 145485054
+        },
+        "median_change_percent": -20.446572
+      },
+      "wall_seconds_instrumented": {
+        "baseline": {
+          "median": 2.9436339490348473,
+          "minimum": 2.7399490469833836,
+          "maximum": 3.0854984410107136
+        },
+        "candidate": {
+          "median": 2.3448101870017126,
+          "minimum": 2.302323290030472,
+          "maximum": 2.4004569759126753
+        },
+        "median_change_percent": -20.34301
+      },
+      "maximum_rss_kib": {
+        "baseline": {
+          "median": 26132,
+          "minimum": 25836,
+          "maximum": 26296
+        },
+        "candidate": {
+          "median": 26372,
+          "minimum": 25664,
+          "maximum": 26396
+        },
+        "median_change_percent": 0.918414
+      },
+      "plain_object_delete_batches": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "plain_object_put_bytes": {
+        "baseline": {
+          "median": 227859,
+          "minimum": 227859,
+          "maximum": 227859
+        },
+        "candidate": {
+          "median": 227859,
+          "minimum": 227859,
+          "maximum": 227859
+        },
+        "median_change_percent": 0.0
+      },
+      "plain_object_puts": {
+        "baseline": {
+          "median": 66,
+          "minimum": 66,
+          "maximum": 66
+        },
+        "candidate": {
+          "median": 66,
+          "minimum": 66,
+          "maximum": 66
+        },
+        "median_change_percent": 0.0
+      },
+      "plain_object_range_bytes": {
+        "baseline": {
+          "median": 724908,
+          "minimum": 724908,
+          "maximum": 724908
+        },
+        "candidate": {
+          "median": 724908,
+          "minimum": 724908,
+          "maximum": 724908
+        },
+        "median_change_percent": 0.0
+      },
+      "plain_object_reads": {
+        "baseline": {
+          "median": 330,
+          "minimum": 330,
+          "maximum": 330
+        },
+        "candidate": {
+          "median": 330,
+          "minimum": 330,
+          "maximum": 330
+        },
+        "median_change_percent": 0.0
+      },
+      "system_seconds": {
+        "baseline": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.01
+        },
+        "candidate": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.01
+        }
+      },
+      "user_seconds": {
+        "baseline": {
+          "median": 0.16,
+          "minimum": 0.14,
+          "maximum": 0.18
+        },
+        "candidate": {
+          "median": 0.13,
+          "minimum": 0.13,
+          "maximum": 0.15
+        },
+        "median_change_percent": -18.75
+      },
+      "wall_seconds": {
+        "baseline": {
+          "median": 0.1759008780354634,
+          "minimum": 0.15526064799632877,
+          "maximum": 0.19532141601666808
+        },
+        "candidate": {
+          "median": 0.1512640540022403,
+          "minimum": 0.14514310006052256,
+          "maximum": 0.16881848103366792
+        },
+        "median_change_percent": -14.006084
+      }
+    },
+    "replay": {
+      "end_blocks": {
+        "baseline": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "candidate": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "median_change_percent": 0.0
+      },
+      "end_bytes": {
+        "baseline": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "candidate": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "median_change_percent": 0.0
+      },
+      "lifecycle_read_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "lifecycle_read_requested_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "lifecycle_requests": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "lifecycle_write_requested_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "lifecycle_written_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "measured_object_puts": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "measured_object_reads": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "object_delete_batches": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "object_put_bytes": {
+        "baseline": {
+          "median": 66857,
+          "minimum": 66857,
+          "maximum": 66857
+        },
+        "candidate": {
+          "median": 66857,
+          "minimum": 66857,
+          "maximum": 66857
+        },
+        "median_change_percent": 0.0
+      },
+      "object_puts": {
+        "baseline": {
+          "median": 84,
+          "minimum": 84,
+          "maximum": 84
+        },
+        "candidate": {
+          "median": 84,
+          "minimum": 84,
+          "maximum": 84
+        },
+        "median_change_percent": 0.0
+      },
+      "object_range_bytes": {
+        "baseline": {
+          "median": 176322,
+          "minimum": 176322,
+          "maximum": 176322
+        },
+        "candidate": {
+          "median": 176322,
+          "minimum": 176322,
+          "maximum": 176322
+        },
+        "median_change_percent": 0.0
+      },
+      "object_reads": {
+        "baseline": {
+          "median": 394,
+          "minimum": 394,
+          "maximum": 394
+        },
+        "candidate": {
+          "median": 394,
+          "minimum": 394,
+          "maximum": 394
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_blocks": {
+        "baseline": {
+          "median": 14074,
+          "minimum": 14074,
+          "maximum": 14074
+        },
+        "candidate": {
+          "median": 14074,
+          "minimum": 14074,
+          "maximum": 14074
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_bytes": {
+        "baseline": {
+          "median": 1167801,
+          "minimum": 1167800,
+          "maximum": 1167805
+        },
+        "candidate": {
+          "median": 1167793,
+          "minimum": 1167791,
+          "maximum": 1167793
+        },
+        "median_change_percent": -0.000685
+      },
+      "stored_bytes": {
+        "baseline": {
+          "median": 66857,
+          "minimum": 66857,
+          "maximum": 66857
+        },
+        "candidate": {
+          "median": 66857,
+          "minimum": 66857,
+          "maximum": 66857
+        },
+        "median_change_percent": 0.0
+      },
+      "stored_objects": {
+        "baseline": {
+          "median": 84,
+          "minimum": 84,
+          "maximum": 84
+        },
+        "candidate": {
+          "median": 84,
+          "minimum": 84,
+          "maximum": 84
+        },
+        "median_change_percent": 0.0
+      },
+      "total_blocks": {
+        "baseline": {
+          "median": 250173,
+          "minimum": 250173,
+          "maximum": 250173
+        },
+        "candidate": {
+          "median": 243896,
+          "minimum": 243896,
+          "maximum": 243896
+        },
+        "median_change_percent": -2.509064
+      },
+      "total_bytes": {
+        "baseline": {
+          "median": 52309680,
+          "minimum": 52309677,
+          "maximum": 52309692
+        },
+        "candidate": {
+          "median": 51874665,
+          "minimum": 51874659,
+          "maximum": 51874665
+        },
+        "median_change_percent": -0.831615
+      },
+      "wall_seconds_instrumented": {
+        "baseline": {
+          "median": 2.1136590789537877,
+          "minimum": 2.083236876060255,
+          "maximum": 2.27903520304244
+        },
+        "candidate": {
+          "median": 2.104414368979633,
+          "minimum": 2.0394450839376077,
+          "maximum": 2.178849083953537
+        },
+        "median_change_percent": -0.437379
+      },
+      "plain_lifecycle_read_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "plain_lifecycle_read_requested_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "plain_lifecycle_requests": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "plain_lifecycle_write_requested_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "plain_lifecycle_written_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "maximum_rss_kib": {
+        "baseline": {
+          "median": 37896,
+          "minimum": 37600,
+          "maximum": 37932
+        },
+        "candidate": {
+          "median": 37024,
+          "minimum": 36388,
+          "maximum": 37044
+        },
+        "median_change_percent": -2.301034
+      },
+      "plain_measured_object_puts": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "plain_measured_object_reads": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "plain_object_delete_batches": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "plain_object_put_bytes": {
+        "baseline": {
+          "median": 66857,
+          "minimum": 66857,
+          "maximum": 66857
+        },
+        "candidate": {
+          "median": 66857,
+          "minimum": 66857,
+          "maximum": 66857
+        },
+        "median_change_percent": 0.0
+      },
+      "plain_object_puts": {
+        "baseline": {
+          "median": 84,
+          "minimum": 84,
+          "maximum": 84
+        },
+        "candidate": {
+          "median": 84,
+          "minimum": 84,
+          "maximum": 84
+        },
+        "median_change_percent": 0.0
+      },
+      "plain_object_range_bytes": {
+        "baseline": {
+          "median": 176322,
+          "minimum": 176322,
+          "maximum": 176322
+        },
+        "candidate": {
+          "median": 176322,
+          "minimum": 176322,
+          "maximum": 176322
+        },
+        "median_change_percent": 0.0
+      },
+      "plain_object_reads": {
+        "baseline": {
+          "median": 394,
+          "minimum": 394,
+          "maximum": 394
+        },
+        "candidate": {
+          "median": 394,
+          "minimum": 394,
+          "maximum": 394
+        },
+        "median_change_percent": 0.0
+      },
+      "plain_stored_bytes": {
+        "baseline": {
+          "median": 66857,
+          "minimum": 66857,
+          "maximum": 66857
+        },
+        "candidate": {
+          "median": 66857,
+          "minimum": 66857,
+          "maximum": 66857
+        },
+        "median_change_percent": 0.0
+      },
+      "plain_stored_objects": {
+        "baseline": {
+          "median": 84,
+          "minimum": 84,
+          "maximum": 84
+        },
+        "candidate": {
+          "median": 84,
+          "minimum": 84,
+          "maximum": 84
+        },
+        "median_change_percent": 0.0
+      },
+      "system_seconds": {
+        "baseline": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        },
+        "candidate": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        }
+      },
+      "user_seconds": {
+        "baseline": {
+          "median": 0.04,
+          "minimum": 0.04,
+          "maximum": 0.04
+        },
+        "candidate": {
+          "median": 0.04,
+          "minimum": 0.04,
+          "maximum": 0.05
+        },
+        "median_change_percent": 0.0
+      },
+      "wall_seconds": {
+        "baseline": {
+          "median": 0.05799141398165375,
+          "minimum": 0.05638336203992367,
+          "maximum": 0.05969881301280111
+        },
+        "candidate": {
+          "median": 0.05401729291770607,
+          "minimum": 0.05349077400751412,
+          "maximum": 0.06220393697731197
+        },
+        "median_change_percent": -6.852947
+      }
+    },
+    "spill": {
+      "end_blocks": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "end_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "peak_blocks": {
+        "baseline": {
+          "median": 109,
+          "minimum": 109,
+          "maximum": 109
+        },
+        "candidate": {
+          "median": 109,
+          "minimum": 109,
+          "maximum": 109
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_bytes": {
+        "baseline": {
+          "median": 331626,
+          "minimum": 331626,
+          "maximum": 331626
+        },
+        "candidate": {
+          "median": 331626,
+          "minimum": 331626,
+          "maximum": 331626
+        },
+        "median_change_percent": 0.0
+      },
+      "total_blocks": {
+        "baseline": {
+          "median": 775,
+          "minimum": 775,
+          "maximum": 775
+        },
+        "candidate": {
+          "median": 775,
+          "minimum": 775,
+          "maximum": 775
+        },
+        "median_change_percent": 0.0
+      },
+      "total_bytes": {
+        "baseline": {
+          "median": 1118224,
+          "minimum": 1118224,
+          "maximum": 1118224
+        },
+        "candidate": {
+          "median": 1118224,
+          "minimum": 1118224,
+          "maximum": 1118224
+        },
+        "median_change_percent": 0.0
+      },
+      "wall_seconds_instrumented": {
+        "baseline": {
+          "median": 0.2514599150745198,
+          "minimum": 0.24552295892499387,
+          "maximum": 0.2672083181096241
+        },
+        "candidate": {
+          "median": 0.2298091429984197,
+          "minimum": 0.22499390598386526,
+          "maximum": 0.3089361450402066
+        },
+        "median_change_percent": -8.610029
+      },
+      "maximum_rss_kib": {
+        "baseline": {
+          "median": 13416,
+          "minimum": 13216,
+          "maximum": 13544
+        },
+        "candidate": {
+          "median": 13392,
+          "minimum": 13200,
+          "maximum": 13392
+        },
+        "median_change_percent": -0.178891
+      },
+      "system_seconds": {
+        "baseline": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        },
+        "candidate": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        }
+      },
+      "user_seconds": {
+        "baseline": {
+          "median": 0.02,
+          "minimum": 0.02,
+          "maximum": 0.02
+        },
+        "candidate": {
+          "median": 0.02,
+          "minimum": 0.02,
+          "maximum": 0.02
+        },
+        "median_change_percent": 0.0
+      },
+      "wall_seconds": {
+        "baseline": {
+          "median": 0.026900883065536618,
+          "minimum": 0.025936873978935182,
+          "maximum": 0.027663370012305677
+        },
+        "candidate": {
+          "median": 0.026980674942024052,
+          "minimum": 0.02637862297706306,
+          "maximum": 0.027262800023891032
+        },
+        "median_change_percent": 0.296614
+      }
+    },
+    "spill_strings": {
+      "end_blocks": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "end_bytes": {
+        "baseline": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        },
+        "candidate": {
+          "median": 0,
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "peak_blocks": {
+        "baseline": {
+          "median": 83,
+          "minimum": 83,
+          "maximum": 83
+        },
+        "candidate": {
+          "median": 83,
+          "minimum": 83,
+          "maximum": 83
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_bytes": {
+        "baseline": {
+          "median": 196051,
+          "minimum": 196051,
+          "maximum": 196051
+        },
+        "candidate": {
+          "median": 196051,
+          "minimum": 196051,
+          "maximum": 196051
+        },
+        "median_change_percent": 0.0
+      },
+      "total_blocks": {
+        "baseline": {
+          "median": 571,
+          "minimum": 571,
+          "maximum": 571
+        },
+        "candidate": {
+          "median": 571,
+          "minimum": 571,
+          "maximum": 571
+        },
+        "median_change_percent": 0.0
+      },
+      "total_bytes": {
+        "baseline": {
+          "median": 548288,
+          "minimum": 548288,
+          "maximum": 548288
+        },
+        "candidate": {
+          "median": 548288,
+          "minimum": 548288,
+          "maximum": 548288
+        },
+        "median_change_percent": 0.0
+      },
+      "wall_seconds_instrumented": {
+        "baseline": {
+          "median": 0.2595089019741863,
+          "minimum": 0.2507898280164227,
+          "maximum": 0.2857204769970849
+        },
+        "candidate": {
+          "median": 0.3373582490021363,
+          "minimum": 0.2863817219622433,
+          "maximum": 0.35938084800727665
+        },
+        "median_change_percent": 29.998719
+      },
+      "maximum_rss_kib": {
+        "baseline": {
+          "median": 13360,
+          "minimum": 13196,
+          "maximum": 13392
+        },
+        "candidate": {
+          "median": 12804,
+          "minimum": 12724,
+          "maximum": 12928
+        },
+        "median_change_percent": -4.161677
+      },
+      "system_seconds": {
+        "baseline": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        },
+        "candidate": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        }
+      },
+      "user_seconds": {
+        "baseline": {
+          "median": 0.02,
+          "minimum": 0.02,
+          "maximum": 0.02
+        },
+        "candidate": {
+          "median": 0.02,
+          "minimum": 0.02,
+          "maximum": 0.02
+        },
+        "median_change_percent": 0.0
+      },
+      "wall_seconds": {
+        "baseline": {
+          "median": 0.026069345069117844,
+          "minimum": 0.02588250197004527,
+          "maximum": 0.027234556968323886
+        },
+        "candidate": {
+          "median": 0.027055716956965625,
+          "minimum": 0.025364859029650688,
+          "maximum": 0.028315117000602186
+        },
+        "median_change_percent": 3.783647
+      }
+    },
+    "group": {
+      "end_blocks": {
+        "baseline": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "candidate": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "median_change_percent": 0.0
+      },
+      "end_bytes": {
+        "baseline": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "candidate": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_blocks": {
+        "baseline": {
+          "median": 542,
+          "minimum": 542,
+          "maximum": 542
+        },
+        "candidate": {
+          "median": 542,
+          "minimum": 542,
+          "maximum": 542
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_bytes": {
+        "baseline": {
+          "median": 293596,
+          "minimum": 293596,
+          "maximum": 293596
+        },
+        "candidate": {
+          "median": 293596,
+          "minimum": 293596,
+          "maximum": 293596
+        },
+        "median_change_percent": 0.0
+      },
+      "total_blocks": {
+        "baseline": {
+          "median": 7272,
+          "minimum": 7272,
+          "maximum": 7272
+        },
+        "candidate": {
+          "median": 7241,
+          "minimum": 7241,
+          "maximum": 7241
+        },
+        "median_change_percent": -0.426293
+      },
+      "total_bytes": {
+        "baseline": {
+          "median": 1781775,
+          "minimum": 1781775,
+          "maximum": 1781775
+        },
+        "candidate": {
+          "median": 1781359,
+          "minimum": 1781359,
+          "maximum": 1781359
+        },
+        "median_change_percent": -0.023348
+      },
+      "wall_seconds_instrumented": {
+        "baseline": {
+          "median": 0.4393166119698435,
+          "minimum": 0.42683203099295497,
+          "maximum": 0.48858676000963897
+        },
+        "candidate": {
+          "median": 0.449464327073656,
+          "minimum": 0.4139970151009038,
+          "maximum": 0.4728576660854742
+        },
+        "median_change_percent": 2.309886
+      },
+      "maximum_rss_kib": {
+        "baseline": {
+          "median": 23660,
+          "minimum": 23476,
+          "maximum": 23856
+        },
+        "candidate": {
+          "median": 23788,
+          "minimum": 23652,
+          "maximum": 23884
+        },
+        "median_change_percent": 0.540997
+      },
+      "system_seconds": {
+        "baseline": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        },
+        "candidate": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        }
+      },
+      "user_seconds": {
+        "baseline": {
+          "median": 0.02,
+          "minimum": 0.02,
+          "maximum": 0.02
+        },
+        "candidate": {
+          "median": 0.02,
+          "minimum": 0.02,
+          "maximum": 0.02
+        },
+        "median_change_percent": 0.0
+      },
+      "wall_seconds": {
+        "baseline": {
+          "median": 0.028377174981869757,
+          "minimum": 0.028254442033357918,
+          "maximum": 0.029431635979562998
+        },
+        "candidate": {
+          "median": 0.028899456025101244,
+          "minimum": 0.028328772983513772,
+          "maximum": 0.029043589951470494
+        },
+        "median_change_percent": 1.840497
+      }
+    },
+    "processing": {
+      "end_blocks": {
+        "baseline": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "candidate": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "median_change_percent": 0.0
+      },
+      "end_bytes": {
+        "baseline": {
+          "median": 128,
+          "minimum": 128,
+          "maximum": 128
+        },
+        "candidate": {
+          "median": 128,
+          "minimum": 128,
+          "maximum": 128
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_blocks": {
+        "baseline": {
+          "median": 4196,
+          "minimum": 4196,
+          "maximum": 4196
+        },
+        "candidate": {
+          "median": 4196,
+          "minimum": 4196,
+          "maximum": 4196
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_bytes": {
+        "baseline": {
+          "median": 702638,
+          "minimum": 702638,
+          "maximum": 702638
+        },
+        "candidate": {
+          "median": 702638,
+          "minimum": 702638,
+          "maximum": 702638
+        },
+        "median_change_percent": 0.0
+      },
+      "total_blocks": {
+        "baseline": {
+          "median": 61290,
+          "minimum": 61290,
+          "maximum": 61290
+        },
+        "candidate": {
+          "median": 60185,
+          "minimum": 60185,
+          "maximum": 60185
+        },
+        "median_change_percent": -1.802904
+      },
+      "total_bytes": {
+        "baseline": {
+          "median": 11593185,
+          "minimum": 11593185,
+          "maximum": 11593185
+        },
+        "candidate": {
+          "median": 11508561,
+          "minimum": 11508561,
+          "maximum": 11508561
+        },
+        "median_change_percent": -0.729946
+      },
+      "wall_seconds_instrumented": {
+        "baseline": {
+          "median": 0.7079521169653162,
+          "minimum": 0.6912580060306937,
+          "maximum": 0.7307715689530596
+        },
+        "candidate": {
+          "median": 0.7634602020261809,
+          "minimum": 0.7580017200671136,
+          "maximum": 0.783278944902122
+        },
+        "median_change_percent": 7.840655
+      },
+      "maximum_rss_kib": {
+        "baseline": {
+          "median": 28672,
+          "minimum": 28668,
+          "maximum": 28984
+        },
+        "candidate": {
+          "median": 28348,
+          "minimum": 27952,
+          "maximum": 28392
+        },
+        "median_change_percent": -1.130022
+      },
+      "system_seconds": {
+        "baseline": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        },
+        "candidate": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        }
+      },
+      "user_seconds": {
+        "baseline": {
+          "median": 0.02,
+          "minimum": 0.02,
+          "maximum": 0.03
+        },
+        "candidate": {
+          "median": 0.03,
+          "minimum": 0.02,
+          "maximum": 0.03
+        },
+        "median_change_percent": 50.0
+      },
+      "wall_seconds": {
+        "baseline": {
+          "median": 0.03701112896669656,
+          "minimum": 0.036295470083132386,
+          "maximum": 0.0400260390015319
+        },
+        "candidate": {
+          "median": 0.03785777499433607,
+          "minimum": 0.03451806807424873,
+          "maximum": 0.03818542696535587
+        },
+        "median_change_percent": 2.287544
+      }
+    },
+    "join": {
+      "end_blocks": {
+        "baseline": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "candidate": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "median_change_percent": 0.0
+      },
+      "end_bytes": {
+        "baseline": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "candidate": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_blocks": {
+        "baseline": {
+          "median": 766,
+          "minimum": 766,
+          "maximum": 766
+        },
+        "candidate": {
+          "median": 766,
+          "minimum": 766,
+          "maximum": 766
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_bytes": {
+        "baseline": {
+          "median": 209712,
+          "minimum": 209712,
+          "maximum": 209712
+        },
+        "candidate": {
+          "median": 209712,
+          "minimum": 209712,
+          "maximum": 209712
+        },
+        "median_change_percent": 0.0
+      },
+      "total_blocks": {
+        "baseline": {
+          "median": 1176252,
+          "minimum": 1176252,
+          "maximum": 1176252
+        },
+        "candidate": {
+          "median": 1157648,
+          "minimum": 1157648,
+          "maximum": 1157648
+        },
+        "median_change_percent": -1.581634
+      },
+      "total_bytes": {
+        "baseline": {
+          "median": 249576254,
+          "minimum": 249576254,
+          "maximum": 249576254
+        },
+        "candidate": {
+          "median": 248270084,
+          "minimum": 248270084,
+          "maximum": 248270084
+        },
+        "median_change_percent": -0.523355
+      },
+      "wall_seconds_instrumented": {
+        "baseline": {
+          "median": 3.3659499710192904,
+          "minimum": 3.2492657910333946,
+          "maximum": 3.4301815319340676
+        },
+        "candidate": {
+          "median": 3.1713711170013994,
+          "minimum": 3.089191433042288,
+          "maximum": 3.4365540229482576
+        },
+        "median_change_percent": -5.780801
+      },
+      "maximum_rss_kib": {
+        "baseline": {
+          "median": 22640,
+          "minimum": 22532,
+          "maximum": 22784
+        },
+        "candidate": {
+          "median": 22792,
+          "minimum": 22148,
+          "maximum": 22820
+        },
+        "median_change_percent": 0.671378
+      },
+      "system_seconds": {
+        "baseline": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.01
+        },
+        "candidate": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        }
+      },
+      "user_seconds": {
+        "baseline": {
+          "median": 0.16,
+          "minimum": 0.13,
+          "maximum": 0.17
+        },
+        "candidate": {
+          "median": 0.16,
+          "minimum": 0.15,
+          "maximum": 0.16
+        },
+        "median_change_percent": 0.0
+      },
+      "wall_seconds": {
+        "baseline": {
+          "median": 0.1765898149460554,
+          "minimum": 0.1496147180441767,
+          "maximum": 0.18478634604252875
+        },
+        "candidate": {
+          "median": 0.17558979603927583,
+          "minimum": 0.16838194790761918,
+          "maximum": 0.17884700698778033
+        },
+        "median_change_percent": -0.566295
+      }
+    },
+    "statistics": {
+      "end_blocks": {
+        "baseline": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "candidate": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "median_change_percent": 0.0
+      },
+      "end_bytes": {
+        "baseline": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "candidate": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_blocks": {
+        "baseline": {
+          "median": 1863,
+          "minimum": 1863,
+          "maximum": 1863
+        },
+        "candidate": {
+          "median": 1863,
+          "minimum": 1863,
+          "maximum": 1863
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_bytes": {
+        "baseline": {
+          "median": 655170,
+          "minimum": 655170,
+          "maximum": 655170
+        },
+        "candidate": {
+          "median": 655170,
+          "minimum": 655170,
+          "maximum": 655170
+        },
+        "median_change_percent": 0.0
+      },
+      "total_blocks": {
+        "baseline": {
+          "median": 113645,
+          "minimum": 113645,
+          "maximum": 113645
+        },
+        "candidate": {
+          "median": 113263,
+          "minimum": 113263,
+          "maximum": 113263
+        },
+        "median_change_percent": -0.336134
+      },
+      "total_bytes": {
+        "baseline": {
+          "median": 39883996,
+          "minimum": 39883996,
+          "maximum": 39883996
+        },
+        "candidate": {
+          "median": 39783288,
+          "minimum": 39783288,
+          "maximum": 39783288
+        },
+        "median_change_percent": -0.252502
+      },
+      "wall_seconds_instrumented": {
+        "baseline": {
+          "median": 0.695816354942508,
+          "minimum": 0.6176502120215446,
+          "maximum": 0.7866487440187484
+        },
+        "candidate": {
+          "median": 0.7224771280307323,
+          "minimum": 0.7012309610145167,
+          "maximum": 0.7397532450268045
+        },
+        "median_change_percent": 3.831582
+      },
+      "maximum_rss_kib": {
+        "baseline": {
+          "median": 25052,
+          "minimum": 24948,
+          "maximum": 25124
+        },
+        "candidate": {
+          "median": 24688,
+          "minimum": 24648,
+          "maximum": 24716
+        },
+        "median_change_percent": -1.452978
+      },
+      "system_seconds": {
+        "baseline": {
+          "median": 0.01,
+          "minimum": 0.0,
+          "maximum": 0.01
+        },
+        "candidate": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.01
+        },
+        "median_change_percent": -100.0
+      },
+      "user_seconds": {
+        "baseline": {
+          "median": 0.04,
+          "minimum": 0.03,
+          "maximum": 0.04
+        },
+        "candidate": {
+          "median": 0.03,
+          "minimum": 0.03,
+          "maximum": 0.04
+        },
+        "median_change_percent": -25.0
+      },
+      "wall_seconds": {
+        "baseline": {
+          "median": 0.05418156296946108,
+          "minimum": 0.0503812920069322,
+          "maximum": 0.05496569094248116
+        },
+        "candidate": {
+          "median": 0.04607934900559485,
+          "minimum": 0.04337633901741356,
+          "maximum": 0.05419569998048246
+        },
+        "median_change_percent": -14.953821
+      }
+    },
+    "topk": {
+      "end_blocks": {
+        "baseline": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "candidate": {
+          "median": 1,
+          "minimum": 1,
+          "maximum": 1
+        },
+        "median_change_percent": 0.0
+      },
+      "end_bytes": {
+        "baseline": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "candidate": {
+          "median": 64,
+          "minimum": 64,
+          "maximum": 64
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_blocks": {
+        "baseline": {
+          "median": 892,
+          "minimum": 892,
+          "maximum": 892
+        },
+        "candidate": {
+          "median": 892,
+          "minimum": 892,
+          "maximum": 892
+        },
+        "median_change_percent": 0.0
+      },
+      "peak_bytes": {
+        "baseline": {
+          "median": 411869,
+          "minimum": 411869,
+          "maximum": 411869
+        },
+        "candidate": {
+          "median": 411869,
+          "minimum": 411869,
+          "maximum": 411869
+        },
+        "median_change_percent": 0.0
+      },
+      "total_blocks": {
+        "baseline": {
+          "median": 94407,
+          "minimum": 94407,
+          "maximum": 94407
+        },
+        "candidate": {
+          "median": 94057,
+          "minimum": 94057,
+          "maximum": 94057
+        },
+        "median_change_percent": -0.370735
+      },
+      "total_bytes": {
+        "baseline": {
+          "median": 24024948,
+          "minimum": 24024948,
+          "maximum": 24024948
+        },
+        "candidate": {
+          "median": 23996298,
+          "minimum": 23996298,
+          "maximum": 23996298
+        },
+        "median_change_percent": -0.119251
+      },
+      "wall_seconds_instrumented": {
+        "baseline": {
+          "median": 0.7129746989812702,
+          "minimum": 0.6894320860737935,
+          "maximum": 0.7763559959130362
+        },
+        "candidate": {
+          "median": 0.7289031220134348,
+          "minimum": 0.7188090719282627,
+          "maximum": 0.7638271729229018
+        },
+        "median_change_percent": 2.23408
+      },
+      "maximum_rss_kib": {
+        "baseline": {
+          "median": 23624,
+          "minimum": 22676,
+          "maximum": 23640
+        },
+        "candidate": {
+          "median": 23124,
+          "minimum": 22872,
+          "maximum": 23332
+        },
+        "median_change_percent": -2.116492
+      },
+      "system_seconds": {
+        "baseline": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        },
+        "candidate": {
+          "median": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0
+        }
+      },
+      "user_seconds": {
+        "baseline": {
+          "median": 0.03,
+          "minimum": 0.03,
+          "maximum": 0.03
+        },
+        "candidate": {
+          "median": 0.03,
+          "minimum": 0.03,
+          "maximum": 0.03
+        },
+        "median_change_percent": 0.0
+      },
+      "wall_seconds": {
+        "baseline": {
+          "median": 0.03845849900972098,
+          "minimum": 0.03681514004711062,
+          "maximum": 0.04219248401932418
+        },
+        "candidate": {
+          "median": 0.03781726106535643,
+          "minimum": 0.035785414976999164,
+          "maximum": 0.04144417401403189
+        },
+        "median_change_percent": -1.66735
+      }
+    }
+  },
+  "object_cost_gate": [
+    {
+      "workload": "reader",
+      "profiled": false,
+      "repeat": 0,
+      "counter": "object_puts",
+      "baseline": 66,
+      "candidate": 66
+    },
+    {
+      "workload": "reader",
+      "profiled": false,
+      "repeat": 0,
+      "counter": "object_put_bytes",
+      "baseline": 227859,
+      "candidate": 227859
+    },
+    {
+      "workload": "reader",
+      "profiled": false,
+      "repeat": 1,
+      "counter": "object_puts",
+      "baseline": 66,
+      "candidate": 66
+    },
+    {
+      "workload": "reader",
+      "profiled": false,
+      "repeat": 1,
+      "counter": "object_put_bytes",
+      "baseline": 227859,
+      "candidate": 227859
+    },
+    {
+      "workload": "reader",
+      "profiled": false,
+      "repeat": 2,
+      "counter": "object_puts",
+      "baseline": 66,
+      "candidate": 66
+    },
+    {
+      "workload": "reader",
+      "profiled": false,
+      "repeat": 2,
+      "counter": "object_put_bytes",
+      "baseline": 227859,
+      "candidate": 227859
+    },
+    {
+      "workload": "reader",
+      "profiled": true,
+      "repeat": 0,
+      "counter": "object_puts",
+      "baseline": 66,
+      "candidate": 66
+    },
+    {
+      "workload": "reader",
+      "profiled": true,
+      "repeat": 0,
+      "counter": "object_put_bytes",
+      "baseline": 227859,
+      "candidate": 227859
+    },
+    {
+      "workload": "reader",
+      "profiled": true,
+      "repeat": 1,
+      "counter": "object_puts",
+      "baseline": 66,
+      "candidate": 66
+    },
+    {
+      "workload": "reader",
+      "profiled": true,
+      "repeat": 1,
+      "counter": "object_put_bytes",
+      "baseline": 227859,
+      "candidate": 227859
+    },
+    {
+      "workload": "reader",
+      "profiled": true,
+      "repeat": 2,
+      "counter": "object_puts",
+      "baseline": 66,
+      "candidate": 66
+    },
+    {
+      "workload": "reader",
+      "profiled": true,
+      "repeat": 2,
+      "counter": "object_put_bytes",
+      "baseline": 227859,
+      "candidate": 227859
+    },
+    {
+      "workload": "replay",
+      "profiled": false,
+      "repeat": 0,
+      "counter": "object_puts",
+      "baseline": 84,
+      "candidate": 84
+    },
+    {
+      "workload": "replay",
+      "profiled": false,
+      "repeat": 0,
+      "counter": "object_put_bytes",
+      "baseline": 66857,
+      "candidate": 66857
+    },
+    {
+      "workload": "replay",
+      "profiled": false,
+      "repeat": 1,
+      "counter": "object_puts",
+      "baseline": 84,
+      "candidate": 84
+    },
+    {
+      "workload": "replay",
+      "profiled": false,
+      "repeat": 1,
+      "counter": "object_put_bytes",
+      "baseline": 66857,
+      "candidate": 66857
+    },
+    {
+      "workload": "replay",
+      "profiled": false,
+      "repeat": 2,
+      "counter": "object_puts",
+      "baseline": 84,
+      "candidate": 84
+    },
+    {
+      "workload": "replay",
+      "profiled": false,
+      "repeat": 2,
+      "counter": "object_put_bytes",
+      "baseline": 66857,
+      "candidate": 66857
+    },
+    {
+      "workload": "replay",
+      "profiled": true,
+      "repeat": 0,
+      "counter": "object_puts",
+      "baseline": 84,
+      "candidate": 84
+    },
+    {
+      "workload": "replay",
+      "profiled": true,
+      "repeat": 0,
+      "counter": "object_put_bytes",
+      "baseline": 66857,
+      "candidate": 66857
+    },
+    {
+      "workload": "replay",
+      "profiled": true,
+      "repeat": 1,
+      "counter": "object_puts",
+      "baseline": 84,
+      "candidate": 84
+    },
+    {
+      "workload": "replay",
+      "profiled": true,
+      "repeat": 1,
+      "counter": "object_put_bytes",
+      "baseline": 66857,
+      "candidate": 66857
+    },
+    {
+      "workload": "replay",
+      "profiled": true,
+      "repeat": 2,
+      "counter": "object_puts",
+      "baseline": 84,
+      "candidate": 84
+    },
+    {
+      "workload": "replay",
+      "profiled": true,
+      "repeat": 2,
+      "counter": "object_put_bytes",
+      "baseline": 66857,
+      "candidate": 66857
+    }
+  ],
+  "caveats": [
+    "Allocation/reallocation requests and requested bytes are not measured memory-copy traffic.",
+    "Tracked heap byte peak is distinct from RSS and retained-cache accounting.",
+    "Workloads include their fixture setup and independent oracles.",
+    "Short GNU time samples are diagnostic; they do not qualify sustained throughput."
+  ],
+  "validation": {
+    "gate_log": "artifacts/allocation-round4/validation/gate.log",
+    "gate_log_sha256": "e0a74707d55308c55819f1a95a4442734edb0043af12d9d14cd0efc4b64d6a39",
+    "coverage_json": "artifacts/coverage/run-ss0l2HOk/coverage.json",
+    "coverage_json_sha256": "20022279347b25fd4868910ef113383405fe79ade159085420cb5671b773599d",
+    "production_lines": {
+      "count": 35477,
+      "covered": 34421,
+      "percent": 97.02342362657495
+    },
+    "profile": "core",
+    "python_tests_passed": 213,
+    "rust_tests_passed": 816,
+    "manual_rust_tests_ignored": 14,
+    "full_release_qualification_run": false
+  },
+  "raw_evidence_sha256": {
+    "artifacts/allocation-round4/baseline/group-heap-0.dhat.json": "77efa1b5f7099656135e7afddd8c19d723574d691b078812c28a9bdaf3b98832",
+    "artifacts/allocation-round4/baseline/group-heap-0.log": "1ab1e30aa1bd5d382d959d85d9e9b832370e8cc9867142d32e4cef6c928f436d",
+    "artifacts/allocation-round4/baseline/group-heap-0.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/baseline/group-heap-1.dhat.json": "6ceea7405b6d17eb457f92f50f03c7cec8bb6d6497306268728b897271a84433",
+    "artifacts/allocation-round4/baseline/group-heap-1.log": "454ec94e467ef96b3827826d71dc4517c9db9eb6e1f2f90b09b084cf3ea4a2b7",
+    "artifacts/allocation-round4/baseline/group-heap-1.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/baseline/group-heap-2.dhat.json": "67327efcf67a2ef2e63710ce94855db8986c03142f6c9b2f607e8b9bcd6e8712",
+    "artifacts/allocation-round4/baseline/group-heap-2.log": "6486ca1a3b031fbb6c21f69e515fe559cc70afee9ef4a387c3facf1699081d82",
+    "artifacts/allocation-round4/baseline/group-heap-2.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/baseline/group-plain-0.log": "2768867a03696ac1454e5812deca2233da565590105123b4f4065482592be196",
+    "artifacts/allocation-round4/baseline/group-plain-0.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/baseline/group-plain-0.time.txt": "0d95eba8cce32f9d35568ba3e99a9902eb1a24eedd7a21a6382e930d92764694",
+    "artifacts/allocation-round4/baseline/group-plain-1.log": "2768867a03696ac1454e5812deca2233da565590105123b4f4065482592be196",
+    "artifacts/allocation-round4/baseline/group-plain-1.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/baseline/group-plain-1.time.txt": "213d328f9fbf9e5d1174b0510073322ec43db6cfd568c381e0ca4461538c9a8a",
+    "artifacts/allocation-round4/baseline/group-plain-2.log": "2768867a03696ac1454e5812deca2233da565590105123b4f4065482592be196",
+    "artifacts/allocation-round4/baseline/group-plain-2.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/baseline/group-plain-2.time.txt": "bbd33457b022ffb4998539ffa6d9ec96ce9c36a3f5e11c59243ad2974ee1fcd9",
+    "artifacts/allocation-round4/baseline/instrument-lock.log": "b73a7665fafbd506daed8ec146bdb45ccb5d6124664fbde7f6ab4282eef44b6a",
+    "artifacts/allocation-round4/baseline/instrument-metadata.log": "14bd76276dff2271e3c633f10ac54444662214c99246fed7904a0d5f194e05d2",
+    "artifacts/allocation-round4/baseline/instrument-resolved.Cargo.lock": "1af124079575d3df102eb86c5507867052ddb6d743b45235db0f5cd51a59d74b",
+    "artifacts/allocation-round4/baseline/instrumented-source-hashes.json": "ae2f67067afa66869ac1f6c4724e1f51d75b07750df1a76d2eaee601ad27355f",
+    "artifacts/allocation-round4/baseline/join-heap-0.dhat.json": "9a4dcd54fcc776faff39c515bf74317ec05cc6419804b11cafcaaa1272f0fe70",
+    "artifacts/allocation-round4/baseline/join-heap-0.log": "05d040a409ab0803ac0f8798259d28b0b5d2a902e2c147058eca961165af2daa",
+    "artifacts/allocation-round4/baseline/join-heap-0.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/baseline/join-heap-1.dhat.json": "cadbc5eb2c0b6130742e59aeb08b3e0a211ca35dccba06df279936c48dde84d4",
+    "artifacts/allocation-round4/baseline/join-heap-1.log": "837f0242baafa86ae0308c0f950c49a75e5abf50bd59c02e8599dd9c6de3095b",
+    "artifacts/allocation-round4/baseline/join-heap-1.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/baseline/join-heap-2.dhat.json": "e6d2d0416462cdee5951046e78dc8178cf68413341c2638e1b08a449290641ee",
+    "artifacts/allocation-round4/baseline/join-heap-2.log": "78d06a389701bf2b387f1622ab22ed0010d9c4f0c47d28652912f31b10d9c75c",
+    "artifacts/allocation-round4/baseline/join-heap-2.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/baseline/join-plain-0.log": "8c1d4a0aaaa5273c85d3eae2da9bd9619f5f2fa1089be7e43cbcdcf02e723d98",
+    "artifacts/allocation-round4/baseline/join-plain-0.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/baseline/join-plain-0.time.txt": "ca0aed52f4211ebebdba4b4743a01a69e828d70817f42ebd6cd32f4a34876617",
+    "artifacts/allocation-round4/baseline/join-plain-1.log": "c336d596e82a8f9a129621a5118650c4a735ca5dcdfb2c96fd4a2d773a51340b",
+    "artifacts/allocation-round4/baseline/join-plain-1.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/baseline/join-plain-1.time.txt": "5b0ecdd45f12edc0e5cd0435d17fc1b88e11ba960086590d612490beb909b24a",
+    "artifacts/allocation-round4/baseline/join-plain-2.log": "1099a996a387a63e2dbd0f692bc200abd384e6d6f7ffd12a7f1a15d344faa60b",
+    "artifacts/allocation-round4/baseline/join-plain-2.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/baseline/join-plain-2.time.txt": "958c7e3d666b4a3493d30d7c0ee0a9cdc2eda1878ba3625ca9adadc77d660c32",
+    "artifacts/allocation-round4/baseline/original-source-hashes.json": "15e6a4b676b6301313c9298beded230e564ae6fd644f3fd5b627f547ec9147c9",
+    "artifacts/allocation-round4/baseline/plain-tests.build.log": "65e0786cc2c82d9b844e99a2a47b736827d4fd481907206d442cc8b5e5be52de",
+    "artifacts/allocation-round4/baseline/processing-heap-0.dhat.json": "82d7046d43f46d7760b580663b6df13a0d7ee0f118eeb7dc764ae6f82da48bfe",
+    "artifacts/allocation-round4/baseline/processing-heap-0.log": "b0bb359bab04712bc68309517b52d5fca613e5af9052c4912bbc6e6be3bd341e",
+    "artifacts/allocation-round4/baseline/processing-heap-0.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/baseline/processing-heap-1.dhat.json": "7750f9609516efbb064d5a31942f6b95fd721ebd20c41734103bb004a6c3c307",
+    "artifacts/allocation-round4/baseline/processing-heap-1.log": "b69c9b514043995a2a1298db27966f57be6818ee4d8464f55259f4bc2ffb1923",
+    "artifacts/allocation-round4/baseline/processing-heap-1.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/baseline/processing-heap-2.dhat.json": "a5d6e002e91e11d9318e6811fea880ee54e7483ad47d5d1d630b21e3ceeb3b89",
+    "artifacts/allocation-round4/baseline/processing-heap-2.log": "6f9e582c7bdcc5cac38c6e804ef6bda1ffa11b183750dfad271b04c936e9f55b",
+    "artifacts/allocation-round4/baseline/processing-heap-2.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/baseline/processing-plain-0.log": "bd9c90e94772732f90ed54b78e8807b2dc24529020514a8827babb5ee64d8ec2",
+    "artifacts/allocation-round4/baseline/processing-plain-0.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/baseline/processing-plain-0.time.txt": "fa506e2810dd0d3c1b1ef7f53169452e91405c6c4ba3f8a84b15b72f922fe5f7",
+    "artifacts/allocation-round4/baseline/processing-plain-1.log": "94f811f7648b9f3710a0d6a960758b24aac86e15d9cb5b6c80919b5ce7cec59f",
+    "artifacts/allocation-round4/baseline/processing-plain-1.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/baseline/processing-plain-1.time.txt": "c885b30a92fa3d4a6ee33207743e410de894e420197ee6c202f9fb526e65b147",
+    "artifacts/allocation-round4/baseline/processing-plain-2.log": "94f811f7648b9f3710a0d6a960758b24aac86e15d9cb5b6c80919b5ce7cec59f",
+    "artifacts/allocation-round4/baseline/processing-plain-2.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/baseline/processing-plain-2.time.txt": "6be6a973faa3159fdb128e2a8276e9f1005b35688ab54a6be411695ed9f22bc1",
+    "artifacts/allocation-round4/baseline/profiled-tests.build.log": "ed2632ce94342dbbe15cd513f6e814bb268af6198a6e66f98b8f3fc52cfeb34a",
+    "artifacts/allocation-round4/baseline/reader-heap-0.dhat.json": "93779c1082f668ad9cbdc3674c7b579c42e45829ea5ea51150e7ce14d0947cf1",
+    "artifacts/allocation-round4/baseline/reader-heap-0.log": "a53da7fcf4e7b19cc7582229af51674db7e9aecb2fe94f4b0a26e298a9450f25",
+    "artifacts/allocation-round4/baseline/reader-heap-0.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/baseline/reader-heap-1.dhat.json": "0cfe611b0c0ab20493751fdc534c9383f341e43bf6fd2ece73be7cc42d0b5688",
+    "artifacts/allocation-round4/baseline/reader-heap-1.log": "c7282deee744bdb76afeffca83d14d6278bdb7696b0a1736ab080441b0b3ce5d",
+    "artifacts/allocation-round4/baseline/reader-heap-1.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/baseline/reader-heap-2.dhat.json": "f4e1839df470f4a83338f9a5a0835e57d3d5f5a84daceb86b9544506d1392442",
+    "artifacts/allocation-round4/baseline/reader-heap-2.log": "a28d2619a3d8027d462eb8008df5206a0aa0450579525413edaf4fdcd988a688",
+    "artifacts/allocation-round4/baseline/reader-heap-2.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/baseline/reader-plain-0.log": "a60e00aea8c8808ab8f6e0c890bf0ae06092296521e4780f60f86ae19e49d79b",
+    "artifacts/allocation-round4/baseline/reader-plain-0.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/baseline/reader-plain-0.time.txt": "f7dd31e01bba12fc9c6d685700aec353ceebc2feab576d12ad1d99170376ca3b",
+    "artifacts/allocation-round4/baseline/reader-plain-1.log": "a585cebe9e734b376fd28e111982393b42000152f52cb770cc039c5b4a0b723e",
+    "artifacts/allocation-round4/baseline/reader-plain-1.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/baseline/reader-plain-1.time.txt": "ee767d9167d20f1ed7fc571674c5741b73f37490a2df8efc60c04cb30eb4fa21",
+    "artifacts/allocation-round4/baseline/reader-plain-2.log": "655514bde995838eb2a9b3dbe98fd7feba82ad8610ff9851ed42a368973fc679",
+    "artifacts/allocation-round4/baseline/reader-plain-2.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/baseline/reader-plain-2.time.txt": "710be7406d82fafa852c5006a6b206e3419426173e2dcd76bfc05fcc05e4500d",
+    "artifacts/allocation-round4/baseline/replay-heap-0.dhat.json": "b861bf24cbfa2a93d6ad233bc72d72280ad51cc115811f5b217e00e4e9a996cb",
+    "artifacts/allocation-round4/baseline/replay-heap-0.log": "50badedfc25bb4075b86ed8209c1d6ff4dcc762df85a50f9b0240bd980949a4f",
+    "artifacts/allocation-round4/baseline/replay-heap-0.replay.json": "bb99fd60dce17550d394f1519fe463be0baf58dfff5d0392271d141ccf5849a4",
+    "artifacts/allocation-round4/baseline/replay-heap-0.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/baseline/replay-heap-1.dhat.json": "3815b788b6b8d4f66637d7a83304696ff456bcfceae0b2aba0433aa716774cbe",
+    "artifacts/allocation-round4/baseline/replay-heap-1.log": "7a7e99ce7f5ba03b1a50e21c98a9e63f861b33fcef6e8d727f59e8fbd858a26b",
+    "artifacts/allocation-round4/baseline/replay-heap-1.replay.json": "cb1364ec314c759d09a05cdfa714ed4f43473aa93f2b12f63ba49f68035471fa",
+    "artifacts/allocation-round4/baseline/replay-heap-1.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/baseline/replay-heap-2.dhat.json": "931de5aaadf6d89d5b87c7fb5420b04f0a12b529f981d362b36759012b8ca441",
+    "artifacts/allocation-round4/baseline/replay-heap-2.log": "e644c77f8f809b3f95f239c5e93322ead06cdf9d633e81027e2ecf27b70f4a1c",
+    "artifacts/allocation-round4/baseline/replay-heap-2.replay.json": "67136c15a5d68b28a22bf7c7d505d6cb2e782061d09e305a927e31e3c5682302",
+    "artifacts/allocation-round4/baseline/replay-heap-2.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/baseline/replay-plain-0.log": "69f029f996a15a8ed65e92c0cce9b38dce0285ce1d84a116bc51957f407decfc",
+    "artifacts/allocation-round4/baseline/replay-plain-0.replay.json": "71101417838dd53f69fa7c759a7013709bcd2faaad4e22da82f976945431a209",
+    "artifacts/allocation-round4/baseline/replay-plain-0.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/baseline/replay-plain-0.time.txt": "2220f5d7f3de89f2a0afb3eda5b1c67ef51d1f5304da35d51a03ba44d78bc0f6",
+    "artifacts/allocation-round4/baseline/replay-plain-1.log": "eb9a9e32dd821e6b69cfba9f4928e88a6c47c4bd6af32826b91b225a8e309cd8",
+    "artifacts/allocation-round4/baseline/replay-plain-1.replay.json": "5a8e61562eea960277c554a1c33466c12d02596257f0a80a5c6dd3ca31d1a80f",
+    "artifacts/allocation-round4/baseline/replay-plain-1.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/baseline/replay-plain-1.time.txt": "66bb7396a882329944c2d0c78a34e77f55493dbf90a3266c2121a4b1f478f0ab",
+    "artifacts/allocation-round4/baseline/replay-plain-2.log": "d000e56f255ed0e0a3d418bcfe0cf8f3074bcd5857532b149bec1d7718290ce2",
+    "artifacts/allocation-round4/baseline/replay-plain-2.replay.json": "d68be5cda117678685a4b73c0a98430d7f140f5ee7cdda480669269c4fafcfb3",
+    "artifacts/allocation-round4/baseline/replay-plain-2.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/baseline/replay-plain-2.time.txt": "6d1aa558fcf118610d52a394d0f1bbd3cde482ca85c9491d13b478c89ea3554c",
+    "artifacts/allocation-round4/baseline/report.json": "6c027512bdc419781fa0c33f2dd82bf044b1754423a78f94df2ba1fbcf0c076a",
+    "artifacts/allocation-round4/baseline/source-hashes.json": "678509dbf5335bc4ceab02882e5d7989984098938b68323fc0b9ce8b592d1873",
+    "artifacts/allocation-round4/baseline/spill-heap-0.dhat.json": "ec06c35ea31b78d5c7b835cb2e5b0767453e64598733cdbc6fa53b7d24a2c9a7",
+    "artifacts/allocation-round4/baseline/spill-heap-0.log": "cb31727854456a5e298ae213f0169010e47a43f3bad25c68f68ac26480055b9c",
+    "artifacts/allocation-round4/baseline/spill-heap-0.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/baseline/spill-heap-1.dhat.json": "332fbcc91c832aa4993a71a49a98ca28c726768f1cfcc85b3edc25afaa3410e3",
+    "artifacts/allocation-round4/baseline/spill-heap-1.log": "175646851e747fa9783b1de8379b13f932d74b6c408d0951745e8ff72752ae4b",
+    "artifacts/allocation-round4/baseline/spill-heap-1.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/baseline/spill-heap-2.dhat.json": "39d2892a6ff1dbb6397029b0924c482c73d68f89745560dec6f69855b4c33352",
+    "artifacts/allocation-round4/baseline/spill-heap-2.log": "474f3c2b35665a03e7b80b260a388d07c13f9e2d5b7b90cc57b7db019559b063",
+    "artifacts/allocation-round4/baseline/spill-heap-2.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/baseline/spill-plain-0.log": "c8745b80861d443624edb2c87bb1ba9f1064821325d356c0575380e1ff4c6d77",
+    "artifacts/allocation-round4/baseline/spill-plain-0.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/baseline/spill-plain-0.time.txt": "5bc4c6e22b606222b9d85719a4cef5f0192cdc4ddcb4a7f5b576cf2da1c662d9",
+    "artifacts/allocation-round4/baseline/spill-plain-1.log": "c8745b80861d443624edb2c87bb1ba9f1064821325d356c0575380e1ff4c6d77",
+    "artifacts/allocation-round4/baseline/spill-plain-1.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/baseline/spill-plain-1.time.txt": "ce0e7f05295ca12b5b015b31bbe5e46ceace1a967ee523895bdad213e1267e0c",
+    "artifacts/allocation-round4/baseline/spill-plain-2.log": "c8745b80861d443624edb2c87bb1ba9f1064821325d356c0575380e1ff4c6d77",
+    "artifacts/allocation-round4/baseline/spill-plain-2.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/baseline/spill-plain-2.time.txt": "93a0ed42cf88fb47940c7b012822ca946f65b48758e6bdeb4ade7a62e7573d56",
+    "artifacts/allocation-round4/baseline/spill_strings-heap-0.dhat.json": "fae3e1a051306a12fa405191de178f5e911b87185c6f3f5b1114aa4c5cdb9904",
+    "artifacts/allocation-round4/baseline/spill_strings-heap-0.log": "5bf2262ff311e6da5c15e3fa5c8addb0900dcf623f5123aff6f9ebc4f05fd89b",
+    "artifacts/allocation-round4/baseline/spill_strings-heap-0.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/baseline/spill_strings-heap-1.dhat.json": "d3f50d39e1e65dd1b995d522e4d00e2e429015ba035ba466ab99e7434152adbb",
+    "artifacts/allocation-round4/baseline/spill_strings-heap-1.log": "1e2a7f3d44231fe7e55f86e6d848eb9a4b57425b9d30789c45026a5d8d18059f",
+    "artifacts/allocation-round4/baseline/spill_strings-heap-1.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/baseline/spill_strings-heap-2.dhat.json": "a46ef7803f9917d49466f26c815558bdd18a085e8ec70a28fff7ca2d760e849e",
+    "artifacts/allocation-round4/baseline/spill_strings-heap-2.log": "91b781767c49fd8371cc2469af2ed8e1f0807fc288d2dc3ca965e732f730a166",
+    "artifacts/allocation-round4/baseline/spill_strings-heap-2.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/baseline/spill_strings-plain-0.log": "8da4897f2c47ad3ae3aaca001cbc705030302ef5c7412da00bb507096db0cd85",
+    "artifacts/allocation-round4/baseline/spill_strings-plain-0.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/baseline/spill_strings-plain-0.time.txt": "8b3e54c4ad30cba931ca650bf289357ec98de7cb694933ea7a80469d26b88b7a",
+    "artifacts/allocation-round4/baseline/spill_strings-plain-1.log": "8da4897f2c47ad3ae3aaca001cbc705030302ef5c7412da00bb507096db0cd85",
+    "artifacts/allocation-round4/baseline/spill_strings-plain-1.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/baseline/spill_strings-plain-1.time.txt": "fb5061fcfc2fd1f9ce0741cff8d4553f33dbe36b47fbc25bac67bd5c5f29a45c",
+    "artifacts/allocation-round4/baseline/spill_strings-plain-2.log": "8da4897f2c47ad3ae3aaca001cbc705030302ef5c7412da00bb507096db0cd85",
+    "artifacts/allocation-round4/baseline/spill_strings-plain-2.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/baseline/spill_strings-plain-2.time.txt": "901595b29bd92f9f29348b9be4f153e9048a95095c42ea611144c7807bbde08e",
+    "artifacts/allocation-round4/baseline/statistics-heap-0.dhat.json": "51b19223700909337ec48163f8b5cb0ad437b8fe5febb45e939e72b0b392eefb",
+    "artifacts/allocation-round4/baseline/statistics-heap-0.log": "17d2bb5508c710616b77cca0766f05ff452d9baf74eca4465e259d5f9323258c",
+    "artifacts/allocation-round4/baseline/statistics-heap-0.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/baseline/statistics-heap-1.dhat.json": "928c7af420794743b1f2e410f30e19d388511e5acf48e6ecbabc58dabbdcdbc1",
+    "artifacts/allocation-round4/baseline/statistics-heap-1.log": "27da3af1a750ab8f1845c8a408e13fd3ce59e9e96a94988ee06e1020c4d0f5c6",
+    "artifacts/allocation-round4/baseline/statistics-heap-1.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/baseline/statistics-heap-2.dhat.json": "4c538e26f351763b3b5f1967045e0fb6d46871cca2ed93769043dcc20608c1ed",
+    "artifacts/allocation-round4/baseline/statistics-heap-2.log": "b3396214ea4bdbe46462526de927691bf66efbae75ffb70ae1c8f584fea42fd9",
+    "artifacts/allocation-round4/baseline/statistics-heap-2.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/baseline/statistics-plain-0.log": "02dbfa8701b20c9eba71fedf52fdf35be0da66fda89118d10f1b642e7a17f18f",
+    "artifacts/allocation-round4/baseline/statistics-plain-0.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/baseline/statistics-plain-0.time.txt": "04b49e64aa5803853460f3c3c0c6255eabff64ad02ff3d790978d2fae915112b",
+    "artifacts/allocation-round4/baseline/statistics-plain-1.log": "02dbfa8701b20c9eba71fedf52fdf35be0da66fda89118d10f1b642e7a17f18f",
+    "artifacts/allocation-round4/baseline/statistics-plain-1.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/baseline/statistics-plain-1.time.txt": "b3e56b4d34468b62d6bfe67891b9e85e38612b48d34ed50ec39aa6826523e3d8",
+    "artifacts/allocation-round4/baseline/statistics-plain-2.log": "744642bb901e370c2a7ba0e9d52b57e43cd891bffe77d7377f592ee33b36ccf6",
+    "artifacts/allocation-round4/baseline/statistics-plain-2.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/baseline/statistics-plain-2.time.txt": "906b2952ed89877df89dcf153b99a7f58f9d32b5de0ff6b9df55938eb1d958c3",
+    "artifacts/allocation-round4/baseline/topk-heap-0.dhat.json": "74c2c39a516d8b0beba48aa3b8907ba0cf77fdad486b015a78833be8c84f896e",
+    "artifacts/allocation-round4/baseline/topk-heap-0.log": "7aba22d8c976b44eb34a05bb50031c95f163c662ef8054b5628d6b19cab12742",
+    "artifacts/allocation-round4/baseline/topk-heap-0.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/baseline/topk-heap-1.dhat.json": "92a3ce35a8f186d613e5a873d463dc21902463256e812a88a3bb1e358c0e6916",
+    "artifacts/allocation-round4/baseline/topk-heap-1.log": "02dac65c1fdbebe288e6c0b0d218a7ae2855f07487bf01820c99707caba272a8",
+    "artifacts/allocation-round4/baseline/topk-heap-1.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/baseline/topk-heap-2.dhat.json": "a94c3cc144114f716bd385c26ff5289328be043cd13a6dceeec0693601554011",
+    "artifacts/allocation-round4/baseline/topk-heap-2.log": "8009b2e89e1e3d8c50fe570b6f1b6a468d7fb3b970b72c95f6fb6d0371b7261d",
+    "artifacts/allocation-round4/baseline/topk-heap-2.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/baseline/topk-plain-0.log": "074c55593d7e455e29535bc09138c28175285f163dda78a08e7888cc1c42bd68",
+    "artifacts/allocation-round4/baseline/topk-plain-0.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/baseline/topk-plain-0.time.txt": "0981b60d0aaeb7148b39d15f1333f9b5f10fd0b7b757b383e4b20749b5407717",
+    "artifacts/allocation-round4/baseline/topk-plain-1.log": "074c55593d7e455e29535bc09138c28175285f163dda78a08e7888cc1c42bd68",
+    "artifacts/allocation-round4/baseline/topk-plain-1.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/baseline/topk-plain-1.time.txt": "372a74f8212a2b8b5d5f940a9e0da8f10ea78bbfbe6d4c5bfa32db7ed6f4a213",
+    "artifacts/allocation-round4/baseline/topk-plain-2.log": "074c55593d7e455e29535bc09138c28175285f163dda78a08e7888cc1c42bd68",
+    "artifacts/allocation-round4/baseline/topk-plain-2.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/baseline/topk-plain-2.time.txt": "7a03513054bd566e91407d2897c426d0a1340dca4837647291a1f5d9cd590503",
+    "artifacts/allocation-round4/candidate/group-heap-0.dhat.json": "561621c214536aa721283a75c6c464850650b3781fc9f171c333573dd16024ea",
+    "artifacts/allocation-round4/candidate/group-heap-0.log": "86386430e660f0b36f677425a23449d267edd957a93e7247b0283ec81972d924",
+    "artifacts/allocation-round4/candidate/group-heap-0.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/candidate/group-heap-1.dhat.json": "5914dbaab5fb226efaff49d197c44ee6f187f64d83a3e513d063293bf6af56e2",
+    "artifacts/allocation-round4/candidate/group-heap-1.log": "a54ce547edacaabe5a99bbe36c67e0f4340985c8d1a09c690d62e4557243c52a",
+    "artifacts/allocation-round4/candidate/group-heap-1.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/candidate/group-heap-2.dhat.json": "5d01e002deefec21a7af7399f61f7856cfc60643b887890e01deca7bdeda4de8",
+    "artifacts/allocation-round4/candidate/group-heap-2.log": "97c78a6a55b704cf2e594f129308a3b4071fbebe254f728f83326b83242f3603",
+    "artifacts/allocation-round4/candidate/group-heap-2.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/candidate/group-plain-0.log": "1de12d0647d90be78cf7675dc0c5ae20a6cd0c2b2502921103e8f993024ff4fb",
+    "artifacts/allocation-round4/candidate/group-plain-0.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/candidate/group-plain-0.time.txt": "f02775a4f5236dca0f79655ed2efe54a392f4f346e77c8634df88ff4a98c545e",
+    "artifacts/allocation-round4/candidate/group-plain-1.log": "1de12d0647d90be78cf7675dc0c5ae20a6cd0c2b2502921103e8f993024ff4fb",
+    "artifacts/allocation-round4/candidate/group-plain-1.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/candidate/group-plain-1.time.txt": "211f0fcd743580e676d407abeb5b86aeb5382825373d94fefa316b2b44f1e778",
+    "artifacts/allocation-round4/candidate/group-plain-2.log": "daeb77d136aee907efe276948d42a8f6d2a1dd9b9363ca60276148dd5e14284e",
+    "artifacts/allocation-round4/candidate/group-plain-2.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/candidate/group-plain-2.time.txt": "b69edf2088f5f01873afe07e10fcbd5d6e9a424cafd4553b153b607a37199059",
+    "artifacts/allocation-round4/candidate/instrument-lock.log": "b73a7665fafbd506daed8ec146bdb45ccb5d6124664fbde7f6ab4282eef44b6a",
+    "artifacts/allocation-round4/candidate/instrument-metadata.log": "45d593d5788e00eb96c37ad118542c202643b1d3337a95905b26e8f85e4d87b8",
+    "artifacts/allocation-round4/candidate/instrument-resolved.Cargo.lock": "1af124079575d3df102eb86c5507867052ddb6d743b45235db0f5cd51a59d74b",
+    "artifacts/allocation-round4/candidate/instrumented-source-hashes.json": "5195094695daaf77ab23909ef99444a2ed4ceece9c73cbec4c529672bfb98588",
+    "artifacts/allocation-round4/candidate/join-heap-0.dhat.json": "bf7747f1bb63748b07d9e5fec49abdcb1a051c8dc0f8c393a0ae0291dc1f54e4",
+    "artifacts/allocation-round4/candidate/join-heap-0.log": "1a48a46d3c52a707950b8e551767d0330237a86e7353a5174fbe3f5317d7d17c",
+    "artifacts/allocation-round4/candidate/join-heap-0.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/candidate/join-heap-1.dhat.json": "cdf3d333aacd5321ca238ce6a6c46ff31ece6a23855ca78823d094d4072be956",
+    "artifacts/allocation-round4/candidate/join-heap-1.log": "0f5655bb1ec2f148660fb31b946c230b824a6a9cd82869d4773783c479c0b5c5",
+    "artifacts/allocation-round4/candidate/join-heap-1.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/candidate/join-heap-2.dhat.json": "cf2b7917798fafcb41e755306d42cd9c6ecfc1c77ae564734c53db29174f79cd",
+    "artifacts/allocation-round4/candidate/join-heap-2.log": "cdca73274e6c2ad7dc9b18663624c5907106def92108a29fa6046e94493ddbf2",
+    "artifacts/allocation-round4/candidate/join-heap-2.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/candidate/join-plain-0.log": "7346889b686915509140407b9b392cd629475fef14b64ccf78f78adfbbd1d0fa",
+    "artifacts/allocation-round4/candidate/join-plain-0.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/candidate/join-plain-0.time.txt": "72096a3fc3d017b99bdfa455f1692498da8be5895d44e639fd9e2c9119b489c4",
+    "artifacts/allocation-round4/candidate/join-plain-1.log": "1720c8da4deefe1cb88780a2f01a1c68647d0ace803a06bd5c5e084d14d8ce63",
+    "artifacts/allocation-round4/candidate/join-plain-1.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/candidate/join-plain-1.time.txt": "95f25bc448ba6f935c38337d2ffe08a28f7058271c60a7eb478df84e2836c19b",
+    "artifacts/allocation-round4/candidate/join-plain-2.log": "916f3d2242a0ad3fbb8ded198f8821bf4e4c11ff3e922e09c36bb6cf70d189fe",
+    "artifacts/allocation-round4/candidate/join-plain-2.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/candidate/join-plain-2.time.txt": "766fe71a870c8bce4bec9039ba75ff7b7634ecd9149a4630f015325fb6b6a740",
+    "artifacts/allocation-round4/candidate/original-source-hashes.json": "b33941fd1410fa05b1ac0e196ebf8e2125058a8e90bb2dcf0f896c24f620a7d5",
+    "artifacts/allocation-round4/candidate/plain-tests.build.log": "1c8fa4a96dd77001ecb32601f43284c574543fd0f24f504eb56c5ca5bfac0a6e",
+    "artifacts/allocation-round4/candidate/processing-heap-0.dhat.json": "7542b69e614bfad3263888f193e1bbd31bc70005393762989ab5052bd244bd76",
+    "artifacts/allocation-round4/candidate/processing-heap-0.log": "6f69284c0b756112fdbd59ab66c36c0aa5e9f9da19cbfe823ace56e562491df7",
+    "artifacts/allocation-round4/candidate/processing-heap-0.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/candidate/processing-heap-1.dhat.json": "13e26b4b7c07ea4602f80e6f0856d3138bcc1bc2a37bd47d16394b4b2ec173ea",
+    "artifacts/allocation-round4/candidate/processing-heap-1.log": "d5e9354e704e4148a366e641c9a2d824b18613a8da88d23233fd8832cdec67a0",
+    "artifacts/allocation-round4/candidate/processing-heap-1.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/candidate/processing-heap-2.dhat.json": "8adeae1027df08f47f31581ed9cec1459023d2254c3219b4237d16ba3bece776",
+    "artifacts/allocation-round4/candidate/processing-heap-2.log": "24ef2220f2aee99f020cfb66af2f93b9f5ab77c332a8c3328b0a7ad28b6b225c",
+    "artifacts/allocation-round4/candidate/processing-heap-2.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/candidate/processing-plain-0.log": "646054b40de0b8088e82d5bb1522c0c71b2433e1a3d4620d6e3188dfed09adbc",
+    "artifacts/allocation-round4/candidate/processing-plain-0.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/candidate/processing-plain-0.time.txt": "c1f9f4310fdc8cedc6e487c567ced250b1a6741a616d29f655ef5ff546abffc7",
+    "artifacts/allocation-round4/candidate/processing-plain-1.log": "646054b40de0b8088e82d5bb1522c0c71b2433e1a3d4620d6e3188dfed09adbc",
+    "artifacts/allocation-round4/candidate/processing-plain-1.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/candidate/processing-plain-1.time.txt": "99ac967dac1df6711da3e61d82f53904815b3518aa0f90ba5f3be8572d1efb3f",
+    "artifacts/allocation-round4/candidate/processing-plain-2.log": "646054b40de0b8088e82d5bb1522c0c71b2433e1a3d4620d6e3188dfed09adbc",
+    "artifacts/allocation-round4/candidate/processing-plain-2.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/candidate/processing-plain-2.time.txt": "b0fdcbf2e43a49c424b978571111392a5f88f8b861daacd3703b9d577414a13d",
+    "artifacts/allocation-round4/candidate/profiled-tests.build.log": "b7e98580a2173f1b79e38281177321e129c612278c2ee09785944178581e9055",
+    "artifacts/allocation-round4/candidate/reader-heap-0.dhat.json": "56c33ce39b9fc351d08a2b97f99dfb55915feceae3f55fc656d85fe9bf01d5e2",
+    "artifacts/allocation-round4/candidate/reader-heap-0.log": "e06b257eebaa5896b3221ce818498addf904267ac221f646b71d2548e9e5d467",
+    "artifacts/allocation-round4/candidate/reader-heap-0.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/candidate/reader-heap-1.dhat.json": "bbb097a4f0b0bf3432c388b8e29d969152601720f0218ba566027f55c5a85414",
+    "artifacts/allocation-round4/candidate/reader-heap-1.log": "11d0b86865d3a09904fc2095b2dc7d1790ddb5015acc2c754aba906239bcdb11",
+    "artifacts/allocation-round4/candidate/reader-heap-1.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/candidate/reader-heap-2.dhat.json": "f5d53ecfb5d46ba936cbc5da85f32a63f0619906485be65262004896d6dffcf3",
+    "artifacts/allocation-round4/candidate/reader-heap-2.log": "afd9b84a151f2357416afaf316f32ab552f75284a0babacb845496260e438252",
+    "artifacts/allocation-round4/candidate/reader-heap-2.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/candidate/reader-plain-0.log": "9e11c0b53a534690989c5fc0346b0347d7e10363aad1fea1e1d08d29455e5a27",
+    "artifacts/allocation-round4/candidate/reader-plain-0.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/candidate/reader-plain-0.time.txt": "06c59ad1bca52c0b10f83a66ab96a71112f3cbe2921872992c48f4777b88a3e5",
+    "artifacts/allocation-round4/candidate/reader-plain-1.log": "399a9f96d2a17e72cc25bc472b63c0f18c03981f451c6c0d2d2638dfafbe2839",
+    "artifacts/allocation-round4/candidate/reader-plain-1.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/candidate/reader-plain-1.time.txt": "b973902b0ae64a75d536c54fa5c950fc42bfcc3dda725db9c7afae94d35f3b37",
+    "artifacts/allocation-round4/candidate/reader-plain-2.log": "12157a7d1c44632a56d1ab3318de27988a8f325cca85d11979ac9c84a382092f",
+    "artifacts/allocation-round4/candidate/reader-plain-2.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/candidate/reader-plain-2.time.txt": "f177380c573cd8a9d13d84b802253f337eda51627d08bec81317c88771300a1d",
+    "artifacts/allocation-round4/candidate/replay-heap-0.dhat.json": "b31d216e0d012eada97044de5846655df115a9db12612b1cb279662d6ae352bc",
+    "artifacts/allocation-round4/candidate/replay-heap-0.log": "be4a72ec5b009e45da303f8e5499c6c2707e26d22ea4a2cadd0b30339859cd9d",
+    "artifacts/allocation-round4/candidate/replay-heap-0.replay.json": "c1fce6e27cc2e48d94e52134f2d34076ab3d14e64813a244d6cedaf917ebade9",
+    "artifacts/allocation-round4/candidate/replay-heap-0.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/candidate/replay-heap-1.dhat.json": "c9a519e1c3fe32a3d50983bbcd89797488e8bb695462c705ff7f7b05a32abc9c",
+    "artifacts/allocation-round4/candidate/replay-heap-1.log": "bd8d8ce6dcfbb253ed9c3667328e3eeda6a79b89fd60197fe2928805c818c6eb",
+    "artifacts/allocation-round4/candidate/replay-heap-1.replay.json": "cc2f4cecc495c017351822b1680226dc3884e3c87944927929a81cada94a35cf",
+    "artifacts/allocation-round4/candidate/replay-heap-1.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/candidate/replay-heap-2.dhat.json": "0b57397bc3b37a6087b0b9d5ba0db26c77a9a634284d76b3fa8651648e760ec9",
+    "artifacts/allocation-round4/candidate/replay-heap-2.log": "6c48d0c79a182276d3720bea16100ce92cd5cd3f9c159832386a6210ed23a905",
+    "artifacts/allocation-round4/candidate/replay-heap-2.replay.json": "d963f4848c43c82c242c747b505a4db89aca49638fb51b41b418342a98cb4a3e",
+    "artifacts/allocation-round4/candidate/replay-heap-2.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/candidate/replay-plain-0.log": "cb218312b91740fc9ea16800f59cf2668ccf54122f0f586a3287b92b41a1d8ed",
+    "artifacts/allocation-round4/candidate/replay-plain-0.replay.json": "6f9880088011e8ca99ad281313b46ea574d575adaa9a9b05c1a0a21e01c5199c",
+    "artifacts/allocation-round4/candidate/replay-plain-0.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/candidate/replay-plain-0.time.txt": "411dff30ae5296c6d15af692a56db7ca7434dcb46e771ef9483108d884792924",
+    "artifacts/allocation-round4/candidate/replay-plain-1.log": "3868ba4b8ea6e98ba7aa871362f8660221145998161935afcf42510e96ab9452",
+    "artifacts/allocation-round4/candidate/replay-plain-1.replay.json": "b7f25f81c0897e5e6b67bcec1f2e6fe1c84abaffc1d3b7c925df8a28706fff71",
+    "artifacts/allocation-round4/candidate/replay-plain-1.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/candidate/replay-plain-1.time.txt": "3267cc5535f5ec248359d7af1ea5a58f4b7815f4acf357fcc5cebf48f1b718f8",
+    "artifacts/allocation-round4/candidate/replay-plain-2.log": "ee63d6b40c3cf3d6f19db88c4721f2639cdf253298113f16909c16e318675643",
+    "artifacts/allocation-round4/candidate/replay-plain-2.replay.json": "fa018b52a01575a93662dbf2c2310abfc2736bc8effdda483c581748ad4f3d61",
+    "artifacts/allocation-round4/candidate/replay-plain-2.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/candidate/replay-plain-2.time.txt": "3db62679a870e0117a5bc2ee09d7d4f901c184ebe67a604717183e83ee24020e",
+    "artifacts/allocation-round4/candidate/report.json": "1ad83edaaf1624c9d6cd8eecc6dc9b5e128cef6d4739f5007eedc7b293532539",
+    "artifacts/allocation-round4/candidate/source-hashes.json": "4334530750e8197b8fbd285fa8baf240e8c14658543a6dcaa3833268acc3bf35",
+    "artifacts/allocation-round4/candidate/spill-heap-0.dhat.json": "cd6f9e5aee96075c90c3cc90e8d44403ba3d4ea4262dcc3065bae3e898b2bfb5",
+    "artifacts/allocation-round4/candidate/spill-heap-0.log": "75fcf57eaecba97634ae04af704daa0beef06093f7bb22daa03f6bfc69d841f1",
+    "artifacts/allocation-round4/candidate/spill-heap-0.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/candidate/spill-heap-1.dhat.json": "5fa9b8a8957af8e1de06d9fc56d2d4db988c6cf5cdee53aece299b36a1b39a51",
+    "artifacts/allocation-round4/candidate/spill-heap-1.log": "85c643ef36c41641061f5d7dca4a2a3da03464423fa42e619181b617286aea14",
+    "artifacts/allocation-round4/candidate/spill-heap-1.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/candidate/spill-heap-2.dhat.json": "ad657389c96d3227291bc3a3a8e526ab24d03490775325b78ac7f47698372e85",
+    "artifacts/allocation-round4/candidate/spill-heap-2.log": "ab76125bc42c919fb1e1806befd15d871c9344b5d341abc921cffe47b041e658",
+    "artifacts/allocation-round4/candidate/spill-heap-2.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/candidate/spill-plain-0.log": "c15a2ab5745d1d4745fa73dedf309897e0ce7c01286c8e2f70f799eb5aba6319",
+    "artifacts/allocation-round4/candidate/spill-plain-0.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/candidate/spill-plain-0.time.txt": "bf847d5b4e1c291b2a9591540d646997ce4c9e047a86a3ea5769c70fca250fff",
+    "artifacts/allocation-round4/candidate/spill-plain-1.log": "bfd5000ee3d7dfaaf0f31e8afd4664ceb815854d2ea6bb36c5a778959f6a19d4",
+    "artifacts/allocation-round4/candidate/spill-plain-1.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/candidate/spill-plain-1.time.txt": "bb15317b30aa017d7bbe68419110670f47f485abe42fe4f339315ff9bcccf862",
+    "artifacts/allocation-round4/candidate/spill-plain-2.log": "bfd5000ee3d7dfaaf0f31e8afd4664ceb815854d2ea6bb36c5a778959f6a19d4",
+    "artifacts/allocation-round4/candidate/spill-plain-2.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/candidate/spill-plain-2.time.txt": "d43edff2b2eb55e6e3ba913e1c98746353dc3f546090c99fcc06a89383c3fca6",
+    "artifacts/allocation-round4/candidate/spill_strings-heap-0.dhat.json": "81ed71441fadc53cb53444cb61a83c840209452858feb735a74a317db928fd0f",
+    "artifacts/allocation-round4/candidate/spill_strings-heap-0.log": "b107c938990985aed4105e82808984968d7958ca2b1628b87cd7d666cfc006c7",
+    "artifacts/allocation-round4/candidate/spill_strings-heap-0.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/candidate/spill_strings-heap-1.dhat.json": "b012a74621f40cb5f50173a130474ce56f06b05d1eba381117c41765bb7cf1e1",
+    "artifacts/allocation-round4/candidate/spill_strings-heap-1.log": "e44c9244b9f9e7fb3ecbc0ce4b5ff7ccaa9b009404517a51d956202ee446a683",
+    "artifacts/allocation-round4/candidate/spill_strings-heap-1.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/candidate/spill_strings-heap-2.dhat.json": "f8c284fcf0024ddbb76c303578918e112eecfb285c62226ee9caa3f5f28ea036",
+    "artifacts/allocation-round4/candidate/spill_strings-heap-2.log": "9b5a6021f3d9d2c2ec206f65d332453d60c34c561ebc18d3c388a056d8edf3f1",
+    "artifacts/allocation-round4/candidate/spill_strings-heap-2.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/candidate/spill_strings-plain-0.log": "502819f7a120301ade4bebfa3a4a1d7750ced1d92000b9a91533c785df8fd9ee",
+    "artifacts/allocation-round4/candidate/spill_strings-plain-0.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/candidate/spill_strings-plain-0.time.txt": "ad80b9525eb58181bc40daeffcfd8dcec1eb412c583caa52b47b737dc5324bb0",
+    "artifacts/allocation-round4/candidate/spill_strings-plain-1.log": "502819f7a120301ade4bebfa3a4a1d7750ced1d92000b9a91533c785df8fd9ee",
+    "artifacts/allocation-round4/candidate/spill_strings-plain-1.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/candidate/spill_strings-plain-1.time.txt": "818ba5de89ce9629f0e66d25551b3e431c2701d15a60aeadb920e6f70bc19dae",
+    "artifacts/allocation-round4/candidate/spill_strings-plain-2.log": "502819f7a120301ade4bebfa3a4a1d7750ced1d92000b9a91533c785df8fd9ee",
+    "artifacts/allocation-round4/candidate/spill_strings-plain-2.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/candidate/spill_strings-plain-2.time.txt": "7f0d92178173dc6904d131beaa90933bcfeb43bf4deb87e213a4ba07de3bc650",
+    "artifacts/allocation-round4/candidate/statistics-heap-0.dhat.json": "532f0a41ab9c8857754d2e9aa0500930824b56f8b78a2374a0df89cf74d45cb3",
+    "artifacts/allocation-round4/candidate/statistics-heap-0.log": "2c6a9cf06ede70d34a25168bfc078381d6671ec0c02e0902aabccbe77e5c0567",
+    "artifacts/allocation-round4/candidate/statistics-heap-0.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/candidate/statistics-heap-1.dhat.json": "43f6959e2166b784b51edc9087afce3dea5bb7ca962d6f46024d90aab3009da8",
+    "artifacts/allocation-round4/candidate/statistics-heap-1.log": "2a86697762b4dd01ea4985290e13519b5d1346eef5a041fb7eca798547c95068",
+    "artifacts/allocation-round4/candidate/statistics-heap-1.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/candidate/statistics-heap-2.dhat.json": "a1aaae0ec2ed995536d01b42be1b21caa3c88564886948864c39d62ff1728afa",
+    "artifacts/allocation-round4/candidate/statistics-heap-2.log": "c737a31212d9010e56563e54bd8fddb06dceb02fd207953d69d7db0daa7f77ea",
+    "artifacts/allocation-round4/candidate/statistics-heap-2.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/candidate/statistics-plain-0.log": "e3d78166060429d9107e59a34359711f4ee0e89f1c194e29d599f1bd48905a0a",
+    "artifacts/allocation-round4/candidate/statistics-plain-0.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/candidate/statistics-plain-0.time.txt": "d3b0e92331cefabe042b83deb273f991d1348e4186b4db0b1b124537afa1ae23",
+    "artifacts/allocation-round4/candidate/statistics-plain-1.log": "e3d78166060429d9107e59a34359711f4ee0e89f1c194e29d599f1bd48905a0a",
+    "artifacts/allocation-round4/candidate/statistics-plain-1.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/candidate/statistics-plain-1.time.txt": "7540364f226860361b69a9d5c5f28e9d58a73356b7e5517aaf46723a04973478",
+    "artifacts/allocation-round4/candidate/statistics-plain-2.log": "d7b30d300e9bfa22d1e2e43b369a9f3da8e3dab7394b2cef49f44ac21391dcdb",
+    "artifacts/allocation-round4/candidate/statistics-plain-2.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/candidate/statistics-plain-2.time.txt": "8568d534493129fef10c288d287cc73df576c7bcff4d7e397e52c407e00a3888",
+    "artifacts/allocation-round4/candidate/topk-heap-0.dhat.json": "9fbfe7cea334c4f74705ffe9633276e7c5c275ce4ccc2fd341826ed4449cec60",
+    "artifacts/allocation-round4/candidate/topk-heap-0.log": "f942ed5d43c270d33b030f6b5bc48fff6298e4fefff313bfa750f3790ed8c8b1",
+    "artifacts/allocation-round4/candidate/topk-heap-0.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/candidate/topk-heap-1.dhat.json": "eb6128a65c926d94c20837cf4c400525e023dd47239af2cfb62f0ecb3d75cbca",
+    "artifacts/allocation-round4/candidate/topk-heap-1.log": "26dbb839c0dbc85cd9671187f90334b5c2d85a5746bc3507a385ab23bda75746",
+    "artifacts/allocation-round4/candidate/topk-heap-1.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/candidate/topk-heap-2.dhat.json": "1842af108b35c0febfcb4740f89b3074e9f20f6538021648ffbfde25df201b6e",
+    "artifacts/allocation-round4/candidate/topk-heap-2.log": "7a0d18691938b738bfe9952f747f657dc2085437d273c269e7242dc203bbd003",
+    "artifacts/allocation-round4/candidate/topk-heap-2.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/candidate/topk-plain-0.log": "fce87f3ad61e7112559feffc47bbb67c1ff541f6905e21a03353bab2eb0744d6",
+    "artifacts/allocation-round4/candidate/topk-plain-0.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/candidate/topk-plain-0.time.txt": "97e75f465edd6a8264dc9cc55c644f95d4b55eb204e8fb5d375a8ff793ff00dd",
+    "artifacts/allocation-round4/candidate/topk-plain-1.log": "fdd210380e0dc6adce06a43b964b6ed8302aa568018f2d740595363ed2557ac1",
+    "artifacts/allocation-round4/candidate/topk-plain-1.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/candidate/topk-plain-1.time.txt": "411ebb35172098362516950fff1cdac62b60b4d1de99322647859bfe17890e8a",
+    "artifacts/allocation-round4/candidate/topk-plain-2.log": "fdd210380e0dc6adce06a43b964b6ed8302aa568018f2d740595363ed2557ac1",
+    "artifacts/allocation-round4/candidate/topk-plain-2.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/candidate/topk-plain-2.time.txt": "49d5ca273fa7a8f2684d20051a42cb8b22b19459b5b42687a86a9502e3046a1a",
+    "artifacts/allocation-round4/candidate/working-tree.patch": "e1bb262c2023db60e49734fcafbc28bfd94eb193175c461ee2b042ded9ef8e5f",
+    "artifacts/allocation-round4/paired/baseline-group-plain-0.log": "2768867a03696ac1454e5812deca2233da565590105123b4f4065482592be196",
+    "artifacts/allocation-round4/paired/baseline-group-plain-0.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/baseline-group-plain-0.time.txt": "4b92bebeeb329d9410b32b1a67d724d3fbabcc03f5101b42a79407c3dd7aae0e",
+    "artifacts/allocation-round4/paired/baseline-group-plain-1.log": "2768867a03696ac1454e5812deca2233da565590105123b4f4065482592be196",
+    "artifacts/allocation-round4/paired/baseline-group-plain-1.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/baseline-group-plain-1.time.txt": "f1adad5b5f5c7c9e12bb224e5090b24ab8405112cc32debad5e01ea55a8bf1ae",
+    "artifacts/allocation-round4/paired/baseline-group-plain-2.log": "2768867a03696ac1454e5812deca2233da565590105123b4f4065482592be196",
+    "artifacts/allocation-round4/paired/baseline-group-plain-2.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/baseline-group-plain-2.time.txt": "2fc50450fc282fd1329a35674f7af67661024e124180b4d300667c5b1c5d041e",
+    "artifacts/allocation-round4/paired/baseline-group-profiled-0.dhat.json": "afb2ee90a189373f316c4abb48495a97b6ccce629ce183947ae1112334a55b02",
+    "artifacts/allocation-round4/paired/baseline-group-profiled-0.log": "f54b0b0398de86723f4a115dd7d09a47fc68e9e724073595492106189391688e",
+    "artifacts/allocation-round4/paired/baseline-group-profiled-0.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/baseline-group-profiled-1.dhat.json": "e8c9d55c84ec4f538ff4acba27cac7bcb75250c5a86ab1146b18e9b10b05d51f",
+    "artifacts/allocation-round4/paired/baseline-group-profiled-1.log": "33c3566c5f074616512b5915c9dd87775b5c17bc7ec564414c5a47ce0bed6fee",
+    "artifacts/allocation-round4/paired/baseline-group-profiled-1.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/baseline-group-profiled-2.dhat.json": "ff240d82beb06c60ab9d161195f37df8b337c9ad78b4258c84a24022de6bdff3",
+    "artifacts/allocation-round4/paired/baseline-group-profiled-2.log": "adfaed6ec16c253b4b8d1128e1c3798ee93549d8f63a3b68baa9e8d6038eee1f",
+    "artifacts/allocation-round4/paired/baseline-group-profiled-2.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/baseline-join-plain-0.log": "489ed1f742d227eaaef910cd0d65a7d4672c94cdb4c5977c1b292544a94d2f0d",
+    "artifacts/allocation-round4/paired/baseline-join-plain-0.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/baseline-join-plain-0.time.txt": "5e02d711d3d63ebc1b4dd89b7e22007c055e57a3ff077ebdbad5426d44b85c17",
+    "artifacts/allocation-round4/paired/baseline-join-plain-1.log": "a0883765a79345c49dc8e3ec6de645bf150d40e375ca8a4b93fb69909a9adf06",
+    "artifacts/allocation-round4/paired/baseline-join-plain-1.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/baseline-join-plain-1.time.txt": "c6bfd8173723b9b372e993ed3cd99351e98ee902a133a4dab24cd46cbcbd349f",
+    "artifacts/allocation-round4/paired/baseline-join-plain-2.log": "c336d596e82a8f9a129621a5118650c4a735ca5dcdfb2c96fd4a2d773a51340b",
+    "artifacts/allocation-round4/paired/baseline-join-plain-2.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/baseline-join-plain-2.time.txt": "1929a8d3e78aa8a458e2461279cc317f020e2d07765b54648210e6a023e70b66",
+    "artifacts/allocation-round4/paired/baseline-join-profiled-0.dhat.json": "4747a84e5f093cd44ccb43f371fb01c1f3f17fefb215b1fbbf296a0adda54956",
+    "artifacts/allocation-round4/paired/baseline-join-profiled-0.log": "db476d62ebc2507d8afdbd65c1067265361a8caece4ccd7ced8472a393229063",
+    "artifacts/allocation-round4/paired/baseline-join-profiled-0.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/baseline-join-profiled-1.dhat.json": "a9cd39a2c3a02cedd0649907dc63f3bf63bbcf5461a7ea84986a47dbb999f699",
+    "artifacts/allocation-round4/paired/baseline-join-profiled-1.log": "8e6774d7253122233e11d47ba970aecf9bcf474d23d64e071ce1cc48ca6dfd68",
+    "artifacts/allocation-round4/paired/baseline-join-profiled-1.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/baseline-join-profiled-2.dhat.json": "6dd5683b123214399aab4cc54142ee49881ac3d6650a1083102d716c869b6b7e",
+    "artifacts/allocation-round4/paired/baseline-join-profiled-2.log": "85e5b82afa90c9ff7c47287c3060807bd7b5057f11a32bdd6d36b091a7ebfd6a",
+    "artifacts/allocation-round4/paired/baseline-join-profiled-2.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/baseline-processing-plain-0.log": "94f811f7648b9f3710a0d6a960758b24aac86e15d9cb5b6c80919b5ce7cec59f",
+    "artifacts/allocation-round4/paired/baseline-processing-plain-0.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/baseline-processing-plain-0.time.txt": "c8cbefdf9340c96527fe6cf37808ab99683d50dc1aeb7da7fded03e1a5506f00",
+    "artifacts/allocation-round4/paired/baseline-processing-plain-1.log": "94f811f7648b9f3710a0d6a960758b24aac86e15d9cb5b6c80919b5ce7cec59f",
+    "artifacts/allocation-round4/paired/baseline-processing-plain-1.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/baseline-processing-plain-1.time.txt": "79711ff5e73be20f2c2428ce34acb884c481490083bde7a426e8a1b21b179802",
+    "artifacts/allocation-round4/paired/baseline-processing-plain-2.log": "94f811f7648b9f3710a0d6a960758b24aac86e15d9cb5b6c80919b5ce7cec59f",
+    "artifacts/allocation-round4/paired/baseline-processing-plain-2.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/baseline-processing-plain-2.time.txt": "0f482dc6e45926a04283132906b5c42e98b68fd2721ddcf8f205d3877b615766",
+    "artifacts/allocation-round4/paired/baseline-processing-profiled-0.dhat.json": "bdbe0f6d4543cf41219566d6a7e1f2d75a9a5b0effcd7bddd43c984accdde16e",
+    "artifacts/allocation-round4/paired/baseline-processing-profiled-0.log": "b636c99ca68ad80c677471f4ba55d736ba1e5c7ed6b1f0654b0b6f082e5ff739",
+    "artifacts/allocation-round4/paired/baseline-processing-profiled-0.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/baseline-processing-profiled-1.dhat.json": "0d851e809d2f969f2113c32e84c1d694afa67b611bd6dd592a3cc98b290a5c42",
+    "artifacts/allocation-round4/paired/baseline-processing-profiled-1.log": "fee307683ffb6e87c6420fd23c3fb204b91fcb31b94081172d2fd4762a238b47",
+    "artifacts/allocation-round4/paired/baseline-processing-profiled-1.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/baseline-processing-profiled-2.dhat.json": "461bf981937396cb5e8b6924c4e1b7188e6d255c97f117f671c04da2c9caf611",
+    "artifacts/allocation-round4/paired/baseline-processing-profiled-2.log": "5af6f14bc11224a6f9d2608c1c8bfec106a80a961a24f89b7e11291d459935c0",
+    "artifacts/allocation-round4/paired/baseline-processing-profiled-2.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/baseline-reader-plain-0.log": "69c30f692024a8ee1a90534609554779ab43d57b3024f79a7db0d9bb251ce3c1",
+    "artifacts/allocation-round4/paired/baseline-reader-plain-0.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/baseline-reader-plain-0.time.txt": "f4cf77c4fb6da0e610e7fb33e9fc80958dcf5140e7b70aa1a604b3a85cf2a080",
+    "artifacts/allocation-round4/paired/baseline-reader-plain-1.log": "5d80b90272fea905949764c6253f840858844e5ae60d42426566904d1fbedfeb",
+    "artifacts/allocation-round4/paired/baseline-reader-plain-1.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/baseline-reader-plain-1.time.txt": "8f294135fa814ebf049089ee5761bab2fa9e4e24088251ab25639fa371950651",
+    "artifacts/allocation-round4/paired/baseline-reader-plain-2.log": "8f3e8493a7e572cac9447846423584102ead0b466263c8f6538bce1587b49155",
+    "artifacts/allocation-round4/paired/baseline-reader-plain-2.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/baseline-reader-plain-2.time.txt": "3cd23d8d4a97059712520dabcfd8baca38659e49f284093cabaaa0cea61e9eeb",
+    "artifacts/allocation-round4/paired/baseline-reader-profiled-0.dhat.json": "23111e307e92740310827c4e597728ba036a562399e1314d0167399449df1ff2",
+    "artifacts/allocation-round4/paired/baseline-reader-profiled-0.log": "c1cad9dda6ce62ef3794571b0446856f1099f916036d7e12979c0cf2487f2210",
+    "artifacts/allocation-round4/paired/baseline-reader-profiled-0.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/baseline-reader-profiled-1.dhat.json": "148564e9d42c919ac9eb0c85d25bff7079240a5f06296301345c9f40578c2ff8",
+    "artifacts/allocation-round4/paired/baseline-reader-profiled-1.log": "ecf15e0af37f3e71e68c45f5459336fb04f2dc1bfae30ebb0a71362a25b7b930",
+    "artifacts/allocation-round4/paired/baseline-reader-profiled-1.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/baseline-reader-profiled-2.dhat.json": "1207cfd439692deb15d44f99cf755a20f2949095caa472372ae65cf77343f6af",
+    "artifacts/allocation-round4/paired/baseline-reader-profiled-2.log": "61875975b394612b847076a4357cc80af81d4983f05547a9a9f44fc02628b847",
+    "artifacts/allocation-round4/paired/baseline-reader-profiled-2.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-0.log": "69f029f996a15a8ed65e92c0cce9b38dce0285ce1d84a116bc51957f407decfc",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-0.replay.json": "26c2542ae01ef80ce846817af03007b91a688e54aef8445cff492f0e77a1517f",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-0.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-0.time.txt": "3bf5906d0a684df968814eb5b6781fe0d603b2d1a75500bd52a57fafb2f83913",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-1.log": "69f029f996a15a8ed65e92c0cce9b38dce0285ce1d84a116bc51957f407decfc",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-1.replay.json": "d484c8ad8ba09eb0e306c05977a1f26a72d4798d909265919393877e6b550325",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-1.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-1.time.txt": "5e5eb778f5a7e4d65e9397724c33947865e2c2ad7511af19adc9f3e062daae9b",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-2.log": "69f029f996a15a8ed65e92c0cce9b38dce0285ce1d84a116bc51957f407decfc",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-2.replay.json": "c564348ebfcb199aa25d993406ebb1657f1a1e0f3d9150d1ba6582f17ef17f49",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-2.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/baseline-replay-plain-2.time.txt": "b9d647da29544904e5a96a92c77f8c875215f27f0a1c339dc2ce278ef37c55f5",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-0.dhat.json": "e2249c2e8ce2b63fc69f130d14efd60406add9aac5ea8f3b279e39c186200d4f",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-0.log": "ea396c4ec81563c70de64f9ad221464155073c7afc6f4f6c363422186d5013e3",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-0.replay.json": "30f7c7badab568a9fafe40a773741fec0ed5fb2f038de7f88ac691bacb301dce",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-0.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-1.dhat.json": "d1c0b5f172e5314465840a4ad348b7b9f1a22812a1f984bc1b704f6496ff5175",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-1.log": "cb083d5a2bb0666e660b5676758a9e4e9a1d45ff01ef10b5f0a0bcfe4203d8fb",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-1.replay.json": "56bf649946f91ca665c1d9f3bacb6203a88ca7bd0f57dfff378664b74d1cdfee",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-1.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-2.dhat.json": "4d278457aacbda996d92a8966663354922dd3f935e78d38813ffff0ecaa9d4d7",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-2.log": "496bc17cb54eea8c942b1a26a71edebb0e1b7c6305a0973371e3b35cc59c7c71",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-2.replay.json": "e8e051c3260a5275764df3696434caa1a45cbb8a6a05229150d886ac98fd833c",
+    "artifacts/allocation-round4/paired/baseline-replay-profiled-2.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/baseline-spill-plain-0.log": "c8745b80861d443624edb2c87bb1ba9f1064821325d356c0575380e1ff4c6d77",
+    "artifacts/allocation-round4/paired/baseline-spill-plain-0.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/baseline-spill-plain-0.time.txt": "b8cd7357479b811a08ae7397384a7e4d8679118dd81d8908e5b12fc61e89bbec",
+    "artifacts/allocation-round4/paired/baseline-spill-plain-1.log": "c8745b80861d443624edb2c87bb1ba9f1064821325d356c0575380e1ff4c6d77",
+    "artifacts/allocation-round4/paired/baseline-spill-plain-1.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/baseline-spill-plain-1.time.txt": "87680068c91e79b68f4dbd7c18d6dae120e938db6c767284de46b7ee2eada5b1",
+    "artifacts/allocation-round4/paired/baseline-spill-plain-2.log": "c8745b80861d443624edb2c87bb1ba9f1064821325d356c0575380e1ff4c6d77",
+    "artifacts/allocation-round4/paired/baseline-spill-plain-2.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/baseline-spill-plain-2.time.txt": "49e39c66de241da6e3e9c0329f32715452fe09d96e5024cda28f76116e80fd20",
+    "artifacts/allocation-round4/paired/baseline-spill-profiled-0.dhat.json": "3ca5a6238e24aa9d6b68cbec724994ddbad25afa1d62e29a0bdb5791a247ad47",
+    "artifacts/allocation-round4/paired/baseline-spill-profiled-0.log": "5af3360172b89bd7fcf5a6e11f48551756dd5a5656ba381b8f1c69b424b02a2e",
+    "artifacts/allocation-round4/paired/baseline-spill-profiled-0.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/baseline-spill-profiled-1.dhat.json": "10937fd6a579dc93be856e80803aa8f1b766d0e63ba71de15ba53ddfc53e8fb9",
+    "artifacts/allocation-round4/paired/baseline-spill-profiled-1.log": "ff6b0d53225f6e206616a5a810a820f2f17a55901cabfccb85fbc44426011fd6",
+    "artifacts/allocation-round4/paired/baseline-spill-profiled-1.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/baseline-spill-profiled-2.dhat.json": "620da7636bc09d213caa49737c0d2d55187253926075574bac6b2cd30100aafe",
+    "artifacts/allocation-round4/paired/baseline-spill-profiled-2.log": "f86b30c8b576933f362fd520fc044afed4dd63c0585d882158d5215a150417dd",
+    "artifacts/allocation-round4/paired/baseline-spill-profiled-2.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-plain-0.log": "8da4897f2c47ad3ae3aaca001cbc705030302ef5c7412da00bb507096db0cd85",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-plain-0.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-plain-0.time.txt": "bc4050a8ca3b4c25e4e91854655619728d3a5f631f49ebb1944a99282da198df",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-plain-1.log": "8da4897f2c47ad3ae3aaca001cbc705030302ef5c7412da00bb507096db0cd85",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-plain-1.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-plain-1.time.txt": "3548bc6f6f9545d9cfaa82d0edb411f39d4c6f378c8f32e9a5ad4aaa6033b5ea",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-plain-2.log": "8da4897f2c47ad3ae3aaca001cbc705030302ef5c7412da00bb507096db0cd85",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-plain-2.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-plain-2.time.txt": "c126c47fe67f492935e72823523750828b112ff19f15bc3de336a1111a777553",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-profiled-0.dhat.json": "3ad3c5ed8c41bce764186ac5f9263144ad4cd44de4fec18a577941a12f072d32",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-profiled-0.log": "965eb4f2278f483be188590f08f88027944b4c60e1b2d134eea54922d3697b85",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-profiled-0.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-profiled-1.dhat.json": "260e98c14fa8a8996c3be07736265852e121c724c98a1f6a6f348862af84d593",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-profiled-1.log": "51e1981a06acb7677e2ef2be7c17f4bf777b13d37ee38b91c5ec4c4896f90fe5",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-profiled-1.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-profiled-2.dhat.json": "97836b97cec7182c76376fc917a12a5a59361195e881215eb29ea45ce6f4a5eb",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-profiled-2.log": "687b856eb937318bc39261cc77e215240fd453dc2031cd7fef192cefb5785bd0",
+    "artifacts/allocation-round4/paired/baseline-spill_strings-profiled-2.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/baseline-statistics-plain-0.log": "02dbfa8701b20c9eba71fedf52fdf35be0da66fda89118d10f1b642e7a17f18f",
+    "artifacts/allocation-round4/paired/baseline-statistics-plain-0.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/baseline-statistics-plain-0.time.txt": "b1dc71c0b26428f9a9e8f8ce06f42a5e6737ed96363a1b5f536b05c806352a47",
+    "artifacts/allocation-round4/paired/baseline-statistics-plain-1.log": "02dbfa8701b20c9eba71fedf52fdf35be0da66fda89118d10f1b642e7a17f18f",
+    "artifacts/allocation-round4/paired/baseline-statistics-plain-1.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/baseline-statistics-plain-1.time.txt": "84d2c887a2d4522d40430d3fa3255ad92a80cd70e15e0766e495c013a81f7f0f",
+    "artifacts/allocation-round4/paired/baseline-statistics-plain-2.log": "870373a2ffb06a83fb9ce8a5e22853d81c1fed6a994b1559dc367bcc24760cbf",
+    "artifacts/allocation-round4/paired/baseline-statistics-plain-2.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/baseline-statistics-plain-2.time.txt": "67f16d1f303682ad4757acce967f52b58137206313640c62c3cc3f5456bf4803",
+    "artifacts/allocation-round4/paired/baseline-statistics-profiled-0.dhat.json": "ae5c7793179a8b3fd264e19122ac84df48293161b409895153b9896ae63489d8",
+    "artifacts/allocation-round4/paired/baseline-statistics-profiled-0.log": "6b0502bd3229e1b83c6f7a76bdaedd551309686644395d690fa32a1f3f08e3f3",
+    "artifacts/allocation-round4/paired/baseline-statistics-profiled-0.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/baseline-statistics-profiled-1.dhat.json": "736eb4ac09fdbaad9a5ff71138b3e4508e7809364cd10c24aa0675eed44efbb2",
+    "artifacts/allocation-round4/paired/baseline-statistics-profiled-1.log": "3d99e32da9652a51e896620be0cd46dd8f3638704943e89683bea09be787b8a7",
+    "artifacts/allocation-round4/paired/baseline-statistics-profiled-1.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/baseline-statistics-profiled-2.dhat.json": "5268a05e6c44904029d73b8cf2988d9d699d7d3a9554c33051a33970ffda3636",
+    "artifacts/allocation-round4/paired/baseline-statistics-profiled-2.log": "887fc3d1fad99f461ab03e5c6b10f8c6071e07048eeb0b38adb94328b9a37cd9",
+    "artifacts/allocation-round4/paired/baseline-statistics-profiled-2.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/baseline-topk-plain-0.log": "439bf9392fe45a00c1c5a71e35b6abf2b3dcecc492126acc583ded5c37b03a51",
+    "artifacts/allocation-round4/paired/baseline-topk-plain-0.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/baseline-topk-plain-0.time.txt": "fcdf4cecfe096ebbf03ba901a4419103554f17769d463d34c113043cfbd12465",
+    "artifacts/allocation-round4/paired/baseline-topk-plain-1.log": "074c55593d7e455e29535bc09138c28175285f163dda78a08e7888cc1c42bd68",
+    "artifacts/allocation-round4/paired/baseline-topk-plain-1.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/baseline-topk-plain-1.time.txt": "baec1bd019e5ded499a725d355db6eb6fef69f67c1eec30ccf3ef726cf8d1e73",
+    "artifacts/allocation-round4/paired/baseline-topk-plain-2.log": "439bf9392fe45a00c1c5a71e35b6abf2b3dcecc492126acc583ded5c37b03a51",
+    "artifacts/allocation-round4/paired/baseline-topk-plain-2.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/baseline-topk-plain-2.time.txt": "e8995f5f0e113e4613ae6b492f1cd1f480886a8fe6fed9bd63659831f11c33c8",
+    "artifacts/allocation-round4/paired/baseline-topk-profiled-0.dhat.json": "823dbc025ed64074f7befc643a118f81bd24ba7db3abce648f729b7613cbdeb0",
+    "artifacts/allocation-round4/paired/baseline-topk-profiled-0.log": "e16d9d973917c2088750bc4446634a878a2f20967c3ef3cf44907ae076f17e69",
+    "artifacts/allocation-round4/paired/baseline-topk-profiled-0.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/baseline-topk-profiled-1.dhat.json": "fdf065f0e56f4be886cf1b27baf0efb3d40af3808dded7d44dbd09e75da60db5",
+    "artifacts/allocation-round4/paired/baseline-topk-profiled-1.log": "df3aa11e38441655cd9486235c5a8c0feb4bea356265f36e2d90c71f034d2801",
+    "artifacts/allocation-round4/paired/baseline-topk-profiled-1.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/baseline-topk-profiled-2.dhat.json": "5fa24075f992c13120cee2289d2a5c5b94dc43b9209c86baa2e6c7cafca682f8",
+    "artifacts/allocation-round4/paired/baseline-topk-profiled-2.log": "7f428f7c6cb1cfe1d6347867ed389b2a02e37d8ee0ebb9ef168c357dbca3bc7b",
+    "artifacts/allocation-round4/paired/baseline-topk-profiled-2.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/candidate-group-plain-0.log": "1de12d0647d90be78cf7675dc0c5ae20a6cd0c2b2502921103e8f993024ff4fb",
+    "artifacts/allocation-round4/paired/candidate-group-plain-0.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/candidate-group-plain-0.time.txt": "1dfa91e2633a3c7b486a989b23c1363e972f445bef0f6b2551b4193a61006000",
+    "artifacts/allocation-round4/paired/candidate-group-plain-1.log": "1de12d0647d90be78cf7675dc0c5ae20a6cd0c2b2502921103e8f993024ff4fb",
+    "artifacts/allocation-round4/paired/candidate-group-plain-1.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/candidate-group-plain-1.time.txt": "4eb23b5bc3cfe19ade3d2317adbb518fb410ac4238a7c9fa589a0887c82bb9b8",
+    "artifacts/allocation-round4/paired/candidate-group-plain-2.log": "1de12d0647d90be78cf7675dc0c5ae20a6cd0c2b2502921103e8f993024ff4fb",
+    "artifacts/allocation-round4/paired/candidate-group-plain-2.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/candidate-group-plain-2.time.txt": "1bb488d6a091e8fb05d8fa20e2dbf35faa02f807c789c78253578b5df842c4bf",
+    "artifacts/allocation-round4/paired/candidate-group-profiled-0.dhat.json": "e851c25a829fb568607109adb580063b68bde77466ed8d4052419f414ecc8a54",
+    "artifacts/allocation-round4/paired/candidate-group-profiled-0.log": "8229956665036d5b939711b8a8c7c8727d4c66c25633dfcb39baf25cc634064c",
+    "artifacts/allocation-round4/paired/candidate-group-profiled-0.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/candidate-group-profiled-1.dhat.json": "b45c245ca23aa737441aa5ec5b640ac8f54e1843bfa45258372d1b5420975fd1",
+    "artifacts/allocation-round4/paired/candidate-group-profiled-1.log": "3af0aa14907665f988fe3e2755c929765500f32120bfbe10fb84bf8c4554aaf3",
+    "artifacts/allocation-round4/paired/candidate-group-profiled-1.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/candidate-group-profiled-2.dhat.json": "4a2e2eb43d631e4f552979ef16c070c39974f248cba6cf76ea324f13ba3c3cc0",
+    "artifacts/allocation-round4/paired/candidate-group-profiled-2.log": "f6382c93044a986d7d383b30655552c01c9972a04d7181064f16026d1bc56888",
+    "artifacts/allocation-round4/paired/candidate-group-profiled-2.selection.log": "69b91cd59a7efb4ff9113dd805e021c85d6b70397686c4fdd72b69aa8f3dd0d0",
+    "artifacts/allocation-round4/paired/candidate-join-plain-0.log": "362635c729a15dd9cbc769693e12e0dde3ccd3c011642b8eadfda1c8df89057e",
+    "artifacts/allocation-round4/paired/candidate-join-plain-0.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/candidate-join-plain-0.time.txt": "924185061c53609674f1cb098d85e048d0e87b082a15fe2a865d2b79a791eef0",
+    "artifacts/allocation-round4/paired/candidate-join-plain-1.log": "7346889b686915509140407b9b392cd629475fef14b64ccf78f78adfbbd1d0fa",
+    "artifacts/allocation-round4/paired/candidate-join-plain-1.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/candidate-join-plain-1.time.txt": "72276bdf1c549568a296d15a7bac861c27c97b24b3bd71bb399de522ea4d9693",
+    "artifacts/allocation-round4/paired/candidate-join-plain-2.log": "362635c729a15dd9cbc769693e12e0dde3ccd3c011642b8eadfda1c8df89057e",
+    "artifacts/allocation-round4/paired/candidate-join-plain-2.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/candidate-join-plain-2.time.txt": "af0e3a500ad18b7487df20a745e5dd948513a4f3e654c91d49b381fd9e6b35c4",
+    "artifacts/allocation-round4/paired/candidate-join-profiled-0.dhat.json": "2b16983d98c019ed96f8b2cd8a898b3057f94b9518cacee216d81fd30375c1a2",
+    "artifacts/allocation-round4/paired/candidate-join-profiled-0.log": "db9cf86915476532e490d87dd6f88674a02b9c8483cede0e4c24a6b03eb639f9",
+    "artifacts/allocation-round4/paired/candidate-join-profiled-0.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/candidate-join-profiled-1.dhat.json": "2bbd0d67990f6e77b20848a1a5bc96fa776ac3970972260697faf5a490c11c10",
+    "artifacts/allocation-round4/paired/candidate-join-profiled-1.log": "7c2cf0bbd0310aaabfcdcdd4697af91df48a1da795cb940df3ec43f80bcd7bfe",
+    "artifacts/allocation-round4/paired/candidate-join-profiled-1.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/candidate-join-profiled-2.dhat.json": "ae7cf8dbe65ac8a00c0f183ca366860ffb927016bb2d3d7bfd2c9d182e0803b0",
+    "artifacts/allocation-round4/paired/candidate-join-profiled-2.log": "642fbe4af945061944359b63595d27f86fefef1b13a070315d73f6ea682880fa",
+    "artifacts/allocation-round4/paired/candidate-join-profiled-2.selection.log": "7e4c1d502340f16eaa2c396bc81e8f3cf023618a707e917564c38d5fa4dc4399",
+    "artifacts/allocation-round4/paired/candidate-processing-plain-0.log": "646054b40de0b8088e82d5bb1522c0c71b2433e1a3d4620d6e3188dfed09adbc",
+    "artifacts/allocation-round4/paired/candidate-processing-plain-0.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/candidate-processing-plain-0.time.txt": "be6eef933a2be36ef5f0632199b17ea729fee29cbdcad3f139f951c997f65f4e",
+    "artifacts/allocation-round4/paired/candidate-processing-plain-1.log": "646054b40de0b8088e82d5bb1522c0c71b2433e1a3d4620d6e3188dfed09adbc",
+    "artifacts/allocation-round4/paired/candidate-processing-plain-1.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/candidate-processing-plain-1.time.txt": "31925334f500d9eead854eafc460f7f6eecea5cc530fbd486a77c822e48a6b89",
+    "artifacts/allocation-round4/paired/candidate-processing-plain-2.log": "646054b40de0b8088e82d5bb1522c0c71b2433e1a3d4620d6e3188dfed09adbc",
+    "artifacts/allocation-round4/paired/candidate-processing-plain-2.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/candidate-processing-plain-2.time.txt": "dea9e471791b197966cf7dcf1b9b994a72df9f053e6df2c7a817b060413f57c6",
+    "artifacts/allocation-round4/paired/candidate-processing-profiled-0.dhat.json": "9091fc8d4e9662caeaf47343109f124862315f19a666ce2a65890a0f658ef3df",
+    "artifacts/allocation-round4/paired/candidate-processing-profiled-0.log": "6639f5f045c16ff8ee770d8883b930a95565e5a9728f80f6bf513500dcae9b22",
+    "artifacts/allocation-round4/paired/candidate-processing-profiled-0.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/candidate-processing-profiled-1.dhat.json": "3b298d5a3571545146494b12b66246532e2cc3fe65d3ded970c8a77782517e48",
+    "artifacts/allocation-round4/paired/candidate-processing-profiled-1.log": "bc2023f15822dfcefd866ef6f9a0b777482b0fa5933a77da33b83f5fc9703112",
+    "artifacts/allocation-round4/paired/candidate-processing-profiled-1.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/candidate-processing-profiled-2.dhat.json": "625aed161c727fd4469fc289ffc1a286591934bf5c323c6dd46a7640259ca15a",
+    "artifacts/allocation-round4/paired/candidate-processing-profiled-2.log": "31561cf10ac97574dcf523496ce1b182ec382d5b9a818d277d5a3a7f839e96c2",
+    "artifacts/allocation-round4/paired/candidate-processing-profiled-2.selection.log": "95ec1ecebd31276393248601627caf00716d74c20a45a61c72b724f4ae562a45",
+    "artifacts/allocation-round4/paired/candidate-reader-plain-0.log": "04b6b7baaee4ab18bdce25fdc22e425998c782d35fd679d9d8d9093f42264fe2",
+    "artifacts/allocation-round4/paired/candidate-reader-plain-0.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/candidate-reader-plain-0.time.txt": "a797a30f231d5c49dd5bf4f3f409202b75f7a85740783f5f76216d305cc6edb8",
+    "artifacts/allocation-round4/paired/candidate-reader-plain-1.log": "afd80870f0e6fe845784961d9d661422dd78d16e83a854bbcb332db315f8dbff",
+    "artifacts/allocation-round4/paired/candidate-reader-plain-1.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/candidate-reader-plain-1.time.txt": "ffe9314499289b9b8f255706eff7300a8a83341259ba0e49176dcd5bb48a014d",
+    "artifacts/allocation-round4/paired/candidate-reader-plain-2.log": "0d1ad4a28ecf53ba6de2b2c0058139f71de85d7e6c133f52498deb0f9c38e570",
+    "artifacts/allocation-round4/paired/candidate-reader-plain-2.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/candidate-reader-plain-2.time.txt": "4779feee56bac0aacb39d844cbb50f988d8336751834e8793aa4880cd38e7238",
+    "artifacts/allocation-round4/paired/candidate-reader-profiled-0.dhat.json": "40a8e9df5ec75ddb477e8f2c0bdb40ca81c305b994454ec28a2f412d0ba389ac",
+    "artifacts/allocation-round4/paired/candidate-reader-profiled-0.log": "d10f2780c9091566cd4f03e2b9474f0ff70c3f1a414b58719178104d6400c2fa",
+    "artifacts/allocation-round4/paired/candidate-reader-profiled-0.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/candidate-reader-profiled-1.dhat.json": "2c455502a7bb91826bd710e21db7ddfba992b81af9226ab3b86489592a440372",
+    "artifacts/allocation-round4/paired/candidate-reader-profiled-1.log": "ff16b1eb3f159a5795024d49a5711b61cac7cebd08ec923241a4b3ac5db5a514",
+    "artifacts/allocation-round4/paired/candidate-reader-profiled-1.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/candidate-reader-profiled-2.dhat.json": "aaa174c151b36338467cebd9a7268fed5e29dbf6e910beab19857539b423877f",
+    "artifacts/allocation-round4/paired/candidate-reader-profiled-2.log": "1ab277beb012c75fd929b5820ca792b2c4908de5ba28347e613e969b791318b2",
+    "artifacts/allocation-round4/paired/candidate-reader-profiled-2.selection.log": "44965219e1cd425bde7ad45fa0691567313407563bc6e1da049621c2b470a80b",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-0.log": "3868ba4b8ea6e98ba7aa871362f8660221145998161935afcf42510e96ab9452",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-0.replay.json": "84cb4216e1cd47d06d92c2c85fdeb2488471245ecaba9b6531e0874f156fcc57",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-0.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-0.time.txt": "6e3cd997360227727ff0afdb7de0f3dec92b536b5dc74f950b8f034f97804c0d",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-1.log": "cb218312b91740fc9ea16800f59cf2668ccf54122f0f586a3287b92b41a1d8ed",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-1.replay.json": "29e2a89673e30693b8e398d95bb2f93ba64420616b3e266fe65e21ff401872c5",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-1.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-1.time.txt": "7a10c3b1c66e93f0270bf7379a598c425ce74941ae6afbb139928d6f0ea79205",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-2.log": "cb218312b91740fc9ea16800f59cf2668ccf54122f0f586a3287b92b41a1d8ed",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-2.replay.json": "f5d3f2fc1b11f4ecc24d5b97627773963c3f824d9e5750a3b54cf5f487572d72",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-2.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/candidate-replay-plain-2.time.txt": "d2d9cf670643f028a386924d4c971f679ee1e14d4a5484348f09fb848c5fb229",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-0.dhat.json": "9be9cecfa027a4d965263d4608cdbdbe8ac43a69dec62ed0e2e6271745442e98",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-0.log": "3e872c6e96bb11df0cdeae5d3f0f9d43df85e79bb63d9c252d41069d312cc12a",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-0.replay.json": "0e8a0f1c4c3945786b14c6c770870daf512b98b271af0da188724247c93a22c7",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-0.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-1.dhat.json": "0f392c56d326e93f82d36826c11f69bbd21b0764d7cdc12b9d7b091ebf8418ca",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-1.log": "e795d5b36352145299c0f69c29f5c6988d35c87b8372c08970ac46bf00eecaa8",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-1.replay.json": "edef60621704670cb077bcc9a94437f5f4246ff3168ba577541486fa30a7df2b",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-1.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-2.dhat.json": "fb7d66a4679c02ac873cd1eabc1bfe0afac517d9b0a191133b03f82e539512bc",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-2.log": "c52c842cabc90166ecb87ab6ca33d3d105fbaad36ec2bb8e6e9084f023e7415c",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-2.replay.json": "6655826eab3fe3e68cfa7c52a5d0923b202dbcc3dbaeef699268ccba579b085e",
+    "artifacts/allocation-round4/paired/candidate-replay-profiled-2.selection.log": "cec6f1206f31aead51381a3953d502643320a62504de1388c04c54a405eadfa4",
+    "artifacts/allocation-round4/paired/candidate-spill-plain-0.log": "bfd5000ee3d7dfaaf0f31e8afd4664ceb815854d2ea6bb36c5a778959f6a19d4",
+    "artifacts/allocation-round4/paired/candidate-spill-plain-0.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/candidate-spill-plain-0.time.txt": "4f4c7ee41ff80857137faf16d30a3fec83efdc59c1685ca50c12788f33bdb96f",
+    "artifacts/allocation-round4/paired/candidate-spill-plain-1.log": "bfd5000ee3d7dfaaf0f31e8afd4664ceb815854d2ea6bb36c5a778959f6a19d4",
+    "artifacts/allocation-round4/paired/candidate-spill-plain-1.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/candidate-spill-plain-1.time.txt": "d525f76babcc58e60cbae29e500dee4f8478f072701c4fe6dbf8e796ac9b32d1",
+    "artifacts/allocation-round4/paired/candidate-spill-plain-2.log": "bfd5000ee3d7dfaaf0f31e8afd4664ceb815854d2ea6bb36c5a778959f6a19d4",
+    "artifacts/allocation-round4/paired/candidate-spill-plain-2.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/candidate-spill-plain-2.time.txt": "b7bcf9878e51aff50b3091eb4cda4e9212e9c015d8f6bbcdb46e79040360efbe",
+    "artifacts/allocation-round4/paired/candidate-spill-profiled-0.dhat.json": "771e355a70efead13ec9d81831c72512614e45b66e97d4ef31d216af5c96acc1",
+    "artifacts/allocation-round4/paired/candidate-spill-profiled-0.log": "c8626c0f4e36dbdb14c1b005727280348f8c2d33c3f698133c5863bf7ddc47b4",
+    "artifacts/allocation-round4/paired/candidate-spill-profiled-0.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/candidate-spill-profiled-1.dhat.json": "56edafed7dd09367482e8e6734a52d4cee50820ab2c7f4a9ca294261afa1d797",
+    "artifacts/allocation-round4/paired/candidate-spill-profiled-1.log": "c3e2f6a3cb526fe0b8719a22b267bfebe7916f4a381f10fb15543822b9d19e7c",
+    "artifacts/allocation-round4/paired/candidate-spill-profiled-1.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/candidate-spill-profiled-2.dhat.json": "e91abad0aeccfd31977d3a95596079cefbbcf2305574108087b744eeb2d7d7ee",
+    "artifacts/allocation-round4/paired/candidate-spill-profiled-2.log": "7ec9831aa67cd33bd7e61090fb05e55bd6ab79c8d927c2ff759d45f63b6011bc",
+    "artifacts/allocation-round4/paired/candidate-spill-profiled-2.selection.log": "7da2915de7c1e15778f24fb863936ff59c0926ac32a4f3b88d3dbdc97071e541",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-plain-0.log": "502819f7a120301ade4bebfa3a4a1d7750ced1d92000b9a91533c785df8fd9ee",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-plain-0.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-plain-0.time.txt": "c56c6d607dbfb93cc5b28ac8095ca30d96ba14b41d6944ad353700d1d2f10a26",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-plain-1.log": "502819f7a120301ade4bebfa3a4a1d7750ced1d92000b9a91533c785df8fd9ee",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-plain-1.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-plain-1.time.txt": "d79dcc6a4bc8a538d70b7958e79b74d79586c69748461dadc3e1196abb7789c8",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-plain-2.log": "502819f7a120301ade4bebfa3a4a1d7750ced1d92000b9a91533c785df8fd9ee",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-plain-2.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-plain-2.time.txt": "259d6fdb7c17bf87bcd204cce30ee2413a35565b246131f4ef726d92cd44c12a",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-profiled-0.dhat.json": "44fe4337d34a292eed0ace47fb6003829c4c62a1325291e9f7b1cccbbcb2289e",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-profiled-0.log": "22eebe6bb6ab1f5ad551bf3681f7921bcf8b3868d05e6889fd9ca8b8e35a2c6e",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-profiled-0.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-profiled-1.dhat.json": "80f7ae10aa7bf84713edaae689f3c41d2a070975cabd6e99b6d38dc679308458",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-profiled-1.log": "bd2c9a3509592f0ff8b91857afbff814592cdf69075cc6953ec4ab17dcab9c1b",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-profiled-1.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-profiled-2.dhat.json": "b40751bb2020b335ba81f4b18cc82814c190bda8c01a40a2e7d32d2243dfff12",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-profiled-2.log": "1ce6095a042320c19955b7cfdfc8a85e6e2c56a7f4118f0e12b9efe555181342",
+    "artifacts/allocation-round4/paired/candidate-spill_strings-profiled-2.selection.log": "b47735fd6373d1334d63c226d68ff58bbc5d1b492ea8eb376337868000a41133",
+    "artifacts/allocation-round4/paired/candidate-statistics-plain-0.log": "d7b30d300e9bfa22d1e2e43b369a9f3da8e3dab7394b2cef49f44ac21391dcdb",
+    "artifacts/allocation-round4/paired/candidate-statistics-plain-0.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/candidate-statistics-plain-0.time.txt": "4ef129959760f0c1062aa495e19eb5184989ef7bbf0ecff4b1910d6799ed07eb",
+    "artifacts/allocation-round4/paired/candidate-statistics-plain-1.log": "e3d78166060429d9107e59a34359711f4ee0e89f1c194e29d599f1bd48905a0a",
+    "artifacts/allocation-round4/paired/candidate-statistics-plain-1.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/candidate-statistics-plain-1.time.txt": "e5da36f61d16a8750cff8b57615f7748b85da0f3601c40ae27a826d3e1d8d7cb",
+    "artifacts/allocation-round4/paired/candidate-statistics-plain-2.log": "e3d78166060429d9107e59a34359711f4ee0e89f1c194e29d599f1bd48905a0a",
+    "artifacts/allocation-round4/paired/candidate-statistics-plain-2.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/candidate-statistics-plain-2.time.txt": "d6042e7781f4e27f1948b05c2a0b1639144b6a8fe247dfad9402421e5ac0b478",
+    "artifacts/allocation-round4/paired/candidate-statistics-profiled-0.dhat.json": "ecf0beb5876ab2a53c18899ced6643760e9577489a36ae26bd4429a1e297eda4",
+    "artifacts/allocation-round4/paired/candidate-statistics-profiled-0.log": "4932e6e990ebf6ac72459a31443493c5c41d33aeaa648a9dbc1c20fcc49f30a6",
+    "artifacts/allocation-round4/paired/candidate-statistics-profiled-0.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/candidate-statistics-profiled-1.dhat.json": "957dce5256532c122db30a99ed6a8a6d226f01c0838f4d005a08f1b833b46c93",
+    "artifacts/allocation-round4/paired/candidate-statistics-profiled-1.log": "a60f9adea47a8aa4fa60081d85ada33c1face87a11c1583099ec23400ebb6105",
+    "artifacts/allocation-round4/paired/candidate-statistics-profiled-1.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/candidate-statistics-profiled-2.dhat.json": "4da2cdab83131e363636b772cca6c19c9d5f832d60877dab5e7ca599f2b5e7d3",
+    "artifacts/allocation-round4/paired/candidate-statistics-profiled-2.log": "91870fe4a2654b06f233d9ccb55bb57a2998b6d55541f0acb5bd261d0e902fff",
+    "artifacts/allocation-round4/paired/candidate-statistics-profiled-2.selection.log": "7edeb74fce61e29e07cce795c5648e5f95582183f47f029c38f6690a7f1756a8",
+    "artifacts/allocation-round4/paired/candidate-topk-plain-0.log": "1f5fb50fa288c1d1a37632a97589ac80558eaced265ac87c30d2c3483067fe85",
+    "artifacts/allocation-round4/paired/candidate-topk-plain-0.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/candidate-topk-plain-0.time.txt": "f52a49c6066f8c1cfbf7f6669849eabedd89c4a3ec43e9b3efbb5d4d5379b9e3",
+    "artifacts/allocation-round4/paired/candidate-topk-plain-1.log": "1f5fb50fa288c1d1a37632a97589ac80558eaced265ac87c30d2c3483067fe85",
+    "artifacts/allocation-round4/paired/candidate-topk-plain-1.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/candidate-topk-plain-1.time.txt": "fcb4ea88b843aa823f2428c3b3858c254a5e7b683ec362f5efec73d2220c114e",
+    "artifacts/allocation-round4/paired/candidate-topk-plain-2.log": "fdd210380e0dc6adce06a43b964b6ed8302aa568018f2d740595363ed2557ac1",
+    "artifacts/allocation-round4/paired/candidate-topk-plain-2.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/candidate-topk-plain-2.time.txt": "2a5aaf4ca8e4cf01b6ed16f81d67644ef20114b3c0a45cd3703aaf485393ef49",
+    "artifacts/allocation-round4/paired/candidate-topk-profiled-0.dhat.json": "1a41a3e4adea64b8b31e6108cc91064ddcd6629fdfae324bee9caddb586b9889",
+    "artifacts/allocation-round4/paired/candidate-topk-profiled-0.log": "7b5c697b58c7f02ead5cc6dbf4aee28ac4817b2bb4a7a5a85c437b8773fc6822",
+    "artifacts/allocation-round4/paired/candidate-topk-profiled-0.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/candidate-topk-profiled-1.dhat.json": "6dcf29f5da902f3cb95c1cbac941c55f3f9b21fe04889f59047c15396f7b14c8",
+    "artifacts/allocation-round4/paired/candidate-topk-profiled-1.log": "cdb3616993b088b2a0f0a9373f34a17923192e8fe014dbbeed9a4b1f6667e8d1",
+    "artifacts/allocation-round4/paired/candidate-topk-profiled-1.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/candidate-topk-profiled-2.dhat.json": "3e0d27d231c88eded2800d469dd753bc1b5f7a8931948cd29ad9723976c97ddf",
+    "artifacts/allocation-round4/paired/candidate-topk-profiled-2.log": "7aff23768720eae41b056f63ad9b695a490c87dc65a05cd7b262d8d93d4ed93a",
+    "artifacts/allocation-round4/paired/candidate-topk-profiled-2.selection.log": "4f089d3d03d67dd805140cf9f101df5e89fc0eb9d2ab13f199f2a971090ca140",
+    "artifacts/allocation-round4/paired/report.json": "b19e341b8c4fd2e6845a60cf3f18f0c05496f124fdcc2599a54479568520e235",
+    "artifacts/allocation-round4/validation/fixture.json": "3aedc076170c0e2b5bb35eed2fdec823b8f9c6ba0210fbf8545c0b0e9d23437c",
+    "artifacts/allocation-round4/validation/gate.log": "e0a74707d55308c55819f1a95a4442734edb0043af12d9d14cd0efc4b64d6a39",
+    "artifacts/allocation-round4/validation/method-at-gate.md": "f34489075274e2df006a1bb0faae88784e1b4ecf49a0ce7da4acd321f20d33e8",
+    "artifacts/allocation-round4/host-state-before-paired.json": "3e1a85477d78679cd6b0b1ab172760965f471b403b70bb1ed40d00400e733508",
+    "artifacts/allocation-round4/validation/attribution.json": "39eb0f00525113ee03b374fd4208b9b3a95e273edcdb69a395ea2558fb8dd2af"
+  },
+  "qualification_fixture": {
+    "container": "pgderive-allocation-round4-pg",
+    "image": "sha256:eb0fb2377534e65aad04f37838956b3dfb888e1a3dd3c1acf957bc6557eb6c7d",
+    "postgres_version": "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+    "port": 55446,
+    "tmpfs": {
+      "/var/lib/postgresql/data": "rw,size=6g"
+    },
+    "mounts": [],
+    "recorded_utc": "2026-11-08T19:40:09.582095+00:00",
+    "removed": true,
+    "other_client_connections_before_removal": 0,
+    "removed_utc": "2026-11-08T20:44:33.102697+00:00"
+  },
+  "host_state": "artifacts/allocation-round4/host-state-before-paired.json",
+  "attribution": "artifacts/allocation-round4/validation/attribution.json",
+  "merge": {
+    "previous_pass_main_commit": "cba1c86",
+    "mode": "fast-forward",
+    "main_checkout": "/home/jlerche/.codex/worktrees/allocation-main/pgderive",
+    "push_performed": false
+  }
+}

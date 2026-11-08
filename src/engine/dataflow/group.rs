@@ -12,6 +12,7 @@ use std::{borrow::Borrow, future::Future, pin::Pin, sync::Arc};
 pub type GroupFuture<'a, V> = Pin<Box<dyn Future<Output = Result<Batch<(), V>>> + Send + 'a>>;
 type Transform<K, V> =
     dyn for<'a> Fn(GroupInput<'a, K, V>, &'a mut PartitionWork) -> GroupFuture<'a, V> + Send + Sync;
+type DeltaRows<V> = Arc<Vec<Entry<(), V>>>;
 /// Pinned old state and complete changes for one navigation key.
 pub struct GroupInput<'a, K: BatchData, V: BatchData> {
     /// Affected navigation key; full values retain independent tuple identity.
@@ -28,11 +29,7 @@ impl<K: BatchData, V: BatchData> GroupInput<'_, K, V> {
     /// # Errors
     /// Returns selected-block read, integrity or arithmetic failures.
     pub async fn before(&self) -> Result<GroupCursor<K, V>> {
-        Ok(GroupCursor {
-            prior: self.prior.key_cursor(self.key).await?,
-            delta: Arc::new(Vec::new()),
-            index: 0,
-        })
+        Ok(GroupCursor { prior: self.prior.key_cursor(self.key).await?, delta: None, index: 0 })
     }
     /// Overlay the signed tick delta on old state, without rebuilding the old bag.
     /// Changed identities have already passed nonnegative membership validation.
@@ -42,7 +39,7 @@ impl<K: BatchData, V: BatchData> GroupInput<'_, K, V> {
     pub async fn after(&self) -> Result<GroupCursor<K, V>> {
         Ok(GroupCursor {
             prior: self.prior.key_cursor(self.key).await?,
-            delta: self.delta.shared_entries(),
+            delta: Some(self.delta.shared_entries()),
             index: 0,
         })
     }
@@ -51,7 +48,7 @@ impl<K: BatchData, V: BatchData> GroupInput<'_, K, V> {
 #[derive(Clone)]
 pub struct GroupCursor<K: BatchData, V: BatchData> {
     prior: KeyCursor<K, V>,
-    delta: Arc<Vec<Entry<(), V>>>,
+    delta: Option<DeltaRows<V>>,
     index: usize,
 }
 impl<K: BatchData, V: BatchData> GroupCursor<K, V> {
@@ -68,7 +65,11 @@ impl<K: BatchData, V: BatchData> GroupCursor<K, V> {
     async fn next_inner(&mut self, work: &mut PartitionWork) -> Result<Option<(V, i64)>> {
         loop {
             let old = self.prior.current().map(|(_, value, weight)| (value, weight));
-            let changed = self.delta.get(self.index).map(|(((), value), weight)| (value, weight));
+            let changed = self
+                .delta
+                .as_deref()
+                .and_then(|delta| delta.get(self.index))
+                .map(|(((), value), weight)| (value, weight));
             let value = old
                 .map(|entry| entry.0)
                 .into_iter()
@@ -166,7 +167,12 @@ impl<K: BatchData, V: BatchData> Group<K, V> {
 #[cfg(test)]
 mod storage_tests {
     use super::GroupInput;
-    use crate::engine::{Batch, execution::Limits, trace::TraceSnapshot};
+    use crate::engine::{
+        Batch,
+        dataflow::PartitionWork,
+        execution::Limits,
+        trace::{Run, TraceSnapshot},
+    };
     use anyhow::Result;
     use std::sync::Arc;
 
@@ -177,8 +183,28 @@ mod storage_tests {
         let input = GroupInput { key: &7, delta: &delta, prior: &prior, limits: Limits::default() };
         let first = input.after().await?;
         let second = input.after().await?;
-        assert!(Arc::ptr_eq(&first.delta, &delta.shared_entries()));
-        assert!(Arc::ptr_eq(&first.delta, &second.delta));
+        let shared = delta.shared_entries();
+        assert!(first.delta.as_ref().is_some_and(|rows| Arc::ptr_eq(rows, &shared)));
+        assert!(second.delta.as_ref().is_some_and(|rows| Arc::ptr_eq(rows, &shared)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn before_cursors_need_no_delta_storage_and_retry_independently() -> Result<()> {
+        let rows = Batch::from_updates([((7, String::from("old")), 2)])?;
+        let prior = TraceSnapshot::empty().append_validated(Run::Memory(Arc::new(rows)), 1)?;
+        let delta = Batch::from_updates([(((), String::from("new")), 1)])?;
+        let input = GroupInput { key: &7, delta: &delta, prior: &prior, limits: Limits::default() };
+        let mut cursor = input.before().await?;
+        let mut pinned = cursor.clone();
+        assert!(cursor.delta.is_none());
+        assert!(pinned.delta.is_none());
+        assert!(cursor.next(&mut PartitionWork::new(0)).await.is_err());
+        let mut work = PartitionWork::new(8);
+        assert_eq!(cursor.next(&mut work).await?, Some((String::from("old"), 2)));
+        assert_eq!(cursor.next(&mut work).await?, None);
+        assert_eq!(pinned.next(&mut work).await?, Some((String::from("old"), 2)));
+        assert_eq!(pinned.next(&mut work).await?, None);
         Ok(())
     }
 }

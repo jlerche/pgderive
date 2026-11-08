@@ -196,7 +196,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
     async fn push(&mut self, row: Entry<K, V>) -> Result<()> {
         super::work::spend(0).await;
         ensure!(
-            row.1 != 0 && self.previous.as_ref().is_none_or(|previous| previous < &row.0),
+            row.1 != 0 && self.previous().is_none_or(|previous| previous < &row.0),
             "noncanonical streaming input"
         );
         let bytes = bounded::encoded_len(&row)?;
@@ -221,9 +221,12 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             .checked_add(bytes)
             .and_then(|bytes| bytes.checked_add(usize::from(!self.rows.is_empty())))
             .context("streaming block size overflow")?;
-        self.previous = Some(row.0.clone());
+        self.previous = None;
         self.rows.push(row);
         Ok(())
+    }
+    fn previous(&self) -> Option<&(K, V)> {
+        self.rows.last().map(|row| &row.0).or(self.previous.as_ref())
     }
     async fn flush_block(&mut self) -> Result<()> {
         if self.rows.is_empty() {
@@ -303,6 +306,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         self.fence_bytes =
             self.fence_bytes.checked_add(bytes).context("streaming fence bytes overflow")?;
         self.blocks.push(block);
+        self.previous = self.rows.pop().map(|row| row.0);
         self.rows.clear();
         self.row_bytes = 2;
         Ok(())
@@ -361,7 +365,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         leaf.pack.validate()?;
         leaf.block.validate_address()?;
         ensure!(
-            self.previous.as_ref().is_none_or(|previous| previous < &leaf.block.first),
+            self.previous().is_none_or(|previous| previous < &leaf.block.first),
             "noncanonical reused block"
         );
         self.flush_block().await?;
@@ -411,16 +415,25 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         super::work::spend(self.fence_bytes).await;
         let packs = std::mem::take(&mut self.packs);
         let blocks = std::mem::take(&mut self.blocks);
+        let resident = if let Some(cache) = &self.cache {
+            Some((
+                cache,
+                super::format::row_count(&blocks)?,
+                blocks.iter().map(|block| block.max_weight).max().unwrap_or(0),
+            ))
+        } else {
+            None
+        };
         let (reference, mut index, head) = ObjectBatch::<K, V>::upload_index(
             &self.store,
             &self.schema,
-            (packs.clone(), blocks.clone()),
+            (packs, blocks),
             self.limits.index_bytes,
             self.cache.as_deref(),
         )
         .await?;
         self.references.push(reference.clone());
-        if let Some(cache) = &self.cache {
+        if let Some((cache, rows, max_weight)) = resident {
             if index.pack.is_some()
                 && let (Some(address), Some(head)) = (&index.node, &head)
             {
@@ -436,8 +449,8 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             self.resident.push(ObjectBatch {
                 store: self.store.clone(),
                 reference,
-                rows: super::format::row_count(&blocks)?,
-                max_weight: blocks.iter().map(|block| block.max_weight).max().unwrap_or(0),
+                rows,
+                max_weight,
                 index: Arc::new(index),
                 head,
                 cache: cache.clone(),
