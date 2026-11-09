@@ -114,6 +114,21 @@ fn common(values: &[Expr], top: bool) -> BTreeSet<String> {
     sets.fold(first, |left, right| left.intersection(&right).cloned().collect())
 }
 impl Predicate {
+    pub(in crate::compiler) fn read_names(&self) -> BTreeSet<String> {
+        self.0.read_names()
+    }
+
+    /// Bind an outer join's combined-row predicate to its two borrowed inputs.
+    pub(crate) fn for_join(&self, right: &[ColumnRef]) -> anyhow::Result<Self> {
+        let names = right.iter().map(|column| column.name.as_str()).collect::<BTreeSet<_>>();
+        let expression = self.0.replaced(&|column| {
+            let mut column = column.clone();
+            column.right = names.contains(column.name.as_str());
+            Some(super::Scalar::column(column))
+        });
+        expression.map(Self).ok_or_else(|| anyhow::anyhow!("join predicate column binding"))
+    }
+
     pub(in crate::compiler) fn conjuncts(self) -> Vec<Expr> {
         match self.0 {
             Expr::And(values) | Expr::Quals(values) => values,

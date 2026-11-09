@@ -115,12 +115,23 @@ pub(crate) fn record_size(value: &impl serde::Serialize, limit: usize) -> Result
     record::size_value(value, limit)
 }
 
-pub(crate) fn weight_size(
-    tuple: &impl serde::Serialize,
+pub(crate) fn weighted_record_size(
+    tuple_bytes: usize,
     weight: &BigInt,
     limit: usize,
 ) -> Result<usize> {
-    record::size(tuple, weight, limit)
+    record::weighted_size(tuple_bytes, weight, limit)
+}
+
+/// Size a JSON pair using an already measured first element.
+pub(crate) fn paired_record_size(
+    tuple_bytes: usize,
+    value: &impl serde::Serialize,
+    limit: usize,
+) -> Result<usize> {
+    let prefix = tuple_bytes.checked_add(3).context("scratch record size overflow")?;
+    ensure!(prefix <= limit, CapacityExceeded("scratch record limit exceeded"));
+    Ok(prefix + record_size(value, limit - prefix)?)
 }
 
 pub(crate) fn charge_contribution(count: &mut usize, limit: usize) -> Result<()> {

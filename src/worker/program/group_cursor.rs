@@ -127,12 +127,12 @@ async fn emit_unmatched(
     }
     Ok(())
 }
-pub(super) fn left_join(spec: &Spec) -> Group<Key, Row> {
+pub(super) fn left_join(spec: &Spec) -> Result<Group<Key, Row>> {
     if spec.predicate.is_some() || spec.full {
         return residual_join::operator(spec);
     }
     let spec = Arc::new(spec.clone());
-    Group::new(move |input, work| {
+    Ok(Group::new(move |input, work| {
         let spec = Arc::clone(&spec);
         Box::pin(async move {
             let mut output = Consolidator::new(input.limits)?;
@@ -151,7 +151,7 @@ pub(super) fn left_join(spec: &Spec) -> Group<Key, Row> {
             }
             output.finish_batch()
         })
-    })
+    }))
 }
 
 fn emit_delta(

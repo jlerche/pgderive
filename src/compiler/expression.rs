@@ -341,7 +341,10 @@ impl Predicate {
         self.0.is_constant()
     }
     pub(crate) fn qualifies(&self, row: &Row) -> Result<bool> {
-        Ok(self.0.evaluate((row, row))? == Some(true))
+        self.qualifies_pair((row, row))
+    }
+    pub(crate) fn qualifies_pair(&self, rows: (&Row, &Row)) -> Result<bool> {
+        Ok(self.0.evaluate(rows)? == Some(true))
     }
 }
 

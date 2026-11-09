@@ -1,6 +1,7 @@
 //! Drop unread computed columns and left joins nothing above can observe.
 use super::{graph::Graph, join::Join, scope::Scopes};
 use crate::compiler::{
+    Predicate,
     left_join::Spec,
     partition::{Function, Mode, Partition, statistics::key_scale},
     properties::Analysis,
@@ -215,7 +216,12 @@ fn trim(node: &mut Node, origin: &Names, required: &Names) -> bool {
             fields.len() != before
         }
         Node::LeftJoin { spec, .. } => {
-            let live = |name: &str| required.contains(name) || !origin.contains(name);
+            // Borrowed predicate binding needs the side of every read, even when
+            // a computed column is unused above the join.
+            let predicate = spec.predicate.as_ref().map_or_else(Names::new, Predicate::read_names);
+            let live = |name: &str| {
+                required.contains(name) || predicate.contains(name) || !origin.contains(name)
+            };
             let before = spec.left.len() + spec.right.len();
             spec.left.retain(|column| live(&column.name));
             spec.right.retain(|column| live(&column.name));
@@ -367,4 +373,31 @@ fn distinct_for(
         Node::SetDistinct { columns, .. } => grouped(columns),
         _ => false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Names, trim};
+    use crate::compiler::{
+        ColumnRef, Predicate, expression::Expr, left_join::Spec, relational::Node, typed::Typed,
+    };
+
+    #[test]
+    fn residual_reads_keep_computed_join_side_metadata() {
+        let column =
+            ColumnRef { right: false, name: "computed_right".into(), oid: 16, nullable: true };
+        let mut join = Node::LeftJoin {
+            id: "join".into(),
+            input: "tagged".into(),
+            spec: Spec {
+                left: Vec::new(),
+                right: vec![column.clone()],
+                full: true,
+                predicate: Some(Predicate::new(Expr::Value(Typed::column(column)))),
+            },
+        };
+        let origin = Names::from(["computed_right".into()]);
+        assert!(!trim(&mut join, &origin, &Names::new()));
+        assert!(matches!(join, Node::LeftJoin {spec,..} if spec.right.len() == 1));
+    }
 }

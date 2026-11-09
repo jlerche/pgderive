@@ -95,6 +95,20 @@ pub(super) fn stripped(row: &Row) -> Row {
         .collect()
 }
 
+fn validate_pair(left: &Row, right: &Row) -> Result<()> {
+    ensure!(
+        !left.keys().any(|field| field != SIDE && right.contains_key(field)),
+        "left join field collision"
+    );
+    Ok(())
+}
+fn combined(left: &Row, right: &Row) -> Row {
+    left.iter()
+        .chain(right)
+        .filter(|(field, _)| field.as_str() != SIDE)
+        .map(|(field, value)| (field.clone(), value.clone()))
+        .collect()
+}
 pub(super) fn pair(left: &Row, right: &Row) -> Result<Row> {
     let mut result = stripped(left);
     for (field, value) in right {
@@ -107,12 +121,26 @@ pub(super) fn pair(left: &Row, right: &Row) -> Result<Row> {
     }
     Ok(result)
 }
+#[cfg(test)]
 pub(super) fn matching(spec: &Spec, left: &Row, right: &Row) -> Result<Option<Row>> {
     let result = pair(left, right)?;
-    if spec.predicate.as_ref().map_or(Ok(true), |predicate| predicate.qualifies(&result))? {
-        Ok(Some(result))
-    } else {
-        Ok(None)
+    Ok(spec
+        .predicate
+        .as_ref()
+        .map_or(Ok(true), |predicate| predicate.qualifies(&result))?
+        .then_some(result))
+}
+pub(super) struct Matcher(Option<crate::compiler::Predicate>);
+impl Matcher {
+    pub(super) fn new(spec: &Spec) -> Result<Self> {
+        Ok(Self(spec.predicate.as_ref().map(|value| value.for_join(&spec.right)).transpose()?))
+    }
+    pub(super) fn matches(&self, left: &Row, right: &Row) -> Result<bool> {
+        validate_pair(left, right)?;
+        self.0.as_ref().map_or(Ok(true), |predicate| predicate.qualifies_pair((left, right)))
+    }
+    pub(super) fn matching(&self, left: &Row, right: &Row) -> Result<Option<Row>> {
+        Ok(self.matches(left, right)?.then(|| combined(left, right)))
     }
 }
 
@@ -126,7 +154,7 @@ pub(super) fn null_extend(columns: &[ColumnRef], row: &Row) -> Result<Row> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SIDE, pair};
+    use super::{Matcher, SIDE, pair};
     use crate::transaction::Row;
     use anyhow::Result;
 
@@ -146,6 +174,39 @@ mod tests {
         );
         assert_eq!(left.len(), 2);
         assert_eq!(right.len(), 2);
+        Ok(())
+    }
+    #[test]
+    fn borrowed_matching_validates_collisions_before_reading_predicate_columns() -> Result<()> {
+        use crate::compiler::{compile, relational::Node};
+        let mut native = crate::worker::tests::contract();
+        native.relations[0].columns[2].oid = 23;
+        native.relations[0].columns[2].collation = 0;
+        let compiled = compile(
+            "SELECT a.id,b.id FROM source.auction a FULL JOIN source.bid b ON a.other=b.auction AND a.id<b.price",
+            &native,
+        )?;
+        let spec = compiled
+            .relational()
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                Node::LeftJoin { spec, .. } => Some(spec),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("join absent"))?;
+        let matcher = Matcher::new(spec)?;
+        let left = Row::from([("collision".into(), None)]);
+        let right = left.clone();
+        assert_eq!(
+            matcher.matches(&left, &right).err().map(|e| e.to_string()),
+            Some("left join field collision".into())
+        );
+        assert_eq!(
+            matcher.matching(&left, &right).err().map(|e| e.to_string()),
+            Some("left join field collision".into())
+        );
+        assert!(matcher.matches(&Row::new(), &Row::new()).is_err());
         Ok(())
     }
 }

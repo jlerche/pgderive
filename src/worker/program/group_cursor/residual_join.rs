@@ -8,7 +8,7 @@ use crate::{
     },
     transaction::Row,
     worker::program::{
-        left_join::{matching, null_extend},
+        left_join::{Matcher, null_extend},
         relational::Key,
     },
 };
@@ -75,6 +75,7 @@ impl Changes {
 
 struct Scan<'a> {
     spec: &'a Spec,
+    matcher: &'a Matcher,
     left: Rows<'a>,
     right: Rows<'a>,
     lefts: Changes,
@@ -83,9 +84,11 @@ struct Scan<'a> {
     output: Consolidator<((), Row)>,
 }
 
-pub(super) fn operator(spec: &Spec) -> Group<Key, Row> {
+pub(super) fn operator(spec: &Spec) -> Result<Group<Key, Row>> {
+    let matcher = Arc::new(Matcher::new(spec)?);
     let spec = Arc::new(spec.clone());
-    Group::new(move |input, work| {
+    Ok(Group::new(move |input, work| {
+        let matcher = Arc::clone(&matcher);
         let spec = Arc::clone(&spec);
         Box::pin(async move {
             let (left, right) = split(input.delta)?;
@@ -93,14 +96,15 @@ pub(super) fn operator(spec: &Spec) -> Group<Key, Row> {
             let lefts = Changes::seeded(&left, limit)?;
             let rights = Changes::seeded(&right, limit)?;
             let output = Consolidator::new(input.limits)?;
-            let mut scan = Scan { spec: &spec, left, right, lefts, rights, limit, output };
+            let mut scan =
+                Scan { spec: &spec, matcher: &matcher, left, right, lefts, rights, limit, output };
             scan.before(input.before().await?, work).await?;
             scan.after(input.after().await?, work).await?;
             scan.changed_pairs(work)?;
             scan.settle(&input, work).await?;
             scan.finish()
         })
-    })
+    }))
 }
 
 impl Scan<'_> {
@@ -124,7 +128,7 @@ impl Scan<'_> {
         let changes = std::mem::take(&mut self.right);
         for (right, delta) in &changes {
             work.charge(1)?;
-            let Some(result) = matching(self.spec, left, right)? else { continue };
+            let Some(result) = self.matcher.matching(left, right)? else { continue };
             self.output.add(((), result), BigInt::from(weight) * *delta)?;
             let state = if *delta > 0 { NEW } else { OLD };
             self.lefts.flag(left, weight, state, self.limit)?;
@@ -154,7 +158,7 @@ impl Scan<'_> {
         let changes = std::mem::take(&mut self.left);
         for (left, delta) in &changes {
             work.charge(1)?;
-            let Some(result) = matching(self.spec, left, right)? else { continue };
+            let Some(result) = self.matcher.matching(left, right)? else { continue };
             self.output.add(((), result), BigInt::from(weight) * *delta)?;
             let state = if *delta > 0 { NEW } else { OLD };
             self.lefts.flag(left, 0, state, self.limit)?;
@@ -184,7 +188,7 @@ impl Scan<'_> {
         if exists == [false, false] {
             return Ok(());
         }
-        let Some(result) = matching(self.spec, left, right)? else { return Ok(()) };
+        let Some(result) = self.matcher.matching(left, right)? else { return Ok(()) };
         let new = BigInt::from(a[NEW]) * b[NEW];
         self.output.add(((), result), new - BigInt::from(a[OLD]) * b[OLD])?;
         for state in [OLD, NEW].into_iter().filter(|state| exists[*state]) {
@@ -217,7 +221,7 @@ impl Scan<'_> {
             for candidate in std::mem::take(candidates) {
                 work.charge(1)?;
                 let (a, b) = if left { (&row, &candidate) } else { (&candidate, &row) };
-                if matching(self.spec, a, b)?.is_some() {
+                if self.matcher.matches(a, b)? {
                     changes.flag(&candidate, 0, state, self.limit)?;
                 } else {
                     candidates.push(candidate);

@@ -182,3 +182,5 @@ mod scalar;
 
 #[path = "tests/using.rs"]
 mod using;
+
+mod join_predicate;

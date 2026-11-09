@@ -39,7 +39,7 @@ async fn cursor_left_join_does_only_linear_visits_and_new_matching_pairs() -> Re
             batch: Batch::from_updates([((vec!["key".into()].into(), tagged(false, size)), 1)])?,
         };
         let budget = usize::try_from(5 * size + 2)?;
-        let output = left_join(&spec)
+        let output = left_join(&spec)?
             .evaluate(&delta, &prior, Limits { contributions: budget, ..Limits::default() })
             .await?;
         assert_eq!(
@@ -56,7 +56,7 @@ async fn cursor_left_join_does_only_linear_visits_and_new_matching_pairs() -> Re
             }))?
         );
         assert!(
-            left_join(&spec)
+            left_join(&spec)?
                 .evaluate(&delta, &prior, Limits { contributions: budget - 1, ..Limits::default() })
                 .await
                 .is_err()

@@ -1,6 +1,6 @@
 //! Typed reversible scalar folds erased only at the operator registry boundary.
 use crate::engine::{
-    execution::{Limits, weight_size},
+    execution::{Limits, paired_record_size, record_size, weighted_record_size},
     reader::BatchData,
     value::Decoded,
 };
@@ -21,12 +21,13 @@ pub trait Additive:
     fn add_scaled(&mut self, other: &Self, weight: i64) -> Result<()>;
     /// Whether every hidden contribution is zero, including scale/special counts.
     fn is_zero(&self) -> bool;
-    /// Charge the complete scalar representation against a bounded record.
+    /// Charge a JSON pair of an exactly measured tuple and this scalar.
+    /// `tuple_bytes` must be the tuple's canonical JSON encoded length.
     ///
     /// # Errors
     /// Returns serialization or record-capacity failures.
-    fn record_size(&self, tuple: &impl Serialize, limit: usize) -> Result<usize> {
-        crate::engine::execution::record_size(&(tuple, self), limit)
+    fn record_size(&self, tuple_bytes: usize, limit: usize) -> Result<usize> {
+        paired_record_size(tuple_bytes, self, limit)
     }
 }
 impl Additive for BigInt {
@@ -37,8 +38,8 @@ impl Additive for BigInt {
     fn is_zero(&self) -> bool {
         self == &Self::default()
     }
-    fn record_size(&self, tuple: &impl Serialize, limit: usize) -> Result<usize> {
-        weight_size(tuple, self, limit)
+    fn record_size(&self, tuple_bytes: usize, limit: usize) -> Result<usize> {
+        weighted_record_size(tuple_bytes, self, limit)
     }
 }
 type Measure<K, V, A> = dyn Fn(&K, &V) -> Result<Vec<A>> + Send + Sync;
@@ -89,6 +90,9 @@ impl<K: BatchData, V: BatchData, S: BatchData, A: Additive> Accumulator<K, V, S>
     fn observe(&mut self, key: &K, row: &V, weight: i64) -> Result<()> {
         let values = (self.algebra.measure)(key, row)?;
         ensure!(values.len() == self.values.len(), "statistics measure width mismatch");
+        // Equal ordering keys can carry different serialized representatives.
+        // Reuse only within this row, across its scalar columns.
+        self.budget.key_bytes = None;
         for (column, (total, value)) in self.values.iter_mut().zip(values).enumerate() {
             total.add_scaled(&value, weight)?;
             self.budget.add(key, column, total)?;
@@ -145,10 +149,11 @@ pub(super) struct Budget {
     contributions: usize,
     entries: usize,
     bytes: u64,
+    key_bytes: Option<usize>,
 }
 impl Budget {
     pub(super) const fn new(limits: Limits) -> Self {
-        Self { limits, contributions: 0, entries: 0, bytes: 0 }
+        Self { limits, contributions: 0, entries: 0, bytes: 0, key_bytes: None }
     }
     fn add<K: BatchData, A: Additive>(&mut self, key: &K, column: usize, value: &A) -> Result<()> {
         ensure!(
@@ -156,7 +161,14 @@ impl Budget {
             crate::engine::execution::CapacityExceeded("contribution limit exceeded")
         );
         self.contributions += 1;
-        value.record_size(&(key, column), self.limits.record_bytes)?;
+        let key_bytes = if let Some(bytes) = self.key_bytes {
+            bytes
+        } else {
+            let bytes = record_size(key, self.limits.record_bytes)?;
+            self.key_bytes = Some(bytes);
+            bytes
+        };
+        value.record_size(tuple_size(key_bytes, column)?, self.limits.record_bytes)?;
         Ok(())
     }
     pub(super) fn finish<K: BatchData, A: Additive>(
@@ -164,16 +176,25 @@ impl Budget {
         key: &K,
         values: &[A],
     ) -> Result<()> {
+        self.key_bytes = None;
+        let mut key_bytes = None;
         for (column, value) in values.iter().enumerate().filter(|(_, value)| !value.is_zero()) {
             self.entries = self.entries.checked_add(1).context("output entry count overflow")?;
             ensure!(
                 self.entries <= self.limits.output_entries,
                 crate::engine::execution::CapacityExceeded("output entry limit exceeded")
             );
+            let bytes = if let Some(bytes) = key_bytes {
+                bytes
+            } else {
+                let bytes = record_size(key, self.limits.record_bytes)?;
+                key_bytes = Some(bytes);
+                bytes
+            };
             self.bytes = self
                 .bytes
                 .checked_add(u64::try_from(
-                    value.record_size(&(key, column), self.limits.record_bytes)?,
+                    value.record_size(tuple_size(bytes, column)?, self.limits.record_bytes)?,
                 )?)
                 .context("output byte count overflow")?;
             ensure!(
@@ -184,3 +205,14 @@ impl Budget {
         Ok(())
     }
 }
+
+fn tuple_size(key_bytes: usize, column: usize) -> Result<usize> {
+    let digits = usize::try_from(column.checked_ilog10().map_or(1, |value| value + 1))?;
+    key_bytes
+        .checked_add(digits)
+        .and_then(|bytes| bytes.checked_add(3))
+        .context("statistics tuple size overflow")
+}
+
+#[cfg(test)]
+mod tests;

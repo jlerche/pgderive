@@ -113,7 +113,7 @@ fn bind(
         Node::Mark { spec, .. } => Operator::Group(super::subquery::mark(spec)),
         Node::Existence { anti, .. } => Operator::Group(super::group_cursor::existence(*anti)),
         Node::LeftJoinInput { spec, .. } => Operator::Project(super::left_join::input(spec)),
-        Node::LeftJoin { spec, .. } => Operator::Group(super::group_cursor::left_join(spec)),
+        Node::LeftJoin { spec, .. } => Operator::Group(super::group_cursor::left_join(spec)?),
         Node::DistinctInput { .. }
         | Node::DistinctCounts { .. }
         | Node::DistinctMembership { .. }
