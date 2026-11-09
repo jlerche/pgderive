@@ -106,3 +106,7 @@ mod binary;
 pub use binary::{Binary, BinaryFuture, BinaryInput};
 
 pub(crate) use partition::WorkOutput;
+
+#[cfg(test)]
+#[path = "tests/filter.rs"]
+mod filter_tests;

@@ -203,9 +203,7 @@ fn output(output: &Projected) -> Project<Key, Row, Key, Row> {
 
 fn filter(predicate: &crate::compiler::Predicate) -> Project<Key, Row, Key, Row> {
     let predicate = predicate.clone();
-    Project::new(move |key: &Key, row: &Row| {
-        Ok(predicate.qualifies(row)?.then(|| (key.clone(), row.clone())))
-    })
+    Project::filter(move |_: &Key, row: &Row| predicate.qualifies(row))
 }
 
 fn expand(
