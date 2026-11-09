@@ -155,9 +155,8 @@ impl<K: BatchData, V: BatchData> Group<K, V> {
             let result =
                 (self.transform)(GroupInput { key, delta: &delta, prior, limits }, work).await?;
             limits.check_batch(&result)?;
-            for (((), value), weight) in result.iter() {
-                output.add((key.clone(), value.clone()), *weight)?;
-            }
+            result
+                .for_each_owned(|((), value), weight| output.add((key.clone(), value), weight))?;
             remaining = rest;
         }
         Ok(())

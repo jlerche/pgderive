@@ -168,6 +168,22 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         self.current = None;
         Ok(cursor)
     }
+    async fn select(
+        run: &Run<K, V>,
+        head: Option<&Cursor<K, V>>,
+        key: &KeyIdentity<K>,
+        page: Option<&SelectedBlock<K, V>>,
+    ) -> Result<Option<Cursor<K, V>>> {
+        match run {
+            Run::Memory(batch) => {
+                Ok(Some(Cursor::memory_key_reusing(batch.shared_entries(), key.key(), head)))
+            }
+            Run::Object(batch) => match page {
+                Some(page) => Cursor::object_key_page(batch.clone(), key, page.clone(), head).await,
+                None => Ok(None),
+            },
+        }
+    }
     pub(crate) async fn cursor_prepared(
         &mut self,
         prepared: &PreparedKey<K, V>,
@@ -182,38 +198,17 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
             cursor.find().await?;
             return Ok(KeyCursor::new(cursor, None, key.clone(), 0));
         }
-        let requests = self
-            .runs
-            .iter()
-            .zip(&self.heads)
-            .zip(&prepared.pages)
-            .map(|((run, head), page)| (run.clone(), head.clone(), key.clone(), page.clone()))
-            .collect::<Vec<_>>();
-        let selected = stream::iter(requests)
-            .map(|(run, head, key, page)| async move {
-                match run {
-                    Run::Memory(batch) => Ok(Some(Cursor::memory_key_reusing(
-                        batch.shared_entries(),
-                        key.key(),
-                        head.as_ref(),
-                    ))),
-                    Run::Object(batch) => match page {
-                        Some(page) => {
-                            Cursor::object_key_page(batch, &key, page, head.as_ref()).await
-                        }
-                        None => Ok(None),
-                    },
-                }
+        let runs = self.runs.as_slice();
+        let heads = self.heads.as_slice();
+        let pages = prepared.pages.as_slice();
+        let length = runs.len().min(heads.len()).min(pages.len());
+        let selected = stream::iter(0..length)
+            .map(|index| {
+                Self::select(&runs[index], heads[index].as_ref(), key, pages[index].as_ref())
             })
             .buffered(READ_CONCURRENCY)
             .try_collect::<Vec<_>>()
             .await?;
-        let mut heads = self.heads.clone();
-        for (head, selected) in heads.iter_mut().zip(&selected) {
-            if let Some(cursor) = selected {
-                *head = Some(cursor.clone());
-            }
-        }
         let mut cursors = Vec::new();
         for index in &self.slots {
             if let Some(cursor) = selected.get(*index).context("missing selected run head")?
@@ -226,7 +221,11 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         cursor.find().await?;
         let cursor =
             KeyCursor::new(cursor, prepared.ticket.clone(), key.clone(), prepared.collector_limit);
-        self.heads = heads;
+        for (head, selected) in self.heads.iter_mut().zip(selected) {
+            if let Some(cursor) = selected {
+                *head = Some(cursor);
+            }
+        }
         self.current = Some(LastProbe { key: key.key().clone(), cursor: cursor.clone() });
         Ok(cursor)
     }
@@ -242,6 +241,30 @@ mod retention_tests {
     use anyhow::Result;
     use object_store::{ObjectStore, memory::InMemory};
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn failed_final_consolidation_retains_heads_and_last_successful_probe() -> Result<()> {
+        let mut runs = Vec::new();
+        for weight in [i64::MAX, 1] {
+            runs.push(Run::Memory(Arc::new(Batch::from_updates([
+                ((0_i64, 0_i64), 1),
+                ((1, 1), weight),
+            ])?)));
+        }
+        let trace = TraceSnapshot::from_runs(runs, 1, 1)?;
+        let mut probes = trace.probes();
+        let pinned = probes.cursor(&0).await?;
+        assert_eq!(pinned.current(), Some((&0, &0, 2)));
+        let heads = probes.heads.as_ptr();
+        assert!(probes.cursor_releasing_unselected(&1).await.is_err());
+        assert_eq!(probes.heads.as_ptr(), heads);
+        assert!(probes.heads.iter().all(|head| {
+            head.as_ref().and_then(crate::engine::reader::Cursor::current) == Some((&0, &0, 1))
+        }));
+        assert_eq!(probes.cursor(&0).await?.current(), Some((&0, &0, 2)));
+        assert_eq!(pinned.current(), Some((&0, &0, 2)));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn scoped_probes_release_disjoint_heads_and_preserve_failed_position() -> Result<()> {

@@ -99,6 +99,16 @@ impl<T: Ord + Clone> ZSet<T> {
         Arc::clone(&self.entries)
     }
 
+    /// Consume rows without rebuilding their container; copy only shared identities.
+    pub(crate) fn for_each_owned(self, mut visit: impl FnMut(T, i64) -> Result<()>) -> Result<()> {
+        match Arc::try_unwrap(self.entries) {
+            Ok(entries) => entries.into_iter().try_for_each(|(tuple, weight)| visit(tuple, weight)),
+            Err(entries) => {
+                entries.iter().try_for_each(|(tuple, weight)| visit(tuple.clone(), *weight))
+            }
+        }
+    }
+
     pub(crate) fn weight(&self, tuple: &T) -> i64 {
         self.entries
             .binary_search_by(|entry| entry.0.cmp(tuple))
@@ -169,6 +179,43 @@ mod tests {
     use super::merge_canonical;
     use crate::engine::{Batch, BatchBuilder};
     use anyhow::Result;
+    #[test]
+    fn consuming_entries_moves_unique_identities_and_copies_only_shared_rows() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static CLONES: AtomicUsize = AtomicUsize::new(0);
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+        struct Counted(i64);
+        impl Clone for Counted {
+            fn clone(&self) -> Self {
+                CLONES.fetch_add(1, Ordering::Relaxed);
+                Self(self.0)
+            }
+        }
+        let batch = super::ZSet::from_updates([(Counted(1), -2), (Counted(2), 3)])?;
+        CLONES.store(0, Ordering::Relaxed);
+        let mut rows = Vec::new();
+        batch.for_each_owned(|tuple, weight| {
+            rows.push((tuple, weight));
+            Ok(())
+        })?;
+        assert_eq!(CLONES.load(Ordering::Relaxed), 0);
+        let batch = super::ZSet::from_canonical(rows)?;
+        let pinned = batch.clone();
+        let mut visited = 0;
+        batch.for_each_owned(|_, _| {
+            visited += 1;
+            Ok(())
+        })?;
+        assert_eq!(visited, 2);
+        assert_eq!(CLONES.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            pinned.iter().map(|(value, weight)| (value.0, *weight)).collect::<Vec<_>>(),
+            [(1, -2), (2, 3)]
+        );
+        pinned.for_each_owned(|_, _| Ok(()))?;
+        assert_eq!(CLONES.load(Ordering::Relaxed), 2);
+        Ok(())
+    }
     #[test]
     fn empty_integration_reuses_canonical_storage() -> Result<()> {
         let delta = Batch::from_updates([((1, String::from("payload")), -3)])?;

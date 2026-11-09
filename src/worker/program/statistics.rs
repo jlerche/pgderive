@@ -33,7 +33,8 @@ fn measure(spec: &Partition, row: &Row) -> Result<Vec<Scalar>> {
     if let Some(values) = super::distinct_statistics::measure(spec, row)? {
         return Ok(values.into_iter().map(Scalar::Integer).collect());
     }
-    let mut values = vec![Scalar::Integer(1.into())];
+    let mut values = Vec::with_capacity(width(spec.aggregates.len()));
+    values.push(Scalar::Integer(1.into()));
     for aggregate in &spec.aggregates {
         if matches!(aggregate.function, Function::CountDistinct) {
             values.extend([Scalar::default(), Scalar::default()]);

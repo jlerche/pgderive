@@ -172,12 +172,12 @@ impl<K: BatchData, V: BatchData> Partition<K, V> {
                 work.charge(old_output.iter().count())?;
                 work.charge(new_output.iter().count())?;
             }
-            for (((), value), weight) in old_output.iter() {
-                updates.add((key.clone(), value.clone()), -*weight)?;
-            }
-            for (((), value), weight) in new_output.iter() {
-                updates.add((key.clone(), value.clone()), *weight)?;
-            }
+            drop(before);
+            drop(after);
+            old_output
+                .for_each_owned(|((), value), weight| updates.add((key.clone(), value), -weight))?;
+            new_output
+                .for_each_owned(|((), value), weight| updates.add((key.clone(), value), weight))?;
         }
         Ok(())
     }
