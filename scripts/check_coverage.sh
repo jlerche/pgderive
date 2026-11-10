@@ -20,12 +20,21 @@ source "$output/build/coverage.env"
 # Always execute the checked-in oracles, regardless of benchmark shell settings.
 unset PGDERIVE_SEMANTICS_REPLAY PGDERIVE_FAST_REPLAY PGDERIVE_FAST_REPORT
 export PGDERIVE_SEMANTICS_REPORT="$output/semantics.json"
-# The sourced coverage environment instruments this exact prebuilt target set.
+run_live() {
+    if [[ "$profile" == full ]]; then
+        PGDERIVE_COVERAGE=1 ./scripts/check_integration.sh
+    fi
+    PGDERIVE_GATE_REPLICATION=1 PGDERIVE_COVERAGE=1 ./scripts/check_worker.sh
+}
+# Units use no live PostgreSQL. Both phases use the finished build and separate
+# per-process counters; no cleanup or report may run until both have stopped.
+run_live &
+live_pid=$!
+# Even a unit/oracle failure must await live cleanup and evidence preservation.
+trap 'wait "$live_pid" || true' EXIT
 cargo test --locked --all-targets --all-features | tee "$output/unit-tests.log"
 python3 scripts/check_semantics_report.py "$output/semantics.json" "$output/unit-tests.log"
-if [[ "$profile" == full ]]; then
-    PGDERIVE_COVERAGE=1 ./scripts/check_integration.sh
-fi
-PGDERIVE_GATE_REPLICATION=1 PGDERIVE_COVERAGE=1 ./scripts/check_worker.sh
+wait "$live_pid"
+trap - EXIT
 cargo llvm-cov report --ignore-filename-regex '/tests(/|\.rs$)' --json --output-path "$output/coverage.json"
 cargo llvm-cov report --ignore-filename-regex '/tests(/|\.rs$)' --fail-under-lines 80 | tee "$output/summary.txt"

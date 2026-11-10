@@ -76,7 +76,12 @@ publication, process death and recovery.
 Covered executables and the ignored manifest protocol test are built once with
 one unified Cargo target/feature set. Live suites invoke those exact artifacts;
 no Cargo compilation or coverage-counter cleanup runs concurrently with them.
-All processes inherit the same per-process coverage output pattern. The protocol
+The unit tests and live suites start together after this build. All processes
+inherit the same per-process coverage output pattern. Reporting waits for both
+phases and the semantic-report verifier to pass. A unit or semantic-report
+failure still waits for live cleanup/evidence preservation before returning an
+error. Within the full live phase, integration and worker qualification remain
+sequential. The protocol
 log must show the exact named test and one passing test, preventing an obsolete
 filter from silently running zero tests.
 
@@ -128,3 +133,10 @@ probe; the measured complete gate then reused that build. A fresh dependency
 build or a slower host adds compilation time, so this is a measured warm run,
 not a universal CI time limit. The exhaustive `--full` release gate was not run
 for this gate-only change.
+
+A subsequent run overlapping the unit and live phases passed in **190 seconds
+(3m10s)**, versus 241s when those phases were sequential. The same 865 Rust tests,
+417 semantic histories and live checks passed, together with 223 Python tests
+(including shell overlap/failure regression checks). Production line coverage
+remained 96.02%. Unit execution took 61.99s under concurrent load, compared with
+55.36s in isolation; the net saving was 51s. This also used cached builds.

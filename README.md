@@ -126,8 +126,9 @@ focused live checks for CDC, result-table decoding, checkpoint publication,
 COMMIT faults, process kills, tenant isolation/offline reclamation, lifecycle and
 rebuild. Synthetic S3 latency is disabled. Four independent, owned tmpfs
 PostgreSQL instances run live groups concurrently; mutating harnesses remain
-sequential within each instance. Production line coverage must still be at least
-80%.
+sequential within each instance. Unit tests overlap the live suites after their
+shared build; coverage reporting waits for both phases to pass. Production line
+coverage must still be at least 80%.
 
 `./scripts/check.sh --full` retains the exhaustive live query matrix and operational
 release qualification, including native-oracle refresh, TLS, backup recovery,
