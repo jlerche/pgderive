@@ -31,22 +31,24 @@ if [[ "$profile" == full ]]; then
     export PGDERIVE_ERROR_ORDER_EVIDENCE="$(mktemp "$PWD/artifacts/error-order/run-XXXXXXXX.json")"
     python3 scripts/error_order_differential.py "${pg[@]}" -Atq
 fi
-# Shared tenant storage fault cases are one sequential, schema-isolated live test.
-if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
-    cargo llvm-cov --locked --lib --no-report -- tenant_storage_manifest_live --ignored --nocapture --test-threads=1
-else
-    cargo test --locked --lib tenant_storage_manifest_live -- --ignored --nocapture --test-threads=1
+if [[ -z ${PGDERIVE_GATE_BUILD:-} ]]; then
+    mkdir -p artifacts
+    build=$(mktemp -d "$PWD/artifacts/gate-build-XXXXXXXX")
+    ./scripts/build_gate.sh "$build"
+    export PGDERIVE_GATE_BUILD="$build/manifest.json"
 fi
-
 if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
-    harness=(cargo llvm-cov run --locked --no-report --bin replication_harness -- config.example.toml)
-else
-    cargo build --locked --bins
-    harness=(./target/debug/replication_harness config.example.toml)
+    source "$(dirname "$PGDERIVE_GATE_BUILD")/coverage.env"
 fi
 mkdir -p artifacts/replication
 output=$(mktemp -d "$PWD/artifacts/replication/run-XXXXXXXX")
 printf 'Evidence: %s\n' "$output"
+protocol=$(python3 -c 'import json,os;print(json.load(open(os.environ["PGDERIVE_GATE_BUILD"]))["protocol_tests"])')
+# Invoke the instrumented test executable directly: no rebuild or profile reset
+# while other independent live lanes are writing their coverage counters.
+"$protocol" --exact storage::tenant::tests::tenant_storage_manifest_live --ignored --nocapture --test-threads=1 | tee "$output/protocol.log"
+python3 scripts/gate_build.py protocol "$output/protocol.log"
+harness=("$(python3 -c 'import json,os;print(json.load(open(os.environ["PGDERIVE_GATE_BUILD"]))["replication"])')" config.example.toml)
 install -m 600 s3.example.json "$output/s3.json"
 export PGDERIVE__OBJECT_STORE__CREDENTIALS_FILE="$output/s3.json"
 if PGDERIVE__POSTGRES__PASSWORD="$PGPASSWORD" python3 scripts/run_with_s3_proxy.py "$output" "${harness[@]}"; then
@@ -103,8 +105,8 @@ assert 'MVP exported snapshot plus concurrent insert/update/delete CDC reconstru
 assert 'MVP full-tuple result occurrences, cancellation and negative multiplicity rollback passed' in harness_log
 assert [len(tx['changes']) for tx in transactions]==[12,12,5,5,2,1,2,3,3,2,4,3,2,2,2]
 assert [len(tx['batch']['updates']) for tx in transactions]==[12,24,5,0,4,2,4,6,5,2,4,4,2,2,2]
-binary=root/('target/llvm-cov-target/debug/replication_harness' if os.environ.get('PGDERIVE_COVERAGE')=='1' else 'target/debug/replication_harness')
-files=[root/'Cargo.lock',root/'config.example.toml',root/'scripts/publication_mutations.json',*sorted((root/'src').rglob('*.rs')),*sorted((root/'src').rglob('*.sql')),binary,out/'transactions.jsonl',out/'harness.log',out/'proxy.jsonl',out/'storage-profile.json',out/'sql-commit-before.jsonl',out/'sql-commit-after.jsonl',out/'sql-commit-hold.jsonl']
+binary=pathlib.Path(json.loads(pathlib.Path(os.environ['PGDERIVE_GATE_BUILD']).read_text())['replication'])
+files=[root/'Cargo.lock',root/'config.example.toml',root/'scripts/publication_mutations.json',*sorted((root/'src').rglob('*.rs')),*sorted((root/'src').rglob('*.sql')),binary,out/'protocol.log',out/'transactions.jsonl',out/'harness.log',out/'proxy.jsonl',out/'storage-profile.json',out/'sql-commit-before.jsonl',out/'sql-commit-after.jsonl',out/'sql-commit-hold.jsonl']
 provenance={
     'postgres':subprocess.check_output(['psql','-h','127.0.0.1','-p',os.environ['PGDERIVE_TEST_POSTGRES_PORT'],'-U','postgres','-d','postgres','-Atc','SELECT version()'],text=True).strip(),
     'rust':subprocess.check_output(['rustc','--version'],text=True).strip(),

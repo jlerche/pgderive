@@ -6,19 +6,17 @@ case "$profile" in
     core|full) ;;
     *) printf 'Invalid check profile: %s\n' "$profile" >&2; exit 2 ;;
 esac
-if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
-    # Run the instrumented executable directly so SIGKILL targets the worker,
-    # rather than a cargo launcher whose child would survive the crash test.
-    export CARGO_TARGET_DIR="$PWD/target/llvm-cov-target"
-    source <(cargo llvm-cov show-env --sh)
-    cargo build --locked --bin pgderive_worker --bin pgderive --bin postgres_tls_control_probe
-    worker=("$CARGO_TARGET_DIR/debug/pgderive_worker")
-    admin=("$CARGO_TARGET_DIR/debug/pgderive")
-else
-    cargo build --locked --bin pgderive_worker --bin pgderive --bin postgres_tls_control_probe
-    worker=("$PWD/target/debug/pgderive_worker")
-    admin=("$PWD/target/debug/pgderive")
+if [[ -z ${PGDERIVE_GATE_BUILD:-} ]]; then
+    mkdir -p artifacts
+    build=$(mktemp -d "$PWD/artifacts/gate-build-XXXXXXXX")
+    ./scripts/build_gate.sh "$build"
+    export PGDERIVE_GATE_BUILD="$build/manifest.json"
 fi
+if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
+    source "$(dirname "$PGDERIVE_GATE_BUILD")/coverage.env"
+fi
+worker=("$(python3 -c 'import json,os;print(json.load(open(os.environ["PGDERIVE_GATE_BUILD"]))["worker"])')")
+admin=("$(python3 -c 'import json,os;print(json.load(open(os.environ["PGDERIVE_GATE_BUILD"]))["admin"])')")
 mkdir -p artifacts/worker
 output=$(mktemp -d "$PWD/artifacts/worker/run-XXXXXXXX")
 printf 'Worker evidence: %s\n' "$output"
@@ -33,25 +31,7 @@ run_qualification() {
     fi
 }
 if [[ "$profile" == core ]]; then
-    for boundary in memtable checkpoint; do
-        PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$boundary" \
-            python3 scripts/core_worker_harness.py "$boundary" "$output/$boundary" -- "${worker[@]}"
-    done
-    for name in result-table projection-compiler postgres-support operation-budget tenant-storage tenant-storage-commit; do
-        PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$name" \
-            python3 "scripts/${name//-/_}_harness.py" "$output/$name" -- "${worker[@]}"
-    done
-    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification multi-query \
-        python3 scripts/multi_query_memory_harness.py "$output/multi-query" --counts 2 --seconds 2 --mode shared -- "${worker[@]}"
-    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \
-        python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 "$output/transactions" -- "${worker[@]}"
-    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification crashes \
-        python3 scripts/worker_crash_harness.py "$output/crashes" -- "${worker[@]}"
-    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-lifecycle \
-        python3 scripts/core_worker_harness.py lifecycle "$output/query-lifecycle" -- "${admin[@]}"
-    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-rebuild \
-        python3 scripts/query_rebuild_harness.py "$output/query-rebuild" -- "${admin[@]}"
-    python3 scripts/verify_worker_core.py "$output" "${worker[0]}" "${admin[0]}"
+    python3 scripts/live_gate.py "$output" "$PGDERIVE_GATE_BUILD"
     exit 0
 fi
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification result-table \

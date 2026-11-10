@@ -30,7 +30,7 @@ multiplicities. It does not normalize numeric sums or decode both sides through
 the production numeric parser.
 
 Paused-clock tests also exercise the production epoch collector, checkpoint
-timeout and tenant upload gather loop. They advance virtual time, including a
+timeout, tenant upload gather loop and capped worker retry backoff. They advance virtual time, including a
 one-hour checkpoint timeout, rather than sleeping for those durations. Runtime
 wall-time measurements are diagnostic; they do not drive expected semantics.
 DBSP epoch time, virtual elapsed time and source WAL addresses remain distinct.
@@ -58,12 +58,32 @@ The default worker suite retains 21 result cases plus rebuild and tenant reports
   reclamation and central-manifest COMMIT faults.
 - Query lifecycle and fresh-generation rebuild with pinned-reader reclamation.
 
-The complete low-level replication harness remains sequential and live. These
-checks use real PostgreSQL/object storage, event witnesses and explicit fault
-barriers. Their timeouts are failure bounds, not a way to simulate scheduling.
+The complete low-level replication harness remains live. The default gate
+provisions four independently owned PostgreSQL containers with tmpfs storage.
+Live groups run concurrently across these instances, with strictly sequential
+harnesses within each instance. A database never serves overlapping mutating
+harnesses. These checks use real PostgreSQL/object storage, event witnesses and
+explicit fault barriers. Their timeouts are failure bounds, not a way to simulate scheduling.
 The exhaustive capacity, query-family, binding and operational matrices remain
 in `--full`. Live-only callback witnesses in the source harnesses remain there;
 the frozen replay covers their committed semantic histories.
+
+Live fault scenarios retain their production retry count but use a 1ms base
+retry delay. Paused-time tests separately verify the production exponential
+schedule, its 5s cap and stop interruption. Live waits still observe actual CDC,
+publication, process death and recovery.
+
+Covered executables and the ignored manifest protocol test are built once with
+one unified Cargo target/feature set. Live suites invoke those exact artifacts;
+no Cargo compilation or coverage-counter cleanup runs concurrently with them.
+All processes inherit the same per-process coverage output pattern. The protocol
+log must show the exact named test and one passing test, preventing an obsolete
+filter from silently running zero tests.
+
+All lane servers are removed only after the final result/report verifier passes.
+On failure, owned harness process groups stop, the servers remain available, and
+cluster archives are saved alongside the logs for ephemeral CI runners. The gate
+never restarts or resets an existing demo or PoC instance.
 
 ## Refreshing native fixtures
 
@@ -95,10 +115,16 @@ under `artifacts/coverage/run-*`; live evidence remains under `artifacts/worker`
 and `artifacts/replication`.
 
 
-Measured locally on 2026-11-09, the revised default gate passed in **895 seconds
-(14m55s)**, versus more than two hours for the preceding core live matrix. The
-entire 863-test Rust unit phase, including all 417 replay histories, took 54.96s.
-The live suite produced 21 result cases plus successful rebuild/tenant reports;
-production line coverage was 96.17%. This is one local measurement, not a CI time
-limit; compilation cache and host load affect elapsed time. The exhaustive
-`--full` release gate was not run for this gate-only change.
+Measured locally on 2026-11-10, the default gate passed in **241 seconds
+(4m01s)** with cached builds, down from **895 seconds (14m55s)**. The preceding
+run spent about 8m43s in sequential worker suites and 2m19s in replication,
+including an avoidable 66s rebuild. The new longest live lane took about 152s;
+the 865-test Rust unit phase took 55.36s. All 222 Python tests, 417 native-oracle
+histories, 21 focused live results, replication and rebuild/tenant reports passed.
+Production line coverage was 96.02%, with no production module exclusions added.
+
+The covered all-target build for the changed Rust code took 61s in a separate
+probe; the measured complete gate then reused that build. A fresh dependency
+build or a slower host adds compilation time, so this is a measured warm run,
+not a universal CI time limit. The exhaustive `--full` release gate was not run
+for this gate-only change.

@@ -22,10 +22,7 @@ def commit_proxy(output, mode):
                               gate=output/'sql-commit-hold.release' if mode == 'hold' else None)
 
 
-def run(output, command):
-    timeout = float(os.environ.get("PGDERIVE_HARNESS_TIMEOUT_SECONDS", "600"))
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError("PGDERIVE_HARNESS_TIMEOUT_SECONDS must be finite and positive")
+def prepare():
     upstream = "http://127.0.0.1:8333"
     try:
         request(upstream)
@@ -48,6 +45,14 @@ def run(output, command):
         if error.code != 404:
             raise
         request(f"{upstream}/{bucket}", "PUT")
+    return upstream, bucket
+
+
+def run(output, command):
+    timeout = float(os.environ.get("PGDERIVE_HARNESS_TIMEOUT_SECONDS", "600"))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("PGDERIVE_HARNESS_TIMEOUT_SECONDS must be finite and positive")
+    upstream, bucket = prepare()
     scale = os.environ.get("PGDERIVE_S3_LATENCY_SCALE", "1")
     seed = os.environ.get("PGDERIVE_S3_LATENCY_SEED", "42")
     fail = os.environ.get("PGDERIVE_S3_FAIL")

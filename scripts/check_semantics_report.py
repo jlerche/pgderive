@@ -6,6 +6,8 @@ import sys
 from fast_validation import VIRTUAL_TESTS, validate_tests
 
 TIMER_TESTS = VIRTUAL_TESTS | {
+    'worker::drive::retry_wait::tests::virtual_retry_schedule_preserves_exponential_delays_and_cap',
+    'worker::drive::retry_wait::tests::virtual_retry_wait_is_interrupted_by_shutdown_and_closed_monitor',
     'storage::tenant::batch::tests::virtual_batch_deadline_accepts_arrivals_without_waiting_for_wall_time',
     'storage::tenant::batch::tests::virtual_batch_overflow_preserves_the_next_request_without_delay',
     'storage::tenant::batch::tests::virtual_batch_closed_queue_drains_immediately',

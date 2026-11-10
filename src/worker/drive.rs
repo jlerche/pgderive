@@ -1,4 +1,5 @@
 mod admission;
+mod retry_wait;
 mod startup;
 use super::epoch::model::Observation;
 use super::{open::Open, program::relational, spec::Settings, sql::Session};
@@ -120,14 +121,7 @@ async fn retry(
                         "worker retry budget exhausted; source remains at authoritative progress",
                     ));
                 }
-                let delay = settings
-                    .retry_delay_ms
-                    .saturating_mul(1_u64.checked_shl(attempts - 1).unwrap_or(u64::MAX))
-                    .min(5000);
-                tokio::select! {
-                    ()=sleep(Duration::from_millis(delay)) => {}
-                    signal=stop.changed() => {signal.context("worker stop monitor closed")?;}
-                }
+                retry_wait::backoff(settings.retry_delay_ms, attempts, stop).await?;
                 drop(require_running(error, *stop.borrow())?);
             }
         }

@@ -124,8 +124,10 @@ compiler and engine with paused Tokio time, plus the pinned expression-error
 corpus and virtual checkpoint/epoch/upload-batching timer tests. It then runs
 focused live checks for CDC, result-table decoding, checkpoint publication,
 COMMIT faults, process kills, tenant isolation/offline reclamation, lifecycle and
-rebuild. Synthetic S3 latency is disabled. PostgreSQL-mutating harnesses remain
-sequential. Production line coverage must still be at least 80%.
+rebuild. Synthetic S3 latency is disabled. Four independent, owned tmpfs
+PostgreSQL instances run live groups concurrently; mutating harnesses remain
+sequential within each instance. Production line coverage must still be at least
+80%.
 
 `./scripts/check.sh --full` retains the exhaustive live query matrix and operational
 release qualification, including native-oracle refresh, TLS, backup recovery,
@@ -139,9 +141,10 @@ Frozen oracles are never regenerated during a gate. Recipe fingerprints, exact
 family counts, per-history oracle checks and cold reopen reports are verified.
 For fixture refresh and coverage boundaries, see [the gate design](docs/gate.md).
 
-The gates need `psql` and a logical-replication PostgreSQL/object-store endpoint.
-Docker can provision the local services; full qualification additionally needs
-Docker with BuildKit for its owned tmpfs fixtures and actual image/runtime checks.
+The default gate needs `psql` and Docker for its four owned PostgreSQL instances
+and local object service. Standalone/full harnesses can use a separately owned
+logical-replication endpoint. Full qualification additionally needs BuildKit for
+actual image/runtime checks.
 Every proxy-wrapped harness records `timing.json` (including nonzero exits and
 harness exceptions/timeouts), and prints its elapsed time as it finishes. Evidence remains under
 `artifacts/worker/run-*` and `artifacts/replication/run-*`.
