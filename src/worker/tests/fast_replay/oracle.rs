@@ -28,6 +28,45 @@ impl Expected {
     }
 }
 
+/// Native PG permits any retained numeric spelling for these grouped keys.
+/// The exporter freezes an explicit per-state set; no numeric decoder is shared.
+type NativeChoice = (Option<String>, Vec<Option<String>>);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Representatives {
+    column: usize,
+    choices: Vec<NativeChoice>,
+}
+impl Representatives {
+    pub(super) fn apply(&self, output: &Bag) -> Result<Bag> {
+        let mut aliases = std::collections::BTreeMap::new();
+        for (canonical, spellings) in &self.choices {
+            ensure!(spellings.contains(canonical), "canonical spelling is not retained");
+            for spelling in spellings {
+                ensure!(aliases.insert(spelling, canonical).is_none(), "ambiguous native spelling");
+            }
+        }
+        let mut result = Bag::new();
+        for (cells, weight) in output {
+            ensure!(*weight > 0, "negative native output multiplicity");
+            let mut cells = cells.clone();
+            let cell = cells
+                .get_mut(self.column)
+                .ok_or_else(|| anyhow::anyhow!("missing representative column"))?;
+            *cell = (*aliases.get(cell).ok_or_else(|| {
+                anyhow::anyhow!("numeric spelling is not retained by native source")
+            })?)
+            .clone();
+            let total = result.entry(cells).or_default();
+            *total = total
+                .checked_add(*weight)
+                .ok_or_else(|| anyhow::anyhow!("native multiplicity overflow"))?;
+        }
+        Ok(result)
+    }
+}
+
 impl<'de> Deserialize<'de> for Expected {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         Self::new(&Vec::<(Cells, i64)>::deserialize(deserializer)?).map_err(D::Error::custom)
@@ -87,5 +126,38 @@ fn retained_oracles_are_compressed_instead_of_decoded_snapshots() -> Result<()> 
     let raw_bytes = serde_json::to_vec(&rows)?.len();
     let encoded = Expected::new(&rows)?;
     assert!(encoded.0.len() < raw_bytes / 8);
+    Ok(())
+}
+
+#[test]
+fn native_oracle_preserves_null_positions_numeric_display_scale_and_weights() -> Result<()> {
+    let expected = Expected::new(&[(vec![Some("1.20".into()), None], 2)])?;
+    let mut actual = Bag::from([(vec![Some("1.20".into()), None], 2)]);
+    assert!(expected.matches(&actual)?);
+    actual = Bag::from([(vec![Some("1.2".into()), None], 2)]);
+    assert!(!expected.matches(&actual)?);
+    actual = Bag::from([(vec![Some("1.20".into()), Some(String::new())], 2)]);
+    assert!(!expected.matches(&actual)?);
+    actual = Bag::from([(vec![Some("1.20".into()), None], 1)]);
+    assert!(!expected.matches(&actual)?);
+    Ok(())
+}
+
+#[test]
+fn only_retained_native_spellings_are_accepted_without_changing_other_cells() -> Result<()> {
+    let choices = Representatives {
+        column: 0,
+        choices: vec![(Some("1.20".into()), vec![Some("1.20".into()), Some("1.2000".into())])],
+    };
+    let bag =
+        |value: &str, weight| Bag::from([(vec![Some(value.into()), Some("5".into())], weight)]);
+    assert_eq!(choices.apply(&bag("1.2000", 1))?, bag("1.20", 1));
+    assert!(choices.apply(&bag("1.2", 1)).is_err());
+    assert!(choices.apply(&bag("1.2000", -1)).is_err());
+    let nullable = Bag::from([(vec![Some("1.2000".into()), None], 1)]);
+    assert_eq!(choices.apply(&nullable)?, Bag::from([(vec![Some("1.20".into()), None], 1)]));
+    let mut duplicated = bag("1.2000", 1);
+    duplicated.extend(bag("1.20", 1));
+    assert_eq!(choices.apply(&duplicated)?, bag("1.20", 2));
     Ok(())
 }

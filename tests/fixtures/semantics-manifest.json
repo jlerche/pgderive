@@ -1,0 +1,2580 @@
+{
+  "version": 1,
+  "families": {
+    "sql_composition": 28,
+    "set_operation": 44,
+    "subquery": 75,
+    "numeric_arithmetic": 19,
+    "temporal_arithmetic": 40,
+    "join_predicate": 29,
+    "outer_join": 45,
+    "ordering": 18,
+    "ordering_domains": 14,
+    "unordered": 17,
+    "sliding_extrema": 6,
+    "prefix_window": 6,
+    "expression_composition": 12,
+    "sliding_window": 5,
+    "functions_compiler": 1,
+    "computed_join": 6,
+    "aggregate_inputs_compiler": 6,
+    "relational_compiler": 2,
+    "partition_compiler": 7,
+    "numeric_compiler": 4,
+    "circuit_numeric": 9,
+    "native_compiler": 4,
+    "navigation_compiler": 5,
+    "case_compiler": 6,
+    "lookup_compiler": 5,
+    "sql_compiler": 4
+  },
+  "cases": [
+    "sql_composition--combined",
+    "sql_composition--cte-alias",
+    "sql_composition--cte-chain",
+    "sql_composition--cte-repeated-join",
+    "sql_composition--cte-repeated-union",
+    "sql_composition--cte-shadow",
+    "sql_composition--dead-membership",
+    "sql_composition--global-constant",
+    "sql_composition--global-empty",
+    "sql_composition--global-sum",
+    "sql_composition--global-unknown",
+    "sql_composition--having-count",
+    "sql_composition--having-filter",
+    "sql_composition--having-hidden",
+    "sql_composition--having-key",
+    "sql_composition--having-window",
+    "sql_composition--union-boolean",
+    "sql_composition--union-branch-limit",
+    "sql_composition--union-constant",
+    "sql_composition--union-duplicates",
+    "sql_composition--union-group",
+    "sql_composition--union-limit",
+    "sql_composition--union-null",
+    "sql_composition--union-numeric",
+    "sql_composition--union-temporal",
+    "sql_composition--union-varchar",
+    "sql_composition--union-widen",
+    "sql_composition--union-window",
+    "set_operation--association",
+    "set_operation--boolean",
+    "set_operation--branch-limit",
+    "set_operation--constant-empty",
+    "set_operation--cte-group",
+    "set_operation--explicit-except",
+    "set_operation--explicit-intersect",
+    "set_operation--explicit-union",
+    "set_operation--global-limit",
+    "set_operation--join",
+    "set_operation--numeric-except",
+    "set_operation--numeric-except-all",
+    "set_operation--numeric-group",
+    "set_operation--numeric-intersect",
+    "set_operation--numeric-intersect-all",
+    "set_operation--numeric-mixed",
+    "set_operation--numeric-null",
+    "set_operation--numeric-roundscale",
+    "set_operation--numeric-union",
+    "set_operation--precedence",
+    "set_operation--self-except",
+    "set_operation--self-intersect",
+    "set_operation--temporal",
+    "set_operation--text-default",
+    "set_operation--text-except",
+    "set_operation--text-except-all",
+    "set_operation--text-icu",
+    "set_operation--text-intersect",
+    "set_operation--text-intersect-all",
+    "set_operation--text-union",
+    "set_operation--tuple-except",
+    "set_operation--tuple-except-all",
+    "set_operation--tuple-intersect",
+    "set_operation--tuple-intersect-all",
+    "set_operation--tuple-union",
+    "set_operation--uuid",
+    "set_operation--uuid-literal",
+    "set_operation--varchar",
+    "set_operation--widen-except",
+    "set_operation--widen-except-all",
+    "set_operation--widen-intersect",
+    "set_operation--widen-intersect-all",
+    "set_operation--widen-union",
+    "set_operation--window",
+    "subquery--correlated-avg",
+    "subquery--correlated-computed",
+    "subquery--correlated-count",
+    "subquery--correlated-distinct",
+    "subquery--correlated-filter",
+    "subquery--correlated-having",
+    "subquery--correlated-having-zero",
+    "subquery--correlated-limit-zero",
+    "subquery--correlated-max",
+    "subquery--correlated-min",
+    "subquery--correlated-self",
+    "subquery--correlated-side-filter",
+    "subquery--correlated-sum",
+    "subquery--correlated-temporal-max",
+    "subquery--correlated-where",
+    "subquery--in",
+    "subquery--in-aggregate",
+    "subquery--in-aggregate-having",
+    "subquery--in-aggregate-limit-zero",
+    "subquery--in-boolean",
+    "subquery--in-correlated",
+    "subquery--in-correlated-aggregate",
+    "subquery--in-correlated-aggregate-having",
+    "subquery--in-correlated-case",
+    "subquery--in-correlated-composite",
+    "subquery--in-correlated-computed",
+    "subquery--in-correlated-filtered",
+    "subquery--in-correlated-or",
+    "subquery--in-correlated-where",
+    "subquery--in-cte",
+    "subquery--in-empty",
+    "subquery--in-filtered",
+    "subquery--in-group",
+    "subquery--in-literal",
+    "subquery--in-null",
+    "subquery--in-numeric",
+    "subquery--in-order-alias",
+    "subquery--in-probe-literal",
+    "subquery--in-probe-null",
+    "subquery--in-self",
+    "subquery--in-set",
+    "subquery--in-shadow",
+    "subquery--in-sum",
+    "subquery--in-temporal",
+    "subquery--in-text",
+    "subquery--in-unaliased",
+    "subquery--in-uuid",
+    "subquery--lists",
+    "subquery--lists-finite",
+    "subquery--lists-mixed-numeric",
+    "subquery--lists-mixed-width",
+    "subquery--lists-null",
+    "subquery--lists-numeric",
+    "subquery--lists-probe-null",
+    "subquery--lists-text",
+    "subquery--scalar-avg",
+    "subquery--scalar-computed",
+    "subquery--scalar-count",
+    "subquery--scalar-distinct",
+    "subquery--scalar-double",
+    "subquery--scalar-error",
+    "subquery--scalar-filter",
+    "subquery--scalar-having",
+    "subquery--scalar-having-zero",
+    "subquery--scalar-limit-zero",
+    "subquery--scalar-max",
+    "subquery--scalar-min",
+    "subquery--scalar-order-alias",
+    "subquery--scalar-ordered-coalesce",
+    "subquery--scalar-ordered-default",
+    "subquery--scalar-self",
+    "subquery--scalar-shadow",
+    "subquery--scalar-sum",
+    "subquery--scalar-unaliased",
+    "subquery--scalar-where",
+    "numeric_arithmetic--average-computed",
+    "numeric_arithmetic--average-derived",
+    "numeric_arithmetic--average-filter",
+    "numeric_arithmetic--average-global",
+    "numeric_arithmetic--average-group",
+    "numeric_arithmetic--average-having",
+    "numeric_arithmetic--average-union",
+    "numeric_arithmetic--average-window",
+    "numeric_arithmetic--division",
+    "numeric_arithmetic--division-error",
+    "numeric_arithmetic--guarded-division",
+    "numeric_arithmetic--integer-casts",
+    "numeric_arithmetic--integer-division",
+    "numeric_arithmetic--integer-error",
+    "numeric_arithmetic--mixed",
+    "numeric_arithmetic--positive-scale",
+    "numeric_arithmetic--rounding",
+    "numeric_arithmetic--typmod-error",
+    "numeric_arithmetic--typmods",
+    "temporal_arithmetic--calendar-error",
+    "temporal_arithmetic--cast-error",
+    "temporal_arithmetic--date-casts",
+    "temporal_arithmetic--date-comparison",
+    "temporal_arithmetic--date-distinct",
+    "temporal_arithmetic--date-error",
+    "temporal_arithmetic--date-group",
+    "temporal_arithmetic--date-integer",
+    "temporal_arithmetic--date-interval",
+    "temporal_arithmetic--date-join",
+    "temporal_arithmetic--date-order",
+    "temporal_arithmetic--date-set",
+    "temporal_arithmetic--date-set-mixed",
+    "temporal_arithmetic--date-wide",
+    "temporal_arithmetic--derived",
+    "temporal_arithmetic--difference-error",
+    "temporal_arithmetic--extract-date",
+    "temporal_arithmetic--extract-instant",
+    "temporal_arithmetic--extract-interval",
+    "temporal_arithmetic--extract-stamp",
+    "temporal_arithmetic--group-extract",
+    "temporal_arithmetic--group-trunc",
+    "temporal_arithmetic--guarded",
+    "temporal_arithmetic--instant-difference",
+    "temporal_arithmetic--instant-interval",
+    "temporal_arithmetic--interval-arithmetic",
+    "temporal_arithmetic--interval-error",
+    "temporal_arithmetic--interval-identities",
+    "temporal_arithmetic--interval-predicate",
+    "temporal_arithmetic--join-trunc",
+    "temporal_arithmetic--mixed-in",
+    "temporal_arithmetic--ordered-trunc",
+    "temporal_arithmetic--projection",
+    "temporal_arithmetic--stamp-difference",
+    "temporal_arithmetic--stamp-interval",
+    "temporal_arithmetic--trunc-date",
+    "temporal_arithmetic--trunc-error",
+    "temporal_arithmetic--trunc-instant",
+    "temporal_arithmetic--trunc-interval",
+    "temporal_arithmetic--trunc-stamp",
+    "join_predicate--aggregate",
+    "join_predicate--composite",
+    "join_predicate--constant-equality-left",
+    "join_predicate--constant-left",
+    "join_predicate--derived-text",
+    "join_predicate--keyless",
+    "join_predicate--keyless-left",
+    "join_predicate--left-side",
+    "join_predicate--mixed-equality-left",
+    "join_predicate--mixed-expression",
+    "join_predicate--nested-left",
+    "join_predicate--null-left",
+    "join_predicate--numeric",
+    "join_predicate--numeric-cast-left",
+    "join_predicate--numeric-computed",
+    "join_predicate--numeric-mixed",
+    "join_predicate--numeric-typmods",
+    "join_predicate--or-left",
+    "join_predicate--residual-error",
+    "join_predicate--residual-inner",
+    "join_predicate--residual-left",
+    "join_predicate--right-side",
+    "join_predicate--same-side-text",
+    "join_predicate--text",
+    "join_predicate--text-computed",
+    "join_predicate--text-order-left",
+    "join_predicate--text-varchar",
+    "join_predicate--topk",
+    "join_predicate--true-left",
+    "outer_join--chained-using",
+    "outer_join--full-derived",
+    "outer_join--full-false",
+    "outer_join--full-null",
+    "outer_join--full-on",
+    "outer_join--full-on-mixed-numeric",
+    "outer_join--full-on-numeric-int",
+    "outer_join--full-residual",
+    "outer_join--full-true",
+    "outer_join--full-using",
+    "outer_join--full-using-bool",
+    "outer_join--full-using-collation",
+    "outer_join--full-using-composite",
+    "outer_join--full-using-group",
+    "outer_join--full-using-instant",
+    "outer_join--full-using-mixed-int",
+    "outer_join--full-using-mixed-numeric",
+    "outer_join--full-using-numeric",
+    "outer_join--full-using-reverse-collation",
+    "outer_join--full-using-text-varchar",
+    "outer_join--full-using-timestamp",
+    "outer_join--full-using-topk",
+    "outer_join--full-using-typmod-different",
+    "outer_join--full-using-typmod-same",
+    "outer_join--full-using-uuid",
+    "outer_join--full-using-varchar-text",
+    "outer_join--full-where",
+    "outer_join--inner-using",
+    "outer_join--inner-using-collation",
+    "outer_join--inner-using-mixed-numeric",
+    "outer_join--inner-using-numeric-int",
+    "outer_join--inner-using-numeric-var",
+    "outer_join--inner-using-reverse-collation",
+    "outer_join--left-using",
+    "outer_join--left-using-collation",
+    "outer_join--left-using-mixed-numeric",
+    "outer_join--right-derived",
+    "outer_join--right-keyless",
+    "outer_join--right-on",
+    "outer_join--right-residual",
+    "outer_join--right-using",
+    "outer_join--right-using-collation",
+    "outer_join--right-using-mixed-numeric",
+    "outer_join--right-where",
+    "outer_join--subtrees-using",
+    "ordering--ascending",
+    "ordering--computed",
+    "ordering--derived",
+    "ordering--descending",
+    "ordering--distinct",
+    "ordering--empty",
+    "ordering--empty-derived",
+    "ordering--empty-join",
+    "ordering--empty-overflow",
+    "ordering--empty-window",
+    "ordering--grouped",
+    "ordering--integral-extremes",
+    "ordering--join",
+    "ordering--nulls-first",
+    "ordering--timestamp",
+    "ordering--timestamptz",
+    "ordering--unbounded",
+    "ordering--window",
+    "ordering_domains--bool",
+    "ordering_domains--bool-desc",
+    "ordering_domains--numeric",
+    "ordering_domains--numeric-desc",
+    "ordering_domains--offset-only",
+    "ordering_domains--text-c",
+    "ordering_domains--text-desc",
+    "ordering_domains--text-explicit",
+    "ordering_domains--ties-offset",
+    "ordering_domains--uuid",
+    "ordering_domains--uuid-desc",
+    "ordering_domains--varchar-desc",
+    "ordering_domains--varchar-posix",
+    "ordering_domains--zero-offset",
+    "unordered--all",
+    "unordered--all-hidden",
+    "unordered--all-offset",
+    "unordered--all-ordered",
+    "unordered--derived",
+    "unordered--join",
+    "unordered--limit",
+    "unordered--limit-offset",
+    "unordered--null-limit",
+    "unordered--null-offset",
+    "unordered--offset",
+    "unordered--offset-zero",
+    "unordered--text-default",
+    "unordered--window",
+    "unordered--zero",
+    "unordered--zero-join",
+    "unordered--zero-window",
+    "sliding_extrema--bigint-groups",
+    "sliding_extrema--bigint-rows",
+    "sliding_extrema--integer-groups",
+    "sliding_extrema--integer-rows",
+    "sliding_extrema--smallint-groups",
+    "sliding_extrema--smallint-rows",
+    "prefix_window--bigint-ordered",
+    "prefix_window--bigint-peers",
+    "prefix_window--integer-ordered",
+    "prefix_window--integer-peers",
+    "prefix_window--smallint-ordered",
+    "prefix_window--smallint-peers",
+    "expression_composition--anti",
+    "expression_composition--avg-filter",
+    "expression_composition--avg-join",
+    "expression_composition--avg-project",
+    "expression_composition--avg-regroup",
+    "expression_composition--avg-window",
+    "expression_composition--exists",
+    "expression_composition--outer",
+    "expression_composition--window-empty",
+    "expression_composition--window-peers",
+    "expression_composition--window-rank",
+    "expression_composition--window-rows",
+    "sliding_window--window-empty",
+    "sliding_window--window-peers",
+    "sliding_window--window-rows",
+    "sliding_window--window-rows-i16",
+    "sliding_window--window-rows-i32",
+    "functions_compiler--default",
+    "computed_join--composite",
+    "computed_join--derived",
+    "computed_join--function",
+    "computed_join--inner",
+    "computed_join--scoped",
+    "computed_join--swapped",
+    "aggregate_inputs_compiler--computed-key",
+    "aggregate_inputs_compiler--derived",
+    "aggregate_inputs_compiler--distinct",
+    "aggregate_inputs_compiler--mixed",
+    "aggregate_inputs_compiler--ordered",
+    "aggregate_inputs_compiler--statistics",
+    "relational_compiler--filtered",
+    "relational_compiler--plain",
+    "partition_compiler--empty",
+    "partition_compiler--following",
+    "partition_compiler--full",
+    "partition_compiler--grouped",
+    "partition_compiler--preceding",
+    "partition_compiler--rows",
+    "partition_compiler--unbounded",
+    "numeric_compiler--bigint-grouped",
+    "numeric_compiler--bigint-rows",
+    "numeric_compiler--integer-grouped",
+    "numeric_compiler--smallint-grouped",
+    "circuit_numeric--computed",
+    "circuit_numeric--extrema-max",
+    "circuit_numeric--extrema-min",
+    "circuit_numeric--extrema-mixed",
+    "circuit_numeric--group-key",
+    "circuit_numeric--join-key",
+    "circuit_numeric--native",
+    "circuit_numeric--sum",
+    "circuit_numeric--sum-computed",
+    "native_compiler--grouped",
+    "native_compiler--join",
+    "native_compiler--projection",
+    "native_compiler--rows",
+    "navigation_compiler--filtered",
+    "navigation_compiler--integral",
+    "navigation_compiler--numeric",
+    "navigation_compiler--opaque",
+    "navigation_compiler--temporal",
+    "case_compiler--descending",
+    "case_compiler--flags-instant",
+    "case_compiler--flags-local",
+    "case_compiler--nullable",
+    "case_compiler--running-instant",
+    "case_compiler--running-local",
+    "lookup_compiler--composite",
+    "lookup_compiler--filtered",
+    "lookup_compiler--instant",
+    "lookup_compiler--local",
+    "lookup_compiler--strict",
+    "sql_compiler--null-only",
+    "sql_compiler--regular",
+    "sql_compiler--remainder",
+    "sql_compiler--typed"
+  ],
+  "histories": {
+    "sql_composition--combined": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--cte-alias": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--cte-chain": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--cte-repeated-join": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--cte-repeated-union": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--cte-shadow": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--dead-membership": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--global-constant": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--global-empty": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--global-sum": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--global-unknown": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--having-count": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--having-filter": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--having-hidden": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--having-key": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--having-window": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-boolean": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-branch-limit": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-constant": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-duplicates": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-group": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-limit": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-null": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-numeric": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-temporal": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-varchar": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-widen": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_composition--union-window": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "set_operation--association": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--boolean": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--branch-limit": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--constant-empty": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--cte-group": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--explicit-except": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--explicit-intersect": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--explicit-union": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--global-limit": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--join": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--numeric-except": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--numeric-except-all": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--numeric-group": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--numeric-intersect": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--numeric-intersect-all": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--numeric-mixed": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--numeric-null": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--numeric-roundscale": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--numeric-union": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--precedence": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--self-except": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--self-intersect": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--temporal": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--text-default": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--text-except": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--text-except-all": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--text-icu": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--text-intersect": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--text-intersect-all": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--text-union": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--tuple-except": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--tuple-except-all": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--tuple-intersect": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--tuple-intersect-all": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--tuple-union": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--uuid": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--uuid-literal": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--varchar": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--widen-except": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--widen-except-all": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--widen-intersect": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--widen-intersect-all": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--widen-union": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "set_operation--window": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-avg": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-computed": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-count": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-distinct": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-filter": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-having": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-having-zero": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-limit-zero": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-max": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-min": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-self": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-side-filter": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-sum": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-temporal-max": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--correlated-where": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-aggregate": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-aggregate-having": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-aggregate-limit-zero": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-boolean": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-correlated": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-correlated-aggregate": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-correlated-aggregate-having": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-correlated-case": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-correlated-composite": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-correlated-computed": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-correlated-filtered": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-correlated-or": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-correlated-where": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-cte": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-empty": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-filtered": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-group": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-literal": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-null": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-numeric": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-order-alias": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-probe-literal": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-probe-null": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-self": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-set": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-shadow": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-sum": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-temporal": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-text": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-unaliased": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--in-uuid": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--lists": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--lists-finite": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--lists-mixed-numeric": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--lists-mixed-width": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--lists-null": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--lists-numeric": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--lists-probe-null": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--lists-text": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-avg": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-computed": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-count": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-distinct": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-double": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-error": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-filter": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-having": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-having-zero": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-limit-zero": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-max": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-min": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-order-alias": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-ordered-coalesce": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-ordered-default": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-self": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-shadow": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-sum": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-unaliased": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "subquery--scalar-where": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "numeric_arithmetic--average-computed": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--average-derived": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--average-filter": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--average-global": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--average-group": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--average-having": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--average-union": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--average-window": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--division": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--division-error": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--guarded-division": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--integer-casts": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--integer-division": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--integer-error": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--mixed": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--positive-scale": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--rounding": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--typmod-error": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "numeric_arithmetic--typmods": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "temporal_arithmetic--calendar-error": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--cast-error": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-casts": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-comparison": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-distinct": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-error": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-group": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-integer": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-interval": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-join": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-order": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-set": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-set-mixed": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--date-wide": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--derived": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--difference-error": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--extract-date": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--extract-instant": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--extract-interval": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--extract-stamp": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--group-extract": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--group-trunc": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--guarded": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--instant-difference": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--instant-interval": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--interval-arithmetic": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--interval-error": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--interval-identities": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--interval-predicate": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--join-trunc": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--mixed-in": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--ordered-trunc": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--projection": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--stamp-difference": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--stamp-interval": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--trunc-date": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--trunc-error": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--trunc-instant": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--trunc-interval": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "temporal_arithmetic--trunc-stamp": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "join_predicate--aggregate": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--composite": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--constant-equality-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--constant-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--derived-text": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--keyless": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--keyless-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--left-side": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--mixed-equality-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--mixed-expression": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--nested-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--null-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--numeric": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--numeric-cast-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--numeric-computed": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--numeric-mixed": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--numeric-typmods": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--or-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--residual-error": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--residual-inner": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--residual-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--right-side": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--same-side-text": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--text": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--text-computed": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--text-order-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--text-varchar": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--topk": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "join_predicate--true-left": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "outer_join--chained-using": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-derived": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-false": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-null": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-on": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-on-mixed-numeric": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-on-numeric-int": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-residual": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-true": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-bool": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-collation": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-composite": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-group": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-instant": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-mixed-int": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-mixed-numeric": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-numeric": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-reverse-collation": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-text-varchar": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-timestamp": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-topk": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-typmod-different": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-typmod-same": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-uuid": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-using-varchar-text": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--full-where": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--inner-using": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--inner-using-collation": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--inner-using-mixed-numeric": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--inner-using-numeric-int": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--inner-using-numeric-var": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--inner-using-reverse-collation": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--left-using": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--left-using-collation": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--left-using-mixed-numeric": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--right-derived": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--right-keyless": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--right-on": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--right-residual": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--right-using": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--right-using-collation": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--right-using-mixed-numeric": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--right-where": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "outer_join--subtrees-using": {
+      "commits": 11,
+      "oracle_checks": 12,
+      "restarts": 1
+    },
+    "ordering--ascending": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--computed": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--derived": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--descending": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--distinct": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--empty": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--empty-derived": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--empty-join": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--empty-overflow": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--empty-window": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--grouped": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--integral-extremes": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--join": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--nulls-first": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--timestamp": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--timestamptz": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--unbounded": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering--window": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--bool": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--bool-desc": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--numeric": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--numeric-desc": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--offset-only": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--text-c": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--text-desc": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--text-explicit": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--ties-offset": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--uuid": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--uuid-desc": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--varchar-desc": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--varchar-posix": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "ordering_domains--zero-offset": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--all": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--all-hidden": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--all-offset": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--all-ordered": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--derived": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--join": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--limit": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--limit-offset": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--null-limit": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--null-offset": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--offset": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--offset-zero": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--text-default": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--window": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--zero": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--zero-join": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "unordered--zero-window": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sliding_extrema--bigint-groups": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_extrema--bigint-rows": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_extrema--integer-groups": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_extrema--integer-rows": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_extrema--smallint-groups": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_extrema--smallint-rows": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "prefix_window--bigint-ordered": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "prefix_window--bigint-peers": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "prefix_window--integer-ordered": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "prefix_window--integer-peers": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "prefix_window--smallint-ordered": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "prefix_window--smallint-peers": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--anti": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--avg-filter": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--avg-join": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--avg-project": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--avg-regroup": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--avg-window": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--exists": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--outer": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--window-empty": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--window-peers": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--window-rank": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "expression_composition--window-rows": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_window--window-empty": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_window--window-peers": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_window--window-rows": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_window--window-rows-i16": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "sliding_window--window-rows-i32": {
+      "commits": 9,
+      "oracle_checks": 10,
+      "restarts": 1
+    },
+    "functions_compiler--default": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "computed_join--composite": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "computed_join--derived": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "computed_join--function": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "computed_join--inner": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "computed_join--scoped": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "computed_join--swapped": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "aggregate_inputs_compiler--computed-key": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "aggregate_inputs_compiler--derived": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "aggregate_inputs_compiler--distinct": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "aggregate_inputs_compiler--mixed": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "aggregate_inputs_compiler--ordered": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "aggregate_inputs_compiler--statistics": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "relational_compiler--filtered": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "relational_compiler--plain": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "partition_compiler--empty": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "partition_compiler--following": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "partition_compiler--full": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "partition_compiler--grouped": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "partition_compiler--preceding": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "partition_compiler--rows": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "partition_compiler--unbounded": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "numeric_compiler--bigint-grouped": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "numeric_compiler--bigint-rows": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "numeric_compiler--integer-grouped": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "numeric_compiler--smallint-grouped": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "circuit_numeric--computed": {
+      "commits": 16,
+      "oracle_checks": 17,
+      "restarts": 1
+    },
+    "circuit_numeric--extrema-max": {
+      "commits": 15,
+      "oracle_checks": 16,
+      "restarts": 1
+    },
+    "circuit_numeric--extrema-min": {
+      "commits": 15,
+      "oracle_checks": 16,
+      "restarts": 1
+    },
+    "circuit_numeric--extrema-mixed": {
+      "commits": 15,
+      "oracle_checks": 16,
+      "restarts": 1
+    },
+    "circuit_numeric--group-key": {
+      "commits": 19,
+      "oracle_checks": 20,
+      "restarts": 1
+    },
+    "circuit_numeric--join-key": {
+      "commits": 16,
+      "oracle_checks": 17,
+      "restarts": 1
+    },
+    "circuit_numeric--native": {
+      "commits": 16,
+      "oracle_checks": 17,
+      "restarts": 1
+    },
+    "circuit_numeric--sum": {
+      "commits": 16,
+      "oracle_checks": 17,
+      "restarts": 1
+    },
+    "circuit_numeric--sum-computed": {
+      "commits": 16,
+      "oracle_checks": 17,
+      "restarts": 1
+    },
+    "native_compiler--grouped": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "native_compiler--join": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "native_compiler--projection": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "native_compiler--rows": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "navigation_compiler--filtered": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "navigation_compiler--integral": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "navigation_compiler--numeric": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "navigation_compiler--opaque": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "navigation_compiler--temporal": {
+      "commits": 8,
+      "oracle_checks": 9,
+      "restarts": 1
+    },
+    "case_compiler--descending": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "case_compiler--flags-instant": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "case_compiler--flags-local": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "case_compiler--nullable": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "case_compiler--running-instant": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "case_compiler--running-local": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "lookup_compiler--composite": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "lookup_compiler--filtered": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "lookup_compiler--instant": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "lookup_compiler--local": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "lookup_compiler--strict": {
+      "commits": 10,
+      "oracle_checks": 11,
+      "restarts": 1
+    },
+    "sql_compiler--null-only": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_compiler--regular": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_compiler--remainder": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    },
+    "sql_compiler--typed": {
+      "commits": 7,
+      "oracle_checks": 8,
+      "restarts": 1
+    }
+  },
+  "source_sha256": {
+    "scripts/aggregate_inputs_compiler_harness.py": "3991abfbaf980b3860b200c082c76f87a05d2974cad0d1be702c2baa9def4e01",
+    "scripts/application_evidence.py": "57360975a873d136d2af00c4232c7a85db8e214ebeb09be35c5de083cefc8355",
+    "scripts/application_model.py": "d98949dc70ffb02e9722480fcdff155960d13624df6388674e05e32bd9d021f6",
+    "scripts/application_portfolio_harness.py": "63c8e2d47ae638adefb9c2f5fcf6d4cc11f704c561b7939dd203fc37259e39c7",
+    "scripts/application_reduce.py": "dd2ee3955ed9b72f3d91aaea947d0ef808f0bf23defe2e01daae2809ea7227d9",
+    "scripts/application_trace.py": "88768b87b74119ceac4f7278fcc0994807bb4d19f2e1a16efb37ace9978cfe74",
+    "scripts/case_compiler_harness.py": "523c49ab1fa43697696e7a61dc04923ab24488787fc9aefcba67cbbbcb64e695",
+    "scripts/circuit_numeric_harness.py": "41842c6a7931ce9cd5f157cb89df8347722bd96c8efe7002c5cd27e27167d294",
+    "scripts/computed_join_harness.py": "490566b3b11d12a4943842d0a3906fd32eebeddaa70e1dd53dfe7c889efdd9fb",
+    "scripts/export_semantics.py": "e2d8582ae5efc354e751289ed71c656d790e038682d9566c81cfd4b1218a48e4",
+    "scripts/expression_composition_harness.py": "9dda5ce9df02ad2e6b59500261f5bf5ab4f87e9cb3225ca0978e9cad9a812c88",
+    "scripts/functions_compiler_harness.py": "5a95750210017cc1b6751c856c3386de3a0ceacf7d5700b9a00c31a16fe8c3ef",
+    "scripts/harness_control.py": "75c66f7afa7bffed56f1375b57a2210215f6e910f4af67a7fb62a3fd4ca6d4a4",
+    "scripts/join_predicate_harness.py": "48e34bcb0da7ccc8618f21980632b1079ad4b662b6e57e03d76476b59efb24da",
+    "scripts/lookup_compiler_harness.py": "500a62a056e1e09b2da1f852536bda0a481fbb9adb5e3732b0ed557252512afb",
+    "scripts/native_compiler_harness.py": "0acc6891b0a90f402beaff6355303d2f43381a486e7cd768e6c1c0dccf7e27b5",
+    "scripts/native_mv_oracle.py": "42b3c4cd69896654ab4b53f3c251329b58dacb4ccaacdb3c28677ea98409b87d",
+    "scripts/navigation_compiler_harness.py": "7108ef3eb2e8440ecfd3b2c602f1d2dbc209925029563972d8428cb369aeb0ae",
+    "scripts/numeric_arithmetic_harness.py": "c58acbc05fc965afbf15c0c7b5e859f0e2040134e8a9e211ae2bc63eadf93c75",
+    "scripts/numeric_arithmetic_oracle.py": "1af96436f5839277d5a3b6e7835adfe0d4bb213a1fbe862cfe334312eaa74247",
+    "scripts/numeric_compiler_harness.py": "d79b31a3a2390895a5f26b9530f58916e93a3143c0378b347635f5a8406a0ce7",
+    "scripts/ordering_domains_harness.py": "32ca9e09850091b41d9922d28b17852e64319bbcc05bd82c43bc7fe9095658ac",
+    "scripts/ordering_harness.py": "6e5da1322f17cc241a0363d1c3b69c59961da06b6db0236541a6288613d8bee9",
+    "scripts/outer_join_harness.py": "1de2f4c47b2d1224a8df87b4880e34a33dae88fe4f218e38f5ae63b8c147078d",
+    "scripts/partition_compiler_harness.py": "f4fe037220a006227cff0be9b66210a67085b1007334913d02a421f98ccf459b",
+    "scripts/prefix_window_harness.py": "fb32cb90a3fd7b3200760feb1fb608d5e7b79cf2dbb819e2876711d395eb42d5",
+    "scripts/query_ordered_state_harness.py": "a6cfdb4bb6e58ca5a0c2e874eeac60979dc86e9537a76c8043ba180b27ef1124",
+    "scripts/query_topk_harness.py": "461047b0cc7559953424f41da5276c9bfcb68d375253590293a782d8efb2972a",
+    "scripts/ranking_compiler_harness.py": "f4731428977c9a0afe87712184c1861a18d71f74706d32a8c84868da787d8008",
+    "scripts/relational_compiler_harness.py": "8e18375507296e999c04dc2312b363234bbc3c87356eab4abc6addcef4204b70",
+    "scripts/set_operation_harness.py": "ed0f9a75d6d1b15d496423e781ebfefed098cdaedeae947eee808ec85bcb512b",
+    "scripts/sliding_extrema_harness.py": "135aef818284cfdb9b381b2a2fa41a22581a62ffd49c31f070acccc1413a9272",
+    "scripts/sliding_window_harness.py": "4964486db9b0ba4573b904eb2df4b00d3470bf69e69685884a44a576e634de77",
+    "scripts/sql_compiler_harness.py": "3e29d0c82707e3144f0886c4483980d0cd2569fc1d60f0240a3fda8fceb4ee8e",
+    "scripts/sql_composition_harness.py": "72dab18750bbd6d81824713341d7543b55b2ac76379c576c79d38bd8467c8d98",
+    "scripts/subquery_harness.py": "0750ee5ac2eea6467333282a4f32a7e85755826a6b3fc431f1b88b936cead30b",
+    "scripts/temporal_arithmetic_harness.py": "044cfb4d75df2a66dcf538e07b566744604065dee67a07479370bdc0cc72f681",
+    "scripts/temporal_oracle.py": "f709e469177d6a1f41ae6f35fd0bd8f1f25616354cc608df4b2ccb6fa0b769f6",
+    "scripts/unordered_harness.py": "c0ec6814ed5c54000e12fc1f4785b9699822e8fcf263a26662b00a39f4d59eb6",
+    "scripts/worker_harness.py": "005ab8aa6a1a488755973a0c728dbb41bd922d07d6065666379a26de047ff032"
+  },
+  "fixture_sha256": "80070ff852cb107725ba22f00356116186bc2b55b1b9b7aa23eece787263fdab"
+}

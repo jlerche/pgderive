@@ -81,7 +81,7 @@ async fn outcome(case: &Case) -> Result<(Option<&'static str>, Vec<String>)> {
     Ok((None, lines))
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn expression_errors_match_postgresql() -> Result<()> {
     let mut different = Vec::new();
     for case in serde_json::from_str::<Vec<Case>>(CORPUS)? {
@@ -129,7 +129,7 @@ async fn second_tick_raises(sql: &str, repaired: bool) -> Result<bool> {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn repairing_the_other_join_side_in_a_merged_epoch_clears_the_failure() -> Result<()> {
     const JOIN: &str = "source.auction a JOIN source.bid b ON b.auction=a.id";
     const LEFT: &str = "source.auction a LEFT JOIN source.bid b ON b.auction=a.id";
@@ -146,7 +146,7 @@ async fn repairing_the_other_join_side_in_a_merged_epoch_clears_the_failure() ->
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn implied_equality_spans_integer_widths() -> Result<()> {
     let mut native = integers();
     native.relations[1].columns[0].oid = 20;

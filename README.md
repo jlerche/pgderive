@@ -119,20 +119,25 @@ fixtures must use tmpfs for database storage; leave shared PoC containers intact
 
 The gate runs custom-lint tests, Rust file-length checks, rustfmt, strict Clippy,
 Rust tests, coverage, and unused-dependency detection. The default development
-profile runs the complete low-level live PostgreSQL harness and 133 worker cases:
-result-table decoding/representation, semantic bindings, transaction faults,
-witnessed process kills, representative query families, lifecycle and rebuild.
-It disables synthetic S3 latency but keeps real PostgreSQL/object storage and
-explicit fault barriers. PostgreSQL-mutating harnesses remain sequential.
+profile replays 417 frozen native-oracle SQL histories through the production
+compiler and engine with paused Tokio time, plus the pinned expression-error
+corpus and virtual checkpoint/epoch/upload-batching timer tests. It then runs
+focused live checks for CDC, result-table decoding, checkpoint publication,
+COMMIT faults, process kills, tenant isolation/offline reclamation, lifecycle and
+rebuild. Synthetic S3 latency is disabled. PostgreSQL-mutating harnesses remain
+sequential. Production line coverage must still be at least 80%.
 
-`./scripts/check.sh --full` runs the complete query matrix and operational release
-qualification, including TLS, backup recovery, packaging, containers and capacity.
-GitHub Actions always uses `--full`; run it locally before release or when changing
-families/operational paths outside the core profile. Both profiles enforce the same
-lint rules, unit tests and >=80% production line coverage. Core success is not a
-claim of full release qualification. Standalone `check_worker.sh` and
+`./scripts/check.sh --full` retains the exhaustive live query matrix and operational
+release qualification, including native-oracle refresh, TLS, backup recovery,
+packaging, containers and capacity. Push and PR CI use the default gate; the
+Checks workflow's manual `full` input runs release qualification. Core success is
+not a full release claim. Standalone `check_worker.sh`, `check_integration.sh` and
 `check_coverage.sh` retain the full profile by default; set
-`PGDERIVE_CHECK_PROFILE=core` to select their core profile explicitly.
+`PGDERIVE_CHECK_PROFILE=core` to select their focused profile explicitly.
+
+Frozen oracles are never regenerated during a gate. Recipe fingerprints, exact
+family counts, per-history oracle checks and cold reopen reports are verified.
+For fixture refresh and coverage boundaries, see [the gate design](docs/gate.md).
 
 The gates need `psql` and a logical-replication PostgreSQL/object-store endpoint.
 Docker can provision the local services; full qualification additionally needs

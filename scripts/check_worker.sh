@@ -32,6 +32,28 @@ run_qualification() {
         exit 1
     fi
 }
+if [[ "$profile" == core ]]; then
+    for boundary in memtable checkpoint; do
+        PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$boundary" \
+            python3 scripts/core_worker_harness.py "$boundary" "$output/$boundary" -- "${worker[@]}"
+    done
+    for name in result-table projection-compiler postgres-support operation-budget tenant-storage tenant-storage-commit; do
+        PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$name" \
+            python3 "scripts/${name//-/_}_harness.py" "$output/$name" -- "${worker[@]}"
+    done
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification multi-query \
+        python3 scripts/multi_query_memory_harness.py "$output/multi-query" --counts 2 --seconds 2 --mode shared -- "${worker[@]}"
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \
+        python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 "$output/transactions" -- "${worker[@]}"
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification crashes \
+        python3 scripts/worker_crash_harness.py "$output/crashes" -- "${worker[@]}"
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-lifecycle \
+        python3 scripts/core_worker_harness.py lifecycle "$output/query-lifecycle" -- "${admin[@]}"
+    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-rebuild \
+        python3 scripts/query_rebuild_harness.py "$output/query-rebuild" -- "${admin[@]}"
+    python3 scripts/verify_worker_core.py "$output" "${worker[0]}" "${admin[0]}"
+    exit 0
+fi
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification result-table \
     python3 scripts/result_table_harness.py "$output/result-table" -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-binding \
@@ -53,20 +75,9 @@ PGDERIVE_S3_LATENCY_SCALE=0 run_qualification multi-query \
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \
     python3 scripts/worker_harness.py --faults --kill --ticks 4 --burst 8 \
     "$output/transactions" -- "${worker[@]}"
-crash_scale=${PGDERIVE_S3_LATENCY_SCALE:-1}
-if [[ "$profile" == core ]]; then crash_scale=0; fi
-PGDERIVE_S3_LATENCY_SCALE="$crash_scale" run_qualification crashes python3 scripts/worker_crash_harness.py "$output/crashes" -- "${worker[@]}"
+PGDERIVE_S3_LATENCY_SCALE="${PGDERIVE_S3_LATENCY_SCALE:-1}" run_qualification crashes python3 scripts/worker_crash_harness.py "$output/crashes" -- "${worker[@]}"
 while read -r qualification script; do
-    if [[ "$profile" == core ]]; then
-        case "$qualification" in
-            temporal-arithmetic|outer-joins|subqueries|set-operations|join-predicates|numeric-arithmetic|sql-composition|query-concurrent|unordered|ordering-domains|ordering|keyed-sink|compiler|application|composition-matrix|sliding-extrema|prefix-window|expression-composition|sliding-window|sink-batch|stdout-sink|projection|functions|postgres-support|computed-join|environment|aggregate-inputs|relational|partition|numeric|circuit-numeric|native|navigation|case|lookup) ;;
-            *) continue ;;
-        esac
-    fi
-    harness_timeout=${PGDERIVE_HARNESS_TIMEOUT_SECONDS:-600}
-    if [[ "$qualification" == composition-matrix && "$profile" == full ]]; then
-        harness_timeout=${PGDERIVE_HARNESS_TIMEOUT_SECONDS:-1800}
-    fi
+    harness_timeout=${PGDERIVE_HARNESS_TIMEOUT_SECONDS:-1800}
     executable=("${worker[@]}")
     if [[ "$qualification" == query-concurrent ]]; then executable=("${admin[@]}"); fi
     PGDERIVE_HARNESS_TIMEOUT_SECONDS="$harness_timeout" PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
@@ -133,14 +144,6 @@ nexmark-q13 nexmark_q13
 nexmark-q14 nexmark_q14
 nexmark-q21 nexmark_q21
 QUALIFICATIONS
-if [[ "$profile" == core ]]; then
-    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-lifecycle \
-        python3 scripts/query_lifecycle_harness.py "$output/query-lifecycle" -- "${admin[@]}"
-    PGDERIVE_S3_LATENCY_SCALE=0 run_qualification query-rebuild \
-        python3 scripts/query_rebuild_harness.py "$output/query-rebuild" -- "${admin[@]}"
-    python3 scripts/verify_worker_core.py "$output" "${worker[0]}" "${admin[0]}"
-    exit 0
-fi
 for qualification in query-toast query-ordered-state query-expression query-expression-calendar query-native-join query-topk query-membership; do
     PGDERIVE_S3_LATENCY_SCALE=0 run_qualification "$qualification" \
         python3 "scripts/${qualification//-/_}_harness.py" "$output/$qualification" -- "${worker[@]}"

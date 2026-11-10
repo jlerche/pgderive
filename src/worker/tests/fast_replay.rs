@@ -18,6 +18,7 @@ use std::{
 mod codec;
 mod lifecycle;
 mod oracle;
+mod semantics;
 mod updates;
 use oracle::Expected;
 use updates::Updates;
@@ -38,6 +39,12 @@ struct Case {
     name: String,
     sql: String,
     steps: Vec<Step>,
+    #[serde(default)]
+    relations: Option<Vec<Relation>>,
+    #[serde(default)]
+    rejected: Vec<String>,
+    #[serde(default)]
+    output: Option<Vec<crate::catalog::ResultColumn>>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +52,8 @@ struct Step {
     updates: Updates,
     source_rows: u64,
     expected: Option<Expected>,
+    #[serde(default)]
+    representatives: Option<oracle::Representatives>,
     measure: bool,
     restart: bool,
 }
@@ -198,12 +207,15 @@ fn check_expected(
     expected: Option<Expected>,
     case: &str,
     index: usize,
+    representatives: Option<oracle::Representatives>,
 ) -> Result<usize> {
     let Some(expected) = expected else { return Ok(0) };
-    ensure!(
-        expected.matches(output)?,
-        "replay {case} step {index} differs from independent application oracle"
-    );
+    let matches = if let Some(representatives) = representatives {
+        expected.matches(&representatives.apply(output)?)?
+    } else {
+        expected.matches(output)?
+    };
+    ensure!(matches, "replay {case} step {index} differs from independent application oracle");
     Ok(1)
 }
 fn configure_diagnostics(query: &program::relational::Query) -> Result<()> {
@@ -221,8 +233,7 @@ async fn run(
     limits: crate::engine::execution::Limits,
     config: lifecycle::Config,
 ) -> Result<serde_json::Value> {
-    let native = native();
-    let compiled = crate::compiler::compile(&case.sql, &native)?;
+    let semantics::Binding { native, compiled } = semantics::bind(&case)?;
     let mut settings = replay_settings(limits)?;
     let store = Arc::new(crate::engine::tests::store::Store::unpaced());
     settings.store = store.clone();
@@ -280,7 +291,8 @@ async fn run(
                 lifecycle.observe(&query, prepare_ns, cpu_started)?;
             }
         }
-        oracle_checks += check_expected(&output, step.expected, &case.name, index)?;
+        oracle_checks +=
+            check_expected(&output, step.expected, &case.name, index, step.representatives)?;
     }
     lifecycle.drain(&mut query).await?;
     verify_cold(&query, &native, &compiled, &settings, &output).await?;
@@ -317,8 +329,13 @@ fn parse(text: &str) -> Result<Suite> {
     let suite: Suite = serde_json::from_str(text)?;
     ensure!(suite.version == 2 && !suite.cases.is_empty(), "invalid fast replay suite");
     suite.lifecycle.validate()?;
+    validate_cases(&suite.cases)?;
+    Ok(suite)
+}
+fn validate_cases(cases: &[Case]) -> Result<()> {
+    ensure!(!cases.is_empty(), "empty replay cases");
     let mut names = BTreeSet::new();
-    for case in &suite.cases {
+    for case in cases {
         ensure!(
             !case.name.is_empty() && names.insert(&case.name),
             "duplicate or empty replay name"
@@ -342,8 +359,9 @@ fn parse(text: &str) -> Result<Suite> {
             );
         }
     }
-    Ok(suite)
+    Ok(())
 }
+
 #[tokio::test(start_paused = true)]
 async fn wrong_oracle_is_rejected() -> Result<()> {
     let mut suite = parse(include_str!("../../../tests/fixtures/fast-replay.json"))?;
@@ -441,6 +459,7 @@ async fn capacity_flushes_use_bounded_ingestion_and_preserve_exact_results() -> 
         source_rows: 0,
         updates: Updates::new(&(1..=64).map(|key| update(key, 0, 1)).collect::<Vec<_>>())?,
         expected: Some(expected(0)?),
+        representatives: None,
         measure: false,
         restart: false,
     }];
@@ -449,6 +468,7 @@ async fn capacity_flushes_use_bounded_ingestion_and_preserve_exact_results() -> 
             source_rows: 1,
             updates: Updates::new(&[update(key, 0, -1), update(key, 1, 1)])?,
             expected: (key == 32).then(|| expected(32)).transpose()?,
+            representatives: None,
             measure: true,
             restart: false,
         });
@@ -460,6 +480,9 @@ async fn capacity_flushes_use_bounded_ingestion_and_preserve_exact_results() -> 
             sql: "SELECT account_id,COUNT(*),SUM(amount) FROM source.entry GROUP BY account_id"
                 .into(),
             steps,
+            relations: None,
+            rejected: Vec::new(),
+            output: None,
         },
         suite.limits,
         lifecycle::Config { memtable_bytes: 4096, ..suite.lifecycle },

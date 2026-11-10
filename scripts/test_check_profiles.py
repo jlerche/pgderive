@@ -12,7 +12,7 @@ from verify_worker_core import verify
 
 class CheckProfiles(unittest.TestCase):
     def test_invalid_profiles_fail_before_starting_live_checks(self):
-        for script in ('check_worker.sh', 'check_coverage.sh'):
+        for script in ('check_worker.sh', 'check_coverage.sh', 'check_integration.sh'):
             result = subprocess.run(['bash', 'scripts/'+script],
                                     env={'PATH': '/usr/bin:/bin', 'PGDERIVE_CHECK_PROFILE': 'typo'},
                                     capture_output=True,text=True)

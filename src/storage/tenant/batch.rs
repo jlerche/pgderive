@@ -387,3 +387,6 @@ async fn perform(
         .await?;
     owner.install(&pack, chunks).await
 }
+
+#[cfg(test)]
+mod tests;

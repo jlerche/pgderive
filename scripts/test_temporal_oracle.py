@@ -7,7 +7,9 @@ from temporal_oracle import (Civil, Interval, julian, civil, parse_civil, parse_
     encoded, timestamp_add, timestamp_difference, date_integer, date_difference,
     interval_add, negate, extract, truncate, compare, DAY, HOUR)
 from temporal_arithmetic_harness import TemporalFixture, interval_equal, contains, MODES
-from verify_worker_core import COUNTS
+import json
+import pathlib
+COUNTS = json.loads((pathlib.Path(__file__).resolve().parents[1]/'tests/fixtures/semantics-manifest.json').read_text())['families']
 
 
 class TemporalOracleTests(unittest.TestCase):
@@ -115,7 +117,7 @@ class TemporalOracleTests(unittest.TestCase):
         self.assertFalse(contains(None,[]))
 
     def test_gate_case_count_stays_synchronized(self):
-        self.assertEqual(len(MODES),COUNTS['temporal-arithmetic'])
+        self.assertEqual(len(MODES),COUNTS['temporal_arithmetic'])
         self.assertEqual(len(MODES),len(set(MODES)))
 
 

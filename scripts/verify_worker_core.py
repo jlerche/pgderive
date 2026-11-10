@@ -5,14 +5,33 @@ import pathlib
 import subprocess
 import sys
 
-COUNTS = {'operation-budget': 1, 'async-checkpoints': 6, 'memtable': 8, 'keyed-sink': 8, 'result-table': 2, 'query-binding': 18, 'transactions': 7, 'crashes': 5,
-          'compiler': 4, 'application': 6, 'composition-matrix': 8, 'sliding-extrema': 6, 'prefix-window': 6, 'expression-composition': 12, 'sliding-window': 5, 'sink-batch': 2, 'stdout-sink': 1, 'projection': 2, 'functions': 1, 'postgres-support': 1, 'aggregate-inputs': 6, 'environment': 1, 'computed-join': 6, 'join-predicates': 29, 'relational': 2, 'partition': 7,
-          'numeric': 4, 'circuit-numeric': 6, 'native': 4, 'navigation': 5, 'case': 6, 'lookup': 5,
-          'ordering': 18, 'ordering-domains': 14, 'unordered': 17, 'query-lifecycle': 7, 'query-concurrent': 1,
-          'subqueries': 75, 'set-operations': 44, 'sql-composition': 28, 'numeric-arithmetic': 19, 'outer-joins': 45, 'temporal-arithmetic': 40}
+LIVE_COUNTS = {'memtable': 1, 'checkpoint': 1, 'result-table': 2, 'operation-budget': 1,
+               'transactions': 7, 'crashes': 5, 'query-lifecycle': 1, 'projection-compiler': 2, 'postgres-support': 1}
 
 
-def verify(output, counts=COUNTS):
+def successful(report, fields):
+    if not isinstance(report,dict) or any(report.get(field) is not True for field in fields):
+        raise ValueError('Missing successful live qualification: '+repr(fields))
+
+
+def qualifications(output):
+    def read(name):
+        return json.loads((output/name).read_text())
+    successful(read('query-rebuild/qualification.json'),['rebuild','memory_oracle','cold_restart'])
+    successful(read('tenant-storage/qualification.json'),
+               ['passed','tenant_isolation','cross_database_uploader','healthy_queries_progressed','cold_reopen_equal'])
+    commits=read('tenant-storage-commit/qualification.json')
+    if len(commits)!=2 or {r['fault'] for r in commits}!={'before','after'}:
+        raise ValueError('Missing manifest COMMIT fault coverage')
+    for report in commits:
+        successful(report,['passed','oracle_equal','cold_reopen_equal','ack_safe'])
+    queries=read('multi-query/comparison.json')
+    if len(queries)!=1 or queries[0].get('queries')!=2:
+        raise ValueError('Missing multi-query live coverage')
+    successful(queries[0],['passed'])
+
+
+def verify(output, counts=LIVE_COUNTS):
     expected = set()
     for name, count in counts.items():
         results = list((output/name).rglob('result.json'))
@@ -26,6 +45,8 @@ def verify(output, counts=COUNTS):
         raise ValueError('unexpected core result evidence')
     if not isinstance(json.loads((output/'query-rebuild/qualification.json').read_text()), dict):
         raise ValueError('invalid rebuild evidence')
+    if counts is LIVE_COUNTS:
+        qualifications(output)
     return len(expected)
 
 
@@ -38,11 +59,11 @@ def main(output, binaries):
              *sorted((root/'queries').rglob('*.sql')),
              *sorted(output.rglob('*.json')), *sorted(output.rglob('*.jsonl'))]
     summary = {'profile': 'core', 'result_count': count,
-               'scope': 'live functional/durability regression; full release qualification requires --full',
+               'scope': 'focused live CDC/durability/recovery; broad semantics use virtual-clock replay; full release qualification requires --full',
                'git_head': subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
                'sha256': {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}}
     (output/'provenance.json').write_text(json.dumps(summary,indent=2)+'\n')
-    print(f'Core worker regression passed: {count} results plus rebuild. Full release qualification not run.')
+    print(f'Core worker regression passed: {count} focused results plus rebuild. Full release qualification not run.')
 
 
 if __name__ == '__main__':

@@ -5,7 +5,9 @@ import unittest
 
 from outer_join_harness import CASES, MODES, TYPES, OuterFixture, merged, outer_pairs
 from join_predicate_harness import eq
-from verify_worker_core import COUNTS
+import json
+import pathlib
+COUNTS = json.loads((pathlib.Path(__file__).resolve().parents[1]/'tests/fixtures/semantics-manifest.json').read_text())['families']
 
 
 def fixture(mode):
@@ -76,7 +78,7 @@ class OuterJoinOracleTests(unittest.TestCase):
         self.assertEqual(list(outer_pairs([],[],matches,'FULL')),[])
 
     def test_gate_names_match_the_case_matrix(self):
-        self.assertEqual(COUNTS['outer-joins'],len(MODES))
+        self.assertEqual(COUNTS['outer_join'],len(MODES))
         self.assertEqual(len(MODES),len(set(MODES)))
         self.assertTrue(all(case.kind in ('INNER','LEFT','RIGHT','FULL') for case in CASES.values()))
 

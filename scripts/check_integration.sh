@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+profile=${PGDERIVE_CHECK_PROFILE:-full}
+case "$profile" in
+    core|full) ;;
+    *) printf 'Invalid check profile: %s\n' "$profile" >&2; exit 2 ;;
+esac
 export PGPASSWORD=${PGPASSWORD:-postgres}
 export PGDERIVE_TEST_POSTGRES_PORT=${PGDERIVE_TEST_POSTGRES_PORT:-55434}
 export PGDERIVE__POSTGRES__PORT="$PGDERIVE_TEST_POSTGRES_PORT"
@@ -19,9 +24,13 @@ exists=$("${pg[@]}" -Atc "SELECT 1 FROM pg_database WHERE datname='pgderive_dev'
 if [[ "$exists" != 1 ]]; then
     "${pg[@]}" -c 'CREATE DATABASE pgderive_dev'
 fi
-mkdir -p artifacts/error-order
-export PGDERIVE_ERROR_ORDER_EVIDENCE="$(mktemp "$PWD/artifacts/error-order/run-XXXXXXXX.json")"
-python3 scripts/error_order_differential.py "${pg[@]}" -Atq
+# The pinned error corpus already runs against the engine in paused-clock tests.
+# Refresh its PostgreSQL differential during full qualification, not every edit.
+if [[ "$profile" == full ]]; then
+    mkdir -p artifacts/error-order
+    export PGDERIVE_ERROR_ORDER_EVIDENCE="$(mktemp "$PWD/artifacts/error-order/run-XXXXXXXX.json")"
+    python3 scripts/error_order_differential.py "${pg[@]}" -Atq
+fi
 # Shared tenant storage fault cases are one sequential, schema-isolated live test.
 if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
     cargo llvm-cov --locked --lib --no-report -- tenant_storage_manifest_live --ignored --nocapture --test-threads=1

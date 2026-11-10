@@ -19,3 +19,10 @@ The test starts with an explicit in-memory bootstrap, skips rolled-back source
 transactions, and compares integrated join/filter/count results with a fresh
 source-map computation after each commit. This does not test storage recovery
 or PostgreSQL snapshot/CDC bootstrap. Original accepted artifacts are unchanged.
+
+
+`semantics.json.zst` freezes the native PostgreSQL results and full-tuple weighted
+histories of the existing SQL harnesses. `semantics-manifest.json` records every
+case, family count, expected oracle/restart count and fixture-source fingerprint.
+The ordinary gate only replays this corpus; it never silently refreshes it.
+See [the gate design](../../docs/gate.md) for the explicit refresh command.
