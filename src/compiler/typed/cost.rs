@@ -28,6 +28,7 @@ impl Typed {
             }
             Value::Binary { left, right, .. } => Self::operator_cost(left, right),
             Value::Coalesce(values) => values.iter().map(Self::cost).sum(),
+            Value::SimpleCase(case) => case.cost(),
             Value::Case { branches, otherwise } => branches
                 .iter()
                 .map(|(condition, value)| condition.cost().saturating_add(value.cost()))
@@ -36,8 +37,11 @@ impl Typed {
         }
     }
     pub(in crate::compiler) fn operator_cost(left: &Self, right: &Self) -> u64 {
+        Self::comparison_cost(left, right).saturating_add(left.cost())
+    }
+
+    pub(super) fn comparison_cost(left: &Self, right: &Self) -> u64 {
         OPERATOR_COST
-            .saturating_add(left.cost())
             .saturating_add(right.cost())
             .saturating_add(promotion(left, right.oid))
             .saturating_add(promotion(right, left.oid))

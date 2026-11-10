@@ -184,6 +184,9 @@ impl Rewrite<'_> {
                 self.optional(value.arg.as_deref_mut(), guarded, depth)?;
             }
             Some(NodeEnum::CaseExpr(value)) => {
+                // Folding can discard a simple CASE's test or even its first WHEN.
+                let guarded = guarded || value.arg.is_some();
+                self.optional(value.arg.as_deref_mut(), guarded, depth)?;
                 for (index, arm) in value.args.iter_mut().enumerate() {
                     let Some(NodeEnum::CaseWhen(arm)) = arm.node.as_mut() else {
                         anyhow::bail!("invalid CASE arm");

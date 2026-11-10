@@ -19,6 +19,13 @@ impl Typed {
             Value::Cast { input, .. } => input.collation(resolve),
             Value::Call(call) => collations(&call.arguments, resolve),
             Value::Coalesce(values) => collations(values, resolve),
+            Value::SimpleCase(case) => {
+                let mut result = 100;
+                for value in case.results() {
+                    result = common(result, value.collation(resolve)?)?;
+                }
+                Ok(result)
+            }
             Value::Case { branches, otherwise } => {
                 let mut result = common(100, otherwise.collation(resolve)?)?;
                 for (_, value) in branches {

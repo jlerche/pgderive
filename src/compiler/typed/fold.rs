@@ -38,6 +38,7 @@ impl Typed {
             }
             Value::Coalesce(values) => Value::Coalesce(coalesced(values)?),
             Value::Case { branches, otherwise } => cased(branches, otherwise)?,
+            Value::SimpleCase(case) => Value::SimpleCase(case.fold()?),
             value => value.clone(),
         };
         let folded = Self { oid: self.oid, value };

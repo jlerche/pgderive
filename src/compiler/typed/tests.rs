@@ -236,3 +236,53 @@ fn distinctness_is_total_and_reuses_native_equality() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn simple_case_resolves_matches_and_results_independently() -> Result<()> {
+    let row = [("a".into(), Some("7".into())), ("b".into(), None)].into();
+    for (sql, oid, expected) in [
+        ("CASE a WHEN 7.0 THEN '7.00' ELSE 1.5 END", 1700, Some("7.00")),
+        ("CASE a WHEN '7' THEN 1 ELSE 2147483648 END", 20, Some("1")),
+        ("CASE a WHEN b THEN 1 WHEN a THEN 2 WHEN a THEN 3 END", 23, Some("2")),
+        ("CASE b WHEN NULL THEN 1 WHEN b THEN 2 ELSE 3 END", 23, Some("3")),
+        ("CASE b WHEN NULL THEN 1 END", 23, None),
+        ("CASE NULL WHEN NULL THEN 1 / 0 ELSE 2 END", 23, Some("2")),
+        ("CASE 1 WHEN 1 THEN 7 WHEN 1 / 0 THEN 8 ELSE 9 / 0 END", 23, Some("7")),
+        ("CASE a WHEN 7 THEN NULL END", 25, None),
+        ("CASE 'yes' WHEN 'yes' THEN true ELSE 'no' END", 16, Some("t")),
+        ("CASE a WHEN 7 THEN 'text' ELSE 'varchar'::varchar END", 1043, Some("text")),
+        (
+            "CASE a WHEN 7 THEN DATE '2020-01-01' ELSE TIMESTAMP '2020-01-02 00:00:00' END",
+            1114,
+            Some("2020-01-01 00:00:00"),
+        ),
+        ("CASE 1 WHEN a THEN 1 WHEN 1 THEN 2 ELSE 1 / 0 END", 23, Some("2")),
+        ("CASE a WHEN 7 THEN 1 ELSE 1 / (a - 7) END", 23, Some("1")),
+        ("CASE 1 / (a - 7) WHEN NULL THEN 1 ELSE 2 END", 23, Some("2")),
+        ("CASE a WHEN 7 THEN 1 WHEN 1 / (a - 7) THEN 2 END", 23, Some("1")),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), oid, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    let typed = expression("CASE a WHEN 7 THEN 1::numeric(4,2) ELSE 2::numeric(4,2) END")?;
+    assert_eq!(typed.modifier(&|_| None), crate::numeric::Typmod::new(4, 2)?.encoded());
+    for sql in [
+        "CASE NULL WHEN 1 THEN 2 END",
+        "CASE '7' WHEN 7 THEN 2 END",
+        "CASE a WHEN true THEN 2 END",
+        "CASE a WHEN 7 THEN 'bad' ELSE 1 END",
+        "CASE a WHEN 7 THEN true ELSE 1 END",
+        "CASE NULL WHEN 1 / 0::numeric THEN 2 END",
+        "CASE NULL::int WHEN 1 / 0 THEN 2 END",
+        "CASE 1 / 0 WHEN NULL THEN 2 END",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    for sql in
+        ["CASE b WHEN 1 / (a - 7) THEN 1 ELSE 2 END", "CASE 1 / (a - 7) WHEN a THEN 1 ELSE 2 END"]
+    {
+        assert!(expression(sql)?.evaluate(&row).is_err(), "{sql}");
+    }
+    Ok(())
+}

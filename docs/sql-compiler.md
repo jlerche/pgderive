@@ -653,9 +653,14 @@ Searched CASE in a scalar projection now supports 1..=32 ordered WHEN branches
 using the existing predicate subset. Result arms are native integral columns,
 integral literals or NULL; omitted ELSE is NULL. Integer result promotion follows
 PostgreSQL int2/int4/int8 resolution (ordinary small literals are int4), and mixed
-opaque/numeric results, simple CASE, nested CASE and arithmetic result arms remain
-rejected. CASE conditions retain SQL three-valued logic: only true selects a
-branch. The runtime evaluates conditions in source order, then only the selected
+opaque result types are limited to supported scalar coercions. Simple CASE
+evaluates its test once and compares each WHEN value in order using the
+supported scalar equality rules, including the constant-operand requirement
+for text comparisons.
+NULL never matches, even when both values are NULL. The result type is resolved
+separately across THEN and ELSE, with ELSE considered first and an omitted ELSE
+treated as NULL. A scalar subquery used by simple CASE must be computed in
+a derived scope. Searched CASE selects a branch when its condition is true. The runtime evaluates conditions in source order, then only the selected
 result arm; later conditions are not evaluated. This is a Rust scalar-map stage
 because flags may affect subsequent filters, keys and running aggregates.
 

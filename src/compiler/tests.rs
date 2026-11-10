@@ -188,3 +188,23 @@ mod scalar;
 mod using;
 
 mod join_predicate;
+
+#[test]
+fn simple_case_prunes_unreachable_aggregate_results_and_guards_subqueries() -> Result<()> {
+    let contract = crate::source::tests::contract();
+    super::compile("SELECT SUM(CASE 1 WHEN 0 THEN 1 / 0 ELSE 2 END) FROM public.items", &contract)?;
+    for value in [
+        "CASE (SELECT 1) WHEN NULL THEN 1 ELSE 2 END",
+        "CASE NULL::integer WHEN (SELECT 1) THEN 1 ELSE 2 END",
+    ] {
+        let sql = format!("SELECT {value} FROM public.items");
+        let Err(error) = super::compile(&sql, &contract) else {
+            anyhow::bail!("unexpectedly admitted {sql}");
+        };
+        assert!(
+            format!("{error:#}").contains("subqueries in lazy CASE/COALESCE"),
+            "{sql}: {error:#}"
+        );
+    }
+    Ok(())
+}

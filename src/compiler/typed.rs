@@ -43,6 +43,7 @@ enum Value {
     Binary { operation: Arithmetic, left: Box<Typed>, right: Box<Typed> },
     Coalesce(Vec<Typed>),
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
+    SimpleCase(case::Simple),
 }
 impl Typed {
     pub(in crate::compiler) fn is_constant(&self) -> bool {
@@ -60,6 +61,7 @@ impl Typed {
             Value::Cast { input, .. } => input.is_constant(),
             Value::Binary { left, right, .. } => left.is_constant() && right.is_constant(),
             Value::Coalesce(values) => values.iter().all(Self::is_constant),
+            Value::SimpleCase(case) => case.is_constant(),
             Value::Case { branches, otherwise } => {
                 otherwise.is_constant()
                     && branches
@@ -218,7 +220,10 @@ pub(super) fn computed(
         typed.oid = 25;
     }
     ensure!(
-        matches!(typed.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 1082 | 1114 | 1184 | 1186),
+        matches!(
+            typed.oid,
+            16 | 20 | 21 | 23 | 25 | 1043 | 1700 | 2950 | 1082 | 1114 | 1184 | 1186
+        ),
         "computed scalar requires supported native type"
     );
     super::scalar::register(typed, computed, &format!("@typed_{scope:?}_"))
@@ -280,6 +285,7 @@ impl Typed {
             Value::Cast { input, .. } => input.nullable(),
             Value::Binary { left, right, .. } => left.nullable() || right.nullable(),
             Value::Coalesce(arguments) => arguments.iter().all(Self::nullable),
+            Value::SimpleCase(case) => case.results().any(Self::nullable),
             Value::Case { branches, otherwise } => {
                 otherwise.nullable() || branches.iter().any(|(_, value)| value.nullable())
             }
@@ -357,7 +363,7 @@ impl Typed {
         let text = match value.value {
             Value::Literal(None) => None,
             Value::Text(value) => Some(value),
-            _ => anyhow::bail!("UNION requires an unknown literal"),
+            _ => anyhow::bail!("expected an unknown literal"),
         };
         let text = text
             .map(|value| -> Result<String> {
@@ -369,7 +375,7 @@ impl Typed {
                     let no = lower == "0"
                         || (!lower.is_empty()
                             && ["false", "no", "off"].iter().any(|v| v.starts_with(&lower)));
-                    ensure!(yes != no, "invalid UNION boolean literal");
+                    ensure!(yes != no, "invalid boolean literal");
                     if yes { "t".into() } else { "f".into() }
                 } else if matches!(oid, 20 | 21 | 23) {
                     value.trim_ascii().parse::<i64>()?.to_string()

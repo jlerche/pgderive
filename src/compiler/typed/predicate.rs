@@ -86,18 +86,24 @@ impl Typed {
         match &self.value {
             Value::Column(column) => resolve(column).unwrap_or(-1),
             Value::Cast { typmod: Some(typmod), .. } => typmod.encoded(),
-            Value::Coalesce(values) => {
-                let modifier = values.first().map_or(-1, |value| value.modifier(resolve));
-                if values
-                    .iter()
-                    .all(|value| value.oid == self.oid && value.modifier(resolve) == modifier)
-                {
-                    modifier
-                } else {
-                    -1
-                }
-            }
+            Value::Coalesce(values) => self.common_modifier(values.iter(), resolve),
+            Value::SimpleCase(case) => self.common_modifier(case.results(), resolve),
             _ => -1,
+        }
+    }
+    fn common_modifier<'a>(
+        &self,
+        mut results: impl Iterator<Item = &'a Self>,
+        resolve: &impl Fn(&ColumnRef) -> Option<i32>,
+    ) -> i32 {
+        let Some(first) = results.next().filter(|value| value.oid == self.oid) else {
+            return -1;
+        };
+        let modifier = first.modifier(resolve);
+        if results.all(|value| value.oid == self.oid && value.modifier(resolve) == modifier) {
+            modifier
+        } else {
+            -1
         }
     }
     pub(in crate::compiler) const fn as_integer_literal(&self) -> Option<i64> {

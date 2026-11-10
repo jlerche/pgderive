@@ -179,28 +179,29 @@ fn comparison(
 }
 
 fn comparison_operands(left: Operand, right: Operand) -> Result<(Scalar, Scalar)> {
-    let oid = if [left.oid(), right.oid()]
-        .iter()
-        .flatten()
-        .any(|oid| matches!(oid, 1082 | 1114 | 1184))
-    {
+    let oid = comparison_oid(left.oid(), right.oid(), [left.literal_oid(), right.literal_oid()])?;
+    Ok((left.coerce(oid)?, right.coerce(oid)?))
+}
+pub(super) fn case_match(test: &Scalar, candidate: Operand) -> Result<Scalar> {
+    let oid = comparison_oid(Some(test.oid()), candidate.oid(), [0, candidate.literal_oid()])?;
+    let candidate = candidate.coerce(oid)?;
+    check_comparison(&Compare::Eq, test, &candidate, None)?;
+    Ok(candidate)
+}
+fn comparison_oid(left: Option<u32>, right: Option<u32>, literals: [u32; 2]) -> Result<u32> {
+    let oid = if [left, right].iter().flatten().any(|oid| matches!(oid, 1082 | 1114 | 1184)) {
         [1184, 1114, 1082]
             .into_iter()
-            .find(|oid| left.oid() == Some(*oid) || right.oid() == Some(*oid))
+            .find(|oid| left == Some(*oid) || right == Some(*oid))
             .context("temporal comparison type absent")?
     } else {
-        left.oid().or_else(|| right.oid()).unwrap_or_else(|| {
-            [left.literal_oid(), right.literal_oid()]
-                .into_iter()
-                .find(|oid| *oid != 0)
-                .unwrap_or(25)
-        })
+        left.or(right).unwrap_or_else(|| literals.into_iter().find(|oid| *oid != 0).unwrap_or(25))
     };
     ensure!(
         matches!(oid, 16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1082 | 1114 | 1184 | 1186),
         "SQL type: unsupported comparison type"
     );
-    Ok((left.coerce(oid)?, right.coerce(oid)?))
+    Ok(oid)
 }
 fn check_comparison(
     op: &Compare,
@@ -379,7 +380,7 @@ fn logical(values: &[Expr], rows: (&Row, &Row), and: bool) -> Result<Option<bool
     }
     Ok((!unknown).then_some(and))
 }
-fn compare_order(left: &Value, right: &Value) -> Result<Ordering> {
+pub(super) fn compare_order(left: &Value, right: &Value) -> Result<Ordering> {
     use crate::numeric::Numeric;
     Ok(match (left, right) {
         (Value::Date(left), Value::Timestamp(right)) => left.compare_timestamp(*right),

@@ -16,6 +16,13 @@ pub(in crate::compiler) fn bind(
     value: &Node,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
 ) -> Result<Operand> {
+    bind_at(value, resolve, 0)
+}
+pub(super) fn bind_at(
+    value: &Node,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    depth: usize,
+) -> Result<Operand> {
     let (value, contextual, null_test) = if let Ok(name) = column(value) {
         (Typed::column(resolve(&name)?), false, true)
     } else if let Ok(literal) = native_literal(value) {
@@ -23,7 +30,7 @@ pub(in crate::compiler) fn bind(
     } else if let Ok((name, divisor)) = remainder(value) {
         (Typed::remainder(resolve(&name)?, divisor)?, false, false)
     } else {
-        (super::bind(value, resolve, 0)?, false, true)
+        (super::bind(value, resolve, depth)?, false, true)
     };
     Ok(Operand { value, contextual, null_test })
 }

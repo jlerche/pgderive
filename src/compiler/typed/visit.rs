@@ -20,6 +20,14 @@ impl Typed {
                 }
             }
             Value::Boolean(value) => value.reads(out),
+            Value::SimpleCase(case) => {
+                case.test.reads(out);
+                case.otherwise.reads(out);
+                for (candidate, result) in &case.branches {
+                    candidate.reads(out);
+                    result.reads(out);
+                }
+            }
             Value::Call(call) => call.arguments.iter().for_each(|value| value.reads(out)),
             Value::Cast { input, .. } => input.reads(out),
             Value::Binary { left, right, .. } => {
@@ -68,6 +76,7 @@ impl Typed {
                 Value::Temporal(value)
             }
             Value::Boolean(value) => Value::Boolean(Box::new(value.replaced(replace)?)),
+            Value::SimpleCase(case) => Value::SimpleCase(case.replaced(replace)?),
             Value::Call(call) => {
                 let mut call = call.clone();
                 call.arguments = all(&call.arguments, replace)?;
@@ -124,7 +133,7 @@ impl Typed {
             Value::Call(call) => call.arguments.iter().all(Self::is_strict),
             Value::Cast { input, .. } => input.is_strict(),
             Value::Binary { left, right, .. } => left.is_strict() && right.is_strict(),
-            Value::Coalesce(_) | Value::Case { .. } => false,
+            Value::Coalesce(_) | Value::Case { .. } | Value::SimpleCase(_) => false,
             _ => true,
         }
     }
