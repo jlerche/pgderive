@@ -9,6 +9,7 @@ use url::Url;
 mod budget;
 mod credentials;
 mod scoped;
+pub mod tenant;
 pub use budget::exhausted as operation_budget_exhausted;
 pub use scoped::PageStore;
 
@@ -26,6 +27,22 @@ pub struct Storage {
     operation_budget: Option<Box<budget::Config>>,
 }
 impl Storage {
+    pub(crate) fn identity(&self) -> Result<serde_json::Value> {
+        Ok(
+            serde_json::json!({"endpoint":self.endpoint()?.to_string(),"bucket":self.bucket,"region":self.region,"ca_file":self.ca_file}),
+        )
+    }
+    pub(crate) fn sharing_key(&self) -> Result<serde_json::Value> {
+        let credential = credentials::load(&self.credentials_file)?;
+        let identity = tenant::checksum(&serde_json::to_vec(&(
+            credential.access_key_id,
+            credential.secret_access_key,
+            credential.session_token,
+        ))?);
+        Ok(
+            serde_json::json!({"credentials":identity,"budget":self.operation_budget.as_ref().map(|b|serde_json::json!({"ledger":b.ledger,"class_a_limit":b.class_a_limit,"window_secs":b.window_secs}))}),
+        )
+    }
     pub(crate) fn same_namespace(&self, other: &Self) -> Result<bool> {
         let canonical = |storage: &Self| -> Result<Url> {
             let mut url = storage.endpoint()?;
@@ -146,4 +163,13 @@ pub fn budgeted_test_store(ledger: PathBuf, limit: u64) -> Result<Arc<dyn PageSt
         scoped::Scoped::new(raw.clone(), raw, object_store::path::Path::default(), 8)?
             .with_budget(Some(budget)),
     ))
+}
+
+pub fn prefix(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value.split('/').all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+        })
 }

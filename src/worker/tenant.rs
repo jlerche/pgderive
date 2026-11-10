@@ -1,8 +1,14 @@
 //! Immutable catalog ownership, separate from connection authorization.
 use anyhow::{Context, Result, ensure};
 use tokio_postgres::GenericClient;
-mod namespace;
-pub(super) use namespace::claim as namespace;
+pub(super) async fn namespace(
+    config: &crate::Config,
+    settings: &super::Settings,
+    session: &super::sql::Session,
+) -> Result<()> {
+    Box::pin(crate::storage::tenant::build(config, settings, &session.client)).await?;
+    Ok(())
+}
 
 pub(super) async fn verify(
     sql: &(impl GenericClient + Sync),

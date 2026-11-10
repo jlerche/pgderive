@@ -13,23 +13,27 @@ use serde_json::{Value, json};
 /// # Errors
 /// Rejects occupied creation, missing restart, incompatible state or worker failures.
 pub async fn start(mut config: Config, restart: bool) -> Result<()> {
+    let runtime = super::resources::install(
+        std::slice::from_mut(&mut config),
+        &super::ProcessLimits::default(),
+    )?;
+    let result = Box::pin(start_owned(config, restart)).await;
+    crate::outcome::combine(result, runtime.close().await, "tenant uploader shutdown")
+}
+async fn start_owned(config: Config, restart: bool) -> Result<()> {
     config.validate()?;
-    super::resources::install(std::slice::from_mut(&mut config), &super::ProcessLimits::default())?;
     let shutdown = super::shutdown::listen().context("installing worker shutdown handlers")?;
     let settings = config.worker.clone().context("configuration requires a worker section")?;
-    let storage = config.object_store.as_ref().context("worker requires durable object storage")?;
-    let store = storage.build(&settings.object_prefix, config.execution.object_requests)?;
-    storage.preflight(store.as_ref()).await?;
     let mut session = Session::connect(&config).await?;
     session.own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id).await?;
     super::tenant::namespace(&config, &settings, &session).await?;
     if !restart && super::lifecycle::recreate(&*session.client, &settings).await? {
-        session = super::lifecycle::rebuild_owned(&config, &settings, session, true).await?;
+        session =
+            Box::pin(super::lifecycle::rebuild_owned(&config, &settings, session, true)).await?;
         return Box::pin(super::drive::run_initial(config, settings, Some(session), shutdown))
             .await;
     }
     let resolved = super::lifecycle::resolve(&*session.client, &config, &settings).await?;
-    let native = &resolved.settings;
     let table = format!("{}.pgderive_worker_registration", settings.catalog_schema);
     let exists: bool = session
         .client
@@ -41,7 +45,7 @@ pub async fn start(mut config: Config, restart: bool) -> Result<()> {
             .client
             .query_opt(
                 &format!("SELECT query_id FROM {table} WHERE query_id=$1"),
-                &[&native.query_id],
+                &[&resolved.settings.query_id],
             )
             .await?
             .is_some();
@@ -49,6 +53,7 @@ pub async fn start(mut config: Config, restart: bool) -> Result<()> {
         registered == restart,
         "create requires an unregistered query; restart requires an existing registration"
     );
+    drop(resolved);
     if !restart {
         let catalog = crate::catalog::Catalog::new(&settings.catalog_schema, &settings.query_id)?;
         catalog.install(&session.client).await?;

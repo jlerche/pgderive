@@ -20,6 +20,7 @@ pub(super) async fn check(
         let mut config = config.clone();
         config.postgres.port = port.parse()?;
         let (mut fault, task) = crate::harness::connect(&config).await?;
+        drop(config);
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             catalog.activate_snapshot(&mut fault, plan, snapshot.clone()),

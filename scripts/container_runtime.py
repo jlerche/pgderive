@@ -18,6 +18,7 @@ class ContainerWorker(EventStream):
                 '--mount',f'type=bind,src={secrets.resolve()},dst=/run/secrets,readonly',
                 '--mount',f'type=volume,src={scratch},dst=/var/lib/pgderive/scratch',
                 '-e','PGDERIVE__POSTGRES__PASSWORD='+password,
+                '-e','PGDERIVE__TENANT_STORAGE__POSTGRES__PASSWORD='+password,
                 image,'query',action,'/etc/pgderive/query.toml'],check=True,capture_output=True)
         self.record(subprocess.Popen(['docker','start','--attach',name],stdout=subprocess.PIPE,stderr=self.stderr,text=True))
 
@@ -57,6 +58,7 @@ def cli(image,config,secrets,password,action):
         '--security-opt=no-new-privileges',
         '--mount',f'type=bind,src={config.resolve()},dst=/etc/pgderive/query.toml,readonly',
         '--mount',f'type=bind,src={secrets.resolve()},dst=/run/secrets,readonly',
-        '-e','PGDERIVE__POSTGRES__PASSWORD='+password,image,'query',action,'/etc/pgderive/query.toml'],text=True,capture_output=True,timeout=240)
+        '-e','PGDERIVE__POSTGRES__PASSWORD='+password,
+        '-e','PGDERIVE__TENANT_STORAGE__POSTGRES__PASSWORD='+password,image,'query',action,'/etc/pgderive/query.toml'],text=True,capture_output=True,timeout=240)
     assert result.returncode==0,result.stderr
     return json.loads(result.stdout.splitlines()[-1])

@@ -9,6 +9,14 @@ use serde_json::{Value, json};
 /// # Errors
 /// Rejects live ownership, changed resources, dependencies and uncertain commits.
 pub async fn drop_query(config: &Config) -> Result<Value> {
+    let mut config = config.clone();
+    let runtime = std::sync::Arc::new(crate::storage::tenant::Registry::default());
+    config.storage_runtime = std::sync::Arc::downgrade(&runtime);
+    let result = drop_owned(&config).await;
+    drop(config);
+    crate::outcome::combine(result, runtime.close().await, "tenant storage drop drain")
+}
+async fn drop_owned(config: &Config) -> Result<Value> {
     let (mut session, settings) = own(config).await?;
     let mut state = existing(config, &settings, &session).await?;
     anyhow::ensure!(
@@ -80,11 +88,7 @@ pub(super) async fn collected(
     session: &mut crate::worker::sql::Session,
     mode: CollectionMode,
 ) -> Result<Value> {
-    let store = config
-        .object_store
-        .as_ref()
-        .context("removal requires durable object storage")?
-        .build(&settings.object_prefix, config.execution.object_requests)?;
+    let store = crate::storage::tenant::build(config, settings, &session.client).await?;
     let catalog = crate::catalog::Catalog::new(&settings.catalog_schema, &settings.query_id)?;
     let mut cache = crate::catalog::GcCache::default();
     let mut passes = 0_u8;

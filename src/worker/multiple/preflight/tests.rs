@@ -19,7 +19,7 @@ fn conflicting_catalogs_and_tenants_are_rejected_before_io() -> Result<()> {
     let left = config("catalog", "alice", "root")?;
     assert!(validate(&[left.clone(), left.clone()]).is_err());
     assert!(validate(&[left.clone(), config("catalog", "bob", "root")?]).is_err());
-    assert!(validate(&[left.clone(), config("peer", "bob", "root/child")?]).is_err());
+    assert!(validate(&[left.clone(), config("peer", "bob", "root/child")?]).is_ok());
     assert!(validate(&[left, config("peer", "bob", "root-sibling")?]).is_ok());
     Ok(())
 }
@@ -34,7 +34,9 @@ fn same_catalog_queries_use_exactly_one_root() -> Result<()> {
     assert!(validate(&[left.clone(), right.clone()]).is_ok());
     right.worker.as_mut().ok_or_else(|| anyhow::anyhow!("worker missing"))?.object_prefix =
         "other".into();
-    assert!(validate(&[left, right]).is_err());
+    assert!(validate(&[left.clone(), right.clone()]).is_err());
+    drop(left);
+    drop(right);
     Ok(())
 }
 

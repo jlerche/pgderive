@@ -60,11 +60,11 @@ window_secs=86400
             worker = fixture.start(command, label)
             observation = exhausted(worker, output, label)
             saved = json.loads(ledger.read_text())
-            # Fresh namespace ownership first probes for unbound objects. Its
-            # marker PUT must fail locally once that one LIST uses the allowance.
-            assert saved['used'] == saved['listing_pages'] == 1 and saved['puts'] == 0 and saved['remaining'] == 0, saved
+            # The tenant root's branch marker uses the allowance. Its child
+            # ownership probe must then fail before issuing another Class A call.
+            assert saved['used'] == saved['puts'] == 1 and saved['listing_pages'] == 0 and saved['remaining'] == 0, saved
             calls = attempts(output/'proxy.jsonl', started)
-            assert len(calls) == 1 and calls[0]['listing'], calls
+            assert len(calls) == 1 and calls[0]['method'] == 'PUT', calls
             # An incomplete bootstrap must publish neither durable progress nor a result epoch.
             present = fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_progress') IS NOT NULL").strip() == 't'
             count = fixture.sql(f'SELECT count(*) FROM {fixture.name}.pgderive_progress').strip() if present else '0'
@@ -79,10 +79,10 @@ window_secs=86400
         assert renewed['used'] > saved['used'] and renewed['class_a_limit'] == allowance, renewed
         assert renewed['used'] == len(attempts(output/'proxy.jsonl', started)), renewed
         # Exhaust a checkpoint after its source epoch and sink changes are durable.
-        # Startup collection spends one page, then the shared data pack spends one
-        # PUT. Batch metadata must fail locally before publishing a checkpoint.
+        # Logical collection now lists the manifest without a Class A request.
+        # The data pack spends one PUT; metadata must fail before checkpointing.
         ticks = 1
-        allowance = renewed['used'] + 2
+        allowance = renewed['used'] + 1
         running = fixture.start(command, 'checkpoint-exhaust')
         ready = running.event('ready', seconds=30)
         running.event('collection', seconds=30)

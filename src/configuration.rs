@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(skip)]
+    pub(crate) storage_runtime: std::sync::Weak<crate::storage::tenant::Registry>,
+    #[serde(skip)]
     pub(crate) capacity: Option<std::sync::Arc<crate::worker::resources::Resources>>,
     #[serde(skip)]
     pub(super) source_path: Option<PathBuf>,
@@ -21,12 +23,14 @@ pub struct Config {
     #[serde(default)]
     pub(super) worker: Option<crate::worker::Settings>,
     pub(super) postgres: Postgres,
+    #[serde(default)]
+    pub(crate) tenant_storage: Option<crate::storage::tenant::Config>,
     pub(super) replication: Replication,
     #[serde(default)]
     pub(super) listener: Listener,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Postgres {
     pub(super) host: String,
@@ -60,6 +64,11 @@ impl Default for Listener {
 }
 
 impl Config {
+    pub(crate) fn storage_runtime(
+        &self,
+    ) -> Result<std::sync::Arc<crate::storage::tenant::Registry>> {
+        self.storage_runtime.upgrade().context("tenant storage runtime is not installed")
+    }
     /// Load a TOML file, then overlay `PGDERIVE__SECTION__KEY` environment variables.
     ///
     /// # Errors
@@ -90,13 +99,13 @@ impl Config {
         if let Some(worker) = &self.worker {
             worker.validate()?;
         }
-        ensure!(!self.postgres.host.is_empty(), "postgres.host cannot be empty");
-        ensure!(self.postgres.port > 0, "postgres.port cannot be zero");
-        ensure!(!self.postgres.database.is_empty(), "postgres.database cannot be empty");
-        ensure!(!self.postgres.user.is_empty(), "postgres.user cannot be empty");
+        self.postgres.validate()?;
+        if let Some(storage) = &self.tenant_storage {
+            storage.validate()?;
+        }
         ensure!(
-            matches!(self.postgres.tls.as_str(), "disable" | "verify-full"),
-            "postgres.tls must be disable or verify-full"
+            self.worker.is_none() || self.tenant_storage.is_some(),
+            "workers require a tenant_storage authority"
         );
         ensure!(identifier(&self.replication.slot), "invalid replication.slot identifier");
         ensure!(
@@ -146,3 +155,17 @@ pub fn identifier(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+impl Postgres {
+    pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(!self.host.is_empty(), "postgres.host cannot be empty");
+        ensure!(self.port > 0, "postgres.port cannot be zero");
+        ensure!(!self.database.is_empty(), "postgres.database cannot be empty");
+        ensure!(!self.user.is_empty(), "postgres.user cannot be empty");
+        ensure!(
+            matches!(self.tls.as_str(), "disable" | "verify-full"),
+            "postgres.tls must be disable or verify-full"
+        );
+        Ok(())
+    }
+}

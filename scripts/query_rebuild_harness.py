@@ -4,13 +4,13 @@ import collections
 import json
 import pathlib
 import sys
-import urllib.request
 import urllib.error
 
 from query_lifecycle_harness import configured, grouped, rejected, verify_packed_root
 from native_mv_oracle import expected as native_expected
 from worker_harness import Worker
 from harness_control import admin
+from gc_fixture import logical_get
 
 
 def command(fixture, binary, action, config):
@@ -52,21 +52,15 @@ def pin_roots(fixture):
     return roots
 
 
-def object_bytes(fixture, path):
-    endpoint = fixture.environment.get('PGDERIVE__OBJECT_STORE__ENDPOINT','http://127.0.0.1:8333')
-    with urllib.request.urlopen(f'{endpoint}/pgderive-mvp-tests/{fixture.name}/{path}',timeout=10) as response:
-        return response.read()
-
-
 def verify_pins(fixture, roots):
     for root in roots:
-        verify_packed_root(root, lambda path: object_bytes(fixture, path))
+        verify_packed_root(root, lambda path: logical_get(fixture, path))
 
 
 def verify_collected(fixture, roots):
     for root in roots:
         try:
-            object_bytes(fixture,root['path'])
+            logical_get(fixture,root['path'])
             raise AssertionError('released retired root was not collected')
         except urllib.error.HTTPError as error:
             assert error.code == 404

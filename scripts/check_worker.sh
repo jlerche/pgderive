@@ -44,6 +44,10 @@ PGDERIVE_S3_LATENCY_SCALE=0 run_qualification operation-budget \
     python3 scripts/operation_budget_harness.py "$output/operation-budget" -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification tenant-capacity \
     python3 scripts/multi_tenant_capacity_harness.py "$output/tenant-capacity" -- "${worker[@]}"
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification tenant-storage \
+    python3 scripts/tenant_storage_harness.py "$output/tenant-storage" -- "${worker[@]}"
+PGDERIVE_S3_LATENCY_SCALE=0 run_qualification tenant-storage-commit \
+    python3 scripts/tenant_storage_commit_harness.py "$output/tenant-storage-commit" -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification multi-query \
     python3 scripts/multi_query_memory_harness.py "$output/multi-query" --counts 2 --seconds 2 --mode shared -- "${worker[@]}"
 PGDERIVE_S3_LATENCY_SCALE=0 run_qualification transactions \

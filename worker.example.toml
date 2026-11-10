@@ -8,6 +8,18 @@ user = "postgres"
 tls = "disable" # Use "verify-full" for a TLS-enabled remote instance.
 # ca_file = "/path/to/ca.pem"
 
+# Independent durable manifest authority, shared by every query of a tenant.
+# Password: PGDERIVE__TENANT_STORAGE__POSTGRES__PASSWORD.
+[tenant_storage]
+schema = "pgderive_storage"
+object_prefix = "pgderive_tenant_storage"
+[tenant_storage.postgres]
+host = "127.0.0.1"
+port = 55434
+database = "pgderive_dev"
+user = "postgres"
+tls = "disable"
+
 [replication]
 slot = "pgderive_worker" # Stable logical alias; actual UUID slot is journaled.
 publication = "pgderive_worker_pub"
@@ -47,7 +59,7 @@ catalog_schema = "pgderive_worker"
 query_id = "auction_totals"
 sink_table = "groups"
 sink_output = "postgres" # Or "stdout": print attempted SQL/parameters, no result table.
-object_prefix = "pgderive_worker" # Exclusively owned and stable across restarts.
+object_prefix = "pgderive_worker" # Stable logical catalog namespace.
 block_rows = 4096
 maintenance_ticks = 16
 # Retain source WAL until immutable arrangement checkpoints cover published results.

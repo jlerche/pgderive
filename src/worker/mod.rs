@@ -43,3 +43,14 @@ pub async fn run(config: Config) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+/// Run one bounded tenant physical collection turn without connecting to source databases.
+///
+/// # Errors
+/// Returns metadata/ownership/storage failures; uncertain uploads remain retained.
+pub async fn collect_storage(mut config: Config) -> Result<serde_json::Value> {
+    config.validate()?;
+    let runtime = std::sync::Arc::new(crate::storage::tenant::Registry::default());
+    config.storage_runtime = std::sync::Arc::downgrade(&runtime);
+    runtime.collect(&config).await
+}

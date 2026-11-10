@@ -1,3 +1,4 @@
+from gc_fixture import physical_prefix
 from harness_control import start_recorded
 #!/usr/bin/env python3
 """Deterministic sustained/skewed workload and supervised outage recovery."""
@@ -45,7 +46,7 @@ class Samples:
 
 def inventory(fixture):
     endpoint = fixture.environment['PGDERIVE__OBJECT_STORE__ENDPOINT']
-    prefix = fixture.name+'/'
+    prefix = physical_prefix(fixture)+'/'
     token = None
     seen = set()
     objects = []

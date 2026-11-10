@@ -45,6 +45,10 @@ impl MvpFixture {
     pub(super) fn time(&self) -> u64 {
         self.graph.time()
     }
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "publication is a mutable reference into self, not an owned admission guard; its borrow ends at its last use"
+    )]
     pub(super) async fn verify(
         &mut self,
         sql: &mut crate::catalog::Connection,
@@ -118,6 +122,10 @@ impl MvpFixture {
         eprintln!("MVP project/join/group/sum passed SQL+memory at tick {time}");
         Ok(())
     }
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "publication is a mutable reference into self, not an owned admission guard; its borrow ends at its last use"
+    )]
     async fn compact(&mut self, sql: &mut crate::catalog::Connection) -> Result<()> {
         let pinned = self.graph.snapshot();
         let expected = pinned.trace("output")?.materialize().await?;

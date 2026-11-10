@@ -12,12 +12,11 @@ pub(super) async fn check(
     writer: &mut Writer,
     recovery: &super::super::recovery::Recovery,
 ) -> Result<()> {
-    let config = &recovery.config;
     let pinned = graph.snapshot();
     let before = writer.confirmed(sql, graph.plan()).await?;
     let visible = pinned.trace("output")?.materialize().await?;
     for mode in ["BEFORE", "AFTER"] {
-        exercise(sql, graph, writer, config, mode).await?;
+        exercise(sql, graph, writer, &recovery.config, mode).await?;
     }
     let protection = writer.protect_upload(sql, "maintenance-final").await?;
     let prepared = graph.prepare_compaction_protected(&protection).await?;
@@ -100,6 +99,7 @@ async fn disconnect(
     let mut config = config.clone();
     config.postgres.port = port.parse()?;
     let (mut fault, task) = connect(&config).await?;
+    drop(config);
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         writer.maintain(&mut fault, plan, checkpoint),

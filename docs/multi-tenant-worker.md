@@ -14,14 +14,18 @@ must authenticate tenants, authorize queries and select credentials. These guard
 do not make arbitrary tenant-supplied configuration or SQL safe to execute.
 
 A catalog schema has one immutable tenant owner and catalog UUID. Multiple queries
-of that tenant can share its catalog and exact object root, with distinct query IDs,
-result tables and slots. Different catalogs must have disjoint object roots.
-PostgreSQL ownership and conditional-create S3 ownership markers reject foreign
-catalogs, tenants and ancestor/descendant root collisions, including separate
-processes. Markers live under `.pgderive-ownership/` at bucket root; credentials
+of that tenant can share its catalog and logical object root, with distinct query
+IDs, result tables and slots. Catalog UUIDs isolate logical keys, so different
+catalogs may reuse logical root names. Every worker requires an independent
+`tenant_storage` authority; compatible queries share physical uploads across
+catalogs and source databases. See [tenant storage](tenant-storage.md) for its
+durability, reclamation, capacity and deployment requirements.
+PostgreSQL ownership and conditional-create S3 markers reject foreign physical
+storage authorities and ancestor/descendant physical-root collisions, including
+separate processes. Markers live under `.pgderive-ownership/` at bucket root; credentials
 need read and conditional-create access there in addition to the data prefix.
 Claims and ancestor branch markers persist after query deletion. Reusing a claimed
-root for another catalog is intentionally unsupported. Existing unbound catalogs
+physical root for another manifest/tenant is intentionally unsupported. Existing unbound catalogs
 or nonempty unbound roots are rejected: provision fresh owned namespaces.
 
 `--resources` reads strict process-level TOML. Defaults are 64 configured queries,

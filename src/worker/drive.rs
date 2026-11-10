@@ -76,7 +76,9 @@ async fn retry(
         .context("worker attempt startup timed out")
         .and_then(std::convert::identity);
         let result = match opening {
-            Ok(session) => attempt(config, settings, stop, &mut metrics, (session, &ticket)).await,
+            Ok(session) => {
+                Box::pin(attempt(config, settings, stop, &mut metrics, (session, &ticket))).await
+            }
             Err(error) => Err(error),
         };
         match result {

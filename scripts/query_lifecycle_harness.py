@@ -16,7 +16,7 @@ from native_compiler_harness import NativeFixture
 from native_mv_oracle import expected as native_expected
 from worker_harness import Worker, harness_arguments
 from harness_control import admin
-from gc_fixture import paged_garbage, empty_inventory
+from gc_fixture import paged_garbage, empty_inventory, logical_get, authority
 
 
 def verify_packed_root(root, get):
@@ -141,7 +141,7 @@ def qualify(output, command, factory):
             f'object_prefix="{fixture.name}"', f'object_prefix="{fixture.name}_other"').replace(
             'retry_attempts=8', 'retry_attempts=1')
         config.write_text(other)
-        assert 'one object-store prefix' in rejected(command, fixture, 'create', config)
+        assert 'logical catalog storage ownership mismatch' in rejected(command, fixture, 'create', config)
         config.write_text(original)
         logical = fixture.sql(f"SELECT logical_time FROM {fixture.name}.pgderive_queries")
         progress = fixture.sql(f"SELECT end_lsn FROM {fixture.name}.pgderive_progress")
@@ -188,10 +188,9 @@ def retire(command, fixture, config, validated, *, paged):
     fixture.sql(f"""INSERT INTO {fixture.name}.pgderive_protections(token,query_id,owner_fence,uploading,roots)
         SELECT 'external-reader','grouped',0,false,jsonb_agg(reference)
         FROM {fixture.name}.pgderive_roots""")
-    endpoint = fixture.environment.get('PGDERIVE__OBJECT_STORE__ENDPOINT', 'http://127.0.0.1:8333')
+    authority(fixture)
     def get(path):
-        with urllib.request.urlopen(f'{endpoint}/pgderive-mvp-tests/{fixture.name}/{path}', timeout=10) as response:
-            return response.read()
+        return logical_get(fixture, path)
     if paged:
         paged_garbage(fixture)
     retired = inspect(command, fixture, 'drop', config)
@@ -216,7 +215,7 @@ def retire(command, fixture, config, validated, *, paged):
 
 
 def namespace_race(output, command):
-    """Hold registration serialization until both independent creates contend."""
+    """A bound manifest rejects conflicting roots before journal registration."""
     fixture = grouped(output)
     blocker = None
     try:
@@ -257,9 +256,9 @@ def namespace_race(output, command):
         deadline = time.monotonic()+8
         while True:
             waiting = int(fixture.sql("SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory' AND query='SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1,0))'"))
-            if waiting == 2:
+            if waiting == 1 and any(worker.process.poll() is not None for worker in workers):
                 break
-            assert time.monotonic() < deadline, 'both registrations did not contend'
+            assert time.monotonic() < deadline, 'manifest did not reject incompatible create before registration'
             time.sleep(.05)
         blocker.stdin.write('COMMIT;\n'+chr(92)+'q\n')
         blocker.stdin.flush()
@@ -270,7 +269,7 @@ def namespace_race(output, command):
             time.sleep(.05)
         losers = [worker for worker in workers if worker.process.poll() is not None]
         assert len(losers) == 1 and losers[0].process.returncode != 0
-        assert 'one object-store prefix' in pathlib.Path(losers[0].stderr.name).read_text()
+        assert 'logical catalog storage ownership mismatch' in pathlib.Path(losers[0].stderr.name).read_text()
         winner = next(worker for worker in workers if worker not in losers)
         winner.event('ready')
         winner.finish(graceful=True)

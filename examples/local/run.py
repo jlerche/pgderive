@@ -78,6 +78,15 @@ port={pg_port}
 database="pgderive_demo"
 user="postgres"
 tls="disable"
+[tenant_storage]
+schema="demo_storage"
+object_prefix="demo_storage"
+[tenant_storage.postgres]
+host="127.0.0.1"
+port={pg_port}
+database="pgderive_demo"
+user="postgres"
+tls="disable"
 [replication]
 slot="demo_{'stdout' if diagnostic else 'table'}"
 publication="demo_source"
@@ -86,6 +95,7 @@ endpoint="http://127.0.0.1:{object_port}"
 bucket="pgderive-demo"
 credentials_file={json.dumps(str(credentials.resolve()))}
 [worker]
+tenant_id="demo"
 catalog_schema="demo_engine"
 query_id="{'stdout' if diagnostic else 'totals'}"
 sink_table="{'diagnostic' if diagnostic else 'totals'}"
@@ -111,7 +121,8 @@ def run(args):
     binary = ROOT/'target/debug/pgderive'
     names = ['pgderive-example-'+uuid.uuid4().hex[:10]+suffix for suffix in ('-pg','-objects')]
     environment = {k:v for k,v in os.environ.items() if not k.startswith('PGDERIVE__')}
-    environment.update(PGPASSWORD='postgres',PGDERIVE__POSTGRES__PASSWORD='postgres')
+    environment.update(PGPASSWORD='postgres',PGDERIVE__POSTGRES__PASSWORD='postgres',
+                       PGDERIVE__TENANT_STORAGE__POSTGRES__PASSWORD='postgres')
     workers = []
     try:
         command('docker','run','-d','--name',names[0],'--tmpfs','/var/lib/postgresql/data:rw',

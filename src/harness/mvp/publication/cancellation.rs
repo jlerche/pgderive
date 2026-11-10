@@ -15,6 +15,7 @@ impl PublicationFixture {
         let mut config = self.config.clone();
         config.postgres.port = port.parse()?;
         let (mut fault, task) = crate::harness::connect(&config).await?;
+        drop(config);
         cancel_at_commit(&mut self.grouped, &mut fault, graph.plan(), attempt, &gate).await?;
         ensure!(
             self.grouped.confirmed(sql, graph.plan()).await.is_err(),

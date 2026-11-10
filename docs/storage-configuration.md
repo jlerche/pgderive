@@ -1,5 +1,9 @@
 # Object storage configuration
 
+Workers also require a shared durable `tenant_storage` manifest endpoint. See
+[tenant-wide storage](tenant-storage.md) and `worker.example.toml`. Worker object
+keys are logical IDs; physical packs are owned and reclaimed by that authority.
+
 For an HTTPS S3-compatible service, replace the entire example object-store
 section, including its inline credentials:
 

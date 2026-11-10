@@ -92,7 +92,8 @@ impl Stream {
     }
     pub(crate) async fn shutdown(&mut self) -> Result<()> {
         let _closed = self.stop.send(true);
-        self.queue.close();
+        // The stop watch cancels blocked delivery. Keep its receiver alive until
+        // the reader joins, so normal shutdown cannot become a send failure.
         self.finish().await
     }
     async fn finish(&mut self) -> Result<()> {

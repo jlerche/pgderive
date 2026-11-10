@@ -28,6 +28,7 @@ pub(super) async fn check(sql: &Client, fixture: &Fixture, config: &Config) -> R
     task.await.context("codec snapshot SQL task failed")??;
     sql.query_one("SELECT pg_drop_replication_slot($1)", &[&config.replication.slot]).await?;
     sql.batch_execute(&format!("DROP PUBLICATION {}; DROP TABLE {schema}.source_codec; REVOKE USAGE ON SCHEMA {schema} FROM {role}; REVOKE EXECUTE ON FUNCTION pg_control_system(),pg_control_checkpoint() FROM {role}; DROP ROLE {role}",config.replication.publication)).await?;
+    drop(config);
     eprintln!(
         "MVP snapshot quoted-name/boolean/null/native codecs and bounded-copy/RLS rejection verified"
     );

@@ -77,7 +77,7 @@ def object_kill(output, command, index, restoring, collecting=False):
             fixture.environment['PGDERIVE__WORKER__GC_INTERVAL_MS'] = '1000'
             fixture.environment['PGDERIVE__EXECUTION__WORKSPACE_SLOTS'] = '2'
             fixture.environment['PGDERIVE__EXECUTION__OBJECT_REQUESTS'] = '2'
-            arm(gate, 'POST') # object_store batches GC via S3 DeleteObjects
+            arm(gate, 'POST') # tenant collector uses the client's DeleteObjects batch API
             victim = fixture.start(command, 'victim')
             victim.event('ready')
             # Delta flushing retains old objects. Drive enough checkpoints to
@@ -119,7 +119,7 @@ def object_kill(output, command, index, restoring, collecting=False):
             published = victim.event('published', seconds=10, minimum_time=before + 1)
             usage = published['workspaces']
             assert usage['capacity'] == usage['peak'] == 2, usage
-            assert usage['active'] == 1, 'held collector did not own shared admission'
+            assert usage['active'] < usage['capacity'], 'physical reclamation exhausted healthy query workspaces'
         expected_time = int(durable(fixture).split('|')[0]) if collecting else 1
         if collecting:
             assert expected_time >= 2
@@ -163,6 +163,10 @@ def object_kill(output, command, index, restoring, collecting=False):
 
 def commit_kill(output, command, index, maintaining):
     fixture = Fixture(output, index)
+    if maintaining:
+        # Trigger from the first unsealed run, not the 60-second checkpoint
+        # timer: waiting 60 seconds for that timer races this harness's timeout.
+        fixture.environment['PGDERIVE__WORKER__MAINTENANCE_TICKS'] = '1'
     gate = output / 'commit.release'
     marker = '/* pgderive:maintenance */' if maintaining else '/* pgderive:epoch */'
     process, log, error, port = proxy(output, 'sql', gate, marker)
@@ -171,7 +175,7 @@ def commit_kill(output, command, index, maintaining):
         victim = fixture.start(command, 'victim')
         ready = victim.event('ready')
         prior = durable(fixture)
-        count = 3 if maintaining else 1
+        count = 1
         for tick in range(count):
             fixture.sql(f'UPDATE {fixture.name}.bid SET price=price+1 WHERE id={tick+1}')
             if maintaining:
@@ -179,7 +183,7 @@ def commit_kill(output, command, index, maintaining):
         wait_for(lambda: pathlib.Path(str(gate) + '.pending').exists(), 'held PostgreSQL COMMIT')
         held = durable(fixture)
         if maintaining:
-            assert held.split('|')[0] == '4'
+            assert held.split('|')[0] == '2'
         else:
             assert held == prior, 'uncommitted source publication became visible'
         victim.abort()

@@ -1,10 +1,6 @@
 //! Immutable namespace claims prevent another catalog/tenant's physical GC.
-use crate::{
-    Config,
-    storage::PageStore,
-    worker::{Settings, sql::Session},
-};
-use anyhow::{Context, Result, ensure};
+use crate::storage::PageStore;
+use anyhow::{Result, ensure};
 use object_store::{ObjectStoreExt as _, PutMode, PutOptions, path::Path};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -30,41 +26,29 @@ enum Owner {
     },
 }
 
-pub(in crate::worker) async fn claim(
-    config: &Config,
-    settings: &Settings,
-    session: &Session,
+pub(super) async fn claim(
+    storage: &crate::storage::Storage,
+    manifest: &super::manifest::Manifest,
+    tenant: &str,
+    id: &str,
+    requests: usize,
 ) -> Result<()> {
-    let storage = config.object_store.as_ref().context("worker requires durable object storage")?;
-    let identity = crate::source::Identity::inspect(config).await?;
-    let database: u32 = session
-        .client
-        .query_one("SELECT oid FROM pg_database WHERE datname=current_database()", &[])
-        .await?
-        .try_get(0)?;
-    let catalog_id: String = session
-        .client
-        .query_one(
-            &format!(
-                "SELECT catalog_id::text FROM {}.pgderive_tenant_owner WHERE singleton",
-                settings.catalog_schema
-            ),
-            &[],
-        )
-        .await?
-        .try_get(0)?;
+    let prefix_root = format!("{}/{id}", manifest.config.object_prefix);
+    let mut session = manifest.pool.acquire().await?;
+    let row=session.connection()?.query_one("SELECT s.system_identifier::text,(SELECT oid FROM pg_database WHERE datname=current_database()) FROM pg_control_system() s",&[]).await?;
+    drop(session);
     let owner = Owner::Catalog {
         version: 1,
-        tenant_id: settings.tenant_id.clone(),
-        cluster: identity.system,
-        database,
-        schema: settings.catalog_schema.clone(),
-        catalog_id,
-        prefix: settings.object_prefix.clone(),
+        tenant_id: tenant.into(),
+        cluster: row.try_get(0)?,
+        database: row.try_get(1)?,
+        schema: manifest.config.schema.clone(),
+        catalog_id: id.into(),
+        prefix: prefix_root.clone(),
     };
-    let base = storage.build("", config.execution.object_requests)?;
+    let base = storage.build("", requests)?;
     let mut prefix = String::new();
-    let parts = settings.object_prefix.split('/').collect::<Vec<_>>();
+    let parts = prefix_root.split('/').collect::<Vec<_>>();
     for (index, part) in parts.iter().enumerate() {
         if !prefix.is_empty() {
             prefix.push('/');
@@ -80,8 +64,7 @@ pub(in crate::worker) async fn claim(
         if matches!(expected, Owner::Catalog { .. })
             && read(base.as_ref(), &marker).await?.is_none()
         {
-            let scoped =
-                storage.build(&settings.object_prefix, config.execution.object_requests)?;
+            let scoped = storage.build(&prefix_root, requests)?;
             let page = scoped.page("", None, 1).await?;
             ensure!(
                 page.result.objects.is_empty()

@@ -96,6 +96,7 @@ def qualify(output,image,image_manifest,duration,interval):
             subprocess.run(['docker','exec',name,'sh','-c',f"sed -i '1i hostnossl all {role} 0.0.0.0/0 reject\\nhostnossl all {role} ::/0 reject' /var/lib/postgresql/data/pg_hba.conf"],check=True)
             fixture.sql('SELECT pg_reload_conf()')
             config=configured(fixture)
+            fixture.sql(f'CREATE SCHEMA {fixture.name}_storage AUTHORIZATION {role}')
             text=config.read_text().replace('user="postgres"',f'user="{role}"').replace('host="127.0.0.1"','host="localhost"').replace('tls="disable"','tls="verify-full"\nca_file="/run/secrets/ca.pem"').replace('[execution]','[execution]\nspill_runs=512\nscratch_bytes=134217728')
             before,rest=text.split('[object_store]'); _,after=rest.split('[worker]',1)
             config.write_text(before+f'[object_store]\nendpoint="https://localhost:{s3_port}"\nbucket="pgderive-mvp-tests"\nregion="fixture-region"\nca_file="/run/secrets/ca.pem"\ncredentials_file="/run/secrets/s3.json"\n[worker]'+after)

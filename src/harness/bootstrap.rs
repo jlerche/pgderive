@@ -21,18 +21,18 @@ pub(super) async fn check(
     fixture: &Fixture,
     recovery: &super::recovery::Recovery,
 ) -> Result<()> {
-    let config = &recovery.config;
     let slot = format!("{}_snapshot", fixture.slot);
-    let export = Export::create(config, &slot).await?;
+    let export = Export::create(&recovery.config, &slot).await?;
     let boundary = export.consistent();
-    let (contract, mut model, batch) = snapshot_copy(sql, fixture, config, export).await?;
+    let (contract, mut model, batch) =
+        snapshot_copy(sql, fixture, &recovery.config, export).await?;
     let mut graph = super::mvp::Query::new(
         plan(&contract)?,
         super::mvp::operators(),
         &Settings {
             store: recovery.store.clone(),
             block_rows: 3,
-            limits: config.execution,
+            limits: recovery.config.execution,
             capacity: None,
             encoded_cache: None,
         },
@@ -42,12 +42,12 @@ pub(super) async fn check(
         sql,
         &catalog,
         &mut graph,
-        Initial { contract: &contract, boundary, batch: &batch, config },
+        Initial { contract: &contract, boundary, batch: &batch, config: &recovery.config },
     )
     .await?;
     let (mut graph, mut writer) = restore(sql, &catalog, graph, boundary).await?;
     protection.published(sql, &writer, graph.plan(), &graph.checkpoint()?).await?;
-    let mut config = config.clone();
+    let mut config = recovery.config.clone();
     config.replication.slot = slot.clone();
     let verified = writer.confirmed(sql, graph.plan()).await?;
     let mut stream = crate::acknowledged::Stream::connect(&config, &verified).await?;
@@ -68,6 +68,7 @@ pub(super) async fn check(
     maintenance::check(sql, &fixture.schema, &mut graph, &mut writer, recovery).await?;
     collection::check(sql, &catalog, &mut graph, &mut writer, recovery).await?;
     finish_source(sql, fixture, &config, &catalog, graph.plan()).await?;
+    drop(config);
     eprintln!(
         "MVP exported snapshot plus concurrent insert/update/delete CDC reconstructed exact source state; native schema drift rejected"
     );

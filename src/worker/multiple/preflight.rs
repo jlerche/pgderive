@@ -25,22 +25,16 @@ pub(super) fn validate(configs: &[Config]) -> Result<()> {
                 ensure!(left.query_id != right.query_id, "duplicate logical query ownership");
                 ensure!(left.sink_table != right.sink_table, "duplicate result table ownership");
                 ensure!(
+                    serde_json::to_value(&config.tenant_storage)?
+                        == serde_json::to_value(&other.tenant_storage)?,
+                    "one catalog requires one tenant storage authority"
+                );
+                ensure!(
                     left.object_prefix == right.object_prefix
                         && storage.same_namespace(
                             other.object_store.as_ref().context("object store missing")?
                         )?,
                     "one catalog requires one object namespace"
-                );
-            }
-            if storage
-                .same_namespace(other.object_store.as_ref().context("object store missing")?)?
-                && overlaps(&left.object_prefix, &right.object_prefix)
-            {
-                ensure!(
-                    same_catalog
-                        && left.tenant_id == right.tenant_id
-                        && left.object_prefix == right.object_prefix,
-                    "overlapping object namespaces have different catalog owners"
                 );
             }
             if let (Some(left), Some(right)) = (&paths[index], &paths[other_index]) {
@@ -52,12 +46,6 @@ pub(super) fn validate(configs: &[Config]) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn overlaps(left: &str, right: &str) -> bool {
-    left == right
-        || left.strip_prefix(right).is_some_and(|tail| tail.starts_with('/'))
-        || right.strip_prefix(left).is_some_and(|tail| tail.starts_with('/'))
 }
 
 fn directory(path: &Path) -> Result<PathBuf> {

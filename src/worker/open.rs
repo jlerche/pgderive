@@ -54,18 +54,9 @@ impl Open {
         mut session: Session,
     ) -> Result<Self> {
         settings.validate()?;
-        let store = config
-            .object_store
-            .as_ref()
-            .context("worker requires durable object storage")?
-            .build(&settings.object_prefix, config.execution.object_requests)?;
-        config
-            .object_store
-            .as_ref()
-            .context("worker requires durable object storage")?
-            .preflight(store.as_ref())
-            .await?;
         session.own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id).await?;
+        let store =
+            Box::pin(crate::storage::tenant::build(config, settings, &session.client)).await?;
         let catalog = Catalog::new(&settings.catalog_schema, &settings.query_id)?;
         catalog.install(&session.client).await?;
         let contract = registration::source(&mut session.client, config, settings).await?;

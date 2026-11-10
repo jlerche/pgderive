@@ -166,6 +166,26 @@ async fn blocked_delivery_retains_events_and_sends_only_monotone_durable_feedbac
     while frontend(&mut socket).await?.0 != b'c' {}
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn graceful_shutdown_with_buffered_events_keeps_delivery_alive_until_stop() -> Result<()> {
+    for _attempt in 0..128 {
+        let (mut client, mut socket) = fixture().await?;
+        streaming(&mut socket).await?;
+        for end in 1..=4 {
+            keepalive(&mut socket, end).await?;
+        }
+        ensure!(timeout(Duration::from_secs(2), feedback(&mut socket)).await?? == 0);
+        timeout(Duration::from_secs(2), async {
+            while client.events.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        timeout(Duration::from_secs(2), client.shutdown()).await??;
+    }
+    Ok(())
+}
 #[tokio::test]
 async fn partial_header_survives_feedback_and_shutdown_cancels_startup() -> Result<()> {
     let (mut client, mut socket) = fixture().await?;

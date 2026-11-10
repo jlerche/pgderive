@@ -18,6 +18,10 @@ pub use accounting::ServiceStats;
 /// Object operations plus bounded, opaque-token listing. No ordering assumption.
 #[async_trait]
 pub trait PageStore: ObjectStore {
+    /// Tenant-shared upload accounting when backed by a virtual manifest.
+    fn tenant_stats(&self) -> Option<serde_json::Value> {
+        None
+    }
     /// Runtime API service counters; raw harness adapters have no admission wrapper.
     fn service_stats(&self) -> Option<ServiceStats> {
         None

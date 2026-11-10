@@ -50,7 +50,8 @@ impl Client {
     }
     pub(crate) async fn shutdown(&mut self) -> Result<()> {
         self.stop.send_replace(true);
-        self.events.close();
+        // Keep the consumer alive until the producer observes stop. Closing it
+        // here can race a select poll already waiting for delivery capacity.
         self.finish().await
     }
     async fn finish(&mut self) -> Result<()> {

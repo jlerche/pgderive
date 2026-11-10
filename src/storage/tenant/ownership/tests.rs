@@ -1,5 +1,6 @@
 use super::*;
 use crate::engine::tests::store::Store;
+use anyhow::Context as _;
 
 fn owner(tenant: &str) -> Owner {
     Owner::Catalog {

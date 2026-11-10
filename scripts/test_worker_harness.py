@@ -80,7 +80,7 @@ class BagVerificationTests(unittest.TestCase):
 
 class ManagedFixtureTests(unittest.TestCase):
     def test_cleanup_and_failure_evidence_order(self):
-        for failure in (None, 'body', 'cleanup'):
+        for failure in (None, 'body', 'cleanup', 'storage'):
             events = []
             error = RuntimeError(failure)
 
@@ -91,6 +91,11 @@ class ManagedFixtureTests(unittest.TestCase):
                 def cleanup(self):
                     events.append('cleanup')
                     if failure == 'cleanup':
+                        raise error
+
+                def cleanup_storage(self):
+                    events.append('storage')
+                    if failure == 'storage':
                         raise error
 
                 def preserve(self):
@@ -105,12 +110,14 @@ class ManagedFixtureTests(unittest.TestCase):
             with self.subTest(failure=failure):
                 if failure is None:
                     run()
-                    self.assertEqual(events, ['body', 'cleanup'])
+                    self.assertEqual(events, ['body', 'cleanup', 'storage'])
                 else:
                     with self.assertRaises(RuntimeError) as caught:
                         run()
                     self.assertIs(caught.exception, error)
-                    expected = ['body', 'preserve'] if failure == 'body' else ['body', 'cleanup', 'preserve']
+                    expected = (['body', 'preserve'] if failure == 'body' else
+                                ['body', 'cleanup', 'preserve'] if failure == 'cleanup' else
+                                ['body', 'cleanup', 'storage', 'preserve'])
                     self.assertEqual(events, expected)
 
 

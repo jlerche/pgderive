@@ -12,6 +12,7 @@ pub(super) struct Accounting {
 /// Classified physical API traffic and the shared request admission budget.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ServiceStats {
+    pub(crate) shared_tenant: Option<String>,
     pub(crate) foreground: Report,
     pub(crate) maintenance: Report,
     pub(crate) admission: WorkspaceStats,
@@ -25,6 +26,7 @@ impl Accounting {
     }
     pub(super) fn stats(&self, pool: &Workspaces) -> ServiceStats {
         ServiceStats {
+            shared_tenant: None,
             foreground: self.foreground.snapshot(),
             maintenance: self.maintenance.snapshot(),
             admission: pool.stats(),

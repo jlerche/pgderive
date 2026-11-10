@@ -60,7 +60,9 @@ def qualify(output, binary):
                 f"sed -i '1i hostnossl all {role} 0.0.0.0/0 reject\\nhostnossl all {role} ::/0 reject' /var/lib/postgresql/data/pg_hba.conf"],check=True)
             fixture.sql('SELECT pg_reload_conf()')
             config = configured(fixture)
+            fixture.sql(f'CREATE SCHEMA {fixture.name}_storage AUTHORIZATION {role}')
             fixture.environment['PGDERIVE__POSTGRES__PASSWORD']='owned-fixture-password'
+            fixture.environment['PGDERIVE__TENANT_STORAGE__POSTGRES__PASSWORD']='owned-fixture-password'
             for key in ['HOST','PORT','USER','TLS','CA_FILE']:
                 fixture.environment.pop('PGDERIVE__POSTGRES__'+key,None)
             healthy = config.read_text().replace('user="postgres"',f'user="{role}"').replace(

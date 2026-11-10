@@ -22,7 +22,7 @@ pub async fn run_many(mut configs: Vec<Config>, limits: super::ProcessLimits) ->
         config.validate()?;
     }
     preflight::validate(&configs)?;
-    super::resources::install(&mut configs, &limits)?;
+    let storage_runtime = super::resources::install(&mut configs, &limits)?;
     let mut queries = Vec::with_capacity(configs.len());
     for config in configs {
         config.validate()?;
@@ -42,7 +42,8 @@ pub async fn run_many(mut configs: Vec<Config>, limits: super::ProcessLimits) ->
                 .with_context(|| format!("query {name} failed"))
         });
     }
-    supervise(pending, stop, shutdown).await
+    let result = supervise(pending, stop, shutdown).await;
+    crate::outcome::combine(result, storage_runtime.close().await, "tenant uploader shutdown")
 }
 
 async fn supervise<S>(mut pending: Tasks, stop: watch::Sender<bool>, shutdown: S) -> Result<()>

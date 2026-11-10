@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.request
 
+from gc_fixture import authority, manifest_sql, physical_prefix
 from native_mv_oracle import expected as native_expected
 from query_capacity_harness import inventory
 from query_lifecycle_harness import configured, grouped, rejected, verify_packed_root
@@ -33,9 +34,19 @@ def archive_objects(fixture, roots):
         file=saved/str(ordinal)
         file.write_bytes(content)
         records[key]={'file':str(file),'sha256':hashlib.sha256(content).hexdigest(),'bytes':len(content)}
+    control=authority(fixture)
+    prefix=physical_prefix(fixture)
+    fixture._backup_physical_prefix=prefix
+    chunks=json.loads(manifest_sql(fixture,f"SELECT json_object_agg(c.name,json_build_array(p.path,c.offset_bytes,c.length,c.checksum)) FROM {control['schema']}.chunks c JOIN {control['schema']}.packs p ON p.id=c.pack WHERE c.tenant='{control['tenant']}' AND c.catalog='{control['catalog']}'"))
+    (fixture.output/'logical-object-backup.json').write_text(json.dumps(chunks,indent=2))
+    def get(path):
+        physical,offset,length,checksum=chunks[path]
+        content=pathlib.Path(records[prefix+'/'+physical]['file']).read_bytes()[offset:offset+length]
+        assert hashlib.sha256(content).hexdigest()==checksum
+        return content
     # Verify closure from PG membership and reader roots, not merely a prefix count.
     for root in roots:
-        verify_packed_root(root, lambda path: pathlib.Path(records[fixture.name+'/'+path]['file']).read_bytes())
+        verify_packed_root(root, get)
     (fixture.output/'object-backup-manifest.json').write_text(json.dumps(records,indent=2)+'\n')
     return records
 
@@ -46,7 +57,7 @@ def restore_objects(fixture, records):
     for key,item in records.items():
         content=pathlib.Path(item['file']).read_bytes()
         assert hashlib.sha256(content).hexdigest()==item['sha256']
-        target=mirror+'/'+key.removeprefix(fixture.name+'/')
+        target=mirror+'/'+key.removeprefix(fixture._backup_physical_prefix+'/')
         url=endpoint+'/pgderive-mvp-tests/'+target
         request=urllib.request.Request(url,data=content,method='PUT',headers={'If-None-Match':'*'})
         with urllib.request.urlopen(request,timeout=10) as response:
@@ -128,13 +139,14 @@ def qualify(output, binary):
         assert fixture.sql('SELECT count(*) FROM pg_replication_slots').strip()=='0'
         mirror=restore_objects(fixture,objects)
         error=rejected(binary,fixture,'restart',config)
-        assert 'worker registration source identity changed' in error,error
+        assert any(reason in error for reason in ('worker registration source identity changed','object namespace has another catalog or descendant owner','object namespace ownership mismatch','logical catalog storage ownership mismatch')),error
         assert command(fixture,binary,'status',config)['progress']==before['progress']
         new=fixture.name+'_fresh'
         fixture.sql(f'CREATE SCHEMA {new}')
         text=config.read_text().replace(f'catalog_schema="{fixture.name}"',f'catalog_schema="{new}"').replace(
             'query_id="grouped"','query_id="recovered"').replace(f'slot="{fixture.name}"',f'slot="{new}"').replace(
             f'object_prefix="{fixture.name}"',f'object_prefix="{new}"')
+        text=text.replace(f'schema="{fixture.name}_storage"',f'schema="{new}_storage"').replace(f'object_prefix="tenant-{fixture.name}"',f'object_prefix="tenant-{new}"')
         fresh=output/'fresh.toml';fresh.write_text(text)
         # Change restored sources before bootstrap: cutover must reflect the current database.
         fixture.sql(f'BEGIN; UPDATE {fixture.name}.auction SET group_id=19 WHERE id=1; '

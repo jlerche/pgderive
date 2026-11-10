@@ -145,6 +145,7 @@ class Fixture:
         self.environment = os.environ.copy()
         self.environment['PGPASSWORD'] = os.environ.get('PGPASSWORD', 'postgres')
         self.environment['PGDERIVE__POSTGRES__PASSWORD'] = self.environment['PGPASSWORD']
+        self.environment['PGDERIVE__TENANT_STORAGE__POSTGRES__PASSWORD'] = self.environment['PGPASSWORD']
         self.port = str(int(os.environ.get('PGDERIVE_TEST_POSTGRES_PORT', '55434')))
         assert 1 <= int(self.port) <= 65535, 'invalid test PostgreSQL port'
         self.pg = ['psql', '-h', '127.0.0.1', '-p', self.port, '-U', 'postgres',
@@ -186,6 +187,15 @@ tls="disable"
 [replication]
 slot="{self.name}"
 publication="{self.name}"
+[tenant_storage]
+schema="{self.name}_storage"
+object_prefix="tenant-{self.name}"
+[tenant_storage.postgres]
+host="127.0.0.1"
+port={self.port}
+database="pgderive_dev"
+user="postgres"
+tls="disable"
 [object_store]
 endpoint="http://127.0.0.1:8333"
 bucket="pgderive-mvp-tests"
@@ -297,9 +307,17 @@ max_transactions={maximum}
         try:
             yield self
             self.cleanup()
+            self.cleanup_storage()
         except BaseException:
             self.preserve()
             raise
+
+    def cleanup_storage(self):
+        # The control database is independent of the source fixture database.
+        command = ['psql', '-h', '127.0.0.1', '-p', self.port, '-U', 'postgres',
+                   '-d', 'pgderive_dev', '-v', 'ON_ERROR_STOP=1', '-Atc',
+                   f'DROP SCHEMA IF EXISTS {self.name}_storage CASCADE']
+        subprocess.run(command, env=self.environment, check=True, capture_output=True)
 
     def cleanup(self):
         slots = self.sql(f'SELECT slot_name FROM {self.name}.pgderive_worker_registration').splitlines()
@@ -313,6 +331,10 @@ max_transactions={maximum}
         subprocess.run(['pg_dump', '-h', '127.0.0.1', '-p', self.port, '-U', 'postgres',
                         '-d', self.database, f'--schema={self.name}',
                         f'--file={self.output}/failure-fixture.sql'], env=self.environment, check=False)
+        subprocess.run(['pg_dump', '-h', '127.0.0.1', '-p', self.port, '-U', 'postgres',
+                        '-d', 'pgderive_dev', f'--schema={self.name}_storage',
+                        f'--file={self.output}/failure-storage.sql'], env=self.environment, check=False)
+
 
 
 def qualify(output, command, ticks, index=0, mode=None, target=None, kill=False, burst=0, rows=256, auctions=32):

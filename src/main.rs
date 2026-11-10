@@ -16,6 +16,11 @@ async fn main() -> Result<()> {
                 _ => bail!("unknown environment command: {command}"),
             };
             println!("{}", pgderive::worker::environment(&config, begin).await?);
+            drop(config);
+            Ok(())
+        }
+        [scope, command, path] if scope == "storage" && command == "collect" => {
+            println!("{}", pgderive::worker::collect_storage(Config::load(path)?).await?);
             Ok(())
         }
         [scope, command, path] if scope == "query" => {
@@ -41,7 +46,7 @@ async fn main() -> Result<()> {
             }
         }
         _ => bail!(
-            "usage: pgderive environment <begin|finish> CONFIG.toml | listen CONFIG.toml | query <validate|status|create|restart|rebuild|drop> CONFIG.toml"
+            "usage: pgderive storage collect CONFIG.toml | environment <begin|finish> CONFIG.toml | listen CONFIG.toml | query <validate|status|create|restart|rebuild|drop> CONFIG.toml"
         ),
     }
 }

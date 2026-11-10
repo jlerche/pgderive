@@ -166,6 +166,7 @@ def telemetry(health):
     for scope in ['foreground', 'scan']:
         result[scope] = {key: value for key, value in cache.get('io', {}).get(scope, {}).items()
                          if key in ['gets', 'fetched_bytes', 'requested_bytes']}
+    result['object_service_shared_tenant'] = (diagnostics.get('object_service') or {}).get('shared_tenant')
     result['object_service'] = {scope: {key: value for key, value in values.items()
         if key in ['requests', 'read_requested_bytes', 'read_bytes', 'write_requested_bytes', 'written_bytes']}
         for scope, values in (diagnostics.get('object_service') or {}).items()

@@ -10,6 +10,7 @@ mod harness;
 mod listener;
 mod numeric;
 mod outcome;
+mod postgres;
 mod replication;
 mod semantics;
 pub mod source;

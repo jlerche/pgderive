@@ -16,6 +16,7 @@ fn defaults_and_validation() -> Result<()> {
     assert_eq!(config.listener.max_transactions, 0);
     assert_eq!(config.listener.max_transaction_changes, 100_000);
     assert_eq!(config.replication_config().port, 5432);
+    drop(config);
     Ok(())
 }
 
@@ -29,6 +30,7 @@ fn reject_invalid_limits_and_tls() -> Result<()> {
     assert!(config.validate().is_err());
     config.postgres.tls = "verify-full".to_owned();
     config.validate()?;
+    drop(config);
     Ok(())
 }
 
@@ -53,11 +55,13 @@ fn reject_unsafe_sql_identifiers() {
 async fn public_entry_points_validate_before_connecting() -> Result<()> {
     let mut config = fixture()?;
     config.replication.publication = "pgderive_pub; DROP TABLE source".into();
-    for result in [crate::listen(config.clone()).await, Box::pin(crate::run_harness(config)).await]
+    for result in
+        [crate::listen(config.clone()).await, Box::pin(crate::run_harness(config.clone())).await]
     {
         let error = result.err().ok_or_else(|| anyhow::anyhow!("expected validation error"))?;
         assert_eq!(error.to_string(), "invalid replication.publication identifier");
     }
+    drop(config);
     Ok(())
 }
 
@@ -69,5 +73,26 @@ fn replication_pins_canonical_native_text_settings() -> Result<()> {
         settings.options.as_deref(),
         Some("-c DateStyle=ISO,MDY -c TimeZone=UTC -c IntervalStyle=iso_8601")
     );
+    Ok(())
+}
+
+#[test]
+fn worker_requires_explicit_independent_tenant_storage_authority() -> Result<()> {
+    let mut config = fixture()?;
+    config.worker = Some(serde_json::from_value(
+        json!({"tenant_id":"fixture","catalog_schema":"demo","query_id":"q","sink_table":"result","object_prefix":"prefix","block_rows":64,"maintenance_ticks":0,"retry_attempts":1,"retry_delay_ms":1,"max_transactions":0,"query":{"sql":"SELECT 1"}}),
+    )?);
+    assert!(config.validate().is_err());
+    config.tenant_storage = Some(serde_json::from_value(
+        json!({"postgres":{"host":"localhost","port":5432,"database":"tenant_control","user":"publisher","tls":"disable"},"schema":"tenant_storage","object_prefix":"tenant-packs"}),
+    )?);
+    config.validate()?;
+    config
+        .tenant_storage
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("missing tenant storage"))?
+        .schema = "public;DROP TABLE source".into();
+    assert!(config.validate().is_err());
+    drop(config);
     Ok(())
 }

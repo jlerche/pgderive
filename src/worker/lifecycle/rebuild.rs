@@ -12,6 +12,14 @@ use serde_json::Value;
 /// # Errors
 /// Rejects ownership, unsupported SQL, changed pending semantics or failed cutover/retirement.
 pub async fn rebuild(config: &Config) -> Result<Value> {
+    let mut config = config.clone();
+    let runtime = std::sync::Arc::new(crate::storage::tenant::Registry::default());
+    config.storage_runtime = std::sync::Arc::downgrade(&runtime);
+    let result = Box::pin(rebuild_owned(&config)).await;
+    drop(config);
+    crate::outcome::combine(result, runtime.close().await, "tenant storage administrative drain")
+}
+async fn rebuild_owned(config: &Config) -> Result<Value> {
     ensure!(
         config
             .worker
@@ -20,7 +28,7 @@ pub async fn rebuild(config: &Config) -> Result<Value> {
         "stdout sink does not support rebuild; drop and create a fresh diagnostic stream"
     );
     let (session, settings) = own(config).await?;
-    let session = run_owned(config, &settings, session, false).await?;
+    let session = Box::pin(run_owned(config, &settings, session, false)).await?;
     drop(session);
     admin::status(config).await
 }

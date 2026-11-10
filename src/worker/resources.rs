@@ -89,7 +89,10 @@ impl Resources {
     }
 }
 
-pub(super) fn install(configs: &mut [Config], limits: &Limits) -> Result<()> {
+pub(super) fn install(
+    configs: &mut [Config],
+    limits: &Limits,
+) -> Result<Arc<crate::storage::tenant::Registry>> {
     limits.validate()?;
     ensure!(configs.len() <= limits.max_queries, "process query limit exceeded");
     let mut tenants = std::collections::BTreeMap::new();
@@ -105,7 +108,9 @@ pub(super) fn install(configs: &mut [Config], limits: &Limits) -> Result<()> {
         pressure: tenants.keys().map(|tenant| ((*tenant).clone(), watch::channel(0).0)).collect(),
         recovery: Arc::new(Semaphore::new(1)),
     });
+    let storage_runtime = Arc::new(crate::storage::tenant::Registry::default());
     for config in configs {
+        config.storage_runtime = Arc::downgrade(&storage_runtime);
         let tenant = &config.worker.as_ref().context("worker settings missing")?.tenant_id;
         let query = Query {
             cache: process.cache.tenant(tenant),
@@ -132,7 +137,7 @@ pub(super) fn install(configs: &mut [Config], limits: &Limits) -> Result<()> {
                 .clone(),
         }));
     }
-    Ok(())
+    Ok(storage_runtime)
 }
 
 #[cfg(test)]

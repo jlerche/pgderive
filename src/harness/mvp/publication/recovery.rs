@@ -24,6 +24,7 @@ impl PublicationFixture {
         let mut config = self.config.clone();
         config.postgres.port = port.parse()?;
         let (mut fault, task) = crate::harness::connect(&config).await?;
+        drop(config);
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             self.grouped.publish(&mut fault, graph.plan(), attempt),

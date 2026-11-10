@@ -22,6 +22,13 @@ fi
 mkdir -p artifacts/error-order
 export PGDERIVE_ERROR_ORDER_EVIDENCE="$(mktemp "$PWD/artifacts/error-order/run-XXXXXXXX.json")"
 python3 scripts/error_order_differential.py "${pg[@]}" -Atq
+# Shared tenant storage fault cases are one sequential, schema-isolated live test.
+if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
+    cargo llvm-cov --locked --lib --no-report -- tenant_storage_manifest_live --ignored --nocapture --test-threads=1
+else
+    cargo test --locked --lib tenant_storage_manifest_live -- --ignored --nocapture --test-threads=1
+fi
+
 if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
     harness=(cargo llvm-cov run --locked --no-report --bin replication_harness -- config.example.toml)
 else

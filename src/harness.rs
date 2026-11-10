@@ -190,13 +190,14 @@ async fn execute(
     let recovery = recovery::Recovery { config: config.clone(), store: store.clone(), prefix };
     let (ready, connected) = oneshot::channel();
     let (observed, mut received) = mpsc::channel(8);
-    let mut task = tokio::spawn(listener::run(config.clone(), Some(ready), Some(observed)));
+    let mut task =
+        tokio::spawn(Box::pin(listener::run(config.clone(), Some(ready), Some(observed))));
     let result = async {
         timeout(Duration::from_secs(10), connected)
             .await
             .context("listener connection timed out")?
             .context("listener failed to connect")?;
-        drive(sql, fixture, &mut received, recovery.clone()).await
+        Box::pin(drive(sql, fixture, &mut received, recovery.clone())).await
     }
     .await;
     if result.is_err() {
@@ -214,6 +215,7 @@ async fn execute(
     }
     completed.context("listener shutdown timed out")?.context("listener task failed")??;
     let end = acknowledgement::check(sql, fixture, &config, store.clone()).await?;
+    drop(config);
     let report = recovery.recover_query(sql, &fixture.schema, "atomic_grouped").await?;
     ensure!(
         report.time == 17 && report.epoch == 18 && report.source_end == end.to_string(),
@@ -221,6 +223,7 @@ async fn execute(
     );
     eprintln!("MVP fresh-process recovered atomic tick 17 with exact durable source position");
     bootstrap::check(sql, fixture, &recovery).await?;
+    drop(recovery);
     Ok(())
 }
 
@@ -275,6 +278,7 @@ async fn drive(
             .get(0);
         ensure!(initial == current, "diagnostic listener advanced durable source progress");
     }
+    drop(mvp);
     Ok(())
 }
 
