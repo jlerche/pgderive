@@ -286,3 +286,42 @@ fn simple_case_resolves_matches_and_results_independently() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn nullif_returns_the_resolved_left_argument() -> Result<()> {
+    let row = [("a".into(), Some("7".into())), ("b".into(), None)].into();
+    for (sql, oid, expected) in [
+        ("NULLIF(a, 7.00)", 1700, None),
+        ("NULLIF(a, 8.00)", 1700, Some("7")),
+        ("NULLIF(7.00, a + 1)", 1700, Some("7.00")),
+        ("NULLIF(a, 8::bigint)", 23, Some("7")),
+        ("NULLIF(7::smallint, a + 1)", 21, Some("7")),
+        ("NULLIF(a, '7')", 23, None),
+        ("NULLIF(a, b)", 23, Some("7")),
+        ("NULLIF(b, a)", 23, None),
+        ("NULLIF(b, NULL)", 23, None),
+        ("NULLIF(NULL, NULL)", 25, None),
+        ("NULLIF(NULL, a)", 23, None),
+        ("NULLIF(a, NULL)", 23, Some("7")),
+        ("NULLIF('é'::varchar, 'e')", 25, Some("é")),
+        ("NULLIF('é'::varchar, 'é')", 25, None),
+        ("NULLIF(TRUE, 'no')", 16, Some("t")),
+        ("NULLIF('NaN'::numeric, 'NaN')", 1700, None),
+        ("NULLIF(DATE '2020-01-01', TIMESTAMP '2020-01-02 00:00:00')", 1082, Some("2020-01-01")),
+        ("NULLIF(NULL, 1 / (a - 7))", 23, None),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), oid, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    let typed = expression("NULLIF(7::numeric(4,2), a)")?;
+    assert!(typed.nullable());
+    assert_eq!(typed.modifier(&|_| None), crate::numeric::Typmod::new(4, 2)?.encoded());
+    for sql in ["NULLIF(NULL, 1 / 0)", "NULLIF(1 / 0, NULL)", "NULLIF(a, TRUE)"] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    for sql in ["NULLIF(b, 1 / (a - 7))", "NULLIF(1 / (a - 7), b)"] {
+        assert!(expression(sql)?.evaluate(&row).is_err(), "{sql}");
+    }
+    Ok(())
+}

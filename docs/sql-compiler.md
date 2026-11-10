@@ -38,7 +38,11 @@ Boolean expressions in SELECT and WHERE can use `IS TRUE`, `IS FALSE`, and
 including when its input is NULL. Scalar `IS DISTINCT FROM` and
 `IS NOT DISTINCT FROM` in SELECT and WHERE use the supported equality types
 and coercions. Two NULLs are equal for these tests, and a NULL differs from
-any non-NULL value.
+any non-NULL value. Scalar `NULLIF(x, y)` uses the same equality rules and
+returns NULL when the arguments compare equal. Otherwise it returns the first
+argument after the equality operator's coercions. For example,
+`NULLIF(1, 2.0)` returns a numeric value. Compute scalar subqueries used as the
+second argument in a derived scope.
 Comparisons require at least one native bool, int2/int4/int8 or UUID column.
 Integral columns may compare across integral widths and to signed i64 integer
 literals; evaluation is exact, without narrowing the literal to the column width.

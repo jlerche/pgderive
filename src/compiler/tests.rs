@@ -71,6 +71,7 @@ fn native_comparisons_literals_and_nulls() -> Result<()> {
     for sql in [
         "a = true",
         "a IS TRUE",
+        "NULLIF(a, false)",
         "b IS UNKNOWN",
         "n < 0",
         "n <= -3",
@@ -206,5 +207,22 @@ fn simple_case_prunes_unreachable_aggregate_results_and_guards_subqueries() -> R
             "{sql}: {error:#}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn nullif_guards_only_the_subquery_that_folding_can_discard() -> Result<()> {
+    let contract = crate::source::tests::contract();
+    let compiled = super::compile(
+        "SELECT NULLIF((SELECT MAX(s.id) FROM public.items s), NULL) FROM public.items i",
+        &contract,
+    )?;
+    assert_eq!(compiled.output().columns[0].label, "nullif");
+    let Err(error) =
+        super::compile("SELECT NULLIF(NULLIF(1, 1), (SELECT 1)) FROM public.items", &contract)
+    else {
+        anyhow::bail!("unexpectedly lifted a guarded NULLIF operand");
+    };
+    assert!(format!("{error:#}").contains("subqueries in lazy CASE/COALESCE/NULLIF"));
     Ok(())
 }

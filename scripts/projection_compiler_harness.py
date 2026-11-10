@@ -29,12 +29,16 @@ class ProjectionFixture(SqlFixture):
                       "WHEN NULL THEN 'null match' WHEN 1.0 THEN 'one' ELSE 'other' END AS bucket,"
                       "CASE a.enabled WHEN true THEN 1 WHEN false THEN 2::bigint END AS state,"
                       "CASE a.id WHEN 1 THEN a.vartext ELSE a.vartext END AS label")
-            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple} FROM ')
+            nullif = ("NULLIF(a.group_id, 1.00),"
+                      "NULLIF(a.vartext, 'é🙂') AS nonmatching_text,"
+                      "NULLIF(a.group_id, a.small_value) AS nonmatching_group")
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
                                             "OR a.group_id IS NOT DISTINCT FROM 1) "
                                             "AND a.category IS DISTINCT FROM 'excluded' "
-                                            "AND CASE a.id WHEN 0 THEN false ELSE true END")
+                                            "AND CASE a.id WHEN 0 THEN false ELSE true END "
+                                            "AND NULLIF(a.id, 7) IS NOT NULL")
 
     def verify(self):
         self.sql(f'EXPLAIN {self.query}')
@@ -42,7 +46,7 @@ class ProjectionFixture(SqlFixture):
                     f"FROM {self.name}.auction a WHERE a.id > 0 AND (a.enabled OR a.group_id IS NULL) GROUP BY 1")
         if self.local:
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
-                                       + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label'])
+                                       + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -55,7 +59,8 @@ class ProjectionFixture(SqlFixture):
         for row in rows:
             qualifies = row['enabled'] is True or row['group_id'] is None
             if self.local:
-                qualifies = (qualifies or row['group_id'] == 1) and row['category'] != 'excluded'
+                qualifies = ((qualifies or row['group_id'] == 1)
+                             and row['category'] != 'excluded' and row['id'] != 7)
             if row['id'] > 0 and qualifies:
                 values = tuple(row[key] for key in ('group_id', 'category', 'enabled', 'token', 'group_id'))
                 if self.local:
@@ -77,7 +82,10 @@ class ProjectionFixture(SqlFixture):
                     elif key == 1:
                         bucket = 'one'
                     state = None if active is None else (1 if active else 2)
-                    values += (bucket, state, row['vartext'])
+                    values += (bucket, state, row['vartext'],
+                               None if key == 1 else key,
+                               None if row['vartext'] == 'é🙂' else row['vartext'],
+                               None if key == row['small_value'] else key)
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)

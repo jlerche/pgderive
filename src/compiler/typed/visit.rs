@@ -30,7 +30,7 @@ impl Typed {
             }
             Value::Call(call) => call.arguments.iter().for_each(|value| value.reads(out)),
             Value::Cast { input, .. } => input.reads(out),
-            Value::Binary { left, right, .. } => {
+            Value::Binary { left, right, .. } | Value::NullIf { left, right } => {
                 left.reads(out);
                 right.reads(out);
             }
@@ -90,6 +90,10 @@ impl Typed {
                 left: Box::new(left.replaced(replace)?),
                 right: Box::new(right.replaced(replace)?),
             },
+            Value::NullIf { left, right } => Value::NullIf {
+                left: Box::new(left.replaced(replace)?),
+                right: Box::new(right.replaced(replace)?),
+            },
             Value::Coalesce(values) => Value::Coalesce(all(values, replace)?),
             Value::Case { branches, otherwise } => Value::Case {
                 branches: branches
@@ -133,7 +137,10 @@ impl Typed {
             Value::Call(call) => call.arguments.iter().all(Self::is_strict),
             Value::Cast { input, .. } => input.is_strict(),
             Value::Binary { left, right, .. } => left.is_strict() && right.is_strict(),
-            Value::Coalesce(_) | Value::Case { .. } | Value::SimpleCase(_) => false,
+            Value::Coalesce(_)
+            | Value::Case { .. }
+            | Value::SimpleCase(_)
+            | Value::NullIf { .. } => false,
             _ => true,
         }
     }

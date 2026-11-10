@@ -103,6 +103,7 @@ impl Typed {
                     _ => return Err(PlanFault("invalid arithmetic operands").into()),
                 }
             }
+            Value::NullIf { left, right } => super::nullif::evaluate(left, right, rows)?,
             Value::SimpleCase(case) => case.evaluate(rows)?,
             Value::Coalesce(_) | Value::Case { .. } => self.selected(rows)?,
         })

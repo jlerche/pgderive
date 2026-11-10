@@ -101,7 +101,9 @@ fn bind_ast(
         NodeEnum::AExpr(value) if value.kind == i32::from(pg::AExprKind::AexprIn) => {
             membership(value, resolve, text)
         }
-        NodeEnum::AExpr(value) => comparison(value, resolve, text),
+        NodeEnum::AExpr(value) if value.kind != i32::from(pg::AExprKind::AexprNullif) => {
+            comparison(value, resolve, text)
+        }
         _ => Ok(Expr::Value(operand(value, resolve)?.coerce(16)?)),
     }
 }
@@ -178,7 +180,7 @@ fn comparison(
     })
 }
 
-fn comparison_operands(left: Operand, right: Operand) -> Result<(Scalar, Scalar)> {
+pub(super) fn comparison_operands(left: Operand, right: Operand) -> Result<(Scalar, Scalar)> {
     let oid = comparison_oid(left.oid(), right.oid(), [left.literal_oid(), right.literal_oid()])?;
     Ok((left.coerce(oid)?, right.coerce(oid)?))
 }
@@ -203,7 +205,7 @@ fn comparison_oid(left: Option<u32>, right: Option<u32>, literals: [u32; 2]) -> 
     );
     Ok(oid)
 }
-fn check_comparison(
+pub(super) fn check_comparison(
     op: &Compare,
     left: &Scalar,
     right: &Scalar,

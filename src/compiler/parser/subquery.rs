@@ -116,7 +116,7 @@ impl Rewrite<'_> {
             }
             ensure!(
                 !guarded,
-                "subqueries in lazy CASE/COALESCE branches are unsupported; compute them in a derived scope first"
+                "subqueries in lazy CASE/COALESCE/NULLIF operands are unsupported; compute them in a derived scope first"
             );
             *value = self.link(link)?;
             self.changed = true;
@@ -153,11 +153,14 @@ impl Rewrite<'_> {
                 }
             }
             Some(NodeEnum::AExpr(value)) => {
-                let lazy = distinct_kind(value.kind).is_none()
+                let nullif = value.kind == i32::from(pg::AExprKind::AexprNullif);
+                let lazy = !nullif
+                    && distinct_kind(value.kind).is_none()
                     && (value.lexpr.as_deref().is_some_and(constant_null)
                         || value.rexpr.as_deref().is_some_and(constant_null));
                 self.optional(value.lexpr.as_deref_mut(), guarded || lazy, depth)?;
-                self.optional(value.rexpr.as_deref_mut(), guarded || lazy, depth)?;
+                // A constant NULL left argument can make the right argument unreachable.
+                self.optional(value.rexpr.as_deref_mut(), guarded || lazy || nullif, depth)?;
             }
             Some(NodeEnum::List(value)) => self.list(&mut value.items, guarded, depth)?,
             Some(NodeEnum::BoolExpr(value)) => {

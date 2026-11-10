@@ -36,6 +36,14 @@ impl Typed {
                     }
                 }
             }
+            Value::NullIf { left, right } => {
+                let (left, right) = (left.fold()?, right.fold()?);
+                if left.constant_null() || right.constant_null() {
+                    left.value
+                } else {
+                    Value::NullIf { left: Box::new(left), right: Box::new(right) }
+                }
+            }
             Value::Coalesce(values) => Value::Coalesce(coalesced(values)?),
             Value::Case { branches, otherwise } => cased(branches, otherwise)?,
             Value::SimpleCase(case) => Value::SimpleCase(case.fold()?),

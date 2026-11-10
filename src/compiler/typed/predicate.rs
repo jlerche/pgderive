@@ -88,6 +88,7 @@ impl Typed {
             Value::Cast { typmod: Some(typmod), .. } => typmod.encoded(),
             Value::Coalesce(values) => self.common_modifier(values.iter(), resolve),
             Value::SimpleCase(case) => self.common_modifier(case.results(), resolve),
+            Value::NullIf { left, .. } => left.modifier(resolve),
             _ => -1,
         }
     }

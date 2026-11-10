@@ -13,6 +13,7 @@ mod evaluate;
 mod fold;
 mod functions;
 mod join;
+mod nullif;
 mod operand;
 mod predicate;
 pub(super) use cost::OPERATOR_COST;
@@ -44,6 +45,7 @@ enum Value {
     Coalesce(Vec<Typed>),
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
     SimpleCase(case::Simple),
+    NullIf { left: Box<Typed>, right: Box<Typed> },
 }
 impl Typed {
     pub(in crate::compiler) fn is_constant(&self) -> bool {
@@ -59,7 +61,9 @@ impl Typed {
             | Value::Interval(_) => true,
             Value::Call(call) => call.arguments.iter().all(Self::is_constant),
             Value::Cast { input, .. } => input.is_constant(),
-            Value::Binary { left, right, .. } => left.is_constant() && right.is_constant(),
+            Value::Binary { left, right, .. } | Value::NullIf { left, right } => {
+                left.is_constant() && right.is_constant()
+            }
             Value::Coalesce(values) => values.iter().all(Self::is_constant),
             Value::SimpleCase(case) => case.is_constant(),
             Value::Case { branches, otherwise } => {
@@ -120,6 +124,11 @@ pub(super) fn bind(
                 || super::expression::is_comparison(expression)? =>
         {
             boolean(value, resolve)
+        }
+        NodeEnum::AExpr(expression)
+            if expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprNullif) =>
+        {
+            nullif::bind(expression, resolve, depth)
         }
         NodeEnum::AExpr(expression) => arithmetic(expression, resolve, depth),
         NodeEnum::CoalesceExpr(expression) => {
@@ -274,6 +283,7 @@ impl Typed {
             Value::Column(column) | Value::Average(column) => column.nullable,
             Value::Boolean(value) => value.nullable(),
             Value::Literal(value) => value.is_none(),
+            Value::NullIf { .. } => true,
             Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
             Value::Encoded(value) => value.is_none(),
             Value::Remainder(value) => value.input.nullable,

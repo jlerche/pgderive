@@ -21,6 +21,9 @@ fn figure(value: &Node) -> Result<(u8, String)> {
             (STRONG, names(&call.funcname)?.0.last().cloned().context("empty function label")?)
         }
         NodeEnum::CoalesceExpr(_) => (STRONG, "coalesce".into()),
+        NodeEnum::AExpr(expr) if expr.kind == i32::from(pg::AExprKind::AexprNullif) => {
+            (STRONG, "nullif".into())
+        }
         NodeEnum::TypeCast(cast) => {
             let inner = figure(optional(cast.arg.as_deref())?)?;
             if inner.0 > WEAK {
