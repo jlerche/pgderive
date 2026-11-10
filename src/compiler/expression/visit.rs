@@ -15,7 +15,7 @@ impl Expr {
             | Self::Or(values)
             | Self::Quals(values)
             | Self::Array { values, .. } => values.iter().for_each(|value| value.reads(out)),
-            Self::Not(value) => value.reads(out),
+            Self::Not(value) | Self::BooleanTest { input: value, .. } => value.reads(out),
         }
     }
     pub(in crate::compiler) fn read_names(&self) -> BTreeSet<String> {
@@ -38,6 +38,11 @@ impl Expr {
             Self::Quals(values) => Self::Quals(all(values)?),
             Self::Array { and, values } => Self::Array { and: *and, values: all(values)? },
             Self::Not(value) => Self::Not(Box::new(value.replaced(replace)?)),
+            Self::BooleanTest { input, expected, negated } => Self::BooleanTest {
+                input: Box::new(input.replaced(replace)?),
+                expected: *expected,
+                negated: *negated,
+            },
         })
     }
     /// Columns whose NULL keeps this predicate from being true, as `find_nonnullable_rels` proves.
@@ -46,7 +51,12 @@ impl Expr {
         match self {
             Self::Value(value) => value.strict_columns(&mut out),
             Self::Null(value, true) if top => value.strict_columns(&mut out),
-            Self::Null(..) => {}
+            Self::BooleanTest { input, expected, negated }
+                if top && (expected.is_some() != *negated) =>
+            {
+                return input.strict_columns(false);
+            }
+            Self::Null(..) | Self::BooleanTest { .. } => {}
             Self::Compare(_, left, right) => {
                 left.strict_columns(&mut out);
                 right.strict_columns(&mut out);

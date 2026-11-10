@@ -78,6 +78,7 @@ fn contains_aggregate(value: &Node) -> bool {
         Some(NodeEnum::CoalesceExpr(value)) => value.args.iter().any(contains_aggregate),
         Some(NodeEnum::TypeCast(value)) => value.arg.as_deref().is_some_and(contains_aggregate),
         Some(NodeEnum::NullTest(value)) => value.arg.as_deref().is_some_and(contains_aggregate),
+        Some(NodeEnum::BooleanTest(value)) => value.arg.as_deref().is_some_and(contains_aggregate),
         Some(NodeEnum::CaseExpr(value)) => {
             [&value.arg, &value.defresult]
                 .into_iter()
@@ -250,15 +251,14 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
                     self.expression(arg, windows, depth + 1)?;
                 }
             }
+            Some(NodeEnum::BooleanTest(expr)) => {
+                self.optional_expression(expr.arg.as_deref_mut(), windows, depth)?;
+            }
             Some(NodeEnum::NullTest(expr)) => {
-                if let Some(arg) = expr.arg.as_deref_mut() {
-                    self.expression(arg, windows, depth + 1)?;
-                }
+                self.optional_expression(expr.arg.as_deref_mut(), windows, depth)?;
             }
             Some(NodeEnum::TypeCast(expr)) => {
-                if let Some(arg) = expr.arg.as_deref_mut() {
-                    self.expression(arg, windows, depth + 1)?;
-                }
+                self.optional_expression(expr.arg.as_deref_mut(), windows, depth)?;
             }
             Some(NodeEnum::CoalesceExpr(expr)) => {
                 for arg in &mut expr.args {
@@ -279,6 +279,17 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
                 }
             }
             _ => {}
+        }
+        Ok(())
+    }
+    fn optional_expression(
+        &mut self,
+        value: Option<&mut Node>,
+        windows: bool,
+        depth: usize,
+    ) -> Result<()> {
+        if let Some(value) = value {
+            self.expression(value, windows, depth + 1)?;
         }
         Ok(())
     }

@@ -38,7 +38,7 @@ impl Expr {
             Self::Not(value) => match *value {
                 Self::Or(values) => {
                     for value in values {
-                        Self::Not(Box::new(value)).collect_quals(quals);
+                        value.negated().collect_quals(quals);
                     }
                 }
                 Self::Not(value) => value.collect_quals(quals),

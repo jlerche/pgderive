@@ -176,6 +176,9 @@ impl Rewrite<'_> {
             Some(NodeEnum::TypeCast(value)) => {
                 self.optional(value.arg.as_deref_mut(), guarded, depth)?;
             }
+            Some(NodeEnum::BooleanTest(value)) => {
+                self.optional(value.arg.as_deref_mut(), guarded, depth)?;
+            }
             Some(NodeEnum::NullTest(value)) => {
                 self.optional(value.arg.as_deref_mut(), guarded, depth)?;
             }

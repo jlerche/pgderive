@@ -24,6 +24,7 @@ pub(super) enum Expr {
     Array { and: bool, values: Vec<Self> },
     Quals(Vec<Self>),
     Not(Box<Self>),
+    BooleanTest { input: Box<Self>, expected: Option<bool>, negated: bool },
 }
 type Resolve<'a> = dyn Fn(&Name) -> Result<ColumnRef> + 'a;
 pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
@@ -67,6 +68,24 @@ fn bind_ast(
     ensure!(*visited <= 512 && depth <= 64, "WHERE exceeds AST/depth budget");
     match node(value)? {
         NodeEnum::BoolExpr(value) => boolean(value, resolve, visited, depth, text),
+        NodeEnum::BooleanTest(value) => {
+            use pg::BoolTestType::{
+                IsFalse, IsNotFalse, IsNotTrue, IsNotUnknown, IsTrue, IsUnknown,
+            };
+            ensure!(value.xpr.is_none(), "invalid Boolean test");
+            let (expected, negated) = match pg::BoolTestType::try_from(value.booltesttype)? {
+                IsTrue => (Some(true), false),
+                IsNotTrue => (Some(true), true),
+                IsFalse => (Some(false), false),
+                IsNotFalse => (Some(false), true),
+                IsUnknown => (None, false),
+                IsNotUnknown => (None, true),
+                pg::BoolTestType::Undefined => anyhow::bail!("invalid Boolean test type"),
+            };
+            let input =
+                bind_ast(optional(value.arg.as_deref())?, resolve, visited, depth + 1, text)?;
+            Ok(Expr::BooleanTest { input: Box::new(input), expected, negated })
+        }
         NodeEnum::NullTest(value) => {
             ensure!(!value.argisrow && value.xpr.is_none(), "row NULL tests unsupported");
             let not = match pg::NullTestType::try_from(value.nulltesttype)? {
@@ -128,7 +147,7 @@ fn boolean(
         }
         pg::BoolExprType::NotExpr => {
             ensure!(args.len() == 1, "invalid NOT arity");
-            Ok(Expr::Not(Box::new(args.remove(0))))
+            Ok(args.remove(0).negated())
         }
         pg::BoolExprType::Undefined => anyhow::bail!("invalid Boolean operator"),
     }
@@ -258,6 +277,15 @@ fn normalized(args: Vec<Expr>, and: bool) -> Result<Expr> {
     Ok(if and { Expr::And(values) } else { Expr::Or(values) })
 }
 impl Expr {
+    fn negated(self) -> Self {
+        match self {
+            Self::BooleanTest { input, expected, negated } => {
+                Self::BooleanTest { input, expected, negated: !negated }
+            }
+            value => Self::Not(Box::new(value)),
+        }
+    }
+
     pub(super) fn evaluate(&self, rows: (&Row, &Row)) -> Result<Option<bool>> {
         match self {
             Self::Value(value) => value
@@ -293,6 +321,9 @@ impl Expr {
                 Ok(Some(compare(op, ordering)))
             }
             Self::Not(value) => Ok(value.evaluate(rows)?.map(|value| !value)),
+            Self::BooleanTest { input, expected, negated } => {
+                Ok(Some((input.evaluate(rows)? == *expected) != *negated))
+            }
             Self::And(values) => logical(values, rows, true),
             Self::Or(values) => logical(values, rows, false),
             Self::Array { and, values } => logical(values, rows, *and),
@@ -412,7 +443,7 @@ impl Expr {
             | Self::Or(values)
             | Self::Array { values, .. }
             | Self::Quals(values) => values.iter().all(Self::is_constant),
-            Self::Not(value) => value.is_constant(),
+            Self::Not(value) | Self::BooleanTest { input: value, .. } => value.is_constant(),
         }
     }
     pub(in crate::compiler) fn constant_truth(&self) -> Result<Option<bool>> {
@@ -441,7 +472,7 @@ impl Expr {
                 let lookup = if elements < 9 { elements } else { 2 * typed::OPERATOR_COST };
                 probe.saturating_sub(typed::OPERATOR_COST).saturating_add(lookup)
             }
-            Self::Not(value) => value.cost(),
+            Self::Not(value) | Self::BooleanTest { input: value, .. } => value.cost(),
         }
     }
 }

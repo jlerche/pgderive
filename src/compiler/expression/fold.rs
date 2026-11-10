@@ -23,6 +23,11 @@ impl Expr {
                 values: values.iter().map(Self::fold).collect::<Result<_>>()?,
             },
             Self::Not(value) => Self::Not(Box::new(value.fold()?)),
+            Self::BooleanTest { input, expected, negated } => Self::BooleanTest {
+                input: Box::new(input.fold()?),
+                expected: *expected,
+                negated: *negated,
+            },
         };
         if folded.is_constant() {
             folded.constant_truth().context("constant expression failed in-engine")?;

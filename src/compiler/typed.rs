@@ -109,7 +109,9 @@ pub(super) fn bind(
         }
         NodeEnum::AConst(constant) => literal(constant),
         NodeEnum::TypeCast(cast) => types::cast(cast, resolve, depth),
-        NodeEnum::BoolExpr(_) | NodeEnum::NullTest(_) => boolean(value, resolve),
+        NodeEnum::BoolExpr(_) | NodeEnum::NullTest(_) | NodeEnum::BooleanTest(_) => {
+            boolean(value, resolve)
+        }
         NodeEnum::AExpr(expression)
             if expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprIn)
                 || super::expression::is_comparison(expression)? =>
@@ -264,7 +266,9 @@ impl Typed {
     pub(super) fn nullable(&self) -> bool {
         match &self.value {
             Value::Column(column) | Value::Average(column) => column.nullable,
-            Value::Boolean(_) => true,
+            Value::Boolean(value) => {
+                !matches!(value.as_ref(), super::expression::Expr::BooleanTest { .. })
+            }
             Value::Literal(value) => value.is_none(),
             Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
             Value::Encoded(value) => value.is_none(),

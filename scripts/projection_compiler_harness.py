@@ -5,6 +5,7 @@ from harness_control import commit_proxy
 import collections
 import json
 from sql_compiler_harness import SqlFixture
+from native_mv_oracle import binary_difference, expected as native_expected
 
 
 class ProjectionFixture(SqlFixture):
@@ -20,13 +21,24 @@ class ProjectionFixture(SqlFixture):
             self.sql(f"UPDATE {self.name}.auction SET small_value=CASE WHEN id=1 THEN -2 ELSE 2 END,large_value=CASE WHEN id=1 THEN -3 ELSE 3 END,vartext=CASE WHEN id=1 THEN 'é🙂' ELSE '界x' END WHERE id IN (1,2)")
             self.sql(f"UPDATE {self.name}.auction SET category=CASE WHEN id=1 THEN 'é🙂' ELSE '界x' END,group_id=CASE WHEN id=1 THEN -2 ELSE 2 END,enabled=true WHERE id IN (1,2)")
             self.query = self.query.replace('a.group_id AS', '(0-a.group_id) AS').replace(' FROM ', ',(0-a.small_value) AS sm,(0::bigint-a.large_value) AS lg,a.vartext AS vl FROM ')
+            tests = ('TRUE', 'NOT TRUE', 'FALSE', 'NOT FALSE', 'UNKNOWN', 'NOT UNKNOWN')
+            projected = ','.join(f'a.enabled IS {test} AS flag_{i}' for i,test in enumerate(tests))
+            self.query = self.query.replace(' FROM ', f',{projected} FROM ')
+            self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
+                                            '(a.enabled OR a.group_id IS NULL) IS TRUE')
 
     def verify(self):
         self.sql(f'EXPLAIN {self.query}')
         expected = (f"SELECT jsonb_build_array(NULL,jsonb_build_array(a.group_id,a.category,a.enabled,a.token,a.group_id)) tuple, count(*)::bigint weight "
                     f"FROM {self.name}.auction a WHERE a.id > 0 AND (a.enabled OR a.group_id IS NULL) GROUP BY 1")
         if self.local:
-            expected = expected.replace('jsonb_build_array(a.group_id,a.category,a.enabled,a.token,a.group_id)', 'jsonb_build_array((0-a.group_id),a.category,a.enabled,a.token,(0-a.group_id),(0-a.small_value),(0::bigint-a.large_value),a.vartext)')
+            expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
+                                       + [f'flag_{i}' for i in range(6)])
+            def columns(table):
+                return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
+                    FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
+            assert columns('groups') == columns('pgderive_native_oracle')
+            assert binary_difference(self) == '0'
         self.verify_sql(expected)
         # Independent raw-source recomputation with explicit true-only qualification.
         rows = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a')) or []
@@ -41,6 +53,9 @@ class ProjectionFixture(SqlFixture):
                               None if row['small_value'] is None else -row['small_value'],
                               None if row['large_value'] is None else -row['large_value'],
                               row['vartext'])
+                    active = row['enabled']
+                    values += (active is True, active is not True, active is False,
+                               active is not False, active is None, active is not None)
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)

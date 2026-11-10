@@ -70,6 +70,8 @@ fn native_comparisons_literals_and_nulls() -> Result<()> {
     ]);
     for sql in [
         "a = true",
+        "a IS TRUE",
+        "b IS UNKNOWN",
         "n < 0",
         "n <= -3",
         "n <> 0",
@@ -118,7 +120,7 @@ fn normalization_and_fail_closed_types() -> Result<()> {
         "true IS NULL",
         "ROW(a) IS NULL",
         "round(n)>0",
-        "a IS TRUE",
+        "n IS TRUE",
         "n OPERATOR(pg_catalog.=) 1",
     ] {
         assert!(expression(sql).is_err(), "accepted {sql}");

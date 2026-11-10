@@ -156,3 +156,31 @@ fn calendar_functions_and_arithmetic_use_native_kernels() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn boolean_tests_are_total_and_evaluate_their_input() -> Result<()> {
+    let row = [("a".into(), Some("7".into())), ("b".into(), None)].into();
+    for (input, expected) in [
+        ("a > 0", ["t", "f", "f", "t", "f", "t"]),
+        ("a < 0", ["f", "t", "t", "f", "f", "t"]),
+        ("b > 0", ["f", "t", "f", "t", "t", "f"]),
+        ("NULL", ["f", "t", "f", "t", "t", "f"]),
+        ("'yes'", ["t", "f", "f", "t", "f", "t"]),
+    ] {
+        for (test, expected) in ["TRUE", "NOT TRUE", "FALSE", "NOT FALSE", "UNKNOWN", "NOT UNKNOWN"]
+            .into_iter()
+            .zip(expected)
+        {
+            let sql = format!("({input}) IS {test}");
+            let value = expression(&sql)?;
+            assert_eq!(value.oid(), 16, "{sql}");
+            assert!(!value.nullable(), "{sql}");
+            assert_eq!(value.evaluate(&row)?.as_deref(), Some(expected), "{sql}");
+        }
+    }
+    assert_eq!(expression("NOT ((a > 0) IS NOT TRUE)")?, expression("(a > 0) IS TRUE")?);
+    assert!(expression("a IS TRUE").is_err());
+    assert!(expression("(1 / 0 = 1) IS UNKNOWN").is_err());
+    assert!(expression("(1 / (a - 7) = 1) IS UNKNOWN")?.evaluate(&row).is_err());
+    Ok(())
+}
