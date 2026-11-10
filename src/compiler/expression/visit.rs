@@ -7,7 +7,7 @@ impl Expr {
     pub(in crate::compiler) fn reads(&self, out: &mut BTreeMap<String, ColumnRef>) {
         match self {
             Self::Value(value) | Self::Null(value, _) => value.reads(out),
-            Self::Compare(_, left, right) => {
+            Self::Compare(_, left, right) | Self::Distinct { left, right, .. } => {
                 left.reads(out);
                 right.reads(out);
             }
@@ -33,6 +33,11 @@ impl Expr {
             Self::Compare(op, left, right) => {
                 Self::Compare(op.clone(), left.replaced(replace)?, right.replaced(replace)?)
             }
+            Self::Distinct { left, right, negated } => Self::Distinct {
+                left: left.replaced(replace)?,
+                right: right.replaced(replace)?,
+                negated: *negated,
+            },
             Self::And(values) => Self::And(all(values)?),
             Self::Or(values) => Self::Or(all(values)?),
             Self::Quals(values) => Self::Quals(all(values)?),
@@ -56,7 +61,7 @@ impl Expr {
             {
                 return input.strict_columns(false);
             }
-            Self::Null(..) | Self::BooleanTest { .. } => {}
+            Self::Null(..) | Self::BooleanTest { .. } | Self::Distinct { .. } => {}
             Self::Compare(_, left, right) => {
                 left.strict_columns(&mut out);
                 right.strict_columns(&mut out);

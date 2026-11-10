@@ -184,3 +184,55 @@ fn boolean_tests_are_total_and_evaluate_their_input() -> Result<()> {
     assert!(expression("(1 / (a - 7) = 1) IS UNKNOWN")?.evaluate(&row).is_err());
     Ok(())
 }
+
+#[test]
+fn distinctness_is_total_and_reuses_native_equality() -> Result<()> {
+    let row = [("a".into(), Some("7".into())), ("b".into(), None)].into();
+    for (left, right, distinct) in [
+        ("a", "7::bigint", false),
+        ("a", "8", true),
+        ("a", "7.000", false),
+        ("7.000", "a", false),
+        ("a", "'7'", false),
+        ("a", "b", true),
+        ("b", "a", true),
+        ("b", "b", false),
+        ("NULL", "a", true),
+        ("b", "NULL", false),
+        ("NULL", "NULL", false),
+        ("1", "NULL", true),
+        ("NULL::integer", "NULL::bigint", false),
+        ("'NaN'::numeric", "'NaN'::numeric", false),
+        ("DATE '2020-01-01'", "TIMESTAMP '2020-01-01 00:00:00'", false),
+        ("'é'::text", "'e'", true),
+        ("TRUE", "'yes'", false),
+    ] {
+        for (test, expected) in [("DISTINCT", distinct), ("NOT DISTINCT", !distinct)] {
+            let sql = format!("{left} IS {test} FROM {right}");
+            let value = expression(&sql)?;
+            assert_eq!(value.oid(), 16, "{sql}");
+            assert!(!value.nullable(), "{sql}");
+            assert_eq!(
+                value.evaluate(&row)?.as_deref(),
+                Some(if expected { "t" } else { "f" }),
+                "{sql}"
+            );
+        }
+    }
+    for sql in [
+        "a IS DISTINCT FROM TRUE",
+        "ROW(a) IS DISTINCT FROM ROW(b)",
+        "NULL IS DISTINCT FROM (1 / 0)",
+        "(1 / 0) IS NOT DISTINCT FROM NULL::integer",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    for sql in [
+        "NULL IS DISTINCT FROM (1 / (a - 7))",
+        "b IS DISTINCT FROM (1 / (a - 7))",
+        "(1 / (a - 7)) IS NOT DISTINCT FROM b",
+    ] {
+        assert!(expression(sql)?.evaluate(&row).is_err(), "{sql}");
+    }
+    Ok(())
+}

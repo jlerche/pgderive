@@ -2,6 +2,14 @@ use super::Name;
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
+pub(in crate::compiler) fn distinct_kind(kind: i32) -> Option<bool> {
+    match pg::AExprKind::try_from(kind).ok()? {
+        pg::AExprKind::AexprDistinct => Some(false),
+        pg::AExprKind::AexprNotDistinct => Some(true),
+        _ => None,
+    }
+}
+
 pub(in crate::compiler) fn node(value: &Node) -> Result<&NodeEnum> {
     value.node.as_ref().context("missing AST node")
 }

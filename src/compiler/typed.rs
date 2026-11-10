@@ -114,6 +114,7 @@ pub(super) fn bind(
         }
         NodeEnum::AExpr(expression)
             if expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprIn)
+                || super::parser::expressions::distinct_kind(expression.kind).is_some()
                 || super::expression::is_comparison(expression)? =>
         {
             boolean(value, resolve)
@@ -266,9 +267,7 @@ impl Typed {
     pub(super) fn nullable(&self) -> bool {
         match &self.value {
             Value::Column(column) | Value::Average(column) => column.nullable,
-            Value::Boolean(value) => {
-                !matches!(value.as_ref(), super::expression::Expr::BooleanTest { .. })
-            }
+            Value::Boolean(value) => value.nullable(),
             Value::Literal(value) => value.is_none(),
             Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
             Value::Encoded(value) => value.is_none(),

@@ -28,6 +28,9 @@ pub(in crate::compiler) fn bind(
     Ok(Operand { value, contextual, null_test })
 }
 impl Operand {
+    pub(in crate::compiler) fn into_value(self) -> Typed {
+        self.value
+    }
     pub(in crate::compiler) const fn literal_oid(&self) -> u32 {
         if self.value.oid == 705 { 0 } else { self.value.oid }
     }

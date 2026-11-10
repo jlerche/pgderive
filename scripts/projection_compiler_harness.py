@@ -23,9 +23,13 @@ class ProjectionFixture(SqlFixture):
             self.query = self.query.replace('a.group_id AS', '(0-a.group_id) AS').replace(' FROM ', ',(0-a.small_value) AS sm,(0::bigint-a.large_value) AS lg,a.vartext AS vl FROM ')
             tests = ('TRUE', 'NOT TRUE', 'FALSE', 'NOT FALSE', 'UNKNOWN', 'NOT UNKNOWN')
             projected = ','.join(f'a.enabled IS {test} AS flag_{i}' for i,test in enumerate(tests))
-            self.query = self.query.replace(' FROM ', f',{projected} FROM ')
+            distinct = ('a.group_id IS DISTINCT FROM a.small_value AS changed,'
+                        'a.group_id IS NOT DISTINCT FROM a.small_value AS same')
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
-                                            '(a.enabled OR a.group_id IS NULL) IS TRUE')
+                                            "((a.enabled OR a.group_id IS NULL) IS TRUE "
+                                            "OR a.group_id IS NOT DISTINCT FROM 1) "
+                                            "AND a.category IS DISTINCT FROM 'excluded'")
 
     def verify(self):
         self.sql(f'EXPLAIN {self.query}')
@@ -33,7 +37,7 @@ class ProjectionFixture(SqlFixture):
                     f"FROM {self.name}.auction a WHERE a.id > 0 AND (a.enabled OR a.group_id IS NULL) GROUP BY 1")
         if self.local:
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
-                                       + [f'flag_{i}' for i in range(6)])
+                                       + [f'flag_{i}' for i in range(6)] + ['changed', 'same'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -44,7 +48,10 @@ class ProjectionFixture(SqlFixture):
         rows = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a')) or []
         expected_memory = collections.Counter()
         for row in rows:
-            if row['id'] > 0 and (row['enabled'] is True or row['group_id'] is None):
+            qualifies = row['enabled'] is True or row['group_id'] is None
+            if self.local:
+                qualifies = (qualifies or row['group_id'] == 1) and row['category'] != 'excluded'
+            if row['id'] > 0 and qualifies:
                 values = tuple(row[key] for key in ('group_id', 'category', 'enabled', 'token', 'group_id'))
                 if self.local:
                     group = None if row['group_id'] is None else -row['group_id']
@@ -55,7 +62,9 @@ class ProjectionFixture(SqlFixture):
                               row['vartext'])
                     active = row['enabled']
                     values += (active is True, active is not True, active is False,
-                               active is not False, active is None, active is not None)
+                               active is not False, active is None, active is not None,
+                               row['group_id'] != row['small_value'],
+                               row['group_id'] == row['small_value'])
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
@@ -82,6 +91,8 @@ def qualify(output, command, local=False):
             f"DELETE FROM {fixture.name}.auction WHERE id=100; UPDATE {fixture.name}.bid SET price=price+1 WHERE id=3",
             f"UPDATE {fixture.name}.bid SET price=price+1 WHERE id=4",  # complete empty query delta tick
         ]
+        if local:
+            changes[3] += f"; UPDATE {fixture.name}.auction SET category='excluded' WHERE id=100"
         def initial():
             assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
         def committed_fault():

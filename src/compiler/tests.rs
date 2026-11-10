@@ -104,6 +104,8 @@ fn normalization_and_fail_closed_types() -> Result<()> {
     assert_eq!(expression("a OR (b OR a)")?, expression("a OR b")?);
     assert_ne!(expression("a AND b")?, expression("b AND a")?);
     assert_eq!(expression("a AND a")?, expression("a")?);
+    assert_eq!(expression("NOT (n IS NOT DISTINCT FROM NULL)")?, expression("n IS NOT NULL")?);
+    assert_eq!(expression("NOT (n IS DISTINCT FROM 1)")?, expression("n IS NOT DISTINCT FROM 1")?);
     for sql in [
         "n",
         "text < 'x'",
@@ -116,7 +118,7 @@ fn normalization_and_fail_closed_types() -> Result<()> {
         "u = '00000000000000000000000000000000-'",
         "u = '0-0000000000000000000000000000000'",
         "n BETWEEN 1 AND 2",
-        "n IS DISTINCT FROM 1",
+        "n IS DISTINCT FROM true",
         "true IS NULL",
         "ROW(a) IS NULL",
         "round(n)>0",

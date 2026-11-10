@@ -25,6 +25,7 @@ pub(super) enum Expr {
     Quals(Vec<Self>),
     Not(Box<Self>),
     BooleanTest { input: Box<Self>, expected: Option<bool>, negated: bool },
+    Distinct { left: Scalar, right: Scalar, negated: bool },
 }
 type Resolve<'a> = dyn Fn(&Name) -> Result<ColumnRef> + 'a;
 pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
@@ -62,7 +63,7 @@ fn bind_ast(
     depth: usize,
     text: TextCollation<'_>,
 ) -> Result<Expr> {
-    use super::parser::expressions::{names, node, optional};
+    use super::parser::expressions::{node, optional};
     use pg_query::{NodeEnum, protobuf as pg};
     *visited += 1;
     ensure!(*visited <= 512 && depth <= 64, "WHERE exceeds AST/depth budget");
@@ -100,28 +101,7 @@ fn bind_ast(
         NodeEnum::AExpr(value) if value.kind == i32::from(pg::AExprKind::AexprIn) => {
             membership(value, resolve, text)
         }
-        NodeEnum::AExpr(value) => {
-            ensure!(value.kind == i32::from(pg::AExprKind::AexprOp), "unsupported comparison kind");
-            let name = names(&value.name)?;
-            let [name] = name.0.as_slice() else {
-                anyhow::bail!("qualified operators unsupported");
-            };
-            let op = match name.as_str() {
-                "=" => Compare::Eq,
-                "<>" => Compare::Ne,
-                "<" => Compare::Lt,
-                "<=" => Compare::Le,
-                ">" => Compare::Gt,
-                ">=" => Compare::Ge,
-                _ => anyhow::bail!("unsupported comparison operator"),
-            };
-            comparison(
-                op,
-                operand(optional(value.lexpr.as_deref())?, resolve)?,
-                operand(optional(value.rexpr.as_deref())?, resolve)?,
-                text,
-            )
-        }
+        NodeEnum::AExpr(value) => comparison(value, resolve, text),
         _ => Ok(Expr::Value(operand(value, resolve)?.coerce(16)?)),
     }
 }
@@ -152,7 +132,53 @@ fn boolean(
         pg::BoolExprType::Undefined => anyhow::bail!("invalid Boolean operator"),
     }
 }
-fn comparison(op: Compare, left: Operand, right: Operand, text: TextCollation<'_>) -> Result<Expr> {
+fn comparison(
+    value: &pg_query::protobuf::AExpr,
+    resolve: &Resolve<'_>,
+    text: TextCollation<'_>,
+) -> Result<Expr> {
+    use super::parser::expressions::{distinct_kind, names, optional};
+    use pg_query::{NodeEnum, protobuf::AExprKind};
+
+    let kind = distinct_kind(value.kind);
+    ensure!(
+        kind.is_some() || value.kind == i32::from(AExprKind::AexprOp),
+        "unsupported comparison kind"
+    );
+    let name = names(&value.name)?;
+    let [name] = name.0.as_slice() else {
+        anyhow::bail!("qualified operators unsupported");
+    };
+    let left = optional(value.lexpr.as_deref())?;
+    let right = optional(value.rexpr.as_deref())?;
+    if let Some(negated) = kind {
+        ensure!(name == "=", "invalid distinctness operator");
+        // PostgreSQL treats an undecorated NULL as a scalar NULL test.
+        let bare_null = |node: &pg_query::Node| matches!(&node.node, Some(NodeEnum::AConst(value)) if value.isnull);
+        if let Some(input) =
+            if bare_null(right) { Some(left) } else { bare_null(left).then_some(right) }
+        {
+            return Ok(Expr::Null(operand(input, resolve)?.into_value(), !negated));
+        }
+    }
+    let op = match name.as_str() {
+        "=" => Compare::Eq,
+        "<>" => Compare::Ne,
+        "<" => Compare::Lt,
+        "<=" => Compare::Le,
+        ">" => Compare::Gt,
+        ">=" => Compare::Ge,
+        _ => anyhow::bail!("unsupported comparison operator"),
+    };
+    let (left, right) = comparison_operands(operand(left, resolve)?, operand(right, resolve)?)?;
+    check_comparison(&op, &left, &right, text)?;
+    Ok(match kind {
+        Some(negated) => Expr::Distinct { left, right, negated },
+        None => Expr::Compare(op, left, right),
+    })
+}
+
+fn comparison_operands(left: Operand, right: Operand) -> Result<(Scalar, Scalar)> {
     let oid = if [left.oid(), right.oid()]
         .iter()
         .flatten()
@@ -174,14 +200,14 @@ fn comparison(op: Compare, left: Operand, right: Operand, text: TextCollation<'_
         matches!(oid, 16 | 20 | 21 | 23 | 1700 | 25 | 1043 | 2950 | 1082 | 1114 | 1184 | 1186),
         "SQL type: unsupported comparison type"
     );
-    compare_values(op, left.coerce(oid)?, right.coerce(oid)?, text)
+    Ok((left.coerce(oid)?, right.coerce(oid)?))
 }
-fn compare_values(
-    op: Compare,
-    left: Scalar,
-    right: Scalar,
+fn check_comparison(
+    op: &Compare,
+    left: &Scalar,
+    right: &Scalar,
     text: TextCollation<'_>,
-) -> Result<Expr> {
+) -> Result<()> {
     let oid = left.oid();
     if matches!(oid, 25 | 1043) && text.is_none() {
         ensure!(
@@ -192,7 +218,7 @@ fn compare_values(
     if matches!(oid, 25 | 1043)
         && let Some(text) = text
     {
-        let (left_collation, right_collation) = (text(&left)?, text(&right)?);
+        let (left_collation, right_collation) = (text(left)?, text(right)?);
         ensure!(left_collation != 0 && right_collation != 0, "unresolved ON text collation");
         let collation = typed::collation::common(left_collation, right_collation)?;
         ensure!(
@@ -200,7 +226,7 @@ fn compare_values(
             "text ON ordering requires C/POSIX collation"
         );
     }
-    Ok(Expr::Compare(op, left, right))
+    Ok(())
 }
 fn membership(
     value: &pg_query::protobuf::AExpr,
@@ -233,7 +259,11 @@ fn membership(
     let and = operator == "<>";
     let op = if and { Compare::Ne } else { Compare::Eq };
     let written = values
-        .map(|value| compare_values(op.clone(), probe.clone(), value?, text))
+        .map(|value| {
+            let value = value?;
+            check_comparison(&op, &probe, &value, text)?;
+            Ok(Expr::Compare(op.clone(), probe.clone(), value))
+        })
         .collect::<Result<Vec<_>>>()?;
     if written.iter().filter(|value| value.compares_constant()).count() < 2 {
         return normalized(written, and);
@@ -279,6 +309,10 @@ fn normalized(args: Vec<Expr>, and: bool) -> Result<Expr> {
 impl Expr {
     fn negated(self) -> Self {
         match self {
+            Self::Null(input, not) => Self::Null(input, !not),
+            Self::Distinct { left, right, negated } => {
+                Self::Distinct { left, right, negated: !negated }
+            }
             Self::BooleanTest { input, expected, negated } => {
                 Self::BooleanTest { input, expected, negated: !negated }
             }
@@ -305,20 +339,15 @@ impl Expr {
                 else {
                     return Ok(None);
                 };
-                let ordering = match (&left, &right) {
-                    (Value::Date(left), Value::Timestamp(right)) => left.compare_timestamp(*right),
-                    (Value::Timestamp(left), Value::Date(right)) => {
-                        right.compare_timestamp(*left).reverse()
-                    }
-                    (Value::Numeric(left), Value::Integer(right)) => {
-                        left.cmp(&crate::numeric::Numeric::parse(&right.to_string())?)
-                    }
-                    (Value::Integer(left), Value::Numeric(right)) => {
-                        crate::numeric::Numeric::parse(&left.to_string())?.cmp(right)
-                    }
-                    _ => left.cmp(&right),
+                Ok(Some(compare(op, compare_order(&left, &right)?)))
+            }
+            Self::Distinct { left, right, negated } => {
+                let distinct = match (left.native_pair(rows)?, right.native_pair(rows)?) {
+                    (Some(left), Some(right)) => compare_order(&left, &right)? != Ordering::Equal,
+                    (None, None) => false,
+                    _ => true,
                 };
-                Ok(Some(compare(op, ordering)))
+                Ok(Some(distinct != *negated))
             }
             Self::Not(value) => Ok(value.evaluate(rows)?.map(|value| !value)),
             Self::BooleanTest { input, expected, negated } => {
@@ -350,6 +379,21 @@ fn logical(values: &[Expr], rows: (&Row, &Row), and: bool) -> Result<Option<bool
     }
     Ok((!unknown).then_some(and))
 }
+fn compare_order(left: &Value, right: &Value) -> Result<Ordering> {
+    use crate::numeric::Numeric;
+    Ok(match (left, right) {
+        (Value::Date(left), Value::Timestamp(right)) => left.compare_timestamp(*right),
+        (Value::Timestamp(left), Value::Date(right)) => right.compare_timestamp(*left).reverse(),
+        (Value::Numeric(left), Value::Integer(right)) => {
+            left.cmp(&Numeric::parse(&right.to_string())?)
+        }
+        (Value::Integer(left), Value::Numeric(right)) => {
+            Numeric::parse(&left.to_string())?.cmp(right)
+        }
+        _ => left.cmp(right),
+    })
+}
+
 const fn compare(op: &Compare, ordering: Ordering) -> bool {
     match op {
         Compare::Eq => matches!(ordering, Ordering::Equal),
@@ -435,10 +479,16 @@ impl Predicate {
 }
 
 impl Expr {
+    pub(super) const fn nullable(&self) -> bool {
+        !matches!(self, Self::Null(..) | Self::BooleanTest { .. } | Self::Distinct { .. })
+    }
+
     pub(super) fn is_constant(&self) -> bool {
         match self {
             Self::Value(value) | Self::Null(value, _) => value.is_constant(),
-            Self::Compare(_, left, right) => left.is_constant() && right.is_constant(),
+            Self::Compare(_, left, right) | Self::Distinct { left, right, .. } => {
+                left.is_constant() && right.is_constant()
+            }
             Self::And(values)
             | Self::Or(values)
             | Self::Array { values, .. }
@@ -462,7 +512,9 @@ impl Expr {
         }
         match self {
             Self::Value(value) | Self::Null(value, _) => value.cost(),
-            Self::Compare(_, left, right) => Scalar::operator_cost(left, right),
+            Self::Compare(_, left, right) | Self::Distinct { left, right, .. } => {
+                Scalar::operator_cost(left, right)
+            }
             Self::And(values) | Self::Or(values) | Self::Quals(values) => {
                 values.iter().map(Self::cost).sum()
             }

@@ -35,7 +35,10 @@ WHERE supports column IS NULL / IS NOT NULL, Boolean columns and TRUE/FALSE/NULL
 and scalar comparisons =, <>, !=, <, <=, >, >= composed with AND/OR/NOT.
 Boolean expressions in SELECT and WHERE can use `IS TRUE`, `IS FALSE`, and
 `IS UNKNOWN` and their `IS NOT` forms. Each test returns a non-NULL Boolean,
-including when its input is NULL.
+including when its input is NULL. Scalar `IS DISTINCT FROM` and
+`IS NOT DISTINCT FROM` in SELECT and WHERE use the supported equality types
+and coercions. Two NULLs are equal for these tests, and a NULL differs from
+any non-NULL value.
 Comparisons require at least one native bool, int2/int4/int8 or UUID column.
 Integral columns may compare across integral widths and to signed i64 integer
 literals; evaluation is exact, without narrowing the literal to the column width.

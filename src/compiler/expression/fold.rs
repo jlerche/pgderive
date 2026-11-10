@@ -15,6 +15,9 @@ impl Expr {
                     Self::Compare(op.clone(), left, right)
                 }
             }
+            Self::Distinct { left, right, negated } => {
+                Self::Distinct { left: left.fold()?, right: right.fold()?, negated: *negated }
+            }
             Self::And(values) => connective(values, false, Self::And)?,
             Self::Or(values) => connective(values, true, Self::Or)?,
             Self::Quals(values) => quals(values)?,

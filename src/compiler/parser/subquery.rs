@@ -4,7 +4,7 @@ mod correlation;
 mod scalar;
 use super::{
     Parsed,
-    expressions::{names, node, optional},
+    expressions::{distinct_kind, names, node, optional},
     native_join::Tree,
 };
 use anyhow::{Result, ensure};
@@ -153,8 +153,9 @@ impl Rewrite<'_> {
                 }
             }
             Some(NodeEnum::AExpr(value)) => {
-                let lazy = value.lexpr.as_deref().is_some_and(constant_null)
-                    || value.rexpr.as_deref().is_some_and(constant_null);
+                let lazy = distinct_kind(value.kind).is_none()
+                    && (value.lexpr.as_deref().is_some_and(constant_null)
+                        || value.rexpr.as_deref().is_some_and(constant_null));
                 self.optional(value.lexpr.as_deref_mut(), guarded || lazy, depth)?;
                 self.optional(value.rexpr.as_deref_mut(), guarded || lazy, depth)?;
             }
