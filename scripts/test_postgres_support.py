@@ -11,7 +11,7 @@ from postgres_support_harness import evaluate, load_matrix
 class SupportMatrixTests(unittest.TestCase):
     def test_references_and_declared_signatures_are_complete(self):
         matrix = load_matrix()
-        self.assertEqual(len(matrix['scalar_functions']), 52)
+        self.assertEqual(len(matrix['scalar_functions']), 54)
         self.assertEqual({case['oid'] for case in matrix['source_rejections']},
                          set(matrix['unsupported_source_type_oids']))
         self.assertTrue(set(matrix['source_type_oids']).isdisjoint(matrix['unsupported_source_type_oids']))
@@ -69,6 +69,10 @@ class SupportMatrixTests(unittest.TestCase):
         self.assertEqual(run('abs', [Decimal('-Infinity')], [1700]), 'Infinity')
         self.assertEqual(run('round', [Decimal('NaN')], [1700]), 'NaN')
         self.assertIsNone(run('round', [None], [1700]))
+        self.assertEqual(run('sign', [Decimal('-0.000')], [1700]), Decimal(0))
+        self.assertEqual(run('sign', [Decimal('-Infinity')], [1700]), Decimal(-1))
+        self.assertEqual(run('div', [Decimal('-5.999'), 2], [1700,23]), Decimal(-2))
+        self.assertEqual(run('div', [Decimal('NaN'), 0], [1700,23]), 'NaN')
 
 
 if __name__ == '__main__':

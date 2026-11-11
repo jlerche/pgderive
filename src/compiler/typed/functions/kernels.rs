@@ -14,6 +14,10 @@ pub(super) fn evaluate(
     let third = || arguments.get(2).context("third function input absent");
     let result = match operation {
         Builtin::Extract => return crate::temporal::extract(first, second()?, input_oid),
+        Builtin::Sign => Ok(crate::numeric::Numeric::parse(first)?.sign().text()),
+        Builtin::Div => Ok(crate::numeric::Numeric::parse(first)?
+            .divide_truncated(&crate::numeric::Numeric::parse(second()?)?)?
+            .text()),
         Builtin::DateTrunc => crate::temporal::truncate(first, second()?, input_oid),
         Builtin::Abs if input_oid == 1700 => {
             Ok(crate::numeric::Numeric::parse(first)?.absolute().text())

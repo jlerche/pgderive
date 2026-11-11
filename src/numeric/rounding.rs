@@ -1,7 +1,7 @@
 //! One exact decimal quantizer for rounding functions and numeric/integer casts.
 use super::{LIMIT, Numeric, power};
 use anyhow::{Context, Result, ensure};
-use num_bigint::BigInt;
+use num_bigint::{BigInt, Sign};
 #[derive(Clone, Copy)]
 pub enum Rounding {
     Nearest,
@@ -99,6 +99,21 @@ impl Numeric {
         };
         i64::try_from(coefficient).context("numeric to integer overflow")
     }
+    pub(crate) fn sign(&self) -> Self {
+        let sign = match self {
+            Self::NegativeInfinity => Sign::Minus,
+            Self::Infinity => Sign::Plus,
+            Self::Nan => return Self::Nan,
+            Self::Finite { coefficient, .. } => coefficient.sign(),
+        };
+        let coefficient = match sign {
+            Sign::Minus => -1,
+            Sign::NoSign => 0,
+            Sign::Plus => 1,
+        };
+        Self::Finite { coefficient: BigInt::from(coefficient), scale: 0 }
+    }
+
     pub(crate) fn absolute(&self) -> Self {
         if self < &(Self::Finite { coefficient: BigInt::default(), scale: 0 }) {
             self.negated()

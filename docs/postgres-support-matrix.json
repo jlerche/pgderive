@@ -855,6 +855,36 @@
           "literal": "\u754c\ud83d\ude42"
         }
       ]
+    },
+    {
+      "name": "sign",
+      "input_oids": [
+        1700
+      ],
+      "result_oid": 1700,
+      "expression": "sign(a.amount)",
+      "arguments": [
+        {
+          "column": "amount"
+        }
+      ]
+    },
+    {
+      "name": "div",
+      "input_oids": [
+        1700,
+        1700
+      ],
+      "result_oid": 1700,
+      "expression": "div(a.amount,2.0)",
+      "arguments": [
+        {
+          "column": "amount"
+        },
+        {
+          "literal": "2.0"
+        }
+      ]
     }
   ],
   "coercion_cases": [
@@ -938,6 +968,57 @@
           "literal": 1
         }
       ]
+    },
+    {
+      "name": "div",
+      "input_oids": [
+        23,
+        21
+      ],
+      "result_oid": 1700,
+      "expression": "div(a.group_id,a.small_value)",
+      "arguments": [
+        {
+          "column": "group_id"
+        },
+        {
+          "column": "small_value"
+        }
+      ]
+    },
+    {
+      "name": "div",
+      "input_oids": [
+        20,
+        23
+      ],
+      "result_oid": 1700,
+      "expression": "div(a.large_value,-1)",
+      "arguments": [
+        {
+          "column": "large_value"
+        },
+        {
+          "literal": -1
+        }
+      ]
+    },
+    {
+      "name": "div",
+      "input_oids": [
+        1700,
+        705
+      ],
+      "result_oid": 1700,
+      "expression": "div(a.amount,'0.5')",
+      "arguments": [
+        {
+          "column": "amount"
+        },
+        {
+          "literal": "0.5"
+        }
+      ]
     }
   ],
   "rejections": [
@@ -1005,6 +1086,11 @@
       "id": "numeric-power",
       "expression": "a.amount ^ 2",
       "error_contains": "operator ^ is not available in-engine"
+    },
+    {
+      "id": "integral-sign-overload",
+      "expression": "sign(a.group_id)",
+      "error_contains": "unary overload requires numeric"
     }
   ],
   "features": [

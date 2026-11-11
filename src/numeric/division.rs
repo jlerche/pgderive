@@ -1,4 +1,4 @@
-//! `PostgreSQL`'s unconstrained decimal division scale, followed by exact rounding.
+//! Exact numeric division with `PostgreSQL` rounding or an integral truncated quotient.
 use super::{Numeric, power};
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
@@ -25,6 +25,14 @@ fn result_scale(left: (&BigInt, u32), right: (&BigInt, u32)) -> Result<u32> {
 }
 impl Numeric {
     pub(crate) fn divide(&self, other: &Self) -> Result<Self> {
+        self.divide_with(other, false)
+    }
+
+    pub(crate) fn divide_truncated(&self, other: &Self) -> Result<Self> {
+        self.divide_with(other, true)
+    }
+
+    fn divide_with(&self, other: &Self, truncate: bool) -> Result<Self> {
         if matches!(self, Self::Nan) || matches!(other, Self::Nan) {
             return Ok(Self::Nan);
         }
@@ -46,7 +54,7 @@ impl Numeric {
                 Self::NegativeInfinity
             });
         };
-        let scale = result_scale((left, *ls), (right, *rs))?;
+        let scale = if truncate { 0 } else { result_scale((left, *ls), (right, *rs))? };
         let exponent = i64::from(*rs) + i64::from(scale) - i64::from(*ls);
         let (numerator, denominator) = if exponent >= 0 {
             (left * power(u32::try_from(exponent)?), right.clone())
@@ -54,15 +62,18 @@ impl Numeric {
             (left.clone(), right * power(u32::try_from(-exponent)?))
         };
         let mut quotient = &numerator / &denominator;
-        let remainder = &numerator % &denominator;
-        let absolute =
-            |value: &BigInt| if value < &BigInt::default() { -value } else { value.clone() };
-        if absolute(&remainder) * 2 >= absolute(&denominator) {
-            quotient += if (numerator < BigInt::default()) == (denominator < BigInt::default()) {
-                1
-            } else {
-                -1
-            };
+        if !truncate {
+            let remainder = &numerator % &denominator;
+            let absolute =
+                |value: &BigInt| if value < &BigInt::default() { -value } else { value.clone() };
+            if absolute(&remainder) * 2 >= absolute(&denominator) {
+                quotient += if (numerator < BigInt::default()) == (denominator < BigInt::default())
+                {
+                    1
+                } else {
+                    -1
+                };
+            }
         }
         Self::finite(quotient, scale).context("numeric division result")
     }

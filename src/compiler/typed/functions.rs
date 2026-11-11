@@ -33,6 +33,12 @@ pub(super) fn bind(
     if matches!(signature.operation, registry::Builtin::Extract | registry::Builtin::DateTrunc) {
         validate_calendar(&arguments, signature)?;
     }
+    let arguments =
+        if matches!(signature.operation, registry::Builtin::Sign | registry::Builtin::Div) {
+            arguments.into_iter().map(numeric_argument).collect::<Result<_>>()?
+        } else {
+            arguments
+        };
     let value = Value::Call(Call {
         operation: signature.operation,
         input_oid: if matches!(
@@ -47,6 +53,14 @@ pub(super) fn bind(
     });
     Ok(Typed { oid: signature.result, value })
 }
+fn numeric_argument(input: Typed) -> Result<Typed> {
+    match input.oid {
+        0 | 705 => Typed::contextual_literal(input, 1700),
+        20 | 21 | 23 => Ok(input.widened_to_numeric()),
+        _ => Ok(input),
+    }
+}
+
 impl Call {
     pub(super) fn evaluate(
         &self,

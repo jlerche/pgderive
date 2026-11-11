@@ -31,6 +31,8 @@ pub(in crate::compiler) enum Builtin {
     Floor,
     Extract,
     DateTrunc,
+    Sign,
+    Div,
 }
 pub(in crate::compiler) struct Signature {
     pub name: &'static str,
@@ -101,6 +103,8 @@ const SIGNATURES: &[Signature] = &[
     Signature::strict("ceil", &[1700], 1700, Builtin::Ceiling),
     Signature::strict("ceiling", &[1700], 1700, Builtin::Ceiling),
     Signature::strict("floor", &[1700], 1700, Builtin::Floor),
+    Signature::strict("sign", &[1700], 1700, Builtin::Sign),
+    Signature::strict("div", &[1700, 1700], 1700, Builtin::Div),
 ];
 pub(in crate::compiler) fn contains(name: &str) -> bool {
     SIGNATURES.iter().any(|value| value.name == name)
@@ -131,7 +135,7 @@ pub(in crate::compiler) fn resolve(name: &str, types: &[u32]) -> Result<&'static
         "function substring: untyped NULL position selects an unsupported regex overload; cast the position to integer"
     );
     ensure!(
-        !(matches!(name, "round" | "trunc" | "ceil" | "ceiling" | "floor")
+        !(matches!(name, "round" | "trunc" | "ceil" | "ceiling" | "floor" | "sign")
             && types.len() == 1
             && types[0] != 1700),
         "function {name}: unary overload requires numeric; other PostgreSQL overloads are not available in-engine"

@@ -149,3 +149,26 @@ fn finite_budget_matches_actual_signed_and_scaled_display() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn truncated_division_is_exact_before_truncation_and_enforces_the_result_budget() -> Result<()> {
+    for (left, right, expected) in [
+        ("999999999999999999999999999999", "1000000000000000000000000000000", "0"),
+        ("-5.999", "2.0", "-2"),
+        ("5.999", "-2.0", "-2"),
+        ("-5.999", "-2.0", "2"),
+        ("5e30", "0.01", "500000000000000000000000000000000"),
+        ("NaN", "0", "NaN"),
+        ("Infinity", "-Infinity", "NaN"),
+        ("-Infinity", "-2", "Infinity"),
+        ("-3.50", "Infinity", "0"),
+    ] {
+        assert_eq!(
+            Numeric::parse(left)?.divide_truncated(&Numeric::parse(right)?)?.text(),
+            expected,
+            "div({left},{right})"
+        );
+    }
+    assert!(Numeric::parse("1e4094")?.divide_truncated(&Numeric::parse("0.0001")?).is_err());
+    Ok(())
+}

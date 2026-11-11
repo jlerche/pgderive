@@ -1214,5 +1214,18 @@
 {"sql": "SELECT GREATEST(NULL, NULL) AS v FROM source.auction", "raises": false, "rows": [""]},
 {"sql": "SELECT count(*) AS c FROM source.auction HAVING GREATEST(min(other), 0) = 0", "raises": false, "rows": ["1"]},
 {"sql": "SELECT GREATEST((SELECT MAX(s.price) FROM source.bid s), other) FROM source.auction", "raises": false, "rows": ["1"]},
-{"sql": "SELECT id FROM source.auction WHERE GREATEST(1/other, 0)>0 AND other>0", "raises": false, "rows": []}
+{"sql": "SELECT id FROM source.auction WHERE GREATEST(1/other, 0)>0 AND other>0", "raises": false, "rows": []},
+{"sql": "SELECT sign(other::numeric) AS v FROM source.auction", "raises": false, "rows": ["0"]},
+{"sql": "SELECT div(other, 2) AS v FROM source.auction", "raises": false, "rows": ["0"]},
+{"sql": "SELECT div(1, other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT div(NULL, 1/other) AS v FROM source.auction", "raises": false, "rows": [""]},
+{"sql": "SELECT div(NULLIF(other, 0), 1/other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT div(NULL, 1/0) AS v FROM source.auction", "raises": true, "phase": "planning", "sqlstate": "22012"},
+{"sql": "SELECT div('NaN'::numeric, 0) AS v FROM source.auction", "raises": false, "rows": ["NaN"]},
+{"sql": "SELECT div('Infinity'::numeric, 0) AS v FROM source.auction", "raises": true, "phase": "planning", "sqlstate": "22012"},
+{"sql": "SELECT div('Infinity'::numeric, '-Infinity') AS v FROM source.auction", "raises": false, "rows": ["NaN"]},
+{"sql": "SELECT sign('NaN'::numeric) AS v FROM source.auction", "raises": false, "rows": ["NaN"]},
+{"sql": "SELECT div(999999999999999999999999999999,1000000000000000000000000000000) AS v FROM source.auction", "raises": false, "rows": ["0"]},
+{"sql": "SELECT id FROM source.auction WHERE div(1,other)>0 AND other>0", "raises": false, "rows": []},
+{"sql": "SELECT count(*) AS c FROM source.auction HAVING sign(min(other)::numeric)=0", "raises": false, "rows": ["1"]}
 ]

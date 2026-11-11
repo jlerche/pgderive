@@ -175,3 +175,53 @@ fn padding_preserves_character_lengths_and_fill_semantics() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn sign_and_div_preserve_numeric_types_scale_and_error_boundaries() -> Result<()> {
+    for (sql, expected) in [
+        ("sign(-1.2500)", Some("-1")),
+        ("sign(0.000)", Some("0")),
+        ("sign(0.00001)", Some("1")),
+        ("sign('NaN'::numeric)", Some("NaN")),
+        ("sign('-Infinity'::numeric)", Some("-1")),
+        ("sign('Infinity'::numeric)", Some("1")),
+        ("sign(NULL::numeric)", None),
+        ("div(5.999, 2.0)", Some("2")),
+        ("div(-5.999, 2.0)", Some("-2")),
+        ("div(5.999, -2.0)", Some("-2")),
+        ("div(-5.999, -2.0)", Some("2")),
+        ("div(1::smallint, 2::bigint)", Some("0")),
+        ("div('-9223372036854775808'::bigint, -1)", Some("9223372036854775808")),
+        ("div(' 7.99 ', '2')", Some("3")),
+        ("div(NULL, NULL)", None),
+        ("div('NaN', 0)", Some("NaN")),
+        ("div('Infinity', 'Infinity')", Some("NaN")),
+        ("div('Infinity', -2)", Some("-Infinity")),
+        ("div(1.00, 'Infinity')", Some("0")),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), 1700, "{sql}");
+        assert_eq!(value.modifier(&|_| None), -1, "{sql}");
+        assert_eq!(value.evaluate(&crate::transaction::Row::new())?.as_deref(), expected, "{sql}");
+    }
+    for sql in [
+        "sign(1)",
+        "sign(NULL)",
+        "sign('1')",
+        "sign(1.0, 2)",
+        "div(1)",
+        "div('bad', NULL)",
+        "div(TRUE, 2)",
+        "div(1, 0)",
+        "div('Infinity', 0)",
+        "div(NULL, 1/0)",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    let row = [("a".into(), Some("0".into())), ("b".into(), None)].into();
+    for sql in ["div(1, a)", "div(b, 1/a)"] {
+        assert!(expression(sql)?.evaluate(&row).is_err(), "{sql}");
+    }
+    assert_eq!(expression("div(NULL, 1/a)")?.evaluate(&row)?, None);
+    Ok(())
+}

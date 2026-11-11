@@ -174,7 +174,11 @@ record and sink limits. Scalar `GREATEST` and `LEAST` accept up to 64 integral
 or exact numeric arguments, resolve a common type, and ignore NULLs after
 evaluating the arguments. They return NULL when all arguments are NULL and
 keep the first tied value's representation. A list of bare NULL literals
-resolves to text. The exact function signatures are in
+resolves to text. `sign(numeric)` returns numeric −1, 0, 1, or NaN with
+zero scale for finite results. `div` accepts integral and exact numeric
+arguments through the numeric signature and returns a numeric quotient
+truncated toward zero with scale zero. Numeric division errors, special values,
+and existing digit budgets apply. The exact function signatures are in
 `src/compiler/capabilities.rs`. Overload errors list argument type names and
 OIDs alongside the supported signatures. Nested calls and text CASE/COALESCE share the local evaluator. The evaluator returns native values for predicates, keys and computed columns; text encoding happens at row boundaries. CASE and COALESCE select lazily, while strict calls evaluate all arguments before NULL propagation. Integral widths are checked at each expression node.
 

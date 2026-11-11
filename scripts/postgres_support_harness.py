@@ -5,7 +5,7 @@ import json
 import pathlib
 import subprocess
 from decimal import Decimal
-from numeric_arithmetic_oracle import clean,number,rounding
+from numeric_arithmetic_oracle import clean,division,number,rounding
 from temporal_oracle import parse_civil,parse_interval,extract,truncate,encoded
 from functions_compiler_harness import substring
 from native_mv_oracle import binary_difference, expected
@@ -46,6 +46,18 @@ def load_matrix(path=MATRIX):
                 if not (ROOT / name).is_file():
                     raise ValueError('Missing support-matrix reference: ' + name)
     return matrix
+
+
+def division_truncated(left, right):
+    if not left.is_finite() or not right.is_finite():
+        return division(left, right)
+    if right == 0:
+        raise ZeroDivisionError('division by zero')
+    left_num, left_den = left.as_integer_ratio()
+    right_num, right_den = right.as_integer_ratio()
+    numerator, denominator = left_num * right_den, left_den * right_num
+    quotient = abs(numerator) // abs(denominator)
+    return Decimal(-quotient if (numerator < 0) != (denominator < 0) else quotient)
 
 
 def evaluate(case, row):
@@ -104,6 +116,11 @@ def evaluate(case, row):
         return format(text & ((1 << width) - 1), 'x')
     if name == 'abs':
         return clean(number(text).copy_abs()) if case['input_oids'][0] == 1700 else abs(text)
+    if name == 'sign':
+        value = number(text)
+        return 'NaN' if value.is_nan() else Decimal(int(value > 0) - int(value < 0))
+    if name == 'div':
+        return clean(division_truncated(number(text), number(rest[0])))
     if name in ['round', 'trunc', 'ceil', 'ceiling', 'floor']:
         return clean(rounding(number(text), rest[0] if rest else 0, name))
     if name in ('extract','date_trunc'):
@@ -195,25 +212,28 @@ def qualify(output, command):
         fixture.run_history(command, History(changes=changes,
             final=f"UPDATE {fixture.name}.auction SET category='é🙂',group_id=9 WHERE id=101",
             normalized=fixture.query, rejected=[]), initial=initial)
-        worker = fixture.start(command, 'scalar-failure-recovery')
-        worker.event('ready')
-        poison = f"INSERT INTO {fixture.name}.auction(id,category,group_id,small_value) VALUES(999,'x',1,-32768)"
-        # Isolate abs(int2) overflow from the separately restricted right(int4 MIN) boundary.
-        fixture.sql(poison)
-        native = subprocess.run(fixture.pg + [fixture.query], env=fixture.environment,
-                                             capture_output=True, text=True)
-        (output / 'native-scalar-error.txt').write_text(native.stderr)
-        assert native.returncode != 0 and 'out of range' in native.stderr
-        assert 'overflow' in blocked_recovery(fixture, worker,
-                                              f'DELETE FROM {fixture.name}.auction WHERE id=999')
-        fixture.verify()
-        assert fixture.acknowledgement_ahead().strip() == '0'
+        for label, small_value, native_error, worker_error in [
+            ('overflow', -32768, 'out of range', 'overflow'),
+            ('division-by-zero', 0, 'division by zero', 'division by zero'),
+        ]:
+            worker = fixture.start(command, label + '-recovery')
+            worker.event('ready')
+            # Keep other scalar arguments in range to isolate the intended error.
+            fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,small_value) VALUES(999,'x',1,{small_value})")
+            native = subprocess.run(fixture.pg + [fixture.query], env=fixture.environment,
+                                    capture_output=True, text=True)
+            (output / ('native-' + label + '-error.txt')).write_text(native.stderr)
+            assert native.returncode != 0 and native_error in native.stderr
+            assert worker_error in blocked_recovery(fixture, worker,
+                                                    f'DELETE FROM {fixture.name}.auction WHERE id=999')
+            fixture.verify()
+            assert fixture.acknowledgement_ahead().strip() == '0'
         (output / 'result.json').write_text(json.dumps({
             'strict_signatures': len(matrix['scalar_functions']),
             'coercion_cases': len(matrix['coercion_cases']), 'rejected_cases': len(matrix['rejections']),
             'unsupported_source_types': len(matrix['source_rejections']),
             'native_oracle': 'refreshed original SQL, weighted bag, send bytes and column metadata',
-            'independent_oracle': 'Python Unicode, integer widths and Decimal rounding',
+            'independent_oracle': 'Python Unicode, integer widths, Decimal rounding and exact quotients',
             'transactions': len(changes) + 1, 'restart': 'same slot and durable state',
             'duplicates_nulls_retractions': 'exact'}) + '\n')
 
