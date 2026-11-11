@@ -435,7 +435,10 @@ impl Typed {
         let text = text
             .map(|value| -> Result<String> {
                 let value = if oid == 16 {
-                    let lower = value.trim_ascii().to_ascii_lowercase();
+                    // PostgreSQL boolin also treats vertical tab as whitespace.
+                    let lower = value
+                        .trim_matches(|c: char| c.is_ascii_whitespace() || c == '\u{b}')
+                        .to_ascii_lowercase();
                     let yes = lower == "1"
                         || (!lower.is_empty()
                             && ["true", "yes", "on"].iter().any(|v| v.starts_with(&lower)));

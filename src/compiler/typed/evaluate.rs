@@ -148,6 +148,14 @@ fn cast(value: Native, oid: u32, typmod: Option<crate::numeric::Typmod>) -> Resu
     if let Some(typmod) = typmod {
         return Ok(Native::Numeric(numeric(value)?.constrained(typmod)?));
     }
+    if oid == 25 {
+        match value {
+            // PostgreSQL's explicit Boolean cast uses text(bool), which differs from boolout.
+            Native::Boolean(value) => return Ok(Native::Text(value.to_string())),
+            Native::Integer(_) | Native::Uuid(_) => return Ok(Native::Text(value.text(oid)?)),
+            _ => {}
+        }
+    }
     super::calendar::cast(value, oid)
 }
 

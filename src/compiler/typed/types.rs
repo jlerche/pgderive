@@ -46,6 +46,8 @@ pub(super) fn cast(
         "int2" => 21,
         "int4" => 23,
         "int8" => 20,
+        "bool" => 16,
+        "uuid" => 2950,
         "numeric" => 1700,
         "text" => 25,
         "varchar" => 1043,
@@ -76,10 +78,14 @@ pub(super) fn cast(
     if matches!(oid, 20 | 21 | 23) && input.oid == 705 {
         return Typed::contextual_literal(input, oid);
     }
-    let valid = if matches!(oid, 25 | 1043) {
-        matches!(input.oid, 0 | 25 | 1043 | 705)
-    } else {
-        matches!(input.oid, 0 | 20 | 21 | 23 | 1700)
+    if matches!(oid, 16 | 2950) && matches!(input.oid, 0 | 705) {
+        return Typed::contextual_literal(input, oid);
+    }
+    let valid = match oid {
+        16 | 2950 => input.oid == oid,
+        25 => matches!(input.oid, 0 | 16 | 20 | 21 | 23 | 25 | 705 | 1043 | 2950),
+        1043 => matches!(input.oid, 0 | 25 | 1043 | 705),
+        _ => matches!(input.oid, 0 | 20 | 21 | 23 | 1700),
     };
     ensure!(valid, "scalar cast from OID {} to OID {oid} is not available in-engine", input.oid);
     Ok(Typed { oid, value: Value::Cast { input: Box::new(input), typmod } })

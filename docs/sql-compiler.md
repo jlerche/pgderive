@@ -189,6 +189,11 @@ separator, an all-NULL value list returns the empty string, as does
 `concat` with all-NULL arguments. Cast varchar and other values to text
 before passing them.
 
+Explicit casts to `text` support `smallint`, `integer`, `bigint`,
+`boolean`, and `uuid`. Integers use decimal digits with a leading minus
+for negative values. Boolean casts produce `true` or `false`, and UUID
+casts produce lowercase, hyphenated text. NULL inputs yield NULL.
+
 Integral bitwise operators support `&`, `|`, `#`, `~`, `<<`, and `>>`.
 Binary bitwise operators promote mixed integer widths. Shifts keep the left
 operand's width and take an integer count. On the qualified PostgreSQL 17

@@ -100,7 +100,6 @@ fn unsupported_signatures_and_function_errors_are_explicit() {
         "reverse(1)",
         "COALESCE('a',1)",
         "'a'+1",
-        "1::text",
     ] {
         assert!(expression(sql).is_err(), "{sql}");
     }
@@ -223,6 +222,51 @@ fn sign_and_div_preserve_numeric_types_scale_and_error_boundaries() -> Result<()
         assert!(expression(sql)?.evaluate(&row).is_err(), "{sql}");
     }
     assert_eq!(expression("div(NULL, 1/a)")?.evaluate(&row)?, None);
+    Ok(())
+}
+
+#[test]
+fn native_casts_to_text_match_postgres_formatting() -> Result<()> {
+    let row = [("a".into(), Some("0".into())), ("b".into(), None)].into();
+    for (sql, expected) in [
+        ("'-32768'::smallint::text", Some("-32768")),
+        ("'-2147483648'::integer::text", Some("-2147483648")),
+        ("'-9223372036854775808'::bigint::text", Some("-9223372036854775808")),
+        ("(a + 1)::text", Some("1")),
+        ("(a = 0)::text", Some("true")),
+        ("CAST(false AS boolean)::text", Some("false")),
+        ("' ye '::boolean::text", Some("true")),
+        (r"E'\x0bTrUe\x0b'::boolean::text", Some("true")),
+        (
+            "'{A0EEBC999C0B4EF8BB6D6BB9BD380A11}'::uuid::uuid::text",
+            Some("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"),
+        ),
+        ("b::text", None),
+        ("NULL::smallint::text", None),
+        ("NULL::bigint::text", None),
+        ("NULL::boolean::text", None),
+        ("NULL::uuid::text", None),
+        ("concat_ws(':', a::text, b::text, true::text)", Some("0:true")),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), 25, "{sql}");
+        assert_eq!(value.collation(&|_| Ok(0))?, 100, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    assert!(expression("(1/a)::text")?.evaluate(&row).is_err());
+    assert_eq!(expression("'on'::boolean")?.evaluate(&row)?.as_deref(), Some("t"));
+    for sql in [
+        "1.25::text",
+        "'2026-01-01'::date::text",
+        "1::varchar",
+        "'true'::text::boolean",
+        "'bad'::boolean",
+        "'o'::boolean",
+        "'00000000-0000-0000-0000-000000000000'::text::uuid",
+        "'bad'::uuid",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
     Ok(())
 }
 

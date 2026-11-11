@@ -77,6 +77,8 @@ fn cast_cost(input: u32, output: u32, typmod: bool) -> u64 {
         0
     } else if input == output {
         if typmod { OPERATOR_COST } else { 0 }
+    } else if (input, output) == (16, 25) {
+        OPERATOR_COST
     } else if text(input) || text(output) || typmod {
         2 * OPERATOR_COST
     } else {

@@ -172,6 +172,7 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
         serde_json::from_value::<Vec<Option<Cell>>>(serde_json::to_value(value)?)?,
         projection.row(&row)?
     );
+    compile("SELECT id FROM source.auction WHERE id::text='1'", &native)?;
     for sql in [
         "SELECT * FROM source.auction",
         "SELECT id FROM source.auction LIMIT -1",
@@ -184,7 +185,7 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
         "SELECT id FROM source.auction JOIN source.bid ON auction.id=bid.auction",
         "SELECT id FROM source.auction WHERE random()>0",
         "SELECT id FROM source.auction WHERE category<'x'",
-        "SELECT id FROM source.auction WHERE id::text='1'",
+        "SELECT id FROM source.auction WHERE (id + 0.0)::text='1'",
     ] {
         assert!(compile(sql, &native).is_err(), "accepted {sql}");
     }

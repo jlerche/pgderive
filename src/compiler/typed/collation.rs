@@ -15,7 +15,7 @@ impl Typed {
                 ensure!(collation != 0, "unresolved text expression collation");
                 Ok(collation)
             }
-            Value::Cast { input, .. } if input.oid == 0 => Ok(100),
+            Value::Cast { input, .. } if !matches!(input.oid, 25 | 1043 | 705) => Ok(100),
             Value::Cast { input, .. } => input.collation(resolve),
             Value::Call(call) => collations(&call.arguments, resolve),
             Value::Coalesce(values) => collations(values, resolve),
