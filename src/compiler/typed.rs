@@ -274,13 +274,7 @@ pub(super) fn computed(
     computed: &mut Vec<super::scalar::Computed>,
     scope: Option<usize>,
 ) -> Result<ColumnRef> {
-    use super::parser::{
-        expressions::{column, node},
-        scalar,
-    };
-    if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
-        return resolve(&column(value)?);
-    }
+    use super::parser::scalar;
     let mut typed = if scalar::is_bin(value)? {
         Typed::temporal(scalar::bin(value, resolve)?)
     } else {
@@ -296,7 +290,20 @@ pub(super) fn computed(
         ),
         "computed scalar requires supported native type"
     );
-    super::scalar::register(typed, computed, &format!("@typed_{scope:?}_"))
+    typed.projected_column(computed, &format!("@typed_{scope:?}_"))
+}
+
+impl Typed {
+    pub(super) fn projected_column(
+        self,
+        computed: &mut Vec<super::scalar::Computed>,
+        prefix: &str,
+    ) -> Result<ColumnRef> {
+        if let Value::Column(column) = self.value {
+            return Ok(column);
+        }
+        super::scalar::register(self, computed, prefix)
+    }
 }
 
 #[cfg(test)]
@@ -375,8 +382,8 @@ fn numeric_cast_input(
     if let NodeEnum::AConst(constant) = super::parser::expressions::node(value)?
         && let Some(pg_query::protobuf::a_const::Val::Sval(value)) = &constant.val
     {
-        crate::numeric::Numeric::parse_literal(&value.sval)?;
-        return Ok(Typed { oid: 1700, value: Value::Numeric(value.sval.clone()) });
+        let numeric = crate::numeric::Numeric::parse_literal(&value.sval)?;
+        return Ok(Typed { oid: 1700, value: Value::Numeric(numeric.text()) });
     }
     bind(value, resolve, depth)
 }

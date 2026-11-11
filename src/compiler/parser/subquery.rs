@@ -17,7 +17,7 @@ struct Rewrite<'a> {
     changed: bool,
     validation: Vec<Parsed>,
 }
-pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
+pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Parsed>> {
     let mut checked = select.clone();
     let mut rewrite = Rewrite {
         select,
@@ -48,7 +48,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     }
     checked.distinct_clause.clear();
     super::validate_query(&checked)?;
-    let mut parsed = super::partition::parse(&checked)?;
+    let mut parsed = super::partition::parse(&checked, visible)?;
     if let Some(tree) = rewrite.tree {
         parsed.source = super::partition::Source::Join(tree);
     }

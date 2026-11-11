@@ -104,6 +104,10 @@ pub(super) fn cast(
     } else {
         super::bind(argument, resolve, depth + 1)?
     };
+    // PostgreSQL keeps the original expression when both its type and modifier match.
+    if input.oid == oid && unchanged_modifier(&input, typmod) {
+        return Ok(input);
+    }
     if matches!(oid, 1082 | 1114 | 1184 | 1186) {
         return temporal_cast(input, oid, typmod);
     }
@@ -121,6 +125,13 @@ pub(super) fn cast(
     };
     ensure!(valid, "scalar cast from OID {} to OID {oid} is not available in-engine", input.oid);
     Ok(Typed { oid, value: Value::Cast { input: Box::new(input), typmod } })
+}
+
+fn unchanged_modifier(input: &Typed, typmod: Option<Modifier>) -> bool {
+    match &input.value {
+        Value::Column(column) => column.modifier == typmod.map(Modifier::encoded),
+        _ => typmod.is_none() && input.bound_modifier() == -1,
+    }
 }
 
 fn temporal_cast(input: Typed, oid: u32, typmod: Option<Modifier>) -> Result<Typed> {

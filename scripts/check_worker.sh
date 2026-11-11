@@ -96,6 +96,7 @@ natural-joins natural_join
 aggregate-inputs aggregate_inputs_compiler
 relational relational_compiler
 partition partition_compiler
+group-references group_references
 boolean-aggregates boolean_aggregate
 named-window named_window
 numeric numeric_compiler

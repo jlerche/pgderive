@@ -6,6 +6,7 @@ pub(in crate::compiler) struct Parsed {
     pub source: Source,
     pub expansion: Option<super::expansion::Series>,
     pub targets: Vec<Target>,
+    pub visible: usize,
     pub groups: Vec<super::scalar::Key>,
     pub predicate: Option<crate::compiler::syntax::Expr>,
     pub having: Option<crate::compiler::syntax::Expr>,
@@ -47,7 +48,7 @@ pub(in crate::compiler) struct Window {
     pub ranking: bool,
     pub peers: Option<bool>,
 }
-pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
+pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Parsed> {
     ensure!((1..=64).contains(&select.target_list.len()), "partition output count unsupported");
     let (source, expansion) = if select.from_clause.is_empty() {
         (Source::Unit, None)
@@ -69,16 +70,40 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
     let windows = windows::Definitions::new(&select.window_clause)?;
     let targets = targets_with_windows(select, &windows)?;
     windows.require_used()?;
-    let groups = select.group_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
+    let groups = select
+        .group_clause
+        .iter()
+        .map(|value| group_key(value, &targets[..visible]))
+        .collect::<Result<_>>()?;
     Ok(Parsed {
         source,
         expansion,
         targets,
+        visible,
         groups,
         predicate: crate::compiler::syntax::predicate(select.where_clause.as_deref())?,
         having: crate::compiler::syntax::predicate(select.having_clause.as_deref())?,
     })
 }
+fn group_key(value: &Node, visible: &[Target]) -> Result<super::scalar::Key> {
+    let NodeEnum::AConst(value) = node(value)? else {
+        return super::scalar::key(value);
+    };
+    let Some(pg::a_const::Val::Ival(value)) = &value.val else {
+        anyhow::bail!("GROUP BY constant requires an output ordinal");
+    };
+    let index = usize::try_from(value.ival)?.checked_sub(1).context("GROUP BY ordinal is zero")?;
+    group_target(visible.get(index).context("GROUP BY ordinal exceeds output width")?)
+}
+
+pub(in crate::compiler) fn group_target(target: &Target) -> Result<super::scalar::Key> {
+    let Value::Typed(value) = &target.value else {
+        anyhow::bail!("GROUP BY cannot reference an aggregate or window target");
+    };
+    // Bind the selected expression in the input scope.
+    Ok(super::scalar::Key::Typed(value.clone()))
+}
+
 pub(super) fn parse_targets(select: &pg::SelectStmt) -> Result<Vec<Target>> {
     targets_with_windows(select, &windows::Definitions::new(&select.window_clause)?)
 }

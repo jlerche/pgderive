@@ -20,7 +20,8 @@ pub(super) fn resolve_output(
         _ => anyhow::bail!("unknown derived qualifier"),
     };
     let mut candidates = columns.iter().filter(|column| column.label == *label);
-    let candidate = candidates.next().context("unknown derived column")?;
+    let candidate =
+        candidates.next().with_context(|| super::UnknownColumn("unknown derived column".into()))?;
     ensure!(candidates.next().is_none(), "ambiguous derived column");
     Ok(candidate.column.clone())
 }

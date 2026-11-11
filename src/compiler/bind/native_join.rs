@@ -226,9 +226,9 @@ impl Builder<'_> {
                 id: id.clone(),
                 input,
                 spec: crate::compiler::left_join::Spec {
-                    left: left.columns.iter().map(|value| value.value.clone()).collect(),
+                    left: physical_columns(&left.columns),
                     full: kind == Kind::Full,
-                    right: right.columns.iter().map(|value| value.value.clone()).collect(),
+                    right: physical_columns(&right.columns),
                     predicate: predicate.clone(),
                 },
             });
@@ -305,6 +305,15 @@ impl Builder<'_> {
         });
     }
 }
+fn physical_columns(columns: &[Column]) -> Vec<ColumnRef> {
+    // A merged USING name and its qualified original may expose the same field.
+    let mut seen = std::collections::BTreeSet::new();
+    columns
+        .iter()
+        .filter(|column| seen.insert(&column.value.name))
+        .map(|column| column.value.clone())
+        .collect()
+}
 fn resolve<'a>(name: &Name, columns: &'a [Column]) -> Result<&'a Column> {
     let mut matches = columns.iter().filter(|column| {
         Some(&column.label) == name.0.last()
@@ -317,7 +326,8 @@ fn resolve<'a>(name: &Name, columns: &'a [Column]) -> Result<&'a Column> {
                 _ => false,
             }
     });
-    let result = matches.next().context("unknown join-tree column")?;
+    let result =
+        matches.next().with_context(|| super::UnknownColumn("unknown join-tree column".into()))?;
     ensure!(matches.next().is_none(), "ambiguous join-tree column");
     Ok(result)
 }

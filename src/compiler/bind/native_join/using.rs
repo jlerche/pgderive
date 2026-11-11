@@ -3,7 +3,7 @@ use super::{Builder, Column, Edge, keys, resolve};
 use crate::compiler::{
     left_join::Kind,
     parser::{Name, native_join::JoinClause},
-    scalar, typed,
+    typed,
 };
 use anyhow::{Result, ensure};
 use pg_query::Node as Ast;
@@ -106,7 +106,7 @@ impl Builder<'_> {
                     pair.right.collation
                 })
             })?;
-            let value = scalar::register(expression, &mut computed, &format!("@{id}_using_"))?;
+            let value = expression.projected_column(&mut computed, &format!("@{id}_using_"))?;
             for column in &mut edge.columns {
                 if column.label == name {
                     column.unqualified = false;

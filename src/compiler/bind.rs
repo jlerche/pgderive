@@ -15,6 +15,16 @@ use super::{
 };
 use crate::source::{Contract, Relation};
 use anyhow::{Context, Result, ensure};
+#[derive(Debug)]
+struct UnknownColumn(String);
+
+impl std::fmt::Display for UnknownColumn {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+impl std::error::Error for UnknownColumn {}
+
 struct Scope<'a> {
     table: Table,
     relation: &'a Relation,
@@ -92,5 +102,7 @@ fn resolve(name: &Name, scopes: &[Scope<'_>]) -> Result<ColumnRef> {
         }
     }
     ensure!(matches.len() <= 1, "SQL resolve: ambiguous column {}", name.0.join("."));
-    matches.pop().with_context(|| format!("SQL resolve: unknown column {}", name.0.join(".")))
+    matches
+        .pop()
+        .with_context(|| UnknownColumn(format!("SQL resolve: unknown column {}", name.0.join("."))))
 }

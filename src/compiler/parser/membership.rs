@@ -7,7 +7,7 @@ use super::{
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
-pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
+pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Parsed>> {
     let distinct = !select.distinct_clause.is_empty();
     if distinct {
         ensure!(
@@ -25,7 +25,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     if existence.is_some() {
         checked.where_clause = None;
     }
-    let mut parsed = super::partition::parse(&checked)?;
+    let mut parsed = super::partition::parse(&checked, visible)?;
     if let Some((query, anti)) = existence {
         parsed.source = super::partition::Source::Join(existence_source(select, query, anti)?);
     }

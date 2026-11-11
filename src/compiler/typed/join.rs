@@ -17,6 +17,9 @@ impl Typed {
         let left_var = columns.0.oid == oid && modifiers.0 == common;
         let right_var = columns.1.oid == oid && modifiers.1 == common;
         let convert = |column: ColumnRef, modifier| -> Result<Self> {
+            if column.oid == oid && modifier == common {
+                return Ok(Self::column(column));
+            }
             let input = Self::set_cast(column, oid, Some(modifier))?;
             Ok(if modifier == common {
                 input

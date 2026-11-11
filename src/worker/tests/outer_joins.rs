@@ -309,3 +309,25 @@ async fn residual_join_skips_pairs_present_in_neither_state() -> Result<()> {
     assert!(prepared.output().batch.iter().all(|(_, weight)| *weight == -1));
     Ok(())
 }
+
+#[tokio::test]
+async fn nested_using_field_is_null_extended_once() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT a.id,b.id AS inner_id FROM source.auction a
+         LEFT JOIN (source.bid b JOIN source.bid c USING(id)) ON a.id=b.id",
+        &native,
+    )?;
+    let ir = compiled.relational();
+    let query = relational::build(&native, &compiled, &settings())?;
+    let input =
+        batch(vec![("auction", row(&[("id", Some("1")), ("category", None), ("other", None)]), 1)]);
+    let prepared = query.prepare(relational::inputs(&input, ir, 1)?).await?;
+    let columns = &ir.output.columns;
+    let expected = row(&[(&columns[0].column.name, Some("1")), (&columns[1].column.name, None)]);
+    assert_eq!(
+        prepared.output().batch,
+        Batch::from_updates([((relational::Key::new(), expected), 1)])?
+    );
+    Ok(())
+}

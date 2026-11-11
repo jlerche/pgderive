@@ -1,5 +1,5 @@
 //! SQL sort scope, with hidden targets resolved through the ordinary target binder.
-use super::{expressions::column, node, partition, query};
+use super::{expressions::column, node, partition, query_visible};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
@@ -54,7 +54,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     plain.limit_offset = None;
     plain.limit_option = i32::from(pg::LimitOption::Default);
     Ok(Some(Parsed {
-        inner: Box::new(query(&plain)?),
+        inner: Box::new(query_visible(&plain, visible)?),
         visible,
         distinct: !plain.distinct_clause.is_empty(),
         order,

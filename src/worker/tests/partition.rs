@@ -555,3 +555,97 @@ fn boolean_aggregates_reject_non_boolean_overloads_and_bad_modifiers() {
         assert!(compile(sql, &native).is_err(), "{sql}");
     }
 }
+
+#[test]
+fn group_by_output_references_bind_like_explicit_expressions() -> Result<()> {
+    let native = contract();
+    for (prefix, explicit) in [
+        ("SELECT auction AS g,COUNT(*) AS n FROM source.bid", "auction"),
+        ("SELECT b.auction+1 AS g,COUNT(*) AS n FROM source.bid b", "b.auction+1"),
+        (
+            "SELECT a.id AS g,COUNT(*) AS n FROM source.auction a JOIN source.bid b ON a.id=b.auction",
+            "a.id",
+        ),
+        (
+            "SELECT q.auction AS g,COUNT(*) AS n FROM (SELECT auction FROM source.bid) q",
+            "q.auction",
+        ),
+        ("SELECT 40+2 AS g,COUNT(*) AS n", "40+2"),
+    ] {
+        let alias = compile(&format!("{prefix} GROUP BY g"), &native)?;
+        let ordinal = compile(&format!("{prefix} GROUP BY 1"), &native)?;
+        assert_eq!(serde_json::to_vec(&alias)?, serde_json::to_vec(&ordinal)?);
+        let expression = compile(&format!("{prefix} GROUP BY {explicit}"), &native)?;
+        assert_eq!(serde_json::to_vec(&alias)?, serde_json::to_vec(&expression)?);
+    }
+    compile("SELECT b.* FROM source.bid b GROUP BY 1,2,3 ORDER BY 2", &native)?;
+    compile(
+        "SELECT a.id+1 AS g,COUNT(*) AS n FROM source.auction a
+         GROUP BY g HAVING a.id+1 > 1 ORDER BY a.id+1",
+        &native,
+    )?;
+    compile(
+        "SELECT q.n FROM (
+            SELECT b.auction AS g,auction AS g,b.auction::integer AS g,COUNT(*) AS n FROM source.bid b GROUP BY g
+        ) q",
+        &native,
+    )?;
+    compile(
+        "SELECT q.n FROM (
+            SELECT 1.00 AS g,'01.00'::numeric AS g,COUNT(*) AS n FROM source.bid GROUP BY g
+        ) q",
+        &native,
+    )?;
+    compile(
+        "SELECT q.n FROM (
+            SELECT a.id AS g,id AS g,COUNT(*) AS n
+            FROM source.auction a JOIN source.bid b USING (id) GROUP BY g
+        ) q",
+        &native,
+    )?;
+    let mut varchar = native;
+    let category = &mut varchar.relations[0].columns[1];
+    category.oid = 1043;
+    category.modifier = 11;
+    category.collation = 950;
+    compile(
+        "SELECT q.n FROM (
+            SELECT category AS g,category::varchar(7) AS g,COUNT(*) AS n
+            FROM source.auction GROUP BY g
+        ) q",
+        &varchar,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn group_by_respects_input_precedence_and_visible_target_bounds() -> Result<()> {
+    let native = contract();
+    let prefix = "SELECT auction AS g,COUNT(*) AS auction FROM source.bid b";
+    let unqualified = compile(&format!("{prefix} GROUP BY auction"), &native)?;
+    let qualified = compile(&format!("{prefix} GROUP BY b.auction"), &native)?;
+    assert_eq!(serde_json::to_vec(&unqualified)?, serde_json::to_vec(&qualified)?);
+    for sql in [
+        "SELECT price AS auction,COUNT(*) FROM source.bid GROUP BY auction",
+        "SELECT a.id AS id,COUNT(*) FROM source.auction a JOIN source.bid b ON a.id=b.auction GROUP BY id",
+        "SELECT q.auction AS k,COUNT(*) FROM (SELECT auction,id AS k,price AS k FROM source.bid) q GROUP BY k",
+        "SELECT auction AS g,price AS g,COUNT(*) FROM source.bid GROUP BY g",
+        "SELECT 1.0 AS g,1.00 AS g,COUNT(*) FROM source.bid GROUP BY g",
+        "SELECT auction AS g,COUNT(*) FROM source.bid GROUP BY g+1",
+        "SELECT auction AS g,COUNT(*) FROM source.bid b GROUP BY b.g",
+        "SELECT COUNT(*) AS n FROM source.bid GROUP BY n",
+        "SELECT COUNT(*) FROM source.bid GROUP BY 1",
+        "SELECT ROW_NUMBER() OVER(ORDER BY id) AS w FROM source.bid GROUP BY w",
+        "SELECT ROW_NUMBER() OVER(ORDER BY id) FROM source.bid GROUP BY 1",
+        "SELECT COUNT(*) AS n FROM source.bid GROUP BY 2 ORDER BY price",
+        "SELECT COUNT(*) AS n FROM source.bid GROUP BY abs ORDER BY abs(price)",
+        "SELECT price FROM source.bid GROUP BY 0",
+        "SELECT price FROM source.bid GROUP BY -1",
+        "SELECT COUNT(*) FROM source.bid GROUP BY NULL",
+        "SELECT COUNT(*) FROM source.bid GROUP BY 'price'",
+        "SELECT COUNT(*) FROM source.bid GROUP BY 1.0",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}

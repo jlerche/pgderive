@@ -97,11 +97,12 @@ fn contains_aggregate(value: &Node) -> bool {
 }
 pub(super) fn build(
     body: &Body,
+    groups: Vec<Key>,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     context: Stage<'_>,
 ) -> Result<Compiled> {
     let mut computed = Vec::new();
-    let keys = super::keys(body.groups.clone(), resolve, &mut computed, context.scalar_scope)?;
+    let keys = super::keys(groups.clone(), resolve, &mut computed, context.scalar_scope)?;
     let mut rewrite =
         Rewrite { resolve, keys, scope: context.scalar_scope, aggregates: Vec::new(), visited: 0 };
     let targets = rewrite.targets(&body.targets)?;
@@ -118,9 +119,8 @@ pub(super) fn build(
             navigation: None,
         });
     }
-    let key_count = body.groups.len();
-    let mut group_targets = body
-        .groups
+    let key_count = groups.len();
+    let mut group_targets = groups
         .iter()
         .enumerate()
         .map(|(index, key)| Target {
@@ -136,7 +136,7 @@ pub(super) fn build(
     // Suppress this staging pass only: its targets are already the aggregate stage.
     let contract = context.contract;
     let boundary = context.sources.is_empty().then_some(context.occurrence_keys);
-    let mut compiled = super::build_direct(&group, resolve, context)?;
+    let mut compiled = super::build_direct(&group, groups, resolve, context)?;
     let columns = compiled.relational.output.columns.clone();
     let post_resolve = |name: &Name| -> Result<ColumnRef> {
         if let [empty, field] = name.0.as_slice()
@@ -170,12 +170,22 @@ pub(super) fn build(
         compiled.relational.nodes.push(RelNode::Filter { id: "having".into(), input, predicate });
         compiled.relational.nodes.push(RelNode::Output { id, input: "having".into() });
     }
-    let post = Body { expansion: None, targets, groups: Vec::new(), predicate: None, having: None };
+    let post = post_projection(targets);
     let post_resolve: &Resolver<'_> = &post_resolve;
     let mut outer =
         super::composition::stage(&compiled.relational, &post, &post_resolve, contract, boundary)?;
     super::composition::compose(&mut compiled.relational, &mut outer)?;
     Ok(compiled)
+}
+const fn post_projection(targets: Vec<Target>) -> Body {
+    Body {
+        expansion: None,
+        visible: targets.len(),
+        targets,
+        groups: Vec::new(),
+        predicate: None,
+        having: None,
+    }
 }
 impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
     fn targets(&mut self, targets: &[Target]) -> Result<Vec<Target>> {

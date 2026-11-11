@@ -154,6 +154,10 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
     Ok(())
 }
 fn query(select: &pg::SelectStmt) -> Result<Parsed> {
+    query_visible(select, select.target_list.len())
+}
+
+fn query_visible(select: &pg::SelectStmt, visible: usize) -> Result<Parsed> {
     if let Some(parsed) = setop::parse(select)? {
         return Ok(parsed);
     }
@@ -166,17 +170,17 @@ fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     if let Some(parsed) = ordering::parse(select)? {
         return Ok(Parsed::Ordered(parsed));
     }
-    if let Some(parsed) = subquery::parse(select)? {
+    if let Some(parsed) = subquery::parse(select, visible)? {
         return Ok(parsed);
     }
-    if let Some(parsed) = membership::parse(select)? {
+    if let Some(parsed) = membership::parse(select, visible)? {
         return Ok(parsed);
     }
     validate_query(select)?;
     if let Some(lookup) = lookup::parse(select)? {
         return Ok(Parsed::Lookup(lookup));
     }
-    partition::parse(select).map(Parsed::Partition)
+    partition::parse(select, visible).map(Parsed::Partition)
 }
 
 fn table(value: &Node) -> Result<Table> {

@@ -82,7 +82,7 @@ Table aliases and output aliases support AS or an implicit alias. Output aliases
 in grouped queries are presentation-only: the owned destination still uses group_key, row_count,
 and total, in that fixed order. group_key is JSONB containing the canonical source
 text representation (or JSON null), even for integral/boolean/UUID groups; it is
-not a native SQL output-column codec. Aliases are not visible in GROUP BY/WHERE.
+not a native SQL output-column codec. Output aliases are not visible in WHERE.
 Columns may be unqualified when unique, table-qualified, or schema.table-qualified
 when the table has no alias. An alias hides the original table name. Ambiguous
 columns and duplicate exposed table names are errors. PostgreSQL 17.7 determines
@@ -111,6 +111,16 @@ Administrative metadata table installation may precede compilation; it does not
 register a query. Resolution uses the explicit frozen publication catalog, not
 search_path or live SQL name interpolation. ORDER BY and LIMIT follow the
 [ordering contract](ordering.md).
+
+## GROUP BY names and positions
+
+Supported GROUP BY scopes accept a one-based select-list ordinal or a bare
+output label. A bare name resolves against the current input first. An
+ambiguous input name is an error. When no input column matches, duplicate
+output labels are accepted only if their bound expressions agree. Qualified
+names and names inside GROUP BY expressions resolve in the input scope.
+Ordinals count expanded wildcard columns and exclude hidden ORDER BY targets.
+Aggregate and window targets cannot be grouping keys.
 
 ## Single-source projection/filter subset
 

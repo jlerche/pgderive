@@ -12,6 +12,7 @@ use anyhow::{Context, Result, ensure};
 mod argument;
 pub(in crate::compiler::bind) mod composition;
 mod distinct;
+mod grouping;
 mod having;
 mod ordered;
 mod prefix;
@@ -19,6 +20,7 @@ mod prefix;
 struct Body {
     expansion: Option<crate::compiler::parser::expansion::Series>,
     targets: Vec<syntax::Target>,
+    visible: usize,
     groups: Vec<crate::compiler::parser::scalar::Key>,
     predicate: Option<crate::compiler::syntax::Expr>,
     having: Option<crate::compiler::syntax::Expr>,
@@ -33,8 +35,8 @@ struct Stage<'a> {
     scalar_scope: Option<usize>,
 }
 pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compiled> {
-    let syntax::Parsed { source, expansion, targets, groups, predicate, having } = parsed;
-    let body = Body { expansion, targets, groups, predicate, having };
+    let syntax::Parsed { source, expansion, targets, visible, groups, predicate, having } = parsed;
+    let body = Body { expansion, targets, visible, groups, predicate, having };
     match source {
         syntax::Source::Unit => {
             let relation = contract
@@ -44,7 +46,7 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
             let facts = crate::compiler::properties::Analysis::source_relation(relation, 0)?;
             build(
                 &body,
-                &|_| anyhow::bail!("column reference requires FROM"),
+                &|_| Err(super::UnknownColumn("column reference requires FROM".into()).into()),
                 Stage {
                     contract,
                     unit: true,
@@ -110,18 +112,20 @@ fn build(
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     context: Stage<'_>,
 ) -> Result<Compiled> {
+    let groups = grouping::resolve(parsed, resolve, context.scalar_scope)?;
     if having::required(parsed) {
-        return having::build(parsed, resolve, context);
+        return having::build(parsed, groups, resolve, context);
     }
-    build_direct(parsed, resolve, context)
+    build_direct(parsed, groups, resolve, context)
 }
 fn build_direct(
     parsed: &Body,
+    groups: Vec<crate::compiler::parser::scalar::Key>,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
     context: Stage<'_>,
 ) -> Result<Compiled> {
     let mut computed = Vec::new();
-    let group_keys = keys(parsed.groups.clone(), resolve, &mut computed, context.scalar_scope)?;
+    let group_keys = keys(groups, resolve, &mut computed, context.scalar_scope)?;
     let mut state = Targets {
         mode: None,
         keys: group_keys.clone(),
