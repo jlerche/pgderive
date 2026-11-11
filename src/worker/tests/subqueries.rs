@@ -204,6 +204,7 @@ fn subquery_admission_scopes_contextual_literals_and_lazy_boundaries() -> Result
         "SELECT NULL+(SELECT SUM(10/price) FROM source.bid) FROM source.auction",
         "SELECT (SELECT SUM((SELECT SUM(price) FROM source.bid)) FROM source.bid) FROM source.auction",
         "SELECT NULL=(SELECT SUM(10/price) FROM source.bid) FROM source.auction",
+        r#"SELECT NULL COLLATE "C" LIKE (SELECT SUM(10/price)::text FROM source.bid) FROM source.auction"#,
         "SELECT false AND (SELECT COUNT(*) FROM source.bid)>0 FROM source.auction",
         "SELECT (SELECT price FROM source.bid) FROM source.auction",
         "SELECT (SELECT MAX(price) FROM source.bid GROUP BY auction) FROM source.auction",

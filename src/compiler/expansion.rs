@@ -18,7 +18,14 @@ pub(in crate::compiler) fn resolve(
         return native;
     }
     ensure!(native.is_err(), "SQL resolve: ambiguous series column");
-    Ok(ColumnRef { name: FIELD.into(), right: false, oid: 23, nullable: false, modifier: None })
+    Ok(ColumnRef {
+        name: FIELD.into(),
+        right: false,
+        oid: 23,
+        nullable: false,
+        collation: 0,
+        modifier: None,
+    })
 }
 pub(in crate::compiler) fn attach(
     nodes: &mut Vec<Node>,

@@ -23,6 +23,7 @@ impl Typed {
                     .saturating_add(argument.cost())
                     .saturating_add(promotion(argument, call.input_oid))
             }),
+            Value::Collate { input, .. } => input.cost(),
             Value::Cast { input, typmod } => {
                 let modifies =
                     typmod.is_some_and(|modifier| modifier.requires_coercion(input, self.oid));

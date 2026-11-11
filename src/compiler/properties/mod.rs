@@ -99,6 +99,7 @@ impl Analysis {
                         name,
                         oid: column.oid,
                         nullable: column.nullable,
+                        collation: column.collation,
                         modifier: Some(column.modifier).filter(|modifier| *modifier >= 0),
                     },
                     modifier: column.modifier,

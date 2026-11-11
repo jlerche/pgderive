@@ -54,6 +54,7 @@ pub(super) fn evaluate(
         Builtin::Ltrim | Builtin::Rtrim | Builtin::Btrim => {
             Ok(trim(first, arguments.get(1).map_or(" ", String::as_str), operation))
         }
+        Builtin::LikeEscape => crate::compiler::expression::like::escape(first, second()?),
         Builtin::Replace => replace(first, second()?, third()?),
         Builtin::Translate => Ok(translate(first, second()?, third()?)),
         Builtin::Strpos => first

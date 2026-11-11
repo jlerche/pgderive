@@ -27,6 +27,7 @@ fn projection_and_predicate_bind_the_same_scalar_once() -> Result<()> {
             name,
             right: false,
             nullable: true,
+            collation: 0,
             modifier: None,
         })
     };

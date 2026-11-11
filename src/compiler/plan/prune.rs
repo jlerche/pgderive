@@ -389,6 +389,7 @@ mod tests {
             name: "computed_right".into(),
             oid: 16,
             nullable: true,
+            collation: 0,
             modifier: None,
         };
         let mut join = Node::LeftJoin {

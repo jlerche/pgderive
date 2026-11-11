@@ -76,32 +76,15 @@ pub(super) fn bind(parsed: SetOperation, contract: &Contract) -> Result<Compiled
         .zip(&right.output.columns)
         .enumerate()
         .map(|(index, (a, b))| {
-            let oid = common(
-                &a.column,
-                &b.column,
+            output_column(
+                index,
+                a,
+                b,
                 (
                     left_unknown.get(index).is_some_and(Option::is_some),
                     right_unknown.get(index).is_some_and(Option::is_some),
                 ),
-            )?;
-            ensure!(
-                matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
-                "unsupported set operation native type"
-            );
-            Ok(OutputColumn {
-                label: a.label.clone(),
-                column: ColumnRef {
-                    name: format!("@union_{index}"),
-                    oid,
-                    right: false,
-                    nullable: a.column.nullable || b.column.nullable,
-                    modifier: a.column.modifier.filter(|_| {
-                        a.column.oid == oid
-                            && b.column.oid == oid
-                            && a.column.modifier == b.column.modifier
-                    }),
-                },
-            })
+            )
         })
         .collect::<Result<Vec<_>>>()?;
     let facts = properties(&left, &right, contract)?;
@@ -135,6 +118,36 @@ pub(super) fn bind(parsed: SetOperation, contract: &Contract) -> Result<Compiled
         contract,
     )
 }
+fn output_column(
+    index: usize,
+    a: &OutputColumn,
+    b: &OutputColumn,
+    unknown: (bool, bool),
+) -> Result<OutputColumn> {
+    let oid = common(&a.column, &b.column, unknown)?;
+    ensure!(
+        matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
+        "unsupported set operation native type"
+    );
+    Ok(OutputColumn {
+        label: a.label.clone(),
+        column: ColumnRef {
+            name: format!("@union_{index}"),
+            oid,
+            right: false,
+            nullable: a.column.nullable || b.column.nullable,
+            collation: super::super::typed::collation::common(
+                a.column.collation,
+                b.column.collation,
+            )
+            .unwrap_or(0),
+            modifier: a.column.modifier.filter(|_| {
+                a.column.oid == oid && b.column.oid == oid && a.column.modifier == b.column.modifier
+            }),
+        },
+    })
+}
+
 fn align(
     ir: &mut Relational,
     columns: &[OutputColumn],

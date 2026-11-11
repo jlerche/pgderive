@@ -75,6 +75,34 @@ pub(super) fn bind(
     });
     Ok(Typed { oid: signature.result, value })
 }
+pub(in crate::compiler) fn like_pattern(
+    value: &pg_query::Node,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+) -> Result<Typed> {
+    use crate::compiler::parser::expressions::{names, node};
+    use pg_query::NodeEnum;
+    if let NodeEnum::FuncCall(call) = node(value)?
+        && names(&call.funcname)?.0 == ["pg_catalog", "like_escape"]
+    {
+        crate::compiler::parser::scalar::validate_call(call)?;
+        ensure!(call.args.len() == 2, "LIKE ESCAPE requires two arguments");
+        let arguments = call
+            .args
+            .iter()
+            .map(|value| super::operand(value, resolve)?.coerce(25))
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(Typed {
+            oid: 25,
+            value: Value::Call(Call {
+                operation: registry::Builtin::LikeEscape,
+                input_oid: 25,
+                arguments,
+            }),
+        });
+    }
+    super::operand(value, resolve)?.coerce(25)
+}
+
 fn bind_arguments(
     function: &pg::FuncCall,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,

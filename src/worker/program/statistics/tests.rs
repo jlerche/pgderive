@@ -20,6 +20,7 @@ fn spec(function: Function, oid: u32) -> Partition {
                 right: false,
                 oid,
                 nullable: true,
+                collation: 0,
                 modifier: None,
             }),
             filter: None,

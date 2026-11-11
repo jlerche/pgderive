@@ -123,6 +123,7 @@ pub(super) fn children(value: &Node) -> Vec<&Node> {
         Some(NodeEnum::CoalesceExpr(value)) => value.args.iter().collect(),
         Some(NodeEnum::MinMaxExpr(value)) => value.args.iter().collect(),
         Some(NodeEnum::TypeCast(value)) => value.arg.as_deref().into_iter().collect(),
+        Some(NodeEnum::CollateClause(value)) => value.arg.as_deref().into_iter().collect(),
         Some(NodeEnum::NullTest(value)) => value.arg.as_deref().into_iter().collect(),
         Some(NodeEnum::BooleanTest(value)) => value.arg.as_deref().into_iter().collect(),
         Some(NodeEnum::CaseExpr(value)) => value

@@ -7,7 +7,14 @@ use anyhow::{Context, Result};
 use std::cmp::Ordering;
 fn column(name: &str, oid: u32, descending: bool, nulls_first: bool) -> Order {
     Order {
-        column: ColumnRef { name: name.into(), right: false, oid, nullable: true, modifier: None },
+        column: ColumnRef {
+            name: name.into(),
+            right: false,
+            oid,
+            nullable: true,
+            collation: 0,
+            modifier: None,
+        },
         descending,
         nulls_first,
     }

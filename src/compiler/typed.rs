@@ -13,6 +13,7 @@ mod cost;
 mod evaluate;
 mod fold;
 mod functions;
+pub(super) use functions::like_pattern;
 mod join;
 mod minmax;
 mod nullif;
@@ -44,6 +45,7 @@ enum Value {
     Temporal(super::scalar::Temporal),
     Call(functions::Call),
     Cast { input: Box<Typed>, typmod: Option<types::Modifier> },
+    Collate { input: Box<Typed>, collation: u32 },
     Binary { operation: Arithmetic, left: Box<Typed>, right: Box<Typed> },
     Coalesce(Vec<Typed>),
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
@@ -63,7 +65,7 @@ impl Typed {
             | Value::Encoded(_)
             | Value::Interval(_) => true,
             Value::Call(call) => call.is_constant(),
-            Value::Cast { input, .. } => input.is_constant(),
+            Value::Cast { input, .. } | Value::Collate { input, .. } => input.is_constant(),
             Value::Binary { left, right, .. }
             | Value::NullIf { left, right }
             | Value::Concat { left, right } => left.is_constant() && right.is_constant(),
@@ -121,6 +123,7 @@ pub(super) fn bind(
         }
         NodeEnum::AConst(constant) => literal(constant),
         NodeEnum::TypeCast(cast) => types::cast(cast, resolve, depth),
+        NodeEnum::CollateClause(clause) => collation::bind(clause, resolve, depth),
         NodeEnum::BoolExpr(_) | NodeEnum::NullTest(_) | NodeEnum::BooleanTest(_) => {
             boolean(value, resolve)
         }
@@ -128,6 +131,7 @@ pub(super) fn bind(
             if expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprIn)
                 || super::parser::expressions::distinct_kind(expression.kind).is_some()
                 || super::parser::expressions::between_kind(expression.kind).is_some()
+                || super::expression::like::is_like(expression)
                 || super::expression::is_comparison(expression)? =>
         {
             boolean(value, resolve)
@@ -345,7 +349,7 @@ impl Typed {
             Value::Encoded(value) => value.is_none(),
             Value::Temporal(value) => value.input.nullable,
             Value::Call(call) => call.nullable(),
-            Value::Cast { input, .. } => input.nullable(),
+            Value::Cast { input, .. } | Value::Collate { input, .. } => input.nullable(),
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.nullable() || right.nullable()
             }

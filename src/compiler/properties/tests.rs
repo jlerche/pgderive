@@ -102,7 +102,14 @@ fn positional_order_can_use_either_proven_one_to_one_key() -> Result<()> {
     Ok(())
 }
 fn reference(name: &str, oid: u32) -> ColumnRef {
-    ColumnRef { name: name.into(), right: false, oid, nullable: false, modifier: None }
+    ColumnRef {
+        name: name.into(),
+        right: false,
+        oid,
+        nullable: false,
+        collation: 0,
+        modifier: None,
+    }
 }
 #[test]
 fn forked_source_lineage_is_not_a_join_value_equivalence() -> Result<()> {

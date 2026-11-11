@@ -199,6 +199,15 @@ Unicode characters, preserve collation, and retain the declared length in
 the result type. Shorter strings and NULLs are preserved. These casts do
 not change assignment coercion.
 
+`LIKE` and `NOT LIKE` match text and varchar under the built-in deterministic
+`C` and `POSIX` collations. A column declaration or explicit `COLLATE` clause
+can supply that collation. Matching is case-sensitive over the whole string.
+`%` matches zero or more characters and `_` matches one Unicode character.
+Backslash is the default escape. `ESCAPE` accepts one character or the empty
+string to disable escaping. NULL operands, including a NULL escape, yield NULL.
+Patterns are limited to 16 MiB before and after escape normalization.
+Matching allows up to 16,777,216 steps and 128 nested wildcard searches.
+
 Integral bitwise operators support `&`, `|`, `#`, `~`, `<<`, and `>>`.
 Binary bitwise operators promote mixed integer widths. Shifts keep the left
 operand's width and take an integer count. On the qualified PostgreSQL 17

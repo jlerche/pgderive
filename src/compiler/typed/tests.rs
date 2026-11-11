@@ -24,6 +24,7 @@ pub(super) fn expression(sql: &str) -> Result<Typed> {
                 right: false,
                 oid: 23,
                 nullable: true,
+                collation: 0,
                 modifier: None,
             })
         },
@@ -88,6 +89,7 @@ fn typed_predicates_preserve_null_unknown_and_width_errors() -> Result<()> {
                 right: false,
                 oid: 23,
                 nullable: true,
+                collation: 0,
                 modifier: None,
             })
         })?;
@@ -117,6 +119,9 @@ fn exact_numeric_computation_preserves_scale_and_special_values() -> Result<()> 
 
 #[path = "tests/casts.rs"]
 mod casts;
+
+#[path = "tests/like.rs"]
+mod like;
 
 #[path = "tests/functions.rs"]
 mod functions;

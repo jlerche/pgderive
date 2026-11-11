@@ -52,6 +52,7 @@ WITH RECURSIVE native AS (
         'pg_catalog.jsonb_build_array("any")'::regprocedure,
         'pg_catalog.to_jsonb(anyelement)'::regprocedure,
         'pg_catalog.octet_length(text)'::regprocedure,
+        'pg_catalog.like_escape(text,text)'::regprocedure,
         'pg_catalog.sha256(bytea)'::regprocedure,
         'pg_catalog.convert_to(text,name)'::regprocedure,
         'pg_catalog.encode(bytea,text)'::regprocedure,

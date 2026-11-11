@@ -81,11 +81,15 @@ class ProjectionFixture(SqlFixture):
                          "(CASE WHEN a.enabled THEN a.cast_edge ELSE NULL::interval(4) END)"
                          "::interval(4) AS interval_edge,"
                          "NULL::varchar(3) AS empty_varchar,NULL::interval(2) AS empty_interval")
-            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise},{remainder},{text_joins},{casts},{modifiers} FROM ')
+            patterns = ("a.cast_text LIKE a.vartext::text || '%' AS matches_prefix,"
+                        "a.vartext NOT LIKE '_x' COLLATE pg_catalog.\"POSIX\" AS not_suffix,"
+                        "a.cast_text LIKE 'é🙂🙂_' ESCAPE CASE WHEN a.enabled THEN '🙂' END AS escaped_match")
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise},{remainder},{text_joins},{casts},{modifiers},{patterns} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
                                             "OR a.group_id IS NOT DISTINCT FROM 1) "
                                             "AND (a.category || '🙂') IS DISTINCT FROM 'excluded🙂' "
+                                            "AND (a.category IS NULL OR a.category COLLATE pg_catalog.\"C\" NOT LIKE 'excluded%') "
                                             "AND CASE a.id WHEN 0 THEN false ELSE true END "
                                             "AND NULLIF(GREATEST(a.id, 1), 7) IS NOT NULL "
                                             "AND a.id BETWEEN 1 AND 101 "
@@ -101,7 +105,8 @@ class ProjectionFixture(SqlFixture):
                                           'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric', 'low_bits', 'shifted', 'integral_remainder', 'numeric_remainder', 'combined', 'separated',
                                           'small_text', 'group_text', 'large_text', 'enabled_text', 'token_text',
                                           'limited_text', 'limited_vartext', 'rounded_stamp', 'rounded_instant',
-                                          'rounded_interval', 'interval_edge', 'empty_varchar', 'empty_interval'])
+                                          'rounded_interval', 'interval_edge', 'empty_varchar', 'empty_interval',
+                                          'matches_prefix', 'not_suffix', 'escaped_match'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -115,7 +120,7 @@ class ProjectionFixture(SqlFixture):
             qualifies = row['enabled'] is True or row['group_id'] is None
             if self.local:
                 qualifies = ((qualifies or row['group_id'] == 1)
-                             and row['category'] != 'excluded' and row['id'] != 7
+                             and not (row['category'] or '').startswith('excluded') and row['id'] != 7
                              and 1 <= row['id'] <= 101 and not 98 <= row['id'] <= 99)
             if row['id'] > 0 and qualifies:
                 values = tuple(row[key] for key in ('group_id', 'category', 'enabled', 'token', 'group_id'))
@@ -172,6 +177,10 @@ class ProjectionFixture(SqlFixture):
                     cast_text = row['cast_text']
                     values += (None if cast_text is None else cast_text[:2], None if text is None else text[:1])
                     values += cast_precision(row) + (None, None)
+                    values += (None if cast_text is None or text is None else cast_text.startswith(text),
+                               None if text is None else not (len(text) == 2 and text.endswith('x')),
+                               None if cast_text is None or active is not True else
+                               len(cast_text) == 3 and cast_text.startswith('é🙂'))
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
@@ -199,7 +208,7 @@ def qualify(output, command, local=False):
             f"UPDATE {fixture.name}.bid SET price=price+1 WHERE id=4",  # complete empty query delta tick
         ]
         if local:
-            changes[3] += (f"; UPDATE {fixture.name}.auction SET category='excluded' WHERE id=100"
+            changes[3] += (f"; UPDATE {fixture.name}.auction SET category='excluded suffix' WHERE id=100"
                            f"; UPDATE {fixture.name}.auction SET cast_stamp='294276-12-31 23:59:59.999999' WHERE id=2")
             changes[4] += f"; UPDATE {fixture.name}.auction SET cast_stamp='-infinity',cast_edge=NULL WHERE id=2"
             changes[5] += f"; UPDATE {fixture.name}.auction SET cast_stamp='294276-12-31 23:59:59.999999' WHERE id=2"

@@ -22,6 +22,7 @@ async fn cursor_left_join_does_only_linear_visits_and_new_matching_pairs() -> Re
             name: "r".into(),
             oid: 23,
             nullable: true,
+            collation: 0,
             modifier: None,
         }],
         predicate: None,

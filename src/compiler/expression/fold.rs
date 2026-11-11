@@ -15,6 +15,14 @@ impl Expr {
                     Self::Compare(op.clone(), left, right)
                 }
             }
+            Self::Like { input, pattern, negated } => {
+                let (input, pattern) = (input.fold()?, pattern.fold()?);
+                if input.constant_null() || pattern.constant_null() {
+                    Self::Value(Scalar::null_boolean())
+                } else {
+                    Self::Like { input, pattern, negated: *negated }
+                }
+            }
             Self::Distinct { left, right, negated } => {
                 Self::Distinct { left: left.fold()?, right: right.fold()?, negated: *negated }
             }

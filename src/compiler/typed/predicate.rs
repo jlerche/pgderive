@@ -84,6 +84,7 @@ impl Typed {
         match &self.value {
             Value::Column(column) => resolve(column).unwrap_or(-1),
             Value::Cast { typmod: Some(typmod), .. } => typmod.encoded(),
+            Value::Collate { input, .. } => input.modifier(resolve),
             Value::Coalesce(values) => self.common_modifier(values.iter(), resolve),
             Value::SimpleCase(case) => self.common_modifier(case.results(), resolve),
             Value::Case { branches, otherwise } => self.common_modifier(

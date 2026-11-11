@@ -1,4 +1,5 @@
 mod fold;
+pub(super) mod like;
 mod quals;
 mod visit;
 use super::{ColumnRef, parser::Name, syntax::Compare};
@@ -19,6 +20,7 @@ pub(super) enum Expr {
     Value(Scalar),
     Null(Scalar, bool),
     Compare(Compare, Scalar, Scalar),
+    Like { input: Scalar, pattern: Scalar, negated: bool },
     And(Vec<Self>),
     Or(Vec<Self>),
     Array { and: bool, values: Vec<Self> },
@@ -52,7 +54,7 @@ pub(in crate::compiler) fn bind_join(
     resolve: &Resolve<'_>,
     collation: &impl Fn(&ColumnRef) -> Result<u32>,
 ) -> Result<Expr> {
-    let text = |value: &Scalar| value.collation(collation);
+    let text = |value: &Scalar| value.join_collation(collation);
     bind_ast(value, resolve, &mut 0, 0, Some(&text))
 }
 type TextCollation<'a> = Option<&'a dyn Fn(&Scalar) -> Result<u32>>;
@@ -98,6 +100,7 @@ fn bind_ast(
             let value = operand(value, resolve)?.null_test()?;
             Ok(Expr::Null(value, not))
         }
+        NodeEnum::AExpr(value) if like::is_like(value) => like::bind(value, resolve),
         NodeEnum::AExpr(value) if value.kind == i32::from(pg::AExprKind::AexprIn) => {
             membership(value, resolve, text)
         }
@@ -386,6 +389,9 @@ impl Expr {
                 };
                 Ok(Some(distinct != *negated))
             }
+            Self::Like { input, pattern, negated } => {
+                like::evaluate(input, pattern, *negated, rows)
+            }
             Self::Not(value) => Ok(value.evaluate(rows)?.map(|value| !value)),
             Self::BooleanTest { input, expected, negated } => {
                 Ok(Some((input.evaluate(rows)? == *expected) != *negated))
@@ -523,7 +529,9 @@ impl Expr {
     pub(super) fn is_constant(&self) -> bool {
         match self {
             Self::Value(value) | Self::Null(value, _) => value.is_constant(),
-            Self::Compare(_, left, right) | Self::Distinct { left, right, .. } => {
+            Self::Compare(_, left, right)
+            | Self::Distinct { left, right, .. }
+            | Self::Like { input: left, pattern: right, .. } => {
                 left.is_constant() && right.is_constant()
             }
             Self::And(values)
@@ -549,9 +557,9 @@ impl Expr {
         }
         match self {
             Self::Value(value) | Self::Null(value, _) => value.cost(),
-            Self::Compare(_, left, right) | Self::Distinct { left, right, .. } => {
-                Scalar::operator_cost(left, right)
-            }
+            Self::Compare(_, left, right)
+            | Self::Distinct { left, right, .. }
+            | Self::Like { input: left, pattern: right, .. } => Scalar::operator_cost(left, right),
             Self::And(values) | Self::Or(values) | Self::Quals(values) => {
                 values.iter().map(Self::cost).sum()
             }

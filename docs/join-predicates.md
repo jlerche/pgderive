@@ -21,7 +21,8 @@ uses the existing Cartesian join key and work limits.
 
 Text predicate binding follows source and derived expression collation lineage.
 Conflicting collations reject. Text ordering requires C/POSIX byte order; no locale
-comparison approximation is introduced. Explicit COLLATE syntax remains rejected.
+comparison approximation is introduced. Ordinary join comparisons reject explicit
+`COLLATE`. `LIKE` predicates accept the built-in C and POSIX collations.
 Existing strictness, resource budgets and unsupported-overload checks still apply.
 
 Key maps retain complete source rows and evaluate on each input row that passes

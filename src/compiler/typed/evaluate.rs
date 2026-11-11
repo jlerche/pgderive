@@ -57,6 +57,7 @@ impl Typed {
             Value::Call(call) => {
                 call.evaluate(rows)?.map(|text| value::decode(self.oid, &text)).transpose()?
             }
+            Value::Collate { input, .. } => input.native_pair(rows)?,
             Value::Cast { input, typmod } => input
                 .native_pair(rows)?
                 .map(|value| {

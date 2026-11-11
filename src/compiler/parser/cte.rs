@@ -228,6 +228,9 @@ impl Expansion {
             Some(NodeEnum::CoalesceExpr(expr)) => self.list(&mut expr.args, scope, depth),
             Some(NodeEnum::MinMaxExpr(expr)) => self.list(&mut expr.args, scope, depth),
             Some(NodeEnum::TypeCast(expr)) => self.optional(expr.arg.as_deref_mut(), scope, depth),
+            Some(NodeEnum::CollateClause(expr)) => {
+                self.optional(expr.arg.as_deref_mut(), scope, depth)
+            }
             Some(NodeEnum::NullTest(expr)) => self.optional(expr.arg.as_deref_mut(), scope, depth),
             Some(NodeEnum::BooleanTest(expr)) => {
                 self.optional(expr.arg.as_deref_mut(), scope, depth)
@@ -314,6 +317,7 @@ fn node_shape(value: &Node) -> (usize, usize) {
             combined([&value.expr, &value.result].into_iter().flatten().map(|v| node_shape(v)))
         }
         Some(NodeEnum::TypeCast(value)) => value.arg.as_deref().map_or((0, 0), node_shape),
+        Some(NodeEnum::CollateClause(value)) => value.arg.as_deref().map_or((0, 0), node_shape),
         Some(NodeEnum::NullTest(value)) => value.arg.as_deref().map_or((0, 0), node_shape),
         Some(NodeEnum::BooleanTest(value)) => value.arg.as_deref().map_or((0, 0), node_shape),
         Some(NodeEnum::SortBy(value)) => value.node.as_deref().map_or((0, 0), node_shape),

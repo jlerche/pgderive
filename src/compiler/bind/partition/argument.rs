@@ -47,6 +47,7 @@ pub(super) fn bind(
             right: false,
             oid: expression.oid(),
             nullable: expression.nullable(),
+            collation: 0,
             modifier: None,
         };
         return Ok(Bound {

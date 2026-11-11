@@ -107,6 +107,7 @@ fn adapt_sources(ir: &mut Relational, offset: usize, contract: &Contract) -> Res
                     right: false,
                     oid: column.oid,
                     nullable: column.nullable,
+                    collation: column.collation,
                     modifier: Some(column.modifier).filter(|modifier| *modifier >= 0),
                 };
                 let mut output = input.clone();

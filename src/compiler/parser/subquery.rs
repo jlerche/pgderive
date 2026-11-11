@@ -188,6 +188,9 @@ impl Rewrite<'_> {
             Some(NodeEnum::TypeCast(value)) => {
                 self.optional(value.arg.as_deref_mut(), guarded, depth)?;
             }
+            Some(NodeEnum::CollateClause(value)) => {
+                self.optional(value.arg.as_deref_mut(), guarded, depth)?;
+            }
             Some(NodeEnum::BooleanTest(value)) => {
                 self.optional(value.arg.as_deref_mut(), guarded, depth)?;
             }
@@ -300,6 +303,7 @@ fn constant_null(value: &Node) -> bool {
     match &value.node {
         Some(NodeEnum::AConst(value)) => value.isnull,
         Some(NodeEnum::TypeCast(value)) => value.arg.as_deref().is_some_and(constant_null),
+        Some(NodeEnum::CollateClause(value)) => value.arg.as_deref().is_some_and(constant_null),
         _ => false,
     }
 }

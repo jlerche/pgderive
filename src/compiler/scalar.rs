@@ -28,6 +28,7 @@ pub(super) fn register(
         right: false,
         oid: typed.oid(),
         nullable: typed.nullable(),
+        collation: typed.collation(&|column| Ok(column.collation)).unwrap_or(0),
         modifier: Some(typed.bound_modifier()).filter(|modifier| *modifier >= 0),
     };
     if !computed.iter().any(|prior| prior.column == column) {

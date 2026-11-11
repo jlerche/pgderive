@@ -28,7 +28,7 @@ impl Typed {
                 }
             }
             Value::Call(call) => call.arguments.iter().for_each(|value| value.reads(out)),
-            Value::Cast { input, .. } => input.reads(out),
+            Value::Cast { input, .. } | Value::Collate { input, .. } => input.reads(out),
             Value::Binary { left, right, .. }
             | Value::NullIf { left, right }
             | Value::Concat { left, right } => {
@@ -82,6 +82,9 @@ impl Typed {
                 call.arguments = all(&call.arguments, replace)?;
                 Value::Call(call)
             }
+            Value::Collate { input, collation } => {
+                Value::Collate { input: Box::new(input.replaced(replace)?), collation: *collation }
+            }
             Value::Cast { input, typmod } => {
                 Value::Cast { input: Box::new(input.replaced(replace)?), typmod: *typmod }
             }
@@ -130,7 +133,7 @@ impl Typed {
                     value.strict_columns(out);
                 }
             }
-            Value::Cast { input, .. } => input.strict_columns(out),
+            Value::Cast { input, .. } | Value::Collate { input, .. } => input.strict_columns(out),
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.strict_columns(out);
                 right.strict_columns(out);
@@ -145,7 +148,7 @@ impl Typed {
             Value::Call(call) => {
                 call.operation.is_strict() && call.arguments.iter().all(Self::is_strict)
             }
-            Value::Cast { input, .. } => input.is_strict(),
+            Value::Cast { input, .. } | Value::Collate { input, .. } => input.is_strict(),
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.is_strict() && right.is_strict()
             }

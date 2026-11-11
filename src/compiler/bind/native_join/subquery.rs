@@ -72,6 +72,7 @@ impl Builder<'_> {
             right: false,
             oid: 16,
             nullable: true,
+            collation: 0,
             modifier: None,
         };
         self.nodes.push(Node::Mark {

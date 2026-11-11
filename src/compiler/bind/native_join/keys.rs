@@ -51,7 +51,7 @@ impl<'a> Scope<'a> {
             Key::Column(name) => typed::Typed::column(resolve(&name)?),
             Key::Typed(ast) => typed::bind(&ast, &resolve, 0)?,
         };
-        let collation = expression.collation(&|value| self.collation(value))?;
+        let collation = expression.join_collation(&|value| self.collation(value))?;
         Ok(Operand { sides: sides.get(), expression, collation })
     }
 }

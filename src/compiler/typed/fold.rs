@@ -16,6 +16,9 @@ impl Typed {
                     Value::Call(call)
                 }
             }
+            Value::Collate { input, collation } => {
+                Value::Collate { input: Box::new(input.fold()?), collation: *collation }
+            }
             Value::Cast { input, typmod } => {
                 let input = input.fold()?;
                 if typmod.is_none() && input.constant_null() {

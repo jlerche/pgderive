@@ -110,6 +110,7 @@ mod tests {
                 oid: 23,
                 nullable: true,
                 right: false,
+                collation: 0,
                 modifier: None,
             }],
         }

@@ -94,6 +94,7 @@ fn resolve(name: &Name, scopes: &[Scope<'_>]) -> Result<ColumnRef> {
                 name: column.name.clone(),
                 oid: column.oid,
                 nullable: column.nullable,
+                collation: column.collation,
                 modifier: Some(column.modifier).filter(|modifier| *modifier >= 0),
             });
         }

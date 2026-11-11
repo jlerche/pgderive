@@ -38,6 +38,9 @@ pub(crate) struct ColumnRef {
     pub(crate) nullable: bool,
     #[serde(skip)]
     pub(crate) modifier: Option<i32>,
+    // Source and expression collations are bound in their respective scopes.
+    #[serde(skip)]
+    pub(crate) collation: u32,
 }
 /// Resolved relational graph and output layout shared by every frontend.
 #[derive(Clone, Serialize)]

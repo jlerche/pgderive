@@ -79,6 +79,9 @@ fn contains_aggregate(value: &Node) -> bool {
         Some(NodeEnum::CoalesceExpr(value)) => value.args.iter().any(contains_aggregate),
         Some(NodeEnum::MinMaxExpr(value)) => value.args.iter().any(contains_aggregate),
         Some(NodeEnum::TypeCast(value)) => value.arg.as_deref().is_some_and(contains_aggregate),
+        Some(NodeEnum::CollateClause(value)) => {
+            value.arg.as_deref().is_some_and(contains_aggregate)
+        }
         Some(NodeEnum::NullTest(value)) => value.arg.as_deref().is_some_and(contains_aggregate),
         Some(NodeEnum::BooleanTest(value)) => value.arg.as_deref().is_some_and(contains_aggregate),
         Some(NodeEnum::CaseExpr(value)) => {
@@ -257,6 +260,9 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
                 self.optional_expression(expr.arg.as_deref_mut(), windows, depth)?;
             }
             Some(NodeEnum::TypeCast(expr)) => {
+                self.optional_expression(expr.arg.as_deref_mut(), windows, depth)?;
+            }
+            Some(NodeEnum::CollateClause(expr)) => {
                 self.optional_expression(expr.arg.as_deref_mut(), windows, depth)?;
             }
             Some(NodeEnum::MinMaxExpr(expr)) => self.expressions(&mut expr.args, windows, depth)?,

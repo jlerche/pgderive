@@ -35,6 +35,7 @@ pub(in crate::compiler) enum Builtin {
     Div,
     Concat,
     ConcatWs,
+    LikeEscape,
 }
 
 impl Builtin {

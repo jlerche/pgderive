@@ -123,7 +123,10 @@ impl Builder<'_> {
             .map(|output| Column {
                 label: output.label.clone(),
                 qualifiers: vec![scope.alias.clone()],
-                value: output.column.clone(),
+                value: ColumnRef {
+                    collation: facts.collation(&output.column).unwrap_or(0),
+                    ..output.column.clone()
+                },
                 collation: facts.collation(&output.column).unwrap_or(0),
                 modifier: facts.modifier(&output.column).unwrap_or(-1),
                 unqualified: true,
@@ -154,6 +157,7 @@ impl Builder<'_> {
                     right: false,
                     oid: column.oid,
                     nullable: column.nullable,
+                    collation: column.collation,
                     modifier: Some(column.modifier).filter(|modifier| *modifier >= 0),
                 },
                 collation: column.collation,

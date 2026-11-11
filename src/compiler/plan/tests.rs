@@ -62,6 +62,7 @@ fn column_discovery_preserves_qualified_names() -> Result<()> {
         name: name.to_owned(),
         oid: 23,
         nullable: false,
+        collation: 0,
         modifier: None,
     });
     assert_eq!(column_names(&columns)?, columns.iter().map(|column| column.name.clone()).collect());
@@ -90,6 +91,7 @@ fn logical_join_view_unwraps_presence_and_keeps_attachment_identity() -> Result<
         right: false,
         oid: 20,
         nullable: false,
+        collation: 0,
         modifier: None,
     };
     let mut ir = plan(vec![
