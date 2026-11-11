@@ -1236,5 +1236,15 @@
 {"sql": "SELECT mod(NULLIF(other,0), 1/other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
 {"sql": "SELECT id FROM source.auction WHERE mod(1,other)>0 AND other>0", "raises": false, "rows": []},
 {"sql": "SELECT id FROM source.auction WHERE mod(id::smallint, other)=0 AND other+1+1=0", "raises": false, "rows": []},
-{"sql": "SELECT id FROM source.auction WHERE (id::smallint & other)=0 AND other+1+1=0", "raises": false, "rows": []}
+{"sql": "SELECT id FROM source.auction WHERE (id::smallint & other)=0 AND other+1+1=0", "raises": false, "rows": []},
+{"sql": "SELECT mod(id + 0.00, 3.000) AS v FROM source.auction", "raises": false, "rows": ["1.000"]},
+{"sql": "SELECT (other - 7.99) % -2.0 AS v FROM source.auction", "raises": false, "rows": ["-1.99"]},
+{"sql": "SELECT mod(1.00, other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT mod(1.00, 0.000) AS v FROM source.auction", "raises": true, "phase": "planning", "sqlstate": "22012"},
+{"sql": "SELECT mod('Infinity'::numeric, other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT mod('NaN'::numeric, other) AS v FROM source.auction", "raises": false, "rows": ["NaN"]},
+{"sql": "SELECT mod('Infinity'::numeric, 2.00) AS v FROM source.auction", "raises": false, "rows": ["NaN"]},
+{"sql": "SELECT mod(2.00, 'Infinity') AS v FROM source.auction", "raises": false, "rows": ["2.00"]},
+{"sql": "SELECT mod(2.00, 'NaN') AS v FROM source.auction", "raises": false, "rows": ["NaN"]},
+{"sql": "SELECT mod(NULL::numeric, 1/other) AS v FROM source.auction", "raises": false, "rows": [""]}
 ]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Owned sequential projection CDC, native bag codec and restart qualification."""
-from worker_harness import blocked_diagnostic, History, run_cases
+from worker_harness import blocked_diagnostic, blocked_recovery, History, run_cases
 from harness_control import commit_proxy
 import collections
 import json
@@ -38,7 +38,8 @@ class ProjectionFixture(SqlFixture):
             extrema = ("GREATEST(a.small_value, a.group_id),"
                        "LEAST(a.group_id + 0.00, a.small_value + 0.000, NULL) AS least_numeric")
             bitwise = "a.group_id & 3 AS low_bits, a.small_value << 1 AS shifted"
-            remainder = "mod(a.group_id - 3, a.id) AS integral_remainder"
+            remainder = ("mod(a.group_id - 3, a.id) AS integral_remainder,"
+                         "mod(a.group_id + 0.00, (a.id - 96) * 1.250) AS numeric_remainder")
             self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise},{remainder} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
@@ -56,7 +57,7 @@ class ProjectionFixture(SqlFixture):
         if self.local:
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
                                        + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group',
-                                          'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric', 'low_bits', 'shifted', 'integral_remainder'])
+                                          'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric', 'low_bits', 'shifted', 'integral_remainder', 'numeric_remainder'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -112,6 +113,11 @@ class ProjectionFixture(SqlFixture):
                     values += (None if key is None else key & 3,
                                None if low is None else low * 2,
                                None if key is None else -((3 - key) % row['id']))
+                    if key is None:
+                        values += (None,)
+                    else:
+                        quarters = (abs(key) * 4) % (abs(row['id'] - 96) * 5)
+                        values += ((-quarters if key < 0 else quarters) / 4,)
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
@@ -152,6 +158,12 @@ def qualify(output, command, local=False):
              ('changed-alias',fixture.query.replace('AS active', 'AS renamed'))], verify_reopen=False),
             initial=initial, after_stop=committed_fault)
         if local:
+            worker = fixture.start(command, 'numeric-remainder-recovery')
+            worker.event('ready')
+            fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(96,'zero divisor',1,true)")
+            assert 'division by zero' in blocked_recovery(
+                fixture, worker, f"DELETE FROM {fixture.name}.auction WHERE id=96")
+            fixture.verify()
             before = fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p")
             sink_before = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}")
             bad = fixture.start(command, 'overflow')

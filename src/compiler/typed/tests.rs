@@ -523,12 +523,48 @@ fn integral_remainder_resolves_widths_and_evaluates_computed_operands() -> Resul
         assert_eq!(value.oid(), oid, "{sql}");
         assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
     }
-    for sql in ["mod(NULL,NULL)", "mod(7.0,3)", "1 % 0", "mod(NULL,1/0)"] {
+    for sql in ["mod(NULL,NULL)", "mod(7.0,TRUE)", "1 % 0", "mod(NULL,1/0)"] {
         assert!(expression(sql).is_err(), "{sql}");
     }
     for sql in ["mod(a, a - 7)", "b % (1 / (a - 7))"] {
         let value = expression(sql)?;
         assert!(value.evaluate(&row).is_err(), "{sql}");
     }
+    Ok(())
+}
+
+#[test]
+fn exact_numeric_remainder_preserves_scale_and_postgres_special_values() -> Result<()> {
+    let row = [("a".into(), Some("7".into())), ("b".into(), None)].into();
+    for (sql, expected) in [
+        ("mod(a, 2.00)", Some("1.00")),
+        ("mod('7.99', 2.0)", Some("1.99")),
+        ("a % -2.00", Some("1.00")),
+        ("-7.99 % -2.0", Some("-1.99")),
+        ("mod(2.00, 3.000)", Some("2.000")),
+        ("mod(6.00, 3.000)", Some("0.000")),
+        ("mod(999999999999999999999999999999.01, 3.00)", Some("0.01")),
+        ("mod(2.00, 'Infinity')", Some("2.00")),
+        ("mod('Infinity'::numeric, 2.00)", Some("NaN")),
+        ("'-Infinity'::numeric % 'Infinity'", Some("NaN")),
+        ("mod('NaN'::numeric, 0)", Some("NaN")),
+        ("0.00 % 'NaN'", Some("NaN")),
+        ("mod(b, 2.0)", None),
+        ("mod(a::numeric, NULL)", None),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), 1700, "{sql}");
+        assert_eq!(value.modifier(&|_| None), -1, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    for sql in ["mod(1.00, 0.0)", "'Infinity'::numeric % 0", "mod(NULL::numeric, 1/0)"] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    assert!(
+        expression("mod(-1, 3e-4094)")
+            .is_err_and(|error| format!("{error:#}").contains("numeric display exceeds budget"))
+    );
+    let value = expression("mod(1.00, a - 7)")?;
+    assert!(value.evaluate(&row).is_err());
     Ok(())
 }

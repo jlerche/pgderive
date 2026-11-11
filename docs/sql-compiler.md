@@ -68,7 +68,11 @@ Integral `mod(x, y)` and `x % y` share a typed scalar expression and accept
 computed operands. Mixed integer widths promote to the wider type. The
 remainder has the dividend's sign. A zero divisor raises division by zero,
 and the minimum signed integer modulo −1 returns zero. NULL arguments
-produce NULL after evaluating the operands.
+produce NULL after evaluating the operands. With an exact numeric operand,
+`mod` and `%` return numeric. For two finite operands the remainder uses the
+greater input scale. A finite dividend modulo infinity retains its original
+scale. NaN propagates, including with a zero divisor. Infinity modulo a
+nonzero divisor returns NaN. The existing numeric digit budget applies.
 
 ON equality with either key NULL is unknown and yields no match. Grouping preserves
 NULL, COUNT(*) includes NULL measures, SUM ignores NULL measures and returns NULL

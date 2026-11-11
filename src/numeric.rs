@@ -140,8 +140,10 @@ impl Numeric {
         Self::Finite { coefficient, scale }.text()
     }
     pub(crate) fn binary(&self, other: &Self, operation: &str) -> Result<Self> {
-        if operation == "/" {
-            return self.divide(other);
+        match operation {
+            "/" => return self.divide(other),
+            "%" => return self.remainder(other),
+            _ => {}
         }
         ensure!(matches!(operation, "+" | "-" | "*"), "unsupported numeric operation");
         if operation == "-" {

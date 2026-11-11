@@ -32,6 +32,23 @@ impl Numeric {
         self.divide_with(other, true)
     }
 
+    pub(super) fn remainder(&self, other: &Self) -> Result<Self> {
+        if matches!(self, Self::Nan) || matches!(other, Self::Nan) {
+            return Ok(Self::Nan);
+        }
+        let Self::Finite { coefficient: right, scale: right_scale } = other else {
+            return Ok(if matches!(self, Self::Finite { .. }) { self.clone() } else { Self::Nan });
+        };
+        ensure!(right != &BigInt::default(), "division by zero");
+        let Self::Finite { coefficient: left, scale: left_scale } = self else {
+            return Ok(Self::Nan);
+        };
+        let scale = (*left_scale).max(*right_scale);
+        let dividend = left * power(scale - left_scale);
+        let divisor = right * power(scale - right_scale);
+        Self::finite(dividend % divisor, scale).context("numeric remainder result")
+    }
+
     fn divide_with(&self, other: &Self, truncate: bool) -> Result<Self> {
         if matches!(self, Self::Nan) || matches!(other, Self::Nan) {
             return Ok(Self::Nan);

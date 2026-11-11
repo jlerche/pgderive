@@ -65,6 +65,9 @@ impl Typed {
         else {
             return None;
         };
+        if !matches!(self.oid, 20 | 21 | 23) {
+            return None;
+        }
         right.as_integer_literal().filter(|divisor| *divisor != 0)?;
         left.as_column()
     }

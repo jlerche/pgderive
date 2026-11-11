@@ -232,9 +232,9 @@ fn arithmetic(operation: Arithmetic, left: Option<Typed>, right: Typed) -> Resul
 
 fn remainder(left: Typed, right: Typed) -> Result<Typed> {
     ensure!(
-        [left.oid, right.oid].iter().all(|oid| matches!(oid, 0 | 20 | 21 | 23 | 705))
-            && [left.oid, right.oid].iter().any(|oid| matches!(oid, 20 | 21 | 23)),
-        "remainder requires integral operands"
+        [left.oid, right.oid].iter().all(|oid| matches!(oid, 0 | 20 | 21 | 23 | 705 | 1700))
+            && [left.oid, right.oid].iter().any(|oid| matches!(oid, 20 | 21 | 23 | 1700)),
+        "remainder requires integral or numeric operands"
     );
     let oid = numeric_common(&[left.oid, right.oid]);
     let coerce = |value: Typed| {
