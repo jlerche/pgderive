@@ -36,6 +36,8 @@ pub(crate) struct ColumnRef {
     pub(crate) name: String,
     pub(crate) oid: u32,
     pub(crate) nullable: bool,
+    #[serde(skip)]
+    pub(crate) modifier: Option<i32>,
 }
 /// Resolved relational graph and output layout shared by every frontend.
 #[derive(Clone, Serialize)]

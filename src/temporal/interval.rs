@@ -1,6 +1,6 @@
 //! Component-preserving intervals with `PostgreSQL`'s duration comparison.
 mod parse;
-use super::DAY;
+use super::{DAY, Precision};
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -39,6 +39,16 @@ impl Interval {
                 format!("P{months}M{days}DT{hours}H{second}S")
             }
         }
+    }
+    pub(crate) fn rounded(self, precision: Precision) -> Result<Self> {
+        if let Self::Finite { months, days, micros } = self {
+            return Self::finite(
+                months,
+                days,
+                precision.round(micros).context("interval out of range")?,
+            );
+        }
+        Ok(self)
     }
     pub(crate) fn negate(self) -> Result<Self> {
         Ok(match self {

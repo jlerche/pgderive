@@ -62,6 +62,7 @@ fn column_discovery_preserves_qualified_names() -> Result<()> {
         name: name.to_owned(),
         oid: 23,
         nullable: false,
+        modifier: None,
     });
     assert_eq!(column_names(&columns)?, columns.iter().map(|column| column.name.clone()).collect());
     Ok(())
@@ -84,8 +85,13 @@ fn logical_join_view_unwraps_presence_and_keeps_attachment_identity() -> Result<
     use super::join::Join;
     use crate::compiler::left_join::Input;
     let contract = crate::source::tests::contract();
-    let column =
-        |name: &str| ColumnRef { name: name.into(), right: false, oid: 20, nullable: false };
+    let column = |name: &str| ColumnRef {
+        name: name.into(),
+        right: false,
+        oid: 20,
+        nullable: false,
+        modifier: None,
+    };
     let mut ir = plan(vec![
         Node::Source { id: "left".into(), source: 0 },
         Node::Source { id: "right".into(), source: 1 },

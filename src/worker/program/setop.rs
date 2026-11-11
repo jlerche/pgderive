@@ -105,7 +105,13 @@ mod tests {
         Spec {
             kind,
             all,
-            columns: vec![ColumnRef { name: "x".into(), oid: 23, nullable: true, right: false }],
+            columns: vec![ColumnRef {
+                name: "x".into(),
+                oid: 23,
+                nullable: true,
+                right: false,
+                modifier: None,
+            }],
         }
     }
     fn row(side: &str) -> Row {

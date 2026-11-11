@@ -194,6 +194,11 @@ Explicit casts to `text` support `smallint`, `integer`, `bigint`,
 for negative values. Boolean casts produce `true` or `false`, and UUID
 casts produce lowercase, hyphenated text. NULL inputs yield NULL.
 
+Explicit casts from text and varchar to `varchar(n)` truncate to `n`
+Unicode characters, preserve collation, and retain the declared length in
+the result type. Shorter strings and NULLs are preserved. These casts do
+not change assignment coercion.
+
 Integral bitwise operators support `&`, `|`, `#`, `~`, `<<`, and `>>`.
 Binary bitwise operators promote mixed integer widths. Shifts keep the left
 operand's width and take an integer count. On the qualified PostgreSQL 17

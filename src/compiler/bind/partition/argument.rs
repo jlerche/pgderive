@@ -47,6 +47,7 @@ pub(super) fn bind(
             right: false,
             oid: expression.oid(),
             nullable: expression.nullable(),
+            modifier: None,
         };
         return Ok(Bound {
             column: Some(column),

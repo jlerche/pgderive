@@ -50,7 +50,7 @@ fn invalid_or_context_dependent_timestamp_inputs_fail() {
         ("4714-11-23 00:00:00 BC", 1114),
         ("2000-01-01 00:00:00", 20),
     ] {
-        assert!(Timestamp::parse(text, oid).is_err(), "{text}");
+        assert!(Timestamp::parse_literal(text, oid).is_err(), "{text}");
     }
     assert!(Timestamp(0).json(20).is_err());
 }

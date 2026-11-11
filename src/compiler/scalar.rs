@@ -23,7 +23,13 @@ pub(super) fn register(
 ) -> Result<ColumnRef> {
     use sha2::{Digest, Sha256};
     let name = format!("{prefix}{:x}", Sha256::digest(serde_json::to_vec(&typed)?));
-    let column = ColumnRef { name, right: false, oid: typed.oid(), nullable: typed.nullable() };
+    let column = ColumnRef {
+        name,
+        right: false,
+        oid: typed.oid(),
+        nullable: typed.nullable(),
+        modifier: Some(typed.bound_modifier()).filter(|modifier| *modifier >= 0),
+    };
     if !computed.iter().any(|prior| prior.column == column) {
         computed.push(Computed { column: column.clone(), expression: typed });
     }

@@ -390,7 +390,7 @@ fn aggregate(
         field: name.clone(),
         navigation,
     });
-    Ok(ColumnRef { name, right: false, oid, nullable })
+    Ok(ColumnRef { name, right: false, oid, nullable, modifier: None })
 }
 
 fn validate_keys(keys: &[ColumnRef]) -> Result<()> {

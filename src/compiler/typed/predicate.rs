@@ -74,6 +74,9 @@ impl Typed {
     pub(in crate::compiler) const fn as_column(&self) -> Option<&ColumnRef> {
         if let Value::Column(column) = &self.value { Some(column) } else { None }
     }
+    pub(in crate::compiler) fn bound_modifier(&self) -> i32 {
+        self.modifier(&|column| column.modifier)
+    }
     pub(in crate::compiler) fn modifier(
         &self,
         resolve: &impl Fn(&ColumnRef) -> Option<i32>,
@@ -83,6 +86,10 @@ impl Typed {
             Value::Cast { typmod: Some(typmod), .. } => typmod.encoded(),
             Value::Coalesce(values) => self.common_modifier(values.iter(), resolve),
             Value::SimpleCase(case) => self.common_modifier(case.results(), resolve),
+            Value::Case { branches, otherwise } => self.common_modifier(
+                std::iter::once(otherwise.as_ref()).chain(branches.iter().map(|(_, value)| value)),
+                resolve,
+            ),
             Value::NullIf { left, .. } => left.modifier(resolve),
             _ => -1,
         }

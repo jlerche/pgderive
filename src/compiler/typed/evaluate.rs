@@ -1,5 +1,5 @@
 //! One native evaluator; SQL control flow selects values before result coercion.
-use super::{Typed, Value, check_width};
+use super::{Typed, Value, check_width, types::Modifier};
 use crate::{
     compiler::value::{self, Value as Native},
     engine::execution::{EvaluationFailed, PlanFault},
@@ -57,9 +57,14 @@ impl Typed {
             Value::Call(call) => {
                 call.evaluate(rows)?.map(|text| value::decode(self.oid, &text)).transpose()?
             }
-            Value::Cast { input, typmod } => {
-                input.native_pair(rows)?.map(|value| cast(value, self.oid, *typmod)).transpose()?
-            }
+            Value::Cast { input, typmod } => input
+                .native_pair(rows)?
+                .map(|value| {
+                    let typmod =
+                        typmod.filter(|modifier| modifier.requires_coercion(input, self.oid));
+                    cast(value, input.oid, self.oid, typmod)
+                })
+                .transpose()?,
             Value::Binary { operation, left, right } => {
                 let (left, right) = (left.native_pair(rows)?, right.native_pair(rows)?);
                 match (left, right) {
@@ -141,11 +146,11 @@ fn integer(
     operation.integer(left, right).context("integral arithmetic overflow")
 }
 
-fn cast(value: Native, oid: u32, typmod: Option<crate::numeric::Typmod>) -> Result<Native> {
+fn cast(value: Native, source: u32, oid: u32, typmod: Option<Modifier>) -> Result<Native> {
     if matches!(oid, 20 | 21 | 23) && matches!(value, Native::Numeric(_)) {
         return Ok(Native::Integer(numeric(value)?.integer()?));
     }
-    if let Some(typmod) = typmod {
+    if let Some(Modifier::Numeric(typmod)) = typmod {
         return Ok(Native::Numeric(numeric(value)?.constrained(typmod)?));
     }
     if oid == 25 {
@@ -156,7 +161,23 @@ fn cast(value: Native, oid: u32, typmod: Option<crate::numeric::Typmod>) -> Resu
             _ => {}
         }
     }
-    super::calendar::cast(value, oid)
+    let value = super::calendar::cast(value, source, oid)?;
+    Ok(match (value, typmod) {
+        (Native::Text(mut value), Some(Modifier::Varchar(length))) => {
+            if let Some((end, _)) = value.char_indices().nth(usize::try_from(length)?) {
+                value.truncate(end);
+            }
+            Native::Text(value)
+        }
+        (Native::Timestamp(value), Some(Modifier::Timestamp(precision))) => {
+            Native::Timestamp(value.rounded(precision)?)
+        }
+        (Native::Interval(value), Some(Modifier::Interval { precision, .. })) => {
+            Native::Interval(value.rounded(precision)?)
+        }
+        (value, None) => value,
+        _ => return Err(PlanFault("cast modifier does not match the native value").into()),
+    })
 }
 
 fn concatenate(left: Option<Native>, right: Option<Native>) -> Result<Option<Native>> {

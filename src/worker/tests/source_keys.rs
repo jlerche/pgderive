@@ -123,6 +123,7 @@ fn complete_composite_keys_survive_rebinding_but_partial_keys_do_not() -> Result
                     right: false,
                     oid: column.oid,
                     nullable: column.nullable,
+                    modifier: None,
                 };
                 Binding { output: input.clone(), input }
             })

@@ -6,6 +6,25 @@ import collections
 import json
 from sql_compiler_harness import SqlFixture
 from native_mv_oracle import binary_difference, expected as native_expected
+from temporal_oracle import Civil, DAY, Interval, encoded, julian, parse_civil, parse_interval, special
+
+
+def round_micros(micros, step):
+    rounded = (abs(micros) + step // 2) // step * step
+    return -rounded if micros < 0 else rounded
+
+
+def cast_precision(row):
+    stamp = parse_civil(row['cast_stamp'])
+    if stamp is not None and not special(stamp):
+        epoch = julian(2000, 1, 1)
+        days, micros = divmod(round_micros((stamp.day - epoch) * DAY + stamp.micros, 1000), DAY)
+        stamp = Civil(epoch + days, micros)
+    interval = parse_interval(row['cast_interval'])
+    if interval is not None and not special(interval):
+        interval = Interval(interval.months, interval.days, round_micros(interval.micros, 100))
+    return (encoded(stamp, 'stamp'), encoded(stamp, 'instant'), encoded(interval, 'interval'),
+            row['cast_edge'] if row['enabled'] is True else None)
 
 
 class ProjectionFixture(SqlFixture):
@@ -17,7 +36,17 @@ class ProjectionFixture(SqlFixture):
                       f'a.token AS token, a.group_id AS again FROM {self.name}.auction a '
                       'WHERE a.id > 0 AND (a.enabled OR a.group_id IS NULL)')
         if local:
-            self.sql(f"ALTER TABLE {self.name}.auction ADD COLUMN small_value smallint, ADD COLUMN large_value bigint, ADD COLUMN vartext varchar(64)")
+            self.pg[1:1] = ['-q', '-c', "SET IntervalStyle='iso_8601'; SET TimeZone='UTC'"]
+            self.sql(f"""ALTER TABLE {self.name}.auction ADD COLUMN small_value smallint,
+                ADD COLUMN large_value bigint, ADD COLUMN vartext varchar(64),
+                ADD COLUMN cast_text text COLLATE "C", ADD COLUMN cast_stamp timestamp,
+                ADD COLUMN cast_interval interval, ADD COLUMN cast_edge interval(4);
+                UPDATE {self.name}.auction SET cast_text='é🙂界',cast_stamp='1999-12-31 23:59:59.9995',
+                    cast_interval='P1M2DT-2562047788H-54.775750S' WHERE id=1;
+                UPDATE {self.name}.auction SET cast_text='a  b',cast_stamp='2000-01-01 00:00:00.0005',
+                    cast_interval='P1M2DT23H59M59.99995S',
+                    cast_edge='P1M2DT2562047788H54.775750S'::interval(4) WHERE id=2;
+                UPDATE {self.name}.auction SET cast_stamp='infinity',cast_interval='-infinity' WHERE id IN (3,6)""")
             self.sql(f"UPDATE {self.name}.auction SET small_value=CASE WHEN id=1 THEN -2 ELSE 2 END,large_value=CASE WHEN id=1 THEN -3 ELSE 3 END,vartext=CASE WHEN id=1 THEN 'é🙂' ELSE '界x' END WHERE id IN (1,2)")
             self.sql(f"UPDATE {self.name}.auction SET category=CASE WHEN id=1 THEN 'é🙂' ELSE '界x' END,group_id=CASE WHEN id=1 THEN -2 ELSE 2 END,enabled=true WHERE id IN (1,2)")
             self.query = self.query.replace('a.group_id AS', '(0-a.group_id) AS').replace(' FROM ', ',(0-a.small_value) AS sm,(0::bigint-a.large_value) AS lg,a.vartext AS vl FROM ')
@@ -45,7 +74,14 @@ class ProjectionFixture(SqlFixture):
             casts = ("a.small_value::text AS small_text,a.group_id::text AS group_text,"
                      "a.large_value::text AS large_text,a.enabled::text AS enabled_text,"
                      "a.token::text AS token_text")
-            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise},{remainder},{text_joins},{casts} FROM ')
+            modifiers = ("a.cast_text::varchar(2) AS limited_text,a.vartext::varchar(1) AS limited_vartext,"
+                         "a.cast_stamp::timestamp(3) AS rounded_stamp,"
+                         "a.cast_stamp::timestamptz(3) AS rounded_instant,"
+                         "a.cast_interval::interval(4) AS rounded_interval,"
+                         "(CASE WHEN a.enabled THEN a.cast_edge ELSE NULL::interval(4) END)"
+                         "::interval(4) AS interval_edge,"
+                         "NULL::varchar(3) AS empty_varchar,NULL::interval(2) AS empty_interval")
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise},{remainder},{text_joins},{casts},{modifiers} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
                                             "OR a.group_id IS NOT DISTINCT FROM 1) "
@@ -63,7 +99,9 @@ class ProjectionFixture(SqlFixture):
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
                                        + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group',
                                           'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric', 'low_bits', 'shifted', 'integral_remainder', 'numeric_remainder', 'combined', 'separated',
-                                          'small_text', 'group_text', 'large_text', 'enabled_text', 'token_text'])
+                                          'small_text', 'group_text', 'large_text', 'enabled_text', 'token_text',
+                                          'limited_text', 'limited_vartext', 'rounded_stamp', 'rounded_instant',
+                                          'rounded_interval', 'interval_edge', 'empty_varchar', 'empty_interval'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -131,6 +169,9 @@ class ProjectionFixture(SqlFixture):
                     values += tuple(None if value is None else str(value)
                                     for value in (low, key, row['large_value']))
                     values += (None if active is None else str(active).lower(), row['token'])
+                    cast_text = row['cast_text']
+                    values += (None if cast_text is None else cast_text[:2], None if text is None else text[:1])
+                    values += cast_precision(row) + (None, None)
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
@@ -158,7 +199,10 @@ def qualify(output, command, local=False):
             f"UPDATE {fixture.name}.bid SET price=price+1 WHERE id=4",  # complete empty query delta tick
         ]
         if local:
-            changes[3] += f"; UPDATE {fixture.name}.auction SET category='excluded' WHERE id=100"
+            changes[3] += (f"; UPDATE {fixture.name}.auction SET category='excluded' WHERE id=100"
+                           f"; UPDATE {fixture.name}.auction SET cast_stamp='294276-12-31 23:59:59.999999' WHERE id=2")
+            changes[4] += f"; UPDATE {fixture.name}.auction SET cast_stamp='-infinity',cast_edge=NULL WHERE id=2"
+            changes[5] += f"; UPDATE {fixture.name}.auction SET cast_stamp='294276-12-31 23:59:59.999999' WHERE id=2"
         def initial():
             assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
         def committed_fault():

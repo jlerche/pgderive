@@ -65,6 +65,11 @@ impl ResultColumn {
                 ensure!((0..=6).contains(&modifier), "invalid timestamp result precision");
                 modifier.to_string()
             }
+            1186 => {
+                use crate::temporal::Precision;
+                let precision = Precision::from_interval_modifier(modifier)?;
+                format!("{},{}", Precision::INTERVAL_FULL_RANGE, precision.encoded())
+            }
             1700 => {
                 ensure!(modifier >= 4, "invalid numeric result modifier");
                 let encoded = modifier - 4;
@@ -91,9 +96,36 @@ impl ResultColumn {
             format!(
                 "CASE WHEN {tuple}->1->{index}='null'::jsonb THEN NULL ELSE ARRAY(SELECT pg_catalog.jsonb_array_elements_text({tuple}->1->{index})) END"
             )
+        } else if matches!(self.oid, 1114 | 1184) {
+            self.timestamp_value(tuple, index)?
+        } else if self.oid == 1186
+            && self.modifier == crate::temporal::Precision::INTERVAL_FOUR_DIGITS
+        {
+            self.interval_boundary_value(tuple, index)?
         } else {
             format!("({tuple}->1->>{index})::pg_catalog.{}", self.type_spec()?)
         })
+    }
+    fn interval_boundary_value(&self, tuple: &str, index: usize) -> Result<String> {
+        // Reapplying interval(4) to a rounded time field of ±9223372036854775800 µs
+        // overflows in PostgreSQL. Shift the text inward by 50 µs before its cast.
+        let spec = self.type_spec()?;
+        Ok(format!(
+            r"pg_catalog.regexp_replace({tuple}->1->>{index},'(T-?2562047788H-?54[.])775800S$',E'\\1775750S')::pg_catalog.{spec}"
+        ))
+    }
+    fn timestamp_value(&self, tuple: &str, index: usize) -> Result<String> {
+        use crate::temporal::Timestamp;
+        let (name, _) = native(self.oid)?;
+        let spec = self.type_spec()?;
+        let zone = if self.oid == 1184 { "+00:00" } else { "" };
+        let text = format!("({tuple}->1->>{index})");
+        // PostgreSQL's text input rejects the endpoint its own precision casts can produce.
+        Ok(format!(
+            "CASE WHEN {text}='{}{zone}' THEN '{}{zone}'::pg_catalog.{name}(0) ELSE {text}::pg_catalog.{spec} END",
+            Timestamp::ROUNDED_END,
+            Timestamp::LAST_FINITE,
+        ))
     }
 }
 

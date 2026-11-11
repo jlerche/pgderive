@@ -17,7 +17,13 @@ async fn cursor_left_join_does_only_linear_visits_and_new_matching_pairs() -> Re
     let spec = Spec {
         left: Vec::new(),
         full: false,
-        right: vec![ColumnRef { right: true, name: "r".into(), oid: 23, nullable: true }],
+        right: vec![ColumnRef {
+            right: true,
+            name: "r".into(),
+            oid: 23,
+            nullable: true,
+            modifier: None,
+        }],
         predicate: None,
     };
     for size in [8_i64, 32, 128] {

@@ -26,7 +26,12 @@ one day and one hour, while a stored 25-hour interval keeps its hour field.
 
 Date casts to timestamp/timestamptz and timestamp types cast to date under the
 fixed UTC context. Wide dates can be valid dates yet outside timestamp range;
-an explicit/output coercion then errors. Mixed date/timestamp comparisons,
+an explicit/output coercion then errors. Explicit precision casts for
+timestamp, timestamptz and full-range interval round to the nearest
+fractional-second unit, with ties away from the timestamp epoch or from
+zero interval microseconds. Interval rounding preserves months and days.
+Precision above six resolves to six. Result columns retain their type
+modifiers, including for typed NULLs. Mixed date/timestamp comparisons,
 equality ON conditions and IN/NOT IN compare complete civil values without an
 eager conversion of every date to timestamp. Noon differs from date midnight.
 
@@ -64,7 +69,7 @@ boundaries, infinity results, cyclic-field NULL extraction and strict NULL
 arguments follow the native routines.
 
 Named zones, new AT TIME ZONE forms, date_part's float8 result, formatting,
-interval scaling, temporal precision casts and arbitrary literal grammars are
+interval scaling, interval field-range casts and arbitrary literal grammars are
 not added. The registered environment still freezes UTC, ISO dates and ISO
 interval output; there is no ambient-session or timezone-database fallback.
 

@@ -24,6 +24,7 @@ pub(super) fn expression(sql: &str) -> Result<Typed> {
                 right: false,
                 oid: 23,
                 nullable: true,
+                modifier: None,
             })
         },
         0,
@@ -87,6 +88,7 @@ fn typed_predicates_preserve_null_unknown_and_width_errors() -> Result<()> {
                 right: false,
                 oid: 23,
                 nullable: true,
+                modifier: None,
             })
         })?;
         assert_eq!(predicate.evaluate((&row, &row))?, expected, "{sql}");
@@ -112,6 +114,9 @@ fn exact_numeric_computation_preserves_scale_and_special_values() -> Result<()> 
     }
     Ok(())
 }
+
+#[path = "tests/casts.rs"]
+mod casts;
 
 #[path = "tests/functions.rs"]
 mod functions;

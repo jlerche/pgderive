@@ -62,10 +62,13 @@ pub(super) fn evaluate(left: Native, right: Native, operation: Arithmetic) -> Re
         }
     })
 }
-pub(super) fn cast(value: Native, oid: u32) -> Result<Native> {
+pub(super) fn cast(value: Native, source: u32, oid: u32) -> Result<Native> {
     Ok(match (value, oid) {
         (Native::Date(value), 1114 | 1184) => Native::Timestamp(value.timestamp()?),
         (Native::Timestamp(value), 1082) => Native::Date(value.date()?),
+        (Native::Timestamp(value), 1114 | 1184) if source != oid => {
+            Native::Timestamp(value.cast_zone()?)
+        }
         (value, _) => value,
     })
 }

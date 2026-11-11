@@ -43,7 +43,7 @@ enum Value {
     Interval(crate::temporal::Interval),
     Temporal(super::scalar::Temporal),
     Call(functions::Call),
-    Cast { input: Box<Typed>, typmod: Option<crate::numeric::Typmod> },
+    Cast { input: Box<Typed>, typmod: Option<types::Modifier> },
     Binary { operation: Arithmetic, left: Box<Typed>, right: Box<Typed> },
     Coalesce(Vec<Typed>),
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
@@ -408,7 +408,9 @@ impl Typed {
                 oid: 1700,
                 value: Value::Cast {
                     input: Box::new(input),
-                    typmod: Some(crate::numeric::Typmod::from_encoded(modifier)?),
+                    typmod: Some(types::Modifier::Numeric(crate::numeric::Typmod::from_encoded(
+                        modifier,
+                    )?)),
                 },
             };
         }

@@ -95,6 +95,11 @@ pub(super) fn bind(parsed: SetOperation, contract: &Contract) -> Result<Compiled
                     oid,
                     right: false,
                     nullable: a.column.nullable || b.column.nullable,
+                    modifier: a.column.modifier.filter(|_| {
+                        a.column.oid == oid
+                            && b.column.oid == oid
+                            && a.column.modifier == b.column.modifier
+                    }),
                 },
             })
         })

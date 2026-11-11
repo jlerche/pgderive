@@ -11,7 +11,7 @@ use crate::compiler::{
 use anyhow::Result;
 
 fn column(name: &str, oid: u32) -> ColumnRef {
-    ColumnRef { right: false, name: name.into(), oid, nullable: false }
+    ColumnRef { right: false, name: name.into(), oid, nullable: false, modifier: None }
 }
 fn source() -> Node {
     Node::Source { id: "source".into(), source: 0 }

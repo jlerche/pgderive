@@ -18,7 +18,7 @@ impl Typed {
             }
             Value::Cast { input, typmod } => {
                 let input = input.fold()?;
-                if input.constant_null() {
+                if typmod.is_none() && input.constant_null() {
                     Value::Literal(None)
                 } else {
                     Value::Cast { input: Box::new(input), typmod: *typmod }

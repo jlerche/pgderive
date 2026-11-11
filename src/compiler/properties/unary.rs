@@ -156,6 +156,7 @@ fn expanded(
         name: crate::compiler::expansion::FIELD.into(),
         oid: 23,
         nullable: false,
+        modifier: None,
     };
     ensure!(!facts.columns.contains_key(&reference.name), "property expansion field collision");
     let column = Column::derived(id, reference);
@@ -298,7 +299,13 @@ fn append_aggregates(facts: &mut Properties, id: &str, spec: &Partition) -> Resu
                 | Function::DenseRank
                 | Function::RowNumber
         );
-        let field = ColumnRef { name: aggregate.field.clone(), right: false, oid, nullable };
+        let field = ColumnRef {
+            name: aggregate.field.clone(),
+            right: false,
+            oid,
+            nullable,
+            modifier: None,
+        };
         facts.columns.insert(field.name.clone(), Column::derived(id, field));
     }
     facts.prune();
@@ -308,7 +315,8 @@ fn append_aggregates(facts: &mut Properties, id: &str, spec: &Partition) -> Resu
 fn ranked(input: &Properties, id: &str, name: Option<&str>) -> Properties {
     let mut facts = input.clone();
     if let Some(name) = name {
-        let field = ColumnRef { name: name.into(), right: false, oid: 20, nullable: false };
+        let field =
+            ColumnRef { name: name.into(), right: false, oid: 20, nullable: false, modifier: None };
         facts.columns.insert(field.name.clone(), Column::derived(id, field));
     }
     facts

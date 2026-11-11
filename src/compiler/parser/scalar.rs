@@ -65,7 +65,8 @@ fn bin_origin(value: &Node, input_oid: u32) -> Result<crate::temporal::Timestamp
         "origin type modifiers unsupported"
     );
     ensure!(input_oid == oid, "date_bin origin must match native timestamp type");
-    let origin = crate::temporal::Timestamp::parse(&string(optional(cast.arg.as_deref())?)?, oid)?;
+    let origin =
+        crate::temporal::Timestamp::parse_literal(&string(optional(cast.arg.as_deref())?)?, oid)?;
     ensure!(
         origin.sort_value() != i64::MIN && origin.sort_value() != i64::MAX,
         "date_bin origin must be finite"

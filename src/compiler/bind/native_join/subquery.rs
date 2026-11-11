@@ -67,8 +67,13 @@ impl Builder<'_> {
         let Some(Node::LeftJoin { id, input, spec }) = self.nodes.pop() else {
             anyhow::bail!("missing marker tagged join");
         };
-        let output =
-            ColumnRef { name: format!("@{id}_membership"), right: false, oid: 16, nullable: true };
+        let output = ColumnRef {
+            name: format!("@{id}_membership"),
+            right: false,
+            oid: 16,
+            nullable: true,
+            modifier: None,
+        };
         self.nodes.push(Node::Mark {
             id: id.clone(),
             input,

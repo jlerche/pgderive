@@ -15,7 +15,13 @@ fn spec(function: Function, oid: u32) -> Partition {
         aggregates: vec![Aggregate {
             expression: None,
             function,
-            argument: Some(ColumnRef { name: "price".into(), right: false, oid, nullable: true }),
+            argument: Some(ColumnRef {
+                name: "price".into(),
+                right: false,
+                oid,
+                nullable: true,
+                modifier: None,
+            }),
             filter: None,
             field: "result".into(),
             navigation: None,

@@ -24,7 +24,9 @@ impl Typed {
                     .saturating_add(promotion(argument, call.input_oid))
             }),
             Value::Cast { input, typmod } => {
-                input.cost().saturating_add(cast_cost(input.oid, self.oid, typmod.is_some()))
+                let modifies =
+                    typmod.is_some_and(|modifier| modifier.requires_coercion(input, self.oid));
+                input.cost().saturating_add(cast_cost(input.oid, self.oid, modifies))
             }
             Value::Binary { operation, left, right }
                 if self.oid != 1700
@@ -73,9 +75,7 @@ fn implicit_cast(value: &Typed, oid: u32) -> u64 {
 }
 fn cast_cost(input: u32, output: u32, typmod: bool) -> u64 {
     let text = |oid| matches!(oid, 25 | 1043);
-    if text(input) && text(output) && !typmod {
-        0
-    } else if input == output {
+    if input == output || (text(input) && text(output)) {
         if typmod { OPERATOR_COST } else { 0 }
     } else if (input, output) == (16, 25) {
         OPERATOR_COST

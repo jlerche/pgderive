@@ -154,6 +154,7 @@ impl Builder<'_> {
                     right: false,
                     oid: column.oid,
                     nullable: column.nullable,
+                    modifier: Some(column.modifier).filter(|modifier| *modifier >= 0),
                 },
                 collation: column.collation,
                 modifier: column.modifier,

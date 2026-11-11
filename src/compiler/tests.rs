@@ -26,7 +26,7 @@ fn expression(sql: &str) -> Result<Expr> {
                 "text" => 25,
                 _ => anyhow::bail!("unknown column"),
             };
-            Ok(ColumnRef { right: false, name: name.clone(), oid, nullable: true })
+            Ok(ColumnRef { right: false, name: name.clone(), oid, nullable: true, modifier: None })
         },
     )
 }

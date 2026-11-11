@@ -11,9 +11,67 @@ use serde::Serialize;
 const DAY: i64 = 86_400_000_000;
 const MIN: i64 = -211_813_488_000_000_000;
 const END: i64 = 9_223_371_331_200_000_000;
+/// Fractional-second precision for native timestamp and full-range interval casts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Precision(u8);
+impl Precision {
+    pub(crate) const INTERVAL_FULL_RANGE: i32 = 0x7fff;
+    pub(crate) const INTERVAL_FOUR_DIGITS: i32 = (Self::INTERVAL_FULL_RANGE << 16) | 4;
+    const MAX_DIGITS: u8 = 6;
+
+    pub(crate) fn interval_modifier(self) -> i32 {
+        (Self::INTERVAL_FULL_RANGE << 16) | self.encoded()
+    }
+
+    pub(crate) fn from_interval_modifier(modifier: i32) -> Result<Self> {
+        let digits = modifier & 0xffff;
+        ensure!(
+            modifier >> 16 == Self::INTERVAL_FULL_RANGE && digits <= i32::from(Self::MAX_DIGITS),
+            "unsupported interval result modifier"
+        );
+        Ok(Self(u8::try_from(digits)?))
+    }
+
+    pub(crate) fn new(digits: i64) -> Result<Self> {
+        ensure!((0..=i64::from(i32::MAX)).contains(&digits), "temporal precision out of range");
+        Ok(Self(u8::try_from(digits.min(i64::from(Self::MAX_DIGITS)))?))
+    }
+
+    pub(crate) fn needs_rounding(self, prior: i32) -> bool {
+        self.0 < Self::MAX_DIGITS && (prior < 0 || self.encoded() < prior)
+    }
+
+    pub(crate) fn needs_interval_rounding(self, prior: i32) -> bool {
+        const SECOND_FIELD: i32 = 1 << 12;
+        prior < 0 && self.0 < Self::MAX_DIGITS
+            || prior >= 0
+                && (prior >> 16) & SECOND_FIELD != 0
+                && self.needs_rounding(prior & 0xffff)
+    }
+
+    pub(crate) fn encoded(self) -> i32 {
+        i32::from(self.0)
+    }
+
+    fn round(self, micros: i64) -> Option<i64> {
+        let step = 10_i64.pow(u32::from(Self::MAX_DIGITS - self.0));
+        let offset = step / 2;
+        let adjusted = micros.checked_add(if micros < 0 { -offset } else { offset })?;
+        Some(adjusted - adjusted % step)
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Timestamp(i64);
 impl Timestamp {
+    pub(crate) const ROUNDED_END: &str = "294277-01-01T00:00:00";
+    pub(crate) const LAST_FINITE: &str = "294276-12-31 23:59:59.999999";
+
+    pub(crate) fn parse_literal(value: &str, oid: u32) -> Result<Self> {
+        let result = Self::parse(value, oid)?;
+        ensure!(result.0 != END, "timestamp out of PostgreSQL range");
+        Ok(result)
+    }
+
     pub(crate) fn difference(self, other: Self) -> Result<Interval> {
         match (self.0, other.0) {
             (i64::MIN, value) => {
@@ -33,6 +91,8 @@ impl Timestamp {
     }
 
     pub(crate) fn parse(value: &str, oid: u32) -> Result<Self> {
+        // PostgreSQL 17 precision casts can produce exactly END, which is also
+        // visible in source rows and internal expression results.
         ensure!(
             matches!(oid, 1114 | 1184),
             crate::engine::execution::PlanFault("invalid timestamp type")
@@ -53,12 +113,24 @@ impl Timestamp {
             .and_then(|value| value.checked_add(clock))
             .and_then(|value| value.checked_sub(offset * 1_000_000))
             .context("timestamp arithmetic out of range")?;
-        ensure!((MIN..END).contains(&micros), "timestamp out of PostgreSQL range");
+        ensure!((MIN..=END).contains(&micros), "timestamp out of PostgreSQL range");
         Ok(Self(micros))
     }
     pub(crate) fn from_micros(value: i64) -> Result<Self> {
         ensure!((MIN..END).contains(&value), "timestamp out of range");
         Ok(Self(value))
+    }
+    pub(crate) fn rounded(self, precision: Precision) -> Result<Self> {
+        if matches!(self.0, i64::MIN | i64::MAX) {
+            return Ok(self);
+        }
+        let micros = precision.round(self.0).context("timestamp out of range")?;
+        if micros == END { Ok(Self(END)) } else { Self::from_micros(micros) }
+    }
+    pub(crate) fn cast_zone(self) -> Result<Self> {
+        // The timezone conversion checks the ordinary timestamp range even in UTC.
+        ensure!(self.0 != END, "timestamp out of range");
+        Ok(self)
     }
     pub(crate) fn date(self) -> Result<Date> {
         Ok(match self.0 {

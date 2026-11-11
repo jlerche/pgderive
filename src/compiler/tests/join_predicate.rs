@@ -8,7 +8,8 @@ use anyhow::{Context as _, Result};
 
 #[test]
 fn borrowed_join_predicates_preserve_nulls_lazy_branches_and_errors() -> Result<()> {
-    let right = [ColumnRef { right: false, name: "big".into(), oid: 20, nullable: true }];
+    let right =
+        [ColumnRef { right: false, name: "big".into(), oid: 20, nullable: true, modifier: None }];
     for sql in [
         "n < big",
         "coalesce(big,n) = n",

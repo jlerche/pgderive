@@ -384,8 +384,13 @@ mod tests {
 
     #[test]
     fn residual_reads_keep_computed_join_side_metadata() {
-        let column =
-            ColumnRef { right: false, name: "computed_right".into(), oid: 16, nullable: true };
+        let column = ColumnRef {
+            right: false,
+            name: "computed_right".into(),
+            oid: 16,
+            nullable: true,
+            modifier: None,
+        };
         let mut join = Node::LeftJoin {
             id: "join".into(),
             input: "tagged".into(),
