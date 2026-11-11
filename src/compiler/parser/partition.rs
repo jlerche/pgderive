@@ -1,4 +1,4 @@
-use super::{Name, Table, column, node, optional, target};
+use super::{Name, Table, column, node, optional, target, windows};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) struct Parsed {
@@ -65,7 +65,9 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
             (Source::Native(table), expansion)
         }
     };
-    let targets = select.target_list.iter().map(parse_target).collect::<Result<_>>()?;
+    let windows = windows::Definitions::new(&select.window_clause)?;
+    let targets = targets_with_windows(select, &windows)?;
+    windows.require_used()?;
     let groups = select.group_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
     Ok(Parsed {
         source,
@@ -76,7 +78,22 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Parsed> {
         having: crate::compiler::syntax::predicate(select.having_clause.as_deref())?,
     })
 }
+pub(super) fn parse_targets(select: &pg::SelectStmt) -> Result<Vec<Target>> {
+    targets_with_windows(select, &windows::Definitions::new(&select.window_clause)?)
+}
+
+fn targets_with_windows(
+    select: &pg::SelectStmt,
+    windows: &windows::Definitions<'_>,
+) -> Result<Vec<Target>> {
+    select.target_list.iter().map(|value| target_with_windows(value, windows)).collect()
+}
+
 pub(in crate::compiler) fn parse_target(value: &Node) -> Result<Target> {
+    target_with_windows(value, &windows::Definitions::default())
+}
+
+fn target_with_windows(value: &Node, windows: &windows::Definitions<'_>) -> Result<Target> {
     let NodeEnum::ResTarget(output) = node(value)? else {
         anyhow::bail!("unsupported target");
     };
@@ -90,7 +107,7 @@ pub(in crate::compiler) fn parse_target(value: &Node) -> Result<Target> {
             | "row_number" | "lag" | "lead"),
         ) = function
         {
-            (Value::Aggregate(Box::new(aggregate(call, function)?)), function.to_owned())
+            (Value::Aggregate(Box::new(aggregate(call, function, windows)?)), function.to_owned())
         } else {
             (
                 Value::Typed(Box::new(expression.clone())),
@@ -103,7 +120,11 @@ pub(in crate::compiler) fn parse_target(value: &Node) -> Result<Target> {
     };
     Ok(Target { value, label: if output.name.is_empty() { label } else { output.name.clone() } })
 }
-fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
+fn aggregate(
+    call: &pg::FuncCall,
+    name: &str,
+    windows: &windows::Definitions<'_>,
+) -> Result<Aggregate> {
     use crate::compiler::partition::Function;
     let function = match name {
         "count" if call.agg_distinct => Function::CountDistinct,
@@ -166,6 +187,7 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
             .over
             .as_deref()
             .map(|value| {
+                let value = windows.resolve(value)?;
                 if navigation.is_some() {
                     super::navigation::window(value)
                 } else {
@@ -176,13 +198,16 @@ fn aggregate(call: &pg::FuncCall, name: &str) -> Result<Aggregate> {
         navigation,
     })
 }
-pub(super) fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
-    ensure!(value.name.is_empty() && value.refname.is_empty(), "named windows unsupported");
+pub(super) fn window(spec: windows::Spec<'_>, ranking: bool) -> Result<Window> {
+    let value = spec.frame;
     if ranking {
-        ensure!(value.frame_options == 1058, "ranking currently requires the default frame");
+        ensure!(
+            value.frame_options == windows::DEFAULT_FRAME,
+            "ranking currently requires the default frame"
+        );
         return Ok(Window {
-            keys: value.partition_clause.iter().map(super::scalar::key).collect::<Result<_>>()?,
-            order: value.order_clause.iter().map(sort_key).collect::<Result<_>>()?,
+            keys: spec.partition.iter().map(super::scalar::key).collect::<Result<_>>()?,
+            order: spec.order.iter().map(sort_key).collect::<Result<_>>()?,
             frame: crate::compiler::partition::Frame { start: None, end: Some(0) },
             ranking,
             peers: None,
@@ -202,8 +227,8 @@ pub(super) fn window(value: &pg::WindowDef, ranking: bool) -> Result<Window> {
         peers != Some(false) || value.frame_options & (2048 | 4096 | 8192 | 16384) == 0,
         "RANGE offsets require typed distance semantics"
     );
-    let keys = value.partition_clause.iter().map(super::scalar::key).collect::<Result<_>>()?;
-    let order: Vec<_> = value.order_clause.iter().map(sort_key).collect::<Result<_>>()?;
+    let keys = spec.partition.iter().map(super::scalar::key).collect::<Result<_>>()?;
+    let order: Vec<_> = spec.order.iter().map(sort_key).collect::<Result<_>>()?;
     ensure!(peers != Some(true) || !order.is_empty(), "GROUPS requires ORDER BY");
     let start = bound(value.frame_options, value.start_offset.as_deref(), true)?;
     let end = bound(value.frame_options, value.end_offset.as_deref(), false)?;

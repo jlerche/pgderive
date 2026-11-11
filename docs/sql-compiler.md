@@ -296,7 +296,13 @@ must share one specification. Frame boundaries support CURRENT ROW, nonnegative
 integer PRECEDING/FOLLOWING offsets and valid UNBOUNDED endpoints. The ordering
 must include every source primary-key column, explicitly in SQL, so positional
 frames have deterministic occurrence order. The compiler adds no hidden tiebreaker.
-Peer-aware RANGE/GROUPS frames are described below; exclusions and named windows remain rejected.
+Peer-aware RANGE/GROUPS frames are described below. Frame exclusions remain
+unsupported. Named `WINDOW` definitions are scoped to their SELECT and
+resolve through the same single-window lowering as inline specifications.
+`OVER name` uses the entire definition. `OVER (name ...)` and inherited
+definitions may add ordering if the base has none and may supply their own
+frame. They cannot copy an explicit frame or add a partition clause.
+Every declaration must be referenced directly or through inheritance.
 Peer ranking, native lag/lead and qualified temporal expressions are described below. Windows preserve
 source rows and attach frame aggregates, whereas grouped aggregates replace each
 group with one row. Empty frames yield COUNT zero and other supported aggregates
@@ -512,7 +518,7 @@ uses the derived-query and post-window filter lowering described below.
 Window aggregates also support PostgreSQL's default RANGE frame, RANGE with
 CURRENT ROW or UNBOUNDED endpoints, and GROUPS with nonnegative integral constant
 PRECEDING/FOLLOWING offsets or standard endpoints. GROUPS requires ORDER BY.
-RANGE distance offsets, exclusions and named windows remain rejected before
+RANGE distance offsets and exclusions remain rejected before
 registration. All window expressions must share the same typed specification.
 
 Peer equality uses exactly the SQL ORDER BY values, including NULL placement and

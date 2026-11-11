@@ -92,6 +92,7 @@ outer-joins outer_join
 aggregate-inputs aggregate_inputs_compiler
 relational relational_compiler
 partition partition_compiler
+named-window named_window
 numeric numeric_compiler
 circuit-numeric circuit_numeric
 native native_compiler

@@ -28,8 +28,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     ensure!(select.sort_clause.len() <= 16, "ORDER BY exceeds 16 keys");
     let (limit, offset) = bounds(select)?;
     let visible = select.target_list.len();
-    let targets =
-        select.target_list.iter().map(partition::parse_target).collect::<Result<Vec<_>>>()?;
+    let targets = partition::parse_targets(select)?;
     let mut plain = select.clone();
     let mut order = Vec::new();
     for value in &select.sort_clause {

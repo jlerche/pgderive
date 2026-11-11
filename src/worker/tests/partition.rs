@@ -391,3 +391,100 @@ async fn date_bin_rejects_unqualified_semantics_and_filters_before_errors() -> R
     assert_eq!(query.time(), 1);
     Ok(())
 }
+
+#[test]
+fn named_windows_lower_to_the_inline_plan() -> Result<()> {
+    let mut native = contract();
+    native.relations[1].columns[2].oid = 23;
+    let expected = serde_json::to_vec(&compile(WINDOW, &native)?)?;
+    let frame = "PARTITION BY b.auction ORDER BY b.id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING";
+    let direct = WINDOW.replace(&format!("OVER ({frame})"), r#"OVER "W""#);
+    let named = format!(r#"{direct} WINDOW "W" AS ({frame})"#);
+    assert_eq!(serde_json::to_vec(&compile(&named, &native)?)?, expected);
+
+    let inherited = direct
+        .replacen(r#"OVER "W""#, "OVER (ordered ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)", 1)
+        .replace(r#"OVER "W""#, "OVER framed");
+    let named = format!(
+        "{inherited} WINDOW base AS (PARTITION BY b.auction), ordered AS (base ORDER BY b.id), framed AS (ordered ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)"
+    );
+    assert_eq!(serde_json::to_vec(&compile(&named, &native)?)?, expected);
+
+    for (named, inline) in [
+        (
+            "SELECT b.id,rank() OVER w AS r,dense_rank() OVER (w) AS d FROM source.bid b WINDOW w AS (PARTITION BY b.auction ORDER BY b.price)",
+            "SELECT b.id,rank() OVER (PARTITION BY b.auction ORDER BY b.price) AS r,dense_rank() OVER (PARTITION BY b.auction ORDER BY b.price) AS d FROM source.bid b",
+        ),
+        (
+            "SELECT b.id,lag(b.price) OVER w FROM source.bid b WINDOW w AS (ORDER BY b.id)",
+            "SELECT b.id,lag(b.price) OVER (ORDER BY b.id) FROM source.bid b",
+        ),
+        (
+            "SELECT b.id FROM source.bid b WINDOW w AS (ORDER BY b.id) ORDER BY COUNT(*) OVER w,b.id LIMIT 3",
+            "SELECT b.id FROM source.bid b ORDER BY COUNT(*) OVER (ORDER BY b.id),b.id LIMIT 3",
+        ),
+        (
+            "WITH q AS (SELECT b.id,rank() OVER w AS r FROM source.bid b WINDOW w AS (ORDER BY b.price)) SELECT q.id,q.r FROM q",
+            "WITH q AS (SELECT b.id,rank() OVER (ORDER BY b.price) AS r FROM source.bid b) SELECT q.id,q.r FROM q",
+        ),
+    ] {
+        assert_eq!(
+            serde_json::to_vec(&compile(named, &native)?)?,
+            serde_json::to_vec(&compile(inline, &native)?)?,
+            "{named}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn named_windows_reject_invalid_references_and_multiple_specs() -> Result<()> {
+    let native = contract();
+    for (sql, message) in [
+        (
+            "SELECT id FROM source.bid WINDOW unused AS (ORDER BY missing)",
+            "unused WINDOW definition",
+        ),
+        (
+            "SELECT 1 FROM source.bid WINDOW unused AS (ORDER BY sum(price))",
+            "unused WINDOW definition",
+        ),
+        ("SELECT count(*) OVER missing FROM source.bid", "does not exist"),
+        (
+            "SELECT count(*) OVER w FROM source.bid WINDOW w AS (later), later AS ()",
+            "does not exist",
+        ),
+        ("SELECT count(*) OVER w FROM source.bid WINDOW w AS (w)", "does not exist"),
+        ("SELECT count(*) OVER w FROM source.bid WINDOW w AS (), w AS ()", "duplicate WINDOW"),
+        (
+            "SELECT count(*) OVER (w PARTITION BY auction) FROM source.bid WINDOW w AS ()",
+            "override a window's PARTITION BY",
+        ),
+        (
+            "SELECT count(*) OVER w FROM source.bid WINDOW base AS (ORDER BY id), w AS (base ORDER BY price)",
+            "override a window's ORDER BY",
+        ),
+        (
+            "SELECT count(*) OVER (w) FROM source.bid WINDOW w AS (ORDER BY id ROWS UNBOUNDED PRECEDING)",
+            "cannot copy a window",
+        ),
+        (
+            "SELECT count(*) OVER w FROM source.bid WINDOW base AS (ORDER BY id ROWS UNBOUNDED PRECEDING), w AS (base)",
+            "cannot copy a window",
+        ),
+        (
+            "SELECT count(*) OVER w, count(*) OVER (ORDER BY price) FROM source.bid WINDOW w AS (ORDER BY id)",
+            "multiple window specifications",
+        ),
+        (
+            "SELECT count(*) OVER w FROM (SELECT id, rank() OVER w FROM source.bid WINDOW w AS (ORDER BY id)) q",
+            "does not exist",
+        ),
+    ] {
+        let Err(error) = compile(sql, &native) else {
+            anyhow::bail!("unexpectedly compiled {sql}");
+        };
+        assert!(format!("{error:#}").contains(message), "{sql}: {error:#}");
+    }
+    Ok(())
+}

@@ -61,6 +61,7 @@ fn validate_join(
             && join.rtindex == 0
             && select.group_clause.is_empty()
             && select.having_clause.is_none()
+            && select.window_clause.is_empty()
             && subquery.lateral,
         "lookup requires LEFT JOIN LATERAL without grouping/join modifiers"
     );
@@ -78,7 +79,8 @@ fn inner_shape(select: &pg::SelectStmt) -> Result<Inner> {
             == Some(1)
             && select.limit_option == i32::from(pg::LimitOption::Count)
             && select.group_clause.is_empty()
-            && select.having_clause.is_none(),
+            && select.having_clause.is_none()
+            && select.window_clause.is_empty(),
         "lookup requires LIMIT 1 without WITH TIES/grouping"
     );
     let mut plain = select.clone();

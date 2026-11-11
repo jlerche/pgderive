@@ -15,6 +15,7 @@ pub(super) mod partition;
 pub(super) mod scalar;
 pub(super) mod setop;
 mod subquery;
+mod windows;
 use expressions::{column, node, optional, target};
 
 #[derive(Clone)]
@@ -97,7 +98,7 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
         group_clause: _,
         group_distinct,
         having_clause: _,
-        window_clause,
+        window_clause: _,
         values_lists,
         sort_clause,
         limit_offset,
@@ -114,7 +115,6 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
         distinct_clause.is_empty()
             && into_clause.is_none()
             && !group_distinct
-            && window_clause.is_empty()
             && values_lists.is_empty()
             && sort_clause.is_empty()
             && limit_offset.is_none()
