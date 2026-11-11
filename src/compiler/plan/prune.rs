@@ -254,6 +254,7 @@ fn trim_aggregates(spec: &mut Partition, required: &Names) -> bool {
         spare.expression = None;
         spare.filter = None;
         spare.navigation = None;
+        spare.position = None;
         spec.aggregates.insert(0, spare);
     }
     spec.aggregates != before

@@ -111,6 +111,7 @@ ranking ranking_compiler
 peer-frames peer_frames_compiler
 derived derived_compiler
 navigation navigation_compiler
+frame-values frame_value
 lookup lookup_compiler
 composition composition_compiler
 case case_compiler

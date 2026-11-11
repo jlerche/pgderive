@@ -287,3 +287,58 @@ fn extrema_keep_signed_width_boundaries_until_final_duplicate_departs() -> Resul
     assert_eq!(run(&spec, &bag, true)?.0, run(&spec, &bag, false)?.0);
     Ok(())
 }
+
+#[test]
+fn frame_value_checks_position_before_accessing_the_frame() -> Result<()> {
+    let window = "OVER(ORDER BY id ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)";
+    let query = |value: &str, position: &str| {
+        format!("SELECT nth_value({value},{position}) {window} FROM source.bid")
+    };
+    let empty = input(0, false)?;
+    let one = input(1, false)?;
+    for position in ["0", "-1"] {
+        let spec = bound(&query("price", position))?;
+        assert_eq!(run(&spec, &empty, true)?.0, empty);
+        assert!(matches!(
+            run(&spec, &one, true),
+            Err(error) if error.is::<crate::engine::execution::EvaluationFailed>()
+                && error.root_cause().to_string() == "argument of nth_value must be greater than zero"
+        ));
+    }
+    for position in ["NULL", "2147483647"] {
+        let spec = bound(&query("1/id", position))?;
+        let (result, _) = run(&spec, &one, true)?;
+        assert!(result.iter().all(|(((), row), _)| row.get("@aggregate_0") == Some(&None)));
+    }
+    for sql in [
+        query("NULL", "1"),
+        query("price", "1::bigint"),
+        format!("SELECT first_value(price) FILTER (WHERE true) {window} FROM source.bid"),
+        "SELECT last_value(price) FROM source.bid".into(),
+    ] {
+        assert!(compile(&sql, &contract()).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn frame_values_do_not_scan_unselected_occurrences() -> Result<()> {
+    let window = "OVER(ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)";
+    let spec = bound(&format!(
+        "SELECT first_value(price) {window}, last_value(price) {window}, nth_value(price,2) {window} FROM source.bid"
+    ))?;
+    let (result, work) = run(&spec, &input(400, false)?, true)?;
+    assert_eq!(result.iter().count(), 400);
+    assert!(work < 400 * 10, "{work}");
+    Ok(())
+}
+
+#[test]
+fn frame_value_keeps_collation_for_outer_ordering() -> Result<()> {
+    compile(
+        r#"SELECT first_value(price::text::varchar(12) COLLATE "C") OVER (ORDER BY id) AS v
+           FROM source.bid ORDER BY v"#,
+        &contract(),
+    )?;
+    Ok(())
+}

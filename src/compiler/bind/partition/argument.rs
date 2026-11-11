@@ -34,11 +34,15 @@ pub(super) fn bind(
         };
         return Ok(Bound { column, filter: filter.map(Predicate::new), expression: None });
     };
-    let mut expression = if context.function.boolean() {
+    let mut expression = if context.function.boolean() || context.function.frame_value() {
         Typed::bind_contextual(&ast, resolve, 0)?
     } else {
         typed::bind(&ast, resolve, 0)?
     };
+    ensure!(
+        !context.function.frame_value() || !matches!(expression.oid(), 0 | 705),
+        "could not determine polymorphic type because input has type unknown"
+    );
     if context.function.boolean() && matches!(expression.oid(), 0 | 705) {
         expression = expression.coerce_common(16)?;
     } else if expression.oid() == 0 {
@@ -56,7 +60,11 @@ pub(super) fn bind(
             right: false,
             oid: expression.oid(),
             nullable: expression.nullable(),
-            collation: 0,
+            collation: if context.function.frame_value() {
+                expression.collation(&|column| Ok(column.collation))?
+            } else {
+                0
+            },
             modifier: None,
         };
         return Ok(Bound {
@@ -71,4 +79,13 @@ pub(super) fn bind(
     let column =
         scalar::register(expression, computed, &format!("@aggregate_input_{:?}_", context.scope))?;
     Ok(Bound { column: Some(column), filter: None, expression: None })
+}
+
+pub(super) fn position(
+    ast: &pg_query::Node,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+) -> Result<Typed> {
+    let position = Typed::bind_contextual(ast, resolve, 0)?;
+    ensure!(matches!(position.oid(), 0 | 705 | 21 | 23), "NTH_VALUE position requires integer");
+    position.coerce_common(23)
 }

@@ -1,3 +1,4 @@
+mod frame_value;
 mod sliding;
 use super::aggregate::{Linear, contribution};
 use crate::{
@@ -240,12 +241,17 @@ fn framed_fields(
     frame: &[Ordered],
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
 ) -> Result<Row> {
+    let mut aggregates =
+        spec.aggregates.iter().filter(|value| !value.function.frame_value()).peekable();
+    if aggregates.peek().is_none() {
+        return Ok(Row::new());
+    }
     let (limits, work) = context;
     work.charge(frame.len())?;
     let frame = Batch::from_updates(frame.iter().map(|(_, row)| (((), row.clone()), 1)))?;
     limits.check_batch(&frame)?;
     let mut output = Row::new();
-    for aggregate in &spec.aggregates {
+    for aggregate in aggregates {
         output.insert(aggregate.field.clone(), aggregate_value(aggregate, &frame, work)?);
     }
     Ok(output)
@@ -274,6 +280,8 @@ fn framed(
             group.1 = index + 1;
         }
     }
+    let values: Vec<_> =
+        spec.aggregates.iter().filter(|value| value.function.frame_value()).collect();
     let mut updates = Consolidator::new(limits)?;
     for (index, (first, last)) in groups.iter().enumerate() {
         let (start, end) = bounds(frame, index, groups.len())?;
@@ -287,6 +295,11 @@ fn framed(
             }
             let mut output = row.clone();
             output.extend(fields.clone());
+            for value in &values {
+                work.charge(1)?;
+                let result = frame_value::evaluate(value, &ordered[start_row..end_row], row)?;
+                output.insert(value.field.clone(), result);
+            }
             updates.add(((), output), 1)?;
         }
     }

@@ -636,6 +636,27 @@ NULLs, native type promotion and values, neighbor-changing updates/deletes, sour
 filtering followed by outer rank filtering, projection collisions and cold restart.
 
 
+## Native PostgreSQL FIRST_VALUE, LAST_VALUE and NTH_VALUE
+
+These functions select a physical row occurrence within the current window frame.
+They use the existing ROWS, default or explicit peer RANGE, and GROUPS frame
+forms, including named windows and the full-partition default without ORDER BY.
+ROWS uses the existing complete occurrence ordering requirement. Within a peer
+group, SQL leaves relative row order unspecified unless the ORDER BY breaks ties.
+
+The value argument can be a column or supported typed expression. It is evaluated
+on the selected row. A selected NULL, an empty frame, or an out-of-frame position
+returns NULL. NTH_VALUE evaluates its one-based integer position on the current
+row. A NULL position returns NULL and a nonpositive position errors, including
+on a row with an empty frame. Results retain the value argument's PostgreSQL
+type and collation, with no result type modifier.
+
+Frame navigation shares the bounded affected-partition evaluator with framed
+aggregates. It selects by position from the ordered occurrences, so it does not
+rescan the frame for each output row. The owned PostgreSQL harness compares
+results with both PostgreSQL and an independent frame oracle through updates,
+deletes and cold restart.
+
 ## Native left predecessor lookup
 
 The frontend accepts this PostgreSQL shape, with native column projections and

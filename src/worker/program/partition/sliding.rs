@@ -18,7 +18,7 @@ pub(super) struct Frames(Option<Sliding>);
 impl Frames {
     pub(super) fn new(spec: &Partition) -> Self {
         let eligible = !spec.aggregates.is_empty()
-            && spec.aggregates.iter().all(|value| {
+            && ordinary(spec).all(|value| {
                 value.function.boolean()
                     || matches!(value.function, Function::Count)
                     || matches!(
@@ -31,7 +31,7 @@ impl Frames {
             });
         Self(eligible.then(|| Sliding {
             range: 0..0,
-            states: spec.aggregates.iter().map(Statistics::new).collect(),
+            states: ordinary(spec).map(Statistics::new).collect(),
         }))
     }
     #[cfg(test)]
@@ -50,12 +50,15 @@ impl Frames {
         };
         sliding.advance(spec, rows, range, context.1)?;
         let mut output = Row::new();
-        for (aggregate, state) in spec.aggregates.iter().zip(&sliding.states) {
+        for (aggregate, state) in ordinary(spec).zip(&sliding.states) {
             context.1.charge(1)?;
             output.insert(aggregate.field.clone(), state.result(aggregate)?);
         }
         Ok(output)
     }
+}
+fn ordinary(spec: &Partition) -> impl Iterator<Item = &crate::compiler::partition::Aggregate> {
+    spec.aggregates.iter().filter(|aggregate| !aggregate.function.frame_value())
 }
 impl Sliding {
     fn advance(
@@ -88,7 +91,7 @@ impl Sliding {
         sign: i64,
         work: &mut PartitionWork,
     ) -> Result<()> {
-        for (aggregate, state) in spec.aggregates.iter().zip(&mut self.states) {
+        for (aggregate, state) in ordinary(spec).zip(&mut self.states) {
             work.charge(1)?;
             state.observe(aggregate, row, sign)?;
         }

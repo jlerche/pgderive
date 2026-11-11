@@ -98,3 +98,28 @@ fn temporal_casts_round_native_microseconds_and_keep_metadata() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn quoted_integer_casts_accept_postgres_bases_and_separators() -> Result<()> {
+    for (sql, expected) in [
+        ("' +0x_FF '::integer", "255"),
+        ("'0b1_01'::smallint", "5"),
+        ("'-0O10'::bigint", "-8"),
+        ("'1_000'::integer", "1000"),
+        ("'-0x8000000000000000'::bigint", "-9223372036854775808"),
+    ] {
+        assert_eq!(expression(sql)?.evaluate(&Row::new())?.as_deref(), Some(expected));
+    }
+    for sql in [
+        "'_1'::integer",
+        "'1_'::integer",
+        "'0x__2'::integer",
+        "'0b12'::integer",
+        "'0o8'::integer",
+        "'0x80000000'::integer",
+        "'- 1'::integer",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    Ok(())
+}

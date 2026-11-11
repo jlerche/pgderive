@@ -22,6 +22,9 @@ pub enum Function {
     RowNumber,
     Lag,
     Lead,
+    FirstValue,
+    LastValue,
+    NthValue,
 }
 impl Function {
     pub(crate) const fn distinct_measure(&self) -> bool {
@@ -45,6 +48,9 @@ impl Function {
     pub(crate) const fn occurrence_order(&self) -> bool {
         matches!(self, Self::RowNumber | Self::Lag | Self::Lead)
     }
+    pub(crate) const fn frame_value(&self) -> bool {
+        matches!(self, Self::FirstValue | Self::LastValue | Self::NthValue)
+    }
     pub(crate) const fn ranking(&self) -> bool {
         matches!(self, Self::Rank | Self::DenseRank | Self::RowNumber)
     }
@@ -59,6 +65,37 @@ pub struct Aggregate {
     pub(crate) field: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) navigation: Option<super::navigation::Navigation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) position: Option<super::typed::Typed>,
+}
+impl Aggregate {
+    pub(super) fn output_column(&self) -> Result<ColumnRef> {
+        let oid = self.navigation.as_ref().map_or_else(
+            || result_type(&self.function, self.argument.as_ref()),
+            |navigation| Ok(navigation.oid),
+        )?;
+        let nullable = !matches!(
+            self.function,
+            Function::Count
+                | Function::CountDistinct
+                | Function::Rank
+                | Function::DenseRank
+                | Function::RowNumber
+        );
+        let collation = if self.function.frame_value() {
+            self.argument.as_ref().context("missing window value")?.collation
+        } else {
+            0
+        };
+        Ok(ColumnRef {
+            name: self.field.clone(),
+            right: false,
+            oid,
+            nullable,
+            collation,
+            modifier: None,
+        })
+    }
 }
 #[derive(Clone, Serialize)]
 pub struct Order {
@@ -123,6 +160,9 @@ pub(in crate::compiler) fn result_type(
                 "AVG requires integral or numeric input"
             );
             Ok(1700)
+        }
+        Function::FirstValue | Function::LastValue | Function::NthValue => {
+            Ok(argument.context("missing window value")?.oid)
         }
         Function::Lag | Function::Lead => {
             anyhow::bail!("navigation requires typed operand binding")

@@ -494,7 +494,7 @@ impl Typed {
                     ensure!(yes != no, "invalid boolean literal");
                     if yes { "t".into() } else { "f".into() }
                 } else if matches!(oid, 20 | 21 | 23) {
-                    value.trim_ascii().parse::<i64>()?.to_string()
+                    types::parse_integer_input(&value)?.to_string()
                 } else {
                     value
                 };

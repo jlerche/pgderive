@@ -32,6 +32,7 @@ pub fn with_key_scales(mut spec: super::Partition) -> super::Partition {
             expression: None,
             field: format!("{KEY_SCALE}{index}"),
             navigation: None,
+            position: None,
         });
     }
     spec

@@ -2,7 +2,7 @@ use super::{ColumnRef, Compiled, resolve, scope};
 use crate::{
     compiler::{
         parser::partition as syntax,
-        partition::{Aggregate, Function, Mode, Order, Partition, result_type},
+        partition::{Aggregate, Function, Mode, Order, Partition},
         projection::OutputColumn,
         relational::{Node, Relational, Source, field},
     },
@@ -371,31 +371,24 @@ fn aggregate(
             )
         })
         .transpose()?;
-    let oid = navigation
-        .as_ref()
-        .map_or_else(|| result_type(&value.function, argument.as_ref()), |value| Ok(value.oid))?;
-    let name = format!("@aggregate_{}", state.base + state.aggregates.len());
-    let nullable = !matches!(
-        value.function,
-        Function::Count
-            | Function::CountDistinct
-            | Function::Rank
-            | Function::DenseRank
-            | Function::RowNumber
-    );
-    state.aggregates.push(Aggregate {
-        function: match value.function {
-            // Integral extrema are invariant to duplicate inputs.
-            Function::MinDistinct | Function::MaxDistinct => value.function.ordinary(),
-            function => function,
-        },
+    let position =
+        value.position.as_deref().map(|ast| argument::position(ast, resolve)).transpose()?;
+    let mut aggregate = Aggregate {
+        function: value.function,
         expression,
         argument,
         filter,
-        field: name.clone(),
+        field: format!("@aggregate_{}", state.base + state.aggregates.len()),
         navigation,
-    });
-    Ok(ColumnRef { name, right: false, oid, nullable, collation: 0, modifier: None })
+        position,
+    };
+    let output = aggregate.output_column()?;
+    // Integral extrema are invariant to duplicate inputs.
+    if matches!(aggregate.function, Function::MinDistinct | Function::MaxDistinct) {
+        aggregate.function = aggregate.function.ordinary();
+    }
+    state.aggregates.push(aggregate);
+    Ok(output)
 }
 
 fn validate_keys(keys: &[ColumnRef]) -> Result<()> {

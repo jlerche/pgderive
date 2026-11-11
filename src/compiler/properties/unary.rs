@@ -2,7 +2,7 @@ use super::{Analysis, Column, Identity, Properties};
 use crate::{
     compiler::{
         ColumnRef,
-        partition::{Function, Mode, Partition},
+        partition::{Mode, Partition},
         relational::{Binding, Node, Relational},
         scalar::Computed,
     },
@@ -293,32 +293,11 @@ fn partition(input: &Properties, id: &str, spec: &Partition) -> Result<Propertie
 }
 fn append_aggregates(facts: &mut Properties, id: &str, spec: &Partition) -> Result<()> {
     for aggregate in &spec.aggregates {
-        let oid = aggregate.navigation.as_ref().map_or_else(
-            || {
-                crate::compiler::partition::result_type(
-                    &aggregate.function,
-                    aggregate.argument.as_ref(),
-                )
-            },
-            |navigation| Ok(navigation.oid),
-        )?;
-        let nullable = !matches!(
-            aggregate.function,
-            Function::Count
-                | Function::CountDistinct
-                | Function::Rank
-                | Function::DenseRank
-                | Function::RowNumber
-        );
-        let field = ColumnRef {
-            name: aggregate.field.clone(),
-            right: false,
-            oid,
-            nullable,
-            collation: 0,
-            modifier: None,
-        };
-        facts.columns.insert(field.name.clone(), Column::derived(id, field));
+        let field = aggregate.output_column()?;
+        let collation = field.collation;
+        let mut output = Column::derived(id, field);
+        output.collation = collation;
+        facts.columns.insert(output.reference.name.clone(), output);
     }
     facts.prune();
     Ok(())

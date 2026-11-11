@@ -199,3 +199,30 @@ fn modifier(kind: &pg::TypeName, oid: u32) -> Result<Option<Modifier>> {
     };
     Ok(Some(modifier))
 }
+
+/// Parse the textual input syntax shared by `PostgreSQL` int2, int4 and int8.
+pub(super) fn parse_integer_input(text: &str) -> Result<i64> {
+    let text = text
+        .trim_matches(|character: char| character.is_ascii_whitespace() || character == '\u{b}');
+    let (negative, digits) = match text.as_bytes().first() {
+        Some(b'-') => (true, &text[1..]),
+        Some(b'+') => (false, &text[1..]),
+        _ => (false, text),
+    };
+    let (radix, digits) = match digits.as_bytes() {
+        [b'0', b'x' | b'X', ..] => (16, &digits[2..]),
+        [b'0', b'o' | b'O', ..] => (8, &digits[2..]),
+        [b'0', b'b' | b'B', ..] => (2, &digits[2..]),
+        _ => (10, digits),
+    };
+    // PostgreSQL also permits one underscore immediately after a base prefix.
+    let digits = if radix == 10 { digits } else { digits.strip_prefix('_').unwrap_or(digits) };
+    ensure!(
+        digits
+            .split('_')
+            .all(|part| !part.is_empty() && part.chars().all(|digit| digit.is_digit(radix))),
+        "invalid integer literal"
+    );
+    let magnitude = i128::from_str_radix(&digits.replace('_', ""), radix)?;
+    Ok(i64::try_from(if negative { -magnitude } else { magnitude })?)
+}

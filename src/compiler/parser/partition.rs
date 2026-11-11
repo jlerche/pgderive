@@ -34,6 +34,7 @@ pub(in crate::compiler) struct Aggregate {
     pub filter: Option<crate::compiler::syntax::Expr>,
     pub window: Option<Window>,
     pub navigation: Option<super::navigation::Navigation>,
+    pub position: Option<Box<Node>>,
 }
 #[derive(Clone)]
 pub(in crate::compiler) enum Argument {
@@ -171,6 +172,9 @@ fn aggregate_function(name: &str) -> Option<Function> {
         "row_number" => Some(Function::RowNumber),
         "lag" => Some(Function::Lag),
         "lead" => Some(Function::Lead),
+        "first_value" => Some(Function::FirstValue),
+        "last_value" => Some(Function::LastValue),
+        "nth_value" => Some(Function::NthValue),
         _ => None,
     })
 }
@@ -208,6 +212,7 @@ fn aggregate(
     } else {
         None
     };
+    let position = window_value_position(call, &function)?;
     let argument = if let Some(navigation) = &navigation {
         Some(Argument::Column(navigation.argument.clone()))
     } else if ranking {
@@ -223,8 +228,10 @@ fn aggregate(
         ensure!(matches!(function, Function::Count) && call.args.is_empty(), "star requires COUNT");
         None
     } else {
-        let [argument] = call.args.as_slice() else {
-            anyhow::bail!("aggregate requires one scalar argument");
+        let argument = match call.args.as_slice() {
+            [argument] => argument,
+            [argument, _] if position.is_some() => argument,
+            _ => anyhow::bail!("aggregate requires one scalar argument"),
         };
         if matches!(node(argument)?, NodeEnum::ColumnRef(_)) {
             Some(Argument::Column(column(argument)?))
@@ -249,7 +256,27 @@ fn aggregate(
             })
             .transpose()?,
         navigation,
+        position: position.cloned().map(Box::new),
     })
+}
+fn window_value_position<'a>(
+    call: &'a pg::FuncCall,
+    function: &Function,
+) -> Result<Option<&'a Node>> {
+    if !function.frame_value() {
+        return Ok(None);
+    }
+    ensure!(
+        call.over.is_some() && !call.agg_star && call.agg_filter.is_none(),
+        "frame value functions require OVER and disallow star and FILTER"
+    );
+    if matches!(function, Function::NthValue) {
+        let [_, position] = call.args.as_slice() else {
+            anyhow::bail!("NTH_VALUE requires a value and position");
+        };
+        return Ok(Some(position));
+    }
+    Ok(None)
 }
 pub(super) fn window(spec: windows::Spec<'_>, ranking: bool) -> Result<Window> {
     let value = spec.frame;

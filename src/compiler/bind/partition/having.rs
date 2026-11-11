@@ -56,6 +56,7 @@ fn window_aggregate(value: &syntax::Aggregate) -> bool {
     value.argument.as_ref().is_some_and(
         |argument| matches!(argument,Argument::Expression(value) if contains_aggregate(value)),
     ) || value.filter.as_deref().is_some_and(contains_aggregate)
+        || value.position.as_deref().is_some_and(contains_aggregate)
         || value.window.as_ref().is_some_and(|window| {
             window.keys.iter().any(key_aggregate)
                 || window.order.iter().any(|(key, _, _)| key_aggregate(key))
@@ -117,6 +118,7 @@ pub(super) fn build(
             filter: None,
             window: None,
             navigation: None,
+            position: None,
         });
     }
     let key_count = groups.len();
@@ -330,6 +332,9 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
             for (key, _, _) in &mut window.order {
                 self.key(key)?;
             }
+        }
+        if let Some(position) = &mut value.position {
+            self.expression(position, true, 0)?;
         }
         if let Some(navigation) = &mut value.navigation {
             let mut node = name_node(&navigation.argument);
