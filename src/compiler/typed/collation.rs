@@ -19,7 +19,7 @@ impl Typed {
             Value::Cast { input, .. } => input.collation(resolve),
             Value::Call(call) => collations(&call.arguments, resolve),
             Value::Coalesce(values) => collations(values, resolve),
-            Value::NullIf { left, right } => {
+            Value::NullIf { left, right } | Value::Concat { left, right } => {
                 common(left.collation(resolve)?, right.collation(resolve)?)
             }
             Value::SimpleCase(case) => {

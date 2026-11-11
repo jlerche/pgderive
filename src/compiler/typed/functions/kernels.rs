@@ -1,8 +1,8 @@
 //! Closed native kernels share exact numeric arithmetic and UTF8 character semantics.
+use super::super::TEXT_OUTPUT_LIMIT;
 use crate::compiler::capabilities::Builtin;
 use anyhow::{Context, Result, ensure};
 use std::collections::BTreeSet;
-const OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 
 pub(super) fn evaluate(
     operation: Builtin,
@@ -116,7 +116,7 @@ fn replace(text: &str, from: &str, to: &str) -> Result<String> {
             occurrences.checked_mul(to.len()).and_then(|extra| base.checked_add(extra))
         })
         .context("replace size overflow")?;
-    ensure!(size <= OUTPUT_LIMIT, "replace output exceeds 16 MiB engine budget");
+    ensure!(size <= TEXT_OUTPUT_LIMIT, "replace output exceeds 16 MiB engine budget");
     Ok(text.replace(from, to))
 }
 fn translate(text: &str, from: &str, to: &str) -> String {
@@ -133,7 +133,7 @@ fn translate(text: &str, from: &str, to: &str) -> String {
 fn repeat(text: &str, number: i32) -> Result<String> {
     let number = usize::try_from(number.max(0))?;
     ensure!(
-        text.len().checked_mul(number).is_some_and(|size| size <= OUTPUT_LIMIT),
+        text.len().checked_mul(number).is_some_and(|size| size <= TEXT_OUTPUT_LIMIT),
         "repeat output exceeds 16 MiB engine budget"
     );
     Ok(text.repeat(number))
@@ -182,7 +182,7 @@ fn pad(text: &str, length: i32, fill: &str, left: bool) -> Result<String> {
         .and_then(|size| size.checked_add(remainder.len()))
         .and_then(|size| size.checked_add(prefix.len()))
         .context("padding size overflow")?;
-    ensure!(size <= OUTPUT_LIMIT, "padding output exceeds 16 MiB engine budget");
+    ensure!(size <= TEXT_OUTPUT_LIMIT, "padding output exceeds 16 MiB engine budget");
     let padding = fill.repeat(cycles) + &remainder;
     Ok(if left { padding + &prefix } else { prefix + &padding })
 }

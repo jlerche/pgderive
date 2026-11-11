@@ -26,9 +26,9 @@ impl Typed {
             Value::Cast { input, typmod } => {
                 input.cost().saturating_add(cast_cost(input.oid, self.oid, typmod.is_some()))
             }
-            Value::Binary { left, right, .. } | Value::NullIf { left, right } => {
-                Self::operator_cost(left, right)
-            }
+            Value::Binary { left, right, .. }
+            | Value::NullIf { left, right }
+            | Value::Concat { left, right } => Self::operator_cost(left, right),
             Value::Coalesce(values) => values.iter().map(Self::cost).sum(),
             Value::SimpleCase(case) => case.cost(),
             Value::Case { branches, otherwise } => branches

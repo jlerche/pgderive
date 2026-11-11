@@ -25,16 +25,14 @@ impl Typed {
                 }
             }
             Value::Binary { operation, left, right } => {
-                let (left, right) = (left.fold()?, right.fold()?);
-                if left.constant_null() || right.constant_null() {
-                    Value::Literal(None)
-                } else {
-                    Value::Binary {
-                        operation: *operation,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    }
-                }
+                strict_binary(left, right, |left, right| Value::Binary {
+                    operation: *operation,
+                    left,
+                    right,
+                })?
+            }
+            Value::Concat { left, right } => {
+                strict_binary(left, right, |left, right| Value::Concat { left, right })?
             }
             Value::NullIf { left, right } => {
                 let (left, right) = (left.fold()?, right.fold()?);
@@ -73,6 +71,19 @@ impl Typed {
         Self { oid: 16, value: Value::Literal(None) }
     }
 }
+fn strict_binary(
+    left: &Typed,
+    right: &Typed,
+    build: impl FnOnce(Box<Typed>, Box<Typed>) -> Value,
+) -> Result<Value> {
+    let (left, right) = (left.fold()?, right.fold()?);
+    Ok(if left.constant_null() || right.constant_null() {
+        Value::Literal(None)
+    } else {
+        build(Box::new(left), Box::new(right))
+    })
+}
+
 /// Folding stops at the first constant non-NULL argument and drops constant NULLs.
 fn coalesced(values: &[Typed]) -> Result<Vec<Typed>> {
     let mut out = Vec::new();

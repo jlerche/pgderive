@@ -22,6 +22,8 @@ pub(super) use types::common as comparison_type;
 mod types;
 mod visit;
 pub(super) use visit::Replace;
+
+const TEXT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Typed {
     oid: u32,
@@ -46,6 +48,7 @@ enum Value {
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
     SimpleCase(case::Simple),
     NullIf { left: Box<Typed>, right: Box<Typed> },
+    Concat { left: Box<Typed>, right: Box<Typed> },
 }
 impl Typed {
     pub(in crate::compiler) fn is_constant(&self) -> bool {
@@ -61,9 +64,9 @@ impl Typed {
             | Value::Interval(_) => true,
             Value::Call(call) => call.arguments.iter().all(Self::is_constant),
             Value::Cast { input, .. } => input.is_constant(),
-            Value::Binary { left, right, .. } | Value::NullIf { left, right } => {
-                left.is_constant() && right.is_constant()
-            }
+            Value::Binary { left, right, .. }
+            | Value::NullIf { left, right }
+            | Value::Concat { left, right } => left.is_constant() && right.is_constant(),
             Value::Coalesce(values) => values.iter().all(Self::is_constant),
             Value::SimpleCase(case) => case.is_constant(),
             Value::Case { branches, otherwise } => {
@@ -131,7 +134,7 @@ pub(super) fn bind(
         {
             nullif::bind(expression, resolve, depth)
         }
-        NodeEnum::AExpr(expression) => arithmetic(expression, resolve, depth),
+        NodeEnum::AExpr(expression) => operator(expression, resolve, depth),
         NodeEnum::CoalesceExpr(expression) => {
             ensure!(
                 expression.xpr.is_none() && (1..=64).contains(&expression.args.len()),
@@ -156,7 +159,7 @@ pub(super) fn bind(
 fn boolean(value: &Node, resolve: &impl Fn(&Name) -> Result<ColumnRef>) -> Result<Typed> {
     Ok(Typed { oid: 16, value: Value::Boolean(Box::new(super::expression::bind(value, resolve)?)) })
 }
-fn arithmetic(
+fn operator(
     expression: &pg_query::protobuf::AExpr,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     depth: usize,
@@ -170,6 +173,11 @@ fn arithmetic(
     let [operation] = name.as_slice() else {
         anyhow::bail!("qualified scalar operator unsupported")
     };
+    if operation == "||" {
+        let left = bind(optional(expression.lexpr.as_deref())?, resolve, depth + 1)?;
+        let right = bind(optional(expression.rexpr.as_deref())?, resolve, depth + 1)?;
+        return concat(left, right);
+    }
     let operation = Arithmetic::resolve(operation)?;
     let left =
         expression.lexpr.as_deref().map(|value| bind(value, resolve, depth + 1)).transpose()?;
@@ -205,6 +213,20 @@ fn arithmetic(
     Ok(Typed {
         oid: numeric_common(&[left.oid, right.oid]),
         value: Value::Binary { operation, left: Box::new(left), right: Box::new(right) },
+    })
+}
+
+fn concat(left: Typed, right: Typed) -> Result<Typed> {
+    ensure!(
+        matches!(left.oid, 0 | 25 | 705) && matches!(right.oid, 0 | 25 | 705),
+        "concatenation requires text operands"
+    );
+    Ok(Typed {
+        oid: 25,
+        value: Value::Concat {
+            left: Box::new(left.unknown_text()),
+            right: Box::new(right.unknown_text()),
+        },
     })
 }
 
@@ -294,7 +316,9 @@ impl Typed {
                     || call.arguments.iter().any(Self::nullable)
             }
             Value::Cast { input, .. } => input.nullable(),
-            Value::Binary { left, right, .. } => left.nullable() || right.nullable(),
+            Value::Binary { left, right, .. } | Value::Concat { left, right } => {
+                left.nullable() || right.nullable()
+            }
             Value::Coalesce(arguments) => arguments.iter().all(Self::nullable),
             Value::SimpleCase(case) => case.results().any(Self::nullable),
             Value::Case { branches, otherwise } => {

@@ -30,7 +30,9 @@ impl Typed {
             }
             Value::Call(call) => call.arguments.iter().for_each(|value| value.reads(out)),
             Value::Cast { input, .. } => input.reads(out),
-            Value::Binary { left, right, .. } | Value::NullIf { left, right } => {
+            Value::Binary { left, right, .. }
+            | Value::NullIf { left, right }
+            | Value::Concat { left, right } => {
                 left.reads(out);
                 right.reads(out);
             }
@@ -90,6 +92,10 @@ impl Typed {
                 left: Box::new(left.replaced(replace)?),
                 right: Box::new(right.replaced(replace)?),
             },
+            Value::Concat { left, right } => Value::Concat {
+                left: Box::new(left.replaced(replace)?),
+                right: Box::new(right.replaced(replace)?),
+            },
             Value::NullIf { left, right } => Value::NullIf {
                 left: Box::new(left.replaced(replace)?),
                 right: Box::new(right.replaced(replace)?),
@@ -123,7 +129,7 @@ impl Typed {
             Value::Boolean(value) => out.extend(value.strict_columns(false)),
             Value::Call(call) => call.arguments.iter().for_each(|value| value.strict_columns(out)),
             Value::Cast { input, .. } => input.strict_columns(out),
-            Value::Binary { left, right, .. } => {
+            Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.strict_columns(out);
                 right.strict_columns(out);
             }
@@ -136,7 +142,9 @@ impl Typed {
             Value::Boolean(value) => value.is_strict(),
             Value::Call(call) => call.arguments.iter().all(Self::is_strict),
             Value::Cast { input, .. } => input.is_strict(),
-            Value::Binary { left, right, .. } => left.is_strict() && right.is_strict(),
+            Value::Binary { left, right, .. } | Value::Concat { left, right } => {
+                left.is_strict() && right.is_strict()
+            }
             Value::Coalesce(_)
             | Value::Case { .. }
             | Value::SimpleCase(_)

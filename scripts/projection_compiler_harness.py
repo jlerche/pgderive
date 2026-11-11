@@ -34,11 +34,12 @@ class ProjectionFixture(SqlFixture):
                       "NULLIF(a.group_id, a.small_value) AS nonmatching_group")
             ranges = ("a.group_id BETWEEN a.small_value AND 2.0 AS within_range,"
                       "a.group_id NOT BETWEEN NULL AND 1 AS beyond_upper")
-            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges} FROM ')
+            joined = "a.category || '🙂' || a.vartext::text AS joined"
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
                                             "OR a.group_id IS NOT DISTINCT FROM 1) "
-                                            "AND a.category IS DISTINCT FROM 'excluded' "
+                                            "AND (a.category || '🙂') IS DISTINCT FROM 'excluded🙂' "
                                             "AND CASE a.id WHEN 0 THEN false ELSE true END "
                                             "AND NULLIF(a.id, 7) IS NOT NULL "
                                             "AND a.id BETWEEN 1 AND 101 "
@@ -51,7 +52,7 @@ class ProjectionFixture(SqlFixture):
         if self.local:
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
                                        + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group',
-                                          'within_range', 'beyond_upper'])
+                                          'within_range', 'beyond_upper', 'joined'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -100,6 +101,9 @@ class ProjectionFixture(SqlFixture):
                         elif low is not None:
                             within = True
                     values += (within, True if key is not None and key > 1 else None)
+                    text = row['vartext']
+                    joined = None if length is None or text is None else length + '🙂' + text
+                    values += (joined,)
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)

@@ -358,3 +358,47 @@ fn between_uses_independent_comparisons_and_three_valued_logic() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn text_concatenation_is_strict_and_has_text_result_type() -> Result<()> {
+    let row = [("a".into(), Some("0".into())), ("b".into(), None)].into();
+    for (sql, expected) in [
+        ("'é' || '🙂' || '界'", Some("é🙂界")),
+        ("''::text || 'text'", Some("text")),
+        ("'text' || ''", Some("text")),
+        ("NULL || 'text'", None),
+        ("'text' || NULL::text", None),
+        ("NULL || NULL", None),
+        ("NULL::text || chr(a)", None),
+        ("(CASE WHEN a = 0 THEN 'left' ELSE 'right' END) || ' side'", Some("left side")),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), 25, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    for sql in [
+        "'text' || 1",
+        "'text'::varchar || 'suffix'",
+        "'text' || ARRAY['suffix']",
+        "NULL || chr(0)",
+        "chr(0) || NULL",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    let value = expression("(CASE WHEN b IS NULL THEN NULL::text ELSE '' END) || chr(a)")?;
+    assert!(value.evaluate(&row).is_err());
+    Ok(())
+}
+
+#[test]
+fn text_concatenation_checks_combined_utf8_bytes() -> Result<()> {
+    let at_limit = expression("repeat('🙂', 4194303) || 'éé'")?;
+    let value = at_limit.evaluate(&crate::transaction::Row::new())?.context("NULL text")?;
+    assert_eq!(value.len(), super::TEXT_OUTPUT_LIMIT);
+    assert!(value.ends_with("🙂éé"));
+    assert!(
+        expression("repeat('🙂', 4194303) || 'ééx'")
+            .is_err_and(|error| format!("{error:#}").contains("concatenation output exceeds"))
+    );
+    Ok(())
+}

@@ -103,6 +103,9 @@ impl Typed {
                     _ => return Err(PlanFault("invalid arithmetic operands").into()),
                 }
             }
+            Value::Concat { left, right } => {
+                concatenate(left.native_pair(rows)?, right.native_pair(rows)?)?
+            }
             Value::NullIf { left, right } => super::nullif::evaluate(left, right, rows)?,
             Value::SimpleCase(case) => case.evaluate(rows)?,
             Value::Coalesce(_) | Value::Case { .. } => self.selected(rows)?,
@@ -134,6 +137,24 @@ impl Typed {
         self.native_pair(rows)?.map(|value| value.text(self.oid)).transpose()
     }
 }
+fn concatenate(left: Option<Native>, right: Option<Native>) -> Result<Option<Native>> {
+    match (left, right) {
+        (Some(Native::Text(mut left)), Some(Native::Text(right))) => {
+            ensure!(
+                left.len()
+                    .checked_add(right.len())
+                    .is_some_and(|size| size <= super::TEXT_OUTPUT_LIMIT),
+                "concatenation output exceeds 16 MiB engine budget"
+            );
+            left.try_reserve_exact(right.len()).context("allocate text concatenation")?;
+            left.push_str(&right);
+            Ok(Some(Native::Text(left)))
+        }
+        (None, _) | (_, None) => Ok(None),
+        _ => Err(PlanFault("invalid concatenation operands").into()),
+    }
+}
+
 fn numeric(value: Native) -> Result<Numeric> {
     match value {
         Native::Numeric(value) => Ok(value),

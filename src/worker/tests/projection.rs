@@ -377,3 +377,28 @@ fn shared_temporal_target_binding_keeps_nested_and_on_allowlists() -> Result<()>
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn concatenation_budget_failure_preserves_the_committed_checkpoint() -> Result<()> {
+    let native = contract();
+    let compiled = compile(
+        "SELECT repeat(category, 2097153) || repeat(category, 2097153) AS joined FROM source.auction",
+        &native,
+    )?;
+    let mut query = super::build(&native, &compiled, &settings())?;
+    let ir = compiled.relational();
+    let initial = row(&[("id", Some("1")), ("category", Some(""))]);
+    let first = batch(vec![("auction", initial.clone(), 1)]);
+    let prepared = query.prepare(relational::inputs(&first, ir, 1)?).await?;
+    query.commit(prepared)?;
+    let before = query.checkpoint()?;
+    let poison = row(&[("id", Some("1")), ("category", Some("🙂"))]);
+    let update = batch(vec![("auction", initial, -1), ("auction", poison, 1)]);
+    let Err(error) = query.prepare(relational::inputs(&update, ir, 2)?).await else {
+        anyhow::bail!("accepted a concatenation beyond the output budget");
+    };
+    assert!(error.is::<crate::engine::execution::EvaluationFailed>(), "{error:#}");
+    assert!(format!("{error:#}").contains("concatenation output exceeds"), "{error:#}");
+    assert_eq!(query.checkpoint()?, before);
+    Ok(())
+}
