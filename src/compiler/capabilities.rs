@@ -33,6 +33,14 @@ pub(in crate::compiler) enum Builtin {
     DateTrunc,
     Sign,
     Div,
+    Concat,
+    ConcatWs,
+}
+
+impl Builtin {
+    pub(in crate::compiler) const fn is_strict(self) -> bool {
+        !matches!(self, Self::Concat | Self::ConcatWs)
+    }
 }
 pub(in crate::compiler) struct Signature {
     pub name: &'static str,
@@ -109,8 +117,16 @@ const SIGNATURES: &[Signature] = &[
 pub(in crate::compiler) fn contains(name: &str) -> bool {
     SIGNATURES.iter().any(|value| value.name == name)
 }
+const TEXT_JOINS: &[(&str, Builtin, usize)] =
+    &[("concat", Builtin::Concat, 1), ("concat_ws", Builtin::ConcatWs, 2)];
+
+pub(in crate::compiler) fn text_join(name: &str) -> Option<(Builtin, usize)> {
+    TEXT_JOINS.iter().find(|entry| entry.0 == name).map(|entry| (entry.1, entry.2))
+}
+
 pub fn names() -> Vec<&'static str> {
     let mut names = SIGNATURES.iter().map(|value| value.name).collect::<Vec<_>>();
+    names.extend(TEXT_JOINS.iter().map(|entry| entry.0));
     names.sort_unstable();
     names.dedup();
     names

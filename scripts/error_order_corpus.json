@@ -1246,5 +1246,14 @@
 {"sql": "SELECT mod('Infinity'::numeric, 2.00) AS v FROM source.auction", "raises": false, "rows": ["NaN"]},
 {"sql": "SELECT mod(2.00, 'Infinity') AS v FROM source.auction", "raises": false, "rows": ["2.00"]},
 {"sql": "SELECT mod(2.00, 'NaN') AS v FROM source.auction", "raises": false, "rows": ["NaN"]},
-{"sql": "SELECT mod(NULL::numeric, 1/other) AS v FROM source.auction", "raises": false, "rows": [""]}
+{"sql": "SELECT mod(NULL::numeric, 1/other) AS v FROM source.auction", "raises": false, "rows": [""]},
+{"sql": "SELECT concat(NULL, '\u00e9', NULL, '\ud83d\ude42') AS v FROM source.auction", "raises": false, "rows": ["\u00e9\ud83d\ude42"]},
+{"sql": "SELECT concat_ws('|', '', NULL, '', '\u00e9', '') AS v FROM source.auction", "raises": false, "rows": ["||\u00e9|"]},
+{"sql": "SELECT concat_ws(NULL, '\u00e9') IS NULL AS v FROM source.auction", "raises": false, "rows": ["t"]},
+{"sql": "SELECT concat(NULL, repeat('a',1/other)) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT concat_ws(NULL, repeat('a',1/other)) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT concat_ws(NULL, repeat('a',1/0)) AS v FROM source.auction", "raises": true, "phase": "planning", "sqlstate": "22012"},
+{"sql": "SELECT CASE WHEN false THEN concat_ws(NULL, repeat('a',1/0)) ELSE 'ok' END AS v FROM source.auction", "raises": false, "rows": ["ok"]},
+{"sql": "SELECT concat_ws(NULL, 'x') || repeat('a',1/other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT CASE WHEN concat(NULL) = '' THEN 'ok' ELSE repeat('x',1/0) END AS v FROM source.auction", "raises": true, "phase": "planning", "sqlstate": "22012"}
 ]

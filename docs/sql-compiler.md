@@ -181,6 +181,14 @@ arguments through the numeric signature and returns a numeric quotient
 truncated toward zero with scale zero. Numeric division errors, special values,
 and existing digit budgets apply.
 
+The text-only `concat` and `concat_ws` functions accept up to 64 arguments
+and share the 16 MiB output limit, including separator bytes. Both evaluate
+all arguments and skip NULL values. Empty strings still count as values.
+`concat_ws` returns NULL when its separator is NULL. With a non-NULL
+separator, an all-NULL value list returns the empty string, as does
+`concat` with all-NULL arguments. Cast varchar and other values to text
+before passing them.
+
 Integral bitwise operators support `&`, `|`, `#`, `~`, `<<`, and `>>`.
 Binary bitwise operators promote mixed integer widths. Shifts keep the left
 operand's width and take an integer count. On the qualified PostgreSQL 17

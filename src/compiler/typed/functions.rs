@@ -30,13 +30,26 @@ pub(super) fn bind(
             super::bind(right, resolve, depth + 1)?,
         );
     }
+    if let Some((operation, minimum)) = registry::text_join(name) {
+        ensure!(
+            (minimum..=64).contains(&function.args.len()),
+            "function {name}: unsupported argument count {}",
+            function.args.len()
+        );
+        let arguments = bind_arguments(function, resolve, depth)?;
+        ensure!(
+            arguments.iter().all(|value| matches!(value.oid, 0 | 25 | 705)),
+            "function {name} requires text arguments"
+        );
+        let arguments = arguments.into_iter().map(Typed::unknown_text).collect();
+        return Ok(Typed {
+            oid: 25,
+            value: Value::Call(Call { operation, input_oid: 25, arguments }),
+        });
+    }
     ensure!(registry::contains(name), "function {} is not available in-engine", names.join("."));
     registry::validate_arity(name, function.args.len())?;
-    let arguments = function
-        .args
-        .iter()
-        .map(|value| super::bind(value, resolve, depth + 1))
-        .collect::<Result<Vec<_>>>()?;
+    let arguments = bind_arguments(function, resolve, depth)?;
     let types = arguments.iter().map(|value| value.oid).collect::<Vec<_>>();
     let signature = registry::resolve(name, &types)?;
     if matches!(signature.operation, registry::Builtin::Extract | registry::Builtin::DateTrunc) {
@@ -62,6 +75,14 @@ pub(super) fn bind(
     });
     Ok(Typed { oid: signature.result, value })
 }
+fn bind_arguments(
+    function: &pg::FuncCall,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    depth: usize,
+) -> Result<Vec<Typed>> {
+    function.args.iter().map(|value| super::bind(value, resolve, depth + 1)).collect()
+}
+
 fn numeric_argument(input: Typed) -> Result<Typed> {
     match input.oid {
         0 | 705 => Typed::contextual_literal(input, 1700),
@@ -71,6 +92,21 @@ fn numeric_argument(input: Typed) -> Result<Typed> {
 }
 
 impl Call {
+    pub(super) fn is_constant(&self) -> bool {
+        // PostgreSQL treats these text joins as STABLE during planning.
+        !matches!(self.operation, registry::Builtin::Concat | registry::Builtin::ConcatWs)
+            && self.arguments.iter().all(Typed::is_constant)
+    }
+
+    pub(super) fn nullable(&self) -> bool {
+        match self.operation {
+            registry::Builtin::Concat => false,
+            registry::Builtin::ConcatWs => self.arguments.first().is_none_or(Typed::nullable),
+            registry::Builtin::Extract => true,
+            _ => self.arguments.iter().any(Typed::nullable),
+        }
+    }
+
     pub(super) fn evaluate(
         &self,
         rows: (&crate::transaction::Row, &crate::transaction::Row),
@@ -78,6 +114,9 @@ impl Call {
         // Evaluate every argument before strict NULL propagation, as PostgreSQL does.
         let values =
             self.arguments.iter().map(|value| value.text_pair(rows)).collect::<Result<Vec<_>>>()?;
+        if !self.operation.is_strict() {
+            return kernels::join_text(self.operation, &values);
+        }
         let Some(arguments) = values.into_iter().collect::<Option<Vec<_>>>() else {
             return Ok(None);
         };

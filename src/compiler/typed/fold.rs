@@ -10,7 +10,7 @@ impl Typed {
             Value::Call(call) => {
                 let mut call = call.clone();
                 call.arguments = call.arguments.iter().map(Self::fold).collect::<Result<_>>()?;
-                if call.arguments.iter().any(Self::constant_null) {
+                if call.operation.is_strict() && call.arguments.iter().any(Self::constant_null) {
                     Value::Literal(None)
                 } else {
                     Value::Call(call)

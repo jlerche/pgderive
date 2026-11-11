@@ -125,7 +125,11 @@ impl Typed {
                 out.insert(value.input.name.clone());
             }
             Value::Boolean(value) => out.extend(value.strict_columns(false)),
-            Value::Call(call) => call.arguments.iter().for_each(|value| value.strict_columns(out)),
+            Value::Call(call) if call.operation.is_strict() => {
+                for value in &call.arguments {
+                    value.strict_columns(out);
+                }
+            }
             Value::Cast { input, .. } => input.strict_columns(out),
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.strict_columns(out);
@@ -138,7 +142,9 @@ impl Typed {
     pub(in crate::compiler) fn is_strict(&self) -> bool {
         match &self.value {
             Value::Boolean(value) => value.is_strict(),
-            Value::Call(call) => call.arguments.iter().all(Self::is_strict),
+            Value::Call(call) => {
+                call.operation.is_strict() && call.arguments.iter().all(Self::is_strict)
+            }
             Value::Cast { input, .. } => input.is_strict(),
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.is_strict() && right.is_strict()

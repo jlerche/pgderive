@@ -40,7 +40,9 @@ class ProjectionFixture(SqlFixture):
             bitwise = "a.group_id & 3 AS low_bits, a.small_value << 1 AS shifted"
             remainder = ("mod(a.group_id - 3, a.id) AS integral_remainder,"
                          "mod(a.group_id + 0.00, (a.id - 96) * 1.250) AS numeric_remainder")
-            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise},{remainder} FROM ')
+            text_joins = ("concat(a.category, a.vartext::text) AS combined,"
+                          "concat_ws(a.category, 'é', a.vartext::text, '', NULL) AS separated")
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise},{remainder},{text_joins} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
                                             "OR a.group_id IS NOT DISTINCT FROM 1) "
@@ -57,7 +59,7 @@ class ProjectionFixture(SqlFixture):
         if self.local:
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
                                        + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group',
-                                          'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric', 'low_bits', 'shifted', 'integral_remainder', 'numeric_remainder'])
+                                          'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric', 'low_bits', 'shifted', 'integral_remainder', 'numeric_remainder', 'combined', 'separated'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -118,6 +120,10 @@ class ProjectionFixture(SqlFixture):
                     else:
                         quarters = (abs(key) * 4) % (abs(row['id'] - 96) * 5)
                         values += ((-quarters if key < 0 else quarters) / 4,)
+                    combined = ''.join(value for value in (length, text) if value is not None)
+                    separated = None if length is None else length.join(
+                        value for value in ('é', text, '') if value is not None)
+                    values += (combined, separated)
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)

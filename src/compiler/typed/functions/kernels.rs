@@ -13,6 +13,9 @@ pub(super) fn evaluate(
     let second = || arguments.get(1).context("second function input absent");
     let third = || arguments.get(2).context("third function input absent");
     let result = match operation {
+        Builtin::Concat | Builtin::ConcatWs => {
+            anyhow::bail!("unexpected non-strict function in strict kernel")
+        }
         Builtin::Extract => return crate::temporal::extract(first, second()?, input_oid),
         Builtin::Sign => Ok(crate::numeric::Numeric::parse(first)?.sign().text()),
         Builtin::Div => Ok(crate::numeric::Numeric::parse(first)?
@@ -73,6 +76,35 @@ pub(super) fn evaluate(
     };
     result.map(Some)
 }
+pub(super) fn join_text(
+    operation: Builtin,
+    arguments: &[Option<String>],
+) -> Result<Option<String>> {
+    let (separator, values) = if operation == Builtin::ConcatWs {
+        let (separator, values) = arguments.split_first().context("concat_ws separator absent")?;
+        let Some(separator) = separator.as_deref() else { return Ok(None) };
+        (separator, values)
+    } else {
+        ("", arguments)
+    };
+    let mut values = values.iter().flatten();
+    let Some(first) = values.next() else { return Ok(Some(String::new())) };
+    let bytes = values.clone().try_fold(first.len(), |size, value| {
+        size.checked_add(separator.len())?.checked_add(value.len())
+    });
+    let bytes = bytes
+        .filter(|size| *size <= TEXT_OUTPUT_LIMIT)
+        .context("text concatenation output exceeds 16 MiB engine budget")?;
+    let mut result = String::new();
+    result.try_reserve_exact(bytes).context("allocate text concatenation")?;
+    result.push_str(first);
+    for value in values {
+        result.push_str(separator);
+        result.push_str(value);
+    }
+    Ok(Some(result))
+}
+
 fn count(value: usize) -> Result<String> {
     Ok(i32::try_from(value).context("function integer result overflow")?.to_string())
 }

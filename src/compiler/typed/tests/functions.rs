@@ -225,3 +225,60 @@ fn sign_and_div_preserve_numeric_types_scale_and_error_boundaries() -> Result<()
     assert_eq!(expression("div(NULL, 1/a)")?.evaluate(&row)?, None);
     Ok(())
 }
+
+#[test]
+fn variadic_text_joins_skip_nulls_and_keep_empty_arguments() -> Result<()> {
+    let row = [("a".into(), Some("0".into())), ("b".into(), None)].into();
+    for (sql, expected, nullable) in [
+        ("concat(NULL, 'é', NULL, '🙂')", Some("é🙂"), false),
+        ("concat(NULL, NULL)", Some(""), false),
+        ("concat('')", Some(""), false),
+        ("concat_ws('|', '', NULL, '', 'é', '')", Some("||é|"), false),
+        ("concat_ws('🙂', NULL, NULL)", Some(""), false),
+        ("concat_ws('', 'a', 'b')", Some("ab"), false),
+        ("concat_ws(NULL, 'a')", None, true),
+        ("concat_ws(CASE WHEN b IS NULL THEN NULL::text ELSE ',' END, 'a')", None, true),
+        ("pg_catalog.concat('a', 'b')", Some("ab"), false),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), 25, "{sql}");
+        assert_eq!(value.nullable(), nullable, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    for sql in [
+        "concat()",
+        "concat_ws(',')",
+        "concat('a', 1)",
+        "concat_ws(1, 'a')",
+        "concat('a'::varchar)",
+        "concat(VARIADIC ARRAY['a'])",
+        "public.concat('a')",
+        "concat_ws(NULL, chr(0))",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    for sql in ["concat(NULL, chr(a))", "concat_ws(NULL, chr(a))"] {
+        assert!(expression(sql)?.evaluate(&row).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn variadic_text_join_limit_counts_utf8_separator_bytes() -> Result<()> {
+    let row = crate::transaction::Row::new();
+    for sql in [
+        "concat(repeat('🙂', 4194303), NULL, 'éé')",
+        "concat_ws('🙂', repeat('🙂', 4194303), NULL, '')",
+    ] {
+        let value = expression(sql)?.evaluate(&row)?;
+        assert_eq!(value.as_ref().map(String::len), Some(16 * 1024 * 1024), "{sql}");
+    }
+    for sql in [
+        "concat(repeat('🙂', 4194303), NULL, 'ééx')",
+        "concat_ws('🙂', repeat('🙂', 4194303), NULL, '', '')",
+    ] {
+        let value = expression(sql)?;
+        assert!(value.evaluate(&row).is_err_and(|error| format!("{error:#}").contains("16 MiB")));
+    }
+    Ok(())
+}

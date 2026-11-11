@@ -62,7 +62,7 @@ impl Typed {
             | Value::Text(_)
             | Value::Encoded(_)
             | Value::Interval(_) => true,
-            Value::Call(call) => call.arguments.iter().all(Self::is_constant),
+            Value::Call(call) => call.is_constant(),
             Value::Cast { input, .. } => input.is_constant(),
             Value::Binary { left, right, .. }
             | Value::NullIf { left, right }
@@ -344,10 +344,7 @@ impl Typed {
             Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
             Value::Encoded(value) => value.is_none(),
             Value::Temporal(value) => value.input.nullable,
-            Value::Call(call) => {
-                call.operation == super::capabilities::Builtin::Extract
-                    || call.arguments.iter().any(Self::nullable)
-            }
+            Value::Call(call) => call.nullable(),
             Value::Cast { input, .. } => input.nullable(),
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.nullable() || right.nullable()

@@ -170,7 +170,12 @@ impl Rewrite<'_> {
                 self.list(&mut value.args, guarded || lazy, depth)?;
             }
             Some(NodeEnum::FuncCall(value)) => {
-                let lazy = value.agg_filter.is_some() || value.args.iter().any(constant_null);
+                let name = names(&value.funcname)?;
+                let text_join = super::expressions::builtin_name(&name.0)
+                    .and_then(crate::compiler::capabilities::text_join)
+                    .is_some();
+                let lazy = value.agg_filter.is_some()
+                    || (!text_join && value.args.iter().any(constant_null));
                 self.list(&mut value.args, guarded || lazy, depth)?;
                 self.optional(value.agg_filter.as_deref_mut(), guarded, depth)?;
             }
