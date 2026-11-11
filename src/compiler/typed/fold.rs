@@ -43,6 +43,10 @@ impl Typed {
                 }
             }
             Value::Coalesce(values) => Value::Coalesce(coalesced(values)?),
+            Value::MinMax { operation, arguments } => Value::MinMax {
+                operation: *operation,
+                arguments: arguments.iter().map(Self::fold).collect::<Result<_>>()?,
+            },
             Value::Case { branches, otherwise } => cased(branches, otherwise)?,
             Value::SimpleCase(case) => Value::SimpleCase(case.fold()?),
             value => value.clone(),

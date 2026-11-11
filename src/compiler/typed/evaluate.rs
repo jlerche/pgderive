@@ -40,7 +40,7 @@ impl Typed {
                 .map(|text| value::decode(column.oid, text))
                 .transpose()?,
             Value::Literal(value) => value.map(Native::Integer),
-            Value::Numeric(value) => Some(Native::Numeric(Numeric::parse(value)?)),
+            Value::Numeric(value) => Some(Native::Numeric(Numeric::parse_literal(value)?)),
             Value::Text(value) => Some(Native::Text(value.clone())),
             Value::Encoded(value) => {
                 value.as_deref().map(|text| value::decode(self.oid, text)).transpose()?
@@ -58,18 +58,9 @@ impl Typed {
             Value::Call(call) => {
                 call.evaluate(rows)?.map(|text| value::decode(self.oid, &text)).transpose()?
             }
-            Value::Cast { input, typmod } => input
-                .native_pair(rows)?
-                .map(|value| -> Result<Native> {
-                    if matches!(self.oid, 20 | 21 | 23) && matches!(value, Native::Numeric(_)) {
-                        return Ok(Native::Integer(numeric(value)?.integer()?));
-                    }
-                    if let Some(typmod) = typmod {
-                        return Ok(Native::Numeric(numeric(value)?.constrained(*typmod)?));
-                    }
-                    super::calendar::cast(value, self.oid)
-                })
-                .transpose()?,
+            Value::Cast { input, typmod } => {
+                input.native_pair(rows)?.map(|value| cast(value, self.oid, *typmod)).transpose()?
+            }
             Value::Binary { operation, left, right } => {
                 let (left, right) = (left.native_pair(rows)?, right.native_pair(rows)?);
                 match (left, right) {
@@ -107,12 +98,18 @@ impl Typed {
                 concatenate(left.native_pair(rows)?, right.native_pair(rows)?)?
             }
             Value::NullIf { left, right } => super::nullif::evaluate(left, right, rows)?,
-            Value::SimpleCase(case) => case.evaluate(rows)?,
-            Value::Coalesce(_) | Value::Case { .. } => self.selected(rows)?,
+            Value::Coalesce(_)
+            | Value::Case { .. }
+            | Value::SimpleCase(_)
+            | Value::MinMax { .. } => self.selected(rows)?,
         })
     }
     fn selected(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
         match &self.value {
+            Value::SimpleCase(case) => case.evaluate(rows),
+            Value::MinMax { operation, arguments } => {
+                super::minmax::evaluate(*operation, arguments, rows)
+            }
             Value::Coalesce(arguments) => {
                 for argument in arguments {
                     let value = argument.native_pair(rows)?;
@@ -137,6 +134,16 @@ impl Typed {
         self.native_pair(rows)?.map(|value| value.text(self.oid)).transpose()
     }
 }
+fn cast(value: Native, oid: u32, typmod: Option<crate::numeric::Typmod>) -> Result<Native> {
+    if matches!(oid, 20 | 21 | 23) && matches!(value, Native::Numeric(_)) {
+        return Ok(Native::Integer(numeric(value)?.integer()?));
+    }
+    if let Some(typmod) = typmod {
+        return Ok(Native::Numeric(numeric(value)?.constrained(typmod)?));
+    }
+    super::calendar::cast(value, oid)
+}
+
 fn concatenate(left: Option<Native>, right: Option<Native>) -> Result<Option<Native>> {
     match (left, right) {
         (Some(Native::Text(mut left)), Some(Native::Text(right))) => {

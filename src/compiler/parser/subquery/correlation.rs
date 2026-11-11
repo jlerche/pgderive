@@ -121,6 +121,7 @@ pub(super) fn children(value: &Node) -> Vec<&Node> {
             value.args.iter().chain(value.agg_filter.iter().map(Box::as_ref)).collect()
         }
         Some(NodeEnum::CoalesceExpr(value)) => value.args.iter().collect(),
+        Some(NodeEnum::MinMaxExpr(value)) => value.args.iter().collect(),
         Some(NodeEnum::TypeCast(value)) => value.arg.as_deref().into_iter().collect(),
         Some(NodeEnum::NullTest(value)) => value.arg.as_deref().into_iter().collect(),
         Some(NodeEnum::BooleanTest(value)) => value.arg.as_deref().into_iter().collect(),

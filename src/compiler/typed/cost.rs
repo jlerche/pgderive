@@ -30,6 +30,9 @@ impl Typed {
             | Value::NullIf { left, right }
             | Value::Concat { left, right } => Self::operator_cost(left, right),
             Value::Coalesce(values) => values.iter().map(Self::cost).sum(),
+            Value::MinMax { arguments, .. } => {
+                arguments.iter().map(Self::cost).sum::<u64>().saturating_add(OPERATOR_COST)
+            }
             Value::SimpleCase(case) => case.cost(),
             Value::Case { branches, otherwise } => branches
                 .iter()

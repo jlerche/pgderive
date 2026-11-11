@@ -44,6 +44,19 @@ impl Numeric {
     pub(crate) fn parse(text: &str) -> Result<Self> {
         Self::parse_bounded(text, LIMIT)
     }
+    pub(crate) fn parse_literal(text: &str) -> Result<Self> {
+        let text = text
+            .trim_matches(|character: char| character.is_ascii_whitespace() || character == '\x0b');
+        if text.eq_ignore_ascii_case("nan") {
+            return Ok(Self::Nan);
+        }
+        let magnitude = text.strip_prefix(['+', '-']).unwrap_or(text);
+        if magnitude.eq_ignore_ascii_case("inf") || magnitude.eq_ignore_ascii_case("infinity") {
+            return Ok(if text.starts_with('-') { Self::NegativeInfinity } else { Self::Infinity });
+        }
+        Self::parse(text)
+    }
+
     fn parse_bounded(text: &str, budget: usize) -> Result<Self> {
         match text {
             "NaN" => return Ok(Self::Nan),

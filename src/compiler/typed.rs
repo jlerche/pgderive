@@ -13,6 +13,7 @@ mod evaluate;
 mod fold;
 mod functions;
 mod join;
+mod minmax;
 mod nullif;
 mod operand;
 mod predicate;
@@ -49,6 +50,7 @@ enum Value {
     SimpleCase(case::Simple),
     NullIf { left: Box<Typed>, right: Box<Typed> },
     Concat { left: Box<Typed>, right: Box<Typed> },
+    MinMax { operation: minmax::Operation, arguments: Vec<Typed> },
 }
 impl Typed {
     pub(in crate::compiler) fn is_constant(&self) -> bool {
@@ -67,7 +69,9 @@ impl Typed {
             Value::Binary { left, right, .. }
             | Value::NullIf { left, right }
             | Value::Concat { left, right } => left.is_constant() && right.is_constant(),
-            Value::Coalesce(values) => values.iter().all(Self::is_constant),
+            Value::Coalesce(values) | Value::MinMax { arguments: values, .. } => {
+                values.iter().all(Self::is_constant)
+            }
             Value::SimpleCase(case) => case.is_constant(),
             Value::Case { branches, otherwise } => {
                 otherwise.is_constant()
@@ -105,6 +109,7 @@ pub(super) fn bind(
     ensure!(depth < 32, "typed scalar expression depth exceeded");
     match node(value)? {
         NodeEnum::CaseExpr(value) => case::bind(value, resolve, depth),
+        NodeEnum::MinMaxExpr(value) => minmax::bind(value, resolve, depth),
         NodeEnum::ColumnRef(_) => {
             let column = resolve(&column(value)?)?;
             ensure!(
@@ -319,7 +324,9 @@ impl Typed {
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.nullable() || right.nullable()
             }
-            Value::Coalesce(arguments) => arguments.iter().all(Self::nullable),
+            Value::Coalesce(arguments) | Value::MinMax { arguments, .. } => {
+                arguments.iter().all(Self::nullable)
+            }
             Value::SimpleCase(case) => case.results().any(Self::nullable),
             Value::Case { branches, otherwise } => {
                 otherwise.nullable() || branches.iter().any(|(_, value)| value.nullable())
@@ -339,7 +346,7 @@ fn numeric_cast_input(
     if let NodeEnum::AConst(constant) = super::parser::expressions::node(value)?
         && let Some(pg_query::protobuf::a_const::Val::Sval(value)) = &constant.val
     {
-        crate::numeric::Numeric::parse(&value.sval)?;
+        crate::numeric::Numeric::parse_literal(&value.sval)?;
         return Ok(Typed { oid: 1700, value: Value::Numeric(value.sval.clone()) });
     }
     bind(value, resolve, depth)

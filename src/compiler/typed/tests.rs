@@ -402,3 +402,49 @@ fn text_concatenation_checks_combined_utf8_bytes() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn numeric_extrema_resolve_common_types_and_preserve_equal_representations() -> Result<()> {
+    let row = [("a".into(), Some("7".into())), ("b".into(), None)].into();
+    for (sql, oid, expected) in [
+        ("GREATEST(NULL, NULL)", 25, None),
+        ("LEAST(NULL, NULL::smallint)", 21, None),
+        ("GREATEST(b, NULL::numeric)", 1700, None),
+        ("GREATEST(NULL, a::smallint)", 21, Some("7")),
+        ("LEAST(a::smallint, 8)", 23, Some("7")),
+        ("GREATEST(a, NULL::bigint, 2147483648)", 20, Some("2147483648")),
+        ("LEAST(b, a)", 23, Some("7")),
+        ("LEAST(9)", 23, Some("9")),
+        ("GREATEST('8', a, NULL)", 23, Some("8")),
+        ("LEAST('7.000', a, 7.0)", 1700, Some("7.000")),
+        ("GREATEST(a, 7.000)", 1700, Some("7")),
+        ("GREATEST(7.000, a)", 1700, Some("7.000")),
+        ("GREATEST('NaN'::numeric, 'Infinity', 42)", 1700, Some("NaN")),
+        ("LEAST('NaN'::numeric, '-Infinity', 42)", 1700, Some("-Infinity")),
+        ("LEAST('Infinity'::numeric, 42.00)", 1700, Some("42.00")),
+        ("LEAST(' 7.00 ', 8.0)", 1700, Some("7.00")),
+        ("GREATEST(' iNF ', 1.0)", 1700, Some("Infinity")),
+        ("LEAST(' -inf '::numeric, 1.0)", 1700, Some("-Infinity")),
+        ("GREATEST('nan'::numeric, 1.0)", 1700, Some("NaN")),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), oid, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    assert!(expression("GREATEST(b, NULL)")?.nullable());
+    assert!(!expression("LEAST(b, a, 0)")?.nullable());
+    for sql in [
+        "GREATEST('a', 'b')",
+        "LEAST(TRUE, 1)",
+        "LEAST('+NaN', 1.0)",
+        "GREATEST(32768, '40000'::smallint)",
+        "LEAST(7, 'bad')",
+        "GREATEST(NULL, 1 / 0)",
+        "LEAST(-2147483648, 1 / 0)",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    let value = expression("GREATEST(2147483647, NULL, 1 / (a - 7))")?;
+    assert!(value.evaluate(&row).is_err());
+    Ok(())
+}

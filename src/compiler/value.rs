@@ -65,7 +65,12 @@ fn uuid_text(bytes: [u8; 16]) -> Result<String> {
 }
 
 pub(super) fn literal_text(oid: u32, text: &str) -> Result<String> {
-    Ok(match decode(oid, text)? {
+    let value = if oid == 1700 {
+        Value::Numeric(crate::numeric::Numeric::parse_literal(text)?)
+    } else {
+        decode(oid, text)?
+    };
+    Ok(match value {
         Value::Date(value) => value.text(),
         Value::Interval(value) => value.text(),
         Value::Timestamp(value) => value.text(oid)?,

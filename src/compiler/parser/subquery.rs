@@ -174,6 +174,7 @@ impl Rewrite<'_> {
                 self.list(&mut value.args, guarded || lazy, depth)?;
                 self.optional(value.agg_filter.as_deref_mut(), guarded, depth)?;
             }
+            Some(NodeEnum::MinMaxExpr(value)) => self.list(&mut value.args, guarded, depth)?,
             Some(NodeEnum::CoalesceExpr(value)) => {
                 for (index, value) in value.args.iter_mut().enumerate() {
                     self.visit(value, guarded || index > 0, depth + 1)?;

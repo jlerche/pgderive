@@ -36,7 +36,11 @@ impl Typed {
                 left.reads(out);
                 right.reads(out);
             }
-            Value::Coalesce(values) => values.iter().for_each(|value| value.reads(out)),
+            Value::Coalesce(values) | Value::MinMax { arguments: values, .. } => {
+                for value in values {
+                    value.reads(out);
+                }
+            }
             Value::Case { branches, otherwise } => {
                 for (condition, value) in branches {
                     condition.reads(out);
@@ -101,6 +105,9 @@ impl Typed {
                 right: Box::new(right.replaced(replace)?),
             },
             Value::Coalesce(values) => Value::Coalesce(all(values, replace)?),
+            Value::MinMax { operation, arguments } => {
+                Value::MinMax { operation: *operation, arguments: all(arguments, replace)? }
+            }
             Value::Case { branches, otherwise } => Value::Case {
                 branches: branches
                     .iter()
@@ -148,7 +155,8 @@ impl Typed {
             Value::Coalesce(_)
             | Value::Case { .. }
             | Value::SimpleCase(_)
-            | Value::NullIf { .. } => false,
+            | Value::NullIf { .. }
+            | Value::MinMax { .. } => false,
             _ => true,
         }
     }

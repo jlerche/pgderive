@@ -35,13 +35,15 @@ class ProjectionFixture(SqlFixture):
             ranges = ("a.group_id BETWEEN a.small_value AND 2.0 AS within_range,"
                       "a.group_id NOT BETWEEN NULL AND 1 AS beyond_upper")
             joined = "a.category || '🙂' || a.vartext::text AS joined"
-            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined} FROM ')
+            extrema = ("GREATEST(a.small_value, a.group_id),"
+                       "LEAST(a.group_id + 0.00, a.small_value + 0.000, NULL) AS least_numeric")
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
                                             "OR a.group_id IS NOT DISTINCT FROM 1) "
                                             "AND (a.category || '🙂') IS DISTINCT FROM 'excluded🙂' "
                                             "AND CASE a.id WHEN 0 THEN false ELSE true END "
-                                            "AND NULLIF(a.id, 7) IS NOT NULL "
+                                            "AND NULLIF(GREATEST(a.id, 1), 7) IS NOT NULL "
                                             "AND a.id BETWEEN 1 AND 101 "
                                             "AND a.id NOT BETWEEN 98 AND 99")
 
@@ -52,7 +54,7 @@ class ProjectionFixture(SqlFixture):
         if self.local:
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
                                        + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group',
-                                          'within_range', 'beyond_upper', 'joined'])
+                                          'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -103,7 +105,8 @@ class ProjectionFixture(SqlFixture):
                     values += (within, True if key is not None and key > 1 else None)
                     text = row['vartext']
                     joined = None if length is None or text is None else length + '🙂' + text
-                    values += (joined,)
+                    candidates = [value for value in (key, low) if value is not None]
+                    values += (joined, max(candidates, default=None), min(candidates, default=None))
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)

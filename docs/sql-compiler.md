@@ -170,7 +170,11 @@ translation, position/prefix checks, repetition and split fields. The
 `text || text` operator accepts text operands and resolves string and NULL
 literals as text. It returns NULL if either operand is NULL. The result
 shares the 16 MiB text expansion limit and is also subject to the normal
-record and sink limits. The exact function signatures are in
+record and sink limits. Scalar `GREATEST` and `LEAST` accept up to 64 integral
+or exact numeric arguments, resolve a common type, and ignore NULLs after
+evaluating the arguments. They return NULL when all arguments are NULL and
+keep the first tied value's representation. A list of bare NULL literals
+resolves to text. The exact function signatures are in
 `src/compiler/capabilities.rs`. Overload errors list argument type names and
 OIDs alongside the supported signatures. Nested calls and text CASE/COALESCE share the local evaluator. The evaluator returns native values for predicates, keys and computed columns; text encoding happens at row boundaries. CASE and COALESCE select lazily, while strict calls evaluate all arguments before NULL propagation. Integral widths are checked at each expression node.
 

@@ -21,6 +21,14 @@ fn figure(value: &Node) -> Result<(u8, String)> {
             (STRONG, names(&call.funcname)?.0.last().cloned().context("empty function label")?)
         }
         NodeEnum::CoalesceExpr(_) => (STRONG, "coalesce".into()),
+        NodeEnum::MinMaxExpr(expr) => {
+            let name = match pg::MinMaxOp::try_from(expr.op)? {
+                pg::MinMaxOp::IsGreatest => "greatest",
+                pg::MinMaxOp::IsLeast => "least",
+                pg::MinMaxOp::Undefined => anyhow::bail!("invalid GREATEST/LEAST operator"),
+            };
+            (STRONG, name.into())
+        }
         NodeEnum::AExpr(expr) if expr.kind == i32::from(pg::AExprKind::AexprNullif) => {
             (STRONG, "nullif".into())
         }

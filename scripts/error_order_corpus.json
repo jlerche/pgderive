@@ -1204,5 +1204,15 @@
 {"sql": "SELECT '7' BETWEEN 7::smallint AND 7.01 AS v FROM source.auction", "raises": false, "rows": ["t"]},
 {"sql": "SELECT id FROM source.auction WHERE (CASE WHEN false THEN other ELSE 0 END) BETWEEN 1 AND 1/0", "raises": false, "rows": []},
 {"sql": "SELECT id FROM source.auction WHERE (CASE WHEN false THEN other ELSE 0 END) BETWEEN 1 AND 1/0 AND 1/0>0", "raises": false, "rows": []},
-{"sql": "SELECT (CASE WHEN false THEN other ELSE 0 END) NOT BETWEEN 1 AND 1/0 AS v FROM source.auction", "raises": false, "rows": ["t"]}
+{"sql": "SELECT (CASE WHEN false THEN other ELSE 0 END) NOT BETWEEN 1 AND 1/0 AS v FROM source.auction", "raises": false, "rows": ["t"]},
+{"sql": "SELECT GREATEST(2147483647, NULL, 1/other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT LEAST(-2147483648, 1/other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT GREATEST(NULL, 1/0) AS v FROM source.auction", "raises": true, "phase": "planning", "sqlstate": "22012"},
+{"sql": "SELECT LEAST(1/0, NULL) AS v FROM source.auction", "raises": true, "phase": "planning", "sqlstate": "22012"},
+{"sql": "SELECT CASE WHEN false THEN GREATEST(1/0, 2) ELSE 3 END AS v FROM source.auction", "raises": false, "rows": ["3"]},
+{"sql": "SELECT LEAST(other + 0.00, 0.000, NULL) AS v FROM source.auction", "raises": false, "rows": ["0.00"]},
+{"sql": "SELECT GREATEST(NULL, NULL) AS v FROM source.auction", "raises": false, "rows": [""]},
+{"sql": "SELECT count(*) AS c FROM source.auction HAVING GREATEST(min(other), 0) = 0", "raises": false, "rows": ["1"]},
+{"sql": "SELECT GREATEST((SELECT MAX(s.price) FROM source.bid s), other) FROM source.auction", "raises": false, "rows": ["1"]},
+{"sql": "SELECT id FROM source.auction WHERE GREATEST(1/other, 0)>0 AND other>0", "raises": false, "rows": []}
 ]
