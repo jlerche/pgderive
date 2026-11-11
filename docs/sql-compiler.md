@@ -971,7 +971,8 @@ only their selected labels; ambiguous unqualified names reject. INNER, CROSS,
 LEFT, RIGHT and FULL joins share the same key binding, weighted execution, and source
 occurrence limits. [ON key extraction and residual predicates](join-predicates.md)
 cover numeric/text keys, OR and non-equality conditions. [USING and outer joins](outer-joins.md)
-preserve merged names and qualified originals; NATURAL remains unsupported.
+preserve merged names and qualified originals. NATURAL joins infer the common
+column names and use the same merge and outer-join rules.
 WHERE runs after the join, and the common builder handles outer
 projection, grouping, and windows under their existing semantic restrictions.
 

@@ -63,9 +63,10 @@ impl Rewrite<'_> {
                 source: Box::new(named(&select)?),
                 alias: alias.clone(),
             }),
-            condition: ast::logical(conditions, true),
+            clause: super::super::native_join::JoinClause::Condition(ast::logical(
+                conditions, true,
+            )),
             kind: crate::compiler::left_join::Kind::Left,
-            using: Vec::new(),
         });
         let fallback = self.alias()?;
         self.attach_scalar(named(&empty)?, fallback.clone())?;

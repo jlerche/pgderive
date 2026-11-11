@@ -89,6 +89,7 @@ environment environment
 computed-join computed_join
 join-predicates join_predicate
 outer-joins outer_join
+natural-joins natural_join
 aggregate-inputs aggregate_inputs_compiler
 relational relational_compiler
 partition partition_compiler

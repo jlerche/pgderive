@@ -30,10 +30,14 @@ pub(in crate::compiler) enum Tree {
     Join {
         left: Box<Self>,
         right: Box<Self>,
-        condition: Option<Box<Node>>,
         kind: crate::compiler::left_join::Kind,
-        using: Vec<String>,
+        clause: JoinClause,
     },
+}
+pub(in crate::compiler) enum JoinClause {
+    Condition(Option<Box<Node>>),
+    Using(Vec<String>),
+    Natural,
 }
 pub(super) fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tree> {
     ensure!(depth < 16, "join tree depth exceeded");
@@ -56,8 +60,7 @@ pub(super) fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tr
                         | pg::JoinType::JoinLeft
                         | pg::JoinType::JoinRight
                         | pg::JoinType::JoinFull
-                ) && !join.is_natural
-                    && join.join_using_alias.is_none()
+                ) && join.join_using_alias.is_none()
                     && join.alias.is_none()
                     && join.rtindex == 0,
                 "unsupported native join shape"
@@ -67,19 +70,30 @@ pub(super) fn tree(value: &Node, sources: &mut usize, depth: usize) -> Result<Tr
             Ok(Tree::Join {
                 left: Box::new(left),
                 right: Box::new(right),
-                condition: join.quals.clone(),
                 kind: match pg::JoinType::try_from(join.jointype)? {
                     pg::JoinType::JoinLeft => crate::compiler::left_join::Kind::Left,
                     pg::JoinType::JoinRight => crate::compiler::left_join::Kind::Right,
                     pg::JoinType::JoinFull => crate::compiler::left_join::Kind::Full,
                     _ => crate::compiler::left_join::Kind::Inner,
                 },
-                using: super::expressions::names(&join.using_clause)?.0,
+                clause: join_clause(join)?,
             })
         }
         _ => anyhow::bail!("native join tree requires ordinary native tables"),
     }
 }
+fn join_clause(join: &pg::JoinExpr) -> Result<JoinClause> {
+    if join.is_natural || !join.using_clause.is_empty() {
+        ensure!(join.quals.is_none(), "NATURAL/USING joins cannot specify ON");
+        if join.is_natural {
+            ensure!(join.using_clause.is_empty(), "NATURAL JOIN cannot specify USING");
+            return Ok(JoinClause::Natural);
+        }
+        return Ok(JoinClause::Using(super::expressions::names(&join.using_clause)?.0));
+    }
+    Ok(JoinClause::Condition(join.quals.clone()))
+}
+
 pub(super) fn computed_equalities(
     value: &Node,
     keys: &mut Vec<(super::scalar::Key, super::scalar::Key)>,

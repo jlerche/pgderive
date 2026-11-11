@@ -84,10 +84,10 @@ impl Builder<'_> {
                 let left = self.tree(*left)?;
                 self.mark(left, right, (&probe, alias, condition.as_deref(), semijoin))
             }
-            Tree::Join { left, right, condition, kind, using } => {
+            Tree::Join { left, right, kind, clause } => {
                 let left = self.tree(*left)?;
                 let right = self.tree(*right)?;
-                self.native_join(left, right, condition.as_deref(), (kind, using))
+                self.native_join(left, right, kind, clause)
             }
         }
     }

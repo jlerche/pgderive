@@ -113,3 +113,43 @@ fn full_and_right_merged_keys_are_nullable_when_the_preserved_right_key_is_nulla
     }
     Ok(())
 }
+
+#[test]
+fn natural_joins_use_visible_common_names_in_left_input_order() -> Result<()> {
+    let native = native((21, -1, 0), (20, -1, 0));
+    let left = "(SELECT k,id FROM public.items) l";
+    let right = "(SELECT id,k FROM public.other) r";
+    for kind in ["", "INNER ", "LEFT ", "RIGHT ", "FULL "] {
+        let prefix = "SELECT k,id,l.k AS lk,r.k AS rk,l.id AS lid,r.id AS rid";
+        let natural =
+            compile(&format!("{prefix} FROM {left} NATURAL {kind}JOIN {right}"), &native)?;
+        let using =
+            compile(&format!("{prefix} FROM {left} {kind}JOIN {right} USING(k,id)"), &native)?;
+        assert_eq!(serde_json::to_vec(&natural)?, serde_json::to_vec(&using)?, "{kind}");
+    }
+    let prefix = "SELECT k,l.k AS lk,r.k AS rk,z.k AS zk FROM (public.items l FULL JOIN public.other r USING(k))";
+    let suffix = "(SELECT k FROM public.items) z";
+    let natural = compile(&format!("{prefix} NATURAL LEFT JOIN {suffix}"), &native)?;
+    let using = compile(&format!("{prefix} LEFT JOIN {suffix} USING(k)"), &native)?;
+    assert_eq!(serde_json::to_vec(&natural)?, serde_json::to_vec(&using)?);
+    Ok(())
+}
+
+#[test]
+fn natural_join_rejects_ambiguous_and_incompatible_common_names() -> Result<()> {
+    let native = native((23, -1, 0), (23, -1, 0));
+    for sql in [
+        "SELECT l.id FROM (public.items l CROSS JOIN public.other r) NATURAL JOIN (SELECT k FROM public.items) t",
+        "SELECT l.id FROM (SELECT k,k FROM public.items) r NATURAL RIGHT JOIN public.items l",
+        "SELECT l.id FROM public.items l NATURAL JOIN (SELECT k::text AS k FROM public.other) r",
+        "SELECT j.k FROM (public.items l NATURAL JOIN public.other r) j",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    let prefix = "SELECT l.lk,r.rk FROM (SELECT k AS lk FROM public.items) l";
+    let suffix = "(SELECT k AS rk FROM public.other) r";
+    let natural = compile(&format!("{prefix} NATURAL JOIN {suffix}"), &native)?;
+    let cross = compile(&format!("{prefix} CROSS JOIN {suffix}"), &native)?;
+    assert_eq!(serde_json::to_vec(&natural)?, serde_json::to_vec(&cross)?);
+    Ok(())
+}

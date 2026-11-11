@@ -167,6 +167,7 @@ fn using_scope_hides_only_unqualified_originals_and_keeps_nested_physical_fields
         compile(&format!("SELECT k,l.k,r.k FROM(SELECT other AS k FROM source.auction)l {kind}(SELECT auction AS k FROM source.bid)r USING(k)"), &native)?.validate_execution()?;
     }
     for sql in [
+        "SELECT id FROM source.auction a NATURAL FULL JOIN source.bid b",
         "SELECT k,a.k,b.k,c.k FROM(SELECT other AS k FROM source.auction)a FULL JOIN(SELECT auction AS k FROM source.bid)b USING(k) FULL JOIN(SELECT auction AS k FROM source.bid)c USING(k)",
         "SELECT k,a.k,b.k,c.k,d.k FROM((SELECT other AS k FROM source.auction)a JOIN(SELECT auction AS k FROM source.bid)b USING(k)) FULL JOIN((SELECT auction AS k FROM source.bid)c JOIN(SELECT other AS k FROM source.auction)d USING(k)) USING(k)",
     ] {
@@ -176,7 +177,6 @@ fn using_scope_hides_only_unqualified_originals_and_keeps_nested_physical_fields
         "SELECT id FROM source.auction a FULL JOIN source.bid b ON a.id=b.id",
         "SELECT id FROM source.auction a FULL JOIN source.bid b USING(missing)",
         "SELECT id FROM source.auction a FULL JOIN source.bid b USING(id,id)",
-        "SELECT id FROM source.auction a NATURAL FULL JOIN source.bid b",
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");
     }

@@ -24,12 +24,17 @@ join cross term. Source primary-key checks remain separate from generic weighted
 identity. A FULL join supplies no uniqueness proof merely because its inputs
 have keys; null extension and fanout must retain their actual occurrence semantics.
 
-## USING names, values and metadata
+## NATURAL and USING names, values and metadata
 
 USING accepts up to 16 unique names, each unambiguously present on both inputs.
 Each name exposes one merged unqualified output, while qualified originals such
 as `a.k` and `b.k` remain independently addressable. A subsequent join can use
 the earlier merged key. Missing, repeated or ambiguous USING names reject.
+
+NATURAL infers the USING list from names visible on both inputs, in the left
+input's column order. Common names must resolve uniquely on both sides. If no
+names are shared, every left row matches every right row. LEFT, RIGHT, and FULL
+still emit NULL-extended rows for their preserved sides when an input is empty.
 
 Columns reconcile through the supported native common types and local casts:
 integral widths, integral/numeric combinations, text/varchar, and supported
@@ -51,8 +56,8 @@ the selected INNER/LEFT value can retain default collation; RIGHT/FULL use C.
 Existing deterministic/compatible collation checks apply. Explicit COLLATE syntax
 and unsupported locale comparisons retain their existing rejection boundaries.
 
-NATURAL joins, aliases on a whole join or USING clause, lateral derived references
-and wildcard projection are not added. FULL ON clauses require at least one
+Aliases on a whole join or USING clause, lateral derived references, and
+wildcard projection remain unsupported. FULL ON clauses require at least one
 supported cross-input equality key or a fully constant condition. The compiler
 rejects keyless nonconstant conditions, including inequality-only and OR-only
 FULL joins, before activation; preparing a result description alone does not

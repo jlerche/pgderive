@@ -1,6 +1,10 @@
-//! USING keeps qualified originals and exposes one merged unqualified key.
+//! NATURAL and USING keep qualified originals and expose one merged key per common name.
 use super::{Builder, Column, Edge, keys, resolve};
-use crate::compiler::{left_join::Kind, parser::Name, scalar, typed};
+use crate::compiler::{
+    left_join::Kind,
+    parser::{Name, native_join::JoinClause},
+    scalar, typed,
+};
 use anyhow::{Result, ensure};
 use pg_query::Node as Ast;
 use std::collections::BTreeSet;
@@ -14,22 +18,49 @@ impl Builder<'_> {
         &mut self,
         left: Edge,
         right: Edge,
-        condition: Option<&Ast>,
-        clause: (Kind, Vec<String>),
+        kind: Kind,
+        clause: JoinClause,
     ) -> Result<Edge> {
-        let (kind, names) = clause;
-        let id = format!("tree_join_{}", self.joins);
+        let names = match clause {
+            JoinClause::Condition(condition) => {
+                return self.join_on(left, right, kind, condition.as_deref());
+            }
+            JoinClause::Using(names) => names,
+            JoinClause::Natural => natural_names(&left.columns, &right.columns),
+        };
         if names.is_empty() {
-            let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
-            ensure!(
-                kind != Kind::Full
-                    || !bound.keys.is_empty()
-                    || bound.predicate.as_ref().is_none_or(crate::compiler::Predicate::is_constant),
-                "FULL JOIN requires a supported cross-input equality key or a fully constant ON condition"
-            );
-            return self.join(left, right, bound, kind);
+            return self.join_on(left, right, kind, None);
         }
-        ensure!(condition.is_none() && names.len() <= 16, "USING key count/clause unsupported");
+        self.join_using(left, right, kind, names)
+    }
+
+    fn join_on(
+        &mut self,
+        left: Edge,
+        right: Edge,
+        kind: Kind,
+        condition: Option<&Ast>,
+    ) -> Result<Edge> {
+        let id = format!("tree_join_{}", self.joins);
+        let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
+        ensure!(
+            kind != Kind::Full
+                || !bound.keys.is_empty()
+                || bound.predicate.as_ref().is_none_or(crate::compiler::Predicate::is_constant),
+            "FULL JOIN requires a supported cross-input equality key or a fully constant ON condition"
+        );
+        self.join(left, right, bound, kind)
+    }
+
+    fn join_using(
+        &mut self,
+        left: Edge,
+        right: Edge,
+        kind: Kind,
+        names: Vec<String>,
+    ) -> Result<Edge> {
+        let id = format!("tree_join_{}", self.joins);
+        ensure!(names.len() <= 16, "USING key count unsupported");
         let mut seen = BTreeSet::new();
         let pairs = names
             .iter()
@@ -96,6 +127,20 @@ impl Builder<'_> {
         Ok(edge)
     }
 }
+fn natural_names(left: &[Column], right: &[Column]) -> Vec<String> {
+    let right = right
+        .iter()
+        .filter(|column| column.unqualified)
+        .map(|column| column.label.as_str())
+        .collect::<BTreeSet<_>>();
+    // Preserve the exposed left-column order. USING checks that every name
+    // resolves to exactly one column on each side.
+    left.iter()
+        .filter(|column| column.unqualified && right.contains(column.label.as_str()))
+        .map(|column| column.label.clone())
+        .collect()
+}
+
 fn common(left: u32, right: u32) -> Result<u32> {
     ensure!(
         !matches!((left, right), (1082, 1114 | 1184) | (1114 | 1184, 1082)),

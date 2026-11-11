@@ -68,7 +68,7 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
         SQL.replace("source.auction a", "source.auction a(id)"),
         SQL.replace("a.id=b.auction", "a.id OPERATOR(pg_catalog.=) b.auction"),
         SQL.replace("JOIN source.bid b ON a.id=b.auction", "JOIN source.bid b USING (missing)"),
-        SQL.replace("JOIN source.bid b ON a.id=b.auction", "NATURAL JOIN source.bid b"),
+        SQL.replace("JOIN source.bid b ON a.id=b.auction", "NATURAL JOIN source.bid b USING(id)"),
         SQL.replace("source.auction a", "(SELECT * FROM source.auction) a"),
         format!("{SQL} LIMIT 1000001"),
         format!("{SQL} FOR UPDATE"),

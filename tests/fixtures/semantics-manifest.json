@@ -2558,7 +2558,7 @@
     "scripts/numeric_compiler_harness.py": "d79b31a3a2390895a5f26b9530f58916e93a3143c0378b347635f5a8406a0ce7",
     "scripts/ordering_domains_harness.py": "32ca9e09850091b41d9922d28b17852e64319bbcc05bd82c43bc7fe9095658ac",
     "scripts/ordering_harness.py": "6e5da1322f17cc241a0363d1c3b69c59961da06b6db0236541a6288613d8bee9",
-    "scripts/outer_join_harness.py": "1de2f4c47b2d1224a8df87b4880e34a33dae88fe4f218e38f5ae63b8c147078d",
+    "scripts/outer_join_harness.py": "7349038610b2de7f8a9d81587fdd37ef13c4beb3b31e74b468d8bb722f508b75",
     "scripts/partition_compiler_harness.py": "f4fe037220a006227cff0be9b66210a67085b1007334913d02a421f98ccf459b",
     "scripts/prefix_window_harness.py": "fb32cb90a3fd7b3200760feb1fb608d5e7b79cf2dbb819e2876711d395eb42d5",
     "scripts/query_ordered_state_harness.py": "a6cfdb4bb6e58ca5a0c2e874eeac60979dc86e9537a76c8043ba180b27ef1124",
@@ -2576,5 +2576,5 @@
     "scripts/unordered_harness.py": "c0ec6814ed5c54000e12fc1f4785b9699822e8fcf263a26662b00a39f4d59eb6",
     "scripts/worker_harness.py": "005ab8aa6a1a488755973a0c728dbb41bd922d07d6065666379a26de047ff032"
   },
-  "fixture_sha256": "16b064c2a3b6722ead7d5f33ab0ab1ab680f5f732f7e653bc052fd921a01b96d"
+  "fixture_sha256": "7bebd22f8660426856ce3bf4cc25a180ae15e42d615a795c9b989f135a3ba46e"
 }

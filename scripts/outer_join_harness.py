@@ -304,7 +304,7 @@ def qualify(output, command, mode):
     with fixture.managed():
         if mode == 'full-on':
             rejected = {
-                'natural': f'SELECT a.id FROM {a} a NATURAL FULL JOIN {b} b',
+                'ambiguous-natural': f'SELECT b.id FROM ({a} a CROSS JOIN {a} c) NATURAL FULL JOIN {b} b',
                 'inequality-full': f'SELECT a.k,b.k AS bk FROM {a} a FULL JOIN {b} b ON a.k<b.k',
                 'missing-using': f'SELECT a.id FROM {a} a FULL JOIN {b} b USING(missing)',
                 'duplicate-using': f'SELECT a.id FROM {a} a FULL JOIN {b} b USING(k,k)',

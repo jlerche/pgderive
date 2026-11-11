@@ -4,7 +4,7 @@ INNER, LEFT, RIGHT and FULL joins over native tables and supported non-LATERAL d
 accept the existing local scalar predicate domain in ON. This includes AND, OR,
 NOT, NULL tests, constants, inequalities and expressions referencing both inputs.
 Only TRUE matches; FALSE and UNKNOWN do not. [Outer joins and USING](outer-joins.md)
-extend the shared match machinery and name/type binding. NATURAL joins, lateral
+extend the shared match machinery and name/type binding. Lateral
 references and arbitrary subqueries remain outside this slice.
 
 ## Keys and types
