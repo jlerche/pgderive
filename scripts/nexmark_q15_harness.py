@@ -56,7 +56,7 @@ class Q15Fixture(NativeFixture):
 def qualify(output,command):
     fixture = Q15Fixture(output)
     with fixture.managed():
-        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY day_start FETCH FIRST 1 ROW WITH TIES')
+        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY day_start FETCH FIRST 1000001 ROWS WITH TIES')
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         changes = [

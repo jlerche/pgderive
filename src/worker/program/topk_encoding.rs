@@ -53,11 +53,16 @@ fn append(
     Ok(())
 }
 
-pub(super) fn encoding(spec: &Spec, row: &Row) -> Result<String> {
+pub(super) fn peer_key(spec: &Spec, row: &Row) -> Result<String> {
     let mut token = String::new();
     for order in &spec.order {
         append(&mut token, &order.column, row, order.descending, order.nulls_first)?;
     }
+    Ok(token)
+}
+
+pub(super) fn encoding(spec: &Spec, row: &Row) -> Result<String> {
+    let mut token = peer_key(spec, row)?;
     for column in &spec.identity {
         if spec.order.iter().any(|order| order.column == *column) {
             continue;

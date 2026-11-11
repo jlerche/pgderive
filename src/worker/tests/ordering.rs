@@ -22,6 +22,10 @@ fn ordering_binds_aliases_ordinals_and_hidden_expressions() -> Result<()> {
         "SELECT DISTINCT abs(auction) AS a FROM source.bid ORDER BY abs(auction) LIMIT 3",
         "SELECT price FROM source.bid ORDER BY price,id LIMIT 1025",
         "SELECT price FROM source.bid ORDER BY price,id FETCH FIRST 3 ROWS ONLY",
+        "SELECT auction FROM source.bid ORDER BY price FETCH FIRST ROW WITH TIES",
+        "SELECT auction FROM source.bid ORDER BY price OFFSET 2 ROWS FETCH NEXT 3 ROWS WITH TIES",
+        "VALUES (1),(1),(2) ORDER BY 1 FETCH FIRST ROW WITH TIES",
+        "SELECT price FROM source.bid UNION ALL SELECT price FROM source.bid ORDER BY 1 FETCH FIRST ROW WITH TIES",
         "SELECT price FROM source.bid ORDER BY price LIMIT 3",
         "SELECT price FROM source.bid ORDER BY price LIMIT 3 OFFSET 2",
         "SELECT price FROM source.bid ORDER BY price OFFSET 2",
@@ -48,7 +52,8 @@ fn ordering_binds_aliases_ordinals_and_hidden_expressions() -> Result<()> {
         "ORDER BY price OFFSET 1000001",
         "ORDER BY price COLLATE \"C\"",
         "ORDER BY price USING >",
-        "ORDER BY price FETCH FIRST 1 ROW WITH TIES",
+        "FETCH FIRST 1 ROW WITH TIES",
+        "ORDER BY price FETCH FIRST 1000001 ROWS WITH TIES",
     ] {
         assert!(compile(&format!("{base} {suffix}"), &native).is_err(), "{suffix}");
     }
@@ -131,7 +136,7 @@ async fn plain_order_ties_and_offsets_count_weighted_occurrences() -> Result<()>
         history
             .run(
                 super::peer_changes(),
-                |state| offset_oracle(state, offset, limit),
+                |state| offset_oracle(state, offset, limit, false),
                 super::apply_rows,
                 |_| true,
             )
@@ -140,7 +145,39 @@ async fn plain_order_ties_and_offsets_count_weighted_occurrences() -> Result<()>
     Ok(())
 }
 
-fn offset_oracle(state: &RowState, offset: usize, limit: Option<usize>) -> Result<super::RowBatch> {
+#[tokio::test]
+async fn fetch_with_ties_preserves_cutoff_peers_through_restore() -> Result<()> {
+    let native = contract();
+    let options = settings();
+    for (offset, limit) in [(0, 1), (1, 1), (0, 3), (1, 0), (4, 100)] {
+        let compiled = compile(
+            &format!(
+                "SELECT auction,price FROM source.bid ORDER BY price DESC NULLS LAST
+                     OFFSET {offset} ROWS FETCH NEXT {limit} ROWS WITH TIES"
+            ),
+            &native,
+        )?;
+        let mut history = History::new((&native, &compiled, &options));
+        history.snapshot = true;
+        history.compact = true;
+        history
+            .run(
+                super::peer_changes(),
+                |state| offset_oracle(state, offset, Some(limit), true),
+                super::apply_rows,
+                |_| true,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn offset_oracle(
+    state: &RowState,
+    offset: usize,
+    limit: Option<usize>,
+    with_ties: bool,
+) -> Result<super::RowBatch> {
     let mut rows = Vec::new();
     for (row, weight) in state {
         let price = row["price"].as_deref().map(str::parse::<i64>).transpose()?;
@@ -150,21 +187,25 @@ fn offset_oracle(state: &RowState, offset: usize, limit: Option<usize>) -> Resul
         }
     }
     rows.sort_by_key(|(p, a, _)| (p.is_none(), p.map(std::cmp::Reverse), *a));
-    Batch::from_updates(rows.into_iter().skip(offset).take(limit.unwrap_or(usize::MAX)).map(
-        |(_, _, row)| {
+    let start = offset.min(rows.len());
+    let mut end = start.saturating_add(limit.unwrap_or(usize::MAX)).min(rows.len());
+    if with_ties && end > start {
+        let cutoff = rows[end - 1].0;
+        end += rows[end..].partition_point(|(price, _, _)| *price == cutoff);
+    }
+    Batch::from_updates(rows[start..end].iter().map(|(_, _, row)| {
+        (
             (
-                (
-                    relational::Key::new(),
-                    [
-                        ("0:auction".into(), row["auction"].clone()),
-                        ("0:price".into(), row["price"].clone()),
-                    ]
-                    .into(),
-                ),
-                1,
-            )
-        },
-    ))
+                relational::Key::new(),
+                [
+                    ("0:auction".into(), row["auction"].clone()),
+                    ("0:price".into(), row["price"].clone()),
+                ]
+                .into(),
+            ),
+            1,
+        )
+    }))
 }
 
 fn oracle(state: &RowState, limit: Option<usize>) -> Result<super::RowBatch> {

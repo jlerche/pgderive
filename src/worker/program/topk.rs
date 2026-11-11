@@ -22,7 +22,8 @@ pub(super) fn input(spec: &Spec) -> Project<Key, Row, Key, Row> {
 pub(super) fn operator(spec: &Spec) -> OrderedSelection<Key, Row> {
     let offset = spec.offset;
     let spec = spec.clone();
-    OrderedSelection::new(spec.limit, move |key: &Key, row: &Row, position| {
+    let peer_spec = spec.with_ties.then(|| spec.clone());
+    let selection = OrderedSelection::new(spec.limit, move |key: &Key, row: &Row, position| {
         ensure!(
             row.get(ORDER) == Some(&Some(encoding(&spec, row)?)),
             "invalid top-k identity codec"
@@ -37,7 +38,12 @@ pub(super) fn operator(spec: &Spec) -> OrderedSelection<Key, Row> {
         }
         Ok((key.clone(), output))
     })
-    .skip(offset)
+    .skip(offset);
+    if let Some(spec) = peer_spec {
+        selection.with_ties(move |row| codec::peer_key(&spec, row))
+    } else {
+        selection
+    }
 }
 
 #[cfg(test)]

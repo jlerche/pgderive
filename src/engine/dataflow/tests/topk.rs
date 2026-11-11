@@ -164,3 +164,34 @@ async fn top_k_borrows_canonical_delta_groups_and_selected_values() -> Result<()
     assert_eq!(selected.batch, input.batch);
     Ok(())
 }
+
+#[tokio::test]
+async fn peer_expansion_obeys_work_and_output_limits_on_refill() -> Result<()> {
+    let writer =
+        Arrangement::<i64, i64>::new(Arc::new(InMemory::new()), "topk-ties-budget-v1".into(), 1)?;
+    let empty = writer.empty();
+    let prior = writer
+        .stage(
+            &empty,
+            &TimedBatch {
+                time: 1,
+                batch: Batch::from_updates([((0, 0), 1), ((0, 20), 2), ((0, 21), 1)])?,
+            },
+        )
+        .await?;
+    let retained = writer
+        .stage(&empty, &TimedBatch { time: 1, batch: Batch::from_updates([((0, 0), 1)])? })
+        .await?;
+    let operator = OrderedSelection::new(1, |key: &i64, value: &i64, _| Ok((*key, *value)))
+        .with_ties(|value| Ok((value / 10).to_string()));
+    let next = TimedBatch { time: 2, batch: Batch::from_updates([((0, 0), -1)])? };
+    for limits in [
+        Limits { contributions: 4, ..Limits::default() },
+        Limits { output_entries: 2, ..Limits::default() },
+    ] {
+        assert!(operator.evaluate(&next, &prior, &retained, limits).await.is_err());
+    }
+    let result = operator.evaluate(&next, &prior, &retained, Limits::default()).await?;
+    assert_eq!(result.batch, Batch::from_updates([((0, 0), -1), ((0, 20), 2), ((0, 21), 1)])?);
+    Ok(())
+}

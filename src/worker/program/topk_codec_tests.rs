@@ -87,6 +87,7 @@ fn encoded_order_matches_signed_boundaries_and_mixed_null_prefixes() -> Result<(
             field: Some("@aggregate_0".into()),
             limit: 3,
             offset: 0,
+            with_ties: false,
             identity: Vec::new(),
         };
         let mut encoded = rows
@@ -151,6 +152,7 @@ fn native_case(oid: u32, values: &[&str], descending: bool, nulls_first: bool) -
         field: None,
         limit: 3,
         offset: 0,
+        with_ties: false,
         identity: Vec::new(),
     };
     let mut rows = values

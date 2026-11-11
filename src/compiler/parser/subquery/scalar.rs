@@ -25,7 +25,8 @@ impl Rewrite<'_> {
         let mut empty = select.clone();
         empty.where_clause = Some(Box::new(ast::boolean(false)));
         empty.target_list.push(ast::target(ast::count(), ast::PRESENT));
-        let (limit, offset) = crate::compiler::parser::ordering::bounds(&select)?;
+        let crate::compiler::parser::ordering::Bounds { limit, offset, .. } =
+            crate::compiler::parser::ordering::bounds(&select)?;
         if limit == Some(0) || offset > 0 {
             self.attach_scalar(named(&empty)?, alias.clone())?;
             return Ok(Scalar {

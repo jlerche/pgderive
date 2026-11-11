@@ -47,6 +47,15 @@ A_Const, so both are admitted. OFFSET NULL means zero. Negative, computed and
 out-of-budget finite counts reject. With no finite limit or nonzero offset these
 clauses normalize to the unchanged result bag.
 
+FETCH FIRST or NEXT ... WITH TIES requires ORDER BY and includes every
+remaining occurrence that compares equal to the last fetched row on all
+explicit sort keys. NULLs are peers of NULLs, and numeric values with equal
+value and different display scales are peers. A zero count returns no rows.
+OFFSET is applied first. If it splits a peer group, Pgderive uses its
+deterministic tuple ordering to choose the skipped occurrences. The selector
+preserves full row identity and multiplicity and charges the existing work and
+output budgets for peer expansion.
+
 Plain SQL ordering permits nonunique keys. Like Feldera's generated comparator,
 it orders ties by remaining fields of the complete logical tuple in tuple order,
 ascending with NULL first. The logical tuple contains selected values followed
@@ -73,7 +82,7 @@ The changed sort codec/state and added POSIX semantic attestation require rebuil
 of existing registrations with the old plan/environment identity. There is no
 compatibility decoder or migration fallback.
 
-Locale-dependent text ordering, WITH TIES, dynamic limits and custom sort operators reject before
+Locale-dependent text ordering, dynamic limits and custom sort operators reject before
 activation. Other execution and publication budgets still apply.
 
 The destination remains an ordinary PostgreSQL table. ORDER BY without LIMIT
@@ -113,7 +122,8 @@ changed identities even outside the cutoff and at K=0; SQL LIMIT 0 instead uses
 the constant-empty lowering above. Nonzero selection merges changed rows with
 the retained ordered prefix and subtracts the prior selection. Deleted winners
 can therefore expose previously unselected rows after cold restore. This reads
-the selected prefix and changed identities, not a full partition sort, but it is
+the selected prefix and changed identities, not a full partition sort. With ties it continues through the cutoff peers and
+stops at the first following nonpeer. Selection is
 not a constant-work algorithm: work scales with the offset plus K, changes and
 storage layout. The shared selector subtracts skipped occurrences directly
 from the selected prefix, equivalent to Feldera's two-prefix subtraction.
@@ -166,6 +176,11 @@ numeric text refines remaining representation ties. Native send bytes and bags
 are both compared through CDC and restart. Rust histories separately exercise
 weighted duplicates across offset/limit boundaries, tail refill and compaction.
 The numeric kernel is compared against independent scaled-integer arithmetic.
+
+The `fetch_with_ties_harness.py` fixtures compare exact PostgreSQL bags and
+binary representations through CDC and cold restart. They cover weighted
+duplicates, NULL peers, OFFSET within identical projected peers, zero count,
+multi-key order and equal numeric values with different scales.
 
 `scripts/unordered_harness.py` adds seventeen count histories: bare LIMIT/OFFSET,
 combined and zero counts, ALL/NULL, ordered/hidden-order ALL, default-collated

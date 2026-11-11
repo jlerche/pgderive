@@ -86,7 +86,7 @@ class AuctionFixture(SqlFixture):
 def qualify(output,command,query,instant):
     fixture = AuctionFixture(output,query,instant)
     with fixture.managed():
-        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY category FETCH FIRST 1 ROW WITH TIES')
+        fixture.rejected(command,'unsupported',fixture.query+' ORDER BY category FETCH FIRST 1000001 ROWS WITH TIES')
         if query=='q9':
             fixture.rejected(command,'missing-bid-key',fixture.query.replace('j.bid_id,j.auction_id','j.auction_id'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'

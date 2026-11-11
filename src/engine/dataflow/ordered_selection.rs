@@ -11,12 +11,15 @@ use num_bigint::BigInt;
 use std::sync::Arc;
 type SelectionPrior<'a, K, V> = (&'a TraceSnapshot<K, V>, &'a TraceSnapshot<K, V>);
 type Selection<K, V> = dyn Fn(&K, &V, usize, Limits) -> Result<Option<(K, V)>> + Send + Sync;
-/// Retractable first K row occurrences per key in physical codec order.
+type Peer<V> = dyn Fn(&V) -> Result<String> + Send + Sync;
+/// Retractable first K row occurrences per key in physical codec order,
+/// optionally extended through the cutoff peer group.
 /// SQL callers bind explicit ordering and the codec to durable plan identity.
 #[derive(Clone)]
 pub struct OrderedSelection<K: BatchData, V: BatchData> {
     limit: usize,
     first: bool,
+    peer: Option<Arc<Peer<V>>>,
     select: Arc<Selection<K, V>>,
 }
 impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
@@ -30,6 +33,17 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         });
         self
     }
+    /// Include rows with the same peer token as the cutoff occurrence.
+    /// Equal tokens must form contiguous runs in the physical ordering.
+    #[must_use]
+    pub fn with_ties(
+        mut self,
+        peer: impl Fn(&V) -> Result<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.first = false;
+        self.peer = Some(Arc::new(peer));
+        self
+    }
     /// Bind a pure selection that preserves the input key and receives a
     /// one-based position for each selected occurrence.
     #[must_use]
@@ -40,6 +54,7 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         Self {
             limit,
             first: false,
+            peer: None,
             select: Arc::new(move |key, value, position, _| select(key, value, position).map(Some)),
         }
     }
@@ -49,6 +64,7 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         Self {
             limit: 1,
             first: true,
+            peer: None,
             select: Arc::new(move |key, value, _, limits| {
                 let input = TimedBatch {
                     time: 0,
@@ -111,7 +127,10 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
                 retained = retained
                     .checked_add(usize::try_from(weight)?)
                     .context("top-k retained count overflow")?;
-                ensure!(retained <= self.limit, "retained top-k exceeds limit");
+                ensure!(
+                    self.peer.is_some() || retained <= self.limit,
+                    "retained top-k exceeds limit"
+                );
                 progress.changes.add((key.clone(), value.clone()), -weight)?;
                 cursor.advance().await?;
             }
@@ -130,7 +149,8 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
         let mut cursor = prior.key_cursor(key).await?;
         let mut changed = delta.iter().peekable();
         let mut position = 0;
-        while position < self.limit {
+        let mut cutoff = None;
+        while position < self.limit || cutoff.is_some() {
             progress.work.charge(1)?;
             let old = cursor.current().map(|(_, value, weight)| (value, weight));
             let new = changed.peek().map(|((_, value), weight)| (value, *weight));
@@ -155,7 +175,9 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
                 coefficient += new.as_ref().context("missing changed top-k row")?.1;
             }
             ensure!(coefficient >= BigInt::from(0), "negative top-k membership");
-            let count = usize::try_from(coefficient.min(BigInt::from(self.limit - position)))?;
+            let Some(count) = self.count(value, coefficient, position, &mut cutoff)? else {
+                break;
+            };
             for _ in 0..count {
                 if !self.first {
                     progress.work.charge(1)?;
@@ -169,11 +191,33 @@ impl<K: BatchData, V: BatchData> OrderedSelection<K, V> {
             if advance_changed {
                 changed.next();
             }
-            if advance_prior && position < self.limit {
+            if advance_prior && (position < self.limit || cutoff.is_some()) {
                 cursor.advance().await?;
             }
         }
         Ok(())
+    }
+    fn count(
+        &self,
+        value: &V,
+        coefficient: BigInt,
+        position: usize,
+        cutoff: &mut Option<String>,
+    ) -> Result<Option<usize>> {
+        let remaining = BigInt::from(self.limit.saturating_sub(position));
+        if let Some(peer) = &self.peer
+            && coefficient >= remaining
+            && coefficient != BigInt::from(0)
+        {
+            let token = peer(value)?;
+            if cutoff.as_ref().is_some_and(|prior| *prior != token) {
+                return Ok(None);
+            }
+            *cutoff = Some(token);
+            // The ordinary per-occurrence work charge bounds the peer expansion.
+            return Ok(Some(usize::try_from(coefficient)?));
+        }
+        Ok(Some(usize::try_from(coefficient.min(remaining))?))
     }
 }
 struct Progress<'a, K: BatchData, V: BatchData> {

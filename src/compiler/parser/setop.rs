@@ -8,8 +8,7 @@ pub(in crate::compiler) struct SetOperation {
     pub left: Box<Parsed>,
     pub right: Box<Parsed>,
     pub order: Vec<Order>,
-    pub limit: Option<usize>,
-    pub offset: usize,
+    pub bounds: super::ordering::Bounds,
 }
 pub(in crate::compiler) struct Order {
     pub reference: Reference,
@@ -49,7 +48,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
     let branch = |value: Option<&pg::SelectStmt>| -> Result<Parsed> {
         query(value.context("missing set operand")?)
     };
-    let (limit, offset) = super::ordering::bounds(select)?;
+    let bounds = super::ordering::bounds(select)?;
     ensure!(select.sort_clause.len() <= 16, "set ORDER BY exceeds 16 keys");
     let order = select
         .sort_clause
@@ -81,7 +80,6 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         left: Box::new(branch(select.larg.as_deref())?),
         right: Box::new(branch(select.rarg.as_deref())?),
         order,
-        limit,
-        offset,
+        bounds,
     })))
 }

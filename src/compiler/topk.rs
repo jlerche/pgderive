@@ -7,5 +7,7 @@ pub struct Spec {
     pub(crate) field: Option<String>,
     pub(crate) limit: usize,
     pub(crate) offset: usize,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) with_ties: bool,
     pub(crate) identity: Vec<super::ColumnRef>,
 }

@@ -1,7 +1,11 @@
 //! Global occurrence selection after SQL expressions, grouping and DISTINCT.
 use crate::{
     compiler::{
-        Compiled, parser::ordering::Parsed, partition::Order, relational::Node, topk::Spec,
+        Compiled,
+        parser::ordering::{Bounds, Parsed},
+        partition::Order,
+        relational::Node,
+        topk::Spec,
     },
     source::Contract,
 };
@@ -15,8 +19,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
             order: parsed.order,
             visible: parsed.visible,
             distinct: parsed.distinct,
-            limit: parsed.limit,
-            offset: parsed.offset,
+            bounds: parsed.bounds,
         },
         contract,
     )
@@ -25,8 +28,7 @@ pub(super) struct Clause {
     pub(super) order: Vec<crate::compiler::parser::ordering::Order>,
     pub(super) visible: usize,
     pub(super) distinct: bool,
-    pub(super) limit: Option<usize>,
-    pub(super) offset: usize,
+    pub(super) bounds: Bounds,
 }
 pub(super) fn apply(
     mut compiled: Compiled,
@@ -79,13 +81,13 @@ pub(super) fn apply(
     ir.output.columns.truncate(parsed.visible);
     let sorted = order.iter().map(|value| value.column.clone()).collect();
     let empty = crate::compiler::properties::occurrence(ir, contract)?.maximum_rows() == Some(0);
-    if parsed.limit == Some(0) || empty {
+    if parsed.bounds.limit == Some(0) || empty {
         sort_marker(ir, sorted)?;
         read_nothing(ir)?;
-    } else if parsed.limit.is_none() && parsed.offset == 0 {
+    } else if parsed.bounds.limit.is_none() && parsed.bounds.offset == 0 {
         sort_marker(ir, sorted)?;
     } else {
-        top_k(ir, order, identity, (parsed.limit, parsed.offset))?;
+        top_k(ir, order, identity, parsed.bounds)?;
     }
     Ok(compiled)
 }
@@ -93,7 +95,7 @@ fn top_k(
     ir: &mut crate::compiler::relational::Relational,
     order: Vec<Order>,
     identity: Vec<crate::compiler::ColumnRef>,
-    (limit, offset): (Option<usize>, usize),
+    Bounds { limit, offset, with_ties }: Bounds,
 ) -> Result<()> {
     let limit = limit
         .map(|limit| limit.checked_add(offset).context("LIMIT + OFFSET overflow"))
@@ -113,7 +115,7 @@ fn top_k(
             output: column.clone(),
         })
         .collect();
-    let spec = Spec { order, field: None, limit, offset, identity };
+    let spec = Spec { order, field: None, limit, offset, with_ties, identity };
     ir.nodes.push(Node::Rebind { id: global.clone(), input, fields });
     ir.nodes.push(Node::TopKInput { id: indexed.clone(), input: global, spec: spec.clone() });
     ir.nodes.push(Node::TopK { id: selected.clone(), input: indexed, spec });

@@ -42,7 +42,7 @@ def qualify(output, command, filtered):
     with fixture.managed():
         for label, query in [
             ('ambiguous', fixture.query.replace('a.enabled OR', 'id > 0 OR')),
-            ('unsupported', fixture.query + ' ORDER BY g FETCH FIRST 1 ROW WITH TIES'),
+            ('unsupported', fixture.query + ' ORDER BY g FETCH FIRST 1000001 ROWS WITH TIES'),
             ('unsupported-function', fixture.query.replace('b.auction=a.id', 'lower(a.category)=a.category')),
         ]:
             fixture.rejected(command, label, query)

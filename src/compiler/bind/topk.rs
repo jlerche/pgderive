@@ -25,6 +25,7 @@ pub(super) fn specialize(ir: &mut Relational, input: &str, predicate: &Predicate
         field: Some(aggregate.field.clone()),
         limit,
         offset: 0,
+        with_ties: false,
         identity: Vec::new(),
     };
     let id = id.clone();

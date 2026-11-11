@@ -8,8 +8,7 @@ pub(in crate::compiler) struct Parsed {
     pub order: Vec<Order>,
     pub visible: usize,
     pub distinct: bool,
-    pub limit: Option<usize>,
-    pub offset: usize,
+    pub bounds: Bounds,
 }
 pub(in crate::compiler) struct Order {
     pub index: usize,
@@ -26,7 +25,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         return Ok(None);
     }
     ensure!(select.sort_clause.len() <= 16, "ORDER BY exceeds 16 keys");
-    let (limit, offset) = bounds(select)?;
+    let bounds = bounds(select)?;
     let visible = select.target_list.len();
     let targets = partition::parse_targets(select)?;
     let mut plain = select.clone();
@@ -59,8 +58,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         visible,
         distinct: !plain.distinct_clause.is_empty(),
         order,
-        limit,
-        offset,
+        bounds,
     }))
 }
 
@@ -148,14 +146,19 @@ fn target_index(value: &Node, targets: &[partition::Target]) -> Result<Option<us
     Ok(None)
 }
 
-pub(in crate::compiler) fn bounds(select: &pg::SelectStmt) -> Result<(Option<usize>, usize)> {
-    ensure!(
-        matches!(
-            pg::LimitOption::try_from(select.limit_option)?,
-            pg::LimitOption::Default | pg::LimitOption::Count
-        ),
-        "FETCH WITH TIES unsupported"
-    );
+pub(in crate::compiler) struct Bounds {
+    pub limit: Option<usize>,
+    pub offset: usize,
+    pub with_ties: bool,
+}
+
+pub(in crate::compiler) fn bounds(select: &pg::SelectStmt) -> Result<Bounds> {
+    let with_ties = match pg::LimitOption::try_from(select.limit_option)? {
+        pg::LimitOption::Default | pg::LimitOption::Count => false,
+        pg::LimitOption::WithTies => true,
+        pg::LimitOption::Undefined => anyhow::bail!("invalid LIMIT option"),
+    };
+    ensure!(!with_ties || !select.sort_clause.is_empty(), "FETCH WITH TIES requires ORDER BY");
     let limit = select.limit_count.as_deref().map(count).transpose()?.flatten();
     let offset = select.limit_offset.as_deref().map(count).transpose()?.flatten().unwrap_or(0);
     if let Some(limit) = limit {
@@ -164,5 +167,5 @@ pub(in crate::compiler) fn bounds(select: &pg::SelectStmt) -> Result<(Option<usi
             "LIMIT + OFFSET exceeds 1000000 occurrence budget"
         );
     }
-    Ok((limit, offset))
+    Ok(Bounds { limit, offset, with_ties: with_ties && limit.is_some() })
 }
