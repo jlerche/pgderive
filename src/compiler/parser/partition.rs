@@ -170,6 +170,9 @@ fn aggregate_function(name: &str) -> Option<Function> {
         "rank" => Some(Function::Rank),
         "dense_rank" => Some(Function::DenseRank),
         "row_number" => Some(Function::RowNumber),
+        "ntile" => Some(Function::Ntile),
+        "percent_rank" => Some(Function::PercentRank),
+        "cume_dist" => Some(Function::CumeDist),
         "lag" => Some(Function::Lag),
         "lead" => Some(Function::Lead),
         "first_value" => Some(Function::FirstValue),
@@ -212,16 +215,16 @@ fn aggregate(
     } else {
         None
     };
-    let position = window_value_position(call, &function)?;
+    let position = integer_window_argument(call, &function)?;
     let argument = if let Some(navigation) = &navigation {
         Some(Argument::Column(navigation.argument.clone()))
     } else if ranking {
         ensure!(
             call.over.is_some()
-                && call.args.is_empty()
+                && (call.args.is_empty() || position.is_some())
                 && !call.agg_star
                 && call.agg_filter.is_none(),
-            "ranking requires OVER, no arguments or FILTER"
+            "ranking requires OVER and disallows star and FILTER"
         );
         None
     } else if call.agg_star {
@@ -240,7 +243,6 @@ fn aggregate(
         }
     };
     Ok(Aggregate {
-        function,
         argument,
         filter: crate::compiler::syntax::predicate(call.agg_filter.as_deref())?,
         window: call
@@ -248,21 +250,37 @@ fn aggregate(
             .as_deref()
             .map(|value| {
                 let value = windows.resolve(value)?;
-                if navigation.is_some() {
-                    super::navigation::window(value)
+                if navigation.is_some()
+                    || matches!(
+                        function,
+                        Function::Ntile | Function::PercentRank | Function::CumeDist
+                    )
+                {
+                    let mut window = window(value, false)?;
+                    // These functions use the partition independently of frame membership.
+                    window.ranking = true;
+                    window.peers = None;
+                    Ok(window)
                 } else {
                     window(value, ranking)
                 }
             })
             .transpose()?,
+        function,
         navigation,
         position: position.cloned().map(Box::new),
     })
 }
-fn window_value_position<'a>(
+fn integer_window_argument<'a>(
     call: &'a pg::FuncCall,
     function: &Function,
 ) -> Result<Option<&'a Node>> {
+    if matches!(function, Function::Ntile) {
+        let [buckets] = call.args.as_slice() else {
+            anyhow::bail!("NTILE requires a bucket count");
+        };
+        return Ok(Some(buckets));
+    }
     if !function.frame_value() {
         return Ok(None);
     }

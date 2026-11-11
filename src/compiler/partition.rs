@@ -20,6 +20,9 @@ pub enum Function {
     Rank,
     DenseRank,
     RowNumber,
+    Ntile,
+    PercentRank,
+    CumeDist,
     Lag,
     Lead,
     FirstValue,
@@ -46,13 +49,21 @@ impl Function {
         matches!(self, Self::BoolAnd | Self::BoolOr)
     }
     pub(crate) const fn occurrence_order(&self) -> bool {
-        matches!(self, Self::RowNumber | Self::Lag | Self::Lead)
+        matches!(self, Self::RowNumber | Self::Ntile | Self::Lag | Self::Lead)
     }
     pub(crate) const fn frame_value(&self) -> bool {
         matches!(self, Self::FirstValue | Self::LastValue | Self::NthValue)
     }
     pub(crate) const fn ranking(&self) -> bool {
-        matches!(self, Self::Rank | Self::DenseRank | Self::RowNumber)
+        matches!(
+            self,
+            Self::Rank
+                | Self::DenseRank
+                | Self::RowNumber
+                | Self::Ntile
+                | Self::PercentRank
+                | Self::CumeDist
+        )
     }
 }
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -81,6 +92,8 @@ impl Aggregate {
                 | Function::Rank
                 | Function::DenseRank
                 | Function::RowNumber
+                | Function::PercentRank
+                | Function::CumeDist
         );
         let collation = if self.function.frame_value() {
             self.argument.as_ref().context("missing window value")?.collation
@@ -140,6 +153,8 @@ pub(in crate::compiler) fn result_type(
         | Function::Rank
         | Function::DenseRank
         | Function::RowNumber => Ok(20),
+        Function::Ntile => Ok(23),
+        Function::PercentRank | Function::CumeDist => Ok(701),
         Function::BoolAnd | Function::BoolOr => {
             ensure!(
                 argument.is_some_and(|arg| arg.oid == 16),

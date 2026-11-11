@@ -108,6 +108,7 @@ native native_compiler
 date-bin date_bin_compiler
 hopping hopping_compiler
 ranking ranking_compiler
+ranking-distribution ranking_distribution
 peer-frames peer_frames_compiler
 derived derived_compiler
 navigation navigation_compiler

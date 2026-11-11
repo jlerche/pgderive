@@ -1,4 +1,5 @@
 mod frame_value;
+mod ranking;
 mod sliding;
 use super::aggregate::{Linear, contribution};
 use crate::{
@@ -26,7 +27,7 @@ pub(super) fn evaluate(
     let (limits, work) = context;
     match &spec.mode {
         Mode::Grouped { keys } => grouped(spec, bag, keys, work),
-        Mode::Ranking { order } => ranks(spec, bag, order, (limits, work)),
+        Mode::Ranking { order } => ranking::evaluate(spec, bag, order, (limits, work)),
         Mode::Rows { order, frame } | Mode::Peers { order, frame, .. } => {
             framed(spec, bag, (order, frame), (limits, work), Frames::new(spec))
         }
@@ -194,46 +195,6 @@ fn bounds(frame: &Frame, index: usize, length: usize) -> Result<(usize, usize)> 
     let start = frame.start.map_or(0, |offset| (index + offset).clamp(0, length));
     let end = frame.end.map_or(length, |offset| (index + offset + 1).clamp(0, length));
     Ok((usize::try_from(start)?, usize::try_from(end)?))
-}
-
-fn ranks(
-    spec: &Partition,
-    bag: &Bag,
-    order: &[Order],
-    context: (Limits, &mut crate::engine::dataflow::PartitionWork),
-) -> Result<Bag> {
-    let (limits, work) = context;
-    let ordered = ordered(bag, order, limits, work)?;
-    let mut updates = Consolidator::new(limits)?;
-    let mut rank = 1_i64;
-    let mut dense = 0_i64;
-    for (index, (keys, row)) in ordered.iter().enumerate() {
-        let position = i64::try_from(index)?.checked_add(1).context("ROW_NUMBER overflow")?;
-        if index == 0 || compare(keys, &ordered[index - 1].0, order) != Ordering::Equal {
-            rank = position;
-            dense = dense.checked_add(1).context("DENSE_RANK overflow")?;
-        }
-        let mut output = row.clone();
-        for function in &spec.aggregates {
-            work.charge(1)?;
-            let value = match function.function {
-                Function::Rank => Some(rank.to_string()),
-                Function::DenseRank => Some(dense.to_string()),
-                Function::RowNumber => Some(position.to_string()),
-                Function::Lag | Function::Lead => super::navigation::evaluate(
-                    function,
-                    function.navigation.as_ref().context("missing navigation specification")?,
-                    &ordered,
-                    index,
-                    matches!(function.function, Function::Lead),
-                )?,
-                _ => anyhow::bail!("aggregate requires framed evaluator"),
-            };
-            output.insert(function.field.clone(), value);
-        }
-        updates.add(((), output), 1)?;
-    }
-    updates.finish_batch()
 }
 
 fn framed_fields(

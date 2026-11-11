@@ -20,11 +20,3 @@ pub(super) fn parse(call: &pg::FuncCall) -> Result<Navigation> {
     let default = call.args.get(2).cloned().map(Box::new);
     Ok(Navigation { argument, offset, default })
 }
-
-pub(super) fn window(value: super::windows::Spec<'_>) -> Result<super::partition::Window> {
-    let mut window = super::partition::window(value, false)?;
-    // Navigation ignores valid frame membership; retain only partition/order.
-    window.ranking = true;
-    window.peers = None;
-    Ok(window)
-}

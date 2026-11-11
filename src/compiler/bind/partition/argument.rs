@@ -81,11 +81,14 @@ pub(super) fn bind(
     Ok(Bound { column: Some(column), filter: None, expression: None })
 }
 
-pub(super) fn position(
+pub(super) fn integer_window_argument(
     ast: &pg_query::Node,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
 ) -> Result<Typed> {
     let position = Typed::bind_contextual(ast, resolve, 0)?;
-    ensure!(matches!(position.oid(), 0 | 705 | 21 | 23), "NTH_VALUE position requires integer");
+    ensure!(
+        matches!(position.oid(), 0 | 705 | 21 | 23),
+        "window function argument requires integer"
+    );
     position.coerce_common(23)
 }

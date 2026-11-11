@@ -39,7 +39,7 @@ impl Projected {
                             crate::temporal::Timestamp::parse(value, output.column.oid)?
                                 .json(output.column.oid)?,
                         )),
-                        25 | 1043 | 2950 | 1700 => Ok(Cell::Text(value.into())),
+                        25 | 701 | 1043 | 2950 | 1700 => Ok(Cell::Text(value.into())),
                         1082 | 1186 => {
                             Ok(Cell::Text(super::value::literal_text(output.column.oid, value)?))
                         }

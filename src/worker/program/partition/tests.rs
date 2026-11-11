@@ -342,3 +342,69 @@ fn frame_value_keeps_collation_for_outer_ordering() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[test]
+fn ntile_uses_first_non_null_bucket_count_and_reports_invalid_counts() -> Result<()> {
+    let window = "OVER (ORDER BY id ROWS BETWEEN 1 FOLLOWING AND 1 FOLLOWING)";
+    let query = |count| format!("SELECT ntile({count}) {window} FROM source.bid");
+    let spec = bound(&query("CASE WHEN id=0 THEN NULL WHEN id=1 THEN 2 ELSE -1 END"))?;
+    let limits = Limits::default();
+    let mut work = PartitionWork::new(BUDGET);
+    let result = evaluate(&spec, &input(5, false)?, (limits, &mut work))?;
+    let expected = [None, Some("1"), Some("1"), Some("1"), Some("2")];
+    for (((), row), _) in result.iter() {
+        let id = row["0:id"].as_deref().context("missing id")?.parse::<usize>()?;
+        assert_eq!(row["@aggregate_0"].as_deref(), expected[id]);
+    }
+    for invalid in ["0", "-1"] {
+        let spec = bound(&query(invalid))?;
+        assert!(evaluate(&spec, &input(0, false)?, (limits, &mut work))?.iter().next().is_none());
+        assert!(matches!(
+            evaluate(&spec, &input(1, false)?, (limits, &mut work)),
+            Err(error) if error.is::<crate::engine::execution::EvaluationFailed>()
+                && error.root_cause().to_string() == "argument of ntile must be greater than zero"
+        ));
+    }
+    for sql in [
+        query("1::bigint"),
+        "SELECT ntile() OVER (ORDER BY id) FROM source.bid".into(),
+        "SELECT ntile(1) OVER (ORDER BY price) FROM source.bid".into(),
+        "SELECT cume_dist(1) OVER () FROM source.bid".into(),
+        "SELECT percent_rank() FILTER (WHERE true) OVER () FROM source.bid".into(),
+    ] {
+        assert!(compile(&sql, &contract()).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn fractional_ranks_count_weighted_null_peers_and_singletons() -> Result<()> {
+    let spec = bound(
+        "SELECT percent_rank() OVER w, cume_dist() OVER w FROM source.bid
+         WINDOW w AS (ORDER BY price NULLS LAST)",
+    )?;
+    let bag = Bag::from_updates([
+        (((), row(&[("0:id", Some("1")), ("0:price", Some("7"))])), 2),
+        (((), row(&[("0:id", Some("2")), ("0:price", Some("7"))])), 1),
+        (((), row(&[("0:id", Some("3")), ("0:price", None)])), 3),
+    ])?;
+    let mut work = PartitionWork::new(BUDGET);
+    let limits = Limits::default();
+    let output = evaluate(&spec, &bag, (limits, &mut work))?;
+    assert_eq!(output.iter().count(), 3);
+    for (((), row), weight) in output.iter() {
+        let (rank, cumulative, weight_expected) = match row["0:id"].as_deref() {
+            Some("1") => ("0", "0.5", 2),
+            Some("2") => ("0", "0.5", 1),
+            _ => ("0.6", "1", 3),
+        };
+        assert_eq!(row["@aggregate_0"].as_deref(), Some(rank));
+        assert_eq!(row["@aggregate_1"].as_deref(), Some(cumulative));
+        assert_eq!(*weight, weight_expected);
+    }
+    let singleton = evaluate(&spec, &input(1, false)?, (limits, &mut work))?;
+    let (((), row), _) = singleton.iter().next().context("missing singleton")?;
+    assert_eq!(row["@aggregate_0"].as_deref(), Some("0"));
+    assert_eq!(row["@aggregate_1"].as_deref(), Some("1"));
+    Ok(())
+}

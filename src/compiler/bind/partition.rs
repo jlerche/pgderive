@@ -371,8 +371,11 @@ fn aggregate(
             )
         })
         .transpose()?;
-    let position =
-        value.position.as_deref().map(|ast| argument::position(ast, resolve)).transpose()?;
+    let position = value
+        .position
+        .as_deref()
+        .map(|ast| argument::integer_window_argument(ast, resolve))
+        .transpose()?;
     let mut aggregate = Aggregate {
         function: value.function,
         expression,

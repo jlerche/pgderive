@@ -147,6 +147,7 @@ pub(super) fn native(oid: u32) -> Result<(&'static str, &'static str)> {
         1184 => ("timestamptz", "timestamptz_send"),
         1186 => ("interval", "interval_send"),
         1700 => ("numeric", "numeric_send"),
+        701 => ("float8", "float8send"),
         1009 => ("_text", "array_send"),
         3802 => ("jsonb", "jsonb_send"),
         _ => anyhow::bail!("unsupported public result type OID {oid}"),

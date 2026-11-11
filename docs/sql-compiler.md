@@ -553,6 +553,29 @@ fixtures compare inserts, updates, deletes, NULL peers, empty query ticks and co
 restart against memory and PostgreSQL bags. A top-k predicate over these results
 uses the derived-query and post-window filter lowering described below.
 
+## Native PostgreSQL ranking distributions
+
+PERCENT_RANK returns `(rank - 1) / (partition size - 1)`, with zero for a
+single-row partition. CUME_DIST returns the fraction of the partition through
+the end of the current peer group. Both return double precision and count
+weighted row occurrences. With no window ORDER BY, every row is a peer and
+the results are zero and one, respectively. Double precision here is supported
+as a projected result type.
+
+NTILE returns integer bucket numbers starting at one. The larger buckets come
+first, and bucket counts above the partition size give each row its own bucket.
+It accepts an integer expression and uses the positional window ordering
+requirements. PostgreSQL evaluates that expression until the first non-NULL
+count and uses that count for the rest of the partition. The preceding rows
+return NULL, and a nonpositive count at initialization raises an evaluation
+error. Bucket sizes are based on the entire partition, including preceding
+rows with NULL counts.
+
+These functions accept named windows and use the whole partition regardless of
+the supported frame specified in OVER. The PostgreSQL harness compares result
+bags, binary values, and type OIDs with the native query across updates, deletes,
+and cold restart.
+
 ## Peer-aware aggregate frames
 
 Window aggregates also support PostgreSQL's default RANGE frame, RANGE with
