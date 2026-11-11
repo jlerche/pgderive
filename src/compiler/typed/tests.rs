@@ -616,3 +616,32 @@ fn boolean_common_results_and_all_unknown_controls() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn uuid_common_results_use_native_input_and_typed_nulls() -> Result<()> {
+    const RAW: &str = "{A0EE-BC99-9C0B-4EF8-BB6D-6BB9-BD38-0A11}";
+    const UUID: &str = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11";
+    let row = crate::transaction::Row::new();
+    for (sql, expected) in [
+        (format!("CASE WHEN true THEN '{RAW}' ELSE NULL::uuid END"), Some(UUID)),
+        (format!("CASE WHEN false THEN '{RAW}' COLLATE \"C\" ELSE NULL::uuid END"), None),
+        (format!("CASE 1 WHEN 1 THEN '{RAW}' ELSE NULL::uuid END"), Some(UUID)),
+        (format!("CASE '{UUID}'::uuid WHEN '{RAW}' THEN '{RAW}' ELSE NULL::uuid END"), Some(UUID)),
+        (format!("COALESCE(NULL, NULL::uuid, '{RAW}' COLLATE \"POSIX\")"), Some(UUID)),
+        (format!("CASE WHEN false THEN '{UUID}'::uuid END"), None),
+    ] {
+        let result = expression(&sql)?;
+        assert_eq!(result.oid(), 2950, "{sql}");
+        assert_eq!(result.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    for sql in [
+        format!("CASE WHEN true THEN '{UUID}'::uuid ELSE 'invalid' END"),
+        format!("COALESCE('{UUID}'::uuid, ' {UUID}')"),
+        format!("COALESCE('{UUID}'::uuid, '{UUID}'::text)"),
+        format!("COALESCE(COALESCE(NULL,NULL), '{UUID}'::uuid)"),
+        "CASE WHEN true THEN NULL::uuid ELSE NULL::boolean END".into(),
+    ] {
+        assert!(expression(&sql).is_err(), "{sql}");
+    }
+    Ok(())
+}

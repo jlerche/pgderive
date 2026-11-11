@@ -112,14 +112,15 @@ register a query. Resolution uses the explicit frozen publication catalog, not
 search_path or live SQL name interpolation. ORDER BY and LIMIT follow the
 [ordering contract](ordering.md).
 
-## Boolean common types
+## Boolean and UUID common types
 
 Searched CASE, simple CASE, COALESCE, and the set operations coerce unknown
-string literals and untyped NULLs to Boolean when Boolean is the known result
-type. Boolean strings use PostgreSQL's Boolean input spellings. A group of
-entirely unknown inputs resolves to text, including all-NULL CASE and COALESCE.
-Explicitly typed text and Boolean are incompatible. An invalid Boolean literal
-fails during binding, even in an arm that execution would skip.
+string literals and untyped NULLs to Boolean or UUID when that is the known
+result type. Literals use PostgreSQL's native input spellings, and UUID output
+uses canonical lowercase hyphenation. A group of entirely unknown inputs
+resolves to text, including all-NULL CASE and COALESCE. Explicitly typed text
+is incompatible with Boolean and UUID. An invalid literal fails during
+binding, even in an arm that execution would skip.
 
 Set operations resolve each pair of operands separately. An inner pair that
 already resolved to text stays text in the outer operation. UNION, INTERSECT,
@@ -767,7 +768,7 @@ joins, arbitrary numeric expressions or automatic auction closure.
 
 Searched CASE in a scalar projection now supports 1..=32 ordered WHEN branches
 using the existing predicate subset. Result arms use the supported scalar
-types and coercions, including [Boolean common types](#boolean-common-types).
+types and coercions, including [Boolean and UUID common types](#boolean-and-uuid-common-types).
 Integer result promotion follows PostgreSQL int2/int4/int8 resolution (ordinary
 small literals are int4). Simple CASE
 evaluates its test once and compares each WHEN value in order using the

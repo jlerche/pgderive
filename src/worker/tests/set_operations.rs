@@ -306,3 +306,26 @@ fn boolean_set_operands_resolve_unknowns_pairwise() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn uuid_set_operands_resolve_unknowns_pairwise() -> Result<()> {
+    let native = contract();
+    let literal = "'{A0EEBC999C0B4EF8BB6D6BB9BD380A11}' COLLATE \"C\"";
+    for operation in ["UNION", "UNION ALL", "INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL"] {
+        for (left, right) in [(literal, "NULL::uuid"), ("NULL", "NULL::uuid")] {
+            let sql = format!("SELECT {left} AS v {operation} SELECT {right}");
+            let compiled = compile(&sql, &native)?;
+            let column = &compiled.output().columns[0].column;
+            assert_eq!((column.oid, column.collation), (2950, 0), "{sql}");
+        }
+    }
+    for sql in [
+        "SELECT NULL UNION ALL SELECT NULL UNION ALL SELECT NULL::uuid",
+        "SELECT NULL::uuid UNION ALL SELECT 'bad' WHERE false",
+        "SELECT NULL::uuid UNION ALL SELECT NULL::text",
+        "SELECT NULL::uuid UNION ALL SELECT true",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}

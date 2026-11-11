@@ -1,4 +1,4 @@
-//! Common result context for Boolean and all-unknown CASE and COALESCE.
+//! Common result context for Boolean, UUID and all-unknown CASE and COALESCE.
 use super::{Typed, Value};
 use anyhow::Result;
 
@@ -6,7 +6,7 @@ pub(super) fn candidate(types: impl Iterator<Item = u32>) -> Option<u32> {
     let mut known = types.filter(|oid| !matches!(oid, 0 | 705));
     match known.next() {
         None => Some(25),
-        Some(16) if known.all(|oid| oid == 16) => Some(16),
+        Some(first @ (16 | 2950)) if known.all(|oid| oid == first) => Some(first),
         _ => None,
     }
 }
