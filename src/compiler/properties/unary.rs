@@ -39,16 +39,8 @@ impl Analysis {
     }
     fn unary(&self, ir: &Relational, node: &Node) -> Result<Properties> {
         Ok(match node {
-            Node::Constant { rows, .. } => {
-                let mut facts = Properties {
-                    maximum: Some(u64::try_from(rows.len())?),
-                    ..Properties::default()
-                };
-                if rows.len() <= 1 {
-                    facts.add_key(BTreeSet::new());
-                }
-                facts
-            }
+            Node::Constant { id, rows, columns, .. } => constant(id, rows.len(), columns)?,
+            Node::Values { id, rows, columns, .. } => constant(id, rows.len(), columns)?,
             Node::Empty { input, .. } => {
                 let mut facts = self.edge(input)?.clone();
                 facts.maximum = Some(0);
@@ -145,6 +137,24 @@ impl Analysis {
         })
     }
 }
+fn constant(
+    id: &str,
+    rows: usize,
+    columns: &[crate::compiler::relational::ConstantColumn],
+) -> Result<Properties> {
+    let mut facts = Properties { maximum: Some(u64::try_from(rows)?), ..Properties::default() };
+    for column in columns {
+        let mut field = Column::derived(id, column.reference.clone());
+        field.modifier = column.modifier;
+        field.collation = column.collation;
+        facts.columns.insert(field.reference.name.clone(), field);
+    }
+    if rows <= 1 {
+        facts.add_key(BTreeSet::new());
+    }
+    Ok(facts)
+}
+
 fn expanded(
     input: &Properties,
     id: &str,

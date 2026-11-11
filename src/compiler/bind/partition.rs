@@ -188,6 +188,7 @@ fn build_direct(
                 id: "unit".into(),
                 input: "source".into(),
                 rows: vec![crate::transaction::Row::new()],
+                columns: Vec::new(),
             },
         );
     }
@@ -532,6 +533,7 @@ fn global_nodes(spec: Partition, computed: Vec<crate::compiler::scalar::Computed
         id: "global_seed".into(),
         input: "source".into(),
         rows: vec![[(crate::compiler::partition::SEED.into(), Some("t".into()))].into()],
+        columns: Vec::new(),
     });
     nodes.push(Node::Union {
         id: "partition_input".into(),

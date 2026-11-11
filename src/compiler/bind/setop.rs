@@ -35,8 +35,11 @@ fn unknown(parsed: &Parsed) -> Vec<Option<Ast>> {
 }
 fn common(left: &ColumnRef, right: &ColumnRef, unknown: (bool, bool)) -> Result<u32> {
     let (a, b) = (if unknown.0 { 0 } else { left.oid }, if unknown.1 { 0 } else { right.oid });
+    common_type(a, b).map(|oid| if oid == 0 { 25 } else { oid })
+}
+
+pub(super) fn common_type(a: u32, b: u32) -> Result<u32> {
     Ok(match (a, b) {
-        (0, 0) => 25,
         (0, value) | (value, 0) => value,
         (a, b) if a == b => a,
         (20 | 21 | 23 | 1700, 20 | 21 | 23 | 1700) => [1700, 20, 23, 21]

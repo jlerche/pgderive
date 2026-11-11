@@ -359,3 +359,113 @@ async fn global_having_restores_zero_after_simultaneous_join_input_changes() -> 
         .await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn values_preserve_typed_duplicates_and_bootstrap_only_once() -> Result<()> {
+    let native = contract();
+    let options = settings();
+    let literal =
+        "VALUES (1::smallint,'é'::varchar(2)),(1::bigint,'é'::varchar(2)),(NULL,NULL::varchar(2))";
+    for (sql, labels) in [
+        (literal.to_owned(), ["column1", "column2"]),
+        (format!("SELECT v.* FROM ({literal}) v(x,y)"), ["x", "y"]),
+        (format!("WITH v(x,y) AS MATERIALIZED ({literal}) SELECT * FROM v"), ["x", "y"]),
+    ] {
+        let compiled = compile(&sql, &native).with_context(|| sql.clone())?;
+        let columns = &compiled.output().columns;
+        assert_eq!([columns[0].label.as_str(), columns[1].label.as_str()], labels);
+        assert_eq!([columns[0].column.oid, columns[1].column.oid], [20, 1043]);
+        let mut query = relational::build(&native, &compiled, &options)?;
+        let prepared =
+            query.prepare(relational::inputs(&batch(vec![]), compiled.relational(), 1)?).await?;
+        let expected = output(
+            &compiled,
+            [(vec![Some("1".into()), Some("é".into())], 2), (vec![None, None], 1)],
+        )?;
+        assert_eq!(prepared.output().batch, expected, "{sql}");
+        query.commit(prepared)?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
+        let next =
+            query.prepare(relational::inputs(&batch(vec![]), compiled.relational(), 2)?).await?;
+        assert!(next.output().batch.iter().next().is_none(), "{sql}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn values_compose_with_ordering_set_operations_and_anonymous_from() -> Result<()> {
+    let native = contract();
+    let options = settings();
+    for (sql, expected) in [
+        ("SELECT * FROM (VALUES (1),(1),(NULL))", vec![(Some("1"), 2), (None, 1)]),
+        (
+            "VALUES (1),(3),(3),(NULL) ORDER BY column1+0 DESC NULLS LAST LIMIT 2 OFFSET 1",
+            vec![(Some("3"), 1), (Some("1"), 1)],
+        ),
+        (
+            "VALUES (1),(1) UNION ALL VALUES (NULL::bigint),(2::bigint)",
+            vec![(Some("1"), 2), (Some("2"), 1), (None, 1)],
+        ),
+        ("SELECT 1 AS n FROM (VALUES (1/0)) v(x) LIMIT 0", vec![]),
+        ("WITH unused AS (VALUES (1/0),(2)) SELECT 1", vec![(Some("1"), 1)]),
+    ] {
+        let compiled = compile(sql, &native).with_context(|| sql.to_owned())?;
+        let query = relational::build(&native, &compiled, &options)?;
+        let prepared =
+            query.prepare(relational::inputs(&batch(vec![]), compiled.relational(), 1)?).await?;
+        let expected = output(
+            &compiled,
+            expected.into_iter().map(|(value, weight)| (vec![value.map(str::to_owned)], weight)),
+        )?;
+        assert_eq!(prepared.output().batch, expected, "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn values_resolve_types_modifiers_and_collations_per_column() -> Result<()> {
+    let native = contract();
+    let compiled = compile(
+        r#"VALUES (1::smallint,'a'::varchar(2) COLLATE "C",NULL,1.2::numeric(4,2),'yes','infinity','a' COLLATE "C",'1' COLLATE "C"),
+                  (2::bigint,'b'::text,NULL,2::numeric(4,2),false,'2000-01-01 00:00:00'::timestamp,'b'::varchar(3),2)"#,
+        &native,
+    )?;
+    let fields = compiled
+        .output()
+        .columns
+        .iter()
+        .map(|output| {
+            let column = &output.column;
+            (column.oid, column.modifier.unwrap_or(-1), column.collation)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields,
+        [
+            (20, -1, 0),
+            (1043, -1, 950),
+            (25, -1, 100),
+            (1700, crate::numeric::Typmod::new(4, 2)?.encoded(), 0),
+            (16, -1, 0),
+            (1114, -1, 0),
+            (1043, -1, 950),
+            (23, -1, 0),
+        ]
+    );
+    for sql in [
+        "VALUES (1),(1,2)",
+        "VALUES (DEFAULT)",
+        "VALUES (1),(false)",
+        "VALUES ('bad'),(1)",
+        "VALUES (1/0),(2) LIMIT 0",
+        "WITH unused AS (VALUES ('bad'),(2)) SELECT 1",
+        "VALUES (NULL) UNION ALL VALUES (1)",
+        "VALUES (missing)",
+        "VALUES (COUNT(*))",
+        "VALUES ((SELECT 1))",
+        "WITH v(a,b) AS (VALUES (1)) SELECT a FROM v",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}

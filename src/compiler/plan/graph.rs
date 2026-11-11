@@ -105,6 +105,9 @@ impl<'a> Graph<'a> {
     pub(super) fn columns(&self, edge: &str) -> Result<BTreeSet<String>> {
         Ok(match self.node(edge)? {
             Node::Source { source, .. } => self.source_columns(*source)?,
+            Node::Constant { columns, .. } => {
+                columns.iter().map(|column| column.reference.name.clone()).collect()
+            }
             Node::Filter { input, .. }
             | Node::EquijoinKey { input, .. }
             | Node::CrossKey { input, .. }

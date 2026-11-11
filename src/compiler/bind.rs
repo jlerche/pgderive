@@ -8,6 +8,7 @@ mod partition;
 mod relational;
 mod setop;
 mod topk;
+mod values;
 use super::{
     ColumnRef, Compiled,
     parser::{Name, Parsed, Table},
@@ -51,6 +52,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
         Parsed::Membership { parsed, distinct } => membership::bind(parsed, distinct, contract),
         Parsed::Lookup(parsed) => lookup::bind(parsed, contract),
         Parsed::Partition(parsed) => partition::bind(parsed, contract),
+        Parsed::Values(parsed) => values::bind(parsed, contract),
     }
 }
 

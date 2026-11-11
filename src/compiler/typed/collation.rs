@@ -8,19 +8,25 @@ pub(super) fn bind(
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     depth: usize,
 ) -> Result<Typed> {
-    use crate::compiler::parser::expressions::{builtin_name, names, optional};
+    use crate::compiler::parser::expressions::optional;
+    let mut input = super::bind(optional(clause.arg.as_deref())?, resolve, depth + 1)?;
+    if input.oid == 0 {
+        input = Typed::null_text();
+    }
+    explicit(clause, input.unknown_text())
+}
+
+// VALUES resolves a leading collated unknown against the other rows before
+// assigning its type; ordinary scalar binding already has a text context.
+pub(super) fn explicit(clause: &pg::CollateClause, input: Typed) -> Result<Typed> {
+    use crate::compiler::parser::expressions::{builtin_name, names};
     let name = names(&clause.collname)?;
     let collation = match builtin_name(&name.0) {
         Some("C") => 950,
         Some("POSIX") => 951,
         _ => anyhow::bail!("explicit text collation must be pg_catalog.C or pg_catalog.POSIX"),
     };
-    let mut input = super::bind(optional(clause.arg.as_deref())?, resolve, depth + 1)?;
-    if input.oid == 0 {
-        input = Typed::null_text();
-    }
-    let input = input.unknown_text();
-    ensure!(matches!(input.oid, 25 | 1043), "COLLATE requires a text or varchar operand");
+    ensure!(matches!(input.oid, 0 | 25 | 705 | 1043), "COLLATE requires a text or varchar operand");
     Ok(Typed { oid: input.oid, value: Value::Collate { input: Box::new(input), collation } })
 }
 

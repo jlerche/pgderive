@@ -1,4 +1,5 @@
 //! Resolved relational nodes lowered into executable durable circuits.
+mod constants;
 mod projection;
 use super::{ColumnRef, Projected};
 pub(super) use projection::column_names;
@@ -13,13 +14,19 @@ pub struct Binding {
     pub(crate) input: ColumnRef,
     pub(crate) output: ColumnRef,
 }
+#[derive(Clone, Serialize)]
+pub struct ConstantColumn {
+    pub(crate) reference: ColumnRef,
+    pub(crate) modifier: i32,
+    pub(crate) collation: u32,
+}
 // Keep serialized variants, edge rewriting and runtime declarations in one schema.
 macro_rules! relational_nodes {
-    ($($variant:ident [$($input:ident),*] => $kind:ident { $($field:ident: $ty:ty),* }),* $(,)?) => {
+    ($($variant:ident [$($input:ident),*] => $kind:ident { $($(#[$attr:meta])* $field:ident: $ty:ty),* }),* $(,)?) => {
         #[derive(Clone, Serialize)]
         pub enum Node {
             Source { id: String, source: usize },
-            $($variant { id: String, $($input: String,)* $($field: $ty,)* }),*
+            $($variant { id: String, $($input: String,)* $($(#[$attr])* $field: $ty,)* }),*
         }
         impl Node {
             pub(crate) fn id(&self) -> &str {
@@ -63,7 +70,15 @@ macro_rules! relational_nodes {
 relational_nodes! {
     Empty [input] => Project {},
     Sorted [input] => Project { columns: Vec<ColumnRef> },
-    Constant [input] => Project { rows: Vec<crate::transaction::Row> },
+    Constant [input] => Project {
+        rows: Vec<crate::transaction::Row>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        columns: Vec<ConstantColumn>
+    },
+    Values [input] => Project {
+        rows: Vec<Vec<super::typed::Typed>>,
+        columns: Vec<ConstantColumn>
+    },
     Filter [input] => Project { predicate: super::Predicate },
     Expand [input] => Expand { series: super::expansion::Series },
     Map [input] => Project { computed: Vec<super::scalar::Computed> },

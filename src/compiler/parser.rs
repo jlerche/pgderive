@@ -15,6 +15,7 @@ pub(super) mod partition;
 pub(super) mod scalar;
 pub(super) mod setop;
 mod subquery;
+pub(super) mod values;
 mod windows;
 use expressions::{column, node, optional, target};
 
@@ -35,6 +36,7 @@ pub(super) enum Parsed {
     Membership { parsed: partition::Parsed, distinct: bool },
     Lookup(lookup::Parsed),
     Partition(partition::Parsed),
+    Values(Vec<Vec<Node>>),
 }
 
 pub(super) fn parse(sql: &str) -> Result<Parsed> {
@@ -133,6 +135,12 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
 fn query(select: &pg::SelectStmt) -> Result<Parsed> {
     if let Some(parsed) = setop::parse(select)? {
         return Ok(parsed);
+    }
+    if !select.values_lists.is_empty() {
+        return values::parse(select);
+    }
+    if let Some(expanded) = values::expand_stars(select)? {
+        return query(&expanded);
     }
     if let Some(parsed) = ordering::parse(select)? {
         return Ok(Parsed::Ordered(parsed));

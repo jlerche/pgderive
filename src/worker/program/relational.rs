@@ -81,6 +81,7 @@ fn bind(
         Node::Source { .. } | Node::Union { .. } => return Ok(None),
         Node::Empty { .. } => Operator::Project(super::bindings::empty()),
         Node::Sorted { .. } => anyhow::bail!("sort marker survived planning"),
+        Node::Values { .. } => anyhow::bail!("VALUES survived constant planning"),
         Node::Constant { rows, .. } => Operator::Constant(Batch::from_updates(
             rows.iter().cloned().map(|row| ((Key::new(), row), 1)),
         )?),

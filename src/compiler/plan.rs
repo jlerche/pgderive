@@ -23,6 +23,9 @@ pub(super) fn bounded(value: &impl serde::Serialize) -> bool {
 const EXPRESSION_BYTES: usize = 16_384;
 
 pub(super) fn rewrite(ir: &mut Relational, contract: &Contract) -> Result<()> {
+    for node in &mut ir.nodes {
+        node.materialize_values()?;
+    }
     let mut graph = Graph::new(ir, contract);
     graph.ensure_unique()?;
     (graph.single_globals, graph.flat_arms) = prune::provenance(&graph)?;

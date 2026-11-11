@@ -432,6 +432,37 @@ impl Typed {
         };
         Self::contextual_literal(literal(value)?, oid)
     }
+    pub(super) fn values_cell(value: &Node, depth: usize) -> Result<Self> {
+        use super::parser::expressions::{node, optional};
+        ensure!(depth < 32, "typed scalar expression depth exceeded");
+        if let NodeEnum::CollateClause(clause) = node(value)? {
+            let input = Self::values_cell(optional(clause.arg.as_deref())?, depth + 1)?;
+            return collation::explicit(clause, input);
+        }
+        bind(
+            value,
+            &|_| anyhow::bail!("VALUES requires expressions independent of input rows"),
+            depth,
+        )
+    }
+
+    pub(super) fn constant_coerce(self, oid: u32) -> Result<Self> {
+        match self {
+            Self { oid: 0 | 705, value: Value::Collate { input, collation } } => {
+                let input = input.constant_coerce(oid)?;
+                if matches!(oid, 25 | 1043) {
+                    Ok(Self { oid, value: Value::Collate { input: Box::new(input), collation } })
+                } else {
+                    Ok(input)
+                }
+            }
+            value if matches!(value.oid, 0 | 705) => Self::contextual_literal(value, oid),
+            value if value.oid == oid => Ok(value),
+            // The caller selected a common type from the implicit native casts.
+            value => Ok(Self { oid, value: Value::Cast { input: Box::new(value), typmod: None } }),
+        }
+    }
+
     fn contextual_literal(value: Self, oid: u32) -> Result<Self> {
         let text = match value.value {
             Value::Literal(None) => None,

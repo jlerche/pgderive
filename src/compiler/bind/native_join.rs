@@ -122,7 +122,11 @@ impl Builder<'_> {
             .iter()
             .map(|output| Column {
                 label: output.label.clone(),
-                qualifiers: vec![scope.alias.clone()],
+                qualifiers: if scope.alias.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![scope.alias.clone()]
+                },
                 value: ColumnRef {
                     collation: facts.collation(&output.column).unwrap_or(0),
                     ..output.column.clone()

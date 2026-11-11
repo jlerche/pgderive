@@ -657,6 +657,20 @@ References: [PostgreSQL lateral and left-join semantics](https://www.postgresql.
 and the local Feldera `crates/dbsp/src/operator/asof_join.rs` and
 `crates/dbsp/src/operator/dynamic/asof_join.rs` implementations.
 
+## Constant VALUES relations
+
+`VALUES` works as a standalone query, a set-operation input, a FROM source,
+or a CTE body. Columns default to `column1`, `column2`, and so on. FROM
+and CTE aliases can rename them. A single VALUES source supports `SELECT *`.
+
+Each column resolves its type independently across rows using the supported
+implicit native casts. Unknown literals take the resolved type, or text
+when the entire column is unknown. Common type modifiers and collations
+are retained. Duplicate and NULL rows participate in the result bag.
+VALUES expressions must be foldable constants, with equal row widths of
+up to 64 columns. A multirow constant bag has a 16 MiB value byte budget.
+The worker emits the bag once at bootstrap and retains it across restart.
+
 ## Composed window and group stages
 
 Aliased derived scopes can now feed another supported GROUP BY or window SELECT.

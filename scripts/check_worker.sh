@@ -65,6 +65,7 @@ while read -r qualification script; do
 done <<'QUALIFICATIONS'
 compiler sql_compiler
 sql-composition sql_composition
+values values
 set-operations set_operation
 subqueries subquery
 numeric-arithmetic numeric_arithmetic

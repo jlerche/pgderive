@@ -151,6 +151,7 @@ fn replace_globals(graph: &mut Graph<'_>, globals: &[String]) -> Result<bool> {
             id: id.clone(),
             input: source,
             rows: vec![Row::new()],
+            columns: Vec::new(),
         });
     }
     Ok(!globals.is_empty())

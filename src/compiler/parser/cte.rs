@@ -113,14 +113,26 @@ impl Expansion {
                 );
             }
         }
+        self.visit_select_body(select, &scope, depth)?;
+        let (height, count) = shape(select);
+        ensure!(height < 64 && count <= 128, "expanded CTE scope budget exceeded");
+        Ok(())
+    }
+    fn visit_select_body(
+        &mut self,
+        select: &mut pg::SelectStmt,
+        scope: &Scope,
+        depth: usize,
+    ) -> Result<()> {
         for value in select
             .from_clause
             .iter_mut()
             .chain(&mut select.target_list)
             .chain(&mut select.group_clause)
             .chain(&mut select.sort_clause)
+            .chain(&mut select.values_lists)
         {
-            self.visit(value, &scope, depth + 1)?;
+            self.visit(value, scope, depth + 1)?;
         }
         for value in [
             &mut select.where_clause,
@@ -131,13 +143,11 @@ impl Expansion {
         .into_iter()
         .flatten()
         {
-            self.visit(value, &scope, depth + 1)?;
+            self.visit(value, scope, depth + 1)?;
         }
         for child in [&mut select.larg, &mut select.rarg].into_iter().flatten() {
-            self.select(child, &scope, depth + 1)?;
+            self.select(child, scope, depth + 1)?;
         }
-        let (height, count) = shape(select);
-        ensure!(height < 64 && count <= 128, "expanded CTE scope budget exceeded");
         Ok(())
     }
     fn replace_reference(&mut self, value: &mut Node, scope: &Scope, depth: usize) -> Result<bool> {
@@ -270,7 +280,8 @@ fn shape(select: &pg::SelectStmt) -> (usize, usize) {
         .iter()
         .chain(&select.target_list)
         .chain(&select.group_clause)
-        .chain(&select.sort_clause);
+        .chain(&select.sort_clause)
+        .chain(&select.values_lists);
     let optional =
         [&select.where_clause, &select.having_clause, &select.limit_count, &select.limit_offset]
             .into_iter()
