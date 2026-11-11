@@ -75,6 +75,7 @@ temporal-arithmetic temporal_arithmetic
 ordering ordering
 ordering-domains ordering_domains
 fetch-with-ties fetch_with_ties
+distinct-on distinct_on
 unordered unordered
 query-concurrent query_concurrent
 application application_portfolio

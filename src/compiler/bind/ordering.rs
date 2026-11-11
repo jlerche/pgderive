@@ -19,6 +19,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
             order: parsed.order,
             visible: parsed.visible,
             distinct: parsed.distinct,
+            distinct_on: parsed.distinct_on,
             bounds: parsed.bounds,
         },
         contract,
@@ -28,6 +29,7 @@ pub(super) struct Clause {
     pub(super) order: Vec<crate::compiler::parser::ordering::Order>,
     pub(super) visible: usize,
     pub(super) distinct: bool,
+    pub(super) distinct_on: Vec<usize>,
     pub(super) bounds: Bounds,
 }
 pub(super) fn apply(
@@ -75,10 +77,16 @@ pub(super) fn apply(
         .filter(|column| seen.insert(column.name.clone()))
         .collect::<Vec<_>>();
     ensure!(
-        (order.is_empty() && parsed.bounds.limit.is_none() && parsed.bounds.offset == 0)
+        (parsed.distinct_on.is_empty()
+            && order.is_empty()
+            && parsed.bounds.limit.is_none()
+            && parsed.bounds.offset == 0)
             || identity.iter().all(|column| column.oid != 1186),
         "interval ORDER BY/LIMIT tuple ordering is unsupported"
     );
+    if !parsed.distinct_on.is_empty() {
+        distinct_on(ir, &parsed.distinct_on, &order, &identity)?;
+    }
     ir.output.columns.truncate(parsed.visible);
     let sorted = order.iter().map(|value| value.column.clone()).collect();
     let empty = crate::compiler::properties::occurrence(ir, contract)?.maximum_rows() == Some(0);
@@ -88,20 +96,63 @@ pub(super) fn apply(
     } else if parsed.bounds.limit.is_none() && parsed.bounds.offset == 0 {
         sort_marker(ir, sorted)?;
     } else {
-        top_k(ir, order, identity, parsed.bounds)?;
+        let Bounds { limit, offset, with_ties } = parsed.bounds;
+        let limit = limit
+            .map(|limit| limit.checked_add(offset).context("LIMIT + OFFSET overflow"))
+            .transpose()?
+            .unwrap_or(usize::MAX);
+        select(ir, Spec { order, field: None, limit, offset, with_ties, identity }, None)?;
     }
     Ok(compiled)
 }
-fn top_k(
+fn distinct_on(
     ir: &mut crate::compiler::relational::Relational,
-    order: Vec<Order>,
-    identity: Vec<crate::compiler::ColumnRef>,
-    Bounds { limit, offset, with_ties }: Bounds,
+    indices: &[usize],
+    order: &[Order],
+    identity: &[crate::compiler::ColumnRef],
 ) -> Result<()> {
-    let limit = limit
-        .map(|limit| limit.checked_add(offset).context("LIMIT + OFFSET overflow"))
-        .transpose()?
-        .unwrap_or(usize::MAX);
+    let mut names = std::collections::BTreeSet::new();
+    let mut keys = Vec::new();
+    for index in indices {
+        let column = &ir.output.columns.get(*index).context("missing DISTINCT ON key")?.column;
+        ensure!(
+            matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
+            "unsupported DISTINCT ON key type"
+        );
+        ensure!(
+            !matches!(column.oid, 25 | 1043) || column.collation != 0,
+            "DISTINCT ON requires resolved text collation"
+        );
+        if names.insert(column.name.clone()) {
+            keys.push(column.clone());
+        }
+    }
+    for value in order {
+        if names.is_empty() {
+            break;
+        }
+        ensure!(
+            keys.iter().any(|key| key == &value.column),
+            "DISTINCT ON expressions must match initial ORDER BY expressions"
+        );
+        names.remove(&value.column.name);
+    }
+    let spec = Spec {
+        order: order.to_vec(),
+        field: None,
+        limit: 1,
+        offset: 0,
+        with_ties: false,
+        identity: identity.to_vec(),
+    };
+    select(ir, spec, Some(keys))
+}
+
+fn select(
+    ir: &mut crate::compiler::relational::Relational,
+    spec: Spec,
+    keys: Option<Vec<crate::compiler::ColumnRef>>,
+) -> Result<()> {
     let Some(Node::Output { id, input }) = ir.nodes.pop() else {
         anyhow::bail!("ORDER BY requires final Output")
     };
@@ -109,18 +160,41 @@ fn top_k(
     let global = format!("{prefix}_global");
     let indexed = format!("{prefix}_input");
     let selected = format!("{prefix}_selected");
-    let fields = identity
+    let fields = spec
+        .identity
         .iter()
         .map(|column| crate::compiler::relational::Binding {
             input: column.clone(),
             output: column.clone(),
         })
         .collect();
-    let spec = Spec { order, field: None, limit, offset, with_ties, identity };
     ir.nodes.push(Node::Rebind { id: global.clone(), input, fields });
-    ir.nodes.push(Node::TopKInput { id: indexed.clone(), input: global, spec: spec.clone() });
-    ir.nodes.push(Node::TopK { id: selected.clone(), input: indexed, spec });
-    ir.nodes.push(Node::Output { id, input: selected });
+    let keyed = keys.is_some();
+    let input = if let Some(keys) = keys {
+        let partition = format!("{prefix}_partition");
+        ir.nodes.push(Node::PartitionBy { id: partition.clone(), input: global, keys });
+        partition
+    } else {
+        global
+    };
+    ir.nodes.push(Node::TopKInput { id: indexed.clone(), input, spec: spec.clone() });
+    ir.nodes.push(Node::TopK { id: selected.clone(), input: indexed, spec: spec.clone() });
+    let input = if keyed {
+        let deindexed = format!("{prefix}_winners");
+        let fields = spec
+            .identity
+            .into_iter()
+            .map(|column| crate::compiler::relational::Binding {
+                input: column.clone(),
+                output: column,
+            })
+            .collect();
+        ir.nodes.push(Node::Rebind { id: deindexed.clone(), input: selected, fields });
+        deindexed
+    } else {
+        selected
+    };
+    ir.nodes.push(Node::Output { id, input });
     Ok(())
 }
 /// `PostgreSQL` computes sort expressions even when nothing above reads them.

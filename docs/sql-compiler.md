@@ -1240,7 +1240,7 @@ every complete source row until membership is tested. A nonempty partition emits
 one projected occurrence without narrowing its total occurrence count. Supported
 output types are boolean, integral, deterministic text/varchar, UUID and timestamp
 types. Repeated
-output columns remain legal. DISTINCT ON and unsupported output domains still reject before registration or
+output columns remain legal. Single-table DISTINCT ON follows the [ordered selection contract](ordering.md#distinct-on). Unsupported output domains still reject before registration or
 slot creation. Grouping after restricted EXISTS/NOT EXISTS now uses the same
 partition lowering as other grouped queries; see the [composition matrix](composition-matrix.md).
 

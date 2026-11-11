@@ -92,6 +92,21 @@ specify ORDER BY when selecting from the destination, including for limited
 results. A limited derived scope selects its rows before an outer filter, sort,
 group or join; downstream predicates cannot pass through that selection.
 
+## DISTINCT ON
+
+For a single publication table, DISTINCT ON selects one occurrence per
+canonical key. SELECT payloads must be plain columns. Keys and sort terms
+use the admitted scalar domains and may be hidden. Labels and ordinals bind
+like ORDER BY. The initial ORDER BY terms may permute the DISTINCT ON keys.
+They may stop before all keys are listed, provided no unrelated sort term
+has appeared. With unresolved peers, including absent ORDER BY, the existing
+logical tuple order supplies a deterministic winner.
+
+The per-key selector retains all candidate identities and emits the winner at
+weight one. Retracting its last occurrence exposes the next candidate or removes
+the group. An outer filter runs after selection. Query-level LIMIT, OFFSET,
+and FETCH operate on the winners.
+
 ## Feldera reference and implementation
 
 The local reference checkouts were updated with `git pull --ff-only` on

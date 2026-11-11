@@ -125,7 +125,13 @@ pub(super) fn bind(parsed: SetOperation, contract: &Contract) -> Result<Compiled
     let order = ordering(parsed.order, &ir)?;
     super::ordering::apply(
         Compiled { relational: ir, result_columns: Vec::new() },
-        super::ordering::Clause { order, visible: width, distinct: false, bounds: parsed.bounds },
+        super::ordering::Clause {
+            order,
+            visible: width,
+            distinct: false,
+            distinct_on: Vec::new(),
+            bounds: parsed.bounds,
+        },
         contract,
     )
 }

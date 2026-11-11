@@ -409,3 +409,85 @@ fn in_lists_do_not_bypass_existence_lowering() -> Result<()> {
     .validate_execution()?;
     Ok(())
 }
+
+#[test]
+fn distinct_on_matches_bound_prefix_and_admission_rules() -> Result<()> {
+    let native = contract();
+    for sql in [
+        "SELECT DISTINCT ON (auction,price) id FROM source.bid b ORDER BY b.price,auction,id",
+        "SELECT DISTINCT ON (auction,price) id FROM source.bid ORDER BY auction,auction",
+        "SELECT DISTINCT ON (auction) price FROM source.bid",
+        "SELECT DISTINCT ON (1) auction AS k,price FROM source.bid ORDER BY k,price DESC LIMIT 2",
+        "SELECT DISTINCT ON (k) auction AS k,price FROM source.bid ORDER BY 1,price",
+        "SELECT DISTINCT ON (category COLLATE \"C\") id FROM source.auction ORDER BY category COLLATE \"C\",id",
+        "SELECT DISTINCT ON (abs(price)) price FROM source.bid ORDER BY abs(price),id",
+        "SELECT q.price FROM (SELECT DISTINCT ON (auction) price FROM source.bid ORDER BY auction,price) q WHERE q.price>0",
+    ] {
+        let compiled = compile(sql, &native)?;
+        assert!(
+            compiled.relational().nodes.iter().any(|node| matches!(
+                node, Node::TopK { spec, .. } if spec.limit == 1 && spec.field.is_none()
+            )),
+            "{sql}"
+        );
+        relational::build(&native, &compiled, &settings())?;
+    }
+    for sql in [
+        "SELECT DISTINCT ON (auction,price) id FROM source.bid ORDER BY auction,id,price",
+        "SELECT DISTINCT ON (auction,price) id FROM source.bid ORDER BY auction,id",
+        "SELECT DISTINCT ON (auction) price FROM source.bid ORDER BY price,auction",
+        "SELECT DISTINCT ON (category COLLATE \"C\") id FROM source.auction ORDER BY category COLLATE \"POSIX\"",
+        "SELECT DISTINCT ON (2) price FROM source.bid ORDER BY price",
+        "SELECT DISTINCT ON (auction) price+1 FROM source.bid",
+        "SELECT DISTINCT ON (b.auction) b.price FROM source.bid b JOIN source.bid c ON b.id=c.id",
+        "SELECT DISTINCT ON (auction) price FROM (SELECT auction,price FROM source.bid) b",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn distinct_on_winners_retract_as_unit_occurrences_after_restore() -> Result<()> {
+    let native = contract();
+    let options = settings();
+    let compiled = compile(
+        "SELECT DISTINCT ON (auction) id,price FROM source.bid ORDER BY auction,price DESC NULLS LAST,id",
+        &native,
+    )?;
+    let columns = &compiled.output().columns;
+    let mut history = History::new((&native, &compiled, &options));
+    history.snapshot = true;
+    history.compact = true;
+    let [initial, mut moved, next, empty] = super::peer_changes();
+    let prior_winner = moved.updates.first_mut().context("missing winner retraction")?;
+    prior_winner.weight += 1;
+    let partial = batch(vec![("bid", prior_winner.tuple.row.clone(), -1)]);
+    history
+        .run(
+            [initial, partial, moved, next, empty],
+            |state| {
+                let mut maxima = std::collections::BTreeMap::new();
+                for (row, weight) in state {
+                    if *weight > 0 {
+                        let price = row["price"].as_deref().map(str::parse::<i64>).transpose()?;
+                        let id = row["id"].as_deref().context("missing id")?.parse::<i64>()?;
+                        let candidate = (price, std::cmp::Reverse(id));
+                        let winner = maxima.entry(&row["auction"]).or_insert(candidate);
+                        *winner = (*winner).max(candidate);
+                    }
+                }
+                Batch::from_updates(maxima.into_values().map(|(price, id)| {
+                    let winner = [
+                        (columns[0].column.name.clone(), Some(id.0.to_string())),
+                        (columns[1].column.name.clone(), price.map(|price| price.to_string())),
+                    ];
+                    ((relational::Key::new(), winner.into()), 1)
+                }))
+            },
+            super::apply_rows,
+            |_| true,
+        )
+        .await?;
+    Ok(())
+}
