@@ -31,7 +31,6 @@ fn native_range_epoch_leaps_offsets_and_infinities() -> Result<()> {
 #[test]
 fn invalid_or_context_dependent_timestamp_inputs_fail() {
     for (text, oid) in [
-        ("2000-01-01", 1114),
         ("0000-01-01 00:00:00", 1114),
         ("1900-02-29 00:00:00", 1114),
         ("2000-13-01 00:00:00", 1114),
@@ -39,8 +38,6 @@ fn invalid_or_context_dependent_timestamp_inputs_fail() {
         ("2000-01-01 24:00:00", 1114),
         ("2000-01-01 00:60:00", 1114),
         ("2000-01-01 00:00:00.1234567", 1114),
-        ("2000-01-01 00:00:00+00", 1114),
-        ("2000-01-01 00:00:00", 1184),
         ("2000-01-01 00:00:00 America/Los_Angeles", 1184),
         ("2000-01-01 00:00:00+16", 1184),
         ("2000-01-01 00:00:00+00:60", 1184),
@@ -52,6 +49,9 @@ fn invalid_or_context_dependent_timestamp_inputs_fail() {
     ] {
         assert!(Timestamp::parse_literal(text, oid).is_err(), "{text}");
     }
+    assert!(Timestamp::parse("2000-01-01", 1114).is_err());
+    assert!(Timestamp::parse("2000-01-01 00:00:00+00", 1114).is_err());
+    assert!(Timestamp::parse("2000-01-01 00:00:00", 1184).is_err());
     assert!(Timestamp(0).json(20).is_err());
 }
 

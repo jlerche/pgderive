@@ -9,7 +9,7 @@ mod bitwise;
 mod calendar;
 mod case;
 pub(in crate::compiler) mod collation;
-mod control;
+pub(in crate::compiler) mod control;
 mod cost;
 mod evaluate;
 mod fold;

@@ -67,14 +67,8 @@ pub(super) fn common_type(a: u32, b: u32) -> Result<u32> {
             .find(|oid| *oid == a || *oid == b)
             .context("missing numeric set operation type")?,
         (25 | 1043, 25 | 1043) => a,
-        (1082 | 1114 | 1184, 1082 | 1114 | 1184) => {
-            if a == 1184 || b == 1184 {
-                1184
-            } else {
-                1114
-            }
-        }
-        _ => anyhow::bail!("set operation operands have incompatible native types"),
+        _ => crate::compiler::typed::control::temporal_common(a, b)
+            .context("set operation operands have incompatible native types")?,
     })
 }
 pub(super) fn bind(parsed: SetOperation, contract: &Contract) -> Result<Compiled> {
@@ -143,7 +137,7 @@ fn output_column(
 ) -> Result<OutputColumn> {
     let oid = common(&a.column, &b.column, unknown)?;
     ensure!(
-        matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
+        matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184 | 1186),
         "unsupported set operation native type"
     );
     Ok(OutputColumn {
@@ -316,6 +310,7 @@ fn domains(
     for (index, ((left, right), output)) in
         left.output.columns.iter().zip(&right.output.columns).zip(columns).enumerate()
     {
+        ensure!(output.column.oid != 1186, "interval set operations require UNION ALL");
         if output.column.oid == 1700 {
             let left_null = null_literal(unknown.0.get(index).and_then(Option::as_ref));
             let right_null = null_literal(unknown.1.get(index).and_then(Option::as_ref));

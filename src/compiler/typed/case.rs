@@ -110,11 +110,6 @@ fn result_type(known: &[u32]) -> Result<u32> {
     {
         return Ok(*first);
     }
-    if known.iter().all(|oid| matches!(oid, 1082 | 1114 | 1184))
-        && let Some(oid) = [1184, 1114, 1082].into_iter().find(|oid| known.contains(oid))
-    {
-        return Ok(oid);
-    }
     super::types::common(known)
 }
 

@@ -274,12 +274,12 @@ fn native_timestamp_resolution_normalizes_offsets_and_utc_cross_type_comparisons
     assert!(original.validate_execution().is_ok());
 
     compile("SELECT b.local FROM source.bid b WHERE b.local=b.instant", &native)?;
-    for predicate in ["b.instant<'2000-01-01 00:00:00'", "b.local<'1900-02-29 00:00:00'"] {
-        assert!(
-            compile(&format!("SELECT b.local FROM source.bid b WHERE {predicate}"), &native)
-                .is_err()
-        );
-    }
+    let implicit_utc = compile(&sql.replace("00:00:00+00", "00:00:00"), &native)?;
+    assert_eq!(serde_json::to_vec(&original)?, serde_json::to_vec(&implicit_utc)?);
+    assert!(
+        compile("SELECT b.local FROM source.bid b WHERE b.local<'1900-02-29 00:00:00'", &native)
+            .is_err()
+    );
     Ok(())
 }
 

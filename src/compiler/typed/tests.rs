@@ -645,3 +645,49 @@ fn uuid_common_results_use_native_input_and_typed_nulls() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn temporal_common_results_coerce_unknowns_and_widen_in_utc() -> Result<()> {
+    let row = crate::transaction::Row::new();
+    for (sql, oid, expected) in [
+        ("CASE WHEN true THEN '2024-02-29' ELSE NULL::date END", 1082, Some("2024-02-29")),
+        ("CASE 1 WHEN 1 THEN 'infinity' ELSE NULL::timestamp END", 1114, Some("infinity")),
+        ("COALESCE(NULL::interval, '1 mon 2 days')", 1186, Some("P1M2DT0H0.000000S")),
+        ("COALESCE(NULL::timestamp, NULL)", 1114, None),
+        ("COALESCE(NULL::timestamptz, '2024-02-29')", 1184, Some("2024-02-29 00:00:00+00")),
+        (
+            "COALESCE(NULL::timestamptz, '2024-02-29 01:02:03')",
+            1184,
+            Some("2024-02-29 01:02:03+00"),
+        ),
+        ("COALESCE(NULL::timestamp, '2024-02-29 01:02:03+02')", 1114, Some("2024-02-29 01:02:03")),
+        ("COALESCE(DATE '2024-02-29', NULL::timestamp)", 1114, Some("2024-02-29 00:00:00")),
+        (
+            "CASE WHEN true THEN DATE '2024-02-29' ELSE NULL::timestamptz END",
+            1184,
+            Some("2024-02-29 00:00:00+00"),
+        ),
+        (
+            "COALESCE(NULL::date, NULL::timestamp, NULL::timestamptz, '2024-02-29 01:02:03+02')",
+            1184,
+            Some("2024-02-28 23:02:03+00"),
+        ),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), oid, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    for sql in [
+        "CASE WHEN true THEN DATE '2024-02-29' ELSE '2024-02-30' END",
+        "CASE 1 WHEN 1 THEN NULL::interval ELSE 'bad' END",
+        "COALESCE(TIMESTAMP '2024-02-29 00:00:00', 'invalid')",
+        "COALESCE(NULL::timestamp, '2024-02-29 01:02:03Z02')",
+        "COALESCE(NULL::timestamptz, '2024-02-29 01:02:03++02')",
+        "COALESCE(NULL::date, NULL::interval)",
+        "COALESCE(NULL::timestamptz, NULL::text)",
+        "COALESCE(COALESCE(NULL,NULL), NULL::date)",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    Ok(())
+}

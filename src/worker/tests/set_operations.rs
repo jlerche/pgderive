@@ -329,3 +329,37 @@ fn uuid_set_operands_resolve_unknowns_pairwise() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn temporal_set_operands_resolve_unknowns_pairwise() -> Result<()> {
+    let native = contract();
+    for operation in ["UNION", "UNION ALL", "INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL"] {
+        for (left, right, oid) in [
+            ("'2024-02-29'", "NULL::date", 1082),
+            ("NULL::timestamp", "NULL::date", 1114),
+            ("NULL::date", "NULL::timestamptz", 1184),
+            ("NULL::timestamp", "'2024-02-29 00:00:00' COLLATE \"C\"", 1114),
+            ("NULL::timestamptz", "'2024-02-29 01:02:03+02'", 1184),
+        ] {
+            let sql = format!("SELECT {left} AS v {operation} SELECT {right}");
+            let compiled = compile(&sql, &native)?;
+            let column = &compiled.output().columns[0].column;
+            assert_eq!((column.oid, column.collation), (oid, 0), "{sql}");
+        }
+    }
+    let interval = compile("SELECT NULL::interval UNION ALL SELECT '1 mon'", &native)?;
+    assert_eq!(interval.output().columns[0].column.oid, 1186);
+    for sql in [
+        "SELECT NULL UNION ALL SELECT NULL UNION ALL SELECT NULL::date",
+        "SELECT NULL::timestamp UNION ALL SELECT 'bad' WHERE false",
+        "SELECT NULL::timestamptz UNION ALL SELECT NULL::text",
+        "SELECT NULL::date UNION ALL SELECT NULL::interval",
+        "SELECT NULL::interval UNION SELECT '30 days'",
+        "SELECT NULL::interval INTERSECT ALL SELECT '30 days'",
+        "SELECT NULL::interval EXCEPT ALL SELECT '30 days'",
+        "SELECT NULL::interval UNION ALL SELECT '1 mon' ORDER BY 1",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}

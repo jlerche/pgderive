@@ -40,9 +40,18 @@ set operations and ORDER BY. Mixed date/timestamp set outputs use their native
 common-type coercion. Mixed-type USING remains rejected for all join kinds;
 use an explicit ON condition or an intentional supported cast. Date MIN/MAX and
 additional date window-order domains are not added. Interval supports scalar
-projection, arithmetic, comparison and CASE, while interval grouping, DISTINCT,
-set operations and ordering remain rejected, including interval fields in an
-ORDER BY/LIMIT fallback tuple.
+projection, arithmetic, comparison, CASE, COALESCE and UNION ALL. Interval
+grouping, ordering and equality-based set operations remain outside the subset
+because equal intervals can have distinct observable representations.
+
+CASE, COALESCE and supported set operations coerce unknown strings and untyped
+NULLs after selecting a temporal result type. Mixed date, timestamp and
+timestamptz resolve to the widest type in that order, with conversions under
+the frozen UTC environment. Interval combines with other interval inputs and
+unknowns. All-unknown results resolve to text. Literals use the existing
+bounded temporal input formats. ISO timestamp literals accept date-only input.
+A zoned literal without an offset uses UTC, and a local timestamp literal
+ignores its numeric offset. Invalid literals fail at binding even in unused arms.
 
 ## Exact fields and truncation
 

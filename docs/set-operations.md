@@ -27,8 +27,10 @@ one duplicate disappears.
 
 ## Types, representations and composition
 
-Admitted domains include integral, boolean, UUID, text/varchar, numeric and native
-timestamp types under the existing type/coercion budgets. Text set equality
+Admitted domains include integral, Boolean, UUID, text/varchar, numeric, date,
+timestamp and timestamptz under the existing type and coercion budgets.
+Interval is admitted for UNION ALL, where its raw representations are preserved.
+Text set equality
 requires compatible, resolved deterministic collations. C/POSIX, default and
 attested deterministic ICU equality preserve byte distinctions. Conflicting or
 indeterminate collations reject for duplicate-eliminating operations; UNION ALL

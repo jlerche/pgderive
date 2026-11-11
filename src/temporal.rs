@@ -67,7 +67,7 @@ impl Timestamp {
     pub(crate) const LAST_FINITE: &str = "294276-12-31 23:59:59.999999";
 
     pub(crate) fn parse_literal(value: &str, oid: u32) -> Result<Self> {
-        let result = Self::parse(value, oid)?;
+        let result = Self::parse_input(value.trim_ascii(), oid, true)?;
         ensure!(result.0 != END, "timestamp out of PostgreSQL range");
         Ok(result)
     }
@@ -91,6 +91,10 @@ impl Timestamp {
     }
 
     pub(crate) fn parse(value: &str, oid: u32) -> Result<Self> {
+        Self::parse_input(value, oid, false)
+    }
+
+    fn parse_input(value: &str, oid: u32, literal: bool) -> Result<Self> {
         // PostgreSQL 17 precision casts can produce exactly END, which is also
         // visible in source rows and internal expression results.
         ensure!(
@@ -103,9 +107,13 @@ impl Timestamp {
             _ => {}
         }
         let (value, bc) = value.strip_suffix(" BC").map_or((value, false), |value| (value, true));
-        let (date, time) =
-            value.split_once([' ', 'T']).context("timestamp requires ISO date/time")?;
-        let (time, offset) = timezone(time, oid)?;
+        let (date, time) = if literal {
+            value.split_once([' ', 'T']).unwrap_or((value, "00:00:00"))
+        } else {
+            value.split_once([' ', 'T']).context("timestamp requires ISO date/time")?
+        };
+        let (time, offset) =
+            if literal { literal_timezone(time, oid)? } else { timezone(time, oid)? };
         let days = calendar::parse(date, bc)?;
         let clock = clock(time)?;
         let micros = days
@@ -260,6 +268,14 @@ fn clock(value: &str) -> Result<i64> {
     };
     Ok((hour * 3600 + minute * 60 + seconds) * 1_000_000 + fraction)
 }
+fn literal_timezone(time: &str, oid: u32) -> Result<(&str, i64)> {
+    if !time.contains(['+', '-', 'Z']) {
+        // The frozen session timezone is UTC.
+        return Ok((time, 0));
+    }
+    let (clock, offset) = timezone(time, 1184)?;
+    Ok((clock.trim_ascii_end(), if oid == 1114 { 0 } else { offset }))
+}
 fn timezone(value: &str, oid: u32) -> Result<(&str, i64)> {
     let zone = value.find(['+', '-', 'Z']);
     if oid == 1114 {
@@ -271,11 +287,21 @@ fn timezone(value: &str, oid: u32) -> Result<(&str, i64)> {
     if suffix == "Z" {
         return Ok((clock, 0));
     }
-    let sign = if suffix.starts_with('-') { -1 } else { 1 };
+    let sign = match suffix.as_bytes().first() {
+        Some(b'-') => -1,
+        Some(b'+') => 1,
+        _ => anyhow::bail!("invalid timezone offset"),
+    };
     let parts = suffix[1..]
         .split(':')
-        .map(str::parse::<i64>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+        .map(|part| {
+            ensure!(
+                !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()),
+                "invalid timezone offset"
+            );
+            Ok(part.parse::<i64>()?)
+        })
+        .collect::<Result<Vec<_>>>()?;
     let offset = match parts.as_slice() {
         [hour] => (*hour, 0, 0),
         [hour, minute] => (*hour, *minute, 0),

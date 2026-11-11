@@ -75,7 +75,8 @@ pub(super) fn apply(
         .filter(|column| seen.insert(column.name.clone()))
         .collect::<Vec<_>>();
     ensure!(
-        identity.iter().all(|column| column.oid != 1186),
+        (order.is_empty() && parsed.bounds.limit.is_none() && parsed.bounds.offset == 0)
+            || identity.iter().all(|column| column.oid != 1186),
         "interval ORDER BY/LIMIT tuple ordering is unsupported"
     );
     ir.output.columns.truncate(parsed.visible);
