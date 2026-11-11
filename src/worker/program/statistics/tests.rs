@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 fn spec(function: Function, oid: u32) -> Partition {
     Partition {
         mode: Mode::Grouped { keys: vec![] },
+        previous_windows: None,
         aggregates: vec![Aggregate {
             expression: None,
             function,

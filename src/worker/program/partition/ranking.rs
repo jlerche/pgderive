@@ -18,7 +18,7 @@ pub(super) fn evaluate(
     context: (Limits, &mut PartitionWork),
 ) -> Result<Bag> {
     let (limits, work) = context;
-    let rows = ordered(bag, order, limits, work)?;
+    let rows = ordered(bag, order, spec.previous_windows.as_ref(), (limits, work))?;
     let cumulative = spec.aggregates.iter().any(|value| value.function == Function::CumeDist);
     let mut states = vec![None; spec.aggregates.len()];
     let mut peers = Peers::default();

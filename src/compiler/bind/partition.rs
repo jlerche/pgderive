@@ -16,6 +16,7 @@ mod grouping;
 mod having;
 mod ordered;
 mod prefix;
+mod windows;
 #[derive(Clone)]
 struct Body {
     expansion: Option<crate::compiler::parser::expansion::Series>,
@@ -127,10 +128,9 @@ fn build_direct(
     let mut computed = Vec::new();
     let group_keys = keys(groups, resolve, &mut computed, context.scalar_scope)?;
     let mut state = Targets {
-        mode: None,
-        keys: group_keys.clone(),
-        aggregates: Vec::new(),
-        base: context.aggregate_base,
+        next: context.aggregate_base,
+        grouped: Vec::new(),
+        windows: windows::Windows::default(),
     };
     let columns = bind_targets(
         parsed.targets.clone(),
@@ -143,42 +143,21 @@ fn build_direct(
         },
         &mut state,
     )?;
-    let projection = state.aggregates.is_empty() && group_keys.is_empty();
-    validate_occurrences(parsed.expansion.as_ref(), &state)?;
-    validate_keys(&state.keys)?;
-    if state.mode.is_none() && !projection {
-        ensure!(
-            columns.iter().all(|output| state
-                .aggregates
-                .iter()
-                .any(|aggregate| aggregate.field == output.column.name)
-                || group_keys.contains(&output.column)),
-            "output column must appear in GROUP BY"
-        );
-    }
+    state.windows.validate_occurrences(parsed.expansion.is_some())?;
+    validate_keys(&group_keys)?;
     let averages = state
-        .aggregates
+        .grouped
         .iter()
+        .chain(state.windows.aggregates())
         .filter(|value| matches!(value.function.ordinary(), Function::Average))
         .map(|value| value.field.clone())
         .collect::<Vec<_>>();
-    let spec = Partition {
-        mode: state.mode.unwrap_or(Mode::Grouped { keys: group_keys }),
-        aggregates: state.aggregates,
-    };
     let output = crate::compiler::Projected { columns };
-    let mut nodes = if projection {
-        let mut nodes = vec![Node::Source { id: "source".into(), source: 0 }];
-        let input = if computed.is_empty() {
-            "source"
-        } else {
-            nodes.push(Node::Map { id: "mapped".into(), input: "source".into(), computed });
-            "mapped"
-        };
-        nodes.push(Node::Output { id: "project".into(), input: input.into() });
-        nodes
+    let mut nodes = if state.windows.is_empty() {
+        grouped_nodes(group_keys, state.grouped, computed, &output)?
     } else {
-        nodes(state.keys, spec, computed)
+        ensure!(state.grouped.is_empty(), "grouped window composition requires subquery lowering");
+        state.windows.nodes(computed)?
     };
     if context.unit {
         for node in &mut nodes {
@@ -204,6 +183,39 @@ fn build_direct(
     super::boundary::finalize(&mut relational, &averages)?;
     Ok(Compiled { result_columns: Vec::new(), relational })
 }
+fn grouped_nodes(
+    keys: Vec<ColumnRef>,
+    aggregates: Vec<Aggregate>,
+    computed: Vec<crate::compiler::scalar::Computed>,
+    output: &crate::compiler::Projected,
+) -> Result<Vec<Node>> {
+    if aggregates.is_empty() && keys.is_empty() {
+        let mut nodes = vec![Node::Source { id: "source".into(), source: 0 }];
+        let input = if computed.is_empty() {
+            "source"
+        } else {
+            nodes.push(Node::Map { id: "mapped".into(), input: "source".into(), computed });
+            "mapped"
+        };
+        nodes.push(Node::Output { id: "project".into(), input: input.into() });
+        return Ok(nodes);
+    }
+    ensure!(
+        output
+            .columns
+            .iter()
+            .all(|output| aggregates.iter().any(|value| value.field == output.column.name)
+                || keys.contains(&output.column)),
+        "output column must appear in GROUP BY"
+    );
+    let spec = Partition {
+        mode: Mode::Grouped { keys: keys.clone() },
+        aggregates,
+        previous_windows: None,
+    };
+    Ok(nodes(keys, spec, computed))
+}
+
 fn source_predicate(
     predicate: Option<crate::compiler::syntax::Expr>,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
@@ -248,22 +260,6 @@ fn bind_targets(
         columns.push(OutputColumn { column, label: target.label });
     }
     Ok(columns)
-}
-fn validate_occurrences(
-    series: Option<&crate::compiler::parser::expansion::Series>,
-    state: &Targets,
-) -> Result<()> {
-    if series.is_some()
-        && let Some(Mode::Rows { order, .. } | Mode::Ranking { order }) = state.mode.as_ref()
-        && (matches!(state.mode, Some(Mode::Rows { .. }))
-            || state.aggregates.iter().any(|value| value.function.occurrence_order()))
-    {
-        ensure!(
-            order.iter().any(|order| order.column.name == crate::compiler::expansion::FIELD),
-            "expanded positional windows must order by generated ordinal"
-        );
-    }
-    Ok(())
 }
 fn validate_expansion(
     series: Option<&crate::compiler::parser::expansion::Series>,
@@ -321,10 +317,9 @@ fn bind_key(
 }
 
 struct Targets {
-    base: usize,
-    mode: Option<Mode>,
-    keys: Vec<ColumnRef>,
-    aggregates: Vec<Aggregate>,
+    next: usize,
+    grouped: Vec<Aggregate>,
+    windows: windows::Windows,
 }
 fn aggregate(
     value: syntax::Aggregate,
@@ -333,32 +328,32 @@ fn aggregate(
     state: &mut Targets,
     computed: &mut Vec<crate::compiler::scalar::Computed>,
 ) -> Result<ColumnRef> {
-    let framed = value.window.is_some();
-    if let Some(window) = value.window {
-        ensure!(context.groups.is_empty(), "grouped window composition requires subquery lowering");
-        let (candidate, window_keys) = bind_window(
-            window,
-            resolve,
-            (context.occurrence_keys, value.function.occurrence_order()),
-            computed,
-            context.scalar_scope,
-        )?;
-        if let Some(prior) = &state.mode {
+    let window = value
+        .window
+        .map(|window| {
             ensure!(
-                serde_json::to_vec(&(prior, &state.keys))?
-                    == serde_json::to_vec(&(&candidate, &window_keys))?,
-                "multiple window specifications unsupported"
+                context.groups.is_empty(),
+                "grouped window composition requires subquery lowering"
             );
-        }
-        state.keys = window_keys;
-        state.mode = Some(candidate);
-    }
+            bind_window(
+                window,
+                resolve,
+                (context.occurrence_keys, value.function.occurrence_order()),
+                computed,
+                context.scalar_scope,
+            )
+        })
+        .transpose()?;
     let argument::Bound { column: argument, filter, expression } = argument::bind(
         value.argument,
         value.filter,
         resolve,
         computed,
-        argument::Context { scope: context.scalar_scope, function: &value.function, framed },
+        argument::Context {
+            scope: context.scalar_scope,
+            function: &value.function,
+            framed: window.is_some(),
+        },
     )?;
     let navigation = value
         .navigation
@@ -381,7 +376,7 @@ fn aggregate(
         expression,
         argument,
         filter,
-        field: format!("@aggregate_{}", state.base + state.aggregates.len()),
+        field: format!("@aggregate_{}", state.next),
         navigation,
         position,
     };
@@ -390,7 +385,12 @@ fn aggregate(
     if matches!(aggregate.function, Function::MinDistinct | Function::MaxDistinct) {
         aggregate.function = aggregate.function.ordinary();
     }
-    state.aggregates.push(aggregate);
+    state.next += 1;
+    if let Some((mode, keys)) = window {
+        state.windows.add(mode, keys, aggregate)?;
+    } else {
+        state.grouped.push(aggregate);
+    }
     Ok(output)
 }
 

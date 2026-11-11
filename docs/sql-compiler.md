@@ -331,14 +331,13 @@ empty global groups and empty window frames.
 
 Single-source window SELECT supports the same aggregate functions with explicit
 ROWS frames and integral/timestamp column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition
-keys use the grouped key subset, including NULL. All window calls in one SELECT
-must share one specification. Frame boundaries support CURRENT ROW, nonnegative
+keys use the grouped key subset, including NULL. Frame boundaries support CURRENT ROW, nonnegative
 integer PRECEDING/FOLLOWING offsets and valid UNBOUNDED endpoints. The ordering
 must include every source primary-key column, explicitly in SQL, so positional
 frames have deterministic occurrence order. The compiler adds no hidden tiebreaker.
 Peer-aware RANGE/GROUPS frames are described below. Frame exclusions remain
 unsupported. Named `WINDOW` definitions are scoped to their SELECT and
-resolve through the same single-window lowering as inline specifications.
+resolve through the same lowering as inline specifications.
 `OVER name` uses the entire definition. `OVER (name ...)` and inherited
 definitions may add ordering if the base has none and may supply their own
 frame. They cannot copy an explicit frame or add a partition clause.
@@ -553,6 +552,21 @@ fixtures compare inserts, updates, deletes, NULL peers, empty query ticks and co
 restart against memory and PostgreSQL bags. A top-k predicate over these results
 uses the derived-query and post-window filter lowering described below.
 
+## Multiple window specifications
+
+Each window in a SELECT sees the same input after WHERE, GROUP BY, and HAVING.
+The compiler shares a stage for matching bound specifications and chains stages
+for distinct ones. Each stage carries the full weighted row and appends its
+results, then the next stage repartitions and orders those same occurrences.
+Earlier window results do not break ties, so equivalent partition and ordering
+keys use a consistent peer order across different frames.
+
+A window can supply a hidden top-level ORDER BY expression. That expression
+participates in planning while the visible SELECT list still determines the
+output layout. Positional windows retain their existing ordering requirements.
+An outer filter may move before the windows when it reads only partition keys
+shared by all of them.
+
 ## Native PostgreSQL ranking distributions
 
 PERCENT_RANK returns `(rank - 1) / (partition size - 1)`, with zero for a
@@ -582,7 +596,7 @@ Window aggregates also support PostgreSQL's default RANGE frame, RANGE with
 CURRENT ROW or UNBOUNDED endpoints, and GROUPS with nonnegative integral constant
 PRECEDING/FOLLOWING offsets or standard endpoints. GROUPS requires ORDER BY.
 RANGE distance offsets and exclusions remain rejected before
-registration. All window expressions must share the same typed specification.
+registration.
 
 Peer equality uses exactly the SQL ORDER BY values, including NULL placement and
 direction; these frames do not require a primary-key tie-breaker. CURRENT ROW
@@ -649,8 +663,8 @@ selects the current row and negative offsets reverse direction. A NULL offset
 returns NULL without using DEFAULT. DEFAULT is read from the current row only
 when the target occurrence is absent; a present NULL remains NULL. Valid supported
 ROWS/RANGE/GROUPS frame syntax is checked and ignored for navigation, matching
-PostgreSQL. All functions in one SELECT still share one partition/order; mixing
-navigation and framed aggregates requires further composition.
+PostgreSQL. Navigation and framed aggregates can use different specifications
+in the same SELECT.
 
 The explicit ordered evaluator revises complete affected partitions and emits
 old/new bag differences. There is no clock, expiry or late-data exclusion. Weighted unit histories and five

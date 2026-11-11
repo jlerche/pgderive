@@ -110,19 +110,19 @@ impl Aggregate {
         })
     }
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct Order {
     pub(crate) column: ColumnRef,
     pub(crate) descending: bool,
     pub(crate) nulls_first: bool,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct Frame {
     // None means unbounded; signed offset relative to current row.
     pub(crate) start: Option<i64>,
     pub(crate) end: Option<i64>,
 }
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub enum Mode {
     Grouped { keys: Vec<ColumnRef> },
     Rows { order: Vec<Order>, frame: Frame },
@@ -133,6 +133,16 @@ pub enum Mode {
 pub struct Partition {
     pub(crate) mode: Mode,
     pub(crate) aggregates: Vec<Aggregate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) previous_windows: Option<PreviousWindows>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct PreviousWindows {
+    // Same-SELECT window outputs carried forward but excluded from peer tie breaks.
+    pub(crate) fields: std::collections::BTreeSet<String>,
+    // Outer filters can cross all preceding stages only on these common keys.
+    pub(crate) common_keys: std::collections::BTreeSet<String>,
 }
 
 pub(in crate::compiler) fn result_type(

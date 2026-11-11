@@ -132,17 +132,21 @@ pub(super) fn compose(inner: &mut Relational, outer: &mut Relational) -> Result<
             super::super::topk::specialize(inner, &input, predicate);
         }
     }
-    let prefix = format!("stage_{}_", inner.nodes.len());
-    for mut node in std::mem::take(&mut outer.nodes) {
+    append(&mut inner.nodes, std::mem::take(&mut outer.nodes), &input);
+    inner.output = outer.output.clone();
+    Ok(())
+}
+
+pub(super) fn append(inner: &mut Vec<Node>, outer: Vec<Node>, input: &str) {
+    let prefix = format!("stage_{}_", inner.len());
+    for mut node in outer {
         if matches!(node, Node::Source { .. }) {
             continue;
         }
         node.rewrite(
             &|id| if id == "project" { id.into() } else { format!("{prefix}{id}") },
-            &|edge| if edge == "source" { input.clone() } else { format!("{prefix}{edge}") },
+            &|edge| if edge == "source" { input.into() } else { format!("{prefix}{edge}") },
         );
-        inner.nodes.push(node);
+        inner.push(node);
     }
-    inner.output = outer.output.clone();
-    Ok(())
 }

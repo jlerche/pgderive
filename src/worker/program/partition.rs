@@ -5,7 +5,7 @@ use super::aggregate::{Linear, contribution};
 use crate::{
     compiler::{
         ColumnRef,
-        partition::{Aggregate, Frame, Function, Mode, Order, Partition},
+        partition::{Aggregate, Frame, Function, Mode, Order, Partition, PreviousWindows},
     },
     engine::{
         Batch,
@@ -119,9 +119,10 @@ fn update_extremum(
 fn ordered(
     bag: &Bag,
     order: &[Order],
-    limits: Limits,
-    work: &mut crate::engine::dataflow::PartitionWork,
+    previous: Option<&PreviousWindows>,
+    context: (Limits, &mut crate::engine::dataflow::PartitionWork),
 ) -> Result<Vec<Ordered>> {
+    let (limits, work) = context;
     let mut rows = Vec::new();
     let mut bytes = 0_u64;
     for (((), row), weight) in bag.iter() {
@@ -157,7 +158,15 @@ fn ordered(
             rows.push((keys.clone(), row.clone()));
         }
     }
-    rows.sort_by(|left, right| compare(&left.0, &right.0, order));
+    rows.sort_by(|left, right| {
+        compare(&left.0, &right.0, order).then_with(|| {
+            previous.map_or(Ordering::Equal, |previous| {
+                let original =
+                    |(name, _): &(&String, &Option<String>)| !previous.fields.contains(*name);
+                left.1.iter().filter(original).cmp(right.1.iter().filter(original))
+            })
+        })
+    });
     Ok(rows)
 }
 pub(super) fn compare(left: &[Option<i64>], right: &[Option<i64>], order: &[Order]) -> Ordering {
@@ -226,7 +235,7 @@ fn framed(
 ) -> Result<Bag> {
     let (order, frame) = ordering;
     let (limits, work) = context;
-    let ordered = ordered(bag, order, limits, work)?;
+    let ordered = ordered(bag, order, spec.previous_windows.as_ref(), (limits, work))?;
     let peers = matches!(spec.mode, Mode::Peers { .. });
     let mut groups: Vec<(usize, usize)> = Vec::new();
     for (index, (keys, _)) in ordered.iter().enumerate() {

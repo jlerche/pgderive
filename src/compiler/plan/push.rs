@@ -299,12 +299,22 @@ fn union(graph: &mut Graph<'_>, id: &str, child: &str, arms: (&str, &str)) -> Re
 }
 /// A grouped or windowed scope admits a filter over the keys that form its partitions.
 fn grouped(graph: &mut Graph<'_>, id: &str, child: &str) -> Result<bool> {
+    let common = match graph.node(child)? {
+        Node::Partition { spec, .. } | Node::PrefixWindow { spec, .. } => {
+            spec.previous_windows.as_ref().map(|previous| previous.common_keys.clone())
+        }
+        _ => None,
+    };
     let mut at = child.to_owned();
     loop {
         let next = match graph.node(&at)? {
             Node::PartitionBy { input, keys, .. } => {
-                let (keyed, input, keys) = (at.clone(), input.clone(), keys.clone());
-                return below_keys(graph, id, (&keyed, &input), &keys);
+                let input = input.clone();
+                let mut keys = keys.clone();
+                if let Some(common) = &common {
+                    keys.retain(|key| common.contains(&key.name));
+                }
+                return below_keys(graph, id, (&at, &input), &keys);
             }
             Node::SetDistinct { input, .. }
             | Node::Partition { input, .. }

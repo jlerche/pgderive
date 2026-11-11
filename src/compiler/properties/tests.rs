@@ -161,6 +161,7 @@ fn forked_source_lineage_is_not_a_join_value_equivalence() -> Result<()> {
             input: "gk".into(),
             spec: super::super::partition::Partition {
                 mode: Mode::Grouped { keys },
+                previous_windows: None,
                 aggregates: Vec::new(),
             },
         },

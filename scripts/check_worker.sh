@@ -102,6 +102,7 @@ partition partition_compiler
 group-references group_references
 boolean-aggregates boolean_aggregate
 named-window named_window
+multiple-windows multiple_window
 numeric numeric_compiler
 circuit-numeric circuit_numeric
 native native_compiler

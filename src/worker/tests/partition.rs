@@ -437,7 +437,7 @@ fn named_windows_lower_to_the_inline_plan() -> Result<()> {
 }
 
 #[test]
-fn named_windows_reject_invalid_references_and_multiple_specs() -> Result<()> {
+fn named_windows_reject_invalid_references() -> Result<()> {
     let native = contract();
     for (sql, message) in [
         (
@@ -470,10 +470,6 @@ fn named_windows_reject_invalid_references_and_multiple_specs() -> Result<()> {
         (
             "SELECT count(*) OVER w FROM source.bid WINDOW base AS (ORDER BY id ROWS UNBOUNDED PRECEDING), w AS (base)",
             "cannot copy a window",
-        ),
-        (
-            "SELECT count(*) OVER w, count(*) OVER (ORDER BY price) FROM source.bid WINDOW w AS (ORDER BY id)",
-            "multiple window specifications",
         ),
         (
             "SELECT count(*) OVER w FROM (SELECT id, rank() OVER w FROM source.bid WINDOW w AS (ORDER BY id)) q",
@@ -646,6 +642,126 @@ fn group_by_respects_input_precedence_and_visible_target_bounds() -> Result<()> 
         "SELECT COUNT(*) FROM source.bid GROUP BY 1.0",
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn different_frames_keep_one_peer_order_for_the_same_sort_keys() -> Result<()> {
+    let native = contract();
+    let compiled = compile(
+        "SELECT id,row_number() OVER (ORDER BY id DESC),
+           first_value(id) OVER (ORDER BY auction RANGE CURRENT ROW),
+           last_value(id) OVER (ORDER BY auction RANGE UNBOUNDED PRECEDING)
+         FROM source.bid",
+        &native,
+    )?;
+    let options = settings();
+    let rows = [("1", "2"), ("2", "1")];
+    let inputs = rows
+        .map(|(id, _)| ("bid", row(&[("id", Some(id)), ("auction", None), ("price", None)]), 1));
+    let expected = Batch::from_updates(rows.map(|(id, rank)| {
+        let output = row(&[
+            ("0:id", Some(id)),
+            ("@aggregate_0", Some(rank)),
+            ("@aggregate_1", Some("1")),
+            ("@aggregate_2", Some("2")),
+        ]);
+        ((relational::Key::new(), output), 1)
+    }))?;
+    super::check_row_history(
+        (&native, &compiled, &options),
+        [batch(inputs.into())],
+        |_| Ok(expected.clone()),
+        |_| false,
+    )
+    .await?;
+    Ok(())
+}
+
+#[test]
+fn multiple_windows_share_specs_and_keep_hidden_ordering() -> Result<()> {
+    use crate::compiler::relational::Node;
+    let compiled = compile(
+        "SELECT id,rank() OVER w, dense_rank() OVER w FROM source.bid
+         WINDOW w AS (PARTITION BY auction ORDER BY price)
+         ORDER BY row_number() OVER (ORDER BY id DESC) LIMIT 3",
+        &contract(),
+    )?;
+    let sizes = compiled
+        .relational
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            Node::Partition { spec, .. } => Some(spec.aggregates.len()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sizes, [2, 1]);
+    assert_eq!(compiled.relational.output.columns.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn unread_prefix_window_payload_is_pruned_but_its_order_is_retained() -> Result<()> {
+    use crate::compiler::relational::Node;
+    let native = contract();
+    let compiled = compile(
+        "SELECT id,n FROM (
+           SELECT id,count(*) OVER () AS n,count(1/(id-id)) OVER (ORDER BY id) AS unused
+           FROM source.bid
+         ) q",
+        &native,
+    )?;
+    let mut prefix_nodes = 0;
+    for node in &compiled.relational.nodes {
+        if let Node::PrefixInput { spec, .. }
+        | Node::PrefixStatistics { spec, .. }
+        | Node::PrefixWindow { spec, .. } = node
+        {
+            assert_eq!(spec.aggregates.len(), 1);
+            assert!(spec.aggregates[0].expression.is_none());
+            assert!(matches!(&spec.mode, crate::compiler::partition::Mode::Peers { order, .. }
+                if order[0].column.name == "0:id"));
+            prefix_nodes += 1;
+        }
+    }
+    assert_eq!(prefix_nodes, 3);
+    let input = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
+    let output = row(&[("0:id", Some("1")), ("@aggregate_0", Some("1"))]);
+    let expected = Batch::from_updates([((relational::Key::new(), output), 1)])?;
+    super::check_row_history(
+        (&native, &compiled, &settings()),
+        [batch(vec![("bid", input, 1)])],
+        |_| Ok(expected.clone()),
+        |_| false,
+    )
+    .await?;
+    Ok(())
+}
+
+#[test]
+fn outer_filter_moves_only_on_partition_keys_shared_by_all_windows() -> Result<()> {
+    use crate::compiler::relational::Node;
+    for (first, crosses_both) in [("PARTITION BY auction", true), ("PARTITION BY price", false)] {
+        let query = format!(
+            "SELECT n,m FROM (
+               SELECT auction,count(*) OVER ({first}) AS n,
+               count(*) OVER (PARTITION BY auction ORDER BY id ROWS CURRENT ROW) AS m
+               FROM source.bid
+             ) q WHERE auction=1"
+        );
+        let compiled = compile(&query, &contract())?;
+        let nodes = &compiled.relational.nodes;
+        let filter = nodes
+            .iter()
+            .position(|node| matches!(node, Node::Filter { .. }))
+            .ok_or_else(|| anyhow::anyhow!("missing filter"))?;
+        for (index, _) in
+            nodes.iter().enumerate().filter(|(_, node)| matches!(node, Node::Partition { .. }))
+        {
+            assert_eq!(filter < index, crosses_both, "{query}");
+        }
     }
     Ok(())
 }

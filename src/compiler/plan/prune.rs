@@ -193,6 +193,7 @@ pub(super) fn computed_origin(graph: &Graph<'_>, marks: bool) -> Names {
                 }
             }
             Node::Partition { spec, .. }
+            | Node::PrefixWindow { spec, .. }
             | Node::Statistics { spec, .. }
             | Node::Finalize { spec, .. } => {
                 origin.extend(spec.aggregates.iter().map(|value| value.field.clone()));
@@ -229,6 +230,9 @@ fn trim(node: &mut Node, origin: &Names, required: &Names) -> bool {
             spec.left.len() + spec.right.len() != before
         }
         Node::Partition { spec, .. }
+        | Node::PrefixInput { spec, .. }
+        | Node::PrefixStatistics { spec, .. }
+        | Node::PrefixWindow { spec, .. }
         | Node::DistinctInput { spec, .. }
         | Node::DistinctCounts { spec, .. }
         | Node::DistinctMembership { spec, .. }
