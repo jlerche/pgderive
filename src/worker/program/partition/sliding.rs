@@ -19,7 +19,8 @@ impl Frames {
     pub(super) fn new(spec: &Partition) -> Self {
         let eligible = !spec.aggregates.is_empty()
             && spec.aggregates.iter().all(|value| {
-                matches!(value.function, Function::Count)
+                value.function.boolean()
+                    || matches!(value.function, Function::Count)
                     || matches!(
                         value.function,
                         Function::Sum | Function::Average | Function::Min | Function::Max

@@ -41,9 +41,6 @@ fn key_node(key: &Key) -> Node {
         Key::Typed(value) => (**value).clone(),
     }
 }
-fn aggregate_function(value: &Node) -> bool {
-    matches!(&value.node,Some(NodeEnum::FuncCall(call)) if call.over.is_none() && crate::compiler::parser::expressions::names(&call.funcname).ok().and_then(|n|crate::compiler::parser::expressions::builtin_name(&n.0).map(str::to_owned)).is_some_and(|name|matches!(name.as_str(),"count"|"sum"|"avg"|"min"|"max")))
-}
 pub(super) fn required(body: &Body) -> bool {
     body.having.is_some()
         || body.targets.iter().any(|target| match &target.value {
@@ -65,7 +62,7 @@ fn window_aggregate(value: &syntax::Aggregate) -> bool {
         })
 }
 fn contains_aggregate(value: &Node) -> bool {
-    if aggregate_function(value) {
+    if syntax::group_aggregate(value) {
         return true;
     }
     match &value.node {
@@ -212,7 +209,7 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
     fn expression(&mut self, value: &mut Node, windows: bool, depth: usize) -> Result<()> {
         self.visited += 1;
         ensure!(self.visited <= 1024 && depth < 64, "HAVING expression budget exceeded");
-        if aggregate_function(value) {
+        if syntax::group_aggregate(value) {
             let target = Node {
                 node: Some(NodeEnum::ResTarget(Box::new(pg::ResTarget {
                     val: Some(Box::new(value.clone())),

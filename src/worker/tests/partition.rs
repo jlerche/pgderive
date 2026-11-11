@@ -488,3 +488,71 @@ fn named_windows_reject_invalid_references_and_multiple_specs() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn boolean_aggregates_preserve_filter_and_empty_input_semantics() -> Result<()> {
+    let native = contract();
+    let options = settings();
+    for (sql, expected) in [
+        (
+            "SELECT bool_and(v),bool_or(v),every(v) FROM (VALUES (true),(false),(NULL)) t(v)",
+            [Some("f"), Some("t"), Some("f")],
+        ),
+        (
+            "SELECT bool_and(v),bool_or(v),every(v) FROM (VALUES (NULL::boolean),(NULL)) t(v)",
+            [None, None, None],
+        ),
+        (
+            "SELECT bool_and(v),bool_or(v),every(v) FROM (VALUES (true),(false)) t(v) WHERE false",
+            [None, None, None],
+        ),
+        (
+            r#"SELECT bool_and(NULL),bool_or('yes' COLLATE "C"),pg_catalog.every('off')"#,
+            [None, Some("t"), Some("f")],
+        ),
+        (
+            "SELECT bool_and(v) FILTER (WHERE v),bool_or(v) FILTER (WHERE NULL),every(v) FILTER (WHERE NOT v) FROM (VALUES (true),(false),(NULL)) t(v)",
+            [Some("t"), None, Some("f")],
+        ),
+        (
+            "SELECT bool_and(x > 0),bool_or(x > 0),every(x > 0) FROM (VALUES (1),(2)) t(x) HAVING every(x > 0)",
+            [Some("t"), Some("t"), Some("t")],
+        ),
+    ] {
+        let compiled = compile(sql, &native)?;
+        let columns = &compiled.output().columns;
+        assert_eq!(
+            columns.iter().map(|value| value.label.as_str()).collect::<Vec<_>>(),
+            ["bool_and", "bool_or", "every"]
+        );
+        assert!(columns.iter().all(|value| value.column.oid == 16 && value.column.nullable));
+        let worker = relational::build(&native, &compiled, &options)?;
+        let prepared =
+            worker.prepare(relational::inputs(&batch(vec![]), compiled.relational(), 1)?).await?;
+        let values = columns
+            .iter()
+            .zip(expected)
+            .map(|(column, value)| (column.column.name.clone(), value.map(str::to_owned)))
+            .collect::<Row>();
+        let expected = Batch::from_updates([((relational::Key::new(), values), 1)])?;
+        assert_eq!(prepared.output().batch, expected, "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn boolean_aggregates_reject_non_boolean_overloads_and_bad_modifiers() {
+    let native = contract();
+    for sql in [
+        "SELECT bool_and(1)",
+        "SELECT bool_or('true'::text)",
+        "SELECT every('not a Boolean') FILTER (WHERE false)",
+        "SELECT every((1 / 0) > 0) FILTER (WHERE false)",
+        "SELECT bool_or(*)",
+        "SELECT bool_and(true,false)",
+        "SELECT bool_or(DISTINCT true)",
+        "SELECT public.every(true)",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+}

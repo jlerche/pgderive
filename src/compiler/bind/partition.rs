@@ -354,11 +354,7 @@ fn aggregate(
         value.filter,
         resolve,
         computed,
-        argument::Context {
-            scope: context.scalar_scope,
-            count: matches!(value.function, Function::Count),
-            framed,
-        },
+        argument::Context { scope: context.scalar_scope, function: &value.function, framed },
     )?;
     let navigation = value
         .navigation

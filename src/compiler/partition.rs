@@ -9,6 +9,8 @@ pub enum Function {
     CountDistinct,
     Sum,
     Average,
+    BoolAnd,
+    BoolOr,
     Min,
     Max,
     Rank,
@@ -18,6 +20,9 @@ pub enum Function {
     Lead,
 }
 impl Function {
+    pub(crate) const fn boolean(&self) -> bool {
+        matches!(self, Self::BoolAnd | Self::BoolOr)
+    }
     pub(crate) const fn occurrence_order(&self) -> bool {
         matches!(self, Self::RowNumber | Self::Lag | Self::Lead)
     }
@@ -67,6 +72,13 @@ pub(in crate::compiler) fn result_type(
 ) -> Result<u32> {
     match function {
         Function::Count | Function::Rank | Function::DenseRank | Function::RowNumber => Ok(20),
+        Function::BoolAnd | Function::BoolOr => {
+            ensure!(
+                argument.is_some_and(|arg| arg.oid == 16),
+                "Boolean aggregate requires a Boolean argument"
+            );
+            Ok(16)
+        }
         Function::CountDistinct => {
             ensure!(
                 argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),

@@ -139,6 +139,5 @@ pub(super) fn children(value: &Node) -> Vec<&Node> {
     }
 }
 pub(super) fn aggregate(value: &Node) -> bool {
-    matches!(&value.node, Some(NodeEnum::FuncCall(value)) if value.over.is_none() && names(&value.funcname).ok().is_some_and(|name| matches!(crate::compiler::parser::expressions::builtin_name(&name.0), Some("count"|"sum"|"avg"|"min"|"max"))))
-        || children(value).into_iter().any(aggregate)
+    super::super::partition::group_aggregate(value) || children(value).into_iter().any(aggregate)
 }

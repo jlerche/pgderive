@@ -432,18 +432,19 @@ impl Typed {
         };
         Self::contextual_literal(literal(value)?, oid)
     }
-    pub(super) fn values_cell(value: &Node, depth: usize) -> Result<Self> {
+    pub(super) fn bind_contextual(
+        value: &Node,
+        resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+        depth: usize,
+    ) -> Result<Self> {
         use super::parser::expressions::{node, optional};
         ensure!(depth < 32, "typed scalar expression depth exceeded");
         if let NodeEnum::CollateClause(clause) = node(value)? {
-            let input = Self::values_cell(optional(clause.arg.as_deref())?, depth + 1)?;
+            let input =
+                Self::bind_contextual(optional(clause.arg.as_deref())?, resolve, depth + 1)?;
             return collation::explicit(clause, input);
         }
-        bind(
-            value,
-            &|_| anyhow::bail!("VALUES requires expressions independent of input rows"),
-            depth,
-        )
+        bind(value, resolve, depth)
     }
 
     pub(super) fn constant_coerce(self, oid: u32) -> Result<Self> {

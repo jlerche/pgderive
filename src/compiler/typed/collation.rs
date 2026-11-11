@@ -16,8 +16,7 @@ pub(super) fn bind(
     explicit(clause, input.unknown_text())
 }
 
-// VALUES resolves a leading collated unknown against the other rows before
-// assigning its type; ordinary scalar binding already has a text context.
+// Some callers resolve leading collated unknowns in their own type context.
 pub(super) fn explicit(clause: &pg::CollateClause, input: Typed) -> Result<Typed> {
     use crate::compiler::parser::expressions::{builtin_name, names};
     let name = names(&clause.collname)?;

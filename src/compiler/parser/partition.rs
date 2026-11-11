@@ -1,4 +1,5 @@
 use super::{Name, Table, column, node, optional, target, windows};
+use crate::compiler::partition::Function;
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 pub(in crate::compiler) struct Parsed {
@@ -101,13 +102,10 @@ fn target_with_windows(value: &Node, windows: &windows::Definitions<'_>) -> Resu
     let expression = target(value)?;
     let (value, label) = if let NodeEnum::FuncCall(call) = node(expression)? {
         let name = super::expressions::names(&call.funcname)?.0;
-        let function = crate::compiler::parser::expressions::builtin_name(&name);
-        if let Some(
-            function @ ("count" | "sum" | "avg" | "min" | "max" | "rank" | "dense_rank"
-            | "row_number" | "lag" | "lead"),
-        ) = function
+        if let Some((name, function)) = super::expressions::builtin_name(&name)
+            .and_then(|name| aggregate_function(name).map(|function| (name, function)))
         {
-            (Value::Aggregate(Box::new(aggregate(call, function, windows)?)), function.to_owned())
+            (Value::Aggregate(Box::new(aggregate(call, function, windows)?)), name.to_owned())
         } else {
             (
                 Value::Typed(Box::new(expression.clone())),
@@ -120,25 +118,47 @@ fn target_with_windows(value: &Node, windows: &windows::Definitions<'_>) -> Resu
     };
     Ok(Target { value, label: if output.name.is_empty() { label } else { output.name.clone() } })
 }
-fn aggregate(
-    call: &pg::FuncCall,
-    name: &str,
-    windows: &windows::Definitions<'_>,
-) -> Result<Aggregate> {
-    use crate::compiler::partition::Function;
-    let function = match name {
-        "count" if call.agg_distinct => Function::CountDistinct,
+fn group_function(name: &str) -> Option<Function> {
+    Some(match name {
         "count" => Function::Count,
         "sum" => Function::Sum,
         "avg" => Function::Average,
         "min" => Function::Min,
         "max" => Function::Max,
-        "rank" => Function::Rank,
-        "dense_rank" => Function::DenseRank,
-        "row_number" => Function::RowNumber,
-        "lag" => Function::Lag,
-        "lead" => Function::Lead,
-        _ => anyhow::bail!("unsupported aggregate"),
+        "bool_and" | "every" => Function::BoolAnd,
+        "bool_or" => Function::BoolOr,
+        _ => return None,
+    })
+}
+
+pub(in crate::compiler) fn group_aggregate(value: &Node) -> bool {
+    let Some(NodeEnum::FuncCall(call)) = &value.node else { return false };
+    call.over.is_none()
+        && super::expressions::names(&call.funcname).ok().is_some_and(|name| {
+            super::expressions::builtin_name(&name.0).and_then(group_function).is_some()
+        })
+}
+
+fn aggregate_function(name: &str) -> Option<Function> {
+    group_function(name).or(match name {
+        "rank" => Some(Function::Rank),
+        "dense_rank" => Some(Function::DenseRank),
+        "row_number" => Some(Function::RowNumber),
+        "lag" => Some(Function::Lag),
+        "lead" => Some(Function::Lead),
+        _ => None,
+    })
+}
+
+fn aggregate(
+    call: &pg::FuncCall,
+    function: Function,
+    windows: &windows::Definitions<'_>,
+) -> Result<Aggregate> {
+    let function = if call.agg_distinct && matches!(function, Function::Count) {
+        Function::CountDistinct
+    } else {
+        function
     };
     ensure!(
         (!call.agg_distinct

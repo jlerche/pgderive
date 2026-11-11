@@ -2,15 +2,16 @@
 use crate::compiler::{
     ColumnRef, Predicate, expression,
     parser::{Name, partition::Argument},
+    partition::Function,
     scalar::{self, Computed},
     syntax,
     typed::{self, Typed},
 };
 use anyhow::{Result, ensure};
 #[derive(Clone, Copy)]
-pub(super) struct Context {
+pub(super) struct Context<'a> {
     pub scope: Option<usize>,
-    pub count: bool,
+    pub function: &'a Function,
     pub framed: bool,
 }
 pub(super) struct Bound {
@@ -23,7 +24,7 @@ pub(super) fn bind(
     filter: Option<syntax::Expr>,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     computed: &mut Vec<Computed>,
-    context: Context,
+    context: Context<'_>,
 ) -> Result<Bound> {
     let filter = filter.map(|value| expression::bind(&value, resolve)).transpose()?;
     let Some(Argument::Expression(ast)) = argument else {
@@ -33,12 +34,20 @@ pub(super) fn bind(
         };
         return Ok(Bound { column, filter: filter.map(Predicate::new), expression: None });
     };
-    let mut expression = typed::bind(&ast, resolve, 0)?;
-    if expression.oid() == 0 {
-        ensure!(context.count, "untyped NULL aggregate input requires an explicit cast");
+    let mut expression = if context.function.boolean() {
+        Typed::bind_contextual(&ast, resolve, 0)?
+    } else {
+        typed::bind(&ast, resolve, 0)?
+    };
+    if context.function.boolean() && matches!(expression.oid(), 0 | 705) {
+        expression = expression.constant_coerce(16)?;
+    } else if expression.oid() == 0 {
+        ensure!(
+            matches!(context.function, Function::Count),
+            "untyped NULL aggregate input requires an explicit cast"
+        );
         expression = Typed::null_text();
-    }
-    if expression.oid() == 705 {
+    } else if expression.oid() == 705 {
         expression = expression.unknown_text();
     }
     if context.framed {

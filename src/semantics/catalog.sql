@@ -8,7 +8,7 @@ WITH RECURSIVE native AS (
 ), families AS (
     SELECT p.oid FROM pg_catalog.pg_proc p
     WHERE p.pronamespace = 'pg_catalog'::regnamespace
-      AND p.proname = ANY(ARRAY['date_bin','extract','date_trunc','mod','count','sum','avg','min','max',
+      AND p.proname = ANY(ARRAY['date_bin','extract','date_trunc','mod','count','sum','avg','min','max','bool_and','bool_or','every',
           'row_number','rank','dense_rank','lag','lead','generate_series'])
       OR (p.pronamespace = 'pg_catalog'::regnamespace AND p.proname = ANY($2::text[]))
 ), aggregates AS (

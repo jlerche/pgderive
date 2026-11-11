@@ -92,7 +92,11 @@ fn bind_rows(input: Vec<Vec<Ast>>) -> Result<Vec<BoundColumn>> {
     let mut columns = vec![Vec::new(); width];
     for input in input {
         for (column, expression) in columns.iter_mut().zip(input) {
-            let value = Typed::values_cell(&expression, 0)?;
+            let value = Typed::bind_contextual(
+                &expression,
+                &|_| anyhow::bail!("VALUES requires expressions independent of input rows"),
+                0,
+            )?;
             ensure!(value.is_constant(), "VALUES requires foldable constant expressions");
             column.push(value);
         }

@@ -72,7 +72,9 @@ fn ordinary_value(
         return numeric_value(aggregate, bag, work);
     }
     work.charge(bag.iter().count())?;
-    if matches!(aggregate.function, Function::Count | Function::Sum | Function::Average) {
+    if aggregate.function.boolean()
+        || matches!(aggregate.function, Function::Count | Function::Sum | Function::Average)
+    {
         let mut state = Linear::default();
         for (((), row), weight) in bag.iter() {
             state.observe(aggregate, row, *weight)?;

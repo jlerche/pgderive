@@ -281,13 +281,19 @@ simultaneous changes, projection collisions, empty output ticks and cold restart
 
 Single-source grouped SELECT supports multiple native bool/integral/UUID/timestamp column
 keys and arbitrary output ordering of those keys and COUNT(*), COUNT(column),
-SUM(int2/int4/int8), AVG(int2/int4/int8), and integral/temporal MIN/MAX. Each aggregate may have a FILTER using the
+SUM(int2/int4/int8), AVG(int2/int4/int8), integral/temporal MIN/MAX, and
+`bool_and(boolean)`, `bool_or(boolean)`, and `every(boolean)`. Each aggregate may have a FILTER using the
 supported three-valued predicate subset. NULL grouping keys remain present;
 COUNT(column) ignores NULL; filters retain only true. Existing groups with no
 qualifying non-NULL measures produce COUNT zero and SUM/MIN/MAX NULL. Removing
 all input rows removes a grouped result. Integral COUNT DISTINCT is described
 below. Later sections add global groups, DISTINCT, derived composition and exact
 numeric input aggregates; see also [numeric arithmetic](numeric-arithmetic.md).
+
+`bool_and` and `every` return true when all qualifying non-NULL values are
+true. `bool_or` returns true when any qualifying non-NULL value is true.
+All three return NULL when no qualifying non-NULL values remain, including
+empty global groups and empty window frames.
 
 Single-source window SELECT supports the same aggregate functions with explicit
 ROWS frames and integral/timestamp column ORDER BY, ASC/DESC and NULLS FIRST/LAST. Partition

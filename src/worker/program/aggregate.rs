@@ -23,7 +23,15 @@ impl Linear {
             let Contribution::Value(value) = value else {
                 anyhow::bail!("missing aggregate measure")
             };
-            let value = value.parse::<i64>()?;
+            let value = if aggregate.function.boolean() {
+                match value.as_ref() {
+                    "t" => 1,
+                    "f" => 0,
+                    _ => anyhow::bail!("invalid Boolean aggregate input"),
+                }
+            } else {
+                value.parse::<i64>()?
+            };
             self.sum += BigInt::from(value) * weight;
         }
         Ok(())
@@ -33,7 +41,13 @@ impl Linear {
             Function::Count | Function::CountDistinct => {
                 Ok(Some(i64::try_from(&self.count).context("COUNT overflow")?.to_string()))
             }
-            Function::Sum | Function::Average if self.count == BigInt::from(0) => Ok(None),
+            Function::Sum | Function::Average | Function::BoolAnd | Function::BoolOr
+                if self.count == BigInt::from(0) =>
+            {
+                Ok(None)
+            }
+            Function::BoolAnd => Ok(Some(boolean_text(self.sum == self.count))),
+            Function::BoolOr => Ok(Some(boolean_text(self.sum != BigInt::from(0)))),
             Function::Average => {
                 let count = i64::try_from(&self.count).context("AVG non-NULL count overflow")?;
                 if aggregate.argument.as_ref().is_some_and(|arg| arg.oid != 20) {
@@ -51,6 +65,10 @@ impl Linear {
         }
     }
 }
+fn boolean_text(value: bool) -> String {
+    if value { "t" } else { "f" }.into()
+}
+
 // Absence is a filtered row or NULL argument; Star is COUNT(*).
 pub(super) fn contribution<'a>(
     aggregate: &Aggregate,
