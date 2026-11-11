@@ -37,7 +37,8 @@ class ProjectionFixture(SqlFixture):
             joined = "a.category || '🙂' || a.vartext::text AS joined"
             extrema = ("GREATEST(a.small_value, a.group_id),"
                        "LEAST(a.group_id + 0.00, a.small_value + 0.000, NULL) AS least_numeric")
-            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema} FROM ')
+            bitwise = "a.group_id & 3 AS low_bits, a.small_value << 1 AS shifted"
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
                                             "OR a.group_id IS NOT DISTINCT FROM 1) "
@@ -54,7 +55,7 @@ class ProjectionFixture(SqlFixture):
         if self.local:
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
                                        + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group',
-                                          'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric'])
+                                          'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric', 'low_bits', 'shifted'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -107,6 +108,8 @@ class ProjectionFixture(SqlFixture):
                     joined = None if length is None or text is None else length + '🙂' + text
                     candidates = [value for value in (key, low) if value is not None]
                     values += (joined, max(candidates, default=None), min(candidates, default=None))
+                    values += (None if key is None else key & 3,
+                               None if low is None else low * 2)
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)

@@ -5,6 +5,7 @@ use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum};
 use serde::Serialize;
 use types::numeric_common;
+mod bitwise;
 mod calendar;
 mod case;
 pub(in crate::compiler) mod collation;
@@ -183,10 +184,18 @@ fn operator(
         let right = bind(optional(expression.rexpr.as_deref())?, resolve, depth + 1)?;
         return concat(left, right);
     }
+    let complement = operation == "~";
     let operation = Arithmetic::resolve(operation)?;
     let left =
         expression.lexpr.as_deref().map(|value| bind(value, resolve, depth + 1)).transpose()?;
     let right = bind(optional(expression.rexpr.as_deref())?, resolve, depth + 1)?;
+    if operation.is_bitwise() {
+        return bitwise::bind(operation, complement, left, right);
+    }
+    arithmetic(operation, left, right)
+}
+
+fn arithmetic(operation: Arithmetic, left: Option<Typed>, right: Typed) -> Result<Typed> {
     let left = if let Some(left) = left {
         left
     } else {

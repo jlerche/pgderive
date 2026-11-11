@@ -73,11 +73,7 @@ impl Typed {
                                 || right != 0,
                             "division by zero"
                         );
-                        Some(Native::Integer(
-                            operation
-                                .integer(left, right)
-                                .context("integral arithmetic overflow")?,
-                        ))
+                        Some(Native::Integer(integer(*operation, left, right, self.oid)?))
                     }
                     (None, _) | (_, None) => None,
                     (Some(left), Some(right))
@@ -134,6 +130,18 @@ impl Typed {
         self.native_pair(rows)?.map(|value| value.text(self.oid)).transpose()
     }
 }
+fn integer(
+    operation: crate::compiler::capabilities::Arithmetic,
+    left: i64,
+    right: i64,
+    oid: u32,
+) -> Result<i64> {
+    if operation.is_shift() {
+        return super::bitwise::shift(operation, left, right, oid);
+    }
+    operation.integer(left, right).context("integral arithmetic overflow")
+}
+
 fn cast(value: Native, oid: u32, typmod: Option<crate::numeric::Typmod>) -> Result<Native> {
     if matches!(oid, 20 | 21 | 23) && matches!(value, Native::Numeric(_)) {
         return Ok(Native::Integer(numeric(value)?.integer()?));

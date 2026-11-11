@@ -178,7 +178,15 @@ resolves to text. `sign(numeric)` returns numeric −1, 0, 1, or NaN with
 zero scale for finite results. `div` accepts integral and exact numeric
 arguments through the numeric signature and returns a numeric quotient
 truncated toward zero with scale zero. Numeric division errors, special values,
-and existing digit budgets apply. The exact function signatures are in
+and existing digit budgets apply.
+
+Integral bitwise operators support `&`, `|`, `#`, `~`, `<<`, and `>>`.
+Binary bitwise operators promote mixed integer widths. Shifts keep the left
+operand's width and take an integer count. On the qualified PostgreSQL 17
+x86-64 build, negative and oversized counts wrap modulo 32 for
+smallint and integer shifts and modulo 64 for bigint shifts. Use the qualified PostgreSQL x86-64 source
+and an x86-64 worker for those counts.
+The exact function signatures are in
 `src/compiler/capabilities.rs`. Overload errors list argument type names and
 OIDs alongside the supported signatures. Nested calls and text CASE/COALESCE share the local evaluator. The evaluator returns native values for predicates, keys and computed columns; text encoding happens at row boundaries. CASE and COALESCE select lazily, while strict calls evaluate all arguments before NULL propagation. Integral widths are checked at each expression node.
 

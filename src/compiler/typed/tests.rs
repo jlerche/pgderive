@@ -448,3 +448,58 @@ fn numeric_extrema_resolve_common_types_and_preserve_equal_representations() -> 
     assert!(value.evaluate(&row).is_err());
     Ok(())
 }
+
+#[test]
+fn integral_bitwise_operators_preserve_width_and_signed_bits() -> Result<()> {
+    let row = [("a".into(), Some("-2".into())), ("b".into(), None)].into();
+    for (sql, oid, expected) in [
+        ("a & 3", 23, Some("2")),
+        ("1::smallint | 2::bigint", 20, Some("3")),
+        ("1::smallint # '3'", 21, Some("2")),
+        ("~1::smallint", 21, Some("-2")),
+        ("~0::bigint", 20, Some("-1")),
+        ("1::smallint << 15", 21, Some("-32768")),
+        ("a >> 1", 23, Some("-1")),
+        ("1::bigint << 63", 20, Some("-9223372036854775808")),
+        ("'1' << 2", 23, Some("4")),
+        ("a & b", 23, None),
+        ("a << NULL", 23, None),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), oid, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    for sql in [
+        "1 << 2::bigint",
+        "1.0 & 2",
+        "~NULL",
+        "NULL & NULL",
+        "NULL << NULL",
+        "'1' << 2::smallint",
+        "NULL::int & (1/0)",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn shift_counts_match_postgres_x86_64() -> Result<()> {
+    for (sql, expected) in [
+        ("1::smallint << -1", "0"),
+        ("1::smallint << 16", "0"),
+        ("1::smallint << 32", "1"),
+        ("1 << -1", "-2147483648"),
+        ("1 << 33", "2"),
+        ("1::bigint << 64", "1"),
+        ("-2::bigint >> -1", "-1"),
+    ] {
+        assert_eq!(
+            expression(sql)?.evaluate(&crate::transaction::Row::new())?.as_deref(),
+            Some(expected),
+            "{sql}"
+        );
+    }
+    Ok(())
+}

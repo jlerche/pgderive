@@ -206,6 +206,11 @@ pub(in crate::compiler) enum Arithmetic {
     Subtract,
     Multiply,
     Divide,
+    BitAnd,
+    BitOr,
+    BitXor,
+    ShiftLeft,
+    ShiftRight,
 }
 impl Arithmetic {
     pub(super) fn resolve(name: &str) -> Result<Self> {
@@ -214,6 +219,11 @@ impl Arithmetic {
             "-" => Ok(Self::Subtract),
             "*" => Ok(Self::Multiply),
             "/" => Ok(Self::Divide),
+            "&" => Ok(Self::BitAnd),
+            "|" => Ok(Self::BitOr),
+            "#" | "~" => Ok(Self::BitXor),
+            "<<" => Ok(Self::ShiftLeft),
+            ">>" => Ok(Self::ShiftRight),
             _ => anyhow::bail!(
                 "operator {name} is not available in-engine; supported arithmetic: +, -, *, /"
             ),
@@ -225,7 +235,18 @@ impl Arithmetic {
             Self::Subtract => "-",
             Self::Multiply => "*",
             Self::Divide => "/",
+            Self::BitAnd => "&",
+            Self::BitOr => "|",
+            Self::BitXor => "#",
+            Self::ShiftLeft => "<<",
+            Self::ShiftRight => ">>",
         }
+    }
+    pub(super) const fn is_shift(self) -> bool {
+        matches!(self, Self::ShiftLeft | Self::ShiftRight)
+    }
+    pub(super) const fn is_bitwise(self) -> bool {
+        self.is_shift() || matches!(self, Self::BitAnd | Self::BitOr | Self::BitXor)
     }
     pub(super) const fn integer(self, left: i64, right: i64) -> Option<i64> {
         match self {
@@ -233,6 +254,10 @@ impl Arithmetic {
             Self::Subtract => left.checked_sub(right),
             Self::Multiply => left.checked_mul(right),
             Self::Divide => left.checked_div(right),
+            Self::BitAnd => Some(left & right),
+            Self::BitOr => Some(left | right),
+            Self::BitXor => Some(left ^ right),
+            Self::ShiftLeft | Self::ShiftRight => None,
         }
     }
 }

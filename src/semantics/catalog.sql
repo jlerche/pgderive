@@ -27,7 +27,7 @@ WITH RECURSIVE native AS (
 ), operators AS (
     SELECT o.* FROM pg_catalog.pg_operator o
     WHERE (o.oprnamespace = 'pg_catalog'::regnamespace
-      AND o.oprleft IN (SELECT oid FROM native)
+      AND (o.oprleft IN (SELECT oid FROM native) OR (o.oprleft = 0 AND o.oprname = '~'))
       AND o.oprright IN (SELECT oid FROM native))
       OR o.oid IN (SELECT aggsortop FROM aggregates)
       OR o.oid IN (SELECT amopopr FROM members)
