@@ -820,34 +820,31 @@ cold restart and incompatible gap/label rejection. Signed weighted unit historie
 restore every retained stage between ticks and include duplicate occurrences;
 offset range failures preserve the prior checkpoint and permit valid retry.
 
-## Retractable integral COUNT DISTINCT
+## DISTINCT aggregates
 
-Grouped `COUNT(DISTINCT native_integral_column)` now supports int2/int4/int8 and
-an optional FILTER from the existing three-valued predicate subset. NULL values
-are ignored. An existing group with no qualifying non-NULL values returns zero;
-only removing every source occurrence removes the group. Multiple distinct and
-ordinary aggregates can share a SELECT, and their results can feed a supported
-outer group/window stage.
+Grouped and global COUNT, SUM, AVG, MIN and MAX accept DISTINCT over one
+int2, int4 or int8 column or supported scalar expression. Boolean bool_and,
+bool_or and every also accept DISTINCT. FILTER admits only true rows and runs
+before a computed argument. NULL inputs are ignored. Each distinct value
+contributes once, so retracting a duplicate changes the result only if it was
+the last qualifying occurrence. MIN, MAX and the Boolean aggregates use their
+ordinary evaluators because their results are invariant to duplicates.
 
-The affected-partition evaluator counts integral value presence over the complete
-retained positive full-tuple bag. Retracting one duplicate does not remove its
-value while another occurrence remains. It computes before/after cardinalities
-and emits their difference under the same tick, checkpoint and publication
-boundary. This is bounded affected-group recomputation, not a specialized persisted
-value-multiplicity index or additive-statistics shortcut. Work charges all visited
-records; existing partition row/byte/work limits still apply.
+COUNT returns zero with no qualifying values. The other aggregates return NULL.
+A global group survives empty input. A keyed group disappears when its last
+input row is removed. SUM returns bigint for int2/int4 and numeric for int8.
+AVG returns numeric for all three widths. Multiple DISTINCT and ordinary
+aggregates can share a SELECT and feed a supported outer stage.
 
-Window DISTINCT, DISTINCT tuples/expressions, other DISTINCT aggregates,
-non-integral DISTINCT measures and SELECT DISTINCT remain rejected before slot
-creation or registration. Text collation, numeric special-value/scale equality
-and richer expression signatures require separate qualification. Changing DISTINCT or FILTER semantics requires fresh registration.
+DISTINCT with OVER, multiple arguments, aggregate ORDER BY, and nonintegral
+arguments to COUNT, SUM, AVG, MIN or MAX are outside this aggregate subset.
+The [exact grouped membership path](#exact-grouped-distinct-membership) and
+affected-group recomputation both use the same result finalization.
 
-Four sequential owned PostgreSQL fixtures cover all three integer widths and
-nested MAX over distinct counts, against independent value-presence recomputation.
-They include duplicate values, NULL keys/measures, filtered zero counts, inserts,
-updates, deletes, empty query ticks and cold restart. Weighted unit histories
-separately verify last-occurrence transitions, full-tuple retraction rejection,
-checkpoint preservation and repeated cold restore.
+Sequential PostgreSQL fixtures exercise all three integer widths, global
+and mixed groups, and nested composition. They compare exact native results,
+binary representations and metadata, and independent value-presence oracles
+through duplicate threshold crossings, FILTER, NULLs, empty input and restart.
 
 ### Named Nexmark q0 and q2 qualification
 
@@ -1053,12 +1050,12 @@ reduction and remaining ordered-index/distinct work.
 
 ## Exact grouped distinct membership
 
-Grouped integral COUNT(DISTINCT), together with COUNT/SUM/AVG and supported FILTER,
-now executes through exact per-group/value occurrence counts and zero/positive
-membership deltas. Full source identities and ordinary rows remain available for
-validity and group presence; NULL and all-filtered groups emit zero distinct
-counts. Counts accumulate with BigInt before public bigint finalization. Mixed
-MIN/MAX queries retain affected-partition evaluation.
+Keyed integral COUNT/SUM/AVG DISTINCT, together with ordinary COUNT/SUM/AVG
+and supported FILTER, use exact per-group/value occurrence counts. Membership
+changes add or retract one contribution with the value as the SUM/AVG measure.
+Full source identities and ordinary rows preserve validity and group presence.
+Counts and sums accumulate with BigInt before result finalization. Global and
+mixed MIN/MAX or Boolean groups use affected-partition evaluation.
 
 The native SQL subset and PUT/PG COMMIT/ACK boundary are unchanged. The
 [Feldera audit](feldera-audit.md) records the controlled block-read measurement,
@@ -1283,8 +1280,8 @@ before activation; the engine does not ask PostgreSQL's planner to evaluate it.
 
 ## Computed grouped aggregate inputs
 
-Grouped COUNT, integral SUM/AVG/MIN/MAX, numeric SUM/MIN/MAX and integral
-COUNT(DISTINCT) accept locally supported typed scalar arguments. The
+Grouped COUNT, integral SUM/AVG/MIN/MAX, numeric SUM/MIN/MAX and the
+DISTINCT aggregate forms above accept locally supported typed scalar arguments. The
 [admission matrix](m4-computed-aggregate-inputs.md) records exact boundaries.
 Argument maps run after WHERE. For computed arguments, FILTER becomes a lazy
 CASE with a typed NULL ELSE; excluded or UNKNOWN-filter rows do not evaluate

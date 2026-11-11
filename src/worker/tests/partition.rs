@@ -100,7 +100,6 @@ fn partition_binding_rejects_unsupported_semantics() -> Result<()> {
         WINDOW.replace("ORDER BY b.id", "ORDER BY b.price"),
         WINDOW.replace("1 PRECEDING", "NULL PRECEDING"),
         WINDOW.replace("1 FOLLOWING", "2 FOLLOWING EXCLUDE CURRENT ROW"),
-        GROUPED.replace("SUM(b.price)", "AVG(DISTINCT b.price)"),
         GROUPED.replace("COUNT(*) AS n", "COUNT(DISTINCT b.price,b.id) AS n"),
         GROUPED.replace("b.auction AS g", "b.id AS g"),
     ] {
@@ -550,7 +549,7 @@ fn boolean_aggregates_reject_non_boolean_overloads_and_bad_modifiers() {
         "SELECT every((1 / 0) > 0) FILTER (WHERE false)",
         "SELECT bool_or(*)",
         "SELECT bool_and(true,false)",
-        "SELECT bool_or(DISTINCT true)",
+        "SELECT bool_or(DISTINCT true) OVER()",
         "SELECT public.every(true)",
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");

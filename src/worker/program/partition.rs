@@ -56,7 +56,7 @@ fn aggregate_value(
     bag: &Bag,
     work: &mut crate::engine::dataflow::PartitionWork,
 ) -> Result<Option<String>> {
-    if matches!(aggregate.function, Function::CountDistinct) {
+    if aggregate.function.distinct_measure() {
         super::distinct::evaluate(aggregate, bag, work)
     } else {
         ordinary_value(aggregate, bag, work)

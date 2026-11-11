@@ -155,7 +155,7 @@ fn build_direct(
     let averages = state
         .aggregates
         .iter()
-        .filter(|value| matches!(value.function, Function::Average))
+        .filter(|value| matches!(value.function.ordinary(), Function::Average))
         .map(|value| value.field.clone())
         .collect::<Vec<_>>();
     let spec = Partition {
@@ -380,7 +380,11 @@ fn aggregate(
             | Function::RowNumber
     );
     state.aggregates.push(Aggregate {
-        function: value.function,
+        function: match value.function {
+            // Integral extrema are invariant to duplicate inputs.
+            Function::MinDistinct | Function::MaxDistinct => value.function.ordinary(),
+            function => function,
+        },
         expression,
         argument,
         filter,

@@ -8,7 +8,11 @@ pub enum Function {
     Count,
     CountDistinct,
     Sum,
+    SumDistinct,
     Average,
+    AverageDistinct,
+    MinDistinct,
+    MaxDistinct,
     BoolAnd,
     BoolOr,
     Min,
@@ -20,6 +24,21 @@ pub enum Function {
     Lead,
 }
 impl Function {
+    pub(crate) const fn distinct_measure(&self) -> bool {
+        matches!(self, Self::CountDistinct | Self::SumDistinct | Self::AverageDistinct)
+    }
+
+    pub(crate) fn ordinary(&self) -> Self {
+        match self {
+            Self::CountDistinct => Self::Count,
+            Self::SumDistinct => Self::Sum,
+            Self::AverageDistinct => Self::Average,
+            Self::MinDistinct => Self::Min,
+            Self::MaxDistinct => Self::Max,
+            other => other.clone(),
+        }
+    }
+
     pub(crate) const fn boolean(&self) -> bool {
         matches!(self, Self::BoolAnd | Self::BoolOr)
     }
@@ -70,8 +89,20 @@ pub(in crate::compiler) fn result_type(
     function: &Function,
     argument: Option<&ColumnRef>,
 ) -> Result<u32> {
+    if function.distinct_measure()
+        || matches!(function, Function::MinDistinct | Function::MaxDistinct)
+    {
+        ensure!(
+            argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
+            "DISTINCT aggregate requires an integral argument"
+        );
+    }
     match function {
-        Function::Count | Function::Rank | Function::DenseRank | Function::RowNumber => Ok(20),
+        Function::Count
+        | Function::CountDistinct
+        | Function::Rank
+        | Function::DenseRank
+        | Function::RowNumber => Ok(20),
         Function::BoolAnd | Function::BoolOr => {
             ensure!(
                 argument.is_some_and(|arg| arg.oid == 16),
@@ -79,21 +110,14 @@ pub(in crate::compiler) fn result_type(
             );
             Ok(16)
         }
-        Function::CountDistinct => {
-            ensure!(
-                argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
-                "COUNT DISTINCT requires native integral column"
-            );
-            Ok(20)
-        }
-        Function::Sum => {
+        Function::Sum | Function::SumDistinct => {
             ensure!(
                 argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23 | 1700)),
                 "SUM requires an integral argument"
             );
             Ok(if argument.is_some_and(|arg| matches!(arg.oid, 20 | 1700)) { 1700 } else { 20 })
         }
-        Function::Average => {
+        Function::Average | Function::AverageDistinct => {
             ensure!(
                 argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23 | 1700)),
                 "AVG requires integral or numeric input"
@@ -103,7 +127,7 @@ pub(in crate::compiler) fn result_type(
         Function::Lag | Function::Lead => {
             anyhow::bail!("navigation requires typed operand binding")
         }
-        Function::Min | Function::Max => {
+        Function::Min | Function::Max | Function::MinDistinct | Function::MaxDistinct => {
             let column = argument.context("missing aggregate argument")?;
             ensure!(
                 matches!(column.oid, 20 | 21 | 23 | 1700 | 1114 | 1184),

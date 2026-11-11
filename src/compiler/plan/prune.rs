@@ -229,6 +229,9 @@ fn trim(node: &mut Node, origin: &Names, required: &Names) -> bool {
             spec.left.len() + spec.right.len() != before
         }
         Node::Partition { spec, .. }
+        | Node::DistinctInput { spec, .. }
+        | Node::DistinctCounts { spec, .. }
+        | Node::DistinctMembership { spec, .. }
         | Node::Statistics { spec, .. }
         | Node::Finalize { spec, .. } => trim_aggregates(spec, required),
         _ => false,
@@ -236,9 +239,6 @@ fn trim(node: &mut Node, origin: &Names, required: &Names) -> bool {
 }
 /// `PostgreSQL` drops unread aggregates; a scope that reads none still keeps its rows and keys.
 fn trim_aggregates(spec: &mut Partition, required: &Names) -> bool {
-    if spec.aggregates.iter().any(|value| matches!(value.function, Function::CountDistinct)) {
-        return false;
-    }
     let before = spec.aggregates.clone();
     let spare = spec.aggregates.iter().find(|value| !key_scale(value)).cloned();
     spec.aggregates.retain(|value| required.contains(&value.field) || key_scale(value));

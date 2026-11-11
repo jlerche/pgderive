@@ -1,16 +1,8 @@
 //! Lower exact grouped DISTINCT through sparse counts and membership deltas.
-use crate::compiler::{
-    ColumnRef,
-    partition::{Function, Partition},
-    relational::Node,
-    scalar::Computed,
-};
+use crate::compiler::{ColumnRef, partition::Partition, relational::Node, scalar::Computed};
 pub(super) fn supports(spec: &Partition) -> bool {
     crate::compiler::partition::statistics::fits(spec)
-        && spec
-            .aggregates
-            .iter()
-            .any(|aggregate| matches!(aggregate.function, Function::CountDistinct))
+        && spec.aggregates.iter().any(|aggregate| aggregate.function.distinct_measure())
         && spec.aggregates.iter().all(crate::compiler::partition::statistics::supports)
 }
 pub(super) fn nodes(keys: Vec<ColumnRef>, spec: Partition, computed: Vec<Computed>) -> Vec<Node> {

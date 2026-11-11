@@ -37,8 +37,8 @@ impl Linear {
         Ok(())
     }
     pub(super) fn result(&self, aggregate: &Aggregate) -> Result<Option<String>> {
-        match aggregate.function {
-            Function::Count | Function::CountDistinct => {
+        match aggregate.function.ordinary() {
+            Function::Count => {
                 Ok(Some(i64::try_from(&self.count).context("COUNT overflow")?.to_string()))
             }
             Function::Sum | Function::Average | Function::BoolAnd | Function::BoolOr

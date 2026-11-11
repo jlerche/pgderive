@@ -14,10 +14,7 @@ fn payload(spec: &Partition, text: &str) -> Result<(usize, i64)> {
     let pair: (usize, i64) = serde_json::from_str(text)?;
     ensure!(serde_json::to_string(&pair)? == text, "noncanonical distinct member");
     let aggregate = spec.aggregates.get(pair.0).context("distinct index out of range")?;
-    ensure!(
-        matches!(aggregate.function, Function::CountDistinct),
-        "distinct member targets ordinary aggregate"
-    );
+    ensure!(aggregate.function.distinct_measure(), "distinct member targets ordinary aggregate");
     Ok(pair)
 }
 fn width(spec: &Partition) -> Result<usize> {
@@ -35,7 +32,7 @@ pub(super) fn input(spec: &Partition) -> Expand<Key, Row, Key, Row> {
             "distinct internal field collision"
         );
         for (index, aggregate) in spec.aggregates.iter().enumerate() {
-            if !matches!(aggregate.function, Function::CountDistinct) {
+            if !aggregate.function.distinct_measure() {
                 continue;
             }
             let Some(super::aggregate::Contribution::Value(value)) =
@@ -118,9 +115,12 @@ pub(super) fn measure(spec: &Partition, row: &Row) -> Result<Option<Vec<BigInt>>
     };
     ensure!(row.len() == 1, "distinct membership/ordinary field collision");
     let text = member.as_deref().context("NULL distinct membership")?;
-    let (index, _) = payload(spec, text)?;
+    let (index, value) = payload(spec, text)?;
     let mut values = vec![BigInt::from(0); statistics::width(spec.aggregates.len())];
     values[statistics::count(index)] = BigInt::from(1);
+    if !matches!(spec.aggregates[index].function, Function::CountDistinct) {
+        values[statistics::sum(index)] = BigInt::from(value);
+    }
     Ok(Some(values))
 }
 

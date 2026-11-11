@@ -1,31 +1,32 @@
 //! Integral distinct aggregation over retained positive full-tuple bags.
-use crate::{compiler::partition::Aggregate, engine::Batch, transaction::Row};
-use anyhow::{Context, Result};
+use super::aggregate::{Contribution, Linear, contribution};
+use crate::{
+    compiler::partition::{Aggregate, Function},
+    engine::Batch,
+    transaction::Row,
+};
+use anyhow::Result;
+use num_bigint::BigInt;
 use std::collections::BTreeSet;
+
 pub(super) fn evaluate(
     aggregate: &Aggregate,
     bag: &Batch<(), Row>,
     work: &mut crate::engine::dataflow::PartitionWork,
 ) -> Result<Option<String>> {
     work.charge(bag.iter().count())?;
-    let argument = aggregate.argument.as_ref().context("missing distinct input")?;
     let mut values = BTreeSet::new();
+    let mut state = Linear::default();
     for (((), row), _) in bag.iter() {
-        if row.contains_key(crate::compiler::partition::SEED) {
-            continue;
-        }
-        if aggregate
-            .filter
-            .as_ref()
-            .map(|filter| filter.qualifies(row))
-            .transpose()?
-            .is_some_and(|qualifies| !qualifies)
-        {
-            continue;
-        }
-        if let Some(value) = row.get(&argument.name).context("missing distinct measure")? {
-            values.insert(value.parse::<i64>()?);
+        if let Some(Contribution::Value(value)) = contribution(aggregate, row)? {
+            let value = value.parse::<i64>()?;
+            if values.insert(value) {
+                state.count += 1;
+                if !matches!(aggregate.function, Function::CountDistinct) {
+                    state.sum += BigInt::from(value);
+                }
+            }
         }
     }
-    Ok(Some(i64::try_from(values.len()).context("COUNT DISTINCT overflow")?.to_string()))
+    state.result(aggregate)
 }

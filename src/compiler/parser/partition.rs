@@ -150,20 +150,28 @@ fn aggregate_function(name: &str) -> Option<Function> {
     })
 }
 
+fn distinct_function(function: Function, call: &pg::FuncCall) -> Result<Function> {
+    ensure!(call.over.is_none() && !call.agg_star, "unsupported aggregate modifier");
+    Ok(match function {
+        Function::Count => Function::CountDistinct,
+        Function::Sum => Function::SumDistinct,
+        Function::Average => Function::AverageDistinct,
+        Function::Min => Function::MinDistinct,
+        Function::Max => Function::MaxDistinct,
+        // Boolean results are invariant to duplicate inputs.
+        Function::BoolAnd | Function::BoolOr => function,
+        _ => anyhow::bail!("unsupported aggregate modifier"),
+    })
+}
+
 fn aggregate(
     call: &pg::FuncCall,
     function: Function,
     windows: &windows::Definitions<'_>,
 ) -> Result<Aggregate> {
-    let function = if call.agg_distinct && matches!(function, Function::Count) {
-        Function::CountDistinct
-    } else {
-        function
-    };
+    let function = if call.agg_distinct { distinct_function(function, call)? } else { function };
     ensure!(
-        (!call.agg_distinct
-            || (matches!(function, Function::CountDistinct) && call.over.is_none()))
-            && !call.agg_within_group
+        !call.agg_within_group
             && !call.func_variadic
             && call.agg_order.is_empty()
             && call.funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall),

@@ -43,6 +43,8 @@ pub const fn supports(aggregate: &super::Aggregate) -> bool {
         aggregate.function,
         super::Function::Count
             | super::Function::CountDistinct
+            | super::Function::SumDistinct
+            | super::Function::AverageDistinct
             | super::Function::Sum
             | super::Function::Average
     )
