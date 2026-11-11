@@ -45,10 +45,23 @@ pub(in crate::compiler) enum Argument {
 pub(in crate::compiler) struct Window {
     pub keys: Vec<super::scalar::Key>,
     pub order: Vec<(super::scalar::Key, bool, bool)>,
-    pub frame: crate::compiler::partition::Frame,
+    pub frame: WindowFrame,
     pub ranking: bool,
     pub peers: Option<bool>,
 }
+#[derive(Clone)]
+pub(in crate::compiler) enum WindowFrame {
+    Position(crate::compiler::partition::Frame),
+    Range { start: RangeBound, end: RangeBound },
+}
+
+#[derive(Clone)]
+pub(in crate::compiler) enum RangeBound {
+    Unbounded,
+    Current,
+    Offset { value: Box<Node>, preceding: bool },
+}
+
 pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Parsed> {
     ensure!((1..=64).contains(&select.target_list.len()), "partition output count unsupported");
     let (source, expansion) = if select.from_clause.is_empty() {
@@ -306,7 +319,10 @@ pub(super) fn window(spec: windows::Spec<'_>, ranking: bool) -> Result<Window> {
         return Ok(Window {
             keys: spec.partition.iter().map(super::scalar::key).collect::<Result<_>>()?,
             order: spec.order.iter().map(sort_key).collect::<Result<_>>()?,
-            frame: crate::compiler::partition::Frame { start: None, end: Some(0) },
+            frame: WindowFrame::Position(crate::compiler::partition::Frame {
+                start: None,
+                end: Some(0),
+            }),
             ranking,
             peers: None,
         });
@@ -321,24 +337,38 @@ pub(super) fn window(spec: windows::Spec<'_>, ranking: bool) -> Result<Window> {
     );
     let peers =
         if value.frame_options & 4 != 0 { None } else { Some(value.frame_options & 8 != 0) };
-    ensure!(
-        peers != Some(false) || value.frame_options & (2048 | 4096 | 8192 | 16384) == 0,
-        "RANGE offsets require typed distance semantics"
-    );
     let keys = spec.partition.iter().map(super::scalar::key).collect::<Result<_>>()?;
     let order: Vec<_> = spec.order.iter().map(sort_key).collect::<Result<_>>()?;
     ensure!(peers != Some(true) || !order.is_empty(), "GROUPS requires ORDER BY");
-    let start = bound(value.frame_options, value.start_offset.as_deref(), true)?;
-    let end = bound(value.frame_options, value.end_offset.as_deref(), false)?;
+    let frame =
+        if peers == Some(false) && (value.start_offset.is_some() || value.end_offset.is_some()) {
+            ensure!(order.len() == 1, "RANGE offsets require exactly one ORDER BY expression");
+            WindowFrame::Range {
+                start: range_bound(value.frame_options, value.start_offset.as_deref(), true)?,
+                end: range_bound(value.frame_options, value.end_offset.as_deref(), false)?,
+            }
+        } else {
+            let start = bound(value.frame_options, value.start_offset.as_deref(), true)?;
+            let end = bound(value.frame_options, value.end_offset.as_deref(), false)?;
+            WindowFrame::Position(crate::compiler::partition::Frame { start, end })
+        };
+    Ok(Window { keys, order, frame, ranking, peers })
+}
 
-    Ok(Window {
-        keys,
-        order,
-        frame: crate::compiler::partition::Frame { start, end },
-        ranking,
-        peers,
+fn range_bound(flags: i32, offset: Option<&Node>, start: bool) -> Result<RangeBound> {
+    if let Some(value) = offset {
+        return Ok(RangeBound::Offset {
+            value: Box::new(value.clone()),
+            preceding: flags & if start { 2048 } else { 4096 } != 0,
+        });
+    }
+    Ok(if bound(flags, None, start)?.is_none() {
+        RangeBound::Unbounded
+    } else {
+        RangeBound::Current
     })
 }
+
 fn sort_key(value: &Node) -> Result<(super::scalar::Key, bool, bool)> {
     let (value, descending, nulls_first) = sort_expression(value)?;
     Ok((super::scalar::key(value)?, descending, nulls_first))

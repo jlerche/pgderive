@@ -57,7 +57,9 @@ fn run(spec: &Partition, bag: &Bag, sliding: bool) -> Result<(Bag, usize)> {
     let limits = Limits { contributions: BUDGET, ..Limits::default() };
     let frames = if sliding { Frames::new(spec) } else { Frames::scan() };
     let result = match &spec.mode {
-        Mode::Rows { order, frame } | Mode::Peers { order, frame, .. } => {
+        Mode::Rows { order, frame }
+        | Mode::Peers { order, frame, .. }
+        | Mode::Range { order, frame } => {
             framed(spec, bag, (order, frame), (limits, &mut work), frames)?
         }
         _ => anyhow::bail!("expected framed mode"),
@@ -406,5 +408,28 @@ fn fractional_ranks_count_weighted_null_peers_and_singletons() -> Result<()> {
     let (((), row), _) = singleton.iter().next().context("missing singleton")?;
     assert_eq!(row["@aggregate_0"].as_deref(), Some("0"));
     assert_eq!(row["@aggregate_1"].as_deref(), Some("1"));
+    Ok(())
+}
+
+#[test]
+fn integral_range_offsets_validate_types_and_keep_sliding_work_bounded() -> Result<()> {
+    let query = |order, offset| {
+        format!("SELECT count(*) OVER (ORDER BY {order} RANGE {offset} PRECEDING) FROM source.bid")
+    };
+    for (order, offset) in [
+        ("price,id", "1"),
+        ("price", "NULL"),
+        ("price", "-1"),
+        ("price", "1.5"),
+        ("price", "id"),
+        ("price::smallint", "'32768'"),
+    ] {
+        assert!(compile(&query(order, offset), &contract()).is_err(), "{order} {offset}");
+    }
+    let spec = bound(&query("price DESC NULLS LAST", "2147483648"))?;
+    let input = input(400, true)?;
+    let (sliding, work) = run(&spec, &input, true)?;
+    assert_eq!(sliding, run(&spec, &input, false)?.0);
+    assert!(work < 10_000, "{work}");
     Ok(())
 }

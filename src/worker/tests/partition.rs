@@ -96,7 +96,7 @@ fn partition_binding_rejects_unsupported_semantics() -> Result<()> {
     let mut native = contract();
     native.relations[1].columns[2].oid = 23;
     for sql in [
-        WINDOW.replace("ROWS", "RANGE"),
+        WINDOW.replace("ORDER BY b.id ROWS", "ORDER BY b.id,b.price RANGE"),
         WINDOW.replace("ORDER BY b.id", "ORDER BY b.price"),
         WINDOW.replace("1 PRECEDING", "NULL PRECEDING"),
         WINDOW.replace("1 FOLLOWING", "2 FOLLOWING EXCLUDE CURRENT ROW"),

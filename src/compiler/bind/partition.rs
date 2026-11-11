@@ -16,6 +16,7 @@ mod grouping;
 mod having;
 mod ordered;
 mod prefix;
+mod range;
 mod windows;
 #[derive(Clone)]
 struct Body {
@@ -440,24 +441,36 @@ fn bind_window(
             Ok(Order { column: bind_key(name, resolve, computed, scope)?, descending, nulls_first })
         })
         .collect::<Result<Vec<_>>>()?;
-    if window.ranking || window.peers.is_some() {
-        ensure!(
-            order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
-            "peer ordering requires integral or timestamp columns"
-        );
-        if context.1 {
-            validate_order(&order, context.0, &window_keys)?;
+    let mode = match window.frame {
+        syntax::WindowFrame::Range { start, end } => {
+            let frame = range::bind(start, end, &order)?;
+            if context.1 {
+                validate_order(&order, context.0, &window_keys)?;
+            }
+            if window.ranking { Mode::Ranking { order } } else { Mode::Range { order, frame } }
         }
-        let mode = if let Some(groups) = window.peers {
-            Mode::Peers { order, frame: window.frame, groups }
-        } else {
-            Mode::Ranking { order }
-        };
-        Ok((mode, window_keys))
-    } else {
-        validate_order(&order, context.0, &window_keys)?;
-        Ok((Mode::Rows { order, frame: window.frame }, window_keys))
-    }
+        syntax::WindowFrame::Position(frame) => {
+            if window.ranking || window.peers.is_some() {
+                ensure!(
+                    order
+                        .iter()
+                        .all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
+                    "peer ordering requires integral or timestamp columns"
+                );
+            }
+            if context.1 || (!window.ranking && window.peers.is_none()) {
+                validate_order(&order, context.0, &window_keys)?;
+            }
+            if window.ranking {
+                Mode::Ranking { order }
+            } else if let Some(groups) = window.peers {
+                Mode::Peers { order, frame, groups }
+            } else {
+                Mode::Rows { order, frame }
+            }
+        }
+    };
+    Ok((mode, window_keys))
 }
 
 fn nodes(

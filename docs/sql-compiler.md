@@ -595,8 +595,14 @@ and cold restart.
 Window aggregates also support PostgreSQL's default RANGE frame, RANGE with
 CURRENT ROW or UNBOUNDED endpoints, and GROUPS with nonnegative integral constant
 PRECEDING/FOLLOWING offsets or standard endpoints. GROUPS requires ORDER BY.
-RANGE distance offsets and exclusions remain rejected before
-registration.
+RANGE also supports distance offsets over one smallint, integer, or bigint
+ordering expression. Pgderive validates nonnegative, non-NULL integral constant
+offsets at bind time. Distances follow the sort direction, include peers at either
+boundary, and can extend beyond the integer type's limits. An offset bound for
+a NULL ordering value uses the current NULL peer group. Unbounded endpoints
+still extend to the edge of the partition. The integral evaluator advances two
+monotone boundaries and uses the same sliding aggregate path as other frames.
+Nonintegral distance offsets and frame exclusions remain outside this slice.
 
 Peer equality uses exactly the SQL ORDER BY values, including NULL placement and
 direction; these frames do not require a primary-key tie-breaker. CURRENT ROW
@@ -1548,7 +1554,7 @@ partition keys use the existing deterministic scalar equality types; computed
 ordering results must be integral or timestamp. Positional windows still include
 the complete raw logical occurrence key in partition/order. Valid empty frames
 return the aggregate's empty value without evaluating their argument. Ranking,
-RANGE without offsets and GROUPS retain peer semantics with computed keys.
+RANGE and GROUPS retain peer semantics with computed keys.
 
 Intermediate AVG values are rendered by an engine map before a derived filter,
 typed scalar projection, group, window or join uses them. Derived scalar arithmetic,

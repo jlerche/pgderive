@@ -128,6 +128,7 @@ pub enum Mode {
     Rows { order: Vec<Order>, frame: Frame },
     Ranking { order: Vec<Order> },
     Peers { order: Vec<Order>, frame: Frame, groups: bool },
+    Range { order: Vec<Order>, frame: Frame },
 }
 #[derive(Clone, Serialize)]
 pub struct Partition {

@@ -1,4 +1,5 @@
 mod frame_value;
+mod range;
 mod ranking;
 mod sliding;
 use super::aggregate::{Linear, contribution};
@@ -28,7 +29,9 @@ pub(super) fn evaluate(
     match &spec.mode {
         Mode::Grouped { keys } => grouped(spec, bag, keys, work),
         Mode::Ranking { order } => ranking::evaluate(spec, bag, order, (limits, work)),
-        Mode::Rows { order, frame } | Mode::Peers { order, frame, .. } => {
+        Mode::Rows { order, frame }
+        | Mode::Peers { order, frame, .. }
+        | Mode::Range { order, frame } => {
             framed(spec, bag, (order, frame), (limits, work), Frames::new(spec))
         }
     }
@@ -236,7 +239,7 @@ fn framed(
     let (order, frame) = ordering;
     let (limits, work) = context;
     let ordered = ordered(bag, order, spec.previous_windows.as_ref(), (limits, work))?;
-    let peers = matches!(spec.mode, Mode::Peers { .. });
+    let peers = !matches!(spec.mode, Mode::Rows { .. });
     let mut groups: Vec<(usize, usize)> = Vec::new();
     for (index, (keys, _)) in ordered.iter().enumerate() {
         if !peers {
@@ -252,13 +255,20 @@ fn framed(
     }
     let values: Vec<_> =
         spec.aggregates.iter().filter(|value| value.function.frame_value()).collect();
+    let mut ranges = range::Cursor::default();
     let mut updates = Consolidator::new(limits)?;
     for (index, (first, last)) in groups.iter().enumerate() {
-        let (start, end) = bounds(frame, index, groups.len())?;
-        let end_row = if end == 0 { 0 } else { groups[end - 1].1 };
-        let start_row = if start >= end { end_row } else { groups[start].0 };
+        let range = if matches!(spec.mode, Mode::Range { .. }) {
+            let [key] = order else { anyhow::bail!("RANGE offsets require one ordering key") };
+            ranges.bounds(&ordered, (frame, key), *first, work)?
+        } else {
+            let (start, end) = bounds(frame, index, groups.len())?;
+            let end = if end == 0 { 0 } else { groups[end - 1].1 };
+            let start = groups.get(start).map_or(end, |group| group.0);
+            start.min(end)..end
+        };
         // Every member of a peer group has the same RANGE/GROUPS frame.
-        let fields = frames.fields(spec, &ordered, start_row..end_row, (limits, work))?;
+        let fields = frames.fields(spec, &ordered, range.clone(), (limits, work))?;
         for (_, row) in &ordered[*first..*last] {
             if peers {
                 work.charge(fields.len())?;
@@ -267,7 +277,7 @@ fn framed(
             output.extend(fields.clone());
             for value in &values {
                 work.charge(1)?;
-                let result = frame_value::evaluate(value, &ordered[start_row..end_row], row)?;
+                let result = frame_value::evaluate(value, &ordered[range.clone()], row)?;
                 output.insert(value.field.clone(), result);
             }
             updates.add(((), output), 1)?;
@@ -332,7 +342,9 @@ pub(in crate::worker) fn evaluate_scan(
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
 ) -> Result<Bag> {
     match &spec.mode {
-        Mode::Rows { order, frame } | Mode::Peers { order, frame, .. } => {
+        Mode::Rows { order, frame }
+        | Mode::Peers { order, frame, .. }
+        | Mode::Range { order, frame } => {
             framed(spec, bag, (order, frame), context, Frames::scan())
         }
         _ => evaluate(spec, bag, context),
