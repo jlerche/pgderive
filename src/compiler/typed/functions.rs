@@ -21,6 +21,15 @@ pub(super) fn bind(
     crate::compiler::parser::scalar::validate_call(function)?;
     let names = names(&function.funcname)?.0;
     let name = builtin_name(&names).unwrap_or("");
+    if name == "mod" {
+        let [left, right] = function.args.as_slice() else {
+            anyhow::bail!("function mod: unsupported argument count {}", function.args.len());
+        };
+        return super::remainder(
+            super::bind(left, resolve, depth + 1)?,
+            super::bind(right, resolve, depth + 1)?,
+        );
+    }
     ensure!(registry::contains(name), "function {} is not available in-engine", names.join("."));
     registry::validate_arity(name, function.args.len())?;
     let arguments = function

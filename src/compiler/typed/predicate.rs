@@ -51,17 +51,6 @@ impl Typed {
             _ => anyhow::bail!("unsupported LAG/LEAD default"),
         })
     }
-    pub(in crate::compiler) fn remainder(input: ColumnRef, divisor: i64) -> Result<Self> {
-        ensure!(
-            matches!(input.oid, 20 | 21 | 23) && divisor != 0,
-            "SQL type: MOD requires integral input and nonzero literal divisor"
-        );
-        let oid = if input.oid == 20 || i32::try_from(divisor).is_err() { 20 } else { 23 };
-        Ok(Self {
-            oid,
-            value: Value::Remainder(super::super::remainder::Remainder { input, divisor }),
-        })
-    }
     pub(in crate::compiler) fn is_null(&self, rows: (&Row, &Row)) -> Result<bool> {
         if let Value::Column(column) = &self.value {
             return Ok((if column.right { rows.1 } else { rows.0 })
@@ -71,10 +60,13 @@ impl Typed {
         }
         Ok(self.native_pair(rows)?.is_none())
     }
-    pub(in crate::compiler) const fn as_remainder(
-        &self,
-    ) -> Option<&crate::compiler::remainder::Remainder> {
-        if let Value::Remainder(value) = &self.value { Some(value) } else { None }
+    pub(in crate::compiler) fn lookup_remainder_input(&self) -> Option<&ColumnRef> {
+        let Value::Binary { operation: super::Arithmetic::Remainder, left, right } = &self.value
+        else {
+            return None;
+        };
+        right.as_integer_literal().filter(|divisor| *divisor != 0)?;
+        left.as_column()
     }
     pub(in crate::compiler) const fn as_column(&self) -> Option<&ColumnRef> {
         if let Value::Column(column) = &self.value { Some(column) } else { None }

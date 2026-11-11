@@ -1,10 +1,7 @@
 //! Contextual predicate operands reuse the shared typed scalar representation.
 use super::{ColumnRef, Name, Typed};
-use crate::compiler::parser::{
-    expressions::{column, names, node, optional},
-    scalar,
-};
-use anyhow::{Context, Result, ensure};
+use crate::compiler::parser::expressions::{column, node};
+use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
 pub(in crate::compiler) struct Operand {
@@ -27,8 +24,6 @@ pub(super) fn bind_at(
         (Typed::column(resolve(&name)?), false, true)
     } else if let Ok(literal) = native_literal(value) {
         (literal, true, false)
-    } else if let Ok((name, divisor)) = remainder(value) {
-        (Typed::remainder(resolve(&name)?, divisor)?, false, false)
     } else {
         (super::bind(value, resolve, depth)?, false, true)
     };
@@ -96,34 +91,4 @@ pub(in crate::compiler) fn navigation(
         return Ok(Typed::column(resolve(&name)?));
     }
     native_literal(value)
-}
-fn remainder(value: &Node) -> Result<(Name, i64)> {
-    let (left, right) = match node(value)? {
-        NodeEnum::AExpr(value) => {
-            ensure!(
-                value.kind == i32::from(pg::AExprKind::AexprOp) && names(&value.name)?.0 == ["%"],
-                "native MOD required"
-            );
-            (optional(value.lexpr.as_deref())?, optional(value.rexpr.as_deref())?)
-        }
-        NodeEnum::FuncCall(call) => {
-            ensure!(
-                matches!(
-                    super::super::parser::expressions::builtin_name(&names(&call.funcname)?.0),
-                    Some("mod")
-                ),
-                "native MOD required"
-            );
-            scalar::validate_call(call)?;
-            let [left, right] = call.args.as_slice() else {
-                anyhow::bail!("MOD requires two arguments")
-            };
-            (left, right)
-        }
-        _ => anyhow::bail!("native MOD required"),
-    };
-    let divisor =
-        native_literal(right)?.as_integer_literal().context("integral MOD divisor required")?;
-    ensure!(divisor != 0, "nonzero MOD divisor required");
-    Ok((column(left)?, divisor))
 }

@@ -148,14 +148,10 @@ fn postgres_remainder_sign_null_and_minimum_integer() -> Result<()> {
         assert_eq!(function.evaluate((&row, &row))?, None);
     }
     for sql in [
-        "mod(n,0)=0",
-        "mod(n,NULL)=0",
-        "mod(n,a)=0",
         "mod(text,3)=0",
         "public.mod(n,3)=0",
         "mod(DISTINCT n,3)=0",
         "mod(n,3) OVER ()=0",
-        "mod(mod(n,3),2)=0",
         "mod(n,3)",
     ] {
         assert!(expression(sql).is_err(), "accepted {sql}");

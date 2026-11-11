@@ -1227,5 +1227,14 @@
 {"sql": "SELECT sign('NaN'::numeric) AS v FROM source.auction", "raises": false, "rows": ["NaN"]},
 {"sql": "SELECT div(999999999999999999999999999999,1000000000000000000000000000000) AS v FROM source.auction", "raises": false, "rows": ["0"]},
 {"sql": "SELECT id FROM source.auction WHERE div(1,other)>0 AND other>0", "raises": false, "rows": []},
-{"sql": "SELECT count(*) AS c FROM source.auction HAVING sign(min(other)::numeric)=0", "raises": false, "rows": ["1"]}
+{"sql": "SELECT count(*) AS c FROM source.auction HAVING sign(min(other)::numeric)=0", "raises": false, "rows": ["1"]},
+{"sql": "SELECT mod(other - 7, id + 2) AS v FROM source.auction", "raises": false, "rows": ["-1"]},
+{"sql": "SELECT (other - 7) % (2 - id) AS v FROM source.auction", "raises": false, "rows": ["0"]},
+{"sql": "SELECT mod(id, other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT mod(1, 0) AS v FROM source.auction", "raises": true, "phase": "planning", "sqlstate": "22012"},
+{"sql": "SELECT mod(NULL, 1/other) AS v FROM source.auction", "raises": false, "rows": [""]},
+{"sql": "SELECT mod(NULLIF(other,0), 1/other) AS v FROM source.auction", "raises": true, "phase": "execution", "sqlstate": "22012"},
+{"sql": "SELECT id FROM source.auction WHERE mod(1,other)>0 AND other>0", "raises": false, "rows": []},
+{"sql": "SELECT id FROM source.auction WHERE mod(id::smallint, other)=0 AND other+1+1=0", "raises": false, "rows": []},
+{"sql": "SELECT id FROM source.auction WHERE (id::smallint & other)=0 AND other+1+1=0", "raises": false, "rows": []}
 ]

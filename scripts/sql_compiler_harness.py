@@ -92,7 +92,7 @@ def qualify(output, command, null_only, typed=False, remainder=False):
     with fixture.managed():
         fixture.rejected(command, 'unsupported', fixture.query + ' HAVING row_number() OVER()>1')
         if remainder:
-            fixture.rejected(command, 'zero-divisor', fixture.query.replace('mod(b.price,3)', 'mod(b.price,0)'))
+            fixture.rejected(command, 'zero-divisor', fixture.query.replace('mod(b.price,3)', 'mod(1,0)'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
         changes = [

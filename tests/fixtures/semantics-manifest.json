@@ -2568,7 +2568,7 @@
     "scripts/set_operation_harness.py": "ed0f9a75d6d1b15d496423e781ebfefed098cdaedeae947eee808ec85bcb512b",
     "scripts/sliding_extrema_harness.py": "135aef818284cfdb9b381b2a2fa41a22581a62ffd49c31f070acccc1413a9272",
     "scripts/sliding_window_harness.py": "4964486db9b0ba4573b904eb2df4b00d3470bf69e69685884a44a576e634de77",
-    "scripts/sql_compiler_harness.py": "3e29d0c82707e3144f0886c4483980d0cd2569fc1d60f0240a3fda8fceb4ee8e",
+    "scripts/sql_compiler_harness.py": "d375949fcf1bd26bb83aa40eaa1d3e2787ad12c40e69f128e3b5d44ccee1e810",
     "scripts/sql_composition_harness.py": "72dab18750bbd6d81824713341d7543b55b2ac76379c576c79d38bd8467c8d98",
     "scripts/subquery_harness.py": "0750ee5ac2eea6467333282a4f32a7e85755826a6b3fc431f1b88b936cead30b",
     "scripts/temporal_arithmetic_harness.py": "044cfb4d75df2a66dcf538e07b566744604065dee67a07479370bdc0cc72f681",
@@ -2576,5 +2576,5 @@
     "scripts/unordered_harness.py": "c0ec6814ed5c54000e12fc1f4785b9699822e8fcf263a26662b00a39f4d59eb6",
     "scripts/worker_harness.py": "005ab8aa6a1a488755973a0c728dbb41bd922d07d6065666379a26de047ff032"
   },
-  "fixture_sha256": "80070ff852cb107725ba22f00356116186bc2b55b1b9b7aa23eece787263fdab"
+  "fixture_sha256": "16b064c2a3b6722ead7d5f33ab0ab1ab680f5f732f7e653bc052fd921a01b96d"
 }

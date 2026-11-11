@@ -41,7 +41,6 @@ enum Value {
     Text(String),
     Encoded(Option<String>),
     Interval(crate::temporal::Interval),
-    Remainder(super::remainder::Remainder),
     Temporal(super::scalar::Temporal),
     Call(functions::Call),
     Cast { input: Box<Typed>, typmod: Option<crate::numeric::Typmod> },
@@ -56,9 +55,7 @@ enum Value {
 impl Typed {
     pub(in crate::compiler) fn is_constant(&self) -> bool {
         match &self.value {
-            Value::Column(_) | Value::Average(_) | Value::Remainder(_) | Value::Temporal(_) => {
-                false
-            }
+            Value::Column(_) | Value::Average(_) | Value::Temporal(_) => false,
             Value::Boolean(value) => value.is_constant(),
             Value::Literal(_)
             | Value::Numeric(_)
@@ -192,6 +189,9 @@ fn operator(
     if operation.is_bitwise() {
         return bitwise::bind(operation, complement, left, right);
     }
+    if operation == Arithmetic::Remainder {
+        return remainder(left.context("remainder requires two operands")?, right);
+    }
     arithmetic(operation, left, right)
 }
 
@@ -227,6 +227,26 @@ fn arithmetic(operation: Arithmetic, left: Option<Typed>, right: Typed) -> Resul
     Ok(Typed {
         oid: numeric_common(&[left.oid, right.oid]),
         value: Value::Binary { operation, left: Box::new(left), right: Box::new(right) },
+    })
+}
+
+fn remainder(left: Typed, right: Typed) -> Result<Typed> {
+    ensure!(
+        [left.oid, right.oid].iter().all(|oid| matches!(oid, 0 | 20 | 21 | 23 | 705))
+            && [left.oid, right.oid].iter().any(|oid| matches!(oid, 20 | 21 | 23)),
+        "remainder requires integral operands"
+    );
+    let oid = numeric_common(&[left.oid, right.oid]);
+    let coerce = |value: Typed| {
+        if matches!(value.oid, 0 | 705) { Typed::contextual_literal(value, oid) } else { Ok(value) }
+    };
+    Ok(Typed {
+        oid,
+        value: Value::Binary {
+            operation: Arithmetic::Remainder,
+            left: Box::new(coerce(left)?),
+            right: Box::new(coerce(right)?),
+        },
     })
 }
 
@@ -323,7 +343,6 @@ impl Typed {
             Value::NullIf { .. } => true,
             Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
             Value::Encoded(value) => value.is_none(),
-            Value::Remainder(value) => value.input.nullable,
             Value::Temporal(value) => value.input.nullable,
             Value::Call(call) => {
                 call.operation == super::capabilities::Builtin::Extract

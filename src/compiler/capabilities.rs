@@ -206,6 +206,7 @@ pub(in crate::compiler) enum Arithmetic {
     Subtract,
     Multiply,
     Divide,
+    Remainder,
     BitAnd,
     BitOr,
     BitXor,
@@ -219,13 +220,14 @@ impl Arithmetic {
             "-" => Ok(Self::Subtract),
             "*" => Ok(Self::Multiply),
             "/" => Ok(Self::Divide),
+            "%" => Ok(Self::Remainder),
             "&" => Ok(Self::BitAnd),
             "|" => Ok(Self::BitOr),
             "#" | "~" => Ok(Self::BitXor),
             "<<" => Ok(Self::ShiftLeft),
             ">>" => Ok(Self::ShiftRight),
             _ => anyhow::bail!(
-                "operator {name} is not available in-engine; supported arithmetic: +, -, *, /"
+                "operator {name} is not available in-engine; supported operators: +, -, *, /, %, &, |, #, ~, <<, >>"
             ),
         }
     }
@@ -235,6 +237,7 @@ impl Arithmetic {
             Self::Subtract => "-",
             Self::Multiply => "*",
             Self::Divide => "/",
+            Self::Remainder => "%",
             Self::BitAnd => "&",
             Self::BitOr => "|",
             Self::BitXor => "#",
@@ -254,6 +257,8 @@ impl Arithmetic {
             Self::Subtract => left.checked_sub(right),
             Self::Multiply => left.checked_mul(right),
             Self::Divide => left.checked_div(right),
+            Self::Remainder if right == -1 => Some(0),
+            Self::Remainder => left.checked_rem(right),
             Self::BitAnd => Some(left & right),
             Self::BitOr => Some(left | right),
             Self::BitXor => Some(left ^ right),

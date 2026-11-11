@@ -17,7 +17,6 @@ pub(crate) mod relational;
 pub(crate) use projection::Cell;
 pub(crate) use projection::Projected;
 pub(crate) mod expansion;
-mod remainder;
 pub(crate) mod scalar;
 pub(crate) mod setop;
 pub(crate) mod subquery;

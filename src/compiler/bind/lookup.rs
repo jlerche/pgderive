@@ -96,22 +96,14 @@ fn condition(value: Expr, state: &mut Conditions) -> Result<()> {
             }
         }
         Expr::Compare(Compare::Eq, left, right)
-            if left.as_remainder().is_some() || right.as_remainder().is_some() =>
+            if left.lookup_remainder_input().is_some()
+                || right.lookup_remainder_input().is_some() =>
         {
-            let (input, divisor, key) = if let Some(value) = left.as_remainder() {
-                (&value.input, value.divisor, right.as_column())
+            if left.lookup_remainder_input().is_some() {
+                computed_key(&left, &right, state)?;
             } else {
-                let value = right.as_remainder().context("missing lookup MOD")?;
-                (&value.input, value.divisor, left.as_column())
-            };
-            let key = key.context("lookup MOD key requires native column")?;
-            ensure!(
-                !input.right && key.right,
-                "lookup MOD key must correlate left input with right column"
-            );
-            let column =
-                crate::compiler::remainder::bind(input.clone(), divisor, &mut state.computed)?;
-            state.keys.push((column, key.clone()));
+                computed_key(&right, &left, state)?;
+            }
         }
         Expr::Compare(op, left, right) => {
             let left = left.as_column().context("lookup requires native columns")?.clone();
@@ -138,6 +130,33 @@ fn condition(value: Expr, state: &mut Conditions) -> Result<()> {
     }
     Ok(())
 }
+fn computed_key(
+    expression: &crate::compiler::typed::Typed,
+    key: &crate::compiler::typed::Typed,
+    state: &mut Conditions,
+) -> Result<()> {
+    use crate::compiler::{scalar::register, typed::Typed};
+
+    let input = expression.lookup_remainder_input().context("missing lookup MOD input")?;
+    let key = key.as_column().context("lookup MOD key requires native column")?;
+    ensure!(
+        !input.right && key.right,
+        "lookup MOD key must correlate left input with right column"
+    );
+    let scoped = expression
+        .replaced(&|column| Some(Typed::column(qualify(column.clone()))))
+        .context("scope lookup MOD expression")?;
+    let mut computed = Vec::new();
+    let column = register(scoped, &mut computed, "@lookup_mod_")?;
+    let mut entry = computed.pop().context("lookup MOD map absent")?;
+    entry.column = qualify(column.clone());
+    if !state.computed.iter().any(|prior| prior.column == entry.column) {
+        state.computed.push(entry);
+    }
+    state.keys.push((column, key.clone()));
+    Ok(())
+}
+
 fn compatible_keys(
     left: &ColumnRef,
     right: &ColumnRef,

@@ -53,7 +53,6 @@ impl Typed {
                 .as_deref()
                 .map(|text| -> Result<_> { Ok(Native::Numeric(Numeric::average(text)?)) })
                 .transpose()?,
-            Value::Remainder(value) => value.integer_pair(rows)?.map(Native::Integer),
             Value::Temporal(value) => value.evaluate(rows.0)?.map(Native::Timestamp),
             Value::Call(call) => {
                 call.evaluate(rows)?.map(|text| value::decode(self.oid, &text)).transpose()?
@@ -68,11 +67,6 @@ impl Typed {
                         numeric(left)?.binary(&numeric(right)?, operation.symbol())?,
                     )),
                     (Some(Native::Integer(left)), Some(Native::Integer(right))) => {
-                        ensure!(
-                            !matches!(operation, crate::compiler::capabilities::Arithmetic::Divide)
-                                || right != 0,
-                            "division by zero"
-                        );
                         Some(Native::Integer(integer(*operation, left, right, self.oid)?))
                     }
                     (None, _) | (_, None) => None,
@@ -136,6 +130,11 @@ fn integer(
     right: i64,
     oid: u32,
 ) -> Result<i64> {
+    use crate::compiler::capabilities::Arithmetic;
+    ensure!(
+        !matches!(operation, Arithmetic::Divide | Arithmetic::Remainder) || right != 0,
+        "division by zero"
+    );
     if operation.is_shift() {
         return super::bitwise::shift(operation, left, right, oid);
     }

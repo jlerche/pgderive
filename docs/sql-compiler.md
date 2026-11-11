@@ -64,14 +64,11 @@ WHERE retains only true, including on retractions. No transform_null_equals
 session setting is applied. Logical expressions follow PostgreSQL three-valued
 truth tables; pure AND/OR trees are flattened and deduplicated, keeping written order.
 
-Integral comparisons also accept `mod(column, nonzero_integer_literal)` and
-`column % nonzero_integer_literal`, including `pg_catalog.mod`. Both forms
-normalize to the same typed remainder expression and execute in Rust before the
-relational operator consumes the row. The remainder has the dividend's sign;
-minimum i64 remainder -1 is zero rather than an overflow. NULL input gives unknown
-comparison/qualification. The argument must be a native integral column; nested
-calls, column divisors, NULL/zero divisors, function modifiers and computed outputs
-remain unsupported. The named q2 qualification below exercises this bounded subset end to end.
+Integral `mod(x, y)` and `x % y` share a typed scalar expression and accept
+computed operands. Mixed integer widths promote to the wider type. The
+remainder has the dividend's sign. A zero divisor raises division by zero,
+and the minimum signed integer modulo −1 returns zero. NULL arguments
+produce NULL after evaluating the operands.
 
 ON equality with either key NULL is unknown and yields no match. Grouping preserves
 NULL, COUNT(*) includes NULL measures, SUM ignores NULL measures and returns NULL

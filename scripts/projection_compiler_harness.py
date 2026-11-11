@@ -38,7 +38,8 @@ class ProjectionFixture(SqlFixture):
             extrema = ("GREATEST(a.small_value, a.group_id),"
                        "LEAST(a.group_id + 0.00, a.small_value + 0.000, NULL) AS least_numeric")
             bitwise = "a.group_id & 3 AS low_bits, a.small_value << 1 AS shifted"
-            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise} FROM ')
+            remainder = "mod(a.group_id - 3, a.id) AS integral_remainder"
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges},{joined},{extrema},{bitwise},{remainder} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
                                             "OR a.group_id IS NOT DISTINCT FROM 1) "
@@ -55,7 +56,7 @@ class ProjectionFixture(SqlFixture):
         if self.local:
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
                                        + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group',
-                                          'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric', 'low_bits', 'shifted'])
+                                          'within_range', 'beyond_upper', 'joined', 'greatest', 'least_numeric', 'low_bits', 'shifted', 'integral_remainder'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -109,7 +110,8 @@ class ProjectionFixture(SqlFixture):
                     candidates = [value for value in (key, low) if value is not None]
                     values += (joined, max(candidates, default=None), min(candidates, default=None))
                     values += (None if key is None else key & 3,
-                               None if low is None else low * 2)
+                               None if low is None else low * 2,
+                               None if key is None else -((3 - key) % row['id']))
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
@@ -145,7 +147,7 @@ def qualify(output, command, local=False):
             assert len(faults) == 1 and faults[0]['server_committed'] is True, faults
         ready = fixture.run_history(command, History(changes,
             f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled,token) VALUES(101,'after restart',NULL,false,NULL)",
-            fixture.query.replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('a.enabled', '"X".enabled'),
+            fixture.query.replace('mod(a.group_id - 3, a.id)', '((a.group_id - 3) % a.id)').replace('a.', '"X".').replace('auction a ', 'auction AS "X" ').replace('a.enabled', '"X".enabled'),
             [('changed-order',fixture.query.replace('(0-a.group_id) AS g, a.category AS category', 'a.category AS category, (0-a.group_id) AS g') if local else fixture.query.replace('a.group_id AS g, a.category AS category', 'a.category AS category, a.group_id AS g')),
              ('changed-alias',fixture.query.replace('AS active', 'AS renamed'))], verify_reopen=False),
             initial=initial, after_stop=committed_fault)

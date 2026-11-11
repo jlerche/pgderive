@@ -12,7 +12,6 @@ impl Typed {
         };
         match &self.value {
             Value::Column(column) | Value::Average(column) => add(column),
-            Value::Remainder(value) => add(&value.input),
             Value::Temporal(value) => {
                 add(&value.input);
                 if let Some((column, _)) = &value.shift {
@@ -68,11 +67,6 @@ impl Typed {
                 None => Value::Column(column.clone()),
             },
             Value::Average(column) => Value::Average(renamed(column, replace)?),
-            Value::Remainder(value) => {
-                let mut value = value.clone();
-                value.input = renamed(&value.input, replace)?;
-                Value::Remainder(value)
-            }
             Value::Temporal(value) => {
                 let mut value = value.clone();
                 value.input = renamed(&value.input, replace)?;
@@ -126,9 +120,6 @@ impl Typed {
         match &self.value {
             Value::Column(column) => {
                 out.insert(column.name.clone());
-            }
-            Value::Remainder(value) => {
-                out.insert(value.input.name.clone());
             }
             Value::Temporal(value) => {
                 out.insert(value.input.name.clone());

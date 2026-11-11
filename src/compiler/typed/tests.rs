@@ -503,3 +503,32 @@ fn shift_counts_match_postgres_x86_64() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn integral_remainder_resolves_widths_and_evaluates_computed_operands() -> Result<()> {
+    let row = [("a".into(), Some("7".into())), ("b".into(), None)].into();
+    for (sql, oid, expected) in [
+        ("mod(a - 14, a - 4)", 23, Some("-1")),
+        ("(a - 14) % (4 - a)", 23, Some("-1")),
+        ("mod(7::smallint, 3::smallint)", 21, Some("1")),
+        ("mod(7::smallint, 3::bigint)", 20, Some("1")),
+        ("'7' % 3::smallint", 21, Some("1")),
+        ("mod('-9223372036854775808'::bigint, -1)", 20, Some("0")),
+        ("mod(a, b)", 23, None),
+        ("NULL % a", 23, None),
+        ("mod(a, NULL)", 23, None),
+        ("mod(mod(a, 5), 2)", 23, Some("0")),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), oid, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    for sql in ["mod(NULL,NULL)", "mod(7.0,3)", "1 % 0", "mod(NULL,1/0)"] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    for sql in ["mod(a, a - 7)", "b % (1 / (a - 7))"] {
+        let value = expression(sql)?;
+        assert!(value.evaluate(&row).is_err(), "{sql}");
+    }
+    Ok(())
+}

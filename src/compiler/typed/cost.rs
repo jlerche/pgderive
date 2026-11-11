@@ -1,5 +1,5 @@
 //! `PostgreSQL` per-tuple qual cost, in half operators, for ordering top-level quals.
-use super::{Typed, Value};
+use super::{Arithmetic, Typed, Value};
 
 pub const OPERATOR_COST: u64 = 2;
 
@@ -17,7 +17,7 @@ impl Typed {
             | Value::Encoded(_)
             | Value::Interval(_) => 0,
             Value::Boolean(value) => value.cost(),
-            Value::Remainder(_) | Value::Temporal(_) => OPERATOR_COST,
+            Value::Temporal(_) => OPERATOR_COST,
             Value::Call(call) => call.arguments.iter().fold(OPERATOR_COST, |total, argument| {
                 total
                     .saturating_add(argument.cost())
@@ -25,6 +25,15 @@ impl Typed {
             }),
             Value::Cast { input, typmod } => {
                 input.cost().saturating_add(cast_cost(input.oid, self.oid, typmod.is_some()))
+            }
+            Value::Binary { operation, left, right }
+                if self.oid != 1700
+                    && (operation.is_bitwise() || *operation == Arithmetic::Remainder) =>
+            {
+                let right_oid = if operation.is_shift() { 23 } else { self.oid };
+                Self::operator_cost(left, right)
+                    .saturating_add(implicit_cast(left, self.oid))
+                    .saturating_add(implicit_cast(right, right_oid))
             }
             Value::Binary { left, right, .. }
             | Value::NullIf { left, right }
@@ -58,6 +67,9 @@ fn promotion(value: &Typed, target: u32) -> u64 {
     } else {
         0
     }
+}
+fn implicit_cast(value: &Typed, oid: u32) -> u64 {
+    if value.is_constant() { 0 } else { cast_cost(value.oid, oid, false) }
 }
 fn cast_cost(input: u32, output: u32, typmod: bool) -> u64 {
     let text = |oid| matches!(oid, 25 | 1043);
