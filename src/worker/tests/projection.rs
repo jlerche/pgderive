@@ -174,7 +174,7 @@ fn projection_allowlist_native_codec_and_aliases() -> Result<()> {
     );
     compile("SELECT id FROM source.auction WHERE id::text='1'", &native)?;
     for sql in [
-        "SELECT * FROM source.auction",
+        "SELECT missing.* FROM source.auction",
         "SELECT id FROM source.auction LIMIT -1",
         "SELECT id FROM source.auction ORDER BY category",
         "SELECT DISTINCT ON (category) category FROM source.auction",
@@ -371,7 +371,7 @@ fn shared_temporal_target_binding_keeps_nested_and_on_allowlists() -> Result<()>
         ),
         "SELECT date_part('hour',moment) FROM source.bid".into(),
         format!("SELECT {bucket} OVER() FROM source.bid"),
-        "SELECT b.* FROM source.bid b".into(),
+        "SELECT bid.* FROM source.bid b".into(),
         "SELECT id,COUNT(*) FROM source.bid".into(),
     ] {
         assert!(compile(&sql, &native).is_err(), "{sql}");
@@ -402,4 +402,87 @@ async fn concatenation_budget_failure_preserves_the_committed_checkpoint() -> Re
     assert!(format!("{error:#}").contains("concatenation output exceeds"), "{error:#}");
     assert_eq!(query.checkpoint()?, before);
     Ok(())
+}
+
+#[test]
+fn single_table_star_uses_visible_column_order_and_metadata() -> Result<()> {
+    let mut native = contract();
+    let columns = &mut native.relations[0].columns;
+    columns[1].position = 4;
+    columns[1].name = "Label".into();
+    columns[1].oid = 1043;
+    columns[1].modifier = 11;
+    columns[1].collation = 950;
+    columns[2].position = 8;
+    columns[2].name = "amount".into();
+    columns[2].oid = 1700;
+    columns[2].modifier = (9 << 16) + 3 + 4;
+    columns[2].collation = 0;
+    let expected = [
+        ("id", 23, None, 0, false),
+        ("Label", 1043, Some(11), 950, true),
+        ("amount", 1700, Some((9 << 16) + 3 + 4), 0, true),
+    ];
+    for sql in [
+        "SELECT * FROM source.auction",
+        "SELECT auction.* FROM source.auction",
+        "SELECT source.auction.* FROM source.auction",
+        r#"SELECT "Alias".* FROM source.auction AS "Alias""#,
+        r#"SELECT q.id,q."Label",q.amount FROM (SELECT * FROM source.auction) q"#,
+        r#"WITH q AS (SELECT * FROM source.auction) SELECT q.id,q."Label",q.amount FROM q"#,
+    ] {
+        let result = compile(sql, &native)?;
+        assert_eq!(projection_metadata(&result), expected, "{sql}");
+    }
+    let mixed = compile(
+        "SELECT 0 AS first,a.*,id+1 AS last FROM source.auction a ORDER BY 4,2 LIMIT 1",
+        &native,
+    )?;
+    let metadata = projection_metadata(&mixed);
+    assert_eq!(
+        metadata.iter().map(|column| column.0).collect::<Vec<_>>(),
+        ["first", "id", "Label", "amount", "last"]
+    );
+    assert_eq!(metadata[1..4], expected);
+    for sql in [
+        "SELECT a.* FROM source.auction AS b",
+        "SELECT source.auction.* FROM source.auction AS a",
+        "SELECT a.* FROM source.auction a JOIN source.bid b ON b.auction=a.id",
+        "SELECT * FROM (SELECT id FROM source.auction) q",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn single_table_star_counts_expanded_columns_against_projection_budget() -> Result<()> {
+    let mut native = contract();
+    let columns = &mut native.relations[0].columns;
+    let template = columns[2].clone();
+    for position in 4..=64 {
+        columns.push(crate::source::Column {
+            position,
+            name: format!("c{position}"),
+            ..template.clone()
+        });
+    }
+    let compiled = compile("SELECT * FROM source.auction", &native)?;
+    assert_eq!(compiled.output().columns.len(), 64);
+    assert!(compile("SELECT 1 AS extra,* FROM source.auction", &native).is_err());
+    Ok(())
+}
+
+type ProjectionMetadata<'a> = (&'a str, u32, Option<i32>, u32, bool);
+
+fn projection_metadata(compiled: &crate::compiler::Compiled) -> Vec<ProjectionMetadata<'_>> {
+    compiled
+        .output()
+        .columns
+        .iter()
+        .map(|output| {
+            let column = &output.column;
+            (output.label.as_str(), column.oid, column.modifier, column.collation, column.nullable)
+        })
+        .collect()
 }

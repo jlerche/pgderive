@@ -1,3 +1,4 @@
+use crate::source::{Contract, Relation};
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
@@ -14,6 +15,7 @@ pub(super) mod ordering;
 pub(super) mod partition;
 pub(super) mod scalar;
 pub(super) mod setop;
+mod stars;
 mod subquery;
 pub(super) mod values;
 mod windows;
@@ -25,6 +27,25 @@ pub(super) struct Name(pub(super) Vec<String>);
 pub(super) struct Table {
     pub(super) name: Name,
     pub(super) alias: Option<String>,
+}
+impl Table {
+    pub(super) fn matches_qualifier(&self, name: &[String]) -> bool {
+        match (name, self.alias.as_deref()) {
+            ([], _) => true,
+            ([table], Some(alias)) => table == alias,
+            ([table], None) => self.name.0.last() == Some(table),
+            ([_, _], None) => self.name.0 == name,
+            _ => false,
+        }
+    }
+
+    pub(super) fn relation<'a>(&self, contract: &'a Contract) -> Result<&'a Relation> {
+        contract
+            .relations
+            .iter()
+            .find(|relation| self.name.0 == [relation.schema.as_str(), relation.table.as_str()])
+            .context("SQL resolve: relation absent from native publication")
+    }
 }
 pub(super) type Columns = Vec<(Name, String)>;
 pub(super) enum Parsed {
@@ -39,7 +60,7 @@ pub(super) enum Parsed {
     Values(Vec<Vec<Node>>),
 }
 
-pub(super) fn parse(sql: &str) -> Result<Parsed> {
+pub(super) fn parse(sql: &str, contract: &Contract) -> Result<Parsed> {
     ensure!(sql.len() <= 16_384 && !sql.contains('\0'), "SQL exceeds size limit or contains NUL");
     scan_budget(sql)?;
     let parsed = pg_query::parse(sql).context("SQL parse (PostgreSQL 17.7)")?;
@@ -52,7 +73,7 @@ pub(super) fn parse(sql: &str) -> Result<Parsed> {
         anyhow::bail!("SQL requires SELECT");
     };
     let mut select = (**select).clone();
-    let validation = cte::expand(&mut select)?;
+    let validation = cte::expand(&mut select, contract)?;
     let inner = query(&select).context("SQL lower: unsupported SELECT")?;
     if validation.is_empty() {
         return Ok(inner);

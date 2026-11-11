@@ -64,11 +64,7 @@ const fn planned_binding(binding: &Parsed) -> bool {
     }
 }
 fn scope(table: Table, contract: &Contract) -> Result<Scope<'_>> {
-    let relation = contract
-        .relations
-        .iter()
-        .find(|relation| table.name.0 == [relation.schema.clone(), relation.table.clone()])
-        .context("SQL resolve: relation absent from native publication")?;
+    let relation = table.relation(contract)?;
     Ok(Scope { table, relation })
 }
 fn qualifier(scope: &Scope<'_>) -> String {
@@ -77,16 +73,10 @@ fn qualifier(scope: &Scope<'_>) -> String {
 fn resolve(name: &Name, scopes: &[Scope<'_>]) -> Result<ColumnRef> {
     let mut matches = Vec::new();
     for (index, scope) in scopes.iter().enumerate() {
-        let qualified = match name.0.as_slice() {
-            [_] => true,
-            [table, _] => table == &qualifier(scope),
-            [schema, table, _] => {
-                scope.table.alias.is_none()
-                    && schema == &scope.relation.schema
-                    && table == &scope.relation.table
-            }
-            _ => false,
-        };
+        let qualified = name
+            .0
+            .split_last()
+            .is_some_and(|(_, qualifier)| scope.table.matches_qualifier(qualifier));
         if qualified
             && let Some(column) =
                 scope.relation.columns.iter().find(|column| Some(&column.name) == name.0.last())

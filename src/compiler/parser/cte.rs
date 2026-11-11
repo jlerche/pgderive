@@ -1,5 +1,6 @@
 //! Lexically expand pure nonrecursive WITH bindings before relational lowering.
 use super::expressions::{names, node};
+use crate::source::Contract;
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 use std::{
@@ -19,7 +20,8 @@ struct Definition {
 type Scope = BTreeMap<String, Arc<Definition>>;
 pub(super) type Definitions = Vec<(pg::SelectStmt, Vec<String>)>;
 #[derive(Default)]
-struct Expansion {
+struct Expansion<'a> {
+    contract: Option<&'a Contract>,
     remaining: usize,
     selects: usize,
     validation: Definitions,
@@ -29,7 +31,7 @@ struct Expansion {
     referenced: BTreeSet<usize>,
 }
 
-pub(super) fn expand(query: &mut pg::SelectStmt) -> Result<Definitions> {
+pub(super) fn expand(query: &mut pg::SelectStmt, contract: &Contract) -> Result<Definitions> {
     // PostgreSQL decides inlining by lexical reference count, known only after a full walk.
     let mut counting = Expansion { remaining: 1_048_576, ..Expansion::default() };
     counting.select(&mut query.clone(), &Scope::new(), 0)?;
@@ -38,6 +40,7 @@ pub(super) fn expand(query: &mut pg::SelectStmt) -> Result<Definitions> {
         counts.filter(|(_, count)| **count >= least).map(|(order, _)| order).collect()
     };
     let mut expansion = Expansion {
+        contract: Some(contract),
         remaining: 1_048_576,
         materialized: at_least(2),
         referenced: at_least(1),
@@ -46,7 +49,7 @@ pub(super) fn expand(query: &mut pg::SelectStmt) -> Result<Definitions> {
     expansion.select(query, &Scope::new(), 0)?;
     Ok(expansion.validation)
 }
-impl Expansion {
+impl Expansion<'_> {
     fn charge(&mut self, bytes: usize) -> Result<()> {
         self.remaining =
             self.remaining.checked_sub(bytes).context("CTE expansion byte budget exceeded")?;
@@ -114,6 +117,9 @@ impl Expansion {
             }
         }
         self.visit_select_body(select, &scope, depth)?;
+        if let Some(contract) = self.contract {
+            super::stars::expand_table(select, contract)?;
+        }
         let (height, count) = shape(select);
         ensure!(height < 64 && count <= 128, "expanded CTE scope budget exceeded");
         Ok(())

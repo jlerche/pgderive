@@ -85,6 +85,7 @@ keyed-sink keyed_sink
 sink-batch sink_batch
 stdout-sink stdout_sink
 projection projection_compiler
+star-projection star_projection
 functions functions_compiler
 postgres-support postgres_support
 environment environment

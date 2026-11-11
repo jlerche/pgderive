@@ -114,6 +114,16 @@ search_path or live SQL name interpolation. ORDER BY and LIMIT follow the
 
 ## Single-source projection/filter subset
 
+With one schema-qualified publication table in FROM, `SELECT *` and
+`SELECT alias.*` expand at their positions in the select list. Use the table
+name or schema-qualified table name as the qualifier when FROM has no alias.
+The expansion follows the frozen visible attribute order, skipping dropped
+attributes and preserving each column's name, type, type modifier, collation
+and nullability. Expanded columns count toward the 64-target limit and can be
+referenced by ORDER BY label or ordinal. The same rules apply inside supported
+subqueries. Join and general derived-table wildcard expansion are outside this
+slice.
+
 The same output and WHERE subset also supports two distinct source tables joined
 by one inner equijoin, with columns selected from either input. Join keys must
 have identical native bool, integral, UUID or timestamp contracts; NULL keys never match.
