@@ -54,7 +54,7 @@ fn typed_integral_widths_nulls_and_lazy_coalesce() -> Result<()> {
     for sql in ["32768::smallint", "2147483647 + 1", "COALESCE(b,32768::smallint)"] {
         assert!(expression(sql).and_then(|value| value.evaluate(&row)).is_err(), "{sql}");
     }
-    for sql in ["COALESCE(NULL,NULL)", "random()", "a ^ 2", "NULL + NULL"] {
+    for sql in ["random()", "a ^ 2", "NULL + NULL"] {
         assert!(expression(sql).is_err(), "{sql}");
     }
     Ok(())
@@ -576,5 +576,43 @@ fn exact_numeric_remainder_preserves_scale_and_postgres_special_values() -> Resu
     );
     let value = expression("mod(1.00, a - 7)")?;
     assert!(value.evaluate(&row).is_err());
+    Ok(())
+}
+
+#[test]
+fn boolean_common_results_and_all_unknown_controls() -> Result<()> {
+    let row = crate::transaction::Row::new();
+    for (sql, oid, expected) in [
+        ("CASE WHEN true THEN ' Ye ' ELSE false END", 16, Some("t")),
+        ("CASE WHEN false THEN true ELSE 'of' END", 16, Some("f")),
+        ("CASE WHEN 'yes' COLLATE \"C\" THEN '0' ELSE true END", 16, Some("f")),
+        ("CASE WHEN false THEN true END", 16, None),
+        ("CASE WHEN NULL THEN NULL ELSE NULL END", 25, None),
+        ("CASE true WHEN 'yes' COLLATE \"C\" THEN 'off' ELSE true END", 16, Some("f")),
+        ("CASE NULL::boolean WHEN NULL THEN true ELSE NULL END", 16, None),
+        ("CASE true WHEN 'yes' THEN NULL END", 25, None),
+        ("COALESCE(NULL, NULL)", 25, None),
+        ("COALESCE(NULL, 'on')", 25, Some("on")),
+        ("COALESCE(NULL COLLATE \"C\", NULL::boolean, '1')", 16, Some("t")),
+        ("COALESCE(false, 'yes')", 16, Some("f")),
+        ("COALESCE(CASE WHEN false THEN 'off' ELSE NULL::boolean END,' yes ')", 16, Some("t")),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), oid, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    for sql in [
+        "CASE WHEN true THEN true ELSE 'o' END",
+        "CASE WHEN false THEN 'bad' ELSE true END",
+        "CASE true WHEN true THEN true ELSE 'bad' END",
+        "CASE 'yes' WHEN true THEN true ELSE false END",
+        "CASE WHEN true THEN true ELSE NULL::text END",
+        "COALESCE(true, 'invalid')",
+        "COALESCE(true, 'yes'::text)",
+        "COALESCE(true, COALESCE(NULL,NULL))",
+        "COALESCE(CASE WHEN false THEN NULL END, true)",
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
     Ok(())
 }

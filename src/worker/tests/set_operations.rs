@@ -266,3 +266,43 @@ async fn union_all_cancels_extreme_signed_branches_through_spill() -> Result<()>
     assert_eq!(output, [(vec![Some("8".to_owned())], -1)]);
     Ok(())
 }
+
+#[test]
+fn boolean_set_operands_resolve_unknowns_pairwise() -> Result<()> {
+    let native = contract();
+    for operation in ["UNION", "UNION ALL", "INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL"] {
+        for (left, right) in [
+            ("true", "'yes'"),
+            ("'off' COLLATE \"C\"", "false"),
+            ("true", "NULL COLLATE \"POSIX\""),
+            ("NULL", "NULL::boolean"),
+            ("NULL", "NULL"),
+        ] {
+            let compiled =
+                compile(&format!("SELECT {left} AS flag {operation} SELECT {right}"), &native)?;
+            let column = &compiled.output().columns[0].column;
+            if left == "NULL" && right == "NULL" {
+                assert_eq!(column.oid, 25);
+            } else {
+                assert_eq!((column.oid, column.collation), (16, 0));
+            }
+        }
+    }
+    for sql in [
+        "SELECT NULL UNION ALL SELECT NULL UNION ALL SELECT true",
+        "SELECT true UNION ALL SELECT NULL UNION ALL SELECT 'yes'",
+        "SELECT true UNION ALL (SELECT NULL UNION ALL SELECT 'yes')",
+        "SELECT 'yes' UNION ALL (SELECT NULL UNION ALL SELECT true)",
+        "(SELECT 'yes' ORDER BY 1) UNION ALL SELECT true",
+        "SELECT DISTINCT 'yes' UNION ALL SELECT true",
+        "(VALUES (NULL)) UNION ALL SELECT true",
+        "SELECT true UNION ALL SELECT COALESCE(NULL,NULL)",
+        "SELECT true INTERSECT SELECT 'yes'::text",
+        "SELECT true EXCEPT SELECT 'bad' WHERE false",
+    ] {
+        let valid = sql == "SELECT true UNION ALL SELECT NULL UNION ALL SELECT 'yes'"
+            || sql == "SELECT 'yes' UNION ALL (SELECT NULL UNION ALL SELECT true)";
+        assert_eq!(compile(sql, &native).is_ok(), valid, "{sql}");
+    }
+    Ok(())
+}

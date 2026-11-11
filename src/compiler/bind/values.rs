@@ -111,7 +111,7 @@ fn bind_column(index: usize, values: Vec<Typed>) -> Result<BoundColumn> {
     })?;
     let oid = if candidate == 0 { 25 } else { candidate };
     let expressions =
-        values.into_iter().map(|value| value.constant_coerce(oid)).collect::<Result<Vec<_>>>()?;
+        values.into_iter().map(|value| value.coerce_common(oid)).collect::<Result<Vec<_>>>()?;
     let modifier = expressions.first().map_or(-1, Typed::bound_modifier);
     let modifier = if expressions.iter().all(|value| value.bound_modifier() == modifier) {
         modifier

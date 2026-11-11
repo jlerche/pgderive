@@ -67,6 +67,7 @@ compiler sql_compiler
 sql-composition sql_composition
 values values
 set-operations set_operation
+boolean-resolution boolean_resolution
 subqueries subquery
 numeric-arithmetic numeric_arithmetic
 temporal-arithmetic temporal_arithmetic

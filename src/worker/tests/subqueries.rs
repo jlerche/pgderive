@@ -197,8 +197,8 @@ fn subquery_admission_scopes_contextual_literals_and_lazy_boundaries() -> Result
         compile(sql, &native).with_context(|| sql.to_owned())?.validate_execution()?;
     }
     for sql in [
-        "SELECT CASE WHEN id>0 THEN 'true' ELSE false END FROM source.auction",
-        "SELECT COALESCE(true,'false') FROM source.auction",
+        "SELECT CASE WHEN id>0 THEN 'true'::text ELSE false END FROM source.auction",
+        "SELECT COALESCE(true,'false'::text) FROM source.auction",
         "SELECT a.id IN(SELECT NULL) FROM source.auction a",
         "SELECT a.id IN(SELECT '1') FROM source.auction a",
         "SELECT NULL+(SELECT SUM(10/price) FROM source.bid) FROM source.auction",

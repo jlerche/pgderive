@@ -130,13 +130,17 @@ fn case_rejects_unsupported_arms_and_gap_types() -> Result<()> {
         sql(false).replace("THEN 1", "THEN 'x'"),
         sql(false).replace("CASE WHEN", "CASE q.price WHEN"),
         sql(false).replace("q.price-q.previous", "q.id-q.auction"),
-        sql(false)
-            .replace("THEN 1", "THEN NULL")
-            .replace("THEN 0", "THEN NULL")
-            .replace("ELSE 0", "ELSE NULL"),
     ] {
         assert!(compile(&invalid, &native).is_err(), "{invalid}");
     }
+    let all_null = sql(false)
+        .replace("THEN 1", "THEN NULL")
+        .replace("THEN 0", "THEN NULL")
+        .replace("ELSE 0", "ELSE NULL");
+    let compiled = compile(&all_null, &native)?;
+    let flag = &compiled.output().columns.last().context("missing CASE result")?.column;
+    assert_eq!(flag.oid, 25);
+    assert!(flag.nullable);
     for unit in ["1 month", "0 seconds"] {
         compile(&sql(false).replace("10 seconds", unit), &native)?;
     }

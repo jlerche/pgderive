@@ -1,5 +1,5 @@
 //! Contextual predicate operands reuse the shared typed scalar representation.
-use super::{ColumnRef, Name, Typed};
+use super::{ColumnRef, Name, Typed, Value};
 use crate::compiler::parser::expressions::{column, node};
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
@@ -25,7 +25,10 @@ pub(super) fn bind_at(
     } else if let Ok(literal) = native_literal(value) {
         (literal, true, false)
     } else {
-        (super::bind(value, resolve, depth)?, false, true)
+        let value = Typed::bind_contextual(value, resolve, depth)?;
+        let contextual =
+            matches!(value.oid, 0 | 705) && matches!(value.value, Value::Collate { .. });
+        (value, contextual, true)
     };
     Ok(Operand { value, contextual, null_test })
 }
@@ -52,7 +55,11 @@ impl Operand {
     }
     pub(in crate::compiler) fn coerce(self, oid: u32) -> Result<Typed> {
         if self.contextual {
-            return self.value.predicate_literal(oid);
+            return if matches!(self.value.value, Value::Collate { .. }) {
+                self.value.coerce_common(oid)
+            } else {
+                self.value.predicate_literal(oid)
+            };
         }
         ensure!(
             self.value.oid == oid

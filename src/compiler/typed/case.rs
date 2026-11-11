@@ -1,5 +1,5 @@
 //! Lazy CASE with separate result type resolution and one evaluation of a simple test.
-use super::{ColumnRef, Name, Typed, Value, visit::Replace};
+use super::{ColumnRef, Name, Typed, Value, control, visit::Replace};
 use crate::{
     compiler::{
         expression,
@@ -30,16 +30,16 @@ pub(super) fn bind(
     let otherwise = value
         .defresult
         .as_deref()
-        .map(|value| super::bind(value, resolve, depth))
+        .map(|value| Typed::bind_contextual(value, resolve, depth))
         .transpose()?
         .unwrap_or(Typed { oid: 0, value: Value::Literal(None) });
     if let Some(test) = value.arg.as_deref() {
         return simple(test, &value.args, otherwise, resolve, depth);
     }
     let branches = arms(&value.args, resolve, depth, |test| expression::bind(test, resolve))?;
+    let (branches, otherwise) = contextual_results(branches, otherwise)?;
     let types =
         branches.iter().map(|(_, value)| value.oid).chain([otherwise.oid]).collect::<Vec<_>>();
-    ensure!(types.iter().any(|oid| *oid != 0), "circuit CASE needs resolved integral result");
     Ok(Typed {
         oid: super::types::common(&types)?,
         value: Value::Case { branches, otherwise: Box::new(otherwise) },
@@ -61,7 +61,7 @@ fn arms<T>(
             ensure!(arm.xpr.is_none(), "invalid CASE arm metadata");
             Ok((
                 condition(optional(arm.expr.as_deref())?)?,
-                super::bind(optional(arm.result.as_deref())?, resolve, depth)?,
+                Typed::bind_contextual(optional(arm.result.as_deref())?, resolve, depth)?,
             ))
         })
         .collect()
@@ -74,13 +74,14 @@ fn simple(
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     depth: usize,
 ) -> Result<Typed> {
-    let mut test = super::operand::bind_at(test, resolve, depth)?.into_value();
+    let mut test = Typed::bind_contextual(test, resolve, depth)?;
     if matches!(test.oid, 0 | 705) {
-        test = Typed::contextual_literal(test, 25)?;
+        test = test.coerce_common(25)?;
     }
     let branches = arms(values, resolve, depth, |value| {
         expression::case_match(&test, super::operand::bind_at(value, resolve, depth)?)
     })?;
+    let (branches, otherwise) = contextual_results(branches, otherwise)?;
     // ELSE is the first candidate for PostgreSQL's common result type.
     let known = std::iter::once(&otherwise)
         .chain(branches.iter().map(|(_, result)| result))
@@ -90,14 +91,14 @@ fn simple(
     let oid = result_type(&known)?;
     let branches = branches
         .into_iter()
-        .map(|(candidate, result)| Ok((candidate, result_cast(result, oid)?)))
+        .map(|(candidate, result)| Ok((candidate, result.coerce_common(oid)?)))
         .collect::<Result<_>>()?;
     Ok(Typed {
         oid,
         value: Value::SimpleCase(Simple {
             test: Box::new(test),
             branches,
-            otherwise: Box::new(result_cast(otherwise, oid)?),
+            otherwise: Box::new(otherwise.coerce_common(oid)?),
         }),
     })
 }
@@ -117,14 +118,16 @@ fn result_type(known: &[u32]) -> Result<u32> {
     super::types::common(known)
 }
 
-fn result_cast(input: Typed, oid: u32) -> Result<Typed> {
-    if input.oid == oid {
-        return Ok(input);
-    }
-    if matches!(input.oid, 0 | 705) {
-        return Typed::contextual_literal(input, oid);
-    }
-    Ok(Typed { oid, value: Value::Cast { input: Box::new(input), typmod: None } })
+type Arms<T> = Vec<(T, Typed)>;
+
+fn contextual_results<T>(branches: Arms<T>, otherwise: Typed) -> Result<(Arms<T>, Typed)> {
+    let candidate =
+        control::candidate(branches.iter().map(|(_, result)| result.oid).chain([otherwise.oid]));
+    let branches = branches
+        .into_iter()
+        .map(|(condition, result)| Ok((condition, control::coerce(result, candidate)?)))
+        .collect::<Result<_>>()?;
+    Ok((branches, control::coerce(otherwise, candidate)?))
 }
 
 impl Simple {

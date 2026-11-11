@@ -22,17 +22,37 @@ fn unknown(parsed: &Parsed) -> Vec<Option<Ast>> {
         Parsed::Ordered(value) => {
             let mut literals = unknown(&value.inner);
             literals.truncate(value.visible);
-            for order in &value.order { if let Some(value) = literals.get_mut(order.index) { *value = None; } }
+            for order in &value.order {
+                if let Some(value) = literals.get_mut(order.index) {
+                    *value = None;
+                }
+            }
             literals
-        },
+        }
         Parsed::Renamed { inner, .. } | Parsed::With { inner, .. } => unknown(inner),
-        Parsed::Partition(value) | Parsed::Membership { parsed: value, distinct:false } => value.targets.iter().map(|target| {
-            let crate::compiler::parser::partition::Value::Typed(value) = &target.value else { return None };
-            matches!(&value.node, Some(NodeEnum::AConst(value)) if value.isnull || matches!(value.val,Some(pg::a_const::Val::Sval(_)))).then(|| (**value).clone())
-        }).collect(),
+        Parsed::Partition(value) | Parsed::Membership { parsed: value, distinct: false } => value
+            .targets
+            .iter()
+            .map(|target| {
+                let crate::compiler::parser::partition::Value::Typed(value) = &target.value else {
+                    return None;
+                };
+                unknown_literal(value).then(|| (**value).clone())
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }
+fn unknown_literal(value: &Ast) -> bool {
+    match &value.node {
+        Some(NodeEnum::AConst(value)) => {
+            value.isnull || matches!(value.val, Some(pg::a_const::Val::Sval(_)))
+        }
+        Some(NodeEnum::CollateClause(value)) => value.arg.as_deref().is_some_and(unknown_literal),
+        _ => false,
+    }
+}
+
 fn common(left: &ColumnRef, right: &ColumnRef, unknown: (bool, bool)) -> Result<u32> {
     let (a, b) = (if unknown.0 { 0 } else { left.oid }, if unknown.1 { 0 } else { right.oid });
     common_type(a, b).map(|oid| if oid == 0 { 25 } else { oid })
@@ -133,11 +153,12 @@ fn output_column(
             oid,
             right: false,
             nullable: a.column.nullable || b.column.nullable,
-            collation: super::super::typed::collation::common(
-                a.column.collation,
-                b.column.collation,
-            )
-            .unwrap_or(0),
+            collation: if matches!(oid, 25 | 1043) {
+                super::super::typed::collation::common(a.column.collation, b.column.collation)
+                    .unwrap_or(0)
+            } else {
+                0
+            },
             modifier: a.column.modifier.filter(|_| {
                 a.column.oid == oid && b.column.oid == oid && a.column.modifier == b.column.modifier
             }),

@@ -112,6 +112,19 @@ register a query. Resolution uses the explicit frozen publication catalog, not
 search_path or live SQL name interpolation. ORDER BY and LIMIT follow the
 [ordering contract](ordering.md).
 
+## Boolean common types
+
+Searched CASE, simple CASE, COALESCE, and the set operations coerce unknown
+string literals and untyped NULLs to Boolean when Boolean is the known result
+type. Boolean strings use PostgreSQL's Boolean input spellings. A group of
+entirely unknown inputs resolves to text, including all-NULL CASE and COALESCE.
+Explicitly typed text and Boolean are incompatible. An invalid Boolean literal
+fails during binding, even in an arm that execution would skip.
+
+Set operations resolve each pair of operands separately. An inner pair that
+already resolved to text stays text in the outer operation. UNION, INTERSECT,
+and EXCEPT retain their existing DISTINCT and ALL multiplicities after coercion.
+
 ## GROUP BY names and positions
 
 Supported GROUP BY scopes accept a one-based select-list ordinal or a bare
@@ -753,10 +766,10 @@ joins, arbitrary numeric expressions or automatic auction closure.
 ## Lazy native CASE and timestamp-gap comparisons
 
 Searched CASE in a scalar projection now supports 1..=32 ordered WHEN branches
-using the existing predicate subset. Result arms are native integral columns,
-integral literals or NULL; omitted ELSE is NULL. Integer result promotion follows
-PostgreSQL int2/int4/int8 resolution (ordinary small literals are int4), and mixed
-opaque result types are limited to supported scalar coercions. Simple CASE
+using the existing predicate subset. Result arms use the supported scalar
+types and coercions, including [Boolean common types](#boolean-common-types).
+Integer result promotion follows PostgreSQL int2/int4/int8 resolution (ordinary
+small literals are int4). Simple CASE
 evaluates its test once and compares each WHEN value in order using the
 supported scalar equality rules, including the constant-operand requirement
 for text comparisons.
@@ -1141,9 +1154,10 @@ changes, independent memory/native-MV agreement and cold restart.
 The circuit scalar tree supports native integral/numeric operands, explicit
 integral casts, checked +/−/*, lazy COALESCE and searched CASE. Computed
 projections and GROUP BY keys use Map nodes; predicates evaluate typed operands
-with SQL three-valued comparisons and NULL tests. All-NULL circuit expressions
-require an explicit integral cast. CASE result promotion and nullability come
-from the same typed representation rather than a second simple-CASE evaluator.
+with SQL three-valued comparisons and NULL tests. All-unknown CASE and COALESCE
+results resolve to text. An explicitly typed NULL can supply the intended
+native type. CASE result promotion and nullability use the shared typed
+representation.
 
 [EXTRACT and date_trunc](temporal-arithmetic.md) now operate in the typed engine
 over date, timestamps and interval. EXTRACT emits exact numeric fields; timestamptz

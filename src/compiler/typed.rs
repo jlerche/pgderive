@@ -9,6 +9,7 @@ mod bitwise;
 mod calendar;
 mod case;
 pub(in crate::compiler) mod collation;
+mod control;
 mod cost;
 mod evaluate;
 mod fold;
@@ -150,13 +151,14 @@ pub(super) fn bind(
             let arguments = expression
                 .args
                 .iter()
-                .map(|value| bind(value, resolve, depth + 1))
+                .map(|value| Typed::bind_contextual(value, resolve, depth + 1))
                 .collect::<Result<Vec<_>>>()?;
-            ensure!(
-                arguments.iter().any(|value| value.oid != 0),
-                "all-NULL circuit COALESCE requires an explicit integral cast"
-            );
-            let oid = types::common(&arguments.iter().map(|value| value.oid).collect::<Vec<_>>())?;
+            let candidate = control::candidate(arguments.iter().map(Typed::oid));
+            let arguments = arguments
+                .into_iter()
+                .map(|value| control::coerce(value, candidate))
+                .collect::<Result<Vec<_>>>()?;
+            let oid = types::common(&arguments.iter().map(Typed::oid).collect::<Vec<_>>())?;
             Ok(Typed { oid, value: Value::Coalesce(arguments) })
         }
         NodeEnum::FuncCall(function) => functions::bind(function, resolve, depth),
@@ -434,10 +436,9 @@ impl Typed {
         Self { oid: 1700, value: Value::Cast { input: Box::new(self), typmod: None } }
     }
     pub(in crate::compiler) fn union_literal(value: &Node, oid: u32) -> Result<Self> {
-        let NodeEnum::AConst(value) = crate::compiler::parser::expressions::node(value)? else {
-            anyhow::bail!("UNION contextual value is not a literal")
-        };
-        Self::contextual_literal(literal(value)?, oid)
+        let value = Self::bind_contextual(value, &|_| anyhow::bail!("expected set literal"), 0)?;
+        ensure!(matches!(value.oid, 0 | 705), "expected unknown set literal");
+        value.coerce_common(oid)
     }
     pub(super) fn bind_contextual(
         value: &Node,
@@ -454,10 +455,10 @@ impl Typed {
         bind(value, resolve, depth)
     }
 
-    pub(super) fn constant_coerce(self, oid: u32) -> Result<Self> {
+    pub(super) fn coerce_common(self, oid: u32) -> Result<Self> {
         match self {
             Self { oid: 0 | 705, value: Value::Collate { input, collation } } => {
-                let input = input.constant_coerce(oid)?;
+                let input = input.coerce_common(oid)?;
                 if matches!(oid, 25 | 1043) {
                     Ok(Self { oid, value: Value::Collate { input: Box::new(input), collation } })
                 } else {

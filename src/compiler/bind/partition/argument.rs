@@ -40,7 +40,7 @@ pub(super) fn bind(
         typed::bind(&ast, resolve, 0)?
     };
     if context.function.boolean() && matches!(expression.oid(), 0 | 705) {
-        expression = expression.constant_coerce(16)?;
+        expression = expression.coerce_common(16)?;
     } else if expression.oid() == 0 {
         ensure!(
             matches!(context.function, Function::Count),
