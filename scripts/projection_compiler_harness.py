@@ -32,13 +32,17 @@ class ProjectionFixture(SqlFixture):
             nullif = ("NULLIF(a.group_id, 1.00),"
                       "NULLIF(a.vartext, 'é🙂') AS nonmatching_text,"
                       "NULLIF(a.group_id, a.small_value) AS nonmatching_group")
-            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif} FROM ')
+            ranges = ("a.group_id BETWEEN a.small_value AND 2.0 AS within_range,"
+                      "a.group_id NOT BETWEEN NULL AND 1 AS beyond_upper")
+            self.query = self.query.replace(' FROM ', f',{projected},{distinct},{simple},{nullif},{ranges} FROM ')
             self.query = self.query.replace('(a.enabled OR a.group_id IS NULL)',
                                             "((a.enabled OR a.group_id IS NULL) IS TRUE "
                                             "OR a.group_id IS NOT DISTINCT FROM 1) "
                                             "AND a.category IS DISTINCT FROM 'excluded' "
                                             "AND CASE a.id WHEN 0 THEN false ELSE true END "
-                                            "AND NULLIF(a.id, 7) IS NOT NULL")
+                                            "AND NULLIF(a.id, 7) IS NOT NULL "
+                                            "AND a.id BETWEEN 1 AND 101 "
+                                            "AND a.id NOT BETWEEN 98 AND 99")
 
     def verify(self):
         self.sql(f'EXPLAIN {self.query}')
@@ -46,7 +50,8 @@ class ProjectionFixture(SqlFixture):
                     f"FROM {self.name}.auction a WHERE a.id > 0 AND (a.enabled OR a.group_id IS NULL) GROUP BY 1")
         if self.local:
             expected = native_expected(self, ['g','category','active','token','again','sm','lg','vl']
-                                       + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group'])
+                                       + [f'flag_{i}' for i in range(6)] + ['changed', 'same', 'bucket', 'state', 'label', 'nullif', 'nonmatching_text', 'nonmatching_group',
+                                          'within_range', 'beyond_upper'])
             def columns(table):
                 return self.sql(f"""SELECT json_agg(json_build_array(attname,atttypid,atttypmod,attcollation) ORDER BY attnum)
                     FROM pg_attribute WHERE attrelid='{self.name}.{table}'::regclass AND attnum>0 AND NOT attisdropped""")
@@ -60,7 +65,8 @@ class ProjectionFixture(SqlFixture):
             qualifies = row['enabled'] is True or row['group_id'] is None
             if self.local:
                 qualifies = ((qualifies or row['group_id'] == 1)
-                             and row['category'] != 'excluded' and row['id'] != 7)
+                             and row['category'] != 'excluded' and row['id'] != 7
+                             and 1 <= row['id'] <= 101 and not 98 <= row['id'] <= 99)
             if row['id'] > 0 and qualifies:
                 values = tuple(row[key] for key in ('group_id', 'category', 'enabled', 'token', 'group_id'))
                 if self.local:
@@ -86,6 +92,14 @@ class ProjectionFixture(SqlFixture):
                                None if key == 1 else key,
                                None if row['vartext'] == 'é🙂' else row['vartext'],
                                None if key == row['small_value'] else key)
+                    low = row['small_value']
+                    within = None
+                    if key is not None:
+                        if key > 2 or (low is not None and key < low):
+                            within = False
+                        elif low is not None:
+                            within = True
+                    values += (within, True if key is not None and key > 1 else None)
                 expected_memory[values] += 1
         actual = json.loads(self.sql(f"SELECT COALESCE(json_agg(g),'[]') FROM {self.bag_relation()} g"))
         assert {tuple(row['tuple'][1]): row['weight'] for row in actual} == dict(expected_memory)
@@ -130,7 +144,7 @@ def qualify(output, command, local=False):
             sink_before = fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}")
             bad = fixture.start(command, 'overflow')
             bad.event('ready')
-            fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(999,'overflow',-2147483648,true)")
+            fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,enabled) VALUES(97,'overflow',-2147483648,true)")
             blocked_diagnostic(bad)
             assert fixture.sql(f"SELECT to_jsonb(p)-'fence' FROM {fixture.name}.pgderive_progress p") == before
             assert fixture.sql(f"SELECT COALESCE(jsonb_agg(jsonb_build_array(tuple,weight) ORDER BY tuple),'[]') FROM {fixture.bag_relation()}") == sink_before

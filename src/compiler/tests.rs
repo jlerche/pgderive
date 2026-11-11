@@ -118,7 +118,7 @@ fn normalization_and_fail_closed_types() -> Result<()> {
         "u = '0000--0000000000000000000000000000'",
         "u = '00000000000000000000000000000000-'",
         "u = '0-0000000000000000000000000000000'",
-        "n BETWEEN 1 AND 2",
+        "n BETWEEN SYMMETRIC 1 AND 2",
         "n IS DISTINCT FROM true",
         "true IS NULL",
         "ROW(a) IS NULL",
@@ -224,5 +224,22 @@ fn nullif_guards_only_the_subquery_that_folding_can_discard() -> Result<()> {
         anyhow::bail!("unexpectedly lifted a guarded NULLIF operand");
     };
     assert!(format!("{error:#}").contains("subqueries in lazy CASE/COALESCE/NULLIF"));
+    Ok(())
+}
+
+#[test]
+fn between_probe_expansion_is_bounded() {
+    let sql = (0..15).fold("a".to_owned(), |sql, _| format!("({sql}) BETWEEN false AND true"));
+    assert!(expression(&sql).is_err_and(|error| error.to_string().contains("expansion budget")));
+}
+
+#[test]
+fn between_folds_qualifiers_in_written_order_before_sorting() -> Result<()> {
+    let contract = crate::source::tests::contract();
+    let sql = "SELECT id FROM public.items WHERE 1 BETWEEN (2147483647 + 1) + id AND 1 / 0";
+    let Err(error) = super::compile(sql, &contract) else {
+        anyhow::bail!("unexpectedly admitted {sql}");
+    };
+    assert!(format!("{error:#}").contains("integer overflow"), "{error:#}");
     Ok(())
 }

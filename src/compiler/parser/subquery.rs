@@ -4,7 +4,7 @@ mod correlation;
 mod scalar;
 use super::{
     Parsed,
-    expressions::{distinct_kind, names, node, optional},
+    expressions::{between_kind, distinct_kind, names, node, optional},
     native_join::Tree,
 };
 use anyhow::{Result, ensure};
@@ -116,7 +116,7 @@ impl Rewrite<'_> {
             }
             ensure!(
                 !guarded,
-                "subqueries in lazy CASE/COALESCE/NULLIF operands are unsupported; compute them in a derived scope first"
+                "subqueries in lazy CASE/COALESCE/NULLIF/BETWEEN operands are unsupported; compute them in a derived scope first"
             );
             *value = self.link(link)?;
             self.changed = true;
@@ -153,6 +153,8 @@ impl Rewrite<'_> {
                 }
             }
             Some(NodeEnum::AExpr(value)) => {
+                // Either comparison can disappear before the executor reaches it.
+                let guarded = guarded || between_kind(value.kind).is_some();
                 let nullif = value.kind == i32::from(pg::AExprKind::AexprNullif);
                 let lazy = !nullif
                     && distinct_kind(value.kind).is_none()

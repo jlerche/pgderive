@@ -45,7 +45,7 @@ pub(super) fn bind(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Expr
     bind_ast(value, resolve, &mut 0, 0, None)
 }
 pub(super) fn bind_quals(value: &pg_query::Node, resolve: &Resolve<'_>) -> Result<Expr> {
-    bind(value, resolve).map(Expr::ordered_quals)
+    bind(value, resolve).map(|value| value.until_false().into_quals())
 }
 pub(in crate::compiler) fn bind_join(
     value: &pg_query::Node,
@@ -63,7 +63,7 @@ fn bind_ast(
     depth: usize,
     text: TextCollation<'_>,
 ) -> Result<Expr> {
-    use super::parser::expressions::{node, optional};
+    use super::parser::expressions::{between_kind, node, optional};
     use pg_query::{NodeEnum, protobuf as pg};
     *visited += 1;
     ensure!(*visited <= 512 && depth <= 64, "WHERE exceeds AST/depth budget");
@@ -102,7 +102,10 @@ fn bind_ast(
             membership(value, resolve, text)
         }
         NodeEnum::AExpr(value) if value.kind != i32::from(pg::AExprKind::AexprNullif) => {
-            comparison(value, resolve, text)
+            between_kind(value.kind).map_or_else(
+                || comparison(value, resolve, text),
+                |negated| between(value, negated, resolve, text),
+            )
         }
         _ => Ok(Expr::Value(operand(value, resolve)?.coerce(16)?)),
     }
@@ -178,6 +181,37 @@ fn comparison(
         Some(negated) => Expr::Distinct { left, right, negated },
         None => Expr::Compare(op, left, right),
     })
+}
+
+fn between(
+    value: &pg_query::protobuf::AExpr,
+    negated: bool,
+    resolve: &Resolve<'_>,
+    text: TextCollation<'_>,
+) -> Result<Expr> {
+    use super::parser::expressions::{node, optional};
+    use pg_query::NodeEnum;
+
+    let NodeEnum::List(bounds) = node(optional(value.rexpr.as_deref())?)? else {
+        anyhow::bail!("BETWEEN requires scalar bounds");
+    };
+    let [lower, upper] = bounds.items.as_slice() else {
+        anyhow::bail!("BETWEEN requires two bounds");
+    };
+    let probe = operand(optional(value.lexpr.as_deref())?, resolve)?;
+    // PostgreSQL resolves each comparison separately. Retain both comparisons
+    // so planning and runtime can reach their operands in PostgreSQL's order.
+    let lower_op = if negated { Compare::Lt } else { Compare::Ge };
+    let upper_op = if negated { Compare::Gt } else { Compare::Le };
+    let (left, lower) =
+        comparison_operands(probe.duplicate_for_between()?, operand(lower, resolve)?)?;
+    check_comparison(&lower_op, &left, &lower, text)?;
+    let (right, upper) = comparison_operands(probe, operand(upper, resolve)?)?;
+    check_comparison(&upper_op, &right, &upper, text)?;
+    normalized(
+        vec![Expr::Compare(lower_op, left, lower), Expr::Compare(upper_op, right, upper)],
+        !negated,
+    )
 }
 
 pub(super) fn comparison_operands(left: Operand, right: Operand) -> Result<(Scalar, Scalar)> {

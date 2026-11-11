@@ -211,6 +211,7 @@ impl Expansion {
                 self.optional(expr.rexpr.as_deref_mut(), scope, depth)
             }
             Some(NodeEnum::BoolExpr(expr)) => self.list(&mut expr.args, scope, depth),
+            Some(NodeEnum::List(expr)) => self.list(&mut expr.items, scope, depth),
             Some(NodeEnum::FuncCall(expr)) => {
                 self.list(&mut expr.args, scope, depth)?;
                 self.optional(expr.agg_filter.as_deref_mut(), scope, depth)
@@ -294,6 +295,7 @@ fn node_shape(value: &Node) -> (usize, usize) {
             combined([&value.lexpr, &value.rexpr].into_iter().flatten().map(|v| node_shape(v)))
         }
         Some(NodeEnum::BoolExpr(value)) => combined(value.args.iter().map(node_shape)),
+        Some(NodeEnum::List(value)) => combined(value.items.iter().map(node_shape)),
         Some(NodeEnum::CoalesceExpr(value)) => combined(value.args.iter().map(node_shape)),
         Some(NodeEnum::FuncCall(value)) => {
             combined(value.args.iter().chain(value.agg_filter.as_deref()).map(node_shape))

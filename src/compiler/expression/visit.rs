@@ -151,7 +151,7 @@ impl Predicate {
         }
     }
     pub(in crate::compiler) fn from_conjuncts(values: Vec<Expr>) -> Option<Self> {
-        (!values.is_empty()).then(|| Self(Expr::And(values).ordered_quals()))
+        (!values.is_empty()).then(|| Self(Expr::And(values).into_quals()))
     }
     pub(in crate::compiler) fn strict_columns(&self) -> BTreeSet<String> {
         self.0.strict_columns(true)

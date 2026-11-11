@@ -1,11 +1,10 @@
-//! The order `PostgreSQL` gives top-level WHERE, HAVING and ON conjuncts before running them.
+//! Normalize top-level WHERE, HAVING and ON conjuncts before folding them.
 use super::Expr;
 
 impl Expr {
-    pub(in crate::compiler) fn ordered_quals(self) -> Self {
+    pub(in crate::compiler) fn into_quals(self) -> Self {
         let mut quals = Vec::new();
         self.collect_quals(&mut quals);
-        quals.sort_by_key(|value| (value.cost(), value.is_equality()));
         if quals.len() == 1 {
             return quals.remove(0);
         }
@@ -51,7 +50,7 @@ impl Expr {
             value => quals.push(value),
         }
     }
-    const fn is_equality(&self) -> bool {
+    pub(super) const fn is_equality(&self) -> bool {
         matches!(self, Self::Compare(super::Compare::Eq, _, _))
     }
 }

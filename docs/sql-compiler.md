@@ -42,7 +42,12 @@ any non-NULL value. Scalar `NULLIF(x, y)` uses the same equality rules and
 returns NULL when the arguments compare equal. Otherwise it returns the first
 argument after the equality operator's coercions. For example,
 `NULLIF(1, 2.0)` returns a numeric value. Compute scalar subqueries used as the
-second argument in a derived scope.
+second argument in a derived scope. Ordinary scalar `BETWEEN` and
+`NOT BETWEEN` use the supported ordering comparisons and resolve each bound
+independently. At runtime in projections, evaluation reaches the upper comparison only
+when the lower comparison has yet to determine the result. WHERE uses the
+normal predicate planning and evaluation rules. Compute scalar subqueries
+used as range operands in a derived scope.
 Comparisons require at least one native bool, int2/int4/int8 or UUID column.
 Integral columns may compare across integral widths and to signed i64 integer
 literals; evaluation is exact, without narrowing the literal to the column width.

@@ -2,6 +2,14 @@ use super::Name;
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
+pub(in crate::compiler) fn between_kind(kind: i32) -> Option<bool> {
+    match pg::AExprKind::try_from(kind).ok()? {
+        pg::AExprKind::AexprBetween => Some(false),
+        pg::AExprKind::AexprNotBetween => Some(true),
+        _ => None,
+    }
+}
+
 pub(in crate::compiler) fn distinct_kind(kind: i32) -> Option<bool> {
     match pg::AExprKind::try_from(kind).ok()? {
         pg::AExprKind::AexprDistinct => Some(false),

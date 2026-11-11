@@ -63,6 +63,8 @@ fn quals(values: &[Expr]) -> Result<Expr> {
         }
     }
     let mut kept = folded.into_iter().filter(|value| !value.is_constant()).collect::<Vec<_>>();
+    // Fold in written order before sorting the remaining runtime qualifiers.
+    kept.sort_by_key(|value| (value.cost(), value.is_equality()));
     Ok(if kept.len() == 1 { kept.remove(0) } else { Expr::Quals(kept) })
 }
 impl Predicate {

@@ -75,6 +75,7 @@ fn contains_aggregate(value: &Node) -> bool {
             .flatten()
             .any(|value| contains_aggregate(value)),
         Some(NodeEnum::BoolExpr(value)) => value.args.iter().any(contains_aggregate),
+        Some(NodeEnum::List(value)) => value.items.iter().any(contains_aggregate),
         Some(NodeEnum::CoalesceExpr(value)) => value.args.iter().any(contains_aggregate),
         Some(NodeEnum::TypeCast(value)) => value.arg.as_deref().is_some_and(contains_aggregate),
         Some(NodeEnum::NullTest(value)) => value.arg.as_deref().is_some_and(contains_aggregate),
@@ -246,11 +247,8 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
                     self.expression(arg, windows, depth + 1)?;
                 }
             }
-            Some(NodeEnum::BoolExpr(expr)) => {
-                for arg in &mut expr.args {
-                    self.expression(arg, windows, depth + 1)?;
-                }
-            }
+            Some(NodeEnum::BoolExpr(expr)) => self.expressions(&mut expr.args, windows, depth)?,
+            Some(NodeEnum::List(expr)) => self.expressions(&mut expr.items, windows, depth)?,
             Some(NodeEnum::BooleanTest(expr)) => {
                 self.optional_expression(expr.arg.as_deref_mut(), windows, depth)?;
             }
@@ -261,9 +259,7 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
                 self.optional_expression(expr.arg.as_deref_mut(), windows, depth)?;
             }
             Some(NodeEnum::CoalesceExpr(expr)) => {
-                for arg in &mut expr.args {
-                    self.expression(arg, windows, depth + 1)?;
-                }
+                self.expressions(&mut expr.args, windows, depth)?;
             }
             Some(NodeEnum::CaseExpr(expr)) => {
                 for arg in [&mut expr.arg, &mut expr.defresult].into_iter().flatten() {
@@ -282,6 +278,13 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
         }
         Ok(())
     }
+    fn expressions(&mut self, values: &mut [Node], windows: bool, depth: usize) -> Result<()> {
+        for value in values {
+            self.expression(value, windows, depth + 1)?;
+        }
+        Ok(())
+    }
+
     fn optional_expression(
         &mut self,
         value: Option<&mut Node>,

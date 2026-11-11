@@ -35,6 +35,17 @@ pub(super) fn bind_at(
     Ok(Operand { value, contextual, null_test })
 }
 impl Operand {
+    pub(in crate::compiler) fn duplicate_for_between(&self) -> Result<Self> {
+        ensure!(
+            crate::compiler::plan::bounded(&self.value),
+            "BETWEEN probe exceeds expression expansion budget"
+        );
+        Ok(Self {
+            value: self.value.clone(),
+            contextual: self.contextual,
+            null_test: self.null_test,
+        })
+    }
     pub(in crate::compiler) fn into_value(self) -> Typed {
         self.value
     }

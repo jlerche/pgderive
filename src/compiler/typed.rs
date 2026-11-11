@@ -121,6 +121,7 @@ pub(super) fn bind(
         NodeEnum::AExpr(expression)
             if expression.kind == i32::from(pg_query::protobuf::AExprKind::AexprIn)
                 || super::parser::expressions::distinct_kind(expression.kind).is_some()
+                || super::parser::expressions::between_kind(expression.kind).is_some()
                 || super::expression::is_comparison(expression)? =>
         {
             boolean(value, resolve)

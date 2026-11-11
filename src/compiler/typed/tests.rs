@@ -325,3 +325,36 @@ fn nullif_returns_the_resolved_left_argument() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn between_uses_independent_comparisons_and_three_valued_logic() -> Result<()> {
+    let row = [("a".into(), Some("7".into())), ("b".into(), None)].into();
+    for (sql, expected) in [
+        ("a BETWEEN 7 AND 7::bigint", Some("t")),
+        ("a BETWEEN 8 AND 6", Some("f")),
+        ("a NOT BETWEEN 8 AND 6", Some("t")),
+        ("a BETWEEN NULL AND 6", Some("f")),
+        ("a NOT BETWEEN NULL AND 6", Some("t")),
+        ("a BETWEEN NULL AND 7", None),
+        ("a NOT BETWEEN 6 AND NULL", None),
+        ("b BETWEEN 1 AND 9", None),
+        ("b NOT BETWEEN 9 AND 1", None),
+        ("'7' BETWEEN 7::smallint AND 7.01", Some("t")),
+        ("a BETWEEN '7' AND 7.01", Some("t")),
+        ("a BETWEEN 6.99 AND '7'", Some("t")),
+        ("'NaN'::numeric BETWEEN 'Infinity'::numeric AND 'NaN'::numeric", Some("t")),
+        (
+            "DATE '2020-01-01' BETWEEN TIMESTAMP '2020-01-01 00:00:00' AND DATE '2020-01-02'",
+            Some("t"),
+        ),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), 16, "{sql}");
+        assert_eq!(value.evaluate(&row)?.as_deref(), expected, "{sql}");
+    }
+    for sql in ["a BETWEEN false AND 6", "a BETWEEN 8 AND 'bad'", "a NOT BETWEEN SYMMETRIC 1 AND 2"]
+    {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    Ok(())
+}

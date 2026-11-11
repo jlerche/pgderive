@@ -16,8 +16,8 @@ use graph::Graph;
 
 const PASSES: usize = 256;
 
-/// Inlining nested computations can grow them exponentially; past this, they stay put.
-fn bounded(value: &impl serde::Serialize) -> bool {
+/// Bound expression expansion before duplicating computations.
+pub(super) fn bounded(value: &impl serde::Serialize) -> bool {
     serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= EXPRESSION_BYTES)
 }
 const EXPRESSION_BYTES: usize = 16_384;
