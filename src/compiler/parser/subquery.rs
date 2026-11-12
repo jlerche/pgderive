@@ -309,7 +309,7 @@ impl Rewrite<'_> {
         let probe = membership::existence_value(query)?.clone();
         let mut query = query.clone();
         let correlation = correlation::extract(&mut query, true)?;
-        if correlation.residual.is_none() {
+        if correlation.inequalities.is_empty() {
             return Ok(None);
         }
         // 1 IN (SELECT 1 ...) is two-valued, even when the residual rejects every pair.
@@ -334,7 +334,7 @@ impl Rewrite<'_> {
         correlation: correlation::Correlation,
     ) -> Result<Node> {
         let alias = self.alias()?;
-        let residual_inequality = correlation.residual.is_some();
+        let residual_inequality = !correlation.inequalities.is_empty();
         if quantified.is_some() || residual_inequality {
             scalar_input::validate(&query, 0)?;
             ensure!(
@@ -362,10 +362,11 @@ impl Rewrite<'_> {
             query.target_list.push(ast::target(inner, &label));
             conditions.push(ast::comparison(outer, ast::column(&alias, &label), "="));
         }
-        if let Some(residual) = correlation.residual {
-            let label = "\0inequality";
-            query.target_list.push(ast::target(residual.inner, label));
-            let inner = ast::column(&alias, label);
+        for (index, residual) in correlation.inequalities.into_iter().enumerate() {
+            let label =
+                if index == 0 { "\0inequality".into() } else { format!("\0inequality_{index}") };
+            query.target_list.push(ast::target(residual.inner, &label));
+            let inner = ast::column(&alias, &label);
             let (left, right) = if residual.outer_first {
                 (residual.outer, inner)
             } else {

@@ -9,7 +9,7 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 #[derive(Default)]
 pub(super) struct Correlation {
     pub pairs: Vec<(Node, Node)>,
-    pub residual: Option<Inequality>,
+    pub inequalities: Vec<Inequality>,
 }
 pub(super) struct Inequality {
     pub outer: Node,
@@ -42,7 +42,7 @@ pub(super) fn extract(query: &mut pg::SelectStmt, inequality: bool) -> Result<Co
         );
     }
     ensure!(
-        correlation.residual.is_none() || !correlation.pairs.is_empty(),
+        correlation.inequalities.is_empty() || !correlation.pairs.is_empty(),
         "inequality correlation requires an equality key"
     );
     Ok(correlation)
@@ -106,14 +106,17 @@ fn comparison(
     } else {
         ensure!(
             inequality && matches!(operator.as_str(), "<" | "<=" | ">" | ">=" | "<>"),
-            "correlation requires ordinary equality or one supported inequality"
+            "correlation requires ordinary equality or supported inequalities"
         );
-        ensure!(correlation.residual.is_none(), "only one correlation inequality is supported");
+        ensure!(
+            correlation.inequalities.len() < 8,
+            "subquery correlation inequality count exceeded"
+        );
         ensure!(
             super::scalar_input::column(outer) && super::scalar_input::column(inner),
             "correlation inequality requires plain columns"
         );
-        correlation.residual = Some(Inequality {
+        correlation.inequalities.push(Inequality {
             outer: outer.clone(),
             inner: inner.clone(),
             operator: operator.clone(),
