@@ -286,3 +286,11 @@ fn calendar_invalid_fields_and_arithmetic_boundaries() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn calendar_day_addition_checks_the_result_after_adding_the_offset() -> Result<()> {
+    let base = Timestamp::from_micros(super::MIN)?;
+    let offset = super::Interval::finite(0, 108_000_000, 0)?;
+    assert_eq!(base.add_interval(offset)?.sort_value(), 9_119_386_512_000_000_000);
+    Ok(())
+}

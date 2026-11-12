@@ -1,5 +1,5 @@
 //! Exact scan reference remains the fallback for ineligible aggregate sets.
-use super::{Bag, Frames, Mode, Partition, evaluate, framed};
+use super::{Bag, Frames, Partition, evaluate, framed};
 use crate::{
     compiler::{compile, relational::Node},
     engine::{dataflow::PartitionWork, execution::Limits},
@@ -56,14 +56,7 @@ fn run(spec: &Partition, bag: &Bag, sliding: bool) -> Result<(Bag, usize)> {
     let mut work = PartitionWork::new(BUDGET);
     let limits = Limits { contributions: BUDGET, ..Limits::default() };
     let frames = if sliding { Frames::new(spec) } else { Frames::scan() };
-    let result = match &spec.mode {
-        Mode::Rows { order, frame }
-        | Mode::Peers { order, frame, .. }
-        | Mode::Range { order, frame } => {
-            framed(spec, bag, (order, frame), (limits, &mut work), frames)?
-        }
-        _ => anyhow::bail!("expected framed mode"),
-    };
+    let result = framed(spec, bag, (limits, &mut work), frames)?;
     Ok((result, BUDGET - work.remaining_for_test()))
 }
 #[test]

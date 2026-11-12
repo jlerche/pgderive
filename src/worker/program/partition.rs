@@ -29,11 +29,7 @@ pub(super) fn evaluate(
     match &spec.mode {
         Mode::Grouped { keys } => grouped(spec, bag, keys, work),
         Mode::Ranking { order } => ranking::evaluate(spec, bag, order, (limits, work)),
-        Mode::Rows { order, frame }
-        | Mode::Peers { order, frame, .. }
-        | Mode::Range { order, frame } => {
-            framed(spec, bag, (order, frame), (limits, work), Frames::new(spec))
-        }
+        _ => framed(spec, bag, (limits, work), Frames::new(spec)),
     }
 }
 fn grouped(
@@ -232,11 +228,19 @@ fn framed_fields(
 fn framed(
     spec: &Partition,
     bag: &Bag,
-    ordering: (&[Order], &Frame),
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
     mut frames: Frames,
 ) -> Result<Bag> {
-    let (order, frame) = ordering;
+    let (order, frame, mut ranges) = match &spec.mode {
+        Mode::Rows { order, frame } | Mode::Peers { order, frame, .. } => {
+            (order, Some(frame), None)
+        }
+        Mode::Range { order, frame } => (order, None, Some(range::Cursor::integral(frame))),
+        Mode::TemporalRange { order, frame } => {
+            (order, None, Some(range::Cursor::temporal(frame)?))
+        }
+        _ => anyhow::bail!("expected framed window"),
+    };
     let (limits, work) = context;
     let ordered = ordered(bag, order, spec.previous_windows.as_ref(), (limits, work))?;
     let peers = !matches!(spec.mode, Mode::Rows { .. });
@@ -255,14 +259,16 @@ fn framed(
     }
     let values: Vec<_> =
         spec.aggregates.iter().filter(|value| value.function.frame_value()).collect();
-    let mut ranges = range::Cursor::default();
     let mut updates = Consolidator::new(limits)?;
     for (index, (first, last)) in groups.iter().enumerate() {
-        let range = if matches!(spec.mode, Mode::Range { .. }) {
-            let [key] = order else { anyhow::bail!("RANGE offsets require one ordering key") };
-            ranges.bounds(&ordered, (frame, key), *first, work)?
+        let range = if let Some(ranges) = &mut ranges {
+            let [key] = order.as_slice() else {
+                anyhow::bail!("RANGE offsets require one ordering key")
+            };
+            ranges.bounds(&ordered, key, *first, work)?
         } else {
-            let (start, end) = bounds(frame, index, groups.len())?;
+            let (start, end) =
+                bounds(frame.context("missing positional frame")?, index, groups.len())?;
             let end = if end == 0 { 0 } else { groups[end - 1].1 };
             let start = groups.get(start).map_or(end, |group| group.0);
             start.min(end)..end
@@ -342,11 +348,7 @@ pub(in crate::worker) fn evaluate_scan(
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
 ) -> Result<Bag> {
     match &spec.mode {
-        Mode::Rows { order, frame }
-        | Mode::Peers { order, frame, .. }
-        | Mode::Range { order, frame } => {
-            framed(spec, bag, (order, frame), context, Frames::scan())
-        }
-        _ => evaluate(spec, bag, context),
+        Mode::Grouped { .. } | Mode::Ranking { .. } => evaluate(spec, bag, context),
+        _ => framed(spec, bag, context, Frames::scan()),
     }
 }

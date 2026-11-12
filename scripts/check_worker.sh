@@ -112,6 +112,7 @@ ranking ranking_compiler
 ranking-distribution ranking_distribution
 peer-frames peer_frames_compiler
 integral-range integral_range
+temporal-range temporal_range
 derived derived_compiler
 navigation navigation_compiler
 frame-values frame_value

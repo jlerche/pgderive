@@ -600,9 +600,15 @@ ordering expression. Pgderive validates nonnegative, non-NULL integral constant
 offsets at bind time. Distances follow the sort direction, include peers at either
 boundary, and can extend beyond the integer type's limits. An offset bound for
 a NULL ordering value uses the current NULL peer group. Unbounded endpoints
-still extend to the edge of the partition. The integral evaluator advances two
-monotone boundaries and uses the same sliding aggregate path as other frames.
-Nonintegral distance offsets and frame exclusions remain outside this slice.
+still extend to the edge of the partition. Timestamp and timestamptz ordering
+keys accept nonnegative, non-NULL constant interval offsets. PostgreSQL's
+interval comparison determines the offset sign. Frame arithmetic preserves
+months, days, and microseconds and uses UTC for timestamptz, as required by the
+worker's fixed session settings. The evaluator advances both frame boundaries
+in sort order, including when month-end clipping makes a calculated boundary
+move backward. Timestamp overflow during a boundary comparison raises an
+evaluation error. Both distance domains share the existing sliding aggregate
+path. Other distance domains and frame exclusions remain unsupported.
 
 Peer equality uses exactly the SQL ORDER BY values, including NULL placement and
 direction; these frames do not require a primary-key tie-breaker. CURRENT ROW

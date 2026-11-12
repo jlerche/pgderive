@@ -443,11 +443,10 @@ fn bind_window(
         .collect::<Result<Vec<_>>>()?;
     let mode = match window.frame {
         syntax::WindowFrame::Range { start, end } => {
-            let frame = range::bind(start, end, &order)?;
             if context.1 {
                 validate_order(&order, context.0, &window_keys)?;
             }
-            if window.ranking { Mode::Ranking { order } } else { Mode::Range { order, frame } }
+            range::bind(start, end, order, window.ranking)?
         }
         syntax::WindowFrame::Position(frame) => {
             if window.ranking || window.peers.is_some() {

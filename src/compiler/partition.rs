@@ -123,12 +123,25 @@ pub struct Frame {
     pub(crate) end: Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct TemporalRangeFrame {
+    pub(crate) start: Option<TemporalRangeOffset>,
+    pub(crate) end: Option<TemporalRangeOffset>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub enum TemporalRangeOffset {
+    Current,
+    Interval { value: String, preceding: bool },
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub enum Mode {
     Grouped { keys: Vec<ColumnRef> },
     Rows { order: Vec<Order>, frame: Frame },
     Ranking { order: Vec<Order> },
     Peers { order: Vec<Order>, frame: Frame, groups: bool },
     Range { order: Vec<Order>, frame: Frame },
+    TemporalRange { order: Vec<Order>, frame: TemporalRangeFrame },
 }
 #[derive(Clone, Serialize)]
 pub struct Partition {

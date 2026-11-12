@@ -170,12 +170,7 @@ impl Timestamp {
                     Self::from_micros(result)?;
                 }
                 if days != 0 {
-                    result = result
-                        .checked_add(
-                            i64::from(days)
-                                .checked_mul(DAY)
-                                .context("timestamp day arithmetic out of range")?,
-                        )
+                    result = i64::try_from(i128::from(result) + i128::from(days) * i128::from(DAY))
                         .context("timestamp day arithmetic out of range")?;
                     Self::from_micros(result)?;
                 }
@@ -215,6 +210,11 @@ impl Timestamp {
     pub(crate) fn text(self, oid: u32) -> Result<String> {
         Ok(self.json(oid)?.replacen('T', " ", 1).replace("+00:00", "+00"))
     }
+    // Native ordering tokens are the original timestamp representation, including infinities.
+    pub(crate) const fn from_sort_value(value: i64) -> Self {
+        Self(value)
+    }
+
     pub(crate) const fn sort_value(self) -> i64 {
         self.0
     }
