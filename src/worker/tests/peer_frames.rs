@@ -10,6 +10,7 @@ fn sql(case: usize) -> String {
         2 => " RANGE BETWEEN CURRENT ROW AND CURRENT ROW",
         3 => " GROUPS BETWEEN 2 FOLLOWING AND 1 FOLLOWING",
         5 => " RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING",
+        6 => " GROUPS CURRENT ROW EXCLUDE CURRENT ROW",
         _ => "",
     };
     let window = format!("OVER(PARTITION BY b.auction{order}{frame})");
@@ -37,7 +38,7 @@ fn oracle(state: &BTreeMap<Row, i64>, case: usize) -> Result<Bag> {
                     keys.iter().position(|key| *key == price(other)).context("missing peer")?;
                 let selected = match case {
                     1 => group.abs_diff(current) <= 1,
-                    2 => group == current,
+                    2 | 6 => group == current,
                     3 => false,
                     4 => true,
                     5 => match (price(row), price(other)) {
@@ -50,6 +51,12 @@ fn oracle(state: &BTreeMap<Row, i64>, case: usize) -> Result<Bag> {
                 if selected {
                     count += 1;
                     values.extend(price(other));
+                }
+            }
+            if case == 6 {
+                count -= 1;
+                if price(row).is_some() {
+                    values.pop();
                 }
             }
             let output = [
@@ -81,7 +88,7 @@ async fn history(case: usize) -> Result<()> {
 }
 #[tokio::test]
 async fn weighted_peer_frames_match_independent_histories() -> Result<()> {
-    for case in 0..6 {
+    for case in 0..7 {
         history(case).await?;
     }
     Ok(())

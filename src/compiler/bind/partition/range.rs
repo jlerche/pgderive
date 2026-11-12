@@ -11,19 +11,24 @@ pub(super) fn bind(
     start: RangeBound,
     end: RangeBound,
     order: Vec<Order>,
-    ranking: bool,
+    options: (bool, bool),
 ) -> Result<Mode> {
+    let (ranking, exclude_current) = options;
     let [key] = order.as_slice() else {
         anyhow::bail!("RANGE offsets require exactly one ORDER BY expression");
     };
     let oid = key.column.oid;
     let mode = match oid {
         20 | 21 | 23 => Mode::Range {
-            frame: Frame { start: offset(start, oid)?, end: offset(end, oid)? },
+            frame: Frame { start: offset(start, oid)?, end: offset(end, oid)?, exclude_current },
             order,
         },
         1114 | 1184 => Mode::TemporalRange {
-            frame: TemporalRangeFrame { start: interval(start)?, end: interval(end)? },
+            frame: TemporalRangeFrame {
+                start: interval(start)?,
+                end: interval(end)?,
+                exclude_current,
+            },
             order,
         },
         _ => anyhow::bail!("RANGE offsets require an integral or timestamp ORDER BY expression"),

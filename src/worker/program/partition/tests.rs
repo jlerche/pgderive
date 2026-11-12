@@ -426,3 +426,47 @@ fn integral_range_offsets_validate_types_and_keep_sliding_work_bounded() -> Resu
     assert!(work < 10_000, "{work}");
     Ok(())
 }
+
+#[test]
+fn exclude_current_skips_payloads_and_normalizes_no_others() -> Result<()> {
+    let sql = "SELECT count(1/(id-id)) OVER w, first_value(1/(id-id)) OVER w,
+        last_value(price) OVER w, nth_value(price,1) OVER w FROM source.bid
+        WINDOW w AS (ORDER BY id ROWS CURRENT ROW EXCLUDE CURRENT ROW)";
+    let spec = bound(sql)?;
+    let (result, _) = run(&spec, &input(1, false)?, true)?;
+    let (((), row), _) = result.iter().next().context("missing excluded row output")?;
+    assert_eq!(row["@aggregate_0"].as_deref(), Some("0"));
+    for name in ["@aggregate_1", "@aggregate_2", "@aggregate_3"] {
+        assert_eq!(row[name], None);
+    }
+    for function in ["count(*)", "rank()", "lag(price)"] {
+        let query = format!("SELECT {function} OVER(ORDER BY id RANGE UNBOUNDED PRECEDING");
+        let compile_query =
+            |clause: &str| compile(&format!("{query}{clause}) FROM source.bid"), &contract());
+        assert_eq!(
+            serde_json::to_vec(&compile_query("")?)?,
+            serde_json::to_vec(&compile_query(" EXCLUDE NO OTHERS")?)?
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn nth_value_counts_included_occurrences_across_the_exclusion() -> Result<()> {
+    let spec = bound(
+        "SELECT id,nth_value(id,2) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING
+         AND UNBOUNDED FOLLOWING EXCLUDE CURRENT ROW) FROM source.bid",
+    )?;
+    let (result, _) = run(&spec, &input(4, false)?, true)?;
+    let values = result
+        .iter()
+        .map(|(((), row), _)| {
+            (
+                row["0:id"].as_deref().unwrap_or_default(),
+                row["@aggregate_0"].as_deref().unwrap_or_default(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(values, [("0", "2"), ("1", "2"), ("2", "1"), ("3", "1")].into());
+    Ok(())
+}

@@ -73,10 +73,19 @@ fn rejects_unsupported_ranking_and_binds_order() -> Result<()> {
         NUMBER.replace(",b.id", ""),
         PEERS.replace("rank()", "rank(b.id)"),
         PEERS.replace("rank() OVER", "rank() FILTER(WHERE b.price>0) OVER"),
-        PEERS.replace("NULLS FIRST)", "NULLS FIRST ROWS UNBOUNDED PRECEDING)"),
+        PEERS.replace("NULLS FIRST)", "NULLS FIRST ROWS UNBOUNDED PRECEDING EXCLUDE GROUP)"),
         PEERS.replace("rank()", "ntile()"),
     ] {
         assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
+    let default = serde_json::to_vec(&compile(PEERS, &native)?)?;
+    for frame in [
+        "ROWS UNBOUNDED PRECEDING",
+        "ROWS UNBOUNDED PRECEDING EXCLUDE CURRENT ROW",
+        "ROWS UNBOUNDED PRECEDING EXCLUDE NO OTHERS",
+    ] {
+        let query = PEERS.replace("NULLS FIRST)", &format!("NULLS FIRST {frame})"));
+        assert_eq!(default, serde_json::to_vec(&compile(&query, &native)?)?, "{frame}");
     }
     let empty_order = compile(&PEERS.replace(" ORDER BY b.price DESC NULLS FIRST", ""), &native)?;
     assert!(!empty_order.relational().nodes.is_empty());

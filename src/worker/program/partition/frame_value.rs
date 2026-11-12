@@ -1,5 +1,5 @@
 //! Select a row within the current frame without evaluating unselected values.
-use super::Ordered;
+use super::selection::Selection;
 use crate::{
     compiler::partition::{Aggregate, Function},
     engine::execution::{EvaluationFailed, PlanFault},
@@ -10,12 +10,12 @@ use anyhow::{Context, Result};
 
 pub(super) fn evaluate(
     value: &Aggregate,
-    frame: &[Ordered],
+    frame: Selection<'_>,
     current: &Row,
 ) -> Result<Option<String>> {
     let selected = match value.function {
-        Function::FirstValue => frame.first(),
-        Function::LastValue => frame.last(),
+        Function::FirstValue => frame.get(0),
+        Function::LastValue => frame.len().checked_sub(1).and_then(|index| frame.get(index)),
         Function::NthValue => {
             let position = value.position.as_ref().context("missing NTH_VALUE position")?;
             let Some(position) = position.evaluate(current)? else {

@@ -8,7 +8,8 @@ use crate::compiler::{
 pub(super) fn supports(spec: &Partition) -> bool {
     let Mode::Peers { order, frame, groups: false } = &spec.mode else { return false };
     let [order] = order.as_slice() else { return false };
-    frame.start.is_none()
+    !frame.exclude_current
+        && frame.start.is_none()
         && frame.end == Some(0)
         && !order.descending
         && !order.column.nullable

@@ -1,5 +1,5 @@
 //! Transient exact statistics over monotone frame ranges; no persisted index.
-use super::{Ordered, framed_fields};
+use super::{Ordered, framed_fields, selection::Selection};
 mod statistics;
 use crate::{
     compiler::partition::{Function, Partition},
@@ -17,7 +17,8 @@ struct Sliding {
 pub(super) struct Frames(Option<Sliding>);
 impl Frames {
     pub(super) fn new(spec: &Partition) -> Self {
-        let eligible = !spec.aggregates.is_empty()
+        let eligible = !spec.mode.excludes_current()
+            && !spec.aggregates.is_empty()
             && ordinary(spec).all(|value| {
                 value.function.boolean()
                     || matches!(value.function, Function::Count)
@@ -46,7 +47,7 @@ impl Frames {
         context: (Limits, &mut PartitionWork),
     ) -> Result<Row> {
         let Some(sliding) = &mut self.0 else {
-            return framed_fields(spec, &rows[range], context);
+            return framed_fields(spec, Selection::new(&rows[range], None), context);
         };
         sliding.advance(spec, rows, range, context.1)?;
         let mut output = Row::new();

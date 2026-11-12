@@ -442,11 +442,11 @@ fn bind_window(
         })
         .collect::<Result<Vec<_>>>()?;
     let mode = match window.frame {
-        syntax::WindowFrame::Range { start, end } => {
+        syntax::WindowFrame::Range { start, end, exclude_current } => {
             if context.1 {
                 validate_order(&order, context.0, &window_keys)?;
             }
-            range::bind(start, end, order, window.ranking)?
+            range::bind(start, end, order, (window.ranking, exclude_current))?
         }
         syntax::WindowFrame::Position(frame) => {
             if window.ranking || window.peers.is_some() {

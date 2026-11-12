@@ -1,6 +1,7 @@
 mod frame_value;
 mod range;
 mod ranking;
+mod selection;
 mod sliding;
 use super::aggregate::{Linear, contribution};
 use crate::{
@@ -16,6 +17,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
+use selection::Selection;
 use sliding::Frames;
 use std::cmp::Ordering;
 type Bag = Batch<(), Row>;
@@ -207,7 +209,7 @@ fn bounds(frame: &Frame, index: usize, length: usize) -> Result<(usize, usize)> 
 
 fn framed_fields(
     spec: &Partition,
-    frame: &[Ordered],
+    frame: Selection<'_>,
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
 ) -> Result<Row> {
     let mut aggregates =
@@ -273,17 +275,30 @@ fn framed(
             let start = groups.get(start).map_or(end, |group| group.0);
             start.min(end)..end
         };
-        // Every member of a peer group has the same RANGE/GROUPS frame.
-        let fields = frames.fields(spec, &ordered, range.clone(), (limits, work))?;
-        for (_, row) in &ordered[*first..*last] {
-            if peers {
-                work.charge(fields.len())?;
-            }
+        // Peer-aware bounds include either every member of this group or none.
+        let omit = spec.mode.excludes_current() && range.contains(first);
+        let shared = if omit {
+            None
+        } else {
+            Some(frames.fields(spec, &ordered, range.clone(), (limits, work))?)
+        };
+        let members = &ordered[*first..*last];
+        let frame = &ordered[range.clone()];
+        for (index, (_, row)) in members.iter().enumerate() {
+            let excluded = omit.then(|| first + index - range.start);
+            let selection = Selection::new(frame, excluded);
             let mut output = row.clone();
-            output.extend(fields.clone());
+            if let Some(fields) = &shared {
+                if peers {
+                    work.charge(fields.len())?;
+                }
+                output.extend(fields.clone());
+            } else {
+                output.extend(framed_fields(spec, selection, (limits, work))?);
+            }
             for value in &values {
                 work.charge(1)?;
-                let result = frame_value::evaluate(value, &ordered[range.clone()], row)?;
+                let result = frame_value::evaluate(value, selection, row)?;
                 output.insert(value.field.clone(), result);
             }
             updates.add(((), output), 1)?;

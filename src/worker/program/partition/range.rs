@@ -162,6 +162,7 @@ mod tests {
             nulls_first: false,
         };
         let frame = TemporalRangeFrame {
+            exclude_current: false,
             start: Some(TemporalRangeOffset::Current),
             end: Some(TemporalRangeOffset::Interval {
                 value: "P0M1DT0H0S".into(),

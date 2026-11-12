@@ -335,9 +335,9 @@ keys use the grouped key subset, including NULL. Frame boundaries support CURREN
 integer PRECEDING/FOLLOWING offsets and valid UNBOUNDED endpoints. The ordering
 must include every source primary-key column, explicitly in SQL, so positional
 frames have deterministic occurrence order. The compiler adds no hidden tiebreaker.
-Peer-aware RANGE/GROUPS frames are described below. Frame exclusions remain
-unsupported. Named `WINDOW` definitions are scoped to their SELECT and
-resolve through the same lowering as inline specifications.
+Peer-aware RANGE/GROUPS frames and supported exclusions are described below.
+Named `WINDOW` definitions are scoped to their SELECT and resolve through the
+same lowering as inline specifications.
 `OVER name` uses the entire definition. `OVER (name ...)` and inherited
 definitions may add ordering if the base has none and may supply their own
 frame. They cannot copy an explicit frame or add a partition clause.
@@ -608,7 +608,15 @@ worker's fixed session settings. The evaluator advances both frame boundaries
 in sort order, including when month-end clipping makes a calculated boundary
 move backward. Timestamp overflow during a boundary comparison raises an
 evaluation error. Both distance domains share the existing sliding aggregate
-path. Other distance domains and frame exclusions remain unsupported.
+path. Other distance domains remain unsupported.
+
+EXCLUDE NO OTHERS is equivalent to omitting the exclusion. EXCLUDE CURRENT ROW
+removes the current occurrence when it lies inside the frame. Identical copies
+and other peers remain eligible. An empty frame returns zero for COUNT and NULL
+for nullable aggregates and frame-value functions. Frame-insensitive functions
+ignore the exclusion. Excluded aggregate frames use bounded scans so their
+arguments and FILTER predicates are evaluated only for included occurrences.
+EXCLUDE GROUP and EXCLUDE TIES remain unsupported.
 
 Peer equality uses exactly the SQL ORDER BY values, including NULL placement and
 direction; these frames do not require a primary-key tie-breaker. CURRENT ROW

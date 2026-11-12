@@ -121,11 +121,15 @@ pub struct Frame {
     // None means unbounded; signed offset relative to current row.
     pub(crate) start: Option<i64>,
     pub(crate) end: Option<i64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) exclude_current: bool,
 }
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct TemporalRangeFrame {
     pub(crate) start: Option<TemporalRangeOffset>,
     pub(crate) end: Option<TemporalRangeOffset>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) exclude_current: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -143,6 +147,18 @@ pub enum Mode {
     Range { order: Vec<Order>, frame: Frame },
     TemporalRange { order: Vec<Order>, frame: TemporalRangeFrame },
 }
+impl Mode {
+    pub(crate) const fn excludes_current(&self) -> bool {
+        match self {
+            Self::Rows { frame, .. } | Self::Peers { frame, .. } | Self::Range { frame, .. } => {
+                frame.exclude_current
+            }
+            Self::TemporalRange { frame, .. } => frame.exclude_current,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct Partition {
     pub(crate) mode: Mode,

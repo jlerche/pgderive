@@ -52,7 +52,7 @@ pub(in crate::compiler) struct Window {
 #[derive(Clone)]
 pub(in crate::compiler) enum WindowFrame {
     Position(crate::compiler::partition::Frame),
-    Range { start: RangeBound, end: RangeBound },
+    Range { start: RangeBound, end: RangeBound, exclude_current: bool },
 }
 
 #[derive(Clone)]
@@ -263,20 +263,7 @@ fn aggregate(
             .as_deref()
             .map(|value| {
                 let value = windows.resolve(value)?;
-                if navigation.is_some()
-                    || matches!(
-                        function,
-                        Function::Ntile | Function::PercentRank | Function::CumeDist
-                    )
-                {
-                    let mut window = window(value, false)?;
-                    // These functions use the partition independently of frame membership.
-                    window.ranking = true;
-                    window.peers = None;
-                    Ok(window)
-                } else {
-                    window(value, ranking)
-                }
+                window(value, ranking || navigation.is_some())
             })
             .transpose()?,
         function,
@@ -310,28 +297,27 @@ fn integer_window_argument<'a>(
     Ok(None)
 }
 pub(super) fn window(spec: windows::Spec<'_>, ranking: bool) -> Result<Window> {
+    // PostgreSQL 17 parsenodes.h. EXCLUDE NO OTHERS has no option bit.
+    const EXCLUDE_CURRENT_ROW: i32 = 0x08000;
     let value = spec.frame;
-    if ranking {
-        ensure!(
-            value.frame_options == windows::DEFAULT_FRAME,
-            "ranking currently requires the default frame"
-        );
-        return Ok(Window {
-            keys: spec.partition.iter().map(super::scalar::key).collect::<Result<_>>()?,
-            order: spec.order.iter().map(sort_key).collect::<Result<_>>()?,
-            frame: WindowFrame::Position(crate::compiler::partition::Frame {
-                start: None,
-                end: Some(0),
-            }),
-            ranking,
-            peers: None,
-        });
-    }
-    // PostgreSQL 17 parsenodes.h: accept standard boundaries, reject exclusions.
+    let exclude_current = value.frame_options & EXCLUDE_CURRENT_ROW != 0;
     ensure!(
         value.frame_options & (2 | 4 | 8) != 0
             && value.frame_options
-                & !(1 | 2 | 4 | 8 | 16 | 32 | 256 | 512 | 1024 | 2048 | 4096 | 8192 | 16384)
+                & !(1
+                    | 2
+                    | 4
+                    | 8
+                    | 16
+                    | 32
+                    | 256
+                    | 512
+                    | 1024
+                    | 2048
+                    | 4096
+                    | 8192
+                    | 16384
+                    | EXCLUDE_CURRENT_ROW)
                 == 0,
         "unsupported window frame"
     );
@@ -346,13 +332,14 @@ pub(super) fn window(spec: windows::Spec<'_>, ranking: bool) -> Result<Window> {
             WindowFrame::Range {
                 start: range_bound(value.frame_options, value.start_offset.as_deref(), true)?,
                 end: range_bound(value.frame_options, value.end_offset.as_deref(), false)?,
+                exclude_current,
             }
         } else {
             let start = bound(value.frame_options, value.start_offset.as_deref(), true)?;
             let end = bound(value.frame_options, value.end_offset.as_deref(), false)?;
-            WindowFrame::Position(crate::compiler::partition::Frame { start, end })
+            WindowFrame::Position(crate::compiler::partition::Frame { start, end, exclude_current })
         };
-    Ok(Window { keys, order, frame, ranking, peers })
+    Ok(Window { keys, order, frame, ranking, peers: if ranking { None } else { peers } })
 }
 
 fn range_bound(flags: i32, offset: Option<&Node>, start: bool) -> Result<RangeBound> {
