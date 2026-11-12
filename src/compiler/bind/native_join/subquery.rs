@@ -145,7 +145,12 @@ fn validate_correlation(
     residual_inequality: bool,
 ) -> Result<()> {
     ensure!(
-        !quantified || bound.predicate.is_none(),
+        !quantified
+            || if residual_inequality {
+                bound.predicate.as_ref().is_some_and(Predicate::is_inequality)
+            } else {
+                bound.predicate.is_none()
+            },
         "quantified correlation requires indexable equality"
     );
     ensure!(

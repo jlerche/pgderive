@@ -2,10 +2,15 @@
 """Check keyed inequality correlation against native PostgreSQL and a raw-source oracle."""
 from collections import Counter
 import json
+import operator
 
 from native_mv_oracle import binary_difference, expected
+from quantified_subqueries_harness import COMPARISONS, compare
 from sql_compiler_harness import SqlFixture
 from worker_harness import History, run_modes
+
+
+QUANTIFIED = tuple(item for item in COMPARISONS if item[0] in ('lt', 'eq', 'ge'))
 
 
 def membership(probe, values):
@@ -30,13 +35,26 @@ class ResidualFixture(SqlFixture):
             ALTER TABLE {b} ADD COLUMN cutoff integer;
             INSERT INTO {a}(id,group_id,probe,ceiling) VALUES
                 (1,1,7,10),(2,1,7,3),(3,1,7,NULL),(4,1,NULL,10),
-                (5,NULL,7,10),(6,2,7,10),(7,3,NULL,10);
+                (5,NULL,7,10),(6,2,7,10),(7,3,NULL,10),(8,1,7,20);
             INSERT INTO {b}(id,auction,price,cutoff) VALUES
                 (1,1,7,3),(2,1,7,3),(3,1,NULL,12),(4,1,NULL,NULL),
-                (5,NULL,7,3),(6,2,NULL,2),(99,1,7,1);''')
+                (5,NULL,7,3),(6,2,NULL,2),(8,1,9,5),(99,1,7,1);''')
         keys = 'b.auction=a.group_id AND b.id<>99'
-        if mode in ('in', 'in-filter'):
-            rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND a.ceiling>b.cutoff'
+        rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND a.ceiling>b.cutoff'
+        if mode == 'quantified':
+            projections = ['a.id']
+            self.labels = ['id']
+            for label, symbol, _ in QUANTIFIED:
+                for quantifier in ('ANY', 'ALL'):
+                    name = f'{label}_{quantifier.lower()}'
+                    self.labels.append(name)
+                    projections.append(f'a.probe {symbol} {quantifier} ({rhs}) AS {name}')
+            derived = f'(SELECT id, group_id, probe, ceiling-1 AS ceiling FROM {a})'
+            self.query = f"SELECT {', '.join(projections)} FROM {derived} a"
+        elif mode == 'all-filter':
+            self.labels = ['id']
+            self.query = f'SELECT a.id FROM {a} a WHERE a.probe < ALL ({rhs})'
+        elif mode in ('in', 'in-filter'):
             if mode == 'in':
                 self.labels = ['id', 'member', 'excluded']
                 self.query = f'''SELECT a.id, a.probe IN ({rhs}) AS member,
@@ -58,12 +76,23 @@ class ResidualFixture(SqlFixture):
         memory = Counter()
         for row in outer:
             key, ceiling = row['group_id'], row['ceiling']
+            if self.mode == 'quantified' and ceiling is not None:
+                ceiling -= 1
             values = [
                 item['price'] for item in inner
                 if key is not None and key == item['auction'] and item['id'] != 99
                 and ceiling is not None and item['cutoff'] is not None and item['cutoff'] < ceiling
             ]
-            if self.mode in ('in', 'in-filter'):
+            if self.mode == 'quantified':
+                truth = tuple(
+                    compare(row['probe'], values, operation, all_rows)
+                    for _, _, operation in QUANTIFIED for all_rows in (False, True)
+                )
+                memory[(row['id'], *truth)] += 1
+            elif self.mode == 'all-filter':
+                if compare(row['probe'], values, operator.lt, True) is True:
+                    memory[(row['id'],)] += 1
+            elif self.mode in ('in', 'in-filter'):
                 mark = membership(row['probe'], values)
                 if self.mode == 'in':
                     memory[(row['id'], mark, None if mark is None else not mark)] += 1
@@ -81,12 +110,12 @@ def qualify(output, command, mode):
         fixture.run_history(command, History(
             changes=[
                 f'DELETE FROM {b} WHERE id=1',
-                f'UPDATE {b} SET cutoff=4 WHERE id=3; DELETE FROM {b} WHERE id=2',
+                f'UPDATE {b} SET cutoff=4 WHERE id=3; DELETE FROM {b} WHERE id IN (2,8)',
                 f'UPDATE {b} SET cutoff=NULL WHERE id=3; UPDATE {a} SET ceiling=20 WHERE id=2',
                 f'UPDATE {b} SET auction=3,cutoff=1 WHERE id=3; UPDATE {a} SET probe=7 WHERE id=7',
             ],
             final=f'UPDATE {b} SET auction=1,price=7 WHERE id=3',
-            normalized=fixture.query.replace('SELECT', 'select'),
+            normalized=fixture.query.replace('SELECT', 'select').replace('ANY', 'SOME'),
             rejected=[],
         ))
         (output/'result.json').write_text(json.dumps({
@@ -96,4 +125,4 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    run_modes(('exists', 'not-exists', 'in', 'in-filter'), qualify)
+    run_modes(('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter'), qualify)

@@ -106,7 +106,9 @@ support `ANY` (also spelled `SOME`) and `ALL` over a one-column subquery. Both o
 must be smallint, integer, or bigint. Unknown probe literals take the RHS type, and typed integral
 operands retain their widths. A simple column or literal probe can appear
 in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
-with indexable column equalities for correlation.
+with indexable column equalities for correlation. A correlated query may add
+one inequality as described above. Rows rejected by the inequality are absent
+from the quantified input, including for NULL propagation and empty groups.
 
 - `ANY` returns TRUE if any comparison is TRUE. Otherwise it returns NULL
   if any comparison is NULL, or FALSE if every comparison is FALSE or the group is empty.
@@ -115,9 +117,9 @@ with indexable column equalities for correlation.
 
 An empty group has these results even when the probe is NULL.
 
-The mark keeps each outer row's multiplicity. When the mark tests equality it
-uses the existing bounded value set. Other comparisons scan the matching RHS
-bucket under the existing work limits. NULL correlation keys have an empty group. PostgreSQL materialized-view and independent raw-source oracles
+The mark keeps each outer row's multiplicity. An equality mark without a residual
+uses the existing bounded value set. Other marks scan the matching RHS bucket
+under the existing work limits. NULL correlation keys have an empty group. PostgreSQL materialized-view and independent raw-source oracles
 check correlated and uncorrelated CDC histories, including cold reopen.
 
 ## Evaluation and durability boundaries

@@ -323,7 +323,7 @@ impl Rewrite<'_> {
         probe: Node,
         quantified: Option<Compare>,
     ) -> Result<Node> {
-        let correlation = correlation::extract(&mut query, quantified.is_none())?;
+        let correlation = correlation::extract(&mut query, true)?;
         self.membership_mark(query, probe, quantified, correlation)
     }
     fn membership_mark(

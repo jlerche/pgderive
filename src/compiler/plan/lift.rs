@@ -161,21 +161,14 @@ fn over_join(graph: &mut Graph<'_>, map: &Lower, key: &str) -> Result<bool> {
             if !left && spec.scalar.is_some() {
                 return Ok(false);
             }
-            if let Some(predicate) = &spec.predicate {
-                pinned.extend(
-                    predicate
-                        .clone()
-                        .conjuncts()
-                        .iter()
-                        .flat_map(crate::compiler::expression::Expr::read_names),
-                );
-            }
+            pin_predicate(&mut pinned, spec.predicate.as_ref());
             spec.full || !left
         }
         Node::Existence { .. } if left => false,
         Node::Mark { spec: mark, .. } if left => {
             pinned.insert(mark.probe.name.clone());
             pinned.insert(mark.value.name.clone());
+            pin_predicate(&mut pinned, mark.correlation.as_ref());
             false
         }
         _ => return Ok(false),
@@ -193,6 +186,11 @@ fn over_join(graph: &mut Graph<'_>, map: &Lower, key: &str) -> Result<bool> {
     let below = rename(graph, &id)?;
     graph.ir.nodes.push(Node::Map { id, input: below, computed: lifted });
     Ok(true)
+}
+fn pin_predicate(pinned: &mut BTreeSet<String>, predicate: Option<&crate::compiler::Predicate>) {
+    if let Some(predicate) = predicate {
+        pinned.extend(predicate.read_names());
+    }
 }
 /// Above a nullable input a lifted output must read NULL for null-extended rows, which takes
 /// a strict expression that reads a column of that input.

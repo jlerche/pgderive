@@ -504,3 +504,26 @@ fn residual_membership_requires_one_inequality_and_a_key() -> Result<()> {
         if format!("{error:#}").contains("requires a total membership probe")));
     Ok(())
 }
+
+#[test]
+fn quantified_inequality_requires_a_key_and_keeps_integral_admission() -> Result<()> {
+    let native = native();
+    for quantifier in ["< ANY", "<> ALL"] {
+        let query = |probe, output, predicate| {
+            format!(
+                "SELECT {probe} {quantifier} (SELECT {output} FROM source.bid b WHERE {predicate}) FROM source.auction a"
+            )
+        };
+        let keyed = "b.auction=a.other AND b.price>a.id";
+        compile(&query("a.other", "b.price", keyed), &native)?;
+        for rejected in [
+            query("a.other", "b.price", "b.price>a.id"),
+            query("a.other", "b.price", "b.auction=a.other AND b.price>a.id AND b.id<a.id"),
+            query("a.other", "b.price", "b.auction=a.other AND b.price+1>a.id"),
+            query("a.category", "'text'::text", keyed),
+        ] {
+            assert!(compile(&rejected, &native).is_err(), "{rejected}");
+        }
+    }
+    Ok(())
+}
