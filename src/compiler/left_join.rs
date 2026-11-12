@@ -19,4 +19,6 @@ pub struct Spec {
     pub(crate) full: bool,
     pub(crate) right: Vec<ColumnRef>,
     pub(crate) predicate: Option<super::Predicate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) scalar: Option<ColumnRef>,
 }

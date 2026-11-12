@@ -1,5 +1,6 @@
 //! SQL membership and left-join differentiation using bounded input deltas and cursors.
 mod residual_join;
+mod scalar;
 use super::{
     left_join::{pair, stripped},
     relational::Key,
@@ -128,6 +129,9 @@ async fn emit_unmatched(
     Ok(())
 }
 pub(super) fn left_join(spec: &Spec) -> Result<Group<Key, Row>> {
+    if let Some(marker) = &spec.scalar {
+        return Ok(scalar::operator(spec, marker));
+    }
     if spec.predicate.is_some() || spec.full {
         return residual_join::operator(spec);
     }

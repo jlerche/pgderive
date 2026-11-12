@@ -129,9 +129,13 @@ impl<'a> Graph<'a> {
                 out.extend(self.columns(right)?);
                 out
             }
-            Node::LeftJoin { spec, .. } => {
-                spec.left.iter().chain(&spec.right).map(|value| value.name.clone()).collect()
-            }
+            Node::LeftJoin { spec, .. } => spec
+                .left
+                .iter()
+                .chain(&spec.right)
+                .chain(spec.scalar.iter())
+                .map(|value| value.name.clone())
+                .collect(),
             Node::Mark { input, spec, .. } => {
                 let mut out = self.columns(input)?;
                 out.insert(spec.output.name.clone());

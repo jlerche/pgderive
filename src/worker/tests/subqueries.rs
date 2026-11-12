@@ -206,8 +206,10 @@ fn subquery_admission_scopes_contextual_literals_and_lazy_boundaries() -> Result
         "SELECT NULL=(SELECT SUM(10/price) FROM source.bid) FROM source.auction",
         r#"SELECT NULL COLLATE "C" LIKE (SELECT SUM(10/price)::text FROM source.bid) FROM source.auction"#,
         "SELECT false AND (SELECT COUNT(*) FROM source.bid)>0 FROM source.auction",
-        "SELECT (SELECT price FROM source.bid) FROM source.auction",
         "SELECT (SELECT MAX(price) FROM source.bid GROUP BY auction) FROM source.auction",
+        "SELECT (SELECT 1/price FROM source.bid) FROM source.auction",
+        "SELECT (SELECT b.price FROM source.bid b WHERE b.auction=a.other AND 1/b.price>0)
+         FROM source.auction a",
         "SELECT (SELECT b.auction+COUNT(*) FROM source.bid b WHERE b.auction=a.other) FROM source.auction a",
         "SELECT (SELECT COUNT(*) FROM source.bid b WHERE b.auction=a.other HAVING b.auction=1 AND COUNT(*)>0) FROM source.auction a",
         "SELECT (SELECT COUNT(*) FROM source.bid b WHERE b.auction=a.other ORDER BY b.auction LIMIT 0) FROM source.auction a",
@@ -265,4 +267,99 @@ async fn uncorrelated_membership_ticks_are_linear_in_the_affected_group() -> Res
     assert_eq!(prepared.output().batch.iter().count(), size + 1);
     assert!(prepared.output().batch.iter().all(|(_, weight)| *weight == -1));
     Ok(())
+}
+
+#[tokio::test]
+async fn nonaggregate_scalar_checks_occurrences_at_the_read_site() -> Result<()> {
+    use crate::engine::execution::EvaluationFailed;
+    let native = native();
+    let compiled = compile(
+        "SELECT a.id,(SELECT b.price FROM source.bid b WHERE b.auction=a.other) AS value
+         FROM source.auction a WHERE a.id>1",
+        &native,
+    )?;
+    let ir = compiled.relational();
+    let mut query = relational::build(&native, &compiled, &settings())?;
+    let left = |id, key| row(&[("id", Some(id)), ("category", None), ("other", key)]);
+    let right = |id, key, value| row(&[("id", Some(id)), ("auction", Some(key)), ("price", value)]);
+    let ignored = right("1", "1", Some("9"));
+    let single = right("2", "2", Some("7"));
+    let matched = left("2", Some("2"));
+    let initial = batch(vec![
+        ("auction", left("1", Some("1")), 1),
+        ("auction", matched, 2),
+        ("auction", left("3", Some("3")), 1),
+        ("auction", left("4", None), 1),
+        ("bid", ignored, 2),
+        ("bid", single.clone(), 1),
+    ]);
+    let prepared = query.prepare(relational::inputs(&initial, ir, 1)?).await?;
+    assert_eq!(prepared.output().batch.iter().count(), 3);
+    query.commit(prepared)?;
+    let too_many = batch(vec![("bid", single.clone(), 1)]);
+    match query.prepare(relational::inputs(&too_many, ir, 2)?).await {
+        Err(error) if error.is::<EvaluationFailed>() => {
+            assert_eq!(
+                error.root_cause().to_string(),
+                "more than one row returned by a subquery used as an expression"
+            );
+        }
+        Err(error) => return Err(error),
+        Ok(_) => anyhow::bail!("scalar accepted two identical occurrences"),
+    }
+    assert_eq!(query.time(), 1);
+    let replacement = batch(vec![("bid", single, -1), ("bid", right("3", "2", None), 1)]);
+    let prepared = query.prepare(relational::inputs(&replacement, ir, 2)?).await?;
+    assert_eq!(prepared.output().batch.iter().map(|(_, weight)| weight.abs()).sum::<i64>(), 4);
+    query.commit(prepared)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn uncorrelated_scalar_counts_projected_rows_and_respects_limit() -> Result<()> {
+    let native = contract();
+    let cases = [
+        ("SELECT (SELECT price FROM source.bid WHERE false)", Some(None)),
+        ("SELECT (SELECT price FROM source.bid ORDER BY id LIMIT 1)", Some(Some("7"))),
+        ("SELECT (SELECT price FROM source.bid)", None),
+        ("SELECT (VALUES (NULL::integer),(NULL::integer))", None),
+        ("SELECT 1 WHERE (SELECT price FROM source.bid) IS NULL", None),
+        ("SELECT q.column1 FROM (SELECT (VALUES (7))) q", Some(Some("7"))),
+        ("SELECT q.x FROM (SELECT (SELECT 7 AS x UNION ALL SELECT 7 LIMIT 1)) q", Some(Some("7"))),
+    ];
+    for (sql, expected) in cases {
+        let compiled = compile(sql, &native)?;
+        let ir = compiled.relational();
+        let query = relational::build(&native, &compiled, &settings())?;
+        let source = batch(vec![
+            ("bid", row(&[("id", Some("1")), ("auction", None), ("price", Some("7"))]), 1),
+            ("bid", row(&[("id", Some("2")), ("auction", None), ("price", Some("7"))]), 1),
+        ]);
+        match (query.prepare(relational::inputs(&source, ir, 1)?).await, expected) {
+            (Ok(prepared), Some(expected)) => {
+                let ((_, row), weight) =
+                    prepared.output().batch.iter().next().context("missing scalar output")?;
+                assert_eq!(*weight, 1);
+                assert_eq!(
+                    row.values().next().context("missing scalar value")?.as_deref(),
+                    expected
+                );
+            }
+            (Err(error), None) if error.is::<crate::engine::execution::EvaluationFailed>() => {}
+            (Err(error), _) => return Err(error),
+            _ => anyhow::bail!("wrong scalar cardinality outcome for {sql}"),
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn scalar_set_input_rejects_fallible_implicit_row_conversion() {
+    let mut native = contract();
+    native.relations[1].columns[2].oid = 1082;
+    let sql = "SELECT (SELECT price FROM source.bid UNION ALL SELECT timestamp '2000-01-01')
+               FROM source.auction WHERE false";
+    assert!(
+        matches!(compile(sql, &native), Err(error) if format!("{error:#}").contains("scalar RHS row conversions must be total"))
+    );
 }

@@ -18,6 +18,8 @@ pub(in crate::compiler) enum Tree {
         left: Box<Self>,
         right: Box<super::Parsed>,
         alias: String,
+        checked: bool,
+        condition: Option<Box<Node>>,
     },
     Mark {
         left: Box<Self>,

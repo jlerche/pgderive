@@ -7,6 +7,15 @@ use crate::{
     transaction::Row,
 };
 use anyhow::{Context, Result, ensure};
+fn column_value(column: &crate::compiler::ColumnRef, rows: (&Row, &Row)) -> Result<Option<Native>> {
+    (if column.right { rows.1 } else { rows.0 })
+        .get(&column.name)
+        .context(PlanFault("compiled scalar column absent"))?
+        .as_deref()
+        .map(|text| value::decode(column.oid, text))
+        .transpose()
+}
+
 impl Typed {
     pub(in crate::compiler) fn native_pair(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
         self.native_result(rows).map_err(|error| {
@@ -33,12 +42,13 @@ impl Typed {
     fn native_value(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
         Ok(match &self.value {
             Value::Boolean(value) => value.evaluate(rows)?.map(Native::Boolean),
-            Value::Column(column) => (if column.right { rows.1 } else { rows.0 })
-                .get(&column.name)
-                .context(PlanFault("compiled scalar column absent"))?
-                .as_deref()
-                .map(|text| value::decode(column.oid, text))
-                .transpose()?,
+            Value::Column(column) => column_value(column, rows)?,
+            Value::Scalar { value, multiple } => {
+                if column_value(multiple, rows)? == Some(Native::Boolean(true)) {
+                    anyhow::bail!("more than one row returned by a subquery used as an expression");
+                }
+                column_value(value, rows)?
+            }
             Value::Literal(value) => value.map(Native::Integer),
             Value::Numeric(value) => Some(Native::Numeric(Numeric::parse_literal(value)?)),
             Value::Text(value) => Some(Native::Text(value.clone())),

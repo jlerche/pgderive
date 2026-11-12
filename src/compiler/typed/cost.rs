@@ -17,7 +17,7 @@ impl Typed {
             | Value::Encoded(_)
             | Value::Interval(_) => 0,
             Value::Boolean(value) => value.cost(),
-            Value::Temporal(_) => OPERATOR_COST,
+            Value::Temporal(_) | Value::Scalar { .. } => OPERATOR_COST,
             Value::Call(call) => call.arguments.iter().fold(OPERATOR_COST, |total, argument| {
                 total
                     .saturating_add(argument.cost())

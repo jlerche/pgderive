@@ -1,18 +1,17 @@
-# Scalar aggregate subqueries and IN
+# Scalar subqueries and IN
 
-Scalar global-aggregate subqueries and scalar IN/NOT IN now compose the existing
+Scalar subqueries and scalar IN/NOT IN compose the existing
 relational engine. Their values can appear in projections and supported predicates,
 including expressions and ordinary NOT/AND/OR contexts. Existing function, native
 type, source-occurrence and work budgets still apply.
 
 ## Scalar aggregation
 
-A scalar subquery must expose exactly one global aggregate result, without an
+A scalar aggregate subquery exposes one global aggregate result, without an
 explicit GROUP BY or set operation. Existing COUNT, SUM, AVG, MIN/MAX, DISTINCT
 aggregate arguments and FILTER domains are reused. Empty input returns COUNT 0
 and NULL for SUM/AVG/MIN/MAX. HAVING or LIMIT/OFFSET can suppress the single result
-row; a suppressed scalar result is NULL. Arbitrary nonaggregate/multirow scalar
-queries reject before activation rather than guessing which row to select.
+row; a suppressed scalar result is NULL.
 
 Uncorrelated aggregates lower through existing global-aggregate scopes and a
 cardinality-checked LEFT join. Equality-correlated single-native-table aggregates
@@ -30,6 +29,25 @@ explicit grouped scalar queries and nested lifted subqueries remain unsupported.
 Correlated ordering/LIMIT is bounded to supported suppressed-global-result cases;
 LIMIT 0 and positive OFFSET produce scalar NULL. Inner aliases retain normal
 lexical shadowing, and unqualified inner names are local; qualify outer references.
+
+## Nonaggregate scalar cardinality
+
+A nonaggregate scalar subquery exposes one column. An empty result yields NULL,
+one occurrence yields its value (which can be NULL), and multiple occurrences
+raise a cardinality error, including identical values with weight greater than
+one. The initial slice supports column and literal projections, simple local
+predicates, constant VALUES, and supported set operations over these inputs.
+Equality-correlated RHS queries use a native table and indexable column
+equalities. Correlated DISTINCT, ordering, and LIMIT/OFFSET are outside this
+slice. The RHS is maintained independently, so admission excludes fallible
+row-dependent expressions that would otherwise run without outer demand.
+
+The keyed join maintains the RHS cardinality independently for each matching
+key and preserves each outer row's weight. A scalar read checks the cardinality
+marker at the expression's evaluation site. An unused key can have multiple
+rows without failing the query, and NULL correlation keys have no match.
+Failed evaluations leave the result and progress at the last successful epoch.
+The worker can publish again after a source change repairs the cardinality.
 
 ## Membership and NULLs
 

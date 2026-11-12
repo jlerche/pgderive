@@ -59,17 +59,28 @@ fn sublink(link: &pg::SubLink) -> Result<(u8, String)> {
             let NodeEnum::SelectStmt(select) = node(optional(link.subselect.as_deref())?)? else {
                 return Ok((NONE, UNNAMED.into()));
             };
-            let Some(NodeEnum::ResTarget(target)) =
-                select.target_list.first().and_then(|target| target.node.as_ref())
-            else {
-                return Ok((NONE, UNNAMED.into()));
-            };
-            if target.name.is_empty() {
-                (STRONG, figure(optional(target.val.as_deref())?)?.1)
-            } else {
-                (STRONG, target.name.clone())
-            }
+            scalar_label(select)?
         }
         _ => (NONE, UNNAMED.into()),
     })
+}
+
+fn scalar_label(mut select: &pg::SelectStmt) -> Result<(u8, String)> {
+    while let Some(left) = select.larg.as_deref() {
+        select = left;
+    }
+    if !select.values_lists.is_empty() {
+        return Ok((STRONG, "column1".into()));
+    }
+    let Some(NodeEnum::ResTarget(target)) =
+        select.target_list.first().and_then(|target| target.node.as_ref())
+    else {
+        return Ok((NONE, UNNAMED.into()));
+    };
+    let label = if target.name.is_empty() {
+        figure(optional(target.val.as_deref())?)?.1
+    } else {
+        target.name.clone()
+    };
+    Ok((STRONG, label))
 }

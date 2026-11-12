@@ -93,7 +93,7 @@ impl Analysis {
         ir: &Relational,
         id: &str,
         input: &str,
-        full: bool,
+        spec: &crate::compiler::left_join::Spec,
     ) -> Result<Properties> {
         let Some(Node::Union { left, right, .. }) = node(ir, input) else {
             return Ok(Properties::default());
@@ -112,7 +112,7 @@ impl Analysis {
         let mut right = self.edge(b)?.clone();
         right.navigation = rk.keys.iter().map(|k| k.name.clone()).collect();
         let mut out = merge(&left, &right)?;
-        if full {
+        if spec.full {
             for (name, column) in &mut out.columns {
                 column.reference.nullable = true;
                 column.identity = Identity::Derived(id.into(), name.clone());
@@ -163,8 +163,19 @@ impl Analysis {
                 c.reference.nullable = true;
             }
         }
+        if let Some(marker) = &spec.scalar {
+            out.columns.insert(marker.name.clone(), Column::derived(id, marker.clone()));
+            if !overlap(&left, &right) {
+                for key in &left.keys {
+                    out.add_key(key.clone());
+                }
+            }
+            out.maximum = left.maximum;
+        } else {
+            out.maximum =
+                left.maximum.zip(right.maximum).and_then(|(a, b)| a.checked_mul(b.max(1)));
+        }
         out.prune();
-        out.maximum = left.maximum.zip(right.maximum).and_then(|(a, b)| a.checked_mul(b.max(1)));
         Ok(out)
     }
     pub(super) fn semi_join(&self, ir: &Relational, input: &str) -> Result<Properties> {

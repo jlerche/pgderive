@@ -96,3 +96,14 @@ pub(super) fn count() -> Node {
         }))),
     }
 }
+
+pub(super) fn checked_scalar(value: Node, multiple: Node) -> Node {
+    Node {
+        node: Some(NodeEnum::FuncCall(Box::new(pg::FuncCall {
+            funcname: vec![string(crate::compiler::subquery::CHECK)],
+            args: vec![value, multiple],
+            funcformat: i32::from(pg::CoercionForm::CoerceExplicitCall),
+            ..pg::FuncCall::default()
+        }))),
+    }
+}

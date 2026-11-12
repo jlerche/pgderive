@@ -36,6 +36,7 @@ pub struct Typed {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 enum Value {
     Column(ColumnRef),
+    Scalar { value: ColumnRef, multiple: ColumnRef },
     Boolean(Box<super::expression::Expr>),
     Average(ColumnRef),
     Literal(Option<i64>),
@@ -58,7 +59,9 @@ enum Value {
 impl Typed {
     pub(in crate::compiler) fn is_constant(&self) -> bool {
         match &self.value {
-            Value::Column(_) | Value::Average(_) | Value::Temporal(_) => false,
+            Value::Column(_) | Value::Scalar { .. } | Value::Average(_) | Value::Temporal(_) => {
+                false
+            }
             Value::Boolean(value) => value.is_constant(),
             Value::Literal(_)
             | Value::Numeric(_)
@@ -353,7 +356,7 @@ impl Typed {
             Value::Column(column) | Value::Average(column) => column.nullable,
             Value::Boolean(value) => value.nullable(),
             Value::Literal(value) => value.is_none(),
-            Value::NullIf { .. } => true,
+            Value::NullIf { .. } | Value::Scalar { .. } => true,
             Value::Numeric(_) | Value::Text(_) | Value::Interval(_) => false,
             Value::Encoded(value) => value.is_none(),
             Value::Temporal(value) => value.input.nullable,

@@ -25,7 +25,7 @@ impl Analysis {
             Node::Union { id, left, right } => {
                 Ok(super::joins::union(self.edge(left)?, self.edge(right)?, id))
             }
-            Node::LeftJoin { id, input, spec } => self.left_join(ir, id, input, spec.full),
+            Node::LeftJoin { id, input, spec } => self.left_join(ir, id, input, spec),
             Node::Existence { input, .. } => self.semi_join(ir, input),
             Node::Mark { id, input, spec } => {
                 let mut facts = self.semi_join(ir, input)?;

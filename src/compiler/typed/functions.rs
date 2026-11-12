@@ -20,6 +20,18 @@ pub(super) fn bind(
     use crate::compiler::parser::expressions::{builtin_name, names};
     crate::compiler::parser::scalar::validate_call(function)?;
     let names = names(&function.funcname)?.0;
+    if names == [crate::compiler::subquery::CHECK] {
+        let [value, multiple] = function.args.as_slice() else {
+            anyhow::bail!("missing scalar cardinality operands");
+        };
+        let value = super::bind(value, resolve, depth + 1)?;
+        let multiple = super::bind(multiple, resolve, depth + 1)?;
+        let (Value::Column(value), Value::Column(multiple)) = (value.value, multiple.value) else {
+            anyhow::bail!("scalar cardinality requires bound columns");
+        };
+        ensure!(multiple.oid == 16, "invalid scalar cardinality marker");
+        return Ok(Typed { oid: value.oid, value: Value::Scalar { value, multiple } });
+    }
     let name = builtin_name(&names).unwrap_or("");
     if name == "mod" {
         let [left, right] = function.args.as_slice() else {

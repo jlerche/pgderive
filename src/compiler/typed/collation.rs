@@ -93,7 +93,7 @@ impl Typed {
             return Ok(Implicit(0));
         }
         match &self.value {
-            Value::Column(column) => match resolve(column)? {
+            Value::Column(column) | Value::Scalar { value: column, .. } => match resolve(column)? {
                 0 => Ok(Indeterminate),
                 collation => Ok(Implicit(collation)),
             },

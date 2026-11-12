@@ -82,7 +82,9 @@ impl Typed {
         resolve: &impl Fn(&ColumnRef) -> Option<i32>,
     ) -> i32 {
         match &self.value {
-            Value::Column(column) => resolve(column).unwrap_or(-1),
+            Value::Column(column) | Value::Scalar { value: column, .. } => {
+                resolve(column).unwrap_or(-1)
+            }
             Value::Cast { typmod: Some(typmod), .. } => typmod.encoded(),
             Value::Collate { input, .. } => input.modifier(resolve),
             Value::Coalesce(values) => self.common_modifier(values.iter(), resolve),

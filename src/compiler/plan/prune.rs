@@ -27,6 +27,7 @@ pub(super) fn run(graph: &mut Graph<'_>, settled: bool) -> Result<bool> {
     for node in graph.ir.nodes.iter_mut().rev() {
         if let Node::LeftJoin { id, spec, .. } = node
             && !spec.full
+            && spec.scalar.is_none()
             && spec.right.iter().all(|column| !required.contains(&column.name))
         {
             removable.push(id.clone());
@@ -405,6 +406,7 @@ mod tests {
                 left: Vec::new(),
                 right: vec![column.clone()],
                 full: true,
+                scalar: None,
                 predicate: Some(Predicate::new(Expr::Value(Typed::column(column)))),
             },
         };

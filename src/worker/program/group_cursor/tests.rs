@@ -15,6 +15,7 @@ fn tagged(left: bool, id: i64) -> Row {
 #[tokio::test]
 async fn cursor_left_join_does_only_linear_visits_and_new_matching_pairs() -> Result<()> {
     let spec = Spec {
+        scalar: None,
         left: Vec::new(),
         full: false,
         right: vec![ColumnRef {

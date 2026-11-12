@@ -106,7 +106,7 @@ fn left_join(graph: &mut Graph<'_>, join: &Join, required: &Required) -> Result<
     };
     let (left, right) =
         (required.rejects(&names(&spec.left)), required.rejects(&names(&spec.right)));
-    if right && (!spec.full || left) {
+    if spec.scalar.is_none() && right && (!spec.full || left) {
         inner(graph, id, union, &join.left.id, &join.right.id)?;
         visit(graph, id, required)?;
         return Ok(true);

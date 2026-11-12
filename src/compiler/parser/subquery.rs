@@ -2,6 +2,7 @@
 mod ast;
 mod correlation;
 mod scalar;
+mod scalar_input;
 use super::{
     Parsed,
     expressions::{between_kind, distinct_kind, names, node, optional},
@@ -28,7 +29,15 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
         validation: Vec::new(),
     };
     for target in &mut checked.target_list {
+        let original = target.clone();
+        let previous = rewrite.links;
         rewrite.visit(target, false, 0)?;
+        if rewrite.links != previous
+            && let Some(NodeEnum::ResTarget(target)) = &mut target.node
+            && target.name.is_empty()
+        {
+            target.name = super::label::output(super::target(&original)?)?;
+        }
     }
     for condition in [&mut checked.where_clause, &mut checked.having_clause].into_iter().flatten() {
         rewrite.visit(condition, false, 0)?;
@@ -235,7 +244,9 @@ impl Rewrite<'_> {
             "nested scalar/IN subqueries inside a lifted subquery are unsupported"
         );
         ensure!(
-            query.op != i32::from(pg::SetOperation::SetopNone) || query.target_list.len() == 1,
+            query.op != i32::from(pg::SetOperation::SetopNone)
+                || !query.values_lists.is_empty()
+                || query.target_list.len() == 1,
             "scalar/IN subquery requires exactly one output"
         );
         match pg::SubLinkType::try_from(link.sub_link_type)? {
@@ -249,11 +260,7 @@ impl Rewrite<'_> {
             pg::SubLinkType::AnySublink => {
                 ensure!(link.oper_name.is_empty(), "only IN equality ANY subqueries are supported");
                 let probe = optional(link.testexpr.as_deref())?.clone();
-                if query.op == i32::from(pg::SetOperation::SetopNone)
-                    && query.group_clause.is_empty()
-                    && (correlation::aggregate(super::target(&query.target_list[0])?)
-                        || query.having_clause.as_deref().is_some_and(correlation::aggregate))
-                {
+                if query.group_clause.is_empty() && scalar::global_aggregate(query)? {
                     let scalar = self.scalar((**query).clone())?;
                     return Ok(ast::case(
                         ast::is_null(scalar.present),

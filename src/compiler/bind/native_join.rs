@@ -63,6 +63,18 @@ pub(super) fn scope(tree: Tree, contract: &Contract) -> Result<Scope> {
         columns: edge.columns,
     })
 }
+fn validate_scalar_input(nodes: &[Node]) -> Result<()> {
+    for node in nodes {
+        if let Node::Map { computed, .. } = node {
+            ensure!(
+                computed.iter().all(|value| value.expression.total_scalar_input()),
+                "scalar RHS row conversions must be total"
+            );
+        }
+    }
+    Ok(())
+}
+
 impl Builder<'_> {
     fn tree(&mut self, tree: Tree) -> Result<Edge> {
         match tree {
@@ -73,12 +85,14 @@ impl Builder<'_> {
                 self.existence(left, right, keys, anti)
             }
             Tree::Derived { source, alias } => self.derived(source, alias),
-            Tree::Scalar { left, right, alias } => {
+            Tree::Scalar { left, right, alias, checked, condition } => {
                 let left = self.tree(*left)?;
-                let right = self.derived_checked(right, alias, true)?;
-                let id = format!("tree_join_{}", self.joins);
-                let bound = keys::condition(None, &left.columns, &right.columns, &id)?;
-                self.join(left, right, bound, Kind::Left)
+                let start = self.nodes.len();
+                let right = self.derived_checked(right, alias.clone(), !checked)?;
+                if checked {
+                    validate_scalar_input(&self.nodes[start..])?;
+                }
+                self.scalar(left, right, (alias, checked, condition.as_deref()))
             }
             Tree::Mark { left, right, probe, alias, condition, semijoin } => {
                 let left = self.tree(*left)?;
@@ -90,6 +104,43 @@ impl Builder<'_> {
                 self.native_join(left, right, kind, clause)
             }
         }
+    }
+    fn scalar(
+        &mut self,
+        left: Edge,
+        right: Edge,
+        (alias, checked, condition): (String, bool, Option<&pg_query::Node>),
+    ) -> Result<Edge> {
+        let id = format!("tree_join_{}", self.joins);
+        let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
+        ensure!(
+            !checked || bound.predicate.is_none(),
+            "scalar correlation requires indexable equality"
+        );
+        let mut edge = self.join(left, right, bound, Kind::Left)?;
+        if checked {
+            let Some(Node::LeftJoin { spec, .. }) = self.nodes.last_mut() else {
+                anyhow::bail!("missing scalar join");
+            };
+            let value = ColumnRef {
+                name: format!("@{id}_scalar_multiple"),
+                right: false,
+                oid: 16,
+                nullable: false,
+                collation: 0,
+                modifier: None,
+            };
+            spec.scalar = Some(value.clone());
+            edge.columns.push(Column {
+                label: crate::compiler::subquery::MULTIPLE.into(),
+                qualifiers: vec![alias],
+                value,
+                collation: 0,
+                modifier: -1,
+                unqualified: false,
+            });
+        }
+        Ok(edge)
     }
     fn derived(
         &mut self,
@@ -230,6 +281,7 @@ impl Builder<'_> {
                     full: kind == Kind::Full,
                     right: physical_columns(&right.columns),
                     predicate: predicate.clone(),
+                    scalar: None,
                 },
             });
             if kind == Kind::Full {

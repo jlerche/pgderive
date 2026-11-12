@@ -70,6 +70,7 @@ set-operations set_operation
 boolean-resolution boolean_resolution
 temporal-resolution temporal_resolution
 subqueries subquery
+scalar-cardinality scalar_cardinality
 numeric-arithmetic numeric_arithmetic
 temporal-arithmetic temporal_arithmetic
 ordering ordering

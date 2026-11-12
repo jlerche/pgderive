@@ -9,7 +9,9 @@ pub(super) struct Scalar {
 }
 impl Rewrite<'_> {
     pub(super) fn scalar(&mut self, mut select: pg::SelectStmt) -> Result<Scalar> {
-        validate(&select)?;
+        if !global_aggregate(&select)? {
+            return self.nonaggregate(select);
+        }
         let correlation = correlation::extract(&mut select)?;
         self.validation.push(query(&select)?);
         let original = target(&select.target_list[0])?.clone();
@@ -90,25 +92,75 @@ impl Rewrite<'_> {
         right: crate::compiler::parser::Parsed,
         alias: String,
     ) -> Result<()> {
-        self.tree =
-            Some(Tree::Scalar { left: Box::new(self.take_tree()?), right: Box::new(right), alias });
+        self.tree = Some(Tree::Scalar {
+            left: Box::new(self.take_tree()?),
+            right: Box::new(right),
+            alias,
+            checked: false,
+            condition: None,
+        });
         Ok(())
     }
 }
 
-fn validate(select: &pg::SelectStmt) -> Result<()> {
+pub(super) fn global_aggregate(select: &pg::SelectStmt) -> Result<bool> {
+    if select.op != i32::from(pg::SetOperation::SetopNone) || select.target_list.is_empty() {
+        return Ok(false);
+    }
+    let aggregate = correlation::aggregate(target(&select.target_list[0])?)
+        || select.having_clause.as_deref().is_some_and(correlation::aggregate);
     ensure!(
-        select.target_list.len() == 1
-            && select.group_clause.is_empty()
-            && select.op == i32::from(pg::SetOperation::SetopNone),
-        "scalar subquery requires one global aggregate output without GROUP BY/set operations"
+        !aggregate || (select.target_list.len() == 1 && select.group_clause.is_empty()),
+        "scalar aggregate requires one global aggregate output without GROUP BY"
     );
-    ensure!(
-        correlation::aggregate(target(&select.target_list[0])?)
-            || select.having_clause.as_deref().is_some_and(correlation::aggregate),
-        "scalar subquery requires a global aggregate; arbitrary cardinality is unsupported"
-    );
-    Ok(())
+    Ok(aggregate)
+}
+
+impl Rewrite<'_> {
+    fn nonaggregate(&mut self, mut select: pg::SelectStmt) -> Result<Scalar> {
+        ensure!(
+            select.group_clause.is_empty() && select.having_clause.is_none(),
+            "nonaggregate scalar subquery does not support GROUP BY/HAVING"
+        );
+        let correlation = correlation::extract(&mut select)?;
+        super::scalar_input::validate(&select, 0)?;
+        let alias = self.alias()?;
+        let mut labels = vec![ast::VALUE.into()];
+        let mut conditions = Vec::new();
+        if !correlation.pairs.is_empty() {
+            ensure!(
+                select.distinct_clause.is_empty()
+                    && select.sort_clause.is_empty()
+                    && select.limit_count.is_none()
+                    && select.limit_offset.is_none()
+                    && correlation.pairs.iter().all(|(outer, inner)| {
+                        super::scalar_input::column(outer) && super::scalar_input::column(inner)
+                    }),
+                "correlated nonaggregate scalar subquery requires column equalities without DISTINCT/ordering/LIMIT"
+            );
+        }
+        for (index, (outer, inner)) in correlation.pairs.into_iter().enumerate() {
+            let label = format!("\0key_{index}");
+            select.target_list.push(ast::target(inner, &label));
+            conditions.push(ast::comparison(outer, ast::column(&alias, &label), "="));
+            labels.push(label);
+        }
+        let right = Parsed::Renamed { inner: Box::new(query(&select)?), labels };
+        self.tree = Some(Tree::Scalar {
+            left: Box::new(self.take_tree()?),
+            right: Box::new(right),
+            alias: alias.clone(),
+            checked: true,
+            condition: ast::logical(conditions, true),
+        });
+        Ok(Scalar {
+            value: ast::checked_scalar(
+                ast::column(&alias, ast::VALUE),
+                ast::column(&alias, super::super::super::subquery::MULTIPLE),
+            ),
+            present: ast::null(),
+        })
+    }
 }
 
 // Internal labels are assigned only after ordinary SQL alias/ordinal resolution.

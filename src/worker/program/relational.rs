@@ -467,7 +467,7 @@ pub(in crate::worker) fn build_scanned(
             Node::Existence { id, anti, .. } => {
                 (id, super::membership::existence(*anti, settings.limits))
             }
-            Node::LeftJoin { id, spec, .. } => {
+            Node::LeftJoin { id, spec, .. } if spec.scalar.is_none() => {
                 (id, super::left_join::operator(spec, settings.limits))
             }
             _ => continue,

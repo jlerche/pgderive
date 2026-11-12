@@ -315,7 +315,7 @@ def qualify(output, command, mode):
     with f.managed():
         if mode == MODES[0]:
             negatives = {
-                'multirow-scalar':f'SELECT (SELECT price FROM {b}) AS v FROM {a}',
+                'fallible-scalar':f'SELECT (SELECT 1/price FROM {b}) AS v FROM {a}',
                 'grouped-scalar':f'SELECT (SELECT SUM(price) FROM {b} GROUP BY auction) AS v FROM {a}',
                 'untyped-null-rhs':f'SELECT a.probe IN(SELECT NULL) FROM {a} a',
                 'untyped-string-rhs':f"SELECT a.probe IN(SELECT '10') FROM {a} a",

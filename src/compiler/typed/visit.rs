@@ -12,6 +12,10 @@ impl Typed {
         };
         match &self.value {
             Value::Column(column) | Value::Average(column) => add(column),
+            Value::Scalar { value, multiple } => {
+                add(value);
+                add(multiple);
+            }
             Value::Temporal(value) => {
                 add(&value.input);
                 if let Some((column, _)) = &value.shift {
@@ -54,6 +58,28 @@ impl Typed {
             | Value::Interval(_) => {}
         }
     }
+    /// Independently maintained scalar inputs may only use total row conversions.
+    pub(in crate::compiler) fn total_scalar_input(&self) -> bool {
+        if self.is_constant() {
+            return self.fold().is_ok();
+        }
+        match &self.value {
+            Value::Column(_) => true,
+            Value::Cast { input, typmod: None } => {
+                (self.oid == input.oid
+                    || matches!(
+                        (input.oid, self.oid),
+                        (21, 23 | 20 | 1700)
+                            | (23, 20 | 1700)
+                            | (20, 1700)
+                            | (25 | 1043, 25 | 1043)
+                    ))
+                    && input.total_scalar_input()
+            }
+            _ => false,
+        }
+    }
+
     /// A cast a set operation added to an arm's column, not a literal it typed.
     /// The value reaches its type through a cast from another type.
     pub(in crate::compiler) fn casts_type(&self) -> bool {
@@ -67,6 +93,10 @@ impl Typed {
                 None => Value::Column(column.clone()),
             },
             Value::Average(column) => Value::Average(renamed(column, replace)?),
+            Value::Scalar { value, multiple } => Value::Scalar {
+                value: renamed(value, replace)?,
+                multiple: renamed(multiple, replace)?,
+            },
             Value::Temporal(value) => {
                 let mut value = value.clone();
                 value.input = renamed(&value.input, replace)?;
@@ -156,7 +186,8 @@ impl Typed {
             | Value::Case { .. }
             | Value::SimpleCase(_)
             | Value::NullIf { .. }
-            | Value::MinMax { .. } => false,
+            | Value::MinMax { .. }
+            | Value::Scalar { .. } => false,
             _ => true,
         }
     }

@@ -158,6 +158,9 @@ fn over_join(graph: &mut Graph<'_>, map: &Lower, key: &str) -> Result<bool> {
     let nullable = match &join.node {
         Node::Join { .. } => false,
         Node::LeftJoin { spec, .. } => {
+            if !left && spec.scalar.is_some() {
+                return Ok(false);
+            }
             if let Some(predicate) = &spec.predicate {
                 pinned.extend(
                     predicate
