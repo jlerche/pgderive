@@ -7,7 +7,9 @@ use super::aggregate::{Linear, contribution};
 use crate::{
     compiler::{
         ColumnRef,
-        partition::{Aggregate, Frame, Function, Mode, Order, Partition, PreviousWindows},
+        partition::{
+            Aggregate, Exclusion, Frame, Function, Mode, Order, Partition, PreviousWindows,
+        },
     },
     engine::{
         Batch,
@@ -246,65 +248,114 @@ fn framed(
     let (limits, work) = context;
     let ordered = ordered(bag, order, spec.previous_windows.as_ref(), (limits, work))?;
     let peers = !matches!(spec.mode, Mode::Rows { .. });
-    let mut groups: Vec<(usize, usize)> = Vec::new();
-    for (index, (keys, _)) in ordered.iter().enumerate() {
-        if !peers {
-            groups.push((index, index + 1));
-            continue;
-        }
-        work.charge(1)?;
-        if index == 0 || compare(keys, &ordered[index - 1].0, order) != Ordering::Equal {
-            groups.push((index, index + 1));
-        } else if let Some(group) = groups.last_mut() {
-            group.1 = index + 1;
-        }
-    }
+    let exclusion = spec.mode.exclusion();
+    let groups = frame_groups(&ordered, order, peers, work)?;
+    let mut positional_peers = 0..0;
     let values: Vec<_> =
         spec.aggregates.iter().filter(|value| value.function.frame_value()).collect();
     let mut updates = Consolidator::new(limits)?;
-    for (index, (first, last)) in groups.iter().enumerate() {
+    for (index, group) in groups.iter().enumerate() {
         let range = if let Some(ranges) = &mut ranges {
             let [key] = order.as_slice() else {
                 anyhow::bail!("RANGE offsets require one ordering key")
             };
-            ranges.bounds(&ordered, key, *first, work)?
+            ranges.bounds(&ordered, key, group.start, work)?
         } else {
             let (start, end) =
                 bounds(frame.context("missing positional frame")?, index, groups.len())?;
-            let end = if end == 0 { 0 } else { groups[end - 1].1 };
-            let start = groups.get(start).map_or(end, |group| group.0);
+            let end = if end == 0 { 0 } else { groups[end - 1].end };
+            let start = groups.get(start).map_or(end, |group| group.start);
             start.min(end)..end
         };
-        // Peer-aware bounds include either every member of this group or none.
-        let omit = spec.mode.excludes_current() && range.contains(first);
-        let shared = if omit {
-            None
+        let peer_group = if !peers && exclusion.uses_peers() {
+            if !positional_peers.contains(&group.start) {
+                positional_peers = group.start..peer_end(&ordered, order, group.start, work)?;
+            }
+            &positional_peers
         } else {
-            Some(frames.fields(spec, &ordered, range.clone(), (limits, work))?)
+            group
         };
-        let members = &ordered[*first..*last];
-        let frame = &ordered[range.clone()];
-        for (index, (_, row)) in members.iter().enumerate() {
-            let excluded = omit.then(|| first + index - range.start);
-            let selection = Selection::new(frame, excluded);
-            let mut output = row.clone();
-            if let Some(fields) = &shared {
-                if peers {
-                    work.charge(fields.len())?;
-                }
-                output.extend(fields.clone());
-            } else {
-                output.extend(framed_fields(spec, selection, (limits, work))?);
-            }
-            for value in &values {
-                work.charge(1)?;
-                let result = frame_value::evaluate(value, selection, row)?;
-                output.insert(value.field.clone(), result);
-            }
+        let shared = if exclusion.is_none()
+            || (exclusion == Exclusion::Current && !range.contains(&group.start))
+            || (exclusion == Exclusion::Ties
+                && (peer_group.end <= range.start
+                    || peer_group.start >= range.end
+                    || peer_group.len() == 1))
+        {
+            Some(frames.fields(spec, &ordered, range.clone(), (limits, work))?)
+        } else if exclusion == Exclusion::Group {
+            let selection = Selection::new(&ordered, &range, peer_group, group.start, exclusion);
+            Some(framed_fields(spec, selection, (limits, work))?)
+        } else {
+            None
+        };
+        for current in group.clone() {
+            let row = &ordered[current].1;
+            let selection = Selection::new(&ordered, &range, peer_group, current, exclusion);
+            let output =
+                frame_output(spec, &values, row, (selection, shared.as_ref()), (limits, work))?;
             updates.add(((), output), 1)?;
         }
     }
     updates.finish_batch()
+}
+
+fn frame_output(
+    spec: &Partition,
+    values: &[&Aggregate],
+    row: &Row,
+    (selection, shared): (Selection<'_>, Option<&Row>),
+    (limits, work): (Limits, &mut crate::engine::dataflow::PartitionWork),
+) -> Result<Row> {
+    let mut output = row.clone();
+    if let Some(fields) = shared {
+        if !matches!(spec.mode, Mode::Rows { .. }) {
+            work.charge(fields.len())?;
+        }
+        output.extend(fields.clone());
+    } else {
+        output.extend(framed_fields(spec, selection, (limits, work))?);
+    }
+    for value in values {
+        work.charge(1)?;
+        let result = frame_value::evaluate(value, selection, row)?;
+        output.insert(value.field.clone(), result);
+    }
+    Ok(output)
+}
+
+fn frame_groups(
+    rows: &[Ordered],
+    order: &[Order],
+    peers: bool,
+    work: &mut crate::engine::dataflow::PartitionWork,
+) -> Result<Vec<std::ops::Range<usize>>> {
+    if !peers {
+        return Ok((0..rows.len()).map(|index| index..index + 1).collect());
+    }
+    let mut groups = Vec::new();
+    let mut start = 0;
+    while start < rows.len() {
+        let end = peer_end(rows, order, start, work)?;
+        groups.push(start..end);
+        start = end;
+    }
+    Ok(groups)
+}
+
+fn peer_end(
+    rows: &[Ordered],
+    order: &[Order],
+    first: usize,
+    work: &mut crate::engine::dataflow::PartitionWork,
+) -> Result<usize> {
+    for index in first + 1..rows.len() {
+        work.charge(1)?;
+        if compare(&rows[first].0, &rows[index].0, order) != Ordering::Equal {
+            return Ok(index);
+        }
+    }
+    Ok(rows.len())
 }
 
 fn numeric_value(

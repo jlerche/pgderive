@@ -52,7 +52,7 @@ pub(in crate::compiler) struct Window {
 #[derive(Clone)]
 pub(in crate::compiler) enum WindowFrame {
     Position(crate::compiler::partition::Frame),
-    Range { start: RangeBound, end: RangeBound, exclude_current: bool },
+    Range { start: RangeBound, end: RangeBound, exclusion: crate::compiler::partition::Exclusion },
 }
 
 #[derive(Clone)]
@@ -297,10 +297,20 @@ fn integer_window_argument<'a>(
     Ok(None)
 }
 pub(super) fn window(spec: windows::Spec<'_>, ranking: bool) -> Result<Window> {
+    use crate::compiler::partition::Exclusion;
     // PostgreSQL 17 parsenodes.h. EXCLUDE NO OTHERS has no option bit.
     const EXCLUDE_CURRENT_ROW: i32 = 0x08000;
+    const EXCLUDE_GROUP: i32 = 0x10000;
+    const EXCLUDE_TIES: i32 = 0x20000;
+    const EXCLUSIONS: i32 = EXCLUDE_CURRENT_ROW | EXCLUDE_GROUP | EXCLUDE_TIES;
     let value = spec.frame;
-    let exclude_current = value.frame_options & EXCLUDE_CURRENT_ROW != 0;
+    let exclusion = match value.frame_options & EXCLUSIONS {
+        0 => Exclusion::None,
+        EXCLUDE_CURRENT_ROW => Exclusion::Current,
+        EXCLUDE_GROUP => Exclusion::Group,
+        EXCLUDE_TIES => Exclusion::Ties,
+        _ => anyhow::bail!("invalid window frame exclusion"),
+    };
     ensure!(
         value.frame_options & (2 | 4 | 8) != 0
             && value.frame_options
@@ -317,7 +327,7 @@ pub(super) fn window(spec: windows::Spec<'_>, ranking: bool) -> Result<Window> {
                     | 4096
                     | 8192
                     | 16384
-                    | EXCLUDE_CURRENT_ROW)
+                    | EXCLUSIONS)
                 == 0,
         "unsupported window frame"
     );
@@ -332,12 +342,12 @@ pub(super) fn window(spec: windows::Spec<'_>, ranking: bool) -> Result<Window> {
             WindowFrame::Range {
                 start: range_bound(value.frame_options, value.start_offset.as_deref(), true)?,
                 end: range_bound(value.frame_options, value.end_offset.as_deref(), false)?,
-                exclude_current,
+                exclusion,
             }
         } else {
             let start = bound(value.frame_options, value.start_offset.as_deref(), true)?;
             let end = bound(value.frame_options, value.end_offset.as_deref(), false)?;
-            WindowFrame::Position(crate::compiler::partition::Frame { start, end, exclude_current })
+            WindowFrame::Position(crate::compiler::partition::Frame { start, end, exclusion })
         };
     Ok(Window { keys, order, frame, ranking, peers: if ranking { None } else { peers } })
 }

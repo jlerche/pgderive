@@ -1,7 +1,7 @@
 //! Resolve distance offsets using the ordering type’s btree operator family.
 use crate::compiler::{
     parser::partition::RangeBound,
-    partition::{Frame, Mode, Order, TemporalRangeFrame, TemporalRangeOffset},
+    partition::{Exclusion, Frame, Mode, Order, TemporalRangeFrame, TemporalRangeOffset},
     typed::Typed,
 };
 use crate::temporal::Interval;
@@ -11,24 +11,20 @@ pub(super) fn bind(
     start: RangeBound,
     end: RangeBound,
     order: Vec<Order>,
-    options: (bool, bool),
+    options: (bool, Exclusion),
 ) -> Result<Mode> {
-    let (ranking, exclude_current) = options;
+    let (ranking, exclusion) = options;
     let [key] = order.as_slice() else {
         anyhow::bail!("RANGE offsets require exactly one ORDER BY expression");
     };
     let oid = key.column.oid;
     let mode = match oid {
         20 | 21 | 23 => Mode::Range {
-            frame: Frame { start: offset(start, oid)?, end: offset(end, oid)?, exclude_current },
+            frame: Frame { start: offset(start, oid)?, end: offset(end, oid)?, exclusion },
             order,
         },
         1114 | 1184 => Mode::TemporalRange {
-            frame: TemporalRangeFrame {
-                start: interval(start)?,
-                end: interval(end)?,
-                exclude_current,
-            },
+            frame: TemporalRangeFrame { start: interval(start)?, end: interval(end)?, exclusion },
             order,
         },
         _ => anyhow::bail!("RANGE offsets require an integral or timestamp ORDER BY expression"),

@@ -162,7 +162,7 @@ mod tests {
             nulls_first: false,
         };
         let frame = TemporalRangeFrame {
-            exclude_current: false,
+            exclusion: crate::compiler::partition::Exclusion::None,
             start: Some(TemporalRangeOffset::Current),
             end: Some(TemporalRangeOffset::Interval {
                 value: "P0M1DT0H0S".into(),

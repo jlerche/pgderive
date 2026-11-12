@@ -73,7 +73,6 @@ fn rejects_unsupported_ranking_and_binds_order() -> Result<()> {
         NUMBER.replace(",b.id", ""),
         PEERS.replace("rank()", "rank(b.id)"),
         PEERS.replace("rank() OVER", "rank() FILTER(WHERE b.price>0) OVER"),
-        PEERS.replace("NULLS FIRST)", "NULLS FIRST ROWS UNBOUNDED PRECEDING EXCLUDE GROUP)"),
         PEERS.replace("rank()", "ntile()"),
     ] {
         assert!(compile(&sql, &native).is_err(), "{sql}");
@@ -83,6 +82,8 @@ fn rejects_unsupported_ranking_and_binds_order() -> Result<()> {
         "ROWS UNBOUNDED PRECEDING",
         "ROWS UNBOUNDED PRECEDING EXCLUDE CURRENT ROW",
         "ROWS UNBOUNDED PRECEDING EXCLUDE NO OTHERS",
+        "ROWS UNBOUNDED PRECEDING EXCLUDE GROUP",
+        "ROWS UNBOUNDED PRECEDING EXCLUDE TIES",
     ] {
         let query = PEERS.replace("NULLS FIRST)", &format!("NULLS FIRST {frame})"));
         assert_eq!(default, serde_json::to_vec(&compile(&query, &native)?)?, "{frame}");

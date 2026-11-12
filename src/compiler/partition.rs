@@ -116,20 +116,42 @@ pub struct Order {
     pub(crate) descending: bool,
     pub(crate) nulls_first: bool,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum Exclusion {
+    None,
+    Current,
+    Group,
+    Ties,
+}
+
+impl Exclusion {
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Serde skip_serializing_if takes a reference"
+    )]
+    pub(crate) const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    pub(crate) const fn uses_peers(self) -> bool {
+        matches!(self, Self::Group | Self::Ties)
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct Frame {
     // None means unbounded; signed offset relative to current row.
     pub(crate) start: Option<i64>,
     pub(crate) end: Option<i64>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) exclude_current: bool,
+    #[serde(skip_serializing_if = "Exclusion::is_none")]
+    pub(crate) exclusion: Exclusion,
 }
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct TemporalRangeFrame {
     pub(crate) start: Option<TemporalRangeOffset>,
     pub(crate) end: Option<TemporalRangeOffset>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) exclude_current: bool,
+    #[serde(skip_serializing_if = "Exclusion::is_none")]
+    pub(crate) exclusion: Exclusion,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -148,13 +170,13 @@ pub enum Mode {
     TemporalRange { order: Vec<Order>, frame: TemporalRangeFrame },
 }
 impl Mode {
-    pub(crate) const fn excludes_current(&self) -> bool {
+    pub(crate) const fn exclusion(&self) -> Exclusion {
         match self {
             Self::Rows { frame, .. } | Self::Peers { frame, .. } | Self::Range { frame, .. } => {
-                frame.exclude_current
+                frame.exclusion
             }
-            Self::TemporalRange { frame, .. } => frame.exclude_current,
-            _ => false,
+            Self::TemporalRange { frame, .. } => frame.exclusion,
+            _ => Exclusion::None,
         }
     }
 }

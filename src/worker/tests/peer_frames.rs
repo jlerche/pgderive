@@ -11,6 +11,8 @@ fn sql(case: usize) -> String {
         3 => " GROUPS BETWEEN 2 FOLLOWING AND 1 FOLLOWING",
         5 => " RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING",
         6 => " GROUPS CURRENT ROW EXCLUDE CURRENT ROW",
+        7 => " GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING EXCLUDE GROUP",
+        8 => " GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING EXCLUDE TIES",
         _ => "",
     };
     let window = format!("OVER(PARTITION BY b.auction{order}{frame})");
@@ -37,7 +39,7 @@ fn oracle(state: &BTreeMap<Row, i64>, case: usize) -> Result<Bag> {
                 let group =
                     keys.iter().position(|key| *key == price(other)).context("missing peer")?;
                 let selected = match case {
-                    1 => group.abs_diff(current) <= 1,
+                    1 | 7 | 8 => group.abs_diff(current) <= 1 && (case == 1 || group != current),
                     2 | 6 => group == current,
                     3 => false,
                     4 => true,
@@ -52,6 +54,10 @@ fn oracle(state: &BTreeMap<Row, i64>, case: usize) -> Result<Bag> {
                     count += 1;
                     values.extend(price(other));
                 }
+            }
+            if case == 8 {
+                count += 1;
+                values.extend(price(row));
             }
             if case == 6 {
                 count -= 1;
@@ -88,17 +94,16 @@ async fn history(case: usize) -> Result<()> {
 }
 #[tokio::test]
 async fn weighted_peer_frames_match_independent_histories() -> Result<()> {
-    for case in 0..7 {
+    for case in 0..9 {
         history(case).await?;
     }
     Ok(())
 }
 #[test]
-fn rejects_unimplemented_distance_and_exclusions() -> Result<()> {
+fn rejects_unsupported_distance_and_missing_order() -> Result<()> {
     for sql in [
         sql(5).replace("ORDER BY b.price", "ORDER BY b.price::numeric"),
         sql(1).replace(" ORDER BY b.price DESC NULLS FIRST", ""),
-        sql(2).replace("CURRENT ROW)", "CURRENT ROW EXCLUDE TIES)"),
     ] {
         assert!(compile(&sql, &contract()).is_err(), "{sql}");
     }

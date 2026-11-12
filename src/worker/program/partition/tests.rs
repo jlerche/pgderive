@@ -470,3 +470,30 @@ fn nth_value_counts_included_occurrences_across_the_exclusion() -> Result<()> {
     assert_eq!(values, [("0", "2"), ("1", "2"), ("2", "1"), ("3", "1")].into());
     Ok(())
 }
+
+#[test]
+fn rows_exclusions_intersect_peers_without_adding_current_row() -> Result<()> {
+    let bag = Bag::from_updates([
+        (((), row(&[("0:id", Some("1"))])), 3),
+        (((), row(&[("0:id", Some("2"))])), 1),
+    ])?;
+    for exclusion in ["GROUP", "TIES"] {
+        let spec = bound(&format!(
+            "SELECT count(*) OVER (ORDER BY id ROWS BETWEEN 1 FOLLOWING AND
+             2 FOLLOWING EXCLUDE {exclusion}) FROM source.bid"
+        ))?;
+        let (result, _) = run(&spec, &bag, true)?;
+        let actual = result
+            .iter()
+            .map(|(((), row), weight)| {
+                ((row["0:id"].as_deref(), row["@aggregate_0"].as_deref()), *weight)
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(actual, [
+            ((Some("1"), Some("0")), 1),
+            ((Some("1"), Some("1")), 2),
+            ((Some("2"), Some("0")), 1),
+        ].into(), "{exclusion}");
+    }
+    Ok(())
+}

@@ -616,7 +616,11 @@ and other peers remain eligible. An empty frame returns zero for COUNT and NULL
 for nullable aggregates and frame-value functions. Frame-insensitive functions
 ignore the exclusion. Excluded aggregate frames use bounded scans so their
 arguments and FILTER predicates are evaluated only for included occurrences.
-EXCLUDE GROUP and EXCLUDE TIES remain unsupported.
+EXCLUDE GROUP removes the current row and its ordering peers from the frame.
+EXCLUDE TIES removes the other peers and keeps the current occurrence when it
+lies in the frame. Both apply only to the intersection of the peer group and
+the frame, including for ROWS frames that cut through a peer group. Without
+ORDER BY, every row in the partition is a peer.
 
 Peer equality uses exactly the SQL ORDER BY values, including NULL placement and
 direction; these frames do not require a primary-key tie-breaker. CURRENT ROW

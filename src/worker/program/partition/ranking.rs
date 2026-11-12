@@ -1,5 +1,5 @@
 //! Partition-wide ranking over weighted row occurrences and SQL peer groups.
-use super::{Bag, Ordered, compare, ordered};
+use super::{Bag, Ordered, compare, ordered, peer_end};
 use crate::{
     compiler::partition::{Aggregate, Function, Order, Partition},
     engine::{
@@ -28,7 +28,7 @@ pub(super) fn evaluate(
             peers.first = index;
             peers.dense += 1;
             if cumulative {
-                peers.end = peer_end(&rows, index, order, work)?;
+                peers.end = peer_end(&rows, order, index, work)?;
             }
         }
         let mut output = row.clone();
@@ -46,21 +46,6 @@ struct Peers {
     first: usize,
     end: usize,
     dense: usize,
-}
-
-fn peer_end(
-    rows: &[Ordered],
-    first: usize,
-    order: &[Order],
-    work: &mut PartitionWork,
-) -> Result<usize> {
-    for index in first + 1..rows.len() {
-        work.charge(1)?;
-        if compare(&rows[first].0, &rows[index].0, order) != Ordering::Equal {
-            return Ok(index);
-        }
-    }
-    Ok(rows.len())
 }
 
 fn value(

@@ -10,7 +10,8 @@ from worker_harness import History, harness_arguments
 
 class ExclusionFixture(SqlFixture):
     labels = ['id', 'empty_count', 'empty_sum', 'empty_value', 'peer_count', 'peer_nth',
-              'group_count', 'distance_count', 'temporal_count', 'following_count', 'plain_count']
+              'group_count', 'distance_count', 'temporal_count', 'following_count', 'plain_count',
+              'group_empty', 'ties_value', 'ties_whole', 'outside_ties', 'unordered_group', 'unordered_ties']
 
     def __init__(self, output):
         super().__init__(output, False)
@@ -29,7 +30,15 @@ class ExclusionFixture(SqlFixture):
                 PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW) AS temporal_count,
             count(*) OVER (PARTITION BY auction ORDER BY id ROWS BETWEEN 1 FOLLOWING AND
                 1 FOLLOWING EXCLUDE CURRENT ROW) AS following_count,
-            count(*) OVER (PARTITION BY auction ORDER BY price RANGE CURRENT ROW EXCLUDE NO OTHERS) AS plain_count
+            count(*) OVER (PARTITION BY auction ORDER BY price RANGE CURRENT ROW EXCLUDE NO OTHERS) AS plain_count,
+            count(*) OVER (PARTITION BY auction ORDER BY price RANGE CURRENT ROW EXCLUDE GROUP) AS group_empty,
+            first_value(id) OVER (PARTITION BY auction ORDER BY price GROUPS CURRENT ROW EXCLUDE TIES) AS ties_value,
+            count(*) OVER (PARTITION BY auction ORDER BY observed RANGE BETWEEN interval '1 day'
+                PRECEDING AND CURRENT ROW EXCLUDE TIES) AS ties_whole,
+            count(*) OVER (PARTITION BY auction ORDER BY price GROUPS BETWEEN 1 FOLLOWING AND
+                1 FOLLOWING EXCLUDE TIES) AS outside_ties,
+            count(*) OVER (PARTITION BY auction RANGE UNBOUNDED PRECEDING EXCLUDE GROUP) AS unordered_group,
+            count(*) OVER (PARTITION BY auction RANGE UNBOUNDED PRECEDING EXCLUDE TIES) AS unordered_ties
             FROM {table}
             WINDOW single AS (ORDER BY id ROWS CURRENT ROW EXCLUDE CURRENT ROW),
                    peers AS (PARTITION BY auction ORDER BY price RANGE CURRENT ROW EXCLUDE CURRENT ROW)"""
@@ -59,8 +68,13 @@ class ExclusionFixture(SqlFixture):
                                 and 0 <= int(observed[8:10])-int(item['observed'][8:10]) <= 1)
                                for item in others)
                 following = int(any(item['id'] > row['id'] for item in others))
+                next_peer = sum(item['price'] == peer_keys[index+1] for item in others) if index+1 < len(peer_keys) else 0
+                earlier_observed = sum(item['observed'] is not None and observed is not None
+                                       and int(observed[8:10])-int(item['observed'][8:10]) == 1
+                                       for item in others)
                 memory[(row['id'], 0, None, None, same, price if same else None,
-                        group_count, distance, temporal, following, same+1)] += 1
+                        group_count, distance, temporal, following, same+1,
+                        0, row['id'], earlier_observed+1, next_peer, 0, 1)] += 1
         self.verify_memory(memory)
 
 
@@ -77,7 +91,7 @@ def qualify(output, command):
             ],
             final=f"UPDATE {table} SET auction=1,price=-3 WHERE id IN (1,101); DELETE FROM {table} WHERE id=4",
             normalized=fixture.query.replace(' EXCLUDE NO OTHERS', ''),
-            rejected=[('changed-exclusion', fixture.query.replace(' EXCLUDE CURRENT ROW', '', 1))],
+            rejected=[('changed-exclusion', fixture.query.replace(' EXCLUDE GROUP', ' EXCLUDE TIES', 1))],
         ))
         (output/'result.json').write_text(json.dumps({
             'native_bag_and_binary': True, 'independent_oracle': True, 'cold_restart': True,
