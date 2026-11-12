@@ -418,7 +418,7 @@ async fn quantified_comparison_preserves_weighted_rows_and_group_truth() -> Resu
 async fn quantified_where_keeps_inequality_and_preserves_literal_width() -> Result<()> {
     let native = native();
     let compiled = compile(
-        "SELECT a.category AS c, 100000 < ALL (VALUES (1::smallint)) AS wide, NULL < ANY (SELECT 1 WHERE false) AS empty_any, NULL < ALL (SELECT 1 WHERE false) AS empty_all FROM source.auction a WHERE a.other=2 AND a.other < SOME(SELECT b.price FROM source.bid b WHERE b.auction=a.other)",
+        "SELECT a.category AS c, 100000 < ALL (VALUES (1::smallint)) AS wide, 100000 = ANY (VALUES (1::smallint)) AS wide_eq, NULL < ANY (SELECT 1 WHERE false) AS empty_any, NULL < ALL (SELECT 1 WHERE false) AS empty_all FROM source.auction a WHERE a.other=2 AND a.other < SOME(SELECT b.price FROM source.bid b WHERE b.auction=a.other)",
         &native,
     )?;
     let names = compiled.output().columns.iter().map(|c| c.column.name.clone()).collect::<Vec<_>>();
@@ -441,6 +441,7 @@ async fn quantified_where_keeps_inequality_and_preserves_literal_width() -> Resu
                         left["category"].clone(),
                         Some("f".into()),
                         Some("f".into()),
+                        Some("f".into()),
                         Some("t".into()),
                     ])
                 })
@@ -450,4 +451,19 @@ async fn quantified_where_keeps_inequality_and_preserves_literal_width() -> Resu
         )
         .await?;
     Ok(())
+}
+
+#[test]
+fn explicit_quantified_equality_keeps_integral_admission() {
+    let native = native();
+    for quantifier in ["= ANY", "<> ALL"] {
+        for (probe, rhs) in [
+            ("a.category", "SELECT 'x'::text"),
+            ("a.other", "SELECT b.price + 1 FROM source.bid b"),
+            ("a.other", "SELECT b.price FROM source.bid b WHERE b.auction=a.other + 1"),
+        ] {
+            let sql = format!("SELECT {probe} {quantifier} ({rhs}) FROM source.auction a");
+            assert!(compile(&sql, &native).is_err(), "{sql}");
+        }
+    }
 }

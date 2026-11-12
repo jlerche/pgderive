@@ -12,16 +12,23 @@ use crate::compiler::{
 };
 use anyhow::{Result, ensure};
 use pg_query::Node as Ast;
+pub(super) struct MarkArguments<'a> {
+    pub(super) probe: &'a Ast,
+    pub(super) alias: String,
+    pub(super) condition: Option<&'a Ast>,
+    pub(super) semijoin: bool,
+    pub(super) quantified: Option<Compare>,
+}
+
 impl Builder<'_> {
     pub(super) fn mark(
         &mut self,
         mut left: Edge,
         parsed: Box<Parsed>,
-        arguments: (&Ast, String, Option<&Ast>, bool, Compare),
+        arguments: MarkArguments<'_>,
     ) -> Result<Edge> {
-        let (probe, alias, condition, semijoin, operator) = arguments;
+        let MarkArguments { probe, alias, condition, semijoin, quantified } = arguments;
         let resolve_left = |name: &Name| Ok(resolve(name, &left.columns)?.value.clone());
-        let ordered = operator != Compare::Eq;
         let start = self.nodes.len();
         let right = self.derived(parsed, alias.clone())?;
         ensure!(
@@ -33,7 +40,7 @@ impl Builder<'_> {
             matches!(value.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
             "unsupported IN native type"
         );
-        let probe = if ordered {
+        let probe = if quantified.is_some() {
             super::validate_scalar_input(&self.nodes[start..])?;
             integral_probe(probe, value.oid, &resolve_left)?
         } else {
@@ -48,18 +55,18 @@ impl Builder<'_> {
             }
         };
         self.map(&mut left, computed, &format!("mark_{}_probe", self.joins));
-        let comparison = Predicate::new(Expr::Compare(
-            operator,
-            typed::Typed::column(probe.clone()),
-            typed::Typed::column(value.clone()),
-        ));
         let columns = left.columns.clone();
         let id = format!("tree_join_{}", self.joins);
         let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
         ensure!(
-            !ordered || bound.predicate.is_none(),
+            quantified.is_none() || bound.predicate.is_none(),
             "quantified correlation requires indexable equality"
         );
+        let comparison = Predicate::new(Expr::Compare(
+            quantified.unwrap_or(Compare::Eq),
+            typed::Typed::column(probe.clone()),
+            typed::Typed::column(value.clone()),
+        ));
         let edge = self.join(left, right, bound, crate::compiler::left_join::Kind::Left)?;
         let Some(Node::LeftJoin { id, input, spec }) = self.nodes.pop() else {
             anyhow::bail!("missing marker tagged join");
@@ -105,7 +112,7 @@ fn integral_probe(
     let probe = typed::Typed::bind_contextual(probe, resolve, 0)?;
     ensure!(
         matches!(rhs_oid, 20 | 21 | 23) && matches!(probe.oid(), 0 | 705 | 20 | 21 | 23),
-        "quantified < requires integral operands"
+        "quantified comparisons require integral operands"
     );
     if matches!(probe.oid(), 0 | 705) { probe.coerce_common(rhs_oid) } else { Ok(probe) }
 }

@@ -75,8 +75,8 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
 }
 /// `PostgreSQL` pulls up IN as a semijoin only when it is a top-level WHERE conjunct.
 fn mark_semijoins(tree: &mut Tree, condition: &Node) {
-    let Tree::Mark { left, alias, semijoin, comparison, .. } = tree else { return };
-    *semijoin = *comparison == Compare::Eq && conjunct(condition, &ast::column(alias, ast::VALUE));
+    let Tree::Mark { left, alias, semijoin, quantified, .. } = tree else { return };
+    *semijoin = quantified.is_none() && conjunct(condition, &ast::column(alias, ast::VALUE));
     mark_semijoins(left, condition);
 }
 fn conjunct(condition: &Node, column: &Node) -> bool {
@@ -270,16 +270,20 @@ impl Rewrite<'_> {
                             ast::comparison(probe, scalar.value, "="),
                         ));
                     }
-                    return self.membership((**query).clone(), probe, Compare::Eq);
+                    return self.membership((**query).clone(), probe, None);
                 }
-                ensure!(names(&link.oper_name)?.0 == ["<"], "only < ANY/SOME/ALL is supported");
+                let operator = names(&link.oper_name)?;
+                let [operator] = operator.0.as_slice() else {
+                    anyhow::bail!("quantified comparison requires an unqualified operator");
+                };
+                let comparison = Compare::parse(operator)?;
                 ensure!(
                     scalar_input::plain(&probe)?,
                     "quantified probe requires a column or literal"
                 );
-                // NOT (probe >= ANY (...)) is the three-valued dual of probe < ALL (...).
-                let comparison = if all { Compare::Ge } else { Compare::Lt };
-                let mark = self.membership((**query).clone(), probe, comparison)?;
+                // ALL is the negation of ANY over the complementary strict comparison.
+                let comparison = if all { comparison.negate() } else { comparison };
+                let mark = self.membership((**query).clone(), probe, Some(comparison))?;
                 Ok(if all { ast::not(mark) } else { mark })
             }
             _ => anyhow::bail!("unsupported scalar/IN sublink kind"),
@@ -289,11 +293,11 @@ impl Rewrite<'_> {
         &mut self,
         mut query: pg::SelectStmt,
         probe: Node,
-        comparison: Compare,
+        quantified: Option<Compare>,
     ) -> Result<Node> {
         let correlation = correlation::extract(&mut query)?;
         let alias = self.alias()?;
-        if comparison != Compare::Eq {
+        if quantified.is_some() {
             scalar_input::validate(&query, 0)?;
             ensure!(
                 correlation.pairs.iter().all(
@@ -328,7 +332,7 @@ impl Rewrite<'_> {
             alias: alias.clone(),
             condition: ast::logical(conditions, true),
             semijoin: false,
-            comparison,
+            quantified,
         });
         Ok(ast::column(&alias, ast::VALUE))
     }

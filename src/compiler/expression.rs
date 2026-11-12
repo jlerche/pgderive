@@ -169,15 +169,7 @@ fn comparison(
             return Ok(Expr::Null(operand(input, resolve)?.into_value(), !negated));
         }
     }
-    let op = match name.as_str() {
-        "=" => Compare::Eq,
-        "<>" => Compare::Ne,
-        "<" => Compare::Lt,
-        "<=" => Compare::Le,
-        ">" => Compare::Gt,
-        ">=" => Compare::Ge,
-        _ => anyhow::bail!("unsupported comparison operator"),
-    };
+    let op = Compare::parse(name)?;
     let (left, right) = comparison_operands(operand(left, resolve)?, operand(right, resolve)?)?;
     check_comparison(&op, &left, &right, text)?;
     Ok(match kind {

@@ -28,7 +28,7 @@ pub(in crate::compiler) enum Tree {
         alias: String,
         condition: Option<Box<Node>>,
         semijoin: bool,
-        comparison: crate::compiler::syntax::Compare,
+        quantified: Option<crate::compiler::syntax::Compare>,
     },
     Join {
         left: Box<Self>,

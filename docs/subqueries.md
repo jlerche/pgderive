@@ -81,25 +81,25 @@ for equality comparisons whose sides share a value domain. Uncorrelated membersh
 a global bucket, so its tick still reads every outer and RHS row. A residual
 correlation or a cross-domain date/timestamp comparison scans the RHS per outer row.
 
-## Ordered quantification
+## Integral quantified comparisons
 
-The initial quantified comparison is `< ANY` (also spelled `< SOME`) and
-`< ALL` over a one-column subquery. Both operands must be smallint, integer,
-or bigint. Unknown probe literals take the RHS type, and typed integral
+The operators `=`, `<>` (also spelled `!=`), `<`, `<=`, `>`, and `>=`
+support `ANY` (also spelled `SOME`) and `ALL` over a one-column subquery. Both operands
+must be smallint, integer, or bigint. Unknown probe literals take the RHS type, and typed integral
 operands retain their widths. A simple column or literal probe can appear
 in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
 with indexable column equalities for correlation.
 
-- `< ANY` returns TRUE if any comparison is TRUE. Otherwise it returns NULL
+- `ANY` returns TRUE if any comparison is TRUE. Otherwise it returns NULL
   if any comparison is NULL, or FALSE if every comparison is FALSE or the group is empty.
-- `< ALL` returns FALSE if any comparison is FALSE. Otherwise it returns NULL
+- `ALL` returns FALSE if any comparison is FALSE. Otherwise it returns NULL
   if any comparison is NULL, or TRUE if every comparison is TRUE or the group is empty.
 
 An empty group has these results even when the probe is NULL.
 
-The mark scans the matching RHS bucket under the existing work limits and
-keeps each outer row's multiplicity. NULL correlation keys have an empty
-group. PostgreSQL materialized-view and independent raw-source oracles
+The mark keeps each outer row's multiplicity. When the mark tests equality it
+uses the existing bounded value set. Other comparisons scan the matching RHS
+bucket under the existing work limits. NULL correlation keys have an empty group. PostgreSQL materialized-view and independent raw-source oracles
 check correlated and uncorrelated CDC histories, including cold reopen.
 
 ## Evaluation and durability boundaries

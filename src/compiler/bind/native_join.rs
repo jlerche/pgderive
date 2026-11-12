@@ -94,9 +94,19 @@ impl Builder<'_> {
                 }
                 self.scalar(left, right, (alias, checked, condition.as_deref()))
             }
-            Tree::Mark { left, right, probe, alias, condition, semijoin, comparison } => {
+            Tree::Mark { left, right, probe, alias, condition, semijoin, quantified } => {
                 let left = self.tree(*left)?;
-                self.mark(left, right, (&probe, alias, condition.as_deref(), semijoin, comparison))
+                self.mark(
+                    left,
+                    right,
+                    subquery::MarkArguments {
+                        probe: &probe,
+                        alias,
+                        condition: condition.as_deref(),
+                        semijoin,
+                        quantified,
+                    },
+                )
             }
             Tree::Join { left, right, kind, clause } => {
                 let left = self.tree(*left)?;
