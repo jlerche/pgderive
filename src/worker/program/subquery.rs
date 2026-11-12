@@ -1,4 +1,4 @@
-//! SQL IN is a three-valued mark, not a multiplicity-changing semijoin.
+//! SQL subquery comparisons preserve outer multiplicity and produce three-valued marks.
 use super::{
     left_join::{pair, stripped},
     relational::Key,
@@ -29,7 +29,8 @@ struct RightValues {
     values: BTreeSet<String>,
 }
 const fn indexed(spec: &Mark) -> bool {
-    spec.correlation.is_none()
+    spec.comparison.is_equality()
+        && spec.correlation.is_none()
         && (spec.probe.oid == spec.value.oid
             || (numeric_family(spec.probe.oid) && numeric_family(spec.value.oid))
             || (matches!(spec.probe.oid, 25 | 1043) && matches!(spec.value.oid, 25 | 1043)))

@@ -22,7 +22,7 @@ from verify_worker_core import main as verify_worker
 
 GROUPS=(
     ('replication','result-table','operation-budget','multi-query','query-lifecycle'),
-    ('tenant-storage','tenant-storage-commit','projection-compiler'),
+    ('tenant-storage','tenant-storage-commit','projection-compiler','quantified-subqueries'),
     ('memtable','postgres-support','checkpoint','query-rebuild'),
     ('transactions','crashes'),
 )

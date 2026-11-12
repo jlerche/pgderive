@@ -8,6 +8,7 @@ use super::{
     expressions::{between_kind, distinct_kind, names, node, optional},
     native_join::Tree,
 };
+use crate::compiler::syntax::Compare;
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 struct Rewrite<'a> {
@@ -74,8 +75,8 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
 }
 /// `PostgreSQL` pulls up IN as a semijoin only when it is a top-level WHERE conjunct.
 fn mark_semijoins(tree: &mut Tree, condition: &Node) {
-    let Tree::Mark { left, alias, semijoin, .. } = tree else { return };
-    *semijoin = conjunct(condition, &ast::column(alias, ast::VALUE));
+    let Tree::Mark { left, alias, semijoin, comparison, .. } = tree else { return };
+    *semijoin = *comparison == Compare::Eq && conjunct(condition, &ast::column(alias, ast::VALUE));
     mark_semijoins(left, condition);
 }
 fn conjunct(condition: &Node, column: &Node) -> bool {
@@ -257,25 +258,50 @@ impl Rewrite<'_> {
                 );
                 Ok(self.scalar((**query).clone())?.value)
             }
-            pg::SubLinkType::AnySublink => {
-                ensure!(link.oper_name.is_empty(), "only IN equality ANY subqueries are supported");
+            kind @ (pg::SubLinkType::AnySublink | pg::SubLinkType::AllSublink) => {
+                let all = kind == pg::SubLinkType::AllSublink;
                 let probe = optional(link.testexpr.as_deref())?.clone();
-                if query.group_clause.is_empty() && scalar::global_aggregate(query)? {
-                    let scalar = self.scalar((**query).clone())?;
-                    return Ok(ast::case(
-                        ast::is_null(scalar.present),
-                        ast::boolean(false),
-                        ast::comparison(probe, scalar.value, "="),
-                    ));
+                if !all && link.oper_name.is_empty() {
+                    if query.group_clause.is_empty() && scalar::global_aggregate(query)? {
+                        let scalar = self.scalar((**query).clone())?;
+                        return Ok(ast::case(
+                            ast::is_null(scalar.present),
+                            ast::boolean(false),
+                            ast::comparison(probe, scalar.value, "="),
+                        ));
+                    }
+                    return self.membership((**query).clone(), probe, Compare::Eq);
                 }
-                self.membership((**query).clone(), probe)
+                ensure!(names(&link.oper_name)?.0 == ["<"], "only < ANY/SOME/ALL is supported");
+                ensure!(
+                    scalar_input::plain(&probe)?,
+                    "quantified probe requires a column or literal"
+                );
+                // NOT (probe >= ANY (...)) is the three-valued dual of probe < ALL (...).
+                let comparison = if all { Compare::Ge } else { Compare::Lt };
+                let mark = self.membership((**query).clone(), probe, comparison)?;
+                Ok(if all { ast::not(mark) } else { mark })
             }
             _ => anyhow::bail!("unsupported scalar/IN sublink kind"),
         }
     }
-    fn membership(&mut self, mut query: pg::SelectStmt, probe: Node) -> Result<Node> {
+    fn membership(
+        &mut self,
+        mut query: pg::SelectStmt,
+        probe: Node,
+        comparison: Compare,
+    ) -> Result<Node> {
         let correlation = correlation::extract(&mut query)?;
         let alias = self.alias()?;
+        if comparison != Compare::Eq {
+            scalar_input::validate(&query, 0)?;
+            ensure!(
+                correlation.pairs.iter().all(
+                    |(outer, inner)| scalar_input::column(outer) && scalar_input::column(inner)
+                ),
+                "quantified correlation requires column equalities"
+            );
+        }
         if !correlation.pairs.is_empty() {
             ensure!(
                 query.group_clause.is_empty()
@@ -302,6 +328,7 @@ impl Rewrite<'_> {
             alias: alias.clone(),
             condition: ast::logical(conditions, true),
             semijoin: false,
+            comparison,
         });
         Ok(ast::column(&alias, ast::VALUE))
     }

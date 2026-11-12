@@ -1,4 +1,4 @@
-# Scalar subqueries and IN
+# Scalar and quantified subqueries
 
 Scalar subqueries and scalar IN/NOT IN compose the existing
 relational engine. Their values can appear in projections and supported predicates,
@@ -77,9 +77,30 @@ HAVING/LIMIT suppression instead makes the RHS empty. These cases are distinct.
 Marks read each affected correlation bucket under the existing work/storage
 budgets. Without a residual correlation, one scan collects the bucket's RHS values
 into a resident set bounded by the output-byte limit, so a tick costs time linear in the bucket
-for any comparison whose sides share a value domain. Uncorrelated membership uses
+for equality comparisons whose sides share a value domain. Uncorrelated membership uses
 a global bucket, so its tick still reads every outer and RHS row. A residual
 correlation or a cross-domain date/timestamp comparison scans the RHS per outer row.
+
+## Ordered quantification
+
+The initial quantified comparison is `< ANY` (also spelled `< SOME`) and
+`< ALL` over a one-column subquery. Both operands must be smallint, integer,
+or bigint. Unknown probe literals take the RHS type, and typed integral
+operands retain their widths. A simple column or literal probe can appear
+in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
+with indexable column equalities for correlation.
+
+- `< ANY` returns TRUE if any comparison is TRUE. Otherwise it returns NULL
+  if any comparison is NULL, or FALSE if every comparison is FALSE or the group is empty.
+- `< ALL` returns FALSE if any comparison is FALSE. Otherwise it returns NULL
+  if any comparison is NULL, or TRUE if every comparison is TRUE or the group is empty.
+
+An empty group has these results even when the probe is NULL.
+
+The mark scans the matching RHS bucket under the existing work limits and
+keeps each outer row's multiplicity. NULL correlation keys have an empty
+group. PostgreSQL materialized-view and independent raw-source oracles
+check correlated and uncorrelated CDC histories, including cold reopen.
 
 ## Evaluation and durability boundaries
 

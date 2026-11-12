@@ -107,3 +107,13 @@ pub(super) fn checked_scalar(value: Node, multiple: Node) -> Node {
         }))),
     }
 }
+
+pub(super) fn not(value: Node) -> Node {
+    Node {
+        node: Some(NodeEnum::BoolExpr(Box::new(pg::BoolExpr {
+            boolop: i32::from(pg::BoolExprType::NotExpr),
+            args: vec![value],
+            ..pg::BoolExpr::default()
+        }))),
+    }
+}

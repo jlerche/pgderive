@@ -1,4 +1,4 @@
-//! Bound IN marker inputs use the same typed scalar and tagged join infrastructure.
+//! Bound subquery marker inputs use the same typed scalar and tagged join infrastructure.
 use super::{Builder, Column, Edge, keys, resolve};
 use crate::compiler::{
     ColumnRef, Predicate,
@@ -17,11 +17,12 @@ impl Builder<'_> {
         &mut self,
         mut left: Edge,
         parsed: Box<Parsed>,
-        arguments: (&Ast, String, Option<&Ast>, bool),
+        arguments: (&Ast, String, Option<&Ast>, bool, Compare),
     ) -> Result<Edge> {
-        let (probe, alias, condition, semijoin) = arguments;
+        let (probe, alias, condition, semijoin, operator) = arguments;
         let resolve_left = |name: &Name| Ok(resolve(name, &left.columns)?.value.clone());
-        let operand = typed::operand(probe, &resolve_left)?;
+        let ordered = operator != Compare::Eq;
+        let start = self.nodes.len();
         let right = self.derived(parsed, alias.clone())?;
         ensure!(
             condition.is_some() || right.columns.len() == 1,
@@ -32,21 +33,13 @@ impl Builder<'_> {
             matches!(value.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
             "unsupported IN native type"
         );
-        let probe = operand.coerce(value.oid)?;
-        if matches!(probe.oid(), 25 | 1043) {
-            let collation = probe.collation(&|value| {
-                Ok(left
-                    .columns
-                    .iter()
-                    .find(|column| column.value.name == value.name)
-                    .map_or(0, |column| column.collation))
-            })?;
-            ensure!(
-                collation != 0 && right.columns[0].collation != 0,
-                "IN requires resolved text collations"
-            );
-            typed::collation::common(collation, right.columns[0].collation)?;
-        }
+        let probe = if ordered {
+            super::validate_scalar_input(&self.nodes[start..])?;
+            integral_probe(probe, value.oid, &resolve_left)?
+        } else {
+            typed::operand(probe, &resolve_left)?.coerce(value.oid)?
+        };
+        validate_probe_collation(&probe, &left.columns, right.columns[0].collation)?;
         let mut computed = Vec::new();
         let probe = match probe.as_column() {
             Some(column) => column.clone(),
@@ -56,13 +49,17 @@ impl Builder<'_> {
         };
         self.map(&mut left, computed, &format!("mark_{}_probe", self.joins));
         let comparison = Predicate::new(Expr::Compare(
-            Compare::Eq,
+            operator,
             typed::Typed::column(probe.clone()),
             typed::Typed::column(value.clone()),
         ));
         let columns = left.columns.clone();
         let id = format!("tree_join_{}", self.joins);
         let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
+        ensure!(
+            !ordered || bound.predicate.is_none(),
+            "quantified correlation requires indexable equality"
+        );
         let edge = self.join(left, right, bound, crate::compiler::left_join::Kind::Left)?;
         let Some(Node::LeftJoin { id, input, spec }) = self.nodes.pop() else {
             anyhow::bail!("missing marker tagged join");
@@ -99,4 +96,33 @@ impl Builder<'_> {
         ensure!(edge.id == id, "marker join edge differs");
         Ok(Edge { id, columns })
     }
+}
+fn integral_probe(
+    probe: &Ast,
+    rhs_oid: u32,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+) -> Result<typed::Typed> {
+    let probe = typed::Typed::bind_contextual(probe, resolve, 0)?;
+    ensure!(
+        matches!(rhs_oid, 20 | 21 | 23) && matches!(probe.oid(), 0 | 705 | 20 | 21 | 23),
+        "quantified < requires integral operands"
+    );
+    if matches!(probe.oid(), 0 | 705) { probe.coerce_common(rhs_oid) } else { Ok(probe) }
+}
+fn validate_probe_collation(
+    probe: &typed::Typed,
+    left: &[Column],
+    rhs_collation: u32,
+) -> Result<()> {
+    if matches!(probe.oid(), 25 | 1043) {
+        let collation = probe.collation(&|value| {
+            Ok(left
+                .iter()
+                .find(|column| column.value.name == value.name)
+                .map_or(0, |column| column.collation))
+        })?;
+        ensure!(collation != 0 && rhs_collation != 0, "IN requires resolved text collations");
+        typed::collation::common(collation, rhs_collation)?;
+    }
+    Ok(())
 }

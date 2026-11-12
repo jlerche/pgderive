@@ -6,7 +6,8 @@ import subprocess
 import sys
 
 LIVE_COUNTS = {'memtable': 1, 'checkpoint': 1, 'result-table': 2, 'operation-budget': 1,
-               'transactions': 7, 'crashes': 5, 'query-lifecycle': 1, 'projection-compiler': 2, 'postgres-support': 1}
+               'transactions': 7, 'crashes': 5, 'query-lifecycle': 1, 'projection-compiler': 2, 'postgres-support': 1,
+               'quantified-subqueries': 2}
 
 
 def successful(report, fields):

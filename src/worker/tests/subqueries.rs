@@ -363,3 +363,91 @@ fn scalar_set_input_rejects_fallible_implicit_row_conversion() {
         matches!(compile(sql, &native), Err(error) if format!("{error:#}").contains("scalar RHS row conversions must be total"))
     );
 }
+
+fn boolean_text(value: bool) -> String {
+    if value { "t" } else { "f" }.into()
+}
+
+fn less_than_quantified(probe: Option<i64>, values: &[Option<i64>], all: bool) -> Option<bool> {
+    let outcomes = values.iter().map(|value| Some(probe? < (*value)?));
+    if outcomes.clone().any(|result| result == Some(!all)) {
+        Some(!all)
+    } else if outcomes.clone().any(|result| result.is_none()) {
+        None
+    } else {
+        Some(all)
+    }
+}
+
+#[tokio::test]
+async fn quantified_comparison_preserves_weighted_rows_and_group_truth() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT a.category AS c,a.other < ANY(SELECT b.price FROM source.bid b WHERE b.auction=a.other) AS some,a.other < ALL(SELECT b.price FROM source.bid b WHERE b.auction=a.other) AS all_less FROM source.auction a",
+        &native,
+    )?;
+    let names = compiled.output().columns.iter().map(|c| c.column.name.clone()).collect::<Vec<_>>();
+    let options = settings();
+    let mut history = History::new((&native, &compiled, &options));
+    history.compact = true;
+    history
+        .run(
+            changes(),
+            |state| {
+                outputs(state, &names, |left, right| {
+                    let values = right
+                        .iter()
+                        .filter(|(right, _)| {
+                            left["other"].is_some() && left["other"] == right["auction"]
+                        })
+                        .map(|(row, _)| row["price"].as_deref().map(str::parse::<i64>).transpose())
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let probe = left["other"].as_deref().map(str::parse).transpose()?;
+                    let result = |all| less_than_quantified(probe, &values, all).map(boolean_text);
+                    Ok(vec![left["category"].clone(), result(false), result(true)])
+                })
+            },
+            super::apply_joined,
+            |_| true,
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn quantified_where_keeps_inequality_and_preserves_literal_width() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT a.category AS c, 100000 < ALL (VALUES (1::smallint)) AS wide, NULL < ANY (SELECT 1 WHERE false) AS empty_any, NULL < ALL (SELECT 1 WHERE false) AS empty_all FROM source.auction a WHERE a.other=2 AND a.other < SOME(SELECT b.price FROM source.bid b WHERE b.auction=a.other)",
+        &native,
+    )?;
+    let names = compiled.output().columns.iter().map(|c| c.column.name.clone()).collect::<Vec<_>>();
+    let options = settings();
+    History::new((&native, &compiled, &options))
+        .run(
+            changes(),
+            |state| {
+                let matching = (
+                    state
+                        .0
+                        .iter()
+                        .filter(|(row, _)| row["other"].as_deref() == Some("2"))
+                        .map(|(row, weight)| (row.clone(), *weight))
+                        .collect(),
+                    state.1.clone(),
+                );
+                outputs(&matching, &names, |left, _| {
+                    Ok(vec![
+                        left["category"].clone(),
+                        Some("f".into()),
+                        Some("f".into()),
+                        Some("t".into()),
+                    ])
+                })
+            },
+            super::apply_joined,
+            |_| true,
+        )
+        .await?;
+    Ok(())
+}

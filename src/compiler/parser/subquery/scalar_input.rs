@@ -62,7 +62,7 @@ fn literal(value: &Node) -> Result<bool> {
     })
 }
 
-fn plain(value: &Node) -> Result<bool> {
+pub(super) fn plain(value: &Node) -> Result<bool> {
     Ok(column(value) || literal(value)?)
 }
 

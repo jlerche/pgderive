@@ -452,6 +452,10 @@ const fn compare(op: &Compare, ordering: Ordering) -> bool {
 #[serde(transparent)]
 pub struct Predicate(Expr);
 impl Predicate {
+    pub(crate) const fn is_equality(&self) -> bool {
+        matches!(self.0, Expr::Compare(Compare::Eq, _, _))
+    }
+
     pub(super) const fn new(expr: Expr) -> Self {
         Self(expr)
     }
