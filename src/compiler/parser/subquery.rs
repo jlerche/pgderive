@@ -6,6 +6,7 @@ mod scalar_input;
 use super::{
     Parsed,
     expressions::{between_kind, distinct_kind, names, node, optional},
+    membership,
     native_join::Tree,
 };
 use crate::compiler::syntax::Compare;
@@ -39,6 +40,12 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
         {
             target.name = super::label::output(super::target(&original)?)?;
         }
+    }
+    if let Some(condition) = &mut checked.where_clause
+        && let Some(mark) = rewrite.residual_exists(condition)?
+    {
+        **condition = mark;
+        rewrite.changed = true;
     }
     for condition in [&mut checked.where_clause, &mut checked.having_clause].into_iter().flatten() {
         rewrite.visit(condition, false, 0)?;
@@ -75,8 +82,12 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
 }
 /// `PostgreSQL` pulls up IN as a semijoin only when it is a top-level WHERE conjunct.
 fn mark_semijoins(tree: &mut Tree, condition: &Node) {
-    let Tree::Mark { left, alias, semijoin, quantified, .. } = tree else { return };
-    *semijoin = quantified.is_none() && conjunct(condition, &ast::column(alias, ast::VALUE));
+    let Tree::Mark { left, alias, semijoin, quantified, residual_inequality, .. } = tree else {
+        return;
+    };
+    *semijoin = quantified.is_none()
+        && !*residual_inequality
+        && conjunct(condition, &ast::column(alias, ast::VALUE));
     mark_semijoins(left, condition);
 }
 fn conjunct(condition: &Node, column: &Node) -> bool {
@@ -289,21 +300,48 @@ impl Rewrite<'_> {
             _ => anyhow::bail!("unsupported scalar/IN sublink kind"),
         }
     }
+    fn residual_exists(&mut self, condition: &Node) -> Result<Option<Node>> {
+        let Some((query, anti)) = membership::exists(condition)? else { return Ok(None) };
+        let filter = optional(query.where_clause.as_deref())?;
+        if super::native_join::computed_equalities(filter, &mut Vec::new(), 0).is_ok() {
+            return Ok(None);
+        }
+        let probe = membership::existence_value(query)?.clone();
+        let mut query = query.clone();
+        let correlation = correlation::extract(&mut query, true)?;
+        if correlation.residual.is_none() {
+            return Ok(None);
+        }
+        // 1 IN (SELECT 1 ...) is two-valued, even when the residual rejects every pair.
+        let mark = self.membership_mark(query, probe, None, correlation)?;
+        Ok(Some(if anti { ast::not(mark) } else { mark }))
+    }
+
     fn membership(
         &mut self,
         mut query: pg::SelectStmt,
         probe: Node,
         quantified: Option<Compare>,
     ) -> Result<Node> {
-        let correlation = correlation::extract(&mut query)?;
+        let correlation = correlation::extract(&mut query, quantified.is_none())?;
+        self.membership_mark(query, probe, quantified, correlation)
+    }
+    fn membership_mark(
+        &mut self,
+        mut query: pg::SelectStmt,
+        probe: Node,
+        quantified: Option<Compare>,
+        correlation: correlation::Correlation,
+    ) -> Result<Node> {
         let alias = self.alias()?;
-        if quantified.is_some() {
+        let residual_inequality = correlation.residual.is_some();
+        if quantified.is_some() || residual_inequality {
             scalar_input::validate(&query, 0)?;
             ensure!(
                 correlation.pairs.iter().all(
                     |(outer, inner)| scalar_input::column(outer) && scalar_input::column(inner)
                 ),
-                "quantified correlation requires column equalities"
+                "correlation requires column equalities"
             );
         }
         if !correlation.pairs.is_empty() {
@@ -324,6 +362,17 @@ impl Rewrite<'_> {
             query.target_list.push(ast::target(inner, &label));
             conditions.push(ast::comparison(outer, ast::column(&alias, &label), "="));
         }
+        if let Some(residual) = correlation.residual {
+            let label = "\0inequality";
+            query.target_list.push(ast::target(residual.inner, label));
+            let inner = ast::column(&alias, label);
+            let (left, right) = if residual.outer_first {
+                (residual.outer, inner)
+            } else {
+                (inner, residual.outer)
+            };
+            conditions.push(ast::comparison(left, right, &residual.operator));
+        }
         let left = self.take_tree()?;
         self.tree = Some(Tree::Mark {
             left: Box::new(left),
@@ -333,6 +382,7 @@ impl Rewrite<'_> {
             condition: ast::logical(conditions, true),
             semijoin: false,
             quantified,
+            residual_inequality,
         });
         Ok(ast::column(&alias, ast::VALUE))
     }

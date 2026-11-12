@@ -1,4 +1,4 @@
-//! Equality-only decorrelation; inner unqualified names retain local shadowing.
+//! Bounded correlation extraction; inner unqualified names retain local shadowing.
 use super::ast;
 use crate::compiler::parser::{
     Table,
@@ -6,20 +6,28 @@ use crate::compiler::parser::{
 };
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
+#[derive(Default)]
 pub(super) struct Correlation {
     pub pairs: Vec<(Node, Node)>,
+    pub residual: Option<Inequality>,
 }
-pub(super) fn extract(query: &mut pg::SelectStmt) -> Result<Correlation> {
+pub(super) struct Inequality {
+    pub outer: Node,
+    pub inner: Node,
+    pub operator: String,
+    pub outer_first: bool,
+}
+pub(super) fn extract(query: &mut pg::SelectStmt, inequality: bool) -> Result<Correlation> {
     let [source] = query.from_clause.as_slice() else {
-        return Ok(Correlation { pairs: Vec::new() });
+        return Ok(Correlation::default());
     };
     let Ok(table) = crate::compiler::parser::table(source) else {
-        return Ok(Correlation { pairs: Vec::new() });
+        return Ok(Correlation::default());
     };
     let mut local = Vec::new();
-    let mut pairs = Vec::new();
+    let mut correlation = Correlation::default();
     if let Some(condition) = query.where_clause.take() {
-        conjunct(*condition, &table, &mut local, &mut pairs, 0)?;
+        conjunct(*condition, &table, &mut local, (&mut correlation, inequality), 0)?;
     }
     query.where_clause = ast::logical(local, true);
     for value in query
@@ -33,21 +41,26 @@ pub(super) fn extract(query: &mut pg::SelectStmt) -> Result<Correlation> {
             "outer references require top-level AND correlation equalities"
         );
     }
-    Ok(Correlation { pairs })
+    ensure!(
+        correlation.residual.is_none() || !correlation.pairs.is_empty(),
+        "inequality correlation requires an equality key"
+    );
+    Ok(correlation)
 }
 fn conjunct(
     value: Node,
     table: &Table,
     local: &mut Vec<Node>,
-    pairs: &mut Vec<(Node, Node)>,
+    state: (&mut Correlation, bool),
     depth: usize,
 ) -> Result<()> {
-    ensure!(depth < 32 && pairs.len() <= 8, "subquery correlation budget exceeded");
+    ensure!(depth < 32, "subquery correlation budget exceeded");
+    let (correlation, inequality) = state;
     if let NodeEnum::BoolExpr(value) = node(&value)?
         && value.boolop == i32::from(pg::BoolExprType::AndExpr)
     {
         for value in &value.args {
-            conjunct(value.clone(), table, local, pairs, depth + 1)?;
+            conjunct(value.clone(), table, local, (correlation, inequality), depth + 1)?;
         }
         return Ok(());
     }
@@ -56,13 +69,22 @@ fn conjunct(
         local.push(value);
         return Ok(());
     }
-    let NodeEnum::AExpr(expression) = node(&value)? else {
+    comparison(&value, table, correlation, inequality)
+}
+fn comparison(
+    value: &Node,
+    table: &Table,
+    correlation: &mut Correlation,
+    inequality: bool,
+) -> Result<()> {
+    let NodeEnum::AExpr(expression) = node(value)? else {
         anyhow::bail!("correlation requires top-level AND equalities");
     };
-    ensure!(
-        expression.kind == i32::from(pg::AExprKind::AexprOp) && names(&expression.name)?.0 == ["="],
-        "correlation requires ordinary equality"
-    );
+    ensure!(expression.kind == i32::from(pg::AExprKind::AexprOp), "invalid correlation comparison");
+    let operator = names(&expression.name)?.0;
+    let [operator] = operator.as_slice() else {
+        anyhow::bail!("correlation requires an unqualified comparison");
+    };
     let left = expression
         .lexpr
         .as_deref()
@@ -76,12 +98,28 @@ fn conjunct(
         matches!(sides, (1, 2) | (2, 1)),
         "correlation operands must be local to opposite scopes"
     );
-    ensure!(pairs.len() < 8, "subquery correlation key count exceeded");
-    pairs.push(if sides.0 == 2 {
-        (left.clone(), right.clone())
+    let outer_first = sides.0 == 2;
+    let (outer, inner) = if outer_first { (left, right) } else { (right, left) };
+    if operator == "=" {
+        ensure!(correlation.pairs.len() < 8, "subquery correlation key count exceeded");
+        correlation.pairs.push((outer.clone(), inner.clone()));
     } else {
-        (right.clone(), left.clone())
-    });
+        ensure!(
+            inequality && matches!(operator.as_str(), "<" | "<=" | ">" | ">=" | "<>"),
+            "correlation requires ordinary equality or one supported inequality"
+        );
+        ensure!(correlation.residual.is_none(), "only one correlation inequality is supported");
+        ensure!(
+            super::scalar_input::column(outer) && super::scalar_input::column(inner),
+            "correlation inequality requires plain columns"
+        );
+        correlation.residual = Some(Inequality {
+            outer: outer.clone(),
+            inner: inner.clone(),
+            operator: operator.clone(),
+            outer_first,
+        });
+    }
     Ok(())
 }
 fn references(value: &Node, table: &Table, depth: usize) -> Result<u8> {

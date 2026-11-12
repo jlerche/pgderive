@@ -81,6 +81,24 @@ for equality comparisons whose sides share a value domain. Uncorrelated membersh
 a global bucket, so its tick still reads every outer and RHS row. A residual
 correlation or a cross-domain date/timestamp comparison scans the RHS per outer row.
 
+## Inequality correlation
+
+A correlated `IN` or `NOT IN` subquery can add one ordinary inequality
+(`<`, `<=`, `>`, `>=`, or `<>`) as an AND term alongside an indexable
+column equality. The inequality compares a column from each scope using the
+existing native comparison rules. The same correlation is supported for
+`WHERE EXISTS (SELECT 1 ...)` and `WHERE NOT EXISTS (SELECT 1 ...)`.
+The RHS uses a native table, a simple projection, and supported local predicates.
+The membership probe must be safe to evaluate independently of the RHS.
+
+The mark scans the matching equality bucket under the existing work limits.
+Only pairs for which the inequality is TRUE contribute. A NULL inequality
+operand therefore cannot establish existence or make an `IN` result NULL.
+A qualifying row whose projected value is NULL can still make `IN` and
+`NOT IN` NULL. When no pair qualifies, `EXISTS` and `IN` are FALSE and
+their negations are TRUE, even for a NULL membership probe. The mark preserves
+outer multiplicity and remains valid across duplicate RHS changes and cold reopen.
+
 ## Integral quantified comparisons
 
 The operators `=`, `<>` (also spelled `!=`), `<`, `<=`, `>`, and `>=`

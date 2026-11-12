@@ -467,3 +467,40 @@ fn explicit_quantified_equality_keeps_integral_admission() {
         }
     }
 }
+
+#[test]
+fn residual_membership_requires_one_inequality_and_a_key() -> Result<()> {
+    let native = native();
+    for predicate in ["b.auction=a.other AND b.price>a.id", "b.auction=a.other AND a.id<=b.price"] {
+        for (projection, filter) in [
+            (
+                format!("a.other IN (SELECT b.price FROM source.bid b WHERE {predicate})"),
+                "true".into(),
+            ),
+            ("a.id".into(), format!("EXISTS (SELECT 1 FROM source.bid b WHERE {predicate})")),
+        ] {
+            compile(&format!("SELECT {projection} FROM source.auction a WHERE {filter}"), &native)?;
+        }
+    }
+    for predicate in [
+        "b.price>a.id",
+        "b.auction=a.other AND b.price>a.id AND b.id<a.id",
+        "b.auction=a.other AND (b.price>a.id OR b.id<a.id)",
+        "b.auction=a.other AND b.price+1>a.id",
+        "b.auction=a.other+1 AND b.price>a.id",
+    ] {
+        let in_query = format!(
+            "SELECT a.other IN (SELECT b.price FROM source.bid b WHERE {predicate}) FROM source.auction a"
+        );
+        let exists_query = format!(
+            "SELECT a.id FROM source.auction a WHERE EXISTS (SELECT 1 FROM source.bid b WHERE {predicate})"
+        );
+        assert!(compile(&in_query, &native).is_err(), "{in_query}");
+        assert!(compile(&exists_query, &native).is_err(), "{exists_query}");
+    }
+    let fallible_probe = "SELECT 10 / a.other IN (SELECT b.price FROM source.bid b
+        WHERE b.auction=a.other AND b.price>a.id) FROM source.auction a";
+    assert!(matches!(compile(fallible_probe, &native), Err(error)
+        if format!("{error:#}").contains("requires a total membership probe")));
+    Ok(())
+}

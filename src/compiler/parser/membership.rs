@@ -32,13 +32,7 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
     Ok(Some(Parsed::Membership { parsed, distinct }))
 }
 fn existence_source(select: &pg::SelectStmt, query: &pg::SelectStmt, anti: bool) -> Result<Tree> {
-    super::validate_query(query)?;
-    ensure!(
-        query.group_clause.is_empty()
-            && query.having_clause.is_none()
-            && query.window_clause.is_empty(),
-        "EXISTS grouping/HAVING/WINDOW unsupported"
-    );
+    existence_value(query)?;
     let [source] = select.from_clause.as_slice() else {
         anyhow::bail!("membership requires one native source")
     };
@@ -48,14 +42,6 @@ fn existence_source(select: &pg::SelectStmt, query: &pg::SelectStmt, anti: bool)
     let mut keys = Vec::new();
     native_join::computed_equalities(optional(query.where_clause.as_deref())?, &mut keys, 0)?;
     ensure!((1..=16).contains(&keys.len()), "EXISTS correlation key budget exceeded");
-    ensure!(query.target_list.len() == 1, "EXISTS requires SELECT 1");
-    let NodeEnum::AConst(value) = node(super::target(&query.target_list[0])?)? else {
-        anyhow::bail!("EXISTS requires SELECT 1")
-    };
-    ensure!(
-        matches!(&value.val, Some(pg::a_const::Val::Ival(value)) if value.ival == 1),
-        "EXISTS requires SELECT 1"
-    );
     Ok(Tree::Exists {
         left: Box::new(Tree::Source(super::table(source)?)),
         right: super::table(right)?,
@@ -64,7 +50,25 @@ fn existence_source(select: &pg::SelectStmt, query: &pg::SelectStmt, anti: bool)
     })
 }
 
-fn exists(value: &Node) -> Result<Option<(&pg::SelectStmt, bool)>> {
+pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<&Node> {
+    super::validate_query(query)?;
+    ensure!(
+        query.group_clause.is_empty()
+            && query.having_clause.is_none()
+            && query.window_clause.is_empty(),
+        "EXISTS grouping/HAVING/WINDOW unsupported"
+    );
+    ensure!(query.target_list.len() == 1, "EXISTS requires SELECT 1");
+    let target = super::target(&query.target_list[0])?;
+    let NodeEnum::AConst(value) = node(target)? else { anyhow::bail!("EXISTS requires SELECT 1") };
+    ensure!(
+        matches!(&value.val, Some(pg::a_const::Val::Ival(value)) if value.ival == 1),
+        "EXISTS requires SELECT 1"
+    );
+    Ok(target)
+}
+
+pub(super) fn exists(value: &Node) -> Result<Option<(&pg::SelectStmt, bool)>> {
     let (value, anti) = match node(value)? {
         NodeEnum::BoolExpr(value) if value.boolop == i32::from(pg::BoolExprType::NotExpr) => {
             let [argument] = value.args.as_slice() else { return Ok(None) };

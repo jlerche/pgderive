@@ -94,7 +94,16 @@ impl Builder<'_> {
                 }
                 self.scalar(left, right, (alias, checked, condition.as_deref()))
             }
-            Tree::Mark { left, right, probe, alias, condition, semijoin, quantified } => {
+            Tree::Mark {
+                left,
+                right,
+                probe,
+                alias,
+                condition,
+                semijoin,
+                quantified,
+                residual_inequality,
+            } => {
                 let left = self.tree(*left)?;
                 self.mark(
                     left,
@@ -105,6 +114,7 @@ impl Builder<'_> {
                         condition: condition.as_deref(),
                         semijoin,
                         quantified,
+                        residual_inequality,
                     },
                 )
             }

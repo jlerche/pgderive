@@ -72,6 +72,7 @@ temporal-resolution temporal_resolution
 subqueries subquery
 scalar-cardinality scalar_cardinality
 quantified-subqueries quantified_subqueries
+residual-subqueries residual_subqueries
 numeric-arithmetic numeric_arithmetic
 temporal-arithmetic temporal_arithmetic
 ordering ordering

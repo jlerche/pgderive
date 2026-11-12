@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Check keyed inequality correlation against native PostgreSQL and a raw-source oracle."""
+from collections import Counter
+import json
+
+from native_mv_oracle import binary_difference, expected
+from sql_compiler_harness import SqlFixture
+from worker_harness import History, run_modes
+
+
+def membership(probe, values):
+    if not values:
+        return False
+    if probe is None:
+        return None
+    if probe in values:
+        return True
+    return None if None in values else False
+
+
+class ResidualFixture(SqlFixture):
+    def __init__(self, output, mode):
+        super().__init__(output, False)
+        self.mode = mode
+        self.outer = self.name + '.auction'
+        self.inner = self.name + '.bid'
+        a, b = self.outer, self.inner
+        self.sql(f'''DELETE FROM {a}; DELETE FROM {b};
+            ALTER TABLE {a} ADD COLUMN probe bigint, ADD COLUMN ceiling bigint;
+            ALTER TABLE {b} ADD COLUMN cutoff integer;
+            INSERT INTO {a}(id,group_id,probe,ceiling) VALUES
+                (1,1,7,10),(2,1,7,3),(3,1,7,NULL),(4,1,NULL,10),
+                (5,NULL,7,10),(6,2,7,10),(7,3,NULL,10);
+            INSERT INTO {b}(id,auction,price,cutoff) VALUES
+                (1,1,7,3),(2,1,7,3),(3,1,NULL,12),(4,1,NULL,NULL),
+                (5,NULL,7,3),(6,2,NULL,2),(99,1,7,1);''')
+        keys = 'b.auction=a.group_id AND b.id<>99'
+        if mode in ('in', 'in-filter'):
+            rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND a.ceiling>b.cutoff'
+            if mode == 'in':
+                self.labels = ['id', 'member', 'excluded']
+                self.query = f'''SELECT a.id, a.probe IN ({rhs}) AS member,
+                    a.probe NOT IN ({rhs}) AS excluded FROM {a} a'''
+            else:
+                self.labels = ['id']
+                self.query = f'SELECT a.id FROM {a} a WHERE a.probe IN ({rhs})'
+        else:
+            negation = 'NOT ' if mode == 'not-exists' else ''
+            self.labels = ['id']
+            self.query = f'''SELECT a.id FROM {a} a WHERE {negation}EXISTS
+                (SELECT 1 FROM {b} b WHERE {keys} AND b.cutoff<a.ceiling)'''
+
+    def verify(self):
+        self.verify_sql(expected(self, self.labels))
+        assert binary_difference(self) == '0'
+        outer = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.outer} a"))
+        inner = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.inner} b"))
+        memory = Counter()
+        for row in outer:
+            key, ceiling = row['group_id'], row['ceiling']
+            values = [
+                item['price'] for item in inner
+                if key is not None and key == item['auction'] and item['id'] != 99
+                and ceiling is not None and item['cutoff'] is not None and item['cutoff'] < ceiling
+            ]
+            if self.mode in ('in', 'in-filter'):
+                mark = membership(row['probe'], values)
+                if self.mode == 'in':
+                    memory[(row['id'], mark, None if mark is None else not mark)] += 1
+                elif mark is True:
+                    memory[(row['id'],)] += 1
+            elif bool(values) == (self.mode == 'exists'):
+                memory[(row['id'],)] += 1
+        self.verify_memory(memory)
+
+
+def qualify(output, command, mode):
+    fixture = ResidualFixture(output, mode)
+    a, b = fixture.outer, fixture.inner
+    with fixture.managed():
+        fixture.run_history(command, History(
+            changes=[
+                f'DELETE FROM {b} WHERE id=1',
+                f'UPDATE {b} SET cutoff=4 WHERE id=3; DELETE FROM {b} WHERE id=2',
+                f'UPDATE {b} SET cutoff=NULL WHERE id=3; UPDATE {a} SET ceiling=20 WHERE id=2',
+                f'UPDATE {b} SET auction=3,cutoff=1 WHERE id=3; UPDATE {a} SET probe=7 WHERE id=7',
+            ],
+            final=f'UPDATE {b} SET auction=1,price=7 WHERE id=3',
+            normalized=fixture.query.replace('SELECT', 'select'),
+            rejected=[],
+        ))
+        (output/'result.json').write_text(json.dumps({
+            'mode': mode, 'cold_restart': True, 'native_bag_and_binary': True,
+            'independent_oracle': True,
+        })+'\n')
+
+
+if __name__ == '__main__':
+    run_modes(('exists', 'not-exists', 'in', 'in-filter'), qualify)

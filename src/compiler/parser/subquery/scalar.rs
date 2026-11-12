@@ -12,7 +12,7 @@ impl Rewrite<'_> {
         if !global_aggregate(&select)? {
             return self.nonaggregate(select);
         }
-        let correlation = correlation::extract(&mut select)?;
+        let correlation = correlation::extract(&mut select, false)?;
         self.validation.push(query(&select)?);
         let original = target(&select.target_list[0])?.clone();
         let alias = self.alias()?;
@@ -122,7 +122,7 @@ impl Rewrite<'_> {
             select.group_clause.is_empty() && select.having_clause.is_none(),
             "nonaggregate scalar subquery does not support GROUP BY/HAVING"
         );
-        let correlation = correlation::extract(&mut select)?;
+        let correlation = correlation::extract(&mut select, false)?;
         super::scalar_input::validate(&select, 0)?;
         let alias = self.alias()?;
         let mut labels = vec![ast::VALUE.into()];
