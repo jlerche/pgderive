@@ -79,6 +79,35 @@ th, td { padding: 8px 18px; border-top: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 500; }
 .changed { background: #223938; }
 .delta { color: #a4ead4; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .result:has(.changed) .result-label span {
+    animation: commit-pulse 400ms ease-out;
+  }
+  .changed {
+    animation: result-highlight 700ms ease-out 180ms both;
+  }
+  .delta {
+    display: inline-block;
+    animation: delta-appear 280ms ease-out 220ms both;
+  }
+}
+
+@keyframes commit-pulse {
+  from { box-shadow: 0 0 0 0 #99e2cc99; }
+  to { box-shadow: 0 0 0 9px #99e2cc00; }
+}
+
+@keyframes result-highlight {
+  0% { background: #191e2b; }
+  35% { background: #34534b; }
+  100% { background: #223938; }
+}
+
+@keyframes delta-appear {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .simulation { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 16px; }
 .simulation p { margin: 0; color: var(--muted); font-size: 0.8rem; }
 .simulation button { background: #222941; color: #e3e7ff; flex-shrink: 0; font-size: 0.8rem; }
