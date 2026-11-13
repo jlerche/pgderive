@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './style.css'
 
@@ -14,30 +13,24 @@ function Wordmark() {
 }
 
 function Example() {
-  const [inserted, setInserted] = useState(false)
-
   return (
     <figure className="example" id="example">
       <figcaption><span>revenue_by_customer.sql</span><span>PostgreSQL</span></figcaption>
       <pre><code><b>SELECT</b> customer_id,{'\n'}{'  '}<b>SUM</b>(amount_cents){'\n'}{'    '}<b>AS</b> revenue_cents{'\n'}<b>FROM</b> orders{'\n'}<b>GROUP BY</b> customer_id;</code></pre>
+      <p className="source-change"><strong>New order</strong><span>Customer 1042 · $25.00</span></p>
       <div className="result">
-        <div className="result-label"><span aria-hidden="true" /> Result table</div>
-        <table aria-label="Revenue by customer in cents">
-          <thead><tr><th scope="col">customer_id</th><th scope="col">revenue_cents</th></tr></thead>
+        <div className="result-label">Result table · Revenue in cents</div>
+        <table aria-label="Revenue by customer before and after the order">
+          <thead>
+            <tr><th scope="col">customer_id</th><th scope="col">Before</th><th scope="col">After</th></tr>
+          </thead>
           <tbody>
-            <tr className={inserted ? 'changed' : undefined}>
-              <td>1042</td>
-              <td>{inserted ? '20900' : '18400'} {inserted && <span className="delta">+2500</span>}</td>
+            <tr className="changed">
+              <th scope="row">1042</th><td>18400</td><td>20900 <span className="delta">+2500</span></td>
             </tr>
-            <tr><td>1089</td><td>9600</td></tr>
+            <tr><th scope="row">1089</th><td>9600</td><td>9600</td></tr>
           </tbody>
         </table>
-      </div>
-      <div className="simulation">
-        <p role="status">{inserted ? 'Customer 1042’s revenue is now $209.00.' : 'Simulate a $25 order for customer 1042.'}</p>
-        <button type="button" onClick={() => setInserted(!inserted)}>
-          {inserted ? 'Reset example' : 'Insert order'}
-        </button>
       </div>
     </figure>
   )
@@ -63,7 +56,7 @@ function App() {
               <h1 id="headline">Keep your query <span>results current.</span></h1>
               <p className="intro">Pgderive processes committed changes and updates the affected rows in a PostgreSQL result table. Read it with ordinary SQL.</p>
               <div className="actions">
-                <a className="button" href="#example">Try the example <span aria-hidden="true">↓</span></a>
+                <a className="button" href="#example">See the example <span aria-hidden="true">↓</span></a>
                 <a className="text-link" href="#how-it-works">How it works <span aria-hidden="true">↘</span></a>
               </div>
             </div>
