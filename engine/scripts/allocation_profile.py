@@ -88,10 +88,16 @@ def snapshot(revision, destination):
                 target = destination / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
-        patch = subprocess.check_output(['git', 'diff', 'HEAD', '--binary'], cwd=ROOT)
+        patch = subprocess.check_output(['git', 'diff', 'HEAD', '--binary', '--relative'], cwd=ROOT)
         (destination.parent / 'working-tree.patch').write_bytes(patch)
     else:
-        archive = subprocess.check_output(['git', 'archive', head], cwd=ROOT)
+        engine_tree = f'{head}:engine'
+        if subprocess.run(['git', 'cat-file', '-e', engine_tree], cwd=ROOT, stderr=subprocess.DEVNULL).returncode == 0:
+            head_tree = engine_tree
+        else:
+            # Historical benchmark revisions predate the monorepo.
+            head_tree = head
+        archive = subprocess.check_output(['git', 'archive', head_tree], cwd=ROOT.parent)
         with tarfile.open(fileobj=io.BytesIO(archive)) as files:
             files.extractall(destination, filter='data')
     hashes = {str(path.relative_to(destination)): digest(path)

@@ -1,6 +1,11 @@
 target/
 __pycache__/
-/config.local.toml
+/engine/config.local.toml
+/engine/artifacts/
 /artifacts/
 
-/s3.local.json
+/engine/s3.local.json
+
+/web/node_modules/
+/web/dist/
+/web/.wrangler/

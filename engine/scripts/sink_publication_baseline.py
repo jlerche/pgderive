@@ -42,8 +42,12 @@ def main():
               'profile':'isolated locked release builds; inherited flags, wrappers, coverage and release overrides cleared'}
     with tempfile.TemporaryDirectory(prefix='pgderive-sink-before-') as directory:
         snapshot=pathlib.Path(directory)
+        engine_tree = f'{before}:engine'
+        # The default baseline predates the monorepo.
+        if subprocess.run(['git', 'cat-file', '-e', engine_tree], stderr=subprocess.DEVNULL).returncode:
+            engine_tree = before
         with (output/'before.tar').open('wb') as archive:
-            subprocess.run(['git','archive',before],stdout=archive,check=True)
+            subprocess.run(['git','archive',engine_tree],cwd=root.parent,stdout=archive,check=True)
         with tarfile.open(output/'before.tar') as archive: archive.extractall(snapshot,filter='data')
         for label,source in [('before',snapshot),('after',root)]:
             destination=output/label; destination.mkdir()

@@ -21,13 +21,14 @@ export RUSTFLAGS="" CARGO_ENCODED_RUSTFLAGS=""
 package_host=$(rustc -vV | sed -n 's/^host: //p')
 test -n "$package_host"
 export PGDERIVE_PACKAGE_HOST="$package_host"
-# Refuse reuse so a failed build and its logs cannot be overwritten.
-mkdir -m 700 -- "$output"
-mkdir -- "$output/bin" "$output/examples" "$output/docs"
-if [[ "$output" == "$PWD/"* ]] && ! git check-ignore --quiet "$output"; then
+repo_root=$(git rev-parse --show-toplevel)
+if [[ "$output" == "$repo_root/"* ]] && ! git check-ignore --quiet "$output"; then
     printf 'Output inside the repository must be git-ignored.\n' >&2
     exit 2
 fi
+# Refuse reuse so a failed build and its logs cannot be overwritten.
+mkdir -m 700 -- "$output"
+mkdir -- "$output/bin" "$output/examples" "$output/docs"
 source_snapshot() {
     python3 - "$1" <<'SNAPSHOT'
 import hashlib,json,os,pathlib,subprocess,sys
