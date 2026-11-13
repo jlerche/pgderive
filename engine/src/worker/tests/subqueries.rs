@@ -461,7 +461,7 @@ async fn quantified_where_keeps_inequality_and_preserves_literal_width() -> Resu
 }
 
 #[test]
-fn explicit_quantified_equality_keeps_exact_numeric_admission() {
+fn explicit_quantified_equality_rejects_unsupported_operands() {
     let native = native();
     for quantifier in ["= ANY", "<> ALL"] {
         for (probe, rhs) in [
@@ -522,7 +522,7 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
 }
 
 #[test]
-fn quantified_inequality_keeps_exact_numeric_admission() -> Result<()> {
+fn quantified_inequality_rejects_unsupported_operands() -> Result<()> {
     let native = native();
     for quantifier in ["< ANY", "<> ALL"] {
         let query = |probe, output, predicate| {
@@ -608,5 +608,24 @@ async fn inequality_only_scan_obeys_contribution_limit() -> Result<()> {
 
     let prepared = query.prepare(relational::inputs(&delta(1), ir, 2)?).await?;
     assert_eq!(prepared.output().batch.iter().count(), 0);
+    Ok(())
+}
+
+#[test]
+fn quantified_text_resolves_c_and_posix_collations() -> Result<()> {
+    let native = native();
+    for expression in [
+        "'Z' < ANY (SELECT 'a' COLLATE \"C\")",
+        "'Z' COLLATE \"POSIX\" < ALL (SELECT 'a'::text)",
+        "NULL = ANY (SELECT 'a'::varchar COLLATE \"C\")",
+        "'Z' COLLATE \"C\" < ANY (SELECT 'a' COLLATE \"POSIX\")",
+        "'1' COLLATE \"C\" < ANY (SELECT 2)",
+        "'Z' < ANY (VALUES ('a' COLLATE \"C\"))",
+    ] {
+        compile(&format!("SELECT {expression}"), &native)?;
+    }
+    for expression in ["'Z' < ANY (SELECT 'a'::text)", "1 < ALL (SELECT 'a' COLLATE \"C\")"] {
+        assert!(compile(&format!("SELECT {expression}"), &native).is_err(), "{expression}");
+    }
     Ok(())
 }

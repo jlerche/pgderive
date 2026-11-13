@@ -19,14 +19,17 @@ pub(super) fn validate(select: &pg::SelectStmt, depth: usize) -> Result<()> {
     );
     for target in &select.target_list {
         let value = super::super::target(target)?;
-        ensure!(plain(value)?, "nonaggregate scalar RHS requires a column or literal");
+        ensure!(collated_plain(value)?, "nonaggregate scalar RHS requires a column or literal");
     }
     for value in &select.values_lists {
         let NodeEnum::List(values) = node(value)? else {
             anyhow::bail!("invalid scalar VALUES row");
         };
         for value in &values.items {
-            ensure!(literal(value)?, "nonaggregate scalar VALUES requires literals");
+            ensure!(
+                literal(without_collation(value)?)?,
+                "nonaggregate scalar VALUES requires literals"
+            );
         }
     }
     if let Some(filter) = select.where_clause.as_deref() {
@@ -64,6 +67,18 @@ fn literal(value: &Node) -> Result<bool> {
 
 pub(super) fn plain(value: &Node) -> Result<bool> {
     Ok(column(value) || literal(value)?)
+}
+
+pub(super) fn collated_plain(value: &Node) -> Result<bool> {
+    plain(without_collation(value)?)
+}
+
+fn without_collation(value: &Node) -> Result<&Node> {
+    if let NodeEnum::CollateClause(clause) = node(value)? {
+        optional(clause.arg.as_deref())
+    } else {
+        Ok(value)
+    }
 }
 
 fn predicate(value: &Node, depth: usize) -> Result<bool> {

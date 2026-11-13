@@ -41,7 +41,15 @@ class QuantifiedFixture(SqlFixture):
             INSERT INTO {self.inner} VALUES(1,1,1),(2,1,2),(3,1,NULL),(4,1,2),
                 (5,2,NULL),(6,NULL,100);''')
         self.probe = 'group_id'
-        if domains != 'integral':
+        if domains in ('C', 'POSIX'):
+            self.probe = 'probe'
+            self.sql(f'''ALTER TABLE {self.outer} ADD COLUMN probe varchar COLLATE "{domains}";
+                ALTER TABLE {self.inner} ADD COLUMN term text COLLATE "{domains}";
+                UPDATE {self.outer} SET probe=CASE id WHEN 1 THEN 'Z' WHEN 2 THEN 'é'
+                    WHEN 3 THEN 'a' WHEN 4 THEN 'a ' END;
+                UPDATE {self.inner} SET term=CASE id WHEN 1 THEN 'Z' WHEN 2 THEN 'a'
+                    WHEN 4 THEN 'a' WHEN 6 THEN 'é' END;''')
+        elif domains != 'integral':
             self.probe = 'probe'
             probe_type = 'bigint' if domains == 'integral-numeric' else 'numeric'
             probe_value = '9007199254740993'
@@ -57,7 +65,8 @@ class QuantifiedFixture(SqlFixture):
             if domains == 'numeric':
                 self.sql(f"UPDATE {self.outer} SET probe=9007199254740993.000 WHERE id=1")
         key = 'a.correlation_key' if mode == 'correlated' else '1'
-        rhs = f'SELECT b.price FROM {self.inner} b WHERE b.auction={key}'
+        self.value = 'term' if domains in ('C', 'POSIX') else 'price'
+        rhs = f'SELECT b.{self.value} FROM {self.inner} b WHERE b.auction={key}'
         projections = ['a.id']
         for label, symbol, _ in self.comparisons:
             for quantifier in ('ANY', 'ALL'):
@@ -74,7 +83,7 @@ class QuantifiedFixture(SqlFixture):
         memory = Counter()
         for row in outer:
             key = row['correlation_key'] if self.mode == 'correlated' else 1
-            values = [item['price'] for item in inner if key is not None and item['auction'] == key]
+            values = [item[self.value] for item in inner if key is not None and item['auction'] == key]
             truth = tuple(
                 compare(row[self.probe], values, operation, all_rows)
                 for _, _, operation in self.comparisons for all_rows in (False, True)
@@ -92,7 +101,7 @@ def qualify(output, command, mode, group, domains):
                 f'DELETE FROM {b} WHERE id IN (1,2)',
                 f'DELETE FROM {b} WHERE id=4; UPDATE {a} SET {fixture.probe}=NULL WHERE id=1',
                 f'DELETE FROM {b} WHERE id=3',
-                f'INSERT INTO {b} VALUES(7,1,2),(8,1,2); UPDATE {a} SET {fixture.probe}=1 WHERE id=1',
+                f"INSERT INTO {b}(id,auction,{fixture.value}) VALUES(7,1,'2'),(8,1,'2'); UPDATE {a} SET {fixture.probe}='1' WHERE id=1",
             ],
             final=f'UPDATE {b} SET auction=4 WHERE id IN (7,8)',
             normalized=fixture.query.replace('ANY', 'SOME').replace('!=', '<>'),
@@ -111,4 +120,5 @@ if __name__ == '__main__':
                    ('uncorrelated', 'integral'), ('correlated', 'integral'),
                    ('correlated', 'numeric'), ('uncorrelated', 'integral-numeric'),
                    ('correlated', 'numeric-integral'),
+                   ('correlated', 'C'), ('uncorrelated', 'POSIX'),
                ) for group in GROUPS), qualify)

@@ -46,11 +46,16 @@ impl Builder<'_> {
             super::validate_scalar_input(&self.nodes[start..])?;
         }
         let probe = if quantified.is_some() {
-            exact_numeric_probe(probe, value.oid, &resolve_left)?
+            quantified_probe(probe, value.oid, &resolve_left)?
         } else {
             typed::operand(probe, &resolve_left)?.coerce(value.oid)?
         };
-        validate_probe(&probe, &left.columns, right.columns[0].collation, residual_inequality)?;
+        validate_probe(
+            &probe,
+            &left.columns,
+            right.columns[0].collation,
+            (residual_inequality, quantified.is_some()),
+        )?;
         let mut computed = Vec::new();
         let probe = match probe.as_column() {
             Some(column) => column.clone(),
@@ -105,16 +110,19 @@ impl Builder<'_> {
         Ok(Edge { id, columns })
     }
 }
-fn exact_numeric_probe(
+fn quantified_probe(
     probe: &Ast,
     rhs_oid: u32,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
 ) -> Result<typed::Typed> {
     let probe = typed::Typed::bind_contextual(probe, resolve, 0)?;
+    let probe_oid = probe.oid();
+    let unknown = matches!(probe_oid, 0 | 705);
     ensure!(
-        matches!(rhs_oid, 20 | 21 | 23 | 1700)
-            && matches!(probe.oid(), 0 | 705 | 20 | 21 | 23 | 1700),
-        "quantified comparisons require integral or numeric operands"
+        (matches!(rhs_oid, 20 | 21 | 23 | 1700)
+            && (unknown || matches!(probe_oid, 20 | 21 | 23 | 1700)))
+            || (matches!(rhs_oid, 25 | 1043) && (unknown || matches!(probe_oid, 25 | 1043))),
+        "quantified comparisons require two exact numeric or two text operands"
     );
     if matches!(probe.oid(), 0 | 705) { probe.coerce_common(rhs_oid) } else { Ok(probe) }
 }
@@ -122,19 +130,36 @@ fn validate_probe(
     probe: &typed::Typed,
     left: &[Column],
     rhs_collation: u32,
-    residual_inequality: bool,
+    (residual_inequality, quantified): (bool, bool),
 ) -> Result<()> {
     ensure!(
         !residual_inequality || probe.total_scalar_input(),
         "inequality correlation requires a total membership probe"
     );
     if matches!(probe.oid(), 25 | 1043) {
-        let collation = probe.collation(&|value| {
+        let resolve = |value: &ColumnRef| {
             Ok(left
                 .iter()
                 .find(|column| column.value.name == value.name)
                 .map_or(0, |column| column.collation))
-        })?;
+        };
+        if quantified {
+            use typed::collation::Derivation;
+            let collation = probe
+                .derive_collation(&resolve)?
+                .merge(if rhs_collation == 0 {
+                    Derivation::Indeterminate
+                } else {
+                    Derivation::Implicit(rhs_collation)
+                })?
+                .oid()?;
+            ensure!(
+                matches!(collation, 950 | 951),
+                "quantified text comparison requires deterministic C/POSIX collation"
+            );
+            return Ok(());
+        }
+        let collation = probe.collation(&resolve)?;
         ensure!(collation != 0 && rhs_collation != 0, "IN requires resolved text collations");
         typed::collation::common(collation, rhs_collation)?;
     }

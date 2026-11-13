@@ -289,7 +289,7 @@ impl Rewrite<'_> {
                 };
                 let comparison = Compare::parse(operator)?;
                 ensure!(
-                    scalar_input::plain(&probe)?,
+                    scalar_input::collated_plain(&probe)?,
                     "quantified probe requires a column or literal"
                 );
                 // ALL is the negation of ANY over the complementary strict comparison.

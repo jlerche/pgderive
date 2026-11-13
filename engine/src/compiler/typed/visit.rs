@@ -65,6 +65,7 @@ impl Typed {
         }
         match &self.value {
             Value::Column(_) => true,
+            Value::Collate { input, .. } => input.total_scalar_input(),
             Value::Cast { input, typmod: None } => {
                 (self.oid == input.oid
                     || matches!(
