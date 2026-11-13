@@ -1,5 +1,7 @@
 {
   "name": "pgderive",
   "compatibility_date": "2026-11-12",
+  "workers_dev": true,
+  "routes": [{ "pattern": "pgderive.com", "custom_domain": true }],
   "assets": { "directory": "./dist" }
 }
