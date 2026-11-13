@@ -1,0 +1,8 @@
+{
+  "name": "pgderive-demo",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-12",
+  "workers_dev": false,
+  "rules": [{ "type": "Text", "globs": ["**/*.css"], "fallthrough": true }],
+  "routes": [{ "pattern": "demo.pgderive.com", "custom_domain": true }]
+}

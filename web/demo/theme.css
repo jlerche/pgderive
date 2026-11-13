@@ -1,0 +1,48 @@
+:root {
+  --bg: #101218;
+  --panel: #191e2b;
+  --line: #303545;
+  --muted: #aeb5c9;
+  --white: #eff1fa;
+  --mint: #b9c2ff;
+  --blue: #a6c5f6;
+  --sans: Geist, system-ui, sans-serif;
+}
+
+body {
+  background: radial-gradient(ellipse at 80% 0%, #242a49, transparent 52rem), var(--bg);
+  font-family: var(--sans);
+}
+
+.masthead, main { max-width: 1180px; }
+
+.wordmark, h1, .hero-stat strong, .section-heading h2,
+.product-icon, .product-value, .live-rail h2, .details-heading h2, .lb-values dd {
+  font-family: var(--sans);
+}
+
+h1 { font-weight: 700; }
+
+nav button, .product-card, .live-rail, .source-model article,
+.sql-grid article, .lb-query-card {
+  border-radius: 9px;
+}
+
+.live-rail {
+  background: #151923;
+  border-color: var(--line);
+}
+
+.product-card[data-rank="1"] {
+  background: linear-gradient(130deg, #262d48, var(--panel));
+  border-color: #555f88;
+}
+
+.product-icon, .history-shared-controls button[aria-pressed=true],
+.metric-history button[aria-pressed=true] {
+  background: #b9c2ff16;
+}
+
+.eyebrow i, .signal i { box-shadow: 0 0 13px #b9c2ff50; }
+.revenue-track { background: var(--line); }
+.product-rank, .sql-grid pre { color: var(--muted); }

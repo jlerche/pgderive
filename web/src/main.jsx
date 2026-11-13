@@ -1,7 +1,7 @@
 import { createRoot } from 'react-dom/client'
 import './style.css'
 
-const repository = 'https://github.com/jlerche/pgderive'
+const demo = 'https://demo.pgderive.com/'
 
 function Wordmark() {
   return (
@@ -44,7 +44,7 @@ function App() {
           <a href="/" aria-label="Pgderive home"><Wordmark /></a>
           <nav aria-label="Main navigation">
             <a href="#how-it-works">How it works</a>
-            <a className="outline" href={repository}>GitHub <span aria-hidden="true">↗</span></a>
+            <a className="outline" href={demo}>Live demo <span aria-hidden="true">↗</span></a>
           </nav>
         </div>
       </header>
