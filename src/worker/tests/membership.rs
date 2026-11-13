@@ -112,7 +112,7 @@ fn unsupported_membership_shapes_fail_during_compilation() {
     let native = contract();
     for sql in [
         "SELECT DISTINCT ON (id) id+1 FROM source.auction",
-        "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction>a.id)",
+        "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction+1>a.id)",
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=a.id OR b.id=a.id)",
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=b.id)",
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=a.id LIMIT 1)",

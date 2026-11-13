@@ -46,10 +46,6 @@ pub(super) fn extract(query: &mut pg::SelectStmt, inequality: bool) -> Result<Co
             "outer references require top-level AND correlation equalities"
         );
     }
-    ensure!(
-        correlation.inequalities.is_empty() || !correlation.pairs.is_empty(),
-        "inequality correlation requires an equality key"
-    );
     Ok(correlation)
 }
 fn conjunct(

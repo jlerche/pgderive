@@ -154,8 +154,10 @@ fn validate_correlation(
         "quantified correlation requires indexable equality"
     );
     ensure!(
-        !residual_inequality || !bound.keys.is_empty(),
-        "inequality correlation requires an indexable equality key"
+        !residual_inequality
+            || !bound.keys.is_empty()
+            || bound.predicate.as_ref().is_some_and(Predicate::is_inequality_expression),
+        "correlation without an indexable equality key requires only inequalities"
     );
     Ok(())
 }

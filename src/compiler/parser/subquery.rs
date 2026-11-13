@@ -344,7 +344,7 @@ impl Rewrite<'_> {
                 "correlation requires column equalities"
             );
         }
-        if !correlation.pairs.is_empty() {
+        if residual_inequality || !correlation.pairs.is_empty() {
             ensure!(
                 query.group_clause.is_empty()
                     && query.distinct_clause.is_empty()

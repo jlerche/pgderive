@@ -84,15 +84,17 @@ correlation or a cross-domain date/timestamp comparison scans the RHS per outer 
 ## Inequality correlation
 
 A correlated `IN` or `NOT IN` subquery can add up to eight ordinary inequalities
-(`<`, `<=`, `>`, `>=`, or `<>`) alongside an indexable column equality.
-Inequalities may be combined with AND, OR, and NOT. The equality key must be a
+(`<`, `<=`, `>`, `>=`, or `<>`) with or without an indexable column equality.
+Inequalities may be combined with AND, OR, and NOT. Any equality key must be a
 top-level AND term. Each inequality compares a column from each scope using
 the existing native comparison rules. The same correlation is supported for
 `WHERE EXISTS (SELECT 1 ...)` and `WHERE NOT EXISTS (SELECT 1 ...)`.
 The RHS uses a native table, a simple projection, and supported local predicates.
 The membership probe must be safe to evaluate independently of the RHS.
 
-The mark scans the matching equality bucket under the existing work limits.
+The mark scans the matching equality bucket, or the shared bucket for an
+inequality-only correlation. Both scans charge candidate visits against the
+existing work limits.
 Only pairs for which the full inequality expression is TRUE contribute. An
 OR group is TRUE if any arm is TRUE, even when another arm evaluates to NULL.
 NOT preserves NULL.
@@ -108,8 +110,7 @@ support `ANY` (also spelled `SOME`) and `ALL` over a one-column subquery. Both o
 must be smallint, integer, or bigint. Unknown probe literals take the RHS type, and typed integral
 operands retain their widths. A simple column or literal probe can appear
 in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
-with indexable column equalities for correlation. A correlated query may add
-the inequalities described above. Rows for which the inequality expression
+with indexable column equalities, the inequalities described above, or both. Rows for which the inequality expression
 is FALSE or NULL are absent from the quantified input.
 
 - `ANY` returns TRUE if any comparison is TRUE. Otherwise it returns NULL

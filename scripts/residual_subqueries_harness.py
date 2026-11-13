@@ -7,7 +7,7 @@ import operator
 from native_mv_oracle import binary_difference, expected
 from quantified_subqueries_harness import COMPARISONS, compare
 from sql_compiler_harness import SqlFixture
-from worker_harness import History, run_modes
+from worker_harness import History, run_cases
 
 
 QUANTIFIED = tuple(item for item in COMPARISONS if item[0] in ('lt', 'eq', 'ge'))
@@ -24,9 +24,10 @@ def membership(probe, values):
 
 
 class ResidualFixture(SqlFixture):
-    def __init__(self, output, mode):
+    def __init__(self, output, mode, keyed):
         super().__init__(output, False)
         self.mode = mode
+        self.keyed = keyed
         self.outer = self.name + '.auction'
         self.inner = self.name + '.bid'
         a, b = self.outer, self.inner
@@ -40,7 +41,9 @@ class ResidualFixture(SqlFixture):
             INSERT INTO {b}(id,auction,price,cutoff) VALUES
                 (1,1,7,3),(2,1,7,3),(3,1,NULL,12),(4,1,NULL,NULL),
                 (5,NULL,7,3),(6,2,NULL,2),(8,1,9,5),(99,1,7,1);''')
-        keys = 'b.auction=a.group_id AND b.id<>99'
+        keys = 'b.id<>99'
+        if keyed:
+            keys += ' AND b.auction=a.group_id'
         rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND NOT (a.ceiling<=b.cutoff AND (b.id<=a.floor OR b.id<a.id))'
         if mode == 'quantified':
             projections = ['a.id']
@@ -81,7 +84,7 @@ class ResidualFixture(SqlFixture):
                 ceiling -= 1
             values = [
                 item['price'] for item in inner
-                if key is not None and key == item['auction'] and item['id'] != 99
+                if (not self.keyed or (key is not None and key == item['auction'])) and item['id'] != 99
                 and (
                     (ceiling is not None and item['cutoff'] is not None and item['cutoff'] < ceiling)
                     or (floor is not None and floor < item['id'] and item['id'] >= row['id'])
@@ -107,8 +110,8 @@ class ResidualFixture(SqlFixture):
         self.verify_memory(memory)
 
 
-def qualify(output, command, mode):
-    fixture = ResidualFixture(output, mode)
+def qualify(output, command, mode, keyed):
+    fixture = ResidualFixture(output, mode, keyed)
     a, b = fixture.outer, fixture.inner
     with fixture.managed():
         fixture.run_history(command, History(
@@ -117,16 +120,20 @@ def qualify(output, command, mode):
                 f'UPDATE {b} SET cutoff=4 WHERE id=3; DELETE FROM {b} WHERE id IN (2,8)',
                 f'UPDATE {b} SET cutoff=NULL WHERE id=3; UPDATE {a} SET ceiling=20 WHERE id=2',
                 f'UPDATE {b} SET auction=3,cutoff=1 WHERE id=3; UPDATE {a} SET probe=7 WHERE id=7',
+                f'DELETE FROM {b}',
+                f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (3,3,NULL,1)',
             ],
             final=f'UPDATE {b} SET auction=1,price=7 WHERE id=3',
             normalized=fixture.query.replace('SELECT', 'select').replace('ANY', 'SOME'),
             rejected=[],
         ))
         (output/'result.json').write_text(json.dumps({
-            'mode': mode, 'cold_restart': True, 'native_bag_and_binary': True,
+            'mode': mode, 'keyed': keyed, 'cold_restart': True, 'native_bag_and_binary': True,
             'independent_oracle': True,
         })+'\n')
 
 
 if __name__ == '__main__':
-    run_modes(('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter'), qualify)
+    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter')
+    run_cases(((mode if keyed else f'{mode}-inequality-only', mode, keyed)
+               for keyed in (True, False) for mode in modes), qualify)

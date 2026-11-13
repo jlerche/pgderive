@@ -469,9 +469,10 @@ fn explicit_quantified_equality_keeps_integral_admission() {
 }
 
 #[test]
-fn residual_membership_requires_an_equality_key() -> Result<()> {
+fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
     let native = native();
     for predicate in [
+        "b.price>a.id",
         "b.auction=a.other AND b.price>a.id",
         "b.auction=a.other AND a.id<=b.price AND b.id>a.id",
         "b.auction=a.other AND (b.price>a.id OR (b.id<a.id AND b.price<>a.id))",
@@ -488,7 +489,6 @@ fn residual_membership_requires_an_equality_key() -> Result<()> {
         }
     }
     for predicate in [
-        "b.price>a.id",
         "b.auction=a.other OR b.price>a.id",
         "NOT (b.auction=a.other AND b.price>a.id)",
         "b.auction=a.other AND NOT (b.id=a.id)",
@@ -514,7 +514,7 @@ fn residual_membership_requires_an_equality_key() -> Result<()> {
 }
 
 #[test]
-fn quantified_inequality_requires_a_key_and_keeps_integral_admission() -> Result<()> {
+fn quantified_inequality_keeps_integral_admission() -> Result<()> {
     let native = native();
     for quantifier in ["< ANY", "<> ALL"] {
         let query = |probe, output, predicate| {
@@ -524,12 +524,12 @@ fn quantified_inequality_requires_a_key_and_keeps_integral_admission() -> Result
         };
         let keyed = "b.auction=a.other AND NOT (b.price>a.id OR b.id<a.id)";
         compile(&query("a.other", "b.price", keyed), &native)?;
+        compile(&query("a.other", "b.price", "b.price>a.id AND b.id<a.id"), &native)?;
         let over_budget =
             format!("b.auction=a.other AND (b.price>a.id{})", " OR b.price>a.id".repeat(8));
         assert!(compile(&query("a.other", "b.price", &over_budget), &native).is_err());
         for rejected in [
-            query("a.other", "b.price", "b.price>a.id"),
-            query("a.other", "b.price", "b.price>a.id AND b.id<a.id"),
+            query("a.other", "b.price", "b.price>a.id LIMIT 1"),
             query("a.other", "b.price", "b.price>a.id AND b.id<a.id AND b.price=a.category"),
             query("a.other", "b.price", "b.auction=a.other AND b.price+1>a.id"),
             query("a.category", "'text'::text", keyed),
@@ -537,5 +537,68 @@ fn quantified_inequality_requires_a_key_and_keeps_integral_admission() -> Result
             assert!(compile(&rejected, &native).is_err(), "{rejected}");
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn inequality_only_scan_obeys_contribution_limit() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT a.id, a.other < ANY (SELECT b.price FROM source.bid b WHERE b.auction < a.id) FROM source.auction a",
+        &native,
+    )?;
+    let ir = compiled.relational();
+    let size = 16_usize;
+    let initial = batch(
+        (0..size)
+            .map(|id| {
+                (
+                    "auction",
+                    row(&[("id", Some(&id.to_string())), ("category", None), ("other", None)]),
+                    1,
+                )
+            })
+            .collect(),
+    );
+    let options = settings();
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let prepared = query.prepare(relational::inputs(&initial, ir, 1)?).await?;
+    query.commit(prepared)?;
+
+    let mut limited = options;
+    limited.limits.contributions = 2048;
+    super::restart_relational(&mut query, &native, &compiled, &limited).await?;
+    let delta = |count| {
+        batch(
+            (0..count)
+                .map(|id: usize| {
+                    (
+                        "bid",
+                        row(&[
+                            ("id", Some(&id.to_string())),
+                            ("auction", Some(&(100 + id).to_string())),
+                            ("price", None),
+                        ]),
+                        1,
+                    )
+                })
+                .collect(),
+        )
+    };
+    let error = query
+        .prepare(relational::inputs(&delta(256), ir, 2)?)
+        .await
+        .err()
+        .context("global residual scan exceeded its work budget")?;
+    assert!(
+        matches!(
+            error.downcast_ref::<crate::engine::execution::CapacityExceeded>(),
+            Some(crate::engine::execution::CapacityExceeded("partition tick work limit exceeded"))
+        ),
+        "{error:#}"
+    );
+
+    let prepared = query.prepare(relational::inputs(&delta(1), ir, 2)?).await?;
+    assert_eq!(prepared.output().batch.iter().count(), 0);
     Ok(())
 }
