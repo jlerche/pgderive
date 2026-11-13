@@ -403,15 +403,12 @@ fn residual_condition(
             };
             ast::comparison(left, right, &residual.operator)
         }
-        correlation::Residual::Logical { terms, and } => {
+        correlation::Residual::Logical { terms, kind } => {
             let args = terms
                 .into_iter()
                 .map(|term| residual_condition(term, alias, targets, index))
                 .collect();
-            ast::boolean_expression(
-                args,
-                if and { pg::BoolExprType::AndExpr } else { pg::BoolExprType::OrExpr },
-            )
+            ast::boolean_expression(args, kind)
         }
     }
 }

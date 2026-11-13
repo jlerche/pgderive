@@ -14,7 +14,7 @@ pub(super) struct Correlation {
 }
 pub(super) enum Residual {
     Comparison(Box<Inequality>),
-    Logical { terms: Vec<Self>, and: bool },
+    Logical { terms: Vec<Self>, kind: pg::BoolExprType },
 }
 pub(super) struct Inequality {
     pub outer: Node,
@@ -98,16 +98,19 @@ fn residual(value: &Node, table: &Table, count: &mut usize, depth: usize) -> Res
     if let NodeEnum::BoolExpr(logical) = node(value)? {
         let kind = pg::BoolExprType::try_from(logical.boolop)?;
         ensure!(
-            matches!(kind, pg::BoolExprType::AndExpr | pg::BoolExprType::OrExpr)
-                && logical.args.len() >= 2,
-            "correlation residual requires AND or OR of inequalities"
+            match kind {
+                pg::BoolExprType::NotExpr => logical.args.len() == 1,
+                pg::BoolExprType::AndExpr | pg::BoolExprType::OrExpr => logical.args.len() >= 2,
+                pg::BoolExprType::Undefined => false,
+            },
+            "invalid Boolean correlation expression"
         );
         let terms = logical
             .args
             .iter()
             .map(|term| residual(term, table, count, depth + 1))
             .collect::<Result<Vec<_>>>()?;
-        return Ok(Residual::Logical { terms, and: kind == pg::BoolExprType::AndExpr });
+        return Ok(Residual::Logical { terms, kind });
     }
     let (operator, operands) = comparison(value, table)?;
     inequality_term(&operator, operands, count)

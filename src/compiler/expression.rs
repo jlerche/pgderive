@@ -452,6 +452,7 @@ impl Predicate {
         fn only_inequalities(expr: &Expr) -> bool {
             match expr {
                 Expr::Compare(op, _, _) => *op != Compare::Eq,
+                Expr::Not(term) => only_inequalities(term),
                 Expr::And(terms) | Expr::Or(terms) | Expr::Quals(terms) => {
                     !terms.is_empty() && terms.iter().all(only_inequalities)
                 }

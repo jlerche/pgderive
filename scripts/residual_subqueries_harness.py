@@ -41,7 +41,7 @@ class ResidualFixture(SqlFixture):
                 (1,1,7,3),(2,1,7,3),(3,1,NULL,12),(4,1,NULL,NULL),
                 (5,NULL,7,3),(6,2,NULL,2),(8,1,9,5),(99,1,7,1);''')
         keys = 'b.auction=a.group_id AND b.id<>99'
-        rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND (a.ceiling>b.cutoff OR (b.id>a.floor AND b.id>=a.id))'
+        rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND NOT (a.ceiling<=b.cutoff AND (b.id<=a.floor OR b.id<a.id))'
         if mode == 'quantified':
             projections = ['a.id']
             self.labels = ['id']
@@ -67,7 +67,7 @@ class ResidualFixture(SqlFixture):
             negation = 'NOT ' if mode == 'not-exists' else ''
             self.labels = ['id']
             self.query = f'''SELECT a.id FROM {a} a WHERE {negation}EXISTS
-                (SELECT 1 FROM {b} b WHERE {keys} AND (b.cutoff<a.ceiling OR (a.floor<b.id AND b.id>=a.id)))'''
+                (SELECT 1 FROM {b} b WHERE {keys} AND NOT (b.cutoff>=a.ceiling AND (a.floor>=b.id OR b.id<a.id)))'''
 
     def verify(self):
         self.verify_sql(expected(self, self.labels))

@@ -85,7 +85,7 @@ correlation or a cross-domain date/timestamp comparison scans the RHS per outer 
 
 A correlated `IN` or `NOT IN` subquery can add up to eight ordinary inequalities
 (`<`, `<=`, `>`, `>=`, or `<>`) alongside an indexable column equality.
-Inequalities may be combined with AND and OR. The equality key must be a
+Inequalities may be combined with AND, OR, and NOT. The equality key must be a
 top-level AND term. Each inequality compares a column from each scope using
 the existing native comparison rules. The same correlation is supported for
 `WHERE EXISTS (SELECT 1 ...)` and `WHERE NOT EXISTS (SELECT 1 ...)`.
@@ -95,6 +95,7 @@ The membership probe must be safe to evaluate independently of the RHS.
 The mark scans the matching equality bucket under the existing work limits.
 Only pairs for which the full inequality expression is TRUE contribute. An
 OR group is TRUE if any arm is TRUE, even when another arm evaluates to NULL.
+NOT preserves NULL.
 A qualifying row whose projected value is NULL can still make `IN` and
 `NOT IN` NULL. When no pair qualifies, `EXISTS` and `IN` are FALSE and
 their negations are TRUE, even for a NULL membership probe. The mark preserves
