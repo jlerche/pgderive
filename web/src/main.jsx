@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './style.css'
 
@@ -36,6 +37,49 @@ function Example() {
   )
 }
 
+function EarlyAccess() {
+  const [status, setStatus] = useState('')
+
+  async function subscribe(event) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const body = new URLSearchParams(new FormData(form))
+    setStatus('Submitting…')
+    try {
+      const response = await fetch('/api/early-access', { method: 'POST', body })
+      if (response.status === 204) {
+        form.reset()
+        setStatus('You’re on the list.')
+      } else if (response.status === 429) {
+        setStatus('Too many attempts. Try again in a minute.')
+      } else if (response.status === 400) {
+        setStatus('Enter a valid email address.')
+      } else {
+        setStatus('Signup failed. Please try again.')
+      }
+    } catch {
+      setStatus('Signup failed. Please try again.')
+    }
+  }
+
+  return (
+    <section id="early-access" className="site early-access" aria-labelledby="early-access-title">
+      <div>
+        <h2 id="early-access-title">Get early access</h2>
+        <p>Join the list for launch updates and early access invitations.</p>
+      </div>
+      <form onSubmit={subscribe}>
+        <label htmlFor="signup-email">Email address</label>
+        <div className="signup-fields">
+          <input id="signup-email" name="email" type="email" autoComplete="email" maxLength={254} required />
+          <button className="button" type="submit" disabled={status === 'Submitting…'}>Join the waitlist</button>
+        </div>
+        <p role="status">{status}</p>
+      </form>
+    </section>
+  )
+}
+
 function App() {
   return (
     <>
@@ -56,7 +100,7 @@ function App() {
               <h1 id="headline">Keep your query <span>results current.</span></h1>
               <p className="intro">Pgderive processes committed changes and updates the affected rows in a PostgreSQL result table. Read it with ordinary SQL.</p>
               <div className="actions">
-                <a className="button" href="#example">See the example <span aria-hidden="true">↓</span></a>
+                <a className="button" href="#early-access">Get early access <span aria-hidden="true">↓</span></a>
                 <a className="text-link" href="#how-it-works">How it works <span aria-hidden="true">↘</span></a>
               </div>
             </div>
@@ -71,8 +115,9 @@ function App() {
             <article><span className="step-label">PostgreSQL sink</span><h3>Publish results</h3><p>Write result changes and durable progress together in PostgreSQL.</p></article>
           </div>
         </section>
+        <EarlyAccess />
       </main>
-      <footer className="site"><Wordmark /><span>Hosted service in development</span></footer>
+      <footer className="site"><Wordmark /></footer>
     </>
   )
 }

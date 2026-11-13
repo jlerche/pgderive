@@ -122,3 +122,32 @@ footer .wordmark { color: #eff1fa; font-size: 1rem; }
   figcaption, table { font-size: 0.67rem; }
   th, td { padding-inline: 12px; }
 }
+
+.early-access {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  border-top: 1px solid var(--line);
+  padding: 38px 0;
+  scroll-margin-top: 12px;
+}
+.early-access h2 { margin-bottom: 8px; }
+.early-access p { color: var(--muted); margin: 0; }
+.early-access form label { display: block; margin-bottom: 8px; }
+.signup-fields { display: flex; flex-wrap: wrap; gap: 8px; }
+.signup-fields input {
+  flex: 1 1 180px;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: #191e2b;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.signup-fields button { border: 0; font: inherit; font-weight: 650; cursor: pointer; }
+.early-access form [role="status"] { min-height: 1.5em; margin-top: 8px; }
+
+@media (max-width: 800px) {
+  .early-access { grid-template-columns: 1fr; }
+}

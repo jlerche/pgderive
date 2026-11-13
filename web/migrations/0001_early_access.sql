@@ -1,0 +1,4 @@
+CREATE TABLE early_access (
+  email TEXT PRIMARY KEY NOT NULL,
+  subscribed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
