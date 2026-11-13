@@ -112,7 +112,7 @@ use exact values and ignore differences in numeric display scale. Unknown probe
 literals take the RHS type, and typed operands retain their types. Text and
 varchar operands may be mixed when the resolved comparison collation is
 deterministic C or POSIX. These comparisons use byte order and keep trailing
-spaces significant. A simple column or literal probe can appear
+spaces significant. Boolean comparisons order FALSE before TRUE. A simple column or literal probe can appear
 in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
 with indexable column equalities, the inequalities described above, or both. Rows for which the inequality expression
 is FALSE or NULL are absent from the quantified input.

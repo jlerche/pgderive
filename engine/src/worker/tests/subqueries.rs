@@ -629,3 +629,21 @@ fn quantified_text_resolves_c_and_posix_collations() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn quantified_boolean_resolves_unknown_probes_and_rejects_other_types() -> Result<()> {
+    let native = native();
+    for expression in
+        ["'of' < ANY (VALUES (TRUE), (NULL))", "NULL = ALL (SELECT FALSE WHERE FALSE)"]
+    {
+        compile(&format!("SELECT {expression}"), &native)?;
+    }
+    for expression in [
+        "1 = ANY (SELECT TRUE)",
+        "TRUE = ALL (SELECT 'true'::text)",
+        "'invalid' <> ANY (SELECT FALSE)",
+    ] {
+        assert!(compile(&format!("SELECT {expression}"), &native).is_err(), "{expression}");
+    }
+    Ok(())
+}
