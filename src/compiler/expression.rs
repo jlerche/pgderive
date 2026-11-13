@@ -448,13 +448,17 @@ impl Predicate {
         matches!(self.0, Expr::Compare(Compare::Eq, _, _))
     }
 
-    pub(super) fn is_inequality_conjunction(&self) -> bool {
-        let inequality =
-            |expr: &Expr| matches!(expr, Expr::Compare(op, _, _) if *op != Compare::Eq);
-        match &self.0 {
-            Expr::Quals(terms) => !terms.is_empty() && terms.iter().all(inequality),
-            term => inequality(term),
+    pub(super) fn is_inequality_expression(&self) -> bool {
+        fn only_inequalities(expr: &Expr) -> bool {
+            match expr {
+                Expr::Compare(op, _, _) => *op != Compare::Eq,
+                Expr::And(terms) | Expr::Or(terms) | Expr::Quals(terms) => {
+                    !terms.is_empty() && terms.iter().all(only_inequalities)
+                }
+                _ => false,
+            }
         }
+        only_inequalities(&self.0)
     }
 
     pub(super) const fn new(expr: Expr) -> Self {

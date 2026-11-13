@@ -84,16 +84,17 @@ correlation or a cross-domain date/timestamp comparison scans the RHS per outer 
 ## Inequality correlation
 
 A correlated `IN` or `NOT IN` subquery can add up to eight ordinary inequalities
-(`<`, `<=`, `>`, `>=`, or `<>`) as AND terms alongside an indexable
-column equality. Each inequality compares a column from each scope using the
-existing native comparison rules. The same correlation is supported for
+(`<`, `<=`, `>`, `>=`, or `<>`) alongside an indexable column equality.
+Inequalities may be combined with AND and OR. The equality key must be a
+top-level AND term. Each inequality compares a column from each scope using
+the existing native comparison rules. The same correlation is supported for
 `WHERE EXISTS (SELECT 1 ...)` and `WHERE NOT EXISTS (SELECT 1 ...)`.
 The RHS uses a native table, a simple projection, and supported local predicates.
 The membership probe must be safe to evaluate independently of the RHS.
 
 The mark scans the matching equality bucket under the existing work limits.
-Only pairs for which every inequality is TRUE contribute. A NULL inequality
-operand therefore cannot establish existence or make an `IN` result NULL.
+Only pairs for which the full inequality expression is TRUE contribute. An
+OR group is TRUE if any arm is TRUE, even when another arm evaluates to NULL.
 A qualifying row whose projected value is NULL can still make `IN` and
 `NOT IN` NULL. When no pair qualifies, `EXISTS` and `IN` are FALSE and
 their negations are TRUE, even for a NULL membership probe. The mark preserves
@@ -107,8 +108,8 @@ must be smallint, integer, or bigint. Unknown probe literals take the RHS type, 
 operands retain their widths. A simple column or literal probe can appear
 in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
 with indexable column equalities for correlation. A correlated query may add
-the inequalities described above. Rows rejected by any inequality are absent
-from the quantified input, including for NULL propagation and empty groups.
+the inequalities described above. Rows for which the inequality expression
+is FALSE or NULL are absent from the quantified input.
 
 - `ANY` returns TRUE if any comparison is TRUE. Otherwise it returns NULL
   if any comparison is NULL, or FALSE if every comparison is FALSE or the group is empty.

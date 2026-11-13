@@ -471,9 +471,11 @@ fn explicit_quantified_equality_keeps_integral_admission() {
 #[test]
 fn residual_membership_requires_an_equality_key() -> Result<()> {
     let native = native();
-    for predicate in
-        ["b.auction=a.other AND b.price>a.id", "b.auction=a.other AND a.id<=b.price AND b.id>a.id"]
-    {
+    for predicate in [
+        "b.auction=a.other AND b.price>a.id",
+        "b.auction=a.other AND a.id<=b.price AND b.id>a.id",
+        "b.auction=a.other AND (b.price>a.id OR (b.id<a.id AND b.price<>a.id))",
+    ] {
         for (projection, filter) in [
             (
                 format!("a.other IN (SELECT b.price FROM source.bid b WHERE {predicate})"),
@@ -486,7 +488,9 @@ fn residual_membership_requires_an_equality_key() -> Result<()> {
     }
     for predicate in [
         "b.price>a.id",
-        "b.auction=a.other AND (b.price>a.id OR b.id<a.id)",
+        "b.auction=a.other OR b.price>a.id",
+        "b.auction=a.other AND (b.price>a.id OR b.id=a.id)",
+        "b.auction=a.other AND (b.price>a.id OR b.id>1)",
         "b.auction=a.other AND b.price+1>a.id",
         "b.auction=a.other+1 AND b.price>a.id",
     ] {
@@ -515,9 +519,10 @@ fn quantified_inequality_requires_a_key_and_keeps_integral_admission() -> Result
                 "SELECT {probe} {quantifier} (SELECT {output} FROM source.bid b WHERE {predicate}) FROM source.auction a"
             )
         };
-        let keyed = "b.auction=a.other AND b.price>a.id AND b.id<a.id";
+        let keyed = "b.auction=a.other AND (b.price>a.id OR b.id<a.id)";
         compile(&query("a.other", "b.price", keyed), &native)?;
-        let over_budget = format!("b.auction=a.other{}", " AND b.price>a.id".repeat(9));
+        let over_budget =
+            format!("b.auction=a.other AND (b.price>a.id{})", " OR b.price>a.id".repeat(8));
         assert!(compile(&query("a.other", "b.price", &over_budget), &native).is_err());
         for rejected in [
             query("a.other", "b.price", "b.price>a.id"),

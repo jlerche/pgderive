@@ -36,12 +36,12 @@ class ResidualFixture(SqlFixture):
             INSERT INTO {a}(id,group_id,probe,ceiling) VALUES
                 (1,1,7,10),(2,1,7,3),(3,1,7,NULL),(4,1,NULL,10),
                 (5,NULL,7,10),(6,2,7,10),(7,3,NULL,10),(8,1,7,20),(9,1,7,10);
-            UPDATE {a} SET floor=0 WHERE id<>9;
+            UPDATE {a} SET floor=100 WHERE id<>9;
             INSERT INTO {b}(id,auction,price,cutoff) VALUES
                 (1,1,7,3),(2,1,7,3),(3,1,NULL,12),(4,1,NULL,NULL),
                 (5,NULL,7,3),(6,2,NULL,2),(8,1,9,5),(99,1,7,1);''')
         keys = 'b.auction=a.group_id AND b.id<>99'
-        rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND a.ceiling>b.cutoff AND b.id>a.floor'
+        rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND (a.ceiling>b.cutoff OR (b.id>a.floor AND b.id>=a.id))'
         if mode == 'quantified':
             projections = ['a.id']
             self.labels = ['id']
@@ -67,7 +67,7 @@ class ResidualFixture(SqlFixture):
             negation = 'NOT ' if mode == 'not-exists' else ''
             self.labels = ['id']
             self.query = f'''SELECT a.id FROM {a} a WHERE {negation}EXISTS
-                (SELECT 1 FROM {b} b WHERE {keys} AND b.cutoff<a.ceiling AND a.floor<b.id)'''
+                (SELECT 1 FROM {b} b WHERE {keys} AND (b.cutoff<a.ceiling OR (a.floor<b.id AND b.id>=a.id)))'''
 
     def verify(self):
         self.verify_sql(expected(self, self.labels))
@@ -82,8 +82,10 @@ class ResidualFixture(SqlFixture):
             values = [
                 item['price'] for item in inner
                 if key is not None and key == item['auction'] and item['id'] != 99
-                and ceiling is not None and floor is not None and item['cutoff'] is not None
-                and floor < item["id"] and item["cutoff"] < ceiling
+                and (
+                    (ceiling is not None and item['cutoff'] is not None and item['cutoff'] < ceiling)
+                    or (floor is not None and floor < item['id'] and item['id'] >= row['id'])
+                )
             ]
             if self.mode == 'quantified':
                 truth = tuple(
@@ -111,7 +113,7 @@ def qualify(output, command, mode):
     with fixture.managed():
         fixture.run_history(command, History(
             changes=[
-                f'DELETE FROM {b} WHERE id=1; UPDATE {a} SET floor=4 WHERE id=1',
+                f'DELETE FROM {b} WHERE id=1; UPDATE {a} SET floor=2 WHERE id IN (1,3)',
                 f'UPDATE {b} SET cutoff=4 WHERE id=3; DELETE FROM {b} WHERE id IN (2,8)',
                 f'UPDATE {b} SET cutoff=NULL WHERE id=3; UPDATE {a} SET ceiling=20 WHERE id=2',
                 f'UPDATE {b} SET auction=3,cutoff=1 WHERE id=3; UPDATE {a} SET probe=7 WHERE id=7',

@@ -9,7 +9,12 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 #[derive(Default)]
 pub(super) struct Correlation {
     pub pairs: Vec<(Node, Node)>,
-    pub inequalities: Vec<Inequality>,
+    pub inequalities: Vec<Residual>,
+    inequality_count: usize,
+}
+pub(super) enum Residual {
+    Comparison(Box<Inequality>),
+    Logical { terms: Vec<Self>, and: bool },
 }
 pub(super) struct Inequality {
     pub outer: Node,
@@ -69,14 +74,52 @@ fn conjunct(
         local.push(value);
         return Ok(());
     }
-    comparison(&value, table, correlation, inequality)
+    if inequality && matches!(node(&value)?, NodeEnum::BoolExpr(_)) {
+        let term = residual(&value, table, &mut correlation.inequality_count, depth)?;
+        correlation.inequalities.push(term);
+        return Ok(());
+    }
+    let (operator, operands) = comparison(&value, table)?;
+    if operator == "=" {
+        ensure!(correlation.pairs.len() < 8, "subquery correlation key count exceeded");
+        correlation.pairs.push((operands.outer, operands.inner));
+    } else {
+        ensure!(inequality, "correlation requires ordinary equality");
+        correlation.inequalities.push(inequality_term(
+            &operator,
+            operands,
+            &mut correlation.inequality_count,
+        )?);
+    }
+    Ok(())
 }
-fn comparison(
-    value: &Node,
-    table: &Table,
-    correlation: &mut Correlation,
-    inequality: bool,
-) -> Result<()> {
+fn residual(value: &Node, table: &Table, count: &mut usize, depth: usize) -> Result<Residual> {
+    ensure!(depth < 16, "correlation residual nesting limit exceeded");
+    if let NodeEnum::BoolExpr(logical) = node(value)? {
+        let kind = pg::BoolExprType::try_from(logical.boolop)?;
+        ensure!(
+            matches!(kind, pg::BoolExprType::AndExpr | pg::BoolExprType::OrExpr)
+                && logical.args.len() >= 2,
+            "correlation residual requires AND or OR of inequalities"
+        );
+        let terms = logical
+            .args
+            .iter()
+            .map(|term| residual(term, table, count, depth + 1))
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(Residual::Logical { terms, and: kind == pg::BoolExprType::AndExpr });
+    }
+    let (operator, operands) = comparison(value, table)?;
+    inequality_term(&operator, operands, count)
+}
+
+struct Operands {
+    outer: Node,
+    inner: Node,
+    outer_first: bool,
+}
+
+fn comparison(value: &Node, table: &Table) -> Result<(String, Operands)> {
     let NodeEnum::AExpr(expression) = node(value)? else {
         anyhow::bail!("correlation requires top-level AND equalities");
     };
@@ -100,30 +143,27 @@ fn comparison(
     );
     let outer_first = sides.0 == 2;
     let (outer, inner) = if outer_first { (left, right) } else { (right, left) };
-    if operator == "=" {
-        ensure!(correlation.pairs.len() < 8, "subquery correlation key count exceeded");
-        correlation.pairs.push((outer.clone(), inner.clone()));
-    } else {
-        ensure!(
-            inequality && matches!(operator.as_str(), "<" | "<=" | ">" | ">=" | "<>"),
-            "correlation requires ordinary equality or supported inequalities"
-        );
-        ensure!(
-            correlation.inequalities.len() < 8,
-            "subquery correlation inequality count exceeded"
-        );
-        ensure!(
-            super::scalar_input::column(outer) && super::scalar_input::column(inner),
-            "correlation inequality requires plain columns"
-        );
-        correlation.inequalities.push(Inequality {
-            outer: outer.clone(),
-            inner: inner.clone(),
-            operator: operator.clone(),
-            outer_first,
-        });
-    }
-    Ok(())
+    Ok((operator.clone(), Operands { outer: outer.clone(), inner: inner.clone(), outer_first }))
+}
+
+fn inequality_term(operator: &str, operands: Operands, count: &mut usize) -> Result<Residual> {
+    ensure!(
+        matches!(operator, "<" | "<=" | ">" | ">=" | "<>"),
+        "correlation residual requires ordinary inequalities"
+    );
+    ensure!(*count < 8, "subquery correlation inequality count exceeded");
+    ensure!(
+        super::scalar_input::column(&operands.outer)
+            && super::scalar_input::column(&operands.inner),
+        "correlation inequality requires plain columns"
+    );
+    *count += 1;
+    Ok(Residual::Comparison(Box::new(Inequality {
+        outer: operands.outer,
+        inner: operands.inner,
+        operator: operator.into(),
+        outer_first: operands.outer_first,
+    })))
 }
 fn references(value: &Node, table: &Table, depth: usize) -> Result<u8> {
     ensure!(depth < 64, "subquery reference depth exceeded");

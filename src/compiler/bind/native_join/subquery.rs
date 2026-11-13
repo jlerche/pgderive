@@ -147,7 +147,7 @@ fn validate_correlation(
     ensure!(
         !quantified
             || if residual_inequality {
-                bound.predicate.as_ref().is_some_and(Predicate::is_inequality_conjunction)
+                bound.predicate.as_ref().is_some_and(Predicate::is_inequality_expression)
             } else {
                 bound.predicate.is_none()
             },

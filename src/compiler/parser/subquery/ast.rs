@@ -49,17 +49,19 @@ pub(super) fn logical(args: Vec<Node>, and: bool) -> Option<Box<Node>> {
     match args.len() {
         0 => None,
         1 => args.into_iter().next().map(Box::new),
-        _ => Some(Box::new(Node {
-            node: Some(NodeEnum::BoolExpr(Box::new(pg::BoolExpr {
-                boolop: i32::from(if and {
-                    pg::BoolExprType::AndExpr
-                } else {
-                    pg::BoolExprType::OrExpr
-                }),
-                args,
-                ..pg::BoolExpr::default()
-            }))),
-        })),
+        _ => Some(Box::new(boolean_expression(
+            args,
+            if and { pg::BoolExprType::AndExpr } else { pg::BoolExprType::OrExpr },
+        ))),
+    }
+}
+pub(super) fn boolean_expression(args: Vec<Node>, kind: pg::BoolExprType) -> Node {
+    Node {
+        node: Some(NodeEnum::BoolExpr(Box::new(pg::BoolExpr {
+            boolop: i32::from(kind),
+            args,
+            ..pg::BoolExpr::default()
+        }))),
     }
 }
 pub(super) fn is_null(value: Node) -> Node {

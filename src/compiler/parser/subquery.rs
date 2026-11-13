@@ -362,18 +362,13 @@ impl Rewrite<'_> {
             query.target_list.push(ast::target(inner, &label));
             conditions.push(ast::comparison(outer, ast::column(&alias, &label), "="));
         }
-        for (index, residual) in correlation.inequalities.into_iter().enumerate() {
-            let label =
-                if index == 0 { "\0inequality".into() } else { format!("\0inequality_{index}") };
-            query.target_list.push(ast::target(residual.inner, &label));
-            let inner = ast::column(&alias, &label);
-            let (left, right) = if residual.outer_first {
-                (residual.outer, inner)
-            } else {
-                (inner, residual.outer)
-            };
-            conditions.push(ast::comparison(left, right, &residual.operator));
-        }
+        let mut index = 0;
+        conditions.extend(
+            correlation
+                .inequalities
+                .into_iter()
+                .map(|term| residual_condition(term, &alias, &mut query.target_list, &mut index)),
+        );
         let left = self.take_tree()?;
         self.tree = Some(Tree::Mark {
             left: Box::new(left),
@@ -386,6 +381,38 @@ impl Rewrite<'_> {
             residual_inequality,
         });
         Ok(ast::column(&alias, ast::VALUE))
+    }
+}
+fn residual_condition(
+    term: correlation::Residual,
+    alias: &str,
+    targets: &mut Vec<Node>,
+    index: &mut usize,
+) -> Node {
+    match term {
+        correlation::Residual::Comparison(residual) => {
+            let label =
+                if *index == 0 { "\0inequality".into() } else { format!("\0inequality_{index}") };
+            *index += 1;
+            targets.push(ast::target(residual.inner, &label));
+            let inner = ast::column(alias, &label);
+            let (left, right) = if residual.outer_first {
+                (residual.outer, inner)
+            } else {
+                (inner, residual.outer)
+            };
+            ast::comparison(left, right, &residual.operator)
+        }
+        correlation::Residual::Logical { terms, and } => {
+            let args = terms
+                .into_iter()
+                .map(|term| residual_condition(term, alias, targets, index))
+                .collect();
+            ast::boolean_expression(
+                args,
+                if and { pg::BoolExprType::AndExpr } else { pg::BoolExprType::OrExpr },
+            )
+        }
     }
 }
 fn constant_null(value: &Node) -> bool {
