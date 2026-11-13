@@ -103,12 +103,13 @@ A qualifying row whose projected value is NULL can still make `IN` and
 their negations are TRUE, even for a NULL membership probe. The mark preserves
 outer multiplicity and remains valid across duplicate RHS changes and cold reopen.
 
-## Integral quantified comparisons
+## Exact numeric quantified comparisons
 
 The operators `=`, `<>` (also spelled `!=`), `<`, `<=`, `>`, and `>=`
 support `ANY` (also spelled `SOME`) and `ALL` over a one-column subquery. Both operands
-must be smallint, integer, or bigint. Unknown probe literals take the RHS type, and typed integral
-operands retain their widths. A simple column or literal probe can appear
+may be smallint, integer, bigint, or numeric, including mixed pairs. Comparisons
+use exact values and ignore differences in numeric display scale. Unknown probe
+literals take the RHS type, and typed operands retain their types. A simple column or literal probe can appear
 in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
 with indexable column equalities, the inequalities described above, or both. Rows for which the inequality expression
 is FALSE or NULL are absent from the quantified input.

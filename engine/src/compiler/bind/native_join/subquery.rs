@@ -46,7 +46,7 @@ impl Builder<'_> {
             super::validate_scalar_input(&self.nodes[start..])?;
         }
         let probe = if quantified.is_some() {
-            integral_probe(probe, value.oid, &resolve_left)?
+            exact_numeric_probe(probe, value.oid, &resolve_left)?
         } else {
             typed::operand(probe, &resolve_left)?.coerce(value.oid)?
         };
@@ -105,15 +105,16 @@ impl Builder<'_> {
         Ok(Edge { id, columns })
     }
 }
-fn integral_probe(
+fn exact_numeric_probe(
     probe: &Ast,
     rhs_oid: u32,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
 ) -> Result<typed::Typed> {
     let probe = typed::Typed::bind_contextual(probe, resolve, 0)?;
     ensure!(
-        matches!(rhs_oid, 20 | 21 | 23) && matches!(probe.oid(), 0 | 705 | 20 | 21 | 23),
-        "quantified comparisons require integral operands"
+        matches!(rhs_oid, 20 | 21 | 23 | 1700)
+            && matches!(probe.oid(), 0 | 705 | 20 | 21 | 23 | 1700),
+        "quantified comparisons require integral or numeric operands"
     );
     if matches!(probe.oid(), 0 | 705) { probe.coerce_common(rhs_oid) } else { Ok(probe) }
 }

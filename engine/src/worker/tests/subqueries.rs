@@ -418,7 +418,11 @@ async fn quantified_comparison_preserves_weighted_rows_and_group_truth() -> Resu
 async fn quantified_where_keeps_inequality_and_preserves_literal_width() -> Result<()> {
     let native = native();
     let compiled = compile(
-        "SELECT a.category AS c, 100000 < ALL (VALUES (1::smallint)) AS wide, 100000 = ANY (VALUES (1::smallint)) AS wide_eq, NULL < ANY (SELECT 1 WHERE false) AS empty_any, NULL < ALL (SELECT 1 WHERE false) AS empty_all FROM source.auction a WHERE a.other=2 AND a.other < SOME(SELECT b.price FROM source.bid b WHERE b.auction=a.other)",
+        "SELECT a.category AS c, 100000 < ALL (VALUES (1::smallint)) AS wide, 100000 = ANY (VALUES (1::smallint)) AS wide_eq, NULL < ANY (SELECT 1 WHERE false) AS empty_any, NULL < ALL (SELECT 1 WHERE false) AS empty_all,
+            '9007199254740993.000' = ANY (VALUES (9007199254740993.00)) AS exact_eq,
+            9007199254740993 < ALL (VALUES (9007199254740993.000000000000000001)) AS exact_order,
+            'Infinity'::numeric < ANY (VALUES ('NaN'::numeric)) AS special_order
+         FROM source.auction a WHERE a.other=2 AND a.other < SOME(SELECT b.price FROM source.bid b WHERE b.auction=a.other)",
         &native,
     )?;
     let names = compiled.output().columns.iter().map(|c| c.column.name.clone()).collect::<Vec<_>>();
@@ -443,6 +447,9 @@ async fn quantified_where_keeps_inequality_and_preserves_literal_width() -> Resu
                         Some("f".into()),
                         Some("f".into()),
                         Some("t".into()),
+                        Some("t".into()),
+                        Some("t".into()),
+                        Some("t".into()),
                     ])
                 })
             },
@@ -454,11 +461,12 @@ async fn quantified_where_keeps_inequality_and_preserves_literal_width() -> Resu
 }
 
 #[test]
-fn explicit_quantified_equality_keeps_integral_admission() {
+fn explicit_quantified_equality_keeps_exact_numeric_admission() {
     let native = native();
     for quantifier in ["= ANY", "<> ALL"] {
         for (probe, rhs) in [
             ("a.category", "SELECT 'x'::text"),
+            ("1::double precision", "SELECT 1.0"),
             ("a.other", "SELECT b.price + 1 FROM source.bid b"),
             ("a.other", "SELECT b.price FROM source.bid b WHERE b.auction=a.other + 1"),
         ] {
@@ -514,7 +522,7 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
 }
 
 #[test]
-fn quantified_inequality_keeps_integral_admission() -> Result<()> {
+fn quantified_inequality_keeps_exact_numeric_admission() -> Result<()> {
     let native = native();
     for quantifier in ["< ANY", "<> ALL"] {
         let query = |probe, output, predicate| {
