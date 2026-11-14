@@ -29,5 +29,5 @@ apply to the expanded plan.
 A single base-table query can also project columns of supported grouping types that depend on its
 declared primary key when every grouping set includes that full key.
 GROUPING() arguments still have to be explicit grouping expressions.
-Primary-key dependencies across joins and ordinary GROUP BY retain
-their existing restrictions.
+The same rule applies to ordinary GROUP BY on a single base table.
+Primary-key dependencies across joins remain unsupported.

@@ -24,6 +24,7 @@ class GroupingFixture(SqlFixture):
             'metadata': [(0,), ()],
             'constants': [(0, 1), (0,), ()],
             'primary': [(0, 1), (0,)],
+            'ordinary-primary': [(0,)],
         }[mode]
         clause = {
             'sets': 'GROUPING SETS ((auction), (), (auction), (price))',
@@ -34,6 +35,7 @@ class GroupingFixture(SqlFixture):
             'metadata': 'ROLLUP (tag)',
             'constants': 'ROLLUP (k, g)',
             'primary': 'id, ROLLUP(auction)',
+            'ordinary-primary': '1',
         }[mode]
         self.query = f'''SELECT auction AS k, price AS g, GROUPING(auction,price), COUNT(*) AS n,
             SUM(price) AS total FROM {self.source} GROUP BY {clause}'''
@@ -57,6 +59,10 @@ class GroupingFixture(SqlFixture):
             self.query = f'''SELECT id AS k, auction AS g, GROUPING(id,auction) AS grouping,
                 COUNT(*) AS n, price AS total FROM {self.source}
                 GROUP BY {clause} HAVING price IS NULL OR price > 0'''
+        if mode == 'ordinary-primary':
+            self.labels = ['k', 'n', 'total']
+            self.query = f'''SELECT id::integer AS k, COUNT(*) AS n, price AS total
+                FROM {self.source} GROUP BY {clause}'''
         self.mode = mode
 
     def verify(self):
@@ -79,7 +85,7 @@ class GroupingFixture(SqlFixture):
                 values = (row['tag'] if self.mode == 'metadata' else row['auction'], row['price'])
                 if self.mode == 'constants':
                     values = (5, 5)
-                if self.mode == 'primary':
+                if self.mode in ('primary', 'ordinary-primary'):
                     values = (row['id'], row['auction'])
                 groups.setdefault(tuple(values[index] for index in keys), []).append(row['price'])
             mask = sum(1 << (1-index) for index in range(2) if index not in keys)
@@ -87,6 +93,8 @@ class GroupingFixture(SqlFixture):
                 projected = dict(zip(keys, values))
                 if self.mode in ('distinct', 'metadata'):
                     bag[(projected.get(0), int(not keys), len(prices))] += 1
+                elif self.mode == 'ordinary-primary':
+                    bag[(projected[0], len(prices), prices[0])] += 1
                 elif self.mode == 'constants':
                     bag[(projected.get(0), projected.get(1), int(0 not in keys), len(prices), 6)] += 1
                 else:
@@ -117,4 +125,4 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    run_modes(('sets', 'rollup', 'cube', 'distinct', 'product', 'metadata', 'constants', 'primary'), qualify)
+    run_modes(('sets', 'rollup', 'cube', 'distinct', 'product', 'metadata', 'constants', 'primary', 'ordinary-primary'), qualify)

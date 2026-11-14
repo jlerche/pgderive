@@ -7,7 +7,7 @@ import sys
 
 LIVE_COUNTS = {'memtable': 1, 'checkpoint': 1, 'result-table': 2, 'operation-budget': 1,
                'transactions': 7, 'crashes': 5, 'query-lifecycle': 1, 'projection-compiler': 2, 'postgres-support': 1,
-               'quantified-subqueries': 36, 'residual-subqueries': 16, 'grouping-sets': 8, 'string-agg': 3, 'text-ordering': 6}
+               'quantified-subqueries': 36, 'residual-subqueries': 16, 'grouping-sets': 9, 'string-agg': 3, 'text-ordering': 6}
 
 
 def successful(report, fields):

@@ -133,7 +133,15 @@ fn build(
     if parsed.grouping_sets.is_some() || having::required(parsed) {
         return having::build(parsed, groups, resolve, context);
     }
-    build_direct(parsed, groups, resolve, context)
+    match build_direct(parsed, groups.clone(), resolve, context.clone()) {
+        Err(error)
+            if error.is::<UngroupedOutput>()
+                && having::ordinary_base_dependency(&groups, resolve, &context) =>
+        {
+            having::build(parsed, groups, resolve, context)
+        }
+        result => result,
+    }
 }
 fn build_direct(
     parsed: &Body,
@@ -199,6 +207,17 @@ fn build_direct(
     super::boundary::finalize(&mut relational, &averages)?;
     Ok(Compiled { result_columns: Vec::new(), relational })
 }
+#[derive(Debug)]
+struct UngroupedOutput;
+
+impl std::fmt::Display for UngroupedOutput {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("output column must appear in GROUP BY")
+    }
+}
+
+impl std::error::Error for UngroupedOutput {}
+
 fn grouped_nodes(
     keys: Vec<ColumnRef>,
     aggregates: Vec<Aggregate>,
@@ -216,14 +235,12 @@ fn grouped_nodes(
         nodes.push(Node::Output { id: "project".into(), input: input.into() });
         return Ok(nodes);
     }
-    ensure!(
-        output
-            .columns
-            .iter()
-            .all(|output| aggregates.iter().any(|value| value.field == output.column.name)
-                || keys.contains(&output.column)),
-        "output column must appear in GROUP BY"
-    );
+    if output.columns.iter().any(|output| {
+        !aggregates.iter().any(|value| value.field == output.column.name)
+            && !keys.contains(&output.column)
+    }) {
+        return Err(UngroupedOutput.into());
+    }
     let spec = Partition {
         mode: Mode::Grouped { keys: keys.clone() },
         aggregates,

@@ -193,15 +193,36 @@ pub(super) fn build(
 // When every grouping set contains it, adding a dependent column does
 // not split a group. Keep these physical keys separate from SQL GROUPING().
 fn base_dependency<F>(body: &Body, rewrite: &Rewrite<'_, F>, context: &Stage<'_>) -> bool {
-    let (Some(sets), Some(relation)) = (&body.grouping_sets, context.base_relation) else {
-        return false;
-    };
+    primary_key_covered(context, |field| {
+        body.grouping_sets.as_ref().map_or_else(
+            || rewrite.keys.iter().any(|key| key.name == field),
+            |sets| {
+                sets.groups
+                    .iter()
+                    .all(|set| set.iter().any(|index| rewrite.keys[*index].name == field))
+            },
+        )
+    })
+}
+
+pub(super) fn ordinary_base_dependency(
+    groups: &[Key],
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    context: &Stage<'_>,
+) -> bool {
+    primary_key_covered(context, |field| {
+        groups.iter().any(|key| {
+            super::bind_key(key.clone(), resolve, &mut Vec::new(), context.scalar_scope)
+                .is_ok_and(|resolved| resolved.name == field)
+        })
+    })
+}
+
+fn primary_key_covered(context: &Stage<'_>, contains: impl Fn(&str) -> bool) -> bool {
+    let Some(relation) = context.base_relation else { return false };
     let mut primary = relation.columns.iter().filter(|column| column.primary).peekable();
     primary.peek().is_some()
-        && primary.all(|column| {
-            let name = crate::compiler::relational::field(0, &column.name);
-            sets.groups.iter().all(|set| set.iter().any(|index| rewrite.keys[*index].name == name))
-        })
+        && primary.all(|column| contains(&crate::compiler::relational::field(0, &column.name)))
 }
 
 fn render_aggregate(value: &Node) -> Result<syntax::Aggregate> {
@@ -354,17 +375,19 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
         keys: &mut Vec<Key>,
         sets: Option<&crate::compiler::parser::grouping_sets::Sets>,
     ) -> Option<crate::compiler::parser::grouping_sets::Sets> {
-        let mut sets = sets.cloned()?;
+        let mut sets = sets.cloned();
         let first = keys.len();
         for (name, resolved) in std::mem::take(&mut self.dependent) {
             keys.push(Key::Column(name));
             self.keys.push(resolved);
             self.constant_slots.push(GroupingSlot::Expression);
         }
-        for set in &mut sets.groups {
-            set.extend(first..keys.len());
+        if let Some(sets) = &mut sets {
+            for set in &mut sets.groups {
+                set.extend(first..keys.len());
+            }
         }
-        Some(sets)
+        sets
     }
 
     fn dependent_column(&mut self, value: &Node) -> Result<Option<Node>> {
