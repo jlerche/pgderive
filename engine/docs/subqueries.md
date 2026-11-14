@@ -81,21 +81,25 @@ for equality comparisons whose sides share a value domain. Uncorrelated membersh
 a global bucket, so its tick still reads every outer and RHS row. A residual
 correlation or a cross-domain date/timestamp comparison scans the RHS per outer row.
 
-## Inequality correlation
+## Residual correlation
 
-A correlated `IN` or `NOT IN` subquery can add up to eight ordinary inequalities
-(`<`, `<=`, `>`, `>=`, or `<>`) with or without an indexable column equality.
-Inequalities may be combined with AND, OR, and NOT. Any equality key must be a
-top-level AND term. Each inequality compares a column from each scope using
-the existing native comparison rules. The same correlation is supported for
-`WHERE EXISTS (SELECT 1 ...)` and `WHERE NOT EXISTS (SELECT 1 ...)`.
-The RHS uses a native table, a simple projection, and supported local predicates.
+A correlated `IN` or `NOT IN` subquery can add up to eight residual comparisons
+with or without an indexable column equality. The six ordinary comparison operators may be combined with AND, OR,
+and NOT. A top-level equality can supply an index key. Equalities inside OR or
+NOT stay in the residual predicate. Each residual compares a column from each
+scope using the existing native comparison rules. The same correlation is supported for
+`EXISTS (SELECT 1 ...)` and `NOT EXISTS (SELECT 1 ...)` in projections and
+Boolean predicates. A standalone equality-only WHERE can use the dedicated
+presence operator.
+A correlated RHS uses one native table, a simple projection, and supported
+local predicates. Qualify outer references in residual comparisons. Correlation
+is limited to one outer query level.
 The membership probe must be safe to evaluate independently of the RHS.
 
-The mark scans the matching equality bucket, or the shared bucket for an
-inequality-only correlation. Both scans charge candidate visits against the
+The mark scans the matching equality bucket, or the shared bucket for a
+correlation without a key. Both scans charge candidate visits against the
 existing work limits.
-Only pairs for which the full inequality expression is TRUE contribute. An
+Only pairs for which the full residual expression is TRUE contribute. An
 OR group is TRUE if any arm is TRUE, even when another arm evaluates to NULL.
 NOT preserves NULL.
 A qualifying row whose projected value is NULL can still make `IN` and
@@ -116,9 +120,10 @@ spaces significant. Boolean comparisons order FALSE before TRUE. UUID values
 compare by their 16 bytes. Dates, timestamps, and timestamps with time zone
 can be compared with each other in the engine's UTC session. A date compares
 as midnight, including when its finite value exceeds the timestamp range.
+Intervals compare by duration using PostgreSQL's 30-day month convention.
 A simple column or literal probe can appear
 in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
-with indexable column equalities, the inequalities described above, or both. Rows for which the inequality expression
+with indexable column equalities, the residual comparisons described above, or both. Rows for which the residual expression
 is FALSE or NULL are absent from the quantified input.
 
 - `ANY` returns TRUE if any comparison is TRUE. Otherwise it returns NULL
@@ -168,3 +173,10 @@ set-operation RHS queries, simultaneous source changes and cold restart. A nativ
 lazy-guard witness accompanies fail-closed admission tests; a division-by-zero
 history verifies the durable failure boundary. Rust weighted histories add
 repeated restart/compaction and correlated COUNT/HAVING/default-row transitions.
+
+The common gate also runs 14 residual-correlation and 36 quantified-comparison
+histories against native PostgreSQL and independent recomputation. The histories
+cover both keyed and keyless predicates, projected existence, all six quantifier
+comparisons, empty groups, NULL transitions, and cold restart. A focused work
+limit test verifies that an over-limit scan leaves the prior epoch available
+for retry.

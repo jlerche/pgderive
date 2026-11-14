@@ -68,7 +68,16 @@ pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<&Node> {
     Ok(target)
 }
 
-pub(super) fn exists(value: &Node) -> Result<Option<(&pg::SelectStmt, bool)>> {
+pub(super) fn uses_keyed_existence(select: &pg::SelectStmt, condition: &Node) -> Result<bool> {
+    let [source] = select.from_clause.as_slice() else { return Ok(false) };
+    if super::table(source).is_err() {
+        return Ok(false);
+    }
+    let Some((query, _)) = exists(condition)? else { return Ok(false) };
+    super::subquery::correlation::only_cross_scope_equalities(query)
+}
+
+fn exists(value: &Node) -> Result<Option<(&pg::SelectStmt, bool)>> {
     let (value, anti) = match node(value)? {
         NodeEnum::BoolExpr(value) if value.boolop == i32::from(pg::BoolExprType::NotExpr) => {
             let [argument] = value.args.as_slice() else { return Ok(None) };

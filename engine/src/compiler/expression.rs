@@ -464,18 +464,18 @@ impl Predicate {
         matches!(self.0, Expr::Compare(Compare::Eq, _, _))
     }
 
-    pub(super) fn is_inequality_expression(&self) -> bool {
-        fn only_inequalities(expr: &Expr) -> bool {
+    pub(super) fn is_comparison_expression(&self) -> bool {
+        fn only_comparisons(expr: &Expr) -> bool {
             match expr {
-                Expr::Compare(op, _, _) => *op != Compare::Eq,
-                Expr::Not(term) => only_inequalities(term),
+                Expr::Compare(..) => true,
+                Expr::Not(term) => only_comparisons(term),
                 Expr::And(terms) | Expr::Or(terms) | Expr::Quals(terms) => {
-                    !terms.is_empty() && terms.iter().all(only_inequalities)
+                    !terms.is_empty() && terms.iter().all(only_comparisons)
                 }
                 _ => false,
             }
         }
-        only_inequalities(&self.0)
+        only_comparisons(&self.0)
     }
 
     pub(super) const fn new(expr: Expr) -> Self {

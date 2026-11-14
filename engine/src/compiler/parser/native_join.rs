@@ -29,7 +29,7 @@ pub(in crate::compiler) enum Tree {
         condition: Option<Box<Node>>,
         semijoin: bool,
         quantified: Option<crate::compiler::syntax::Compare>,
-        residual_inequality: bool,
+        has_residual: bool,
     },
     Join {
         left: Box<Self>,

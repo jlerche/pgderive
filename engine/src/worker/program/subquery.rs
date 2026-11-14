@@ -29,7 +29,9 @@ struct RightValues {
     values: BTreeSet<String>,
 }
 const fn indexed(spec: &Mark) -> bool {
-    spec.comparison.is_equality()
+    // Component-preserving interval encodings can differ for equal durations.
+    spec.probe.oid != 1186
+        && spec.comparison.is_equality()
         && spec.correlation.is_none()
         && (spec.probe.oid == spec.value.oid
             || (numeric_family(spec.probe.oid) && numeric_family(spec.value.oid))

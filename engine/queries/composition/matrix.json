@@ -126,12 +126,12 @@
     {
       "id": "mixed-exists-key",
       "sql": "SELECT a.id FROM {schema}.account a WHERE EXISTS(SELECT 1 FROM {schema}.entry b WHERE a.id+b.id=b.account_id)",
-      "diagnostic": "ON equality must connect"
+      "diagnostic": "correlation operands must be local to opposite scopes"
     },
     {
-      "id": "inequality-correlation",
-      "sql": "SELECT a.id FROM {schema}.account a WHERE EXISTS(SELECT 1 FROM {schema}.entry b WHERE a.id<b.account_id)",
-      "diagnostic": "requires ordinary equality"
+      "id": "computed-inequality-correlation",
+      "sql": "SELECT a.id FROM {schema}.account a WHERE EXISTS(SELECT 1 FROM {schema}.entry b WHERE a.id+1<b.account_id)",
+      "diagnostic": "correlation inequality requires plain columns"
     }
   ],
   "qualified_compositions": [

@@ -102,7 +102,7 @@ impl Builder<'_> {
                 condition,
                 semijoin,
                 quantified,
-                residual_inequality,
+                has_residual,
             } => {
                 let left = self.tree(*left)?;
                 self.mark(
@@ -114,7 +114,7 @@ impl Builder<'_> {
                         condition: condition.as_deref(),
                         semijoin,
                         quantified,
-                        residual_inequality,
+                        has_residual,
                     },
                 )
             }

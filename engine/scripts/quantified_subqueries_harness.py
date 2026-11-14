@@ -87,6 +87,13 @@ class QuantifiedFixture(SqlFixture):
                 UPDATE {self.inner} SET term=CASE WHEN id=1
                     THEN '80000000-0000-0000-0000-000000000000'::uuid
                     ELSE 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid END WHERE id IN (1,2,4,6);''')
+        elif domains == 'interval':
+            self.probe = 'probe'
+            self.sql(f'''ALTER TABLE {self.outer} ADD COLUMN probe interval;
+                ALTER TABLE {self.inner} ADD COLUMN term interval;
+                UPDATE {self.outer} SET probe='1 month' WHERE id<>5;
+                UPDATE {self.inner} SET term='30 days' WHERE id=1;
+                UPDATE {self.inner} SET term='31 days' WHERE id IN (2,4,6);''')
         elif domains in TEMPORAL:
             self.probe = 'probe'
             probe_type, value_type = TEMPORAL[domains]
@@ -117,7 +124,7 @@ class QuantifiedFixture(SqlFixture):
             if domains == 'numeric':
                 self.sql(f"UPDATE {self.outer} SET probe=9007199254740993.000 WHERE id=1")
         key = 'a.correlation_key' if mode == 'correlated' else '1'
-        self.value = 'term' if domains in ('C', 'POSIX', 'boolean', 'uuid') or domains in TEMPORAL else 'price'
+        self.value = 'term' if domains in ('C', 'POSIX', 'boolean', 'uuid', 'interval') or domains in TEMPORAL else 'price'
         rhs = f'SELECT b.{self.value} FROM {self.inner} b WHERE b.auction={key}'
         projections = ['a.id']
         for label, symbol, _ in self.comparisons:
@@ -130,8 +137,13 @@ class QuantifiedFixture(SqlFixture):
     def verify(self):
         self.verify_sql(expected(self, self.labels))
         assert binary_difference(self) == '0'
-        outer = json.loads(self.sql(f"SELECT COALESCE(json_agg(a),'[]') FROM {self.outer} a"), parse_float=Decimal)
-        inner = json.loads(self.sql(f"SELECT COALESCE(json_agg(b),'[]') FROM {self.inner} b"), parse_float=Decimal)
+        outer_layout = 'a'
+        inner_layout = 'b'
+        if self.domains == 'interval':
+            outer_layout = "jsonb_build_object('id',a.id,'correlation_key',a.correlation_key,'probe',extract(epoch from a.probe))"
+            inner_layout = "jsonb_build_object('auction',b.auction,'term',extract(epoch from b.term))"
+        outer = json.loads(self.sql(f"SELECT COALESCE(json_agg({outer_layout}),'[]') FROM {self.outer} a"), parse_float=Decimal)
+        inner = json.loads(self.sql(f"SELECT COALESCE(json_agg({inner_layout}),'[]') FROM {self.inner} b"), parse_float=Decimal)
         memory = Counter()
         for row in outer:
             key = row['correlation_key'] if self.mode == 'correlated' else 1
@@ -156,6 +168,8 @@ def qualify(output, command, mode, group, domains):
     a, b = fixture.outer, fixture.inner
     new_value = {'boolean': 'true', 'uuid': 'ffffffff-ffff-ffff-ffff-ffffffffffff'}.get(domains, '2')
     new_probe = '80000000-0000-0000-0000-000000000000' if domains == 'uuid' else '1'
+    if domains == 'interval':
+        new_value, new_probe = '30 days', '1 month'
     if domains in TEMPORAL:
         probe_type, value_type = TEMPORAL[domains]
         new_value = f'{NEXT_DAY} 00:00:00+00' if value_type == 'timestamptz' else NEXT_DAY
@@ -188,6 +202,7 @@ if __name__ == '__main__':
                    ('correlated', 'C'), ('uncorrelated', 'POSIX'),
                    ('correlated', 'boolean'), ('uncorrelated', 'boolean'),
                    ('correlated', 'uuid'), ('uncorrelated', 'uuid'),
+                   ('uncorrelated', 'interval'),
                    ('correlated', 'date'), ('correlated', 'timestamp'),
                    ('uncorrelated', 'timestamptz'),
                    ('correlated', 'date-timestamptz'), ('uncorrelated', 'timestamp-date'),

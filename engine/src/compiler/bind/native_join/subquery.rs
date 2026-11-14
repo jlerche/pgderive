@@ -18,7 +18,7 @@ pub(super) struct MarkArguments<'a> {
     pub(super) condition: Option<&'a Ast>,
     pub(super) semijoin: bool,
     pub(super) quantified: Option<Compare>,
-    pub(super) residual_inequality: bool,
+    pub(super) has_residual: bool,
 }
 
 impl Builder<'_> {
@@ -28,21 +28,13 @@ impl Builder<'_> {
         parsed: Box<Parsed>,
         arguments: MarkArguments<'_>,
     ) -> Result<Edge> {
-        let MarkArguments { probe, alias, condition, semijoin, quantified, residual_inequality } =
+        let MarkArguments { probe, alias, condition, semijoin, quantified, has_residual } =
             arguments;
         let resolve_left = |name: &Name| Ok(resolve(name, &left.columns)?.value.clone());
         let start = self.nodes.len();
         let right = self.derived(parsed, alias.clone())?;
-        ensure!(
-            condition.is_some() || right.columns.len() == 1,
-            "IN subquery requires exactly one output"
-        );
-        let value = right.columns[0].value.clone();
-        ensure!(
-            matches!(value.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
-            "unsupported IN native type"
-        );
-        if quantified.is_some() || residual_inequality {
+        let value = membership_value(&right, condition.is_some())?;
+        if quantified.is_some() || has_residual {
             super::validate_scalar_input(&self.nodes[start..])?;
         }
         let probe = if quantified.is_some() {
@@ -54,7 +46,7 @@ impl Builder<'_> {
             &probe,
             &left.columns,
             right.columns[0].collation,
-            (residual_inequality, quantified.is_some()),
+            (has_residual, quantified.is_some()),
         )?;
         let mut computed = Vec::new();
         let probe = match probe.as_column() {
@@ -67,7 +59,7 @@ impl Builder<'_> {
         let columns = left.columns.clone();
         let id = format!("tree_join_{}", self.joins);
         let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
-        validate_correlation(&bound, quantified.is_some(), residual_inequality)?;
+        validate_correlation(&bound, quantified.is_some(), has_residual)?;
         let comparison = Predicate::new(Expr::Compare(
             quantified.unwrap_or(Compare::Eq),
             typed::Typed::column(probe.clone()),
@@ -110,6 +102,18 @@ impl Builder<'_> {
         Ok(Edge { id, columns })
     }
 }
+fn membership_value(right: &Edge, correlated: bool) -> Result<ColumnRef> {
+    ensure!(correlated || right.columns.len() == 1, "IN subquery requires exactly one output");
+    let value = right.columns[0].value.clone();
+    ensure!(
+        matches!(
+            value.oid,
+            16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184 | 1186
+        ),
+        "unsupported IN native type"
+    );
+    Ok(value)
+}
 fn quantified_probe(
     probe: &Ast,
     rhs_oid: u32,
@@ -122,10 +126,10 @@ fn quantified_probe(
         (matches!(rhs_oid, 20 | 21 | 23 | 1700)
             && (unknown || matches!(probe_oid, 20 | 21 | 23 | 1700)))
             || (matches!(rhs_oid, 25 | 1043) && (unknown || matches!(probe_oid, 25 | 1043)))
-            || (matches!(rhs_oid, 16 | 2950) && (unknown || probe_oid == rhs_oid))
+            || (matches!(rhs_oid, 16 | 1186 | 2950) && (unknown || probe_oid == rhs_oid))
             || (matches!(rhs_oid, 1082 | 1114 | 1184)
                 && (unknown || matches!(probe_oid, 1082 | 1114 | 1184))),
-        "quantified comparisons require compatible exact numeric, text, Boolean, UUID, or date/time operands"
+        "quantified comparisons require compatible exact numeric, text, Boolean, UUID, date/time, or interval operands"
     );
     if matches!(probe.oid(), 0 | 705) { probe.coerce_common(rhs_oid) } else { Ok(probe) }
 }
@@ -133,10 +137,10 @@ fn validate_probe(
     probe: &typed::Typed,
     left: &[Column],
     rhs_collation: u32,
-    (residual_inequality, quantified): (bool, bool),
+    (has_residual, quantified): (bool, bool),
 ) -> Result<()> {
     ensure!(
-        !residual_inequality || probe.total_scalar_input(),
+        !has_residual || probe.total_scalar_input(),
         "inequality correlation requires a total membership probe"
     );
     if matches!(probe.oid(), 25 | 1043) {
@@ -168,25 +172,21 @@ fn validate_probe(
     }
     Ok(())
 }
-fn validate_correlation(
-    bound: &keys::Bound,
-    quantified: bool,
-    residual_inequality: bool,
-) -> Result<()> {
+fn validate_correlation(bound: &keys::Bound, quantified: bool, has_residual: bool) -> Result<()> {
     ensure!(
         !quantified
-            || if residual_inequality {
-                bound.predicate.as_ref().is_some_and(Predicate::is_inequality_expression)
+            || if has_residual {
+                bound.predicate.as_ref().is_some_and(Predicate::is_comparison_expression)
             } else {
                 bound.predicate.is_none()
             },
         "quantified correlation requires indexable equality"
     );
     ensure!(
-        !residual_inequality
+        !has_residual
             || !bound.keys.is_empty()
-            || bound.predicate.as_ref().is_some_and(Predicate::is_inequality_expression),
-        "correlation without an indexable equality key requires only inequalities"
+            || bound.predicate.as_ref().is_some_and(Predicate::is_comparison_expression),
+        "correlation without an indexable equality key requires ordinary comparisons"
     );
     Ok(())
 }

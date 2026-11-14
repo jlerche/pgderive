@@ -44,7 +44,7 @@ class ResidualFixture(SqlFixture):
         keys = 'b.id<>99'
         if keyed:
             keys += ' AND b.auction=a.group_id'
-        rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND NOT (a.ceiling<=b.cutoff AND (b.id<=a.floor OR b.id<a.id))'
+        rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND NOT (a.ceiling<=b.cutoff AND (b.id<=a.floor OR b.id<a.id OR b.id=a.id))'
         if mode == 'quantified':
             projections = ['a.id']
             self.labels = ['id']
@@ -69,8 +69,13 @@ class ResidualFixture(SqlFixture):
         else:
             negation = 'NOT ' if mode == 'not-exists' else ''
             self.labels = ['id']
-            self.query = f'''SELECT a.id FROM {a} a WHERE {negation}EXISTS
-                (SELECT 1 FROM {b} b WHERE {keys} AND NOT (b.cutoff>=a.ceiling AND (a.floor>=b.id OR b.id<a.id)))'''
+            exists = f'''EXISTS (SELECT 1 FROM {b} b WHERE {keys}
+                AND NOT (b.cutoff>=a.ceiling AND (a.floor>=b.id OR b.id<a.id OR b.id=a.id)))'''
+            if mode == 'exists-projection':
+                self.labels = ['id', 'present', 'absent']
+                self.query = f'SELECT a.id, {exists} AS present, NOT {exists} AS absent FROM {a} a'
+            else:
+                self.query = f'SELECT a.id FROM {a} a WHERE {negation}{exists} AND a.id>0'
 
     def verify(self):
         self.verify_sql(expected(self, self.labels))
@@ -87,7 +92,7 @@ class ResidualFixture(SqlFixture):
                 if (not self.keyed or (key is not None and key == item['auction'])) and item['id'] != 99
                 and (
                     (ceiling is not None and item['cutoff'] is not None and item['cutoff'] < ceiling)
-                    or (floor is not None and floor < item['id'] and item['id'] >= row['id'])
+                    or (floor is not None and floor < item['id'] and item['id'] > row['id'])
                 )
             ]
             if self.mode == 'quantified':
@@ -105,6 +110,8 @@ class ResidualFixture(SqlFixture):
                     memory[(row['id'], mark, None if mark is None else not mark)] += 1
                 elif mark is True:
                     memory[(row['id'],)] += 1
+            elif self.mode == 'exists-projection':
+                memory[(row['id'], bool(values), not values)] += 1
             elif bool(values) == (self.mode == 'exists'):
                 memory[(row['id'],)] += 1
         self.verify_memory(memory)
@@ -134,6 +141,6 @@ def qualify(output, command, mode, keyed):
 
 
 if __name__ == '__main__':
-    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter')
+    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection')
     run_cases(((mode if keyed else f'{mode}-inequality-only', mode, keyed)
                for keyed in (True, False) for mode in modes), qualify)

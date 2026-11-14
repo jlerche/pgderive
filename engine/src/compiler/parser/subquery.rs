@@ -1,6 +1,6 @@
 //! Lift bounded scalar/IN subqueries into the ordinary relational source tree.
 mod ast;
-mod correlation;
+pub(super) mod correlation;
 mod scalar;
 mod scalar_input;
 use super::{
@@ -41,13 +41,25 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
             target.name = super::label::output(super::target(&original)?)?;
         }
     }
+    let defer_existence = !rewrite.changed
+        && checked
+            .where_clause
+            .as_deref()
+            .map(|condition| membership::uses_keyed_existence(select, condition))
+            .transpose()?
+            .unwrap_or(false);
     if let Some(condition) = &mut checked.where_clause
-        && let Some(mark) = rewrite.residual_exists(condition)?
+        && !defer_existence
     {
-        **condition = mark;
-        rewrite.changed = true;
+        rewrite.visit(condition, false, 0)?;
     }
-    for condition in [&mut checked.where_clause, &mut checked.having_clause].into_iter().flatten() {
+    if let Some(condition) = &mut checked.having_clause {
+        rewrite.visit(condition, false, 0)?;
+    }
+    if defer_existence
+        && rewrite.changed
+        && let Some(condition) = &mut checked.where_clause
+    {
         rewrite.visit(condition, false, 0)?;
     }
     if !rewrite.changed {
@@ -82,11 +94,11 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
 }
 /// `PostgreSQL` pulls up IN as a semijoin only when it is a top-level WHERE conjunct.
 fn mark_semijoins(tree: &mut Tree, condition: &Node) {
-    let Tree::Mark { left, alias, semijoin, quantified, residual_inequality, .. } = tree else {
+    let Tree::Mark { left, alias, semijoin, quantified, has_residual, .. } = tree else {
         return;
     };
     *semijoin = quantified.is_none()
-        && !*residual_inequality
+        && !*has_residual
         && conjunct(condition, &ast::column(alias, ast::VALUE));
     mark_semijoins(left, condition);
 }
@@ -132,9 +144,6 @@ impl Rewrite<'_> {
         self.visited += 1;
         ensure!(depth < 64 && self.visited <= 1024, "subquery expression budget exceeded");
         if let Some(NodeEnum::SubLink(link)) = &value.node {
-            if link.sub_link_type == i32::from(pg::SubLinkType::ExistsSublink) {
-                return Ok(());
-            }
             ensure!(
                 !guarded,
                 "subqueries in lazy CASE/COALESCE/NULLIF/BETWEEN operands are unsupported; compute them in a derived scope first"
@@ -262,6 +271,16 @@ impl Rewrite<'_> {
             "scalar/IN subquery requires exactly one output"
         );
         match pg::SubLinkType::try_from(link.sub_link_type)? {
+            pg::SubLinkType::ExistsSublink => {
+                ensure!(
+                    link.testexpr.is_none() && link.oper_name.is_empty(),
+                    "invalid EXISTS sublink"
+                );
+                let probe = membership::existence_value(query)?.clone();
+                scalar_input::validate(query, 0)?;
+                // With a constant, non-NULL RHS value the mark is always two-valued.
+                self.membership((**query).clone(), probe, None)
+            }
             pg::SubLinkType::ExprSublink => {
                 ensure!(
                     link.testexpr.is_none() && link.oper_name.is_empty(),
@@ -300,23 +319,6 @@ impl Rewrite<'_> {
             _ => anyhow::bail!("unsupported scalar/IN sublink kind"),
         }
     }
-    fn residual_exists(&mut self, condition: &Node) -> Result<Option<Node>> {
-        let Some((query, anti)) = membership::exists(condition)? else { return Ok(None) };
-        let filter = optional(query.where_clause.as_deref())?;
-        if super::native_join::computed_equalities(filter, &mut Vec::new(), 0).is_ok() {
-            return Ok(None);
-        }
-        let probe = membership::existence_value(query)?.clone();
-        let mut query = query.clone();
-        let correlation = correlation::extract(&mut query, true)?;
-        if correlation.inequalities.is_empty() {
-            return Ok(None);
-        }
-        // 1 IN (SELECT 1 ...) is two-valued, even when the residual rejects every pair.
-        let mark = self.membership_mark(query, probe, None, correlation)?;
-        Ok(Some(if anti { ast::not(mark) } else { mark }))
-    }
-
     fn membership(
         &mut self,
         mut query: pg::SelectStmt,
@@ -334,8 +336,8 @@ impl Rewrite<'_> {
         correlation: correlation::Correlation,
     ) -> Result<Node> {
         let alias = self.alias()?;
-        let residual_inequality = !correlation.inequalities.is_empty();
-        if quantified.is_some() || residual_inequality {
+        let has_residual = !correlation.residuals.is_empty();
+        if quantified.is_some() || has_residual {
             scalar_input::validate(&query, 0)?;
             ensure!(
                 correlation.pairs.iter().all(
@@ -344,7 +346,7 @@ impl Rewrite<'_> {
                 "correlation requires column equalities"
             );
         }
-        if residual_inequality || !correlation.pairs.is_empty() {
+        if has_residual || !correlation.pairs.is_empty() {
             ensure!(
                 query.group_clause.is_empty()
                     && query.distinct_clause.is_empty()
@@ -365,7 +367,7 @@ impl Rewrite<'_> {
         let mut index = 0;
         conditions.extend(
             correlation
-                .inequalities
+                .residuals
                 .into_iter()
                 .map(|term| residual_condition(term, &alias, &mut query.target_list, &mut index)),
         );
@@ -378,7 +380,7 @@ impl Rewrite<'_> {
             condition: ast::logical(conditions, true),
             semijoin: false,
             quantified,
-            residual_inequality,
+            has_residual,
         });
         Ok(ast::column(&alias, ast::VALUE))
     }

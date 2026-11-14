@@ -1326,16 +1326,15 @@ output columns remain legal. Single-table DISTINCT ON follows the [ordered selec
 slot creation. Grouping after restricted EXISTS/NOT EXISTS now uses the same
 partition lowering as other grouped queries; see the [composition matrix](composition-matrix.md).
 
-An outer ordinary source may use exactly `WHERE EXISTS (SELECT 1 FROM schema.table
+The dedicated presence operator accepts `WHERE EXISTS (SELECT 1 FROM schema.table
 alias WHERE inner.key = outer.key [AND ...])`, or `WHERE NOT EXISTS (...)`.
 Correlations must use qualified operands and 1..16 equalities connecting the
 inner and outer inputs. Key types, computations and collations use the shared
 [join key binder](join-predicates.md). Aliases expose source
-occurrences, permitting self correlation with distinct aliases. Additional outer
-or inner predicates, OR/inequality correlations, uncorrelated subqueries, nested
-subqueries, aggregates, ordering and limits remain rejected for this EXISTS form.
-[IN/NOT IN and scalar aggregate subqueries](subqueries.md) have a separate bounded
-shared relational lowering. NOT IN preserves UNKNOWN and differs from NOT EXISTS.
+occurrences, permitting self correlation with distinct aliases. The
+[shared subquery lowering](subqueries.md) handles additional predicates,
+inequality correlations, and EXISTS in projections and Boolean expressions.
+NOT IN preserves UNKNOWN and differs from NOT EXISTS.
 
 Execution tags both complete full-row input bags, separates NULL keys by side,
 unions synchronized transaction deltas and computes current affected key

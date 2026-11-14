@@ -486,6 +486,10 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
     let native = native();
     for predicate in [
         "b.price>a.id",
+        "b.auction=a.other OR b.price>a.id",
+        "NOT (b.auction=a.other AND b.price>a.id)",
+        "b.auction=a.other AND NOT (b.id=a.id)",
+        "b.auction=a.other AND (b.price>a.id OR b.id=a.id)",
         "b.auction=a.other AND b.price>a.id",
         "b.auction=a.other AND a.id<=b.price AND b.id>a.id",
         "b.auction=a.other AND (b.price>a.id OR (b.id<a.id AND b.price<>a.id))",
@@ -502,10 +506,6 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
         }
     }
     for predicate in [
-        "b.auction=a.other OR b.price>a.id",
-        "NOT (b.auction=a.other AND b.price>a.id)",
-        "b.auction=a.other AND NOT (b.id=a.id)",
-        "b.auction=a.other AND (b.price>a.id OR b.id=a.id)",
         "b.auction=a.other AND (b.price>a.id OR b.id>1)",
         "b.auction=a.other AND b.price+1>a.id",
         "b.auction=a.other+1 AND b.price>a.id",
@@ -518,6 +518,13 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
         );
         assert!(compile(&in_query, &native).is_err(), "{in_query}");
         assert!(compile(&exists_query, &native).is_err(), "{exists_query}");
+    }
+    for sql in [
+        "SELECT a.id FROM source.auction a WHERE EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=1)",
+        "SELECT a.id FROM source.auction a WHERE EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=other)",
+        "SELECT a.id FROM (SELECT id FROM source.auction) a WHERE EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id)",
+    ] {
+        compile(sql, &native)?;
     }
     let fallible_probe = "SELECT 10 / a.other IN (SELECT b.price FROM source.bid b
         WHERE b.auction=a.other AND b.price>a.id) FROM source.auction a";
@@ -686,6 +693,41 @@ async fn quantified_temporal_preserves_mixed_types_and_edges() -> Result<()> {
         .run(
             changes(),
             |state| outputs(state, &names, |_, _| Ok(vec![Some("t".into()); 7])),
+            super::apply_joined,
+            |_| true,
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn quantified_interval_compares_duration_and_preserves_unknown() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT interval '1 month' = ANY (VALUES (interval '30 days'), (NULL)) AS equal_duration,
+            interval '1 month' <> ALL (VALUES (interval '30 days'), (NULL)) AS unequal_duration,
+            interval '1 month' < ANY (VALUES (interval '30 days'), (NULL)) AS unknown_order,
+            interval '1 day' < ALL (VALUES (interval '25 hours')) AS increasing,
+            NULL < ALL (SELECT interval '1 day' WHERE FALSE) AS empty_all
+         FROM source.auction a",
+        &native,
+    )?;
+    let names = compiled.output().columns.iter().map(|c| c.column.name.clone()).collect::<Vec<_>>();
+    let options = settings();
+    History::new((&native, &compiled, &options))
+        .run(
+            changes(),
+            |state| {
+                outputs(state, &names, |_, _| {
+                    Ok(vec![
+                        Some("t".into()),
+                        Some("f".into()),
+                        None,
+                        Some("t".into()),
+                        Some("t".into()),
+                    ])
+                })
+            },
             super::apply_joined,
             |_| true,
         )

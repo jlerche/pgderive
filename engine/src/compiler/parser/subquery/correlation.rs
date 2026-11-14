@@ -9,14 +9,14 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 #[derive(Default)]
 pub(super) struct Correlation {
     pub pairs: Vec<(Node, Node)>,
-    pub inequalities: Vec<Residual>,
-    inequality_count: usize,
+    pub residuals: Vec<Residual>,
+    residual_count: usize,
 }
 pub(super) enum Residual {
-    Comparison(Box<Inequality>),
+    Comparison(Box<ResidualComparison>),
     Logical { terms: Vec<Self>, kind: pg::BoolExprType },
 }
-pub(super) struct Inequality {
+pub(super) struct ResidualComparison {
     pub outer: Node,
     pub inner: Node,
     pub operator: String,
@@ -48,6 +48,56 @@ pub(super) fn extract(query: &mut pg::SelectStmt, inequality: bool) -> Result<Co
     }
     Ok(correlation)
 }
+pub(in crate::compiler::parser) fn only_cross_scope_equalities(
+    query: &pg::SelectStmt,
+) -> Result<bool> {
+    fn check(value: &Node, table: &Table, depth: usize) -> Result<bool> {
+        ensure!(depth < 16, "EXISTS correlation nesting exceeded");
+        if let NodeEnum::BoolExpr(logical) = node(value)?
+            && logical.boolop == i32::from(pg::BoolExprType::AndExpr)
+        {
+            for term in &logical.args {
+                if !check(term, table, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(!logical.args.is_empty());
+        }
+        if comparison(value, table).is_ok_and(|(operator, _)| operator == "=") {
+            return Ok(true);
+        }
+        let NodeEnum::AExpr(expression) = node(value)? else { return Ok(false) };
+        if expression.kind != i32::from(pg::AExprKind::AexprOp)
+            || names(&expression.name)?.0 != ["="]
+        {
+            return Ok(false);
+        }
+        let (Some(left), Some(right)) = (&expression.lexpr, &expression.rexpr) else {
+            return Ok(false);
+        };
+        // Leave unqualified equality operands to the existing native scope binder.
+        Ok(references(left, table, 0)? != 0
+            && references(right, table, 0)? != 0
+            && (has_unqualified(left)? || has_unqualified(right)?))
+    }
+    let [source] = query.from_clause.as_slice() else { return Ok(false) };
+    let Ok(table) = crate::compiler::parser::table(source) else { return Ok(false) };
+    let Some(filter) = query.where_clause.as_deref() else { return Ok(false) };
+    check(filter, &table, 0)
+}
+
+fn has_unqualified(value: &Node) -> Result<bool> {
+    if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
+        return Ok(column(value)?.0.len() == 1);
+    }
+    for child in children(value) {
+        if has_unqualified(child)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn conjunct(
     value: Node,
     table: &Table,
@@ -71,8 +121,8 @@ fn conjunct(
         return Ok(());
     }
     if inequality && matches!(node(&value)?, NodeEnum::BoolExpr(_)) {
-        let term = residual(&value, table, &mut correlation.inequality_count, depth)?;
-        correlation.inequalities.push(term);
+        let term = residual(&value, table, &mut correlation.residual_count, depth)?;
+        correlation.residuals.push(term);
         return Ok(());
     }
     let (operator, operands) = comparison(&value, table)?;
@@ -81,10 +131,10 @@ fn conjunct(
         correlation.pairs.push((operands.outer, operands.inner));
     } else {
         ensure!(inequality, "correlation requires ordinary equality");
-        correlation.inequalities.push(inequality_term(
+        correlation.residuals.push(residual_term(
             &operator,
             operands,
-            &mut correlation.inequality_count,
+            &mut correlation.residual_count,
         )?);
     }
     Ok(())
@@ -109,7 +159,7 @@ fn residual(value: &Node, table: &Table, count: &mut usize, depth: usize) -> Res
         return Ok(Residual::Logical { terms, kind });
     }
     let (operator, operands) = comparison(value, table)?;
-    inequality_term(&operator, operands, count)
+    residual_term(&operator, operands, count)
 }
 
 struct Operands {
@@ -145,19 +195,19 @@ fn comparison(value: &Node, table: &Table) -> Result<(String, Operands)> {
     Ok((operator.clone(), Operands { outer: outer.clone(), inner: inner.clone(), outer_first }))
 }
 
-fn inequality_term(operator: &str, operands: Operands, count: &mut usize) -> Result<Residual> {
+fn residual_term(operator: &str, operands: Operands, count: &mut usize) -> Result<Residual> {
     ensure!(
-        matches!(operator, "<" | "<=" | ">" | ">=" | "<>"),
-        "correlation residual requires ordinary inequalities"
+        matches!(operator, "=" | "<" | "<=" | ">" | ">=" | "<>"),
+        "correlation residual requires ordinary comparisons"
     );
-    ensure!(*count < 8, "subquery correlation inequality count exceeded");
+    ensure!(*count < 8, "subquery correlation residual comparison count exceeded");
     ensure!(
         super::scalar_input::column(&operands.outer)
             && super::scalar_input::column(&operands.inner),
         "correlation inequality requires plain columns"
     );
     *count += 1;
-    Ok(Residual::Comparison(Box::new(Inequality {
+    Ok(Residual::Comparison(Box::new(ResidualComparison {
         outer: operands.outer,
         inner: operands.inner,
         operator: operator.into(),
