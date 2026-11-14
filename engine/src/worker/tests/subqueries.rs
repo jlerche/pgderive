@@ -564,6 +564,33 @@ fn exists_discards_row_preserving_targets() -> Result<()> {
         compile(&format!("SELECT a.id FROM source.auction a WHERE {exists}"), &native)?;
         compile(&format!("SELECT {exists} FROM source.auction a"), &native)?;
     }
+    for suffix in ["ORDER BY b.price LIMIT 1", "ORDER BY 1 LIMIT ALL", "LIMIT NULL"] {
+        compile(
+            &format!(
+                "SELECT EXISTS (SELECT DISTINCT ON (b.price) b.price
+            FROM source.bid b WHERE b.id > a.id {suffix}) FROM source.auction a"
+            ),
+            &native,
+        )?;
+    }
+    for suffix in [
+        "LIMIT 0",
+        "OFFSET 1",
+        "ORDER BY b.price FETCH FIRST 1 ROW WITH TIES",
+        "ORDER BY generate_series(1,0)",
+        "ORDER BY count(*)",
+    ] {
+        assert!(
+            compile(
+                &format!(
+                    "SELECT EXISTS (SELECT b.price FROM source.bid b {suffix})
+            FROM source.auction a"
+                ),
+                &native
+            )
+            .is_err()
+        );
+    }
     for projection in ["count(*)", "generate_series(1, 0)", "1 OPERATOR(public.##) 2"] {
         let sql =
             format!("SELECT EXISTS (SELECT {projection} FROM source.bid) FROM source.auction");

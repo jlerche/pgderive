@@ -94,10 +94,13 @@ presence operator. EXISTS discards row-preserving projections, including
 column lists, stars, literals, casts, and built-in arithmetic on integer literals, before maintaining presence.
 PostgreSQL still validates the original select list during query registration.
 Aggregate and set-returning targets are outside this projection subset.
+For EXISTS, sorting and DISTINCT ON do not change whether rows exist.
+A positive literal LIMIT, LIMIT ALL, and LIMIT NULL also leave presence
+unchanged. OFFSET, LIMIT 0, and WITH TIES are outside this simplification.
 A correlated RHS uses one native table, a simple projection, and supported
 local predicates. Plain SELECT DISTINCT is allowed because RHS duplicates do not
-affect membership or quantified truth values. DISTINCT ON still requires
-choosing a representative and remains outside this slice. Qualify outer references in residual comparisons. Correlation
+affect membership or quantified truth values. For comparisons, DISTINCT ON
+still requires choosing a representative and remains outside this slice. Qualify outer references in residual comparisons. Correlation
 is limited to one outer query level.
 The membership probe must be safe to evaluate independently of the RHS.
 

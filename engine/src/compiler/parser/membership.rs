@@ -52,11 +52,7 @@ fn existence_source(select: &pg::SelectStmt, query: &pg::SelectStmt, anti: bool)
 
 pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
     let mut shape = query.clone();
-    ensure!(
-        shape.distinct_clause.iter().all(|key| key.node.is_none()),
-        "EXISTS does not support DISTINCT ON"
-    );
-    shape.distinct_clause.clear();
+    clear_exists_clauses(&mut shape)?;
     super::validate_query(&shape)?;
     ensure!(
         query.group_clause.is_empty()
@@ -76,6 +72,39 @@ pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
             ..pg::AConst::default()
         })),
     })
+}
+
+// With neither an offset nor WITH TIES, these clauses cannot turn a
+// nonempty set of rows into an empty set. Native prepare still validates them.
+pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<()> {
+    if let Some(limit) = query.limit_count.as_deref() {
+        ensure!(
+            query.limit_option == i32::from(pg::LimitOption::Count) && positive_limit(limit),
+            "EXISTS requires a positive literal LIMIT or LIMIT ALL"
+        );
+        query.limit_count = None;
+        query.limit_option = i32::from(pg::LimitOption::Default);
+    }
+    for sort in &query.sort_clause {
+        let NodeEnum::SortBy(sort) = node(sort)? else {
+            anyhow::bail!("invalid EXISTS ORDER BY");
+        };
+        ensure!(
+            row_preserving(optional(sort.node.as_deref())?, 0)?,
+            "EXISTS ORDER BY requires a supported row-preserving expression"
+        );
+    }
+    for key in query.distinct_clause.iter().filter(|key| key.node.is_some()) {
+        ensure!(row_preserving(key, 0)?, "EXISTS DISTINCT ON requires a row-preserving key");
+    }
+    query.distinct_clause.clear();
+    query.sort_clause.clear();
+    Ok(())
+}
+
+const fn positive_limit(node: &Node) -> bool {
+    matches!(&node.node, Some(NodeEnum::AConst(value))
+        if value.isnull || matches!(&value.val, Some(pg::a_const::Val::Ival(n)) if n.ival > 0))
 }
 
 // Dropping a scalar target does not change row existence. Calls are not

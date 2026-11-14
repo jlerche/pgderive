@@ -100,6 +100,9 @@ class ResidualFixture(SqlFixture):
             targets = 'b.price, NULL, 1 OPERATOR(pg_catalog./) 0' if mode == 'exists-projection' else 'DISTINCT b.*'
             exists = f'''EXISTS (SELECT {targets} FROM {b} b WHERE {keys}
                 AND NOT (b.cutoff>=a.ceiling AND (a.floor>=b.id OR b.id<a.id OR b.id=a.id)))'''
+            if mode == 'exists':
+                exists = exists.replace('DISTINCT b.*', 'DISTINCT ON (b.price) b.price')
+                exists = exists.removesuffix(')') + ' ORDER BY b.price, b.id LIMIT 1)'
             if mode == 'exists-projection':
                 self.labels = ['id', 'present', 'absent']
                 self.query = f'SELECT a.id, {exists} AS present, NOT {exists} AS absent FROM {a} a'

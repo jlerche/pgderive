@@ -284,7 +284,7 @@ impl Rewrite<'_> {
                 let probe = membership::existence_value(query)?;
                 let mut query = (**query).clone();
                 query.target_list = vec![ast::target(probe.clone(), "")];
-                query.distinct_clause.clear();
+                membership::clear_exists_clauses(&mut query)?;
                 scalar_input::validate(&query, 0)?;
                 // The constant, non-NULL RHS makes the mark two-valued.
                 self.membership(query, probe, None)
