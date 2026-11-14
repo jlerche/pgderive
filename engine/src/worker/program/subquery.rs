@@ -141,9 +141,7 @@ async fn membership(
     mut right: GroupCursor<Key, Row>,
     work: &mut PartitionWork,
 ) -> Result<Option<bool>> {
-    let null_probe = probe.get(&spec.probe.name).context("missing IN probe")?.is_none();
-    let mut seen = false;
-    let mut null_value = false;
+    let mut unknown = false;
     while let Some((row, _)) = right.next(work).await? {
         if left(&row)? {
             continue;
@@ -152,11 +150,11 @@ async fn membership(
         if !spec.correlation.as_ref().map_or(Ok(true), |condition| condition.qualifies(&joined))? {
             continue;
         }
-        seen = true;
-        null_value |= row.get(&spec.value.name).context("missing IN value")?.is_none();
-        if spec.comparison.qualifies(&joined)? {
-            return Ok(Some(true));
+        match spec.comparison.truth((&joined, &joined))? {
+            Some(true) => return Ok(Some(true)),
+            Some(false) => {}
+            None => unknown = true,
         }
     }
-    Ok(if seen && (null_probe || null_value) { None } else { Some(false) })
+    Ok((!unknown).then_some(false))
 }

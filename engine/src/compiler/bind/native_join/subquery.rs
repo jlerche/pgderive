@@ -10,8 +10,8 @@ use crate::compiler::{
     syntax::Compare,
     typed,
 };
-use anyhow::{Result, ensure};
-use pg_query::Node as Ast;
+use anyhow::{Context, Result, ensure};
+use pg_query::{Node as Ast, NodeEnum};
 pub(super) struct MarkArguments<'a> {
     pub(super) probe: &'a Ast,
     pub(super) alias: String,
@@ -30,41 +30,24 @@ impl Builder<'_> {
     ) -> Result<Edge> {
         let MarkArguments { probe, alias, condition, semijoin, quantified, has_residual } =
             arguments;
-        let resolve_left = |name: &Name| Ok(resolve(name, &left.columns)?.value.clone());
         let start = self.nodes.len();
         let right = self.derived(parsed, alias.clone())?;
-        let value = membership_value(&right, condition.is_some())?;
         if quantified.is_some() || has_residual {
             super::validate_scalar_input(&self.nodes[start..])?;
         }
-        let probe = if quantified.is_some() {
-            quantified_probe(probe, value.oid, &resolve_left)?
-        } else {
-            typed::operand(probe, &resolve_left)?.coerce(value.oid)?
-        };
-        validate_probe(
-            &probe,
-            &left.columns,
-            right.columns[0].collation,
-            (has_residual, quantified.is_some()),
-        )?;
         let mut computed = Vec::new();
-        let probe = match probe.as_column() {
-            Some(column) => column.clone(),
-            None => {
-                scalar::register(probe, &mut computed, &format!("@mark_{}_probe_", self.joins))?
-            }
-        };
+        let (probe, value, comparison) = bind_comparison(
+            probe,
+            &right,
+            &left.columns,
+            (quantified.as_ref(), has_residual),
+            (&mut computed, self.joins),
+        )?;
         self.map(&mut left, computed, &format!("mark_{}_probe", self.joins));
         let columns = left.columns.clone();
         let id = format!("tree_join_{}", self.joins);
         let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
         validate_correlation(&bound, quantified.is_some(), has_residual)?;
-        let comparison = Predicate::new(Expr::Compare(
-            quantified.unwrap_or(Compare::Eq),
-            typed::Typed::column(probe.clone()),
-            typed::Typed::column(value.clone()),
-        ));
         let edge = self.join(left, right, bound, crate::compiler::left_join::Kind::Left)?;
         let Some(Node::LeftJoin { id, input, spec }) = self.nodes.pop() else {
             anyhow::bail!("missing marker tagged join");
@@ -102,9 +85,71 @@ impl Builder<'_> {
         Ok(Edge { id, columns })
     }
 }
-fn membership_value(right: &Edge, correlated: bool) -> Result<ColumnRef> {
-    ensure!(correlated || right.columns.len() == 1, "IN subquery requires exactly one output");
-    let value = right.columns[0].value.clone();
+fn bind_comparison(
+    ast: &Ast,
+    right: &Edge,
+    left: &[Column],
+    (quantified, has_residual): (Option<&Compare>, bool),
+    (computed, join): (&mut Vec<scalar::Computed>, usize),
+) -> Result<(ColumnRef, ColumnRef, Predicate)> {
+    let row = matches!(ast.node, Some(NodeEnum::RowExpr(_)));
+    let items = match &ast.node {
+        Some(NodeEnum::RowExpr(row)) => row.args.as_slice(),
+        _ => std::slice::from_ref(ast),
+    };
+    let width = items.len();
+    ensure!((1..=8).contains(&width), "membership row requires 1 to 8 fields");
+    let output_width =
+        right.columns.iter().take_while(|column| !column.label.starts_with('\0')).count();
+    ensure!(output_width == width, "membership subquery output width differs from probe");
+    let mut columns = Vec::with_capacity(width);
+    let resolve_left = |name: &Name| Ok(resolve(name, left)?.value.clone());
+    for (item, field) in items.iter().zip(&right.columns) {
+        let value = membership_value(field)?;
+        let probe = if quantified.is_some() {
+            quantified_probe(item, value.oid, &resolve_left)?
+        } else {
+            typed::operand(item, &resolve_left)?.coerce(value.oid)?
+        };
+        validate_probe(&probe, left, field.collation, (has_residual, quantified.is_some()))?;
+        let probe = if let Some(column) = probe.as_column() {
+            column.clone()
+        } else {
+            scalar::register(probe, computed, &format!("@mark_{join}_probe_"))?
+        };
+        columns.push((probe, value));
+    }
+    let (probe, value) = columns.first().context("missing membership columns")?.clone();
+    let op = quantified.cloned().unwrap_or(Compare::Eq);
+    let predicate = if row {
+        row_comparison(&op, columns)?
+    } else {
+        comparison(op, probe.clone(), value.clone())
+    };
+    Ok((probe, value, Predicate::new(predicate)))
+}
+
+const fn comparison(op: Compare, left: ColumnRef, right: ColumnRef) -> Expr {
+    Expr::Compare(op, typed::Typed::column(left), typed::Typed::column(right))
+}
+
+fn row_comparison(op: &Compare, mut columns: Vec<(ColumnRef, ColumnRef)>) -> Result<Expr> {
+    if matches!(op, Compare::Eq | Compare::Ne) {
+        let equal =
+            Expr::And(columns.into_iter().map(|(l, r)| comparison(Compare::Eq, l, r)).collect());
+        return Ok(if *op == Compare::Eq { equal } else { Expr::Not(Box::new(equal)) });
+    }
+    let (left, right) = columns.pop().context("missing row comparison fields")?;
+    let last = comparison(op.clone(), left, right);
+    let strict = if matches!(op, Compare::Lt | Compare::Le) { Compare::Lt } else { Compare::Gt };
+    Ok(columns.into_iter().rev().fold(last, |rest, (left, right)| {
+        let equal = comparison(Compare::Eq, left.clone(), right.clone());
+        Expr::Or(vec![comparison(strict.clone(), left, right), Expr::And(vec![equal, rest])])
+    }))
+}
+
+fn membership_value(field: &Column) -> Result<ColumnRef> {
+    let value = field.value.clone();
     ensure!(
         matches!(
             value.oid,

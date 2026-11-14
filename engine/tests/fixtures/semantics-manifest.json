@@ -2570,11 +2570,11 @@
     "scripts/sliding_window_harness.py": "4964486db9b0ba4573b904eb2df4b00d3470bf69e69685884a44a576e634de77",
     "scripts/sql_compiler_harness.py": "d375949fcf1bd26bb83aa40eaa1d3e2787ad12c40e69f128e3b5d44ccee1e810",
     "scripts/sql_composition_harness.py": "72dab18750bbd6d81824713341d7543b55b2ac76379c576c79d38bd8467c8d98",
-    "scripts/subquery_harness.py": "86ed2dc9f1e437018b32f1abb9c2febca123346a19d5e74e2c1d22f2a89637f9",
+    "scripts/subquery_harness.py": "2f350d311270d8e91c8de1ae20da2c9849f7470362de27e761dec80e734e6d48",
     "scripts/temporal_arithmetic_harness.py": "775ab5361c9175c6872bda6ed624fb8387f82e374838724450f3570cbd8f546b",
     "scripts/temporal_oracle.py": "f709e469177d6a1f41ae6f35fd0bd8f1f25616354cc608df4b2ccb6fa0b769f6",
     "scripts/unordered_harness.py": "c0ec6814ed5c54000e12fc1f4785b9699822e8fcf263a26662b00a39f4d59eb6",
     "scripts/worker_harness.py": "005ab8aa6a1a488755973a0c728dbb41bd922d07d6065666379a26de047ff032"
   },
-  "fixture_sha256": "66678dfe000d980720d1be98c8a24de43b8c110f9e5f9c04b1ecdad8e4cc75d0"
+  "fixture_sha256": "992d82e53edcca98db3bfb56cde069d68fe846adab21f9f26ff65203a33df781"
 }

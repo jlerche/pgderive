@@ -169,6 +169,7 @@ fn over_join(graph: &mut Graph<'_>, map: &Lower, key: &str) -> Result<bool> {
             pinned.insert(mark.probe.name.clone());
             pinned.insert(mark.value.name.clone());
             pin_predicate(&mut pinned, mark.correlation.as_ref());
+            pin_predicate(&mut pinned, Some(&mark.comparison));
             false
         }
         _ => return Ok(false),

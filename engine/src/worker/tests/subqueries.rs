@@ -598,6 +598,63 @@ fn quantified_inequality_rejects_unsupported_operands() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn row_quantifiers_reduce_nulls_after_comparing_fields() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT (1, a.other::bigint) IN (SELECT b.auction, b.price FROM source.bid b) AS member,
+                (1, a.other::bigint) < ANY (SELECT b.auction, b.price FROM source.bid b) AS earlier,
+                (1, a.other::bigint) < ALL (SELECT b.auction, b.price FROM source.bid b) AS before_all
+         FROM source.auction a",
+        &native,
+    )?;
+    let options = settings();
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let outer = row(&[("id", Some("1")), ("category", None), ("other", None)]);
+    let different = row(&[("id", Some("1")), ("auction", Some("2")), ("price", None)]);
+    let equal = row(&[("id", Some("2")), ("auction", Some("1")), ("price", None)]);
+    let columns = &compiled.output().columns;
+    for (changes, expected) in [
+        (
+            batch(vec![("auction", outer, 1), ("bid", different.clone(), 1)]),
+            [Some("f"), Some("t"), Some("t")],
+        ),
+        (batch(vec![("bid", different, -1), ("bid", equal.clone(), 1)]), [None, None, None]),
+        (batch(vec![("bid", equal, -1)]), [Some("f"), Some("f"), Some("t")]),
+    ] {
+        let prepared = query
+            .prepare(relational::inputs(&changes, compiled.relational(), query.time() + 1)?)
+            .await?;
+        let (_, output) = prepared
+            .output()
+            .batch
+            .iter()
+            .find_map(|(tuple, weight)| (*weight == 1).then_some(tuple))
+            .context("missing row quantifier output")?;
+        let actual: Vec<_> = columns
+            .iter()
+            .map(|column| output.get(&column.column.name).and_then(Option::as_deref))
+            .collect();
+        assert_eq!(actual, expected);
+        query.commit(prepared)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn row_quantifiers_bind_matching_widths() -> Result<()> {
+    let native = native();
+    for operator in ["IN", "NOT IN", "= ANY", "< ALL", ">= ANY"] {
+        let query = format!(
+            "SELECT (a.id, a.other) {operator} (SELECT b.auction, b.price
+             FROM source.bid b WHERE b.id > a.id) FROM source.auction a"
+        );
+        compile(&query, &native)?;
+        assert!(compile(&query.replace("b.auction, b.price", "b.price"), &native).is_err());
+    }
+    Ok(())
+}
+
 #[test]
 fn quantified_accepts_total_conversions_and_catalog_operators() -> Result<()> {
     let native = native();

@@ -23,6 +23,25 @@ def membership(probe, values):
     return None if None in values else False
 
 
+def row_truth(left, right, ordered):
+    if ordered:
+        for a, b in zip(left, right):
+            if a is None or b is None:
+                return None
+            if a != b:
+                return a < b
+        return False
+    if any(a is not None and b is not None and a != b for a, b in zip(left, right)):
+        return False
+    return None if None in left or None in right else True
+
+
+def reduce_truth(values, all_rows=False):
+    if (not all_rows) in values:
+        return not all_rows
+    return None if None in values else all_rows
+
+
 class ResidualFixture(SqlFixture):
     def __init__(self, output, mode, keyed):
         super().__init__(output, False)
@@ -57,6 +76,13 @@ class ResidualFixture(SqlFixture):
                     projections.append(f'a.probe {symbol} {quantifier} ({rhs}) AS {name}')
             derived = f'(SELECT id, group_id, probe, floor, ceiling-1 AS ceiling FROM {a})'
             self.query = f"SELECT {', '.join(projections)} FROM {derived} a"
+        elif mode == 'row':
+            self.labels = ['id', 'member', 'excluded', 'earlier', 'before_all']
+            rhs = rhs.replace('SELECT b.price', 'SELECT b.price, b.cutoff', 1)
+            probe = '(a.probe, a.floor::numeric)'
+            self.query = f'''SELECT a.id, {probe} IN ({rhs}) AS member,
+                {probe} NOT IN ({rhs}) AS excluded, {probe} < ANY ({rhs}) AS earlier,
+                {probe} < ALL ({rhs}) AS before_all FROM {a} a'''
         elif mode == 'all-filter':
             self.labels = ['id']
             self.query = f'SELECT a.id FROM {a} a WHERE a.probe < ALL ({rhs})'
@@ -90,15 +116,23 @@ class ResidualFixture(SqlFixture):
             key, ceiling, floor = row['group_id'], row['ceiling'], row['floor']
             if self.mode == 'quantified' and ceiling is not None:
                 ceiling -= 1
-            values = [
-                item['price'] for item in inner
+            matches = [
+                item for item in inner
                 if (not self.keyed or (key is not None and key == item['auction'])) and item['id'] != 99
                 and (
                     (ceiling is not None and item['cutoff'] is not None and item['cutoff'] < ceiling)
                     or (floor is not None and floor < item['id'] and item['id'] > row['id'])
                 )
             ]
-            if self.mode == 'quantified':
+            values = [item['price'] for item in matches]
+            if self.mode == 'row':
+                probe = (row['probe'], floor)
+                terms = [(item['price'], item['cutoff']) for item in matches]
+                member = reduce_truth([row_truth(probe, term, False) for term in terms])
+                order = [row_truth(probe, term, True) for term in terms]
+                memory[(row['id'], member, None if member is None else not member,
+                        reduce_truth(order), reduce_truth(order, True))] += 1
+            elif self.mode == 'quantified':
                 truth = tuple(
                     compare(row['probe'], values, operation, all_rows)
                     for _, _, operation in QUANTIFIED for all_rows in (False, True)
@@ -144,6 +178,6 @@ def qualify(output, command, mode, keyed):
 
 
 if __name__ == '__main__':
-    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection')
+    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row')
     run_cases(((mode if keyed else f'{mode}-inequality-only', mode, keyed)
                for keyed in (True, False) for mode in modes), qualify)

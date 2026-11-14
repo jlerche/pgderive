@@ -488,7 +488,10 @@ impl Predicate {
         self.qualifies_pair((row, row))
     }
     pub(crate) fn qualifies_pair(&self, rows: (&Row, &Row)) -> Result<bool> {
-        Ok(self.0.evaluate(rows)? == Some(true))
+        Ok(self.truth(rows)? == Some(true))
+    }
+    pub(crate) fn truth(&self, rows: (&Row, &Row)) -> Result<Option<bool>> {
+        self.0.evaluate(rows)
     }
 }
 

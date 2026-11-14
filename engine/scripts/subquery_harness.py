@@ -325,13 +325,13 @@ def qualify(output, command, mode):
                 'constant-boolean-guard':f'SELECT a.id FROM {a} a WHERE true OR a.probe>(SELECT SUM(10/b.price) FROM {b} b)',
                 'strict-null-guard':f'SELECT NULL::numeric+(SELECT SUM(10/b.price) FROM {b} b) FROM {a}',
                 'filter-guard':f'SELECT SUM((SELECT SUM(10/b.price) FROM {b} b)) FILTER(WHERE false) FROM {a}',
-                'row-in':f'SELECT (a.id,a.probe) IN(SELECT id,price FROM {b}) FROM {a} a',
+                'row-in-arity':f'SELECT (a.id,a.probe) IN(SELECT id FROM {b}) FROM {a} a',
                 'outer-aggregate-arg':f'SELECT (SELECT SUM(b.price+a.probe) FROM {b} b WHERE b.auction=a.group_id) FROM {a} a',
                 'guarded-subquery':f'SELECT CASE WHEN a.enabled THEN 0::numeric ELSE (SELECT SUM(10/b.price) FROM {b} b) END FROM {a} a WHERE a.enabled',
             }
             guarded = ';'.join(negatives[key] for key in ('guarded-subquery','filter-guard','strict-null-guard','constant-boolean-guard'))
             f.sql(f'BEGIN; INSERT INTO {b}(id,auction,price) VALUES(999,2,0); '+guarded+'; ROLLBACK')
-            for key in ('untyped-null-rhs','untyped-string-rhs','ungrouped-scalar-target','ungrouped-scalar-having','invalid-scalar-ordinal'):
+            for key in ('untyped-null-rhs','untyped-string-rhs','ungrouped-scalar-target','ungrouped-scalar-having','invalid-scalar-ordinal','row-in-arity'):
                 native = subprocess.run(f.pg+['EXPLAIN '+negatives[key]],env=f.environment,capture_output=True,text=True)
                 (output/(key+'-native-error.txt')).write_text(native.stderr)
                 assert native.returncode != 0, 'native SQL unexpectedly admitted '+key

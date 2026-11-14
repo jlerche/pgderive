@@ -268,7 +268,11 @@ impl Rewrite<'_> {
             link.sub_link_type == i32::from(pg::SubLinkType::ExistsSublink)
                 || query.op != i32::from(pg::SetOperation::SetopNone)
                 || !query.values_lists.is_empty()
-                || query.target_list.len() == 1,
+                || query.target_list.len() == 1
+                || matches!(
+                    link.testexpr.as_deref().and_then(|value| value.node.as_ref()),
+                    Some(NodeEnum::RowExpr(_))
+                ),
             "scalar/IN subquery requires exactly one output"
         );
         match pg::SubLinkType::try_from(link.sub_link_type)? {
@@ -295,7 +299,8 @@ impl Rewrite<'_> {
             kind @ (pg::SubLinkType::AnySublink | pg::SubLinkType::AllSublink) => {
                 let all = kind == pg::SubLinkType::AllSublink;
                 let probe = optional(link.testexpr.as_deref())?.clone();
-                if !all && link.oper_name.is_empty() {
+                let row = matches!(probe.node, Some(NodeEnum::RowExpr(_)));
+                if !all && link.oper_name.is_empty() && !row {
                     if query.group_clause.is_empty() && scalar::global_aggregate(query)? {
                         let scalar = self.scalar((**query).clone())?;
                         return Ok(ast::case(
@@ -307,8 +312,12 @@ impl Rewrite<'_> {
                     return self.membership((**query).clone(), probe, None);
                 }
                 let operator = names(&link.oper_name)?;
-                let operator = super::expressions::builtin_name(&operator.0)
-                    .context("quantified comparison requires a built-in operator")?;
+                let operator = if link.oper_name.is_empty() && row {
+                    "="
+                } else {
+                    super::expressions::builtin_name(&operator.0)
+                        .context("quantified comparison requires a built-in operator")?
+                };
                 let comparison = Compare::parse(operator)?;
                 // ALL is the negation of ANY over the complementary strict comparison.
                 let comparison = if all { comparison.negate() } else { comparison };

@@ -145,6 +145,15 @@ uses the existing bounded value set. Other marks scan the matching RHS bucket
 under the existing work limits. NULL correlation keys have an empty group. PostgreSQL materialized-view and independent raw-source oracles
 check correlated and uncorrelated CDC histories, including cold reopen.
 
+### Row-valued membership
+
+A row constructor can compare up to eight fields with a matching RHS
+projection. Equality is FALSE if any known pair differs, and otherwise
+NULL if any pair is unknown. Ordering compares fields from left to right.
+A NULL pair before the first difference makes the comparison unknown.
+Each field uses its native scalar comparison domain. Row comparisons scan
+the affected correlation bucket under the existing contribution limit.
+
 ## Evaluation and durability boundaries
 
 Lifted RHS relations and probe maps are dataflow dependencies evaluated even when
