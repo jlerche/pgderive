@@ -26,7 +26,8 @@ share the input stream and their outputs are consolidated as a bag at
 the same transaction boundary. The existing work and memory limits
 apply to the expanded plan.
 
-The compiler still requires projected input columns to be grouping keys or
-aggregate inputs. It does not infer PostgreSQL's exception for columns that
-functionally depend on a grouped base-table primary key. This restriction
-also applies to ordinary GROUP BY.
+A single base-table query can also project columns of supported grouping types that depend on its
+declared primary key when every grouping set includes that full key.
+GROUPING() arguments still have to be explicit grouping expressions.
+Primary-key dependencies across joins and ordinary GROUP BY retain
+their existing restrictions.

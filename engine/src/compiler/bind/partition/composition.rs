@@ -40,6 +40,7 @@ pub(super) fn stage(
         Stage {
             contract,
             unit: false,
+            base_relation: None,
             sources: Vec::new(),
             occurrence_keys: &occurrence,
             aggregate_base: aggregate_base(relational)?,

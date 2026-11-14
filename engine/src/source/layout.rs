@@ -61,7 +61,7 @@ SELECT s.system_identifier::text, ck.timeline_id::bigint, current_database(),
                    'modifier', a.atttypmod, 'nullable', NOT a.attnotnull,
                    'collation', a.attcollation::bigint, 'primary', EXISTS (
                        SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid=a.attrelid
-                           AND i.indisprimary AND a.attnum=ANY(i.indkey)
+                           AND i.indisprimary AND a.attnum=ANY(i.indkey[0:i.indnkeyatts-1])
                    )) ORDER BY a.attnum), '[]'::jsonb) AS columns,
                    COALESCE(bool_and(a.attgenerated='' AND COALESCE(co.collisdeterministic,true)),true) AS supported
                FROM pg_catalog.pg_attribute a

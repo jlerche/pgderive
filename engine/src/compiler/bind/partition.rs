@@ -33,6 +33,7 @@ struct Body {
 #[derive(Clone)]
 struct Stage<'a> {
     contract: &'a Contract,
+    base_relation: Option<&'a crate::source::Relation>,
     unit: bool,
     sources: Vec<Source>,
     occurrence_keys: &'a crate::compiler::properties::Properties,
@@ -64,6 +65,7 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
                 Stage {
                     contract,
                     unit: true,
+                    base_relation: None,
                     sources: vec![Source {
                         schema: relation.schema.clone(),
                         table: relation.table.clone(),
@@ -111,6 +113,7 @@ fn bind_native(
         Stage {
             contract,
             unit: false,
+            base_relation: Some(scopes[0].relation),
             sources: vec![Source {
                 schema: scopes[0].relation.schema.clone(),
                 table: scopes[0].relation.table.clone(),

@@ -23,6 +23,7 @@ class GroupingFixture(SqlFixture):
             'product': [(0, 1), (0,), (0,), (1,), (), ()],
             'metadata': [(0,), ()],
             'constants': [(0, 1), (0,), ()],
+            'primary': [(0, 1), (0,)],
         }[mode]
         clause = {
             'sets': 'GROUPING SETS ((auction), (), (auction), (price))',
@@ -32,6 +33,7 @@ class GroupingFixture(SqlFixture):
             'product': 'GROUPING SETS (auction, ()), GROUPING SETS (price, (), ())',
             'metadata': 'ROLLUP (tag)',
             'constants': 'ROLLUP (k, g)',
+            'primary': 'id, ROLLUP(auction)',
         }[mode]
         self.query = f'''SELECT auction AS k, price AS g, GROUPING(auction,price), COUNT(*) AS n,
             SUM(price) AS total FROM {self.source} GROUP BY {clause}'''
@@ -48,6 +50,13 @@ class GroupingFixture(SqlFixture):
             self.query = f'''SELECT 5+0 AS k, 5+0 AS g, GROUPING(5+0), COUNT(*) AS n,
                 (5+0)+1 AS total FROM {self.source}
                 GROUP BY {clause} HAVING (5+0) IS NOT NULL'''
+        if mode == 'primary':
+            self.sql(f'''ALTER TABLE {self.source} DROP CONSTRAINT bid_pkey,
+                ADD PRIMARY KEY (id) INCLUDE (price)''')
+            self.labels = ['k', 'g', 'grouping', 'n', 'total']
+            self.query = f'''SELECT id AS k, auction AS g, GROUPING(id,auction) AS grouping,
+                COUNT(*) AS n, price AS total FROM {self.source}
+                GROUP BY {clause} HAVING price IS NULL OR price > 0'''
         self.mode = mode
 
     def verify(self):
@@ -65,9 +74,13 @@ class GroupingFixture(SqlFixture):
         for keys in self.sets:
             groups = {(): []} if not keys else {}
             for row in rows:
+                if self.mode == 'primary' and row['price'] is not None and row['price'] <= 0:
+                    continue
                 values = (row['tag'] if self.mode == 'metadata' else row['auction'], row['price'])
                 if self.mode == 'constants':
                     values = (5, 5)
+                if self.mode == 'primary':
+                    values = (row['id'], row['auction'])
                 groups.setdefault(tuple(values[index] for index in keys), []).append(row['price'])
             mask = sum(1 << (1-index) for index in range(2) if index not in keys)
             for values, prices in groups.items():
@@ -90,7 +103,7 @@ def qualify(output, command, mode):
         fixture.run_history(command, History(
             changes=[
                 f'INSERT INTO {source}(id,auction,price) VALUES (100,1,5),(101,NULL,NULL),(102,NULL,7),(103,1,5)',
-                f'UPDATE {source} SET auction=2,price=NULL WHERE id=100',
+                f'UPDATE {source} SET auction=2,price=-1 WHERE id=100',
                 f'DELETE FROM {source}',
             ],
             final=f'INSERT INTO {source}(id,auction,price) VALUES(104,NULL,NULL)',
@@ -104,4 +117,4 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    run_modes(('sets', 'rollup', 'cube', 'distinct', 'product', 'metadata', 'constants'), qualify)
+    run_modes(('sets', 'rollup', 'cube', 'distinct', 'product', 'metadata', 'constants', 'primary'), qualify)

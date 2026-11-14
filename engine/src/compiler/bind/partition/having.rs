@@ -28,6 +28,8 @@ struct Rewrite<'a, F> {
     aggregates: Vec<syntax::Aggregate>,
     visited: usize,
     grouping: Vec<Vec<usize>>,
+    dependent: Vec<(Name, ColumnRef)>,
+    base_dependency: bool,
 }
 pub(super) fn column(kind: char, index: usize) -> Node {
     name_node(&Name(vec![String::new(), format!("{kind}{index}")]))
@@ -107,11 +109,12 @@ fn contains_aggregate(value: &Node) -> bool {
 }
 pub(super) fn build(
     body: &Body,
-    groups: Vec<Key>,
+    mut groups: Vec<Key>,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     context: Stage<'_>,
 ) -> Result<Compiled> {
     let mut rewrite = Rewrite::new(&groups, body, resolve, context.scalar_scope)?;
+    rewrite.base_dependency = base_dependency(body, &rewrite, &context);
     let targets = rewrite.targets(&body.targets)?;
     let mut condition = body.having.as_deref().cloned();
     if let Some(condition) = &mut condition {
@@ -128,6 +131,7 @@ pub(super) fn build(
             string_agg: None,
         });
     }
+    let sets = rewrite.extend_groups(&mut groups, body.grouping_sets.as_ref());
     let key_count = groups.len();
     let mut group_targets = groups
         .iter()
@@ -148,7 +152,7 @@ pub(super) fn build(
     let contract = context.contract;
     let boundary = context.sources.is_empty().then_some(context.occurrence_keys);
     let mut compiled =
-        aggregate_stage(&group, groups, resolve, context, (body.grouping_sets.as_ref(), &rewrite))?;
+        aggregate_stage(&group, groups, resolve, context, (sets.as_ref(), &rewrite))?;
     let columns = compiled.relational.output.columns.clone();
     let post_resolve = |name: &Name| -> Result<ColumnRef> {
         if let [empty, field] = name.0.as_slice()
@@ -183,6 +187,34 @@ pub(super) fn build(
     super::composition::compose(&mut compiled.relational, &mut outer)?;
     Ok(compiled)
 }
+// PostgreSQL recognizes only the declared base-table primary key here.
+// When every grouping set contains it, adding a dependent column does
+// not split a group. Keep these physical keys separate from SQL GROUPING().
+fn base_dependency<F>(body: &Body, rewrite: &Rewrite<'_, F>, context: &Stage<'_>) -> bool {
+    let (Some(sets), Some(relation)) = (&body.grouping_sets, context.base_relation) else {
+        return false;
+    };
+    let mut primary = relation.columns.iter().filter(|column| column.primary).peekable();
+    primary.peek().is_some()
+        && primary.all(|column| {
+            let name = crate::compiler::relational::field(0, &column.name);
+            sets.groups.iter().all(|set| set.iter().any(|index| rewrite.keys[*index].name == name))
+        })
+}
+
+fn render_aggregate(value: &Node) -> Result<syntax::Aggregate> {
+    let target = Node {
+        node: Some(NodeEnum::ResTarget(Box::new(pg::ResTarget {
+            val: Some(Box::new(value.clone())),
+            ..pg::ResTarget::default()
+        }))),
+    };
+    let Value::Aggregate(aggregate) = syntax::parse_target(&target)?.value else {
+        anyhow::bail!("invalid HAVING aggregate")
+    };
+    Ok(*aggregate)
+}
+
 fn apply_filter(
     relational: &mut crate::compiler::relational::Relational,
     condition: Option<&Node>,
@@ -254,6 +286,8 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
             aggregates: Vec::new(),
             visited: 0,
             grouping: Vec::new(),
+            dependent: Vec::new(),
+            base_dependency: false,
         })
     }
 
@@ -313,6 +347,41 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
         self.grouping.push(positions);
         Ok(column('m', index))
     }
+    fn extend_groups(
+        &mut self,
+        keys: &mut Vec<Key>,
+        sets: Option<&crate::compiler::parser::grouping_sets::Sets>,
+    ) -> Option<crate::compiler::parser::grouping_sets::Sets> {
+        let mut sets = sets.cloned()?;
+        let first = keys.len();
+        for (name, resolved) in std::mem::take(&mut self.dependent) {
+            keys.push(Key::Column(name));
+            self.keys.push(resolved);
+            self.constant_slots.push(GroupingSlot::Expression);
+        }
+        for set in &mut sets.groups {
+            set.extend(first..keys.len());
+        }
+        Some(sets)
+    }
+
+    fn dependent_column(&mut self, value: &Node) -> Result<Option<Node>> {
+        if !self.base_dependency || !matches!(value.node, Some(NodeEnum::ColumnRef(_))) {
+            return Ok(None);
+        }
+        let name = crate::compiler::parser::expressions::column(value)?;
+        let resolved = (self.resolve)(&name)?;
+        if resolved.name == crate::compiler::expansion::FIELD {
+            return Ok(None);
+        }
+        let index = self.dependent.iter().position(|(_, column)| *column == resolved);
+        let index = index.unwrap_or(self.dependent.len());
+        if index == self.dependent.len() {
+            self.dependent.push((name, resolved));
+        }
+        Ok(Some(column('g', self.keys.len() + index)))
+    }
+
     fn grouped_expression(&self, value: &Node) -> Option<usize> {
         let key =
             crate::compiler::typed::computed(value, self.resolve, &mut Vec::new(), self.scope)
@@ -330,20 +399,15 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
             return Ok(());
         }
         if syntax::group_aggregate(value) {
-            let target = Node {
-                node: Some(NodeEnum::ResTarget(Box::new(pg::ResTarget {
-                    val: Some(Box::new(value.clone())),
-                    ..pg::ResTarget::default()
-                }))),
-            };
-            let Value::Aggregate(aggregate) = syntax::parse_target(&target)?.value else {
-                anyhow::bail!("invalid HAVING aggregate")
-            };
-            *value = self.aggregate(*aggregate)?;
+            *value = self.aggregate(render_aggregate(value)?)?;
             return Ok(());
         }
         if let Some(index) = self.grouped_expression(value) {
             *value = column('g', index);
+            return Ok(());
+        }
+        if let Some(dependent) = self.dependent_column(value)? {
+            *value = dependent;
             return Ok(());
         }
         match &mut value.node {
