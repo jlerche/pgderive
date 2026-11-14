@@ -88,9 +88,12 @@ with or without an indexable column equality. The six ordinary comparison operat
 and NOT. A top-level equality can supply an index key. Equalities inside OR or
 NOT stay in the residual predicate. Each residual compares a column from each
 scope using the existing native comparison rules. The same correlation is supported for
-`EXISTS (SELECT 1 ...)` and `NOT EXISTS (SELECT 1 ...)` in projections and
+`EXISTS` and `NOT EXISTS` in projections and
 Boolean predicates. A standalone equality-only WHERE can use the dedicated
-presence operator.
+presence operator. EXISTS discards row-preserving projections, including
+column lists, stars, literals, casts, and built-in arithmetic on integer literals, before maintaining presence.
+PostgreSQL still validates the original select list during query registration.
+Aggregate and set-returning targets are outside this projection subset.
 A correlated RHS uses one native table, a simple projection, and supported
 local predicates. Qualify outer references in residual comparisons. Correlation
 is limited to one outer query level.

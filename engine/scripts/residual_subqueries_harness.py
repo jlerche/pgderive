@@ -69,7 +69,8 @@ class ResidualFixture(SqlFixture):
         else:
             negation = 'NOT ' if mode == 'not-exists' else ''
             self.labels = ['id']
-            exists = f'''EXISTS (SELECT 1 FROM {b} b WHERE {keys}
+            targets = 'b.price, NULL, 1 OPERATOR(pg_catalog./) 0' if mode == 'exists-projection' else 'b.*'
+            exists = f'''EXISTS (SELECT {targets} FROM {b} b WHERE {keys}
                 AND NOT (b.cutoff>=a.ceiling AND (a.floor>=b.id OR b.id<a.id OR b.id=a.id)))'''
             if mode == 'exists-projection':
                 self.labels = ['id', 'present', 'absent']

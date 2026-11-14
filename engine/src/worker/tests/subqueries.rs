@@ -534,6 +534,25 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
 }
 
 #[test]
+fn exists_discards_row_preserving_targets() -> Result<()> {
+    let native = native();
+    for (projection, predicate) in [
+        ("b.*", "b.auction=a.id"),
+        ("b.price, NULL, 1 OPERATOR(pg_catalog./) 0", "b.price>a.id"),
+        ("", "b.price>a.id"),
+    ] {
+        let exists = format!("EXISTS (SELECT {projection} FROM source.bid b WHERE {predicate})");
+        compile(&format!("SELECT a.id FROM source.auction a WHERE {exists}"), &native)?;
+        compile(&format!("SELECT {exists} FROM source.auction a"), &native)?;
+    }
+    for projection in ["count(*)", "generate_series(1, 0)", "1 OPERATOR(public.##) 2"] {
+        let sql =
+            format!("SELECT EXISTS (SELECT {projection} FROM source.bid) FROM source.auction");
+        assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}
+#[test]
 fn quantified_inequality_rejects_unsupported_operands() -> Result<()> {
     let native = native();
     for quantifier in ["< ANY", "<> ALL"] {

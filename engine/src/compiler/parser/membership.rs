@@ -50,7 +50,7 @@ fn existence_source(select: &pg::SelectStmt, query: &pg::SelectStmt, anti: bool)
     })
 }
 
-pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<&Node> {
+pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
     super::validate_query(query)?;
     ensure!(
         query.group_clause.is_empty()
@@ -58,14 +58,47 @@ pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<&Node> {
             && query.window_clause.is_empty(),
         "EXISTS grouping/HAVING/WINDOW unsupported"
     );
-    ensure!(query.target_list.len() == 1, "EXISTS requires SELECT 1");
-    let target = super::target(&query.target_list[0])?;
-    let NodeEnum::AConst(value) = node(target)? else { anyhow::bail!("EXISTS requires SELECT 1") };
-    ensure!(
-        matches!(&value.val, Some(pg::a_const::Val::Ival(value)) if value.ival == 1),
-        "EXISTS requires SELECT 1"
-    );
-    Ok(target)
+    for target in &query.target_list {
+        ensure!(
+            row_preserving(super::target(target)?, 0)?,
+            "EXISTS projection requires a supported row-preserving expression"
+        );
+    }
+    Ok(Node {
+        node: Some(NodeEnum::AConst(pg::AConst {
+            val: Some(pg::a_const::Val::Ival(pg::Integer { ival: 1 })),
+            ..pg::AConst::default()
+        })),
+    })
+}
+
+// Dropping a scalar target does not change row existence. Calls are not
+// admitted here because a raw FuncCall can name an aggregate or an SRF.
+fn row_preserving(value: &Node, depth: usize) -> Result<bool> {
+    ensure!(depth < 32, "EXISTS projection depth exceeded");
+    match node(value)? {
+        NodeEnum::AConst(_) | NodeEnum::ColumnRef(_) => Ok(true),
+        NodeEnum::AExpr(value) => {
+            let names = super::expressions::names(&value.name)?;
+            Ok(value.kind == i32::from(pg::AExprKind::AexprOp)
+                && matches!(
+                    super::expressions::builtin_name(&names.0),
+                    Some("+" | "-" | "*" | "/")
+                )
+                && value.lexpr.as_deref().is_some_and(integer_literal)
+                && value.rexpr.as_deref().is_some_and(integer_literal))
+        }
+        NodeEnum::TypeCast(value) => row_preserving(optional(value.arg.as_deref())?, depth + 1),
+        NodeEnum::CollateClause(value) => {
+            row_preserving(optional(value.arg.as_deref())?, depth + 1)
+        }
+        _ => Ok(false),
+    }
+}
+
+const fn integer_literal(node: &Node) -> bool {
+    matches!(&node.node, Some(NodeEnum::AConst(value))
+        if matches!(value.val, Some(pg::a_const::Val::Ival(_))))
 }
 
 pub(super) fn uses_keyed_existence(select: &pg::SelectStmt, condition: &Node) -> Result<bool> {

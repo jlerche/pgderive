@@ -265,7 +265,8 @@ impl Rewrite<'_> {
             "nested scalar/IN subqueries inside a lifted subquery are unsupported"
         );
         ensure!(
-            query.op != i32::from(pg::SetOperation::SetopNone)
+            link.sub_link_type == i32::from(pg::SubLinkType::ExistsSublink)
+                || query.op != i32::from(pg::SetOperation::SetopNone)
                 || !query.values_lists.is_empty()
                 || query.target_list.len() == 1,
             "scalar/IN subquery requires exactly one output"
@@ -276,10 +277,12 @@ impl Rewrite<'_> {
                     link.testexpr.is_none() && link.oper_name.is_empty(),
                     "invalid EXISTS sublink"
                 );
-                let probe = membership::existence_value(query)?.clone();
-                scalar_input::validate(query, 0)?;
-                // With a constant, non-NULL RHS value the mark is always two-valued.
-                self.membership((**query).clone(), probe, None)
+                let probe = membership::existence_value(query)?;
+                let mut query = (**query).clone();
+                query.target_list = vec![ast::target(probe.clone(), "")];
+                scalar_input::validate(&query, 0)?;
+                // The constant, non-NULL RHS makes the mark two-valued.
+                self.membership(query, probe, None)
             }
             pg::SubLinkType::ExprSublink => {
                 ensure!(
