@@ -30,6 +30,16 @@ class OrderingFixture(SqlFixture):
             self.labels = ['id', 'duration']
             self.query = f'''SELECT DISTINCT ON (duration) id, duration FROM {self.source}
                 ORDER BY duration DESC NULLS LAST, id'''
+        elif mode == 'numeric-range':
+            self.labels = ['id', 'n', 'wide']
+            self.query = f'''SELECT id,
+                count(*) OVER (ORDER BY price::numeric / 2 DESC NULLS FIRST
+                    RANGE BETWEEN 0.5 PRECEDING AND 1.5 FOLLOWING) AS n,
+                count(*) OVER (ORDER BY CASE WHEN id=100 THEN '-Infinity'::numeric
+                    WHEN id=101 THEN 'Infinity'::numeric WHEN id=102 THEN 'NaN'::numeric
+                    ELSE price::numeric END DESC NULLS LAST
+                    RANGE BETWEEN 'Infinity'::numeric PRECEDING AND 'Infinity'::numeric FOLLOWING)
+                    AS wide FROM {self.source}'''
         elif mode == 'window':
             self.labels = ['id', 'r', 'lo']
             self.query = f'''SELECT id, rank() OVER (ORDER BY payload DESC NULLS LAST) AS r,
@@ -57,10 +67,10 @@ def qualify(output, command, mode):
     with fixture.managed():
         fixture.run_history(command, History(
             changes=[
-                f"""INSERT INTO {source}(id,auction,payload,duration) VALUES
-                    (100,1,'a','1 month'),(101,1,'a','30 days'),
-                    (102,1,'A','1 day'),(103,2,NULL,NULL),(104,1,'é','10 hours'),
-                    (105,2,'','-1 day'),(106,1,'ab','2 months');
+                f"""INSERT INTO {source}(id,auction,payload,duration,price) VALUES
+                    (100,1,'a','1 month',1),(101,1,'a','30 days',2),
+                    (102,1,'A','1 day',3),(103,2,NULL,NULL,NULL),(104,1,'é','10 hours',4),
+                    (105,2,'','-1 day',4),(106,1,'ab','2 months',7);
                     UPDATE {source} SET observed = CASE id
                         WHEN 100 THEN date 'infinity'
                         WHEN 101 THEN date '5874897-12-31'
@@ -71,8 +81,8 @@ def qualify(output, command, mode):
                 f'DELETE FROM {source} WHERE id IN (100,102,105)',
                 f'DELETE FROM {source}',
             ],
-            final=f"""INSERT INTO {source}(id,auction,payload,duration) VALUES
-                (107,1,'z','1 day'),(108,1,NULL,NULL)""",
+            final=f"""INSERT INTO {source}(id,auction,payload,duration,price) VALUES
+                (107,1,'z','1 day',1),(108,1,NULL,NULL,NULL)""",
             normalized=fixture.query.replace('SELECT', 'select'),
             rejected=[],
         ))
@@ -82,4 +92,4 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    run_modes(('extrema', 'window', 'interval-ties', 'date-extrema', 'interval-distinct'), qualify)
+    run_modes(('extrema', 'window', 'interval-ties', 'date-extrema', 'interval-distinct', 'numeric-range'), qualify)

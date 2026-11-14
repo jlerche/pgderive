@@ -179,6 +179,20 @@ pub struct TemporalRangeFrame {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct NumericRangeFrame {
+    pub(crate) start: Option<NumericRangeOffset>,
+    pub(crate) end: Option<NumericRangeOffset>,
+    #[serde(skip_serializing_if = "Exclusion::is_none")]
+    pub(crate) exclusion: Exclusion,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct NumericRangeOffset {
+    pub(crate) value: String,
+    pub(crate) preceding: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub enum TemporalRangeOffset {
     Current,
     Interval { value: String, preceding: bool },
@@ -191,6 +205,7 @@ pub enum Mode {
     Ranking { order: Vec<Order> },
     Peers { order: Vec<Order>, frame: Frame, groups: bool },
     Range { order: Vec<Order>, frame: Frame },
+    NumericRange { order: Vec<Order>, frame: NumericRangeFrame },
     TemporalRange { order: Vec<Order>, frame: TemporalRangeFrame },
 }
 impl Mode {
@@ -200,6 +215,7 @@ impl Mode {
                 frame.exclusion
             }
             Self::TemporalRange { frame, .. } => frame.exclusion,
+            Self::NumericRange { frame, .. } => frame.exclusion,
             _ => Exclusion::None,
         }
     }

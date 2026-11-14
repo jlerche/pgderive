@@ -1,16 +1,23 @@
 //! Inclusive RANGE boundaries over a sorted partition.
 use super::Ordered;
 use crate::{
-    compiler::partition::{Frame, Order, TemporalRangeFrame, TemporalRangeOffset},
+    compiler::{
+        partition::{
+            Frame, NumericRangeFrame, NumericRangeOffset, Order, TemporalRangeFrame,
+            TemporalRangeOffset,
+        },
+        value::Value,
+    },
     engine::{dataflow::PartitionWork, execution::EvaluationFailed},
+    numeric::Numeric,
     temporal::{Interval, Timestamp},
 };
 use anyhow::{Context, Result};
 use std::{cmp::Ordering, ops::Range};
 
-#[derive(Clone, Copy)]
 enum Offset {
     Integral(i64),
+    Numeric { value: Numeric, preceding: bool },
     Interval { value: Interval, preceding: bool },
 }
 
@@ -24,11 +31,12 @@ impl Offset {
         })
     }
 
-    fn boundary(self, current: i64, descending: bool, tail: bool) -> Result<i128> {
+    fn boundary(&self, current: i64, descending: bool, tail: bool) -> Result<i128> {
         match self {
-            Self::Integral(distance) => Ok(oriented(current, descending) + i128::from(distance)),
+            Self::Integral(distance) => Ok(oriented(current, descending) + i128::from(*distance)),
+            Self::Numeric { .. } => anyhow::bail!("numeric offset on nonnumeric key"),
             Self::Interval { value, preceding } => {
-                let subtract = preceding != descending;
+                let subtract = *preceding != descending;
                 if matches!(value, Interval::PositiveInfinity)
                     && current == if subtract { i64::MAX } else { i64::MIN }
                 {
@@ -36,11 +44,58 @@ impl Offset {
                     return Ok(if tail { i128::MAX } else { i128::MIN });
                 }
                 let value =
-                    if subtract { value.negate().context(EvaluationFailed)? } else { value };
+                    if subtract { value.negate().context(EvaluationFailed)? } else { *value };
                 let shifted = Timestamp::from_sort_value(current)
                     .add_interval(value)
                     .context(EvaluationFailed)?;
                 Ok(oriented(shifted.sort_value(), descending))
+            }
+        }
+    }
+}
+
+enum Threshold {
+    Oriented(i128),
+    Numeric(Numeric),
+    AllNonNan,
+}
+
+impl Offset {
+    fn numeric(offset: &NumericRangeOffset) -> Result<Self> {
+        Ok(Self::Numeric { value: Numeric::parse(&offset.value)?, preceding: offset.preceding })
+    }
+
+    fn threshold(&self, current: &Value, descending: bool, tail: bool) -> Result<Threshold> {
+        if let (Self::Numeric { value, preceding }, Value::Numeric(base)) = (self, current) {
+            let subtract = *preceding != descending;
+            if matches!(value, Numeric::Infinity)
+                && matches!(
+                    (subtract, base),
+                    (true, Numeric::Infinity) | (false, Numeric::NegativeInfinity)
+                )
+            {
+                return Ok(Threshold::AllNonNan);
+            }
+            return Ok(Threshold::Numeric(base.range_boundary(value, subtract)?));
+        }
+        Ok(Threshold::Oriented(self.boundary(integral_key(current)?, descending, tail)?))
+    }
+}
+
+impl Threshold {
+    fn compare(&self, key: &Value, descending: bool, tail: bool) -> Result<Ordering> {
+        match self {
+            Self::Oriented(value) => Ok(oriented(integral_key(key)?, descending).cmp(value)),
+            Self::Numeric(value) => {
+                let Value::Numeric(key) = key else { anyhow::bail!("missing numeric RANGE key") };
+                let order = key.cmp(value);
+                Ok(if descending { order.reverse() } else { order })
+            }
+            Self::AllNonNan => {
+                if matches!(key, Value::Numeric(Numeric::Nan)) {
+                    return Ok(if descending { Ordering::Less } else { Ordering::Greater });
+                }
+                Ok(if tail { Ordering::Less } else { Ordering::Greater })
             }
         }
     }
@@ -62,6 +117,19 @@ impl Cursor {
             head: Boundary { index: 0, offset: frame.start.map(Offset::Integral) },
             tail: Boundary { index: 0, offset: frame.end.map(Offset::Integral) },
         }
+    }
+
+    pub(super) fn numeric(frame: &NumericRangeFrame) -> Result<Self> {
+        Ok(Self {
+            head: Boundary {
+                index: 0,
+                offset: frame.start.as_ref().map(Offset::numeric).transpose()?,
+            },
+            tail: Boundary {
+                index: 0,
+                offset: frame.end.as_ref().map(Offset::numeric).transpose()?,
+            },
+        })
     }
 
     pub(super) fn temporal(frame: &TemporalRangeFrame) -> Result<Self> {
@@ -98,11 +166,11 @@ impl Boundary {
         &mut self,
         rows: &[Ordered],
         order: &Order,
-        current: Option<i64>,
+        current: Option<&Value>,
         context: (bool, &mut PartitionWork),
     ) -> Result<()> {
         let (tail, work) = context;
-        let Some(offset) = self.offset else {
+        let Some(offset) = &self.offset else {
             self.index = if tail { rows.len() } else { 0 };
             return Ok(());
         };
@@ -112,14 +180,14 @@ impl Boundary {
             let key = order_value(row)?;
             let comparison = match (key, current) {
                 (Some(key), Some(current)) => {
-                    let threshold = if let Some(value) = boundary {
-                        value
-                    } else {
-                        let value = offset.boundary(current, order.descending, tail)?;
-                        boundary = Some(value);
-                        value
-                    };
-                    oriented(key, order.descending).cmp(&threshold)
+                    if boundary.is_none() {
+                        boundary = Some(offset.threshold(current, order.descending, tail)?);
+                    }
+                    boundary.as_ref().context("missing RANGE threshold")?.compare(
+                        key,
+                        order.descending,
+                        tail,
+                    )?
                 }
                 _ if order.nulls_first => key.cmp(&current),
                 _ => current.cmp(&key),
@@ -133,13 +201,15 @@ impl Boundary {
     }
 }
 
-fn order_value(row: &Ordered) -> Result<Option<i64>> {
-    use crate::compiler::value::Value;
-    match row.0.first().context("missing RANGE key")? {
-        None => Ok(None),
-        Some(Value::Integer(value)) => Ok(Some(*value)),
-        Some(Value::Timestamp(value)) => Ok(Some(value.sort_value())),
-        Some(_) => anyhow::bail!("unsupported RANGE offset key"),
+fn order_value(row: &Ordered) -> Result<Option<&Value>> {
+    Ok(row.0.first().context("missing RANGE key")?.as_ref())
+}
+
+fn integral_key(value: &Value) -> Result<i64> {
+    match value {
+        Value::Integer(value) => Ok(*value),
+        Value::Timestamp(value) => Ok(value.sort_value()),
+        _ => anyhow::bail!("unsupported integral or timestamp RANGE key"),
     }
 }
 
@@ -187,6 +257,16 @@ mod tests {
         )];
         assert!(matches!(cursor.bounds(&rows, &order, 0, &mut work),
             Err(error) if error.is::<EvaluationFailed>()));
+        Ok(())
+    }
+
+    #[test]
+    fn numeric_range_threshold_can_exceed_rendered_numeric_budget() -> Result<()> {
+        let key = Numeric::parse(&"9".repeat(4096))?;
+        let offset = Offset::Numeric { value: Numeric::parse("1")?, preceding: false };
+        let key = Value::Numeric(key);
+        let threshold = offset.threshold(&key, false, true)?;
+        assert_eq!(threshold.compare(&key, false, true)?, Ordering::Less);
         Ok(())
     }
 }

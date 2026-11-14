@@ -256,6 +256,7 @@ fn framed(
             (order, Some(frame), None)
         }
         Mode::Range { order, frame } => (order, None, Some(range::Cursor::integral(frame))),
+        Mode::NumericRange { order, frame } => (order, None, Some(range::Cursor::numeric(frame)?)),
         Mode::TemporalRange { order, frame } => {
             (order, None, Some(range::Cursor::temporal(frame)?))
         }

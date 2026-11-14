@@ -1,7 +1,10 @@
 //! Resolve distance offsets using the ordering type’s btree operator family.
 use crate::compiler::{
     parser::partition::RangeBound,
-    partition::{Exclusion, Frame, Mode, Order, TemporalRangeFrame, TemporalRangeOffset},
+    partition::{
+        Exclusion, Frame, Mode, NumericRangeFrame, NumericRangeOffset, Order, TemporalRangeFrame,
+        TemporalRangeOffset,
+    },
     typed::Typed,
 };
 use crate::temporal::Interval;
@@ -27,16 +30,45 @@ pub(super) fn bind(
             frame: TemporalRangeFrame { start: interval(start)?, end: interval(end)?, exclusion },
             order,
         },
-        _ => anyhow::bail!("RANGE offsets require an integral or timestamp ORDER BY expression"),
+        1700 => Mode::NumericRange {
+            frame: NumericRangeFrame { start: numeric(start)?, end: numeric(end)?, exclusion },
+            order,
+        },
+        _ => anyhow::bail!("RANGE offsets require integral, numeric, or timestamp ordering"),
     };
     if ranking {
-        let (Mode::Range { order, .. } | Mode::TemporalRange { order, .. }) = mode else {
+        let (Mode::Range { order, .. }
+        | Mode::TemporalRange { order, .. }
+        | Mode::NumericRange { order, .. }) = mode
+        else {
             anyhow::bail!("invalid RANGE ranking mode");
         };
         Ok(Mode::Ranking { order })
     } else {
         Ok(mode)
     }
+}
+
+fn numeric(bound: RangeBound) -> Result<Option<NumericRangeOffset>> {
+    use crate::numeric::Numeric;
+    let (value, preceding) = match bound {
+        RangeBound::Unbounded => return Ok(None),
+        RangeBound::Current => {
+            return Ok(Some(NumericRangeOffset { value: "0".into(), preceding: false }));
+        }
+        RangeBound::Offset { value, preceding } => (value, preceding),
+    };
+    let value = constant(&value)?;
+    ensure!(
+        matches!(value.oid(), 0 | 705 | 20 | 21 | 23 | 1700),
+        "numeric RANGE offset requires numeric input"
+    );
+    let value = Numeric::parse(&evaluated(value, 1700)?)?;
+    ensure!(
+        !matches!(value, Numeric::Nan) && value >= Numeric::parse("0")?,
+        "invalid preceding or following size in window function"
+    );
+    Ok(Some(NumericRangeOffset { value: value.text(), preceding }))
 }
 
 fn constant(value: &pg_query::Node) -> Result<Typed> {

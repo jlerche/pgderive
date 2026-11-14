@@ -102,7 +102,7 @@ async fn weighted_peer_frames_match_independent_histories() -> Result<()> {
 #[test]
 fn rejects_unsupported_distance_and_missing_order() -> Result<()> {
     for sql in [
-        sql(5).replace("ORDER BY b.price", "ORDER BY b.price::numeric"),
+        sql(5).replace("ORDER BY b.price", "ORDER BY b.price::text COLLATE \"C\""),
         sql(1).replace(" ORDER BY b.price DESC NULLS FIRST", ""),
     ] {
         assert!(compile(&sql, &contract()).is_err(), "{sql}");

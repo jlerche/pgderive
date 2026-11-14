@@ -178,6 +178,23 @@ impl Numeric {
         }
         Ok(if (self < &zero) == (other < &zero) { Self::Infinity } else { Self::NegativeInfinity })
     }
+    /// Internal RANGE boundaries are compared without rendering a SQL numeric.
+    /// Both inputs are bounded, so scale alignment also bounds this intermediate.
+    pub(crate) fn range_boundary(&self, offset: &Self, subtract: bool) -> Result<Self> {
+        if let (
+            Self::Finite { coefficient: left, scale: ls },
+            Self::Finite { coefficient: right, scale: rs },
+        ) = (self, offset)
+        {
+            let scale = (*ls).max(*rs);
+            let left = left * power(scale - ls);
+            let right = right * power(scale - rs);
+            let coefficient = if subtract { left - right } else { left + right };
+            return Ok(Self::Finite { coefficient, scale });
+        }
+        self.binary(offset, if subtract { "-" } else { "+" })
+    }
+
     fn negated(&self) -> Self {
         match self {
             Self::Finite { coefficient, scale } => {

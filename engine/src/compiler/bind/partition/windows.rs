@@ -50,6 +50,7 @@ impl Windows {
             | Mode::Ranking { order }
             | Mode::Peers { order, .. }
             | Mode::Range { order, .. }
+            | Mode::NumericRange { order, .. }
             | Mode::TemporalRange { order, .. } = &spec.mode
                 && (matches!(spec.mode, Mode::Rows { .. })
                     || spec.aggregates.iter().any(|value| value.function.occurrence_order()))
