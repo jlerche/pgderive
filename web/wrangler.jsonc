@@ -1,4 +1,5 @@
 {
+  "account_id": "f73784025ac85c4445b536c7a940b346",
   "name": "pgderive",
   "compatibility_date": "2026-11-12",
   "workers_dev": true,
@@ -20,7 +21,7 @@
     {
       "binding": "EARLY_ACCESS",
       "database_name": "pgderive-early-access",
-      "database_id": "b30e8ed3-f917-45ed-ae5e-e356a1807169"
+      "database_id": "12c582e3-d0fb-4aed-bff7-41ef0b4c9430"
     }
   ],
   "ratelimits": [

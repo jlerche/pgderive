@@ -1,4 +1,5 @@
 {
+  "account_id": "f73784025ac85c4445b536c7a940b346",
   "name": "pgderive-demo",
   "main": "worker.js",
   "compatibility_date": "2026-11-12",
