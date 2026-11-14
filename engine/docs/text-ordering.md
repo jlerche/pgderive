@@ -12,7 +12,9 @@ Boolean, UUID, date, timestamp, timestamptz, interval, and C/POSIX text
 and varchar keys. PostgreSQL's direction and NULL placement apply to
 each key, and peer groups use equality in the ordering domain. ROWS and
 row-position functions continue to require complete occurrence identity
-when row order affects the result. RANGE offsets support integral, exact numeric, and timestamp keys. Numeric
+when row order affects the result. RANGE offsets support integral, exact numeric,
+date, timestamp, and interval keys. Date offsets use PostgreSQL’s conversion
+to timestamp, including an error when a finite date is out of timestamp range. Numeric
 frames admit fractional offsets, preserve numeric peers, and handle NaN and infinity. Interval DISTINCT ON keys use PostgreSQL
 interval equality, including the equivalence between one month and 30 days.
 The selected row retains its original interval representation. Date MIN and

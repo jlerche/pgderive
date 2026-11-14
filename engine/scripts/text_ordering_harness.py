@@ -40,6 +40,18 @@ class OrderingFixture(SqlFixture):
                     ELSE price::numeric END DESC NULLS LAST
                     RANGE BETWEEN 'Infinity'::numeric PRECEDING AND 'Infinity'::numeric FOLLOWING)
                     AS wide FROM {self.source}'''
+        elif mode == 'temporal-range':
+            self.labels = ['id', 'dates', 'durations', 'unbounded']
+            self.query = f'''SELECT id,
+                count(*) OVER (ORDER BY CASE WHEN id=101 THEN date '0001-01-01 BC'
+                    ELSE observed END NULLS FIRST
+                    RANGE BETWEEN interval '1 month' PRECEDING AND CURRENT ROW) AS dates,
+                count(*) OVER (ORDER BY duration DESC NULLS LAST
+                    RANGE BETWEEN CURRENT ROW AND interval '1 day' FOLLOWING) AS durations,
+                count(*) OVER (ORDER BY CASE WHEN id=100 THEN '-infinity'::interval
+                    WHEN id=101 THEN 'infinity'::interval ELSE duration END
+                    RANGE BETWEEN 'infinity'::interval PRECEDING AND 'infinity'::interval FOLLOWING)
+                    AS unbounded FROM {self.source}'''
         elif mode == 'window':
             self.labels = ['id', 'r', 'lo']
             self.query = f'''SELECT id, rank() OVER (ORDER BY payload DESC NULLS LAST) AS r,
@@ -92,4 +104,4 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    run_modes(('extrema', 'window', 'interval-ties', 'date-extrema', 'interval-distinct', 'numeric-range'), qualify)
+    run_modes(('extrema', 'window', 'interval-ties', 'date-extrema', 'interval-distinct', 'numeric-range', 'temporal-range'), qualify)

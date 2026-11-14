@@ -16,15 +16,16 @@ use anyhow::{Context, Result};
 use std::{cmp::Ordering, ops::Range};
 
 enum Offset {
+    Current,
     Integral(i64),
     Numeric { value: Numeric, preceding: bool },
     Interval { value: Interval, preceding: bool },
 }
 
 impl Offset {
-    fn timestamp(offset: &TemporalRangeOffset) -> Result<Self> {
+    fn temporal(offset: &TemporalRangeOffset) -> Result<Self> {
         Ok(match offset {
-            TemporalRangeOffset::Current => Self::Integral(0),
+            TemporalRangeOffset::Current => Self::Current,
             TemporalRangeOffset::Interval { value, preceding } => {
                 Self::Interval { value: Interval::parse(value)?, preceding: *preceding }
             }
@@ -34,7 +35,9 @@ impl Offset {
     fn boundary(&self, current: i64, descending: bool, tail: bool) -> Result<i128> {
         match self {
             Self::Integral(distance) => Ok(oriented(current, descending) + i128::from(*distance)),
-            Self::Numeric { .. } => anyhow::bail!("numeric offset on nonnumeric key"),
+            Self::Current | Self::Numeric { .. } => {
+                anyhow::bail!("unsupported oriented RANGE offset")
+            }
             Self::Interval { value, preceding } => {
                 let subtract = *preceding != descending;
                 if matches!(value, Interval::PositiveInfinity)
@@ -55,6 +58,9 @@ impl Offset {
 }
 
 enum Threshold {
+    Current(Value),
+    Interval(Interval),
+    All,
     Oriented(i128),
     Numeric(Numeric),
     AllNonNan,
@@ -66,6 +72,23 @@ impl Offset {
     }
 
     fn threshold(&self, current: &Value, descending: bool, tail: bool) -> Result<Threshold> {
+        if matches!(self, Self::Current) {
+            return Ok(Threshold::Current(current.clone()));
+        }
+        if let (Self::Interval { value, preceding }, Value::Interval(base)) = (self, current) {
+            let subtract = *preceding != descending;
+            if matches!(value, Interval::PositiveInfinity)
+                && matches!(
+                    (subtract, base),
+                    (true, Interval::PositiveInfinity) | (false, Interval::NegativeInfinity)
+                )
+            {
+                return Ok(Threshold::All);
+            }
+            return Ok(Threshold::Interval(
+                base.binary(*value, subtract).context(EvaluationFailed)?,
+            ));
+        }
         if let (Self::Numeric { value, preceding }, Value::Numeric(base)) = (self, current) {
             let subtract = *preceding != descending;
             if matches!(value, Numeric::Infinity)
@@ -85,11 +108,17 @@ impl Offset {
 impl Threshold {
     fn compare(&self, key: &Value, descending: bool, tail: bool) -> Result<Ordering> {
         match self {
+            Self::Current(value) => Ok(direction(key.cmp(value), descending)),
+            Self::Interval(value) => {
+                let Value::Interval(key) = key else { anyhow::bail!("missing interval RANGE key") };
+                Ok(direction(key.cmp(value), descending))
+            }
+            Self::All => Ok(if tail { Ordering::Less } else { Ordering::Greater }),
             Self::Oriented(value) => Ok(oriented(integral_key(key)?, descending).cmp(value)),
             Self::Numeric(value) => {
                 let Value::Numeric(key) = key else { anyhow::bail!("missing numeric RANGE key") };
                 let order = key.cmp(value);
-                Ok(if descending { order.reverse() } else { order })
+                Ok(direction(order, descending))
             }
             Self::AllNonNan => {
                 if matches!(key, Value::Numeric(Numeric::Nan)) {
@@ -136,11 +165,11 @@ impl Cursor {
         Ok(Self {
             head: Boundary {
                 index: 0,
-                offset: frame.start.as_ref().map(Offset::timestamp).transpose()?,
+                offset: frame.start.as_ref().map(Offset::temporal).transpose()?,
             },
             tail: Boundary {
                 index: 0,
-                offset: frame.end.as_ref().map(Offset::timestamp).transpose()?,
+                offset: frame.end.as_ref().map(Offset::temporal).transpose()?,
             },
         })
     }
@@ -209,8 +238,13 @@ fn integral_key(value: &Value) -> Result<i64> {
     match value {
         Value::Integer(value) => Ok(*value),
         Value::Timestamp(value) => Ok(value.sort_value()),
+        Value::Date(value) => Ok(value.timestamp().context(EvaluationFailed)?.sort_value()),
         _ => anyhow::bail!("unsupported integral or timestamp RANGE key"),
     }
+}
+
+const fn direction(order: Ordering, descending: bool) -> Ordering {
+    if descending { order.reverse() } else { order }
 }
 
 fn oriented(value: i64, descending: bool) -> i128 {
@@ -257,6 +291,34 @@ mod tests {
         )];
         assert!(matches!(cursor.bounds(&rows, &order, 0, &mut work),
             Err(error) if error.is::<EvaluationFailed>()));
+        Ok(())
+    }
+
+    #[test]
+    fn date_current_row_keeps_full_date_domain_but_offsets_check_timestamp_range() -> Result<()> {
+        let key = Value::Date(crate::temporal::Date::parse("5874897-12-31")?);
+        let current = Offset::Current.threshold(&key, false, true)?;
+        assert_eq!(current.compare(&key, false, true)?, Ordering::Equal);
+        let offset = Offset::Interval { value: Interval::parse("P0M1DT0H0S")?, preceding: true };
+        assert!(matches!(offset.threshold(&key, false, false),
+            Err(error) if error.is::<EvaluationFailed>()));
+        Ok(())
+    }
+
+    #[test]
+    fn interval_range_threshold_preserves_peers_and_opposing_infinities() -> Result<()> {
+        let month = Value::Interval(Interval::parse("P1M0DT0H0S")?);
+        let offset = Offset::Interval { value: Interval::parse("P0M1DT0H0S")?, preceding: true };
+        let threshold = offset.threshold(&month, false, false)?;
+        let days = Value::Interval(Interval::parse("P0M29DT0H0S")?);
+        assert_eq!(threshold.compare(&days, false, false)?, Ordering::Equal);
+
+        let infinite = Offset::Interval { value: Interval::PositiveInfinity, preceding: true };
+        let key = Value::Interval(Interval::PositiveInfinity);
+        assert_eq!(
+            infinite.threshold(&key, false, false)?.compare(&days, false, false)?,
+            Ordering::Greater
+        );
         Ok(())
     }
 

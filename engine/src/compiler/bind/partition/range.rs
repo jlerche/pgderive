@@ -26,7 +26,7 @@ pub(super) fn bind(
             frame: Frame { start: offset(start, oid)?, end: offset(end, oid)?, exclusion },
             order,
         },
-        1114 | 1184 => Mode::TemporalRange {
+        1082 | 1114 | 1184 | 1186 => Mode::TemporalRange {
             frame: TemporalRangeFrame { start: interval(start)?, end: interval(end)?, exclusion },
             order,
         },
@@ -34,7 +34,9 @@ pub(super) fn bind(
             frame: NumericRangeFrame { start: numeric(start)?, end: numeric(end)?, exclusion },
             order,
         },
-        _ => anyhow::bail!("RANGE offsets require integral, numeric, or timestamp ordering"),
+        _ => anyhow::bail!(
+            "RANGE offsets require integral, numeric, date, timestamp, or interval ordering"
+        ),
     };
     if ranking {
         let (Mode::Range { order, .. }
@@ -86,7 +88,7 @@ fn interval(bound: RangeBound) -> Result<Option<TemporalRangeOffset>> {
         RangeBound::Offset { value, preceding } => (value, preceding),
     };
     let value = constant(&value)?;
-    ensure!(matches!(value.oid(), 0 | 705 | 1186), "timestamp RANGE offset requires an interval");
+    ensure!(matches!(value.oid(), 0 | 705 | 1186), "temporal RANGE offset requires an interval");
     let value = evaluated(value, 1186)?;
     ensure!(
         Interval::parse(&value)? >= Interval::duration(0),
