@@ -24,6 +24,9 @@ impl Typed {
                     .saturating_add(promotion(argument, call.input_oid))
             }),
             Value::Collate { input, .. } => input.cost(),
+            Value::Unary { input, negative } => {
+                input.cost().saturating_add(if *negative { 0 } else { OPERATOR_COST })
+            }
             Value::Cast { input, typmod } => {
                 let modifies =
                     typmod.is_some_and(|modifier| modifier.requires_coercion(input, self.oid));

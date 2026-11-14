@@ -4,6 +4,7 @@ use pg_query::{Node, NodeEnum, protobuf as pg};
 #[derive(Clone)]
 pub(in crate::compiler) enum Key {
     Typed(Box<Node>),
+    Target(Box<Node>, usize),
     Column(Name),
 }
 pub(in crate::compiler) fn is_bin(value: &Node) -> Result<bool> {

@@ -53,6 +53,7 @@ enum Value {
     Case { branches: Vec<(super::expression::Expr, Typed)>, otherwise: Box<Typed> },
     SimpleCase(case::Simple),
     NullIf { left: Box<Typed>, right: Box<Typed> },
+    Unary { input: Box<Typed>, negative: bool },
     Concat { left: Box<Typed>, right: Box<Typed> },
     MinMax { operation: minmax::Operation, arguments: Vec<Typed> },
 }
@@ -69,7 +70,9 @@ impl Typed {
             | Value::Encoded(_)
             | Value::Interval(_) => true,
             Value::Call(call) => call.is_constant(),
-            Value::Cast { input, .. } | Value::Collate { input, .. } => input.is_constant(),
+            Value::Cast { input, .. }
+            | Value::Collate { input, .. }
+            | Value::Unary { input, .. } => input.is_constant(),
             Value::Binary { left, right, .. }
             | Value::NullIf { left, right }
             | Value::Concat { left, right } => left.is_constant() && right.is_constant(),
@@ -205,6 +208,7 @@ fn operator(
 }
 
 fn arithmetic(operation: Arithmetic, left: Option<Typed>, right: Typed) -> Result<Typed> {
+    let unary = left.is_none();
     let left = if let Some(left) = left {
         left
     } else {
@@ -214,7 +218,7 @@ fn arithmetic(operation: Arithmetic, left: Option<Typed>, right: Typed) -> Resul
             "unresolved unary scalar operator"
         );
         if matches!(operation, Arithmetic::Add) {
-            return Ok(right);
+            return Ok(right.unary(false));
         }
         if right.oid == 1186 {
             calendar::zero_interval()
@@ -223,20 +227,22 @@ fn arithmetic(operation: Arithmetic, left: Option<Typed>, right: Typed) -> Resul
         }
     };
     if let Some(oid) = calendar::oid(left.oid, right.oid, operation)? {
-        return Ok(Typed {
-            oid,
-            value: Value::Binary { operation, left: Box::new(left), right: Box::new(right) },
-        });
+        return Ok(binary(oid, operation, left, right, unary));
     }
     ensure!(left.oid != 0 || right.oid != 0, "unresolved scalar operator types");
     ensure!(
         [left.oid, right.oid].iter().all(|oid| matches!(oid, 0 | 20 | 21 | 23 | 1700)),
         "arithmetic requires integral or numeric operands"
     );
-    Ok(Typed {
-        oid: numeric_common(&[left.oid, right.oid]),
+    Ok(binary(numeric_common(&[left.oid, right.oid]), operation, left, right, unary))
+}
+
+fn binary(oid: u32, operation: Arithmetic, left: Typed, right: Typed, unary: bool) -> Typed {
+    let value = Typed {
+        oid,
         value: Value::Binary { operation, left: Box::new(left), right: Box::new(right) },
-    })
+    };
+    if unary { value.unary(true) } else { value }
 }
 
 fn remainder(left: Typed, right: Typed) -> Result<Typed> {
@@ -299,6 +305,38 @@ pub(super) fn computed(
 }
 
 impl Typed {
+    fn unary(self, negative: bool) -> Self {
+        Self { oid: self.oid, value: Value::Unary { input: Box::new(self), negative } }
+    }
+
+    pub(super) const fn grouping_mask(mask: i64) -> Self {
+        Self { oid: 23, value: Value::Literal(Some(mask)) }
+    }
+
+    pub(super) fn grouping_null(key: &ColumnRef) -> Result<Self> {
+        let mut input = Self { oid: key.oid, value: Value::Encoded(None) };
+        let typmod = match (key.oid, key.modifier) {
+            (1043, Some(value)) => Some(types::Modifier::Varchar(value - 4)),
+            (1700, Some(value)) => {
+                Some(types::Modifier::Numeric(crate::numeric::Typmod::from_encoded(value)?))
+            }
+            (1114 | 1184, Some(value)) => {
+                Some(types::Modifier::Timestamp(crate::temporal::Precision::new(i64::from(value))?))
+            }
+            _ => None,
+        };
+        if typmod.is_some() {
+            input = Self { oid: key.oid, value: Value::Cast { input: Box::new(input), typmod } };
+        }
+        if matches!(key.oid, 25 | 1043) && key.collation != 0 {
+            input = Self {
+                oid: key.oid,
+                value: Value::Collate { input: Box::new(input), collation: key.collation },
+            };
+        }
+        Ok(input)
+    }
+
     pub(super) fn projected_column(
         self,
         computed: &mut Vec<super::scalar::Computed>,
@@ -361,7 +399,9 @@ impl Typed {
             Value::Encoded(value) => value.is_none(),
             Value::Temporal(value) => value.input.nullable,
             Value::Call(call) => call.nullable(),
-            Value::Cast { input, .. } | Value::Collate { input, .. } => input.nullable(),
+            Value::Cast { input, .. }
+            | Value::Collate { input, .. }
+            | Value::Unary { input, .. } => input.nullable(),
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.nullable() || right.nullable()
             }

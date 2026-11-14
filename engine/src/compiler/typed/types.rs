@@ -108,6 +108,9 @@ pub(super) fn cast(
     if input.oid == oid && unchanged_modifier(&input, typmod) {
         return Ok(input);
     }
+    if oid == 25 && matches!(input.oid, 0 | 705) {
+        return Ok(if input.oid == 0 { Typed::null_text() } else { input.unknown_text() });
+    }
     if matches!(oid, 1082 | 1114 | 1184 | 1186) {
         return temporal_cast(input, oid, typmod);
     }
@@ -128,10 +131,7 @@ pub(super) fn cast(
 }
 
 fn unchanged_modifier(input: &Typed, typmod: Option<Modifier>) -> bool {
-    match &input.value {
-        Value::Column(column) => column.modifier == typmod.map(Modifier::encoded),
-        _ => typmod.is_none() && input.bound_modifier() == -1,
-    }
+    input.bound_modifier() == typmod.map_or(-1, Modifier::encoded)
 }
 
 fn temporal_cast(input: Typed, oid: u32, typmod: Option<Modifier>) -> Result<Typed> {

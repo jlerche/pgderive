@@ -27,6 +27,9 @@ impl Typed {
                     Value::Cast { input: Box::new(input), typmod: *typmod }
                 }
             }
+            Value::Unary { input, negative } => {
+                Value::Unary { input: Box::new(input.fold()?), negative: *negative }
+            }
             Value::Binary { operation, left, right } => {
                 strict_binary(left, right, |left, right| Value::Binary {
                     operation: *operation,

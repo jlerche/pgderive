@@ -126,6 +126,8 @@ Set operations resolve each pair of operands separately. An inner pair that
 already resolved to text stays text in the outer operation. UNION, INTERSECT,
 and EXCEPT retain their existing DISTINCT and ALL multiplicities after coercion.
 
+See [Grouping sets](grouping-sets.md) for GROUPING SETS, ROLLUP, CUBE, and GROUPING().
+
 ## GROUP BY names and positions
 
 Supported GROUP BY scopes accept a one-based select-list ordinal or a bare

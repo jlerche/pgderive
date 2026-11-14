@@ -103,6 +103,7 @@ aggregate-inputs aggregate_inputs_compiler
 relational relational_compiler
 partition partition_compiler
 group-references group_references
+grouping-sets grouping_sets
 boolean-aggregates boolean_aggregate
 named-window named_window
 multiple-windows multiple_window

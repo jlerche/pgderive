@@ -34,14 +34,16 @@ fn alias(
     input: &impl Fn(&Name) -> Result<ColumnRef>,
     scope: Option<usize>,
 ) -> Result<Option<Key>> {
-    let mut matches = visible.iter().filter(|target| target.label == label).peekable();
-    let Some(first) = matches.next() else { return Ok(None) };
-    let key = syntax::group_target(first)?;
+    let mut matches =
+        visible.iter().enumerate().filter(|(_, target)| target.label == label).peekable();
+    let Some((index, first)) = matches.next() else { return Ok(None) };
+    let key = syntax::group_target(first, index)?;
     if matches.peek().is_some() {
         let mut computed = Vec::new();
         let bound = bind_key(key.clone(), input, &mut computed, scope)?;
-        for target in matches {
-            let candidate = bind_key(syntax::group_target(target)?, input, &mut computed, scope)?;
+        for (index, target) in matches {
+            let candidate =
+                bind_key(syntax::group_target(target, index)?, input, &mut computed, scope)?;
             ensure!(bound == candidate, "ambiguous GROUP BY output label {label}");
         }
     }

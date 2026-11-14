@@ -61,7 +61,6 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
         SQL.replace("SUM(b.price)", "SUM(b.price) WITHIN GROUP (ORDER BY b.id)"),
         SQL.replace("a.category", "a.*"),
         SQL.replace("a.other IS NOT NULL", "ROW(a.other) IS NULL"),
-        SQL.replace("GROUP BY", "GROUP BY DISTINCT"),
         SQL.replace("SELECT", "SELECT DISTINCT"),
         SQL.replace("FROM source.auction", "INTO source.sink FROM source.auction"),
         SQL.replace("source.auction a", "ONLY source.auction a"),
@@ -120,6 +119,7 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
 #[test]
 fn grouped_joins_use_the_general_aggregate_grammar() -> Result<()> {
     for sql in [
+        SQL.replace("GROUP BY", "GROUP BY DISTINCT"),
         SQL.replace("a.category", "b.auction"),
         SQL.replace("SUM(b.price)", "SUM(a.id)"),
         SQL.replace("COUNT(*)", "COUNT(b.price)"),

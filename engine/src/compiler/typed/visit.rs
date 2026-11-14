@@ -32,7 +32,9 @@ impl Typed {
                 }
             }
             Value::Call(call) => call.arguments.iter().for_each(|value| value.reads(out)),
-            Value::Cast { input, .. } | Value::Collate { input, .. } => input.reads(out),
+            Value::Cast { input, .. }
+            | Value::Collate { input, .. }
+            | Value::Unary { input, .. } => input.reads(out),
             Value::Binary { left, right, .. }
             | Value::NullIf { left, right }
             | Value::Concat { left, right } => {
@@ -65,7 +67,9 @@ impl Typed {
         }
         match &self.value {
             Value::Column(_) => true,
-            Value::Collate { input, .. } => input.total_scalar_input(),
+            Value::Collate { input, .. } | Value::Unary { input, negative: false } => {
+                input.total_scalar_input()
+            }
             Value::Cast { input, typmod: None } => {
                 (self.oid == input.oid
                     || matches!(
@@ -119,6 +123,9 @@ impl Typed {
             Value::Cast { input, typmod } => {
                 Value::Cast { input: Box::new(input.replaced(replace)?), typmod: *typmod }
             }
+            Value::Unary { input, negative } => {
+                Value::Unary { input: Box::new(input.replaced(replace)?), negative: *negative }
+            }
             Value::Binary { operation, left, right } => Value::Binary {
                 operation: *operation,
                 left: Box::new(left.replaced(replace)?),
@@ -164,7 +171,9 @@ impl Typed {
                     value.strict_columns(out);
                 }
             }
-            Value::Cast { input, .. } | Value::Collate { input, .. } => input.strict_columns(out),
+            Value::Cast { input, .. }
+            | Value::Collate { input, .. }
+            | Value::Unary { input, .. } => input.strict_columns(out),
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.strict_columns(out);
                 right.strict_columns(out);
@@ -179,7 +188,9 @@ impl Typed {
             Value::Call(call) => {
                 call.operation.is_strict() && call.arguments.iter().all(Self::is_strict)
             }
-            Value::Cast { input, .. } | Value::Collate { input, .. } => input.is_strict(),
+            Value::Cast { input, .. }
+            | Value::Collate { input, .. }
+            | Value::Unary { input, .. } => input.is_strict(),
             Value::Binary { left, right, .. } | Value::Concat { left, right } => {
                 left.is_strict() && right.is_strict()
             }

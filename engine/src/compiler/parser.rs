@@ -6,6 +6,7 @@ mod cte;
 pub(super) mod derived;
 pub(super) mod expansion;
 pub(super) mod expressions;
+pub(super) mod grouping_sets;
 mod label;
 pub(super) mod lookup;
 mod membership;
@@ -119,7 +120,7 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
         from_clause: _,
         where_clause: _,
         group_clause: _,
-        group_distinct,
+        group_distinct: _,
         having_clause: _,
         window_clause: _,
         values_lists,
@@ -137,7 +138,6 @@ fn validate_query(select: &pg::SelectStmt) -> Result<()> {
     ensure!(
         distinct_clause.is_empty()
             && into_clause.is_none()
-            && !group_distinct
             && values_lists.is_empty()
             && sort_clause.is_empty()
             && limit_offset.is_none()

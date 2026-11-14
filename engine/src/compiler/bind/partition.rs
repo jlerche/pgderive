@@ -13,6 +13,7 @@ mod argument;
 pub(in crate::compiler::bind) mod composition;
 mod distinct;
 mod grouping;
+mod grouping_sets;
 mod having;
 mod ordered;
 mod prefix;
@@ -24,6 +25,7 @@ struct Body {
     targets: Vec<syntax::Target>,
     visible: usize,
     groups: Vec<crate::compiler::parser::scalar::Key>,
+    grouping_sets: Option<crate::compiler::parser::grouping_sets::Sets>,
     predicate: Option<crate::compiler::syntax::Expr>,
     having: Option<crate::compiler::syntax::Expr>,
 }
@@ -37,8 +39,17 @@ struct Stage<'a> {
     scalar_scope: Option<usize>,
 }
 pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compiled> {
-    let syntax::Parsed { source, expansion, targets, visible, groups, predicate, having } = parsed;
-    let body = Body { expansion, targets, visible, groups, predicate, having };
+    let syntax::Parsed {
+        source,
+        expansion,
+        targets,
+        visible,
+        groups,
+        grouping_sets,
+        predicate,
+        having,
+    } = parsed;
+    let body = Body { expansion, targets, visible, groups, grouping_sets, predicate, having };
     match source {
         syntax::Source::Unit => {
             let relation = contract
@@ -115,7 +126,7 @@ fn build(
     context: Stage<'_>,
 ) -> Result<Compiled> {
     let groups = grouping::resolve(parsed, resolve, context.scalar_scope)?;
-    if having::required(parsed) {
+    if parsed.grouping_sets.is_some() || having::required(parsed) {
         return having::build(parsed, groups, resolve, context);
     }
     build_direct(parsed, groups, resolve, context)
@@ -311,7 +322,8 @@ fn bind_key(
 ) -> Result<ColumnRef> {
     match key {
         crate::compiler::parser::scalar::Key::Column(name) => resolve(&name),
-        crate::compiler::parser::scalar::Key::Typed(value) => {
+        crate::compiler::parser::scalar::Key::Typed(value)
+        | crate::compiler::parser::scalar::Key::Target(value, _) => {
             crate::compiler::typed::computed(&value, resolve, computed, scope)
         }
     }

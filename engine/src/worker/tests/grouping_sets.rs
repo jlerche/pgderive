@@ -1,0 +1,88 @@
+use super::{History, JoinedState, RowBatch, apply_joined, batch, contract, row, settings};
+use crate::{compiler::compile, engine::Batch, transaction::Row};
+use anyhow::Result;
+use std::collections::BTreeMap;
+
+#[test]
+fn grouping_syntax_composes_with_ordinary_query_clauses() -> Result<()> {
+    let contract = contract();
+    for sql in [
+        "SELECT category, COUNT(*) FROM source.auction GROUP BY GROUPING SETS ((category), ())",
+        "SELECT category, other, GROUPING(category, other), COUNT(*) FROM source.auction GROUP BY ROLLUP ((category, other))",
+        "SELECT category, other, GROUPING(category, other), COUNT(*) FROM source.auction GROUP BY CUBE(category, other)",
+        "SELECT category AS k, GROUPING(category), COUNT(*) FROM source.auction GROUP BY DISTINCT GROUPING SETS ((k), (1), ())",
+        "SELECT category, GROUPING(category), COUNT(*) FROM source.auction GROUP BY ROLLUP(category) HAVING GROUPING(category)=1 ORDER BY GROUPING(category)",
+        "SELECT category, GROUPING(category), COUNT(*) FROM source.auction GROUP BY category",
+        "SELECT COUNT(*) FROM source.auction GROUP BY GROUPING SETS ((), ())",
+        "SELECT GROUPING(category, other), COUNT(*) FROM source.auction GROUP BY (category, other)",
+        "SELECT GROUPING(+id), COUNT(*) FROM source.auction GROUP BY ROLLUP(+id)",
+        "SELECT 'literal' AS k, GROUPING('literal'::text), COUNT(*) FROM source.auction GROUP BY ROLLUP(k)",
+        "SELECT GROUPING((category::varchar(3))::varchar(3)), COUNT(*) FROM source.auction GROUP BY ROLLUP(category::varchar(3))",
+    ] {
+        compile(sql, &contract).map_err(|error| error.context(sql))?;
+    }
+    for sql in [
+        "SELECT GROUPING(other) FROM source.auction GROUP BY ROLLUP(category)",
+        "SELECT other, COUNT(*) FROM source.auction GROUP BY ROLLUP(category)",
+        "SELECT GROUPING(category) FROM source.auction",
+        "SELECT GROUPING(+id) FROM source.auction GROUP BY ROLLUP(id)",
+        "SELECT GROUPING(id) FROM source.auction GROUP BY ROLLUP(+id)",
+        "SELECT GROUPING(-id) FROM source.auction GROUP BY ROLLUP(0-id)",
+        "SELECT 'literal' AS k, GROUPING('literal') FROM source.auction GROUP BY ROLLUP(k)",
+    ] {
+        assert!(compile(sql, &contract).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn grouping_set_deltas_keep_repeated_groups_and_generated_nulls() -> Result<()> {
+    let contract = contract();
+    let compiled = compile(
+        "SELECT category, GROUPING(category), COUNT(*) FROM source.auction
+         GROUP BY GROUPING SETS ((category), (), (category), ())",
+        &contract,
+    )?;
+    let names = compiled.output().columns.iter().map(|c| c.column.name.clone()).collect::<Vec<_>>();
+    let options = settings();
+    let null = row(&[("id", Some("1")), ("category", None), ("other", None)]);
+    let text = row(&[("id", Some("2")), ("category", Some("a")), ("other", None)]);
+    let oracle = |state: &JoinedState| -> Result<RowBatch> {
+        let mut groups = BTreeMap::new();
+        let mut total = 0;
+        for (row, weight) in &state.0 {
+            *groups.entry(row["category"].clone()).or_insert(0) += weight;
+            total += weight;
+        }
+        let output = |key, mask: &str, count: i64| {
+            let values = [key, Some(mask.into()), Some(count.to_string())];
+            (
+                (
+                    crate::worker::program::relational::Key::new(),
+                    names.iter().cloned().zip(values).collect::<Row>(),
+                ),
+                2,
+            )
+        };
+        Batch::from_updates(
+            groups
+                .into_iter()
+                .filter(|(_, count)| *count > 0)
+                .map(|(key, count)| output(key, "0", count))
+                .chain([output(None, "1", total)]),
+        )
+    };
+    History::new((&contract, &compiled, &options))
+        .run(
+            [
+                batch(vec![]),
+                batch(vec![("auction", null.clone(), 1), ("auction", text.clone(), 1)]),
+                batch(vec![("auction", null, -1), ("auction", text, -1)]),
+            ],
+            oracle,
+            apply_joined,
+            |_| true,
+        )
+        .await?;
+    Ok(())
+}

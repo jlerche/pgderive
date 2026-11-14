@@ -13,14 +13,23 @@ use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
 type Resolver<'a> = dyn Fn(&Name) -> Result<ColumnRef> + 'a;
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum GroupingSlot {
+    Expression,
+    HiddenConstant,
+    ConstantTarget(usize),
+}
+
 struct Rewrite<'a, F> {
     resolve: &'a F,
     keys: Vec<ColumnRef>,
+    constant_slots: Vec<GroupingSlot>,
     scope: Option<usize>,
     aggregates: Vec<syntax::Aggregate>,
     visited: usize,
+    grouping: Vec<Vec<usize>>,
 }
-fn column(kind: char, index: usize) -> Node {
+pub(super) fn column(kind: char, index: usize) -> Node {
     name_node(&Name(vec![String::new(), format!("{kind}{index}")]))
 }
 fn name_node(name: &Name) -> Node {
@@ -35,10 +44,10 @@ fn name_node(name: &Name) -> Node {
         })),
     }
 }
-fn key_node(key: &Key) -> Node {
+pub(super) fn key_node(key: &Key) -> Node {
     match key {
         Key::Column(name) => name_node(name),
-        Key::Typed(value) => (**value).clone(),
+        Key::Typed(value) | Key::Target(value, _) => (**value).clone(),
     }
 }
 pub(super) fn required(body: &Body) -> bool {
@@ -63,7 +72,7 @@ fn window_aggregate(value: &syntax::Aggregate) -> bool {
         })
 }
 fn contains_aggregate(value: &Node) -> bool {
-    if syntax::group_aggregate(value) {
+    if syntax::group_aggregate(value) || matches!(value.node, Some(NodeEnum::GroupingFunc(_))) {
         return true;
     }
     match &value.node {
@@ -102,16 +111,13 @@ pub(super) fn build(
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     context: Stage<'_>,
 ) -> Result<Compiled> {
-    let mut computed = Vec::new();
-    let keys = super::keys(groups.clone(), resolve, &mut computed, context.scalar_scope)?;
-    let mut rewrite =
-        Rewrite { resolve, keys, scope: context.scalar_scope, aggregates: Vec::new(), visited: 0 };
+    let mut rewrite = Rewrite::new(&groups, body, resolve, context.scalar_scope)?;
     let targets = rewrite.targets(&body.targets)?;
     let mut condition = body.having.as_deref().cloned();
     if let Some(condition) = &mut condition {
         rewrite.expression(condition, false, 0)?;
     }
-    if body.groups.is_empty() && rewrite.aggregates.is_empty() {
+    if (body.groups.is_empty() || body.grouping_sets.is_some()) && rewrite.aggregates.is_empty() {
         rewrite.aggregates.push(syntax::Aggregate {
             function: crate::compiler::partition::Function::Count,
             argument: None,
@@ -130,15 +136,18 @@ pub(super) fn build(
             label: format!("group_{index}"),
         })
         .collect::<Vec<_>>();
-    group_targets.extend(rewrite.aggregates.into_iter().enumerate().map(|(index, value)| Target {
-        value: Value::Aggregate(Box::new(value)),
-        label: format!("aggregate_{index}"),
-    }));
-    let group = Body { targets: group_targets, having: None, ..body.clone() };
+    group_targets.extend(std::mem::take(&mut rewrite.aggregates).into_iter().enumerate().map(
+        |(index, value)| Target {
+            value: Value::Aggregate(Box::new(value)),
+            label: format!("aggregate_{index}"),
+        },
+    ));
+    let group = Body { targets: group_targets, having: None, grouping_sets: None, ..body.clone() };
     // Suppress this staging pass only: its targets are already the aggregate stage.
     let contract = context.contract;
     let boundary = context.sources.is_empty().then_some(context.occurrence_keys);
-    let mut compiled = super::build_direct(&group, groups, resolve, context)?;
+    let mut compiled =
+        aggregate_stage(&group, groups, resolve, context, (body.grouping_sets.as_ref(), &rewrite))?;
     let columns = compiled.relational.output.columns.clone();
     let post_resolve = |name: &Name| -> Result<ColumnRef> {
         if let [empty, field] = name.0.as_slice()
@@ -146,7 +155,9 @@ pub(super) fn build(
         {
             let (kind, index) = field.split_at(1);
             let index = index.parse::<usize>()?;
-            let position = if kind == "g" {
+            let position = if kind == "m" {
+                columns.len().checked_sub(index + 1).context("missing GROUPING mask")?
+            } else if kind == "g" {
                 index
             } else {
                 key_count.checked_add(index).context("HAVING field overflow")?
@@ -163,15 +174,7 @@ pub(super) fn build(
             .map(|value| value.column.clone())
             .context("column must appear in GROUP BY")
     };
-    if let Some(condition) = condition {
-        let predicate =
-            Predicate::new(crate::compiler::expression::bind_quals(&condition, &post_resolve)?);
-        let Some(RelNode::Output { id, input }) = compiled.relational.nodes.pop() else {
-            anyhow::bail!("HAVING requires aggregate output")
-        };
-        compiled.relational.nodes.push(RelNode::Filter { id: "having".into(), input, predicate });
-        compiled.relational.nodes.push(RelNode::Output { id, input: "having".into() });
-    }
+    apply_filter(&mut compiled.relational, condition.as_ref(), &post_resolve)?;
     let post = post_projection(targets);
     let post_resolve: &Resolver<'_> = &post_resolve;
     let mut outer =
@@ -179,24 +182,96 @@ pub(super) fn build(
     super::composition::compose(&mut compiled.relational, &mut outer)?;
     Ok(compiled)
 }
+fn apply_filter(
+    relational: &mut crate::compiler::relational::Relational,
+    condition: Option<&Node>,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+) -> Result<()> {
+    if let Some(condition) = condition {
+        let predicate =
+            Predicate::new(crate::compiler::expression::bind_quals(condition, resolve)?);
+        let Some(RelNode::Output { id, input }) = relational.nodes.pop() else {
+            anyhow::bail!("HAVING requires aggregate output")
+        };
+        relational.nodes.push(RelNode::Filter { id: "having".into(), input, predicate });
+        relational.nodes.push(RelNode::Output { id, input: "having".into() });
+    }
+    Ok(())
+}
+
+fn aggregate_stage<F: Fn(&Name) -> Result<ColumnRef>>(
+    group: &Body,
+    groups: Vec<Key>,
+    resolve: &F,
+    context: Stage<'_>,
+    (sets, rewrite): (Option<&crate::compiler::parser::grouping_sets::Sets>, &Rewrite<'_, F>),
+) -> Result<Compiled> {
+    if sets.is_none() && rewrite.grouping.is_empty() {
+        return super::build_direct(group, groups, resolve, context);
+    }
+    let ordinary = sets.is_none().then(|| crate::compiler::parser::grouping_sets::Sets {
+        groups: vec![(0..groups.len()).collect()],
+        distinct: false,
+    });
+    let sets = sets.or(ordinary.as_ref()).context("missing grouping sets")?;
+
+    super::grouping_sets::build(
+        group,
+        &groups,
+        resolve,
+        &context,
+        super::grouping_sets::Layout {
+            sets,
+            keys: &rewrite.keys,
+            masks: &rewrite.grouping,
+            constant_slots: &rewrite.constant_slots,
+        },
+    )
+}
+
 const fn post_projection(targets: Vec<Target>) -> Body {
     Body {
         expansion: None,
         visible: targets.len(),
         targets,
         groups: Vec::new(),
+        grouping_sets: None,
         predicate: None,
         having: None,
     }
 }
-impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
+impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
+    fn new(groups: &[Key], body: &Body, resolve: &'a F, scope: Option<usize>) -> Result<Self> {
+        let mut computed = Vec::new();
+        let keys = super::keys(groups.to_vec(), resolve, &mut computed, scope)?;
+        let constant_slots = constant_slots(groups, &keys, body, resolve, (scope, &computed));
+        Ok(Self {
+            resolve,
+            constant_slots,
+            keys,
+            scope,
+            aggregates: Vec::new(),
+            visited: 0,
+            grouping: Vec::new(),
+        })
+    }
+
     fn targets(&mut self, targets: &[Target]) -> Result<Vec<Target>> {
         let mut outputs = Vec::new();
-        for target in targets {
+        for (index, target) in targets.iter().enumerate() {
             let value = match &target.value {
                 Value::Typed(value) => {
-                    let mut value = (**value).clone();
-                    self.expression(&mut value, true, 0)?;
+                    let value = if let Some(key) = self
+                        .constant_slots
+                        .iter()
+                        .position(|slot| *slot == GroupingSlot::ConstantTarget(index))
+                    {
+                        column('g', key)
+                    } else {
+                        let mut value = (**value).clone();
+                        self.expression(&mut value, true, 0)?;
+                        value
+                    };
                     Value::Typed(Box::new(value))
                 }
                 Value::Aggregate(value) if value.window.is_none() => {
@@ -218,9 +293,41 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
         self.aggregates.push(value);
         Ok(column('a', index))
     }
+    fn grouping_mask(&mut self, args: &[Node]) -> Result<Node> {
+        ensure!((1..=31).contains(&args.len()), "GROUPING requires 1 to 31 arguments");
+        let mut positions = Vec::new();
+        for arg in args {
+            ensure!(!bare_unknown(arg), "GROUPING arguments must match GROUP BY expressions");
+            let key =
+                crate::compiler::typed::computed(arg, self.resolve, &mut Vec::new(), self.scope)?;
+            positions.push(
+                self.keys
+                    .iter()
+                    .position(|candidate| *candidate == key)
+                    .context("GROUPING arguments must match GROUP BY expressions")?,
+            );
+        }
+        let index = self.grouping.len();
+        ensure!(index < 64, "GROUPING expression budget exceeded");
+        self.grouping.push(positions);
+        Ok(column('m', index))
+    }
+    fn grouped_expression(&self, value: &Node) -> Option<usize> {
+        let key =
+            crate::compiler::typed::computed(value, self.resolve, &mut Vec::new(), self.scope)
+                .ok()?;
+        self.keys
+            .iter()
+            .zip(&self.constant_slots)
+            .position(|(candidate, slot)| *candidate == key && *slot == GroupingSlot::Expression)
+    }
     fn expression(&mut self, value: &mut Node, windows: bool, depth: usize) -> Result<()> {
         self.visited += 1;
         ensure!(self.visited <= 1024 && depth < 64, "HAVING expression budget exceeded");
+        if let Some(NodeEnum::GroupingFunc(grouping)) = &value.node {
+            *value = self.grouping_mask(&grouping.args)?;
+            return Ok(());
+        }
         if syntax::group_aggregate(value) {
             let target = Node {
                 node: Some(NodeEnum::ResTarget(Box::new(pg::ResTarget {
@@ -234,11 +341,7 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
             *value = self.aggregate(*aggregate)?;
             return Ok(());
         }
-        let mut scratch = Vec::new();
-        if let Ok(key) =
-            crate::compiler::typed::computed(value, self.resolve, &mut scratch, self.scope)
-            && let Some(index) = self.keys.iter().position(|candidate| *candidate == key)
-        {
+        if let Some(index) = self.grouped_expression(value) {
             *value = column('g', index);
             return Ok(());
         }
@@ -352,4 +455,50 @@ impl<F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'_, F> {
         *key = crate::compiler::parser::scalar::key(&node)?;
         Ok(())
     }
+}
+
+// Unlike a SELECT target that becomes a grouping key, a GROUPING argument
+// has no context that coerces a bare unknown literal to text.
+fn bare_unknown(value: &Node) -> bool {
+    let mut value = value;
+    while let Some(NodeEnum::CollateClause(clause)) = &value.node {
+        let Some(input) = clause.arg.as_deref() else { return false };
+        value = input;
+    }
+    matches!(&value.node, Some(NodeEnum::AConst(c))
+        if c.isnull || matches!(c.val, Some(pg::a_const::Val::Sval(_))))
+}
+
+// PostgreSQL associates a constant grouping expression with a single target
+// entry. Equal constant expressions in other targets or HAVING stay constant.
+fn constant_slots(
+    groups: &[Key],
+    keys: &[ColumnRef],
+    body: &Body,
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    (scope, computed): (Option<usize>, &[crate::compiler::scalar::Computed]),
+) -> Vec<GroupingSlot> {
+    groups
+        .iter()
+        .zip(keys)
+        .map(|(key, column)| {
+            if !computed.iter().any(|item| item.column == *column && item.expression.is_constant())
+            {
+                return GroupingSlot::Expression;
+            }
+            if let Key::Target(_, index) = key {
+                return GroupingSlot::ConstantTarget(*index);
+            }
+            let unknown = bare_unknown(&key_node(key));
+            body.targets
+                .iter()
+                .position(|target| {
+                    let Value::Typed(node) = &target.value else { return false };
+                    bare_unknown(node) == unknown
+                        && crate::compiler::typed::computed(node, resolve, &mut Vec::new(), scope)
+                            .is_ok_and(|candidate| candidate == *column)
+                })
+                .map_or(GroupingSlot::HiddenConstant, GroupingSlot::ConstantTarget)
+        })
+        .collect()
 }

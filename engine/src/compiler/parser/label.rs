@@ -20,6 +20,7 @@ fn figure(value: &Node) -> Result<(u8, String)> {
         NodeEnum::FuncCall(call) => {
             (STRONG, names(&call.funcname)?.0.last().cloned().context("empty function label")?)
         }
+        NodeEnum::GroupingFunc(_) => (STRONG, "grouping".into()),
         NodeEnum::CoalesceExpr(_) => (STRONG, "coalesce".into()),
         NodeEnum::MinMaxExpr(expr) => {
             let name = match pg::MinMaxOp::try_from(expr.op)? {

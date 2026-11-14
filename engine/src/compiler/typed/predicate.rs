@@ -72,7 +72,11 @@ impl Typed {
         left.as_column()
     }
     pub(in crate::compiler) const fn as_column(&self) -> Option<&ColumnRef> {
-        if let Value::Column(column) = &self.value { Some(column) } else { None }
+        match &self.value {
+            Value::Column(column) => Some(column),
+            Value::Unary { input, negative: false } => input.as_column(),
+            _ => None,
+        }
     }
     pub(in crate::compiler) fn bound_modifier(&self) -> i32 {
         self.modifier(&|column| column.modifier)
@@ -113,7 +117,11 @@ impl Typed {
         }
     }
     pub(in crate::compiler) const fn as_integer_literal(&self) -> Option<i64> {
-        if let Value::Literal(value) = &self.value { *value } else { None }
+        match &self.value {
+            Value::Literal(value) => *value,
+            Value::Unary { input, negative: false } => input.as_integer_literal(),
+            _ => None,
+        }
     }
 }
 impl Typed {
