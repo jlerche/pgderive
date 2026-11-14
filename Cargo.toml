@@ -1,0 +1,4 @@
+[workspace]
+members = ["services/api"]
+exclude = ["engine"]
+resolver = "3"

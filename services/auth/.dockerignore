@@ -1,0 +1,6 @@
+**
+!package.json
+!package-lock.json
+!auth.mjs
+!migrate.mjs
+!server.mjs

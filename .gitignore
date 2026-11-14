@@ -11,3 +11,5 @@ __pycache__/
 /web/.wrangler/
 
 /.env
+
+/services/auth/node_modules/
