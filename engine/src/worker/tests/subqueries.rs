@@ -486,6 +486,8 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
     let native = native();
     for predicate in [
         "b.price>a.id",
+        "b.price::numeric > a.id::bigint",
+        "b.auction=a.other AND NOT (b.id::numeric < a.id)",
         "b.auction=a.other OR b.price>a.id",
         "NOT (b.auction=a.other AND b.price>a.id)",
         "b.auction=a.other AND NOT (b.id=a.id)",
@@ -508,6 +510,7 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
     for predicate in [
         "b.auction=a.other AND (b.price>a.id OR b.id>1)",
         "b.auction=a.other AND b.price+1>a.id",
+        "b.auction=a.other AND b.price>10/a.other",
         "b.auction=a.other+1 AND b.price>a.id",
     ] {
         let in_query = format!(

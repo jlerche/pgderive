@@ -218,20 +218,13 @@ fn validate_probe(
     Ok(())
 }
 fn validate_correlation(bound: &keys::Bound, quantified: bool, has_residual: bool) -> Result<()> {
-    ensure!(
-        !quantified
-            || if has_residual {
-                bound.predicate.as_ref().is_some_and(Predicate::is_comparison_expression)
-            } else {
-                bound.predicate.is_none()
-            },
-        "quantified correlation requires indexable equality"
-    );
-    ensure!(
-        !has_residual
-            || !bound.keys.is_empty()
-            || bound.predicate.as_ref().is_some_and(Predicate::is_comparison_expression),
-        "correlation without an indexable equality key requires ordinary comparisons"
-    );
+    if has_residual {
+        ensure!(
+            bound.predicate.as_ref().is_some_and(Predicate::is_total_comparison_expression),
+            "correlation residual requires total comparison operands"
+        );
+    } else if quantified {
+        ensure!(bound.predicate.is_none(), "quantified correlation requires indexable equality");
+    }
     Ok(())
 }

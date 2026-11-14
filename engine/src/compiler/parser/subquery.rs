@@ -285,9 +285,10 @@ impl Rewrite<'_> {
                 let mut query = (**query).clone();
                 query.target_list = vec![ast::target(probe.clone(), "")];
                 membership::clear_exists_clauses(&mut query)?;
+                let correlation = correlation::extract(&mut query, true)?;
                 scalar_input::validate(&query, 0)?;
                 // The constant, non-NULL RHS makes the mark two-valued.
-                self.membership(query, probe, None)
+                self.membership_mark(query, probe, None, correlation)
             }
             pg::SubLinkType::ExprSublink => {
                 ensure!(

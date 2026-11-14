@@ -86,8 +86,9 @@ correlation or a cross-domain date/timestamp comparison scans the RHS per outer 
 A correlated `IN` or `NOT IN` subquery can add up to eight residual comparisons
 with or without an indexable column equality. The six ordinary comparison operators may be combined with AND, OR,
 and NOT. A top-level equality can supply an index key. Equalities inside OR or
-NOT stay in the residual predicate. Each residual compares a column from each
-scope using the existing native comparison rules. The same correlation is supported for
+NOT stay in the residual predicate. Each residual compares operands from opposite scopes using the existing
+native comparison rules. Operands may use total conversions, such as
+widening an integer or converting it to numeric. The same correlation is supported for
 `EXISTS` and `NOT EXISTS` in projections and
 Boolean predicates. A standalone equality-only WHERE can use the dedicated
 presence operator. EXISTS discards row-preserving projections, including

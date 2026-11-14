@@ -464,18 +464,20 @@ impl Predicate {
         matches!(self.0, Expr::Compare(Compare::Eq, _, _))
     }
 
-    pub(super) fn is_comparison_expression(&self) -> bool {
-        fn only_comparisons(expr: &Expr) -> bool {
+    pub(super) fn is_total_comparison_expression(&self) -> bool {
+        fn total_comparisons(expr: &Expr) -> bool {
             match expr {
-                Expr::Compare(..) => true,
-                Expr::Not(term) => only_comparisons(term),
+                Expr::Compare(_, left, right) => {
+                    left.total_scalar_input() && right.total_scalar_input()
+                }
+                Expr::Not(term) => total_comparisons(term),
                 Expr::And(terms) | Expr::Or(terms) | Expr::Quals(terms) => {
-                    !terms.is_empty() && terms.iter().all(only_comparisons)
+                    !terms.is_empty() && terms.iter().all(total_comparisons)
                 }
                 _ => false,
             }
         }
-        only_comparisons(&self.0)
+        total_comparisons(&self.0)
     }
 
     pub(super) const fn new(expr: Expr) -> Self {

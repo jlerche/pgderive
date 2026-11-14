@@ -201,11 +201,6 @@ fn residual_term(operator: &str, operands: Operands, count: &mut usize) -> Resul
         "correlation residual requires ordinary comparisons"
     );
     ensure!(*count < 8, "subquery correlation residual comparison count exceeded");
-    ensure!(
-        super::scalar_input::column(&operands.outer)
-            && super::scalar_input::column(&operands.inner),
-        "correlation inequality requires plain columns"
-    );
     *count += 1;
     Ok(Residual::Comparison(Box::new(ResidualComparison {
         outer: operands.outer,
