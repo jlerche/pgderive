@@ -51,7 +51,13 @@ fn existence_source(select: &pg::SelectStmt, query: &pg::SelectStmt, anti: bool)
 }
 
 pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
-    super::validate_query(query)?;
+    let mut shape = query.clone();
+    ensure!(
+        shape.distinct_clause.iter().all(|key| key.node.is_none()),
+        "EXISTS does not support DISTINCT ON"
+    );
+    shape.distinct_clause.clear();
+    super::validate_query(&shape)?;
     ensure!(
         query.group_clause.is_empty()
             && query.having_clause.is_none()

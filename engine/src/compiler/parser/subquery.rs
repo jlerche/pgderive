@@ -280,6 +280,7 @@ impl Rewrite<'_> {
                 let probe = membership::existence_value(query)?;
                 let mut query = (**query).clone();
                 query.target_list = vec![ast::target(probe.clone(), "")];
+                query.distinct_clause.clear();
                 scalar_input::validate(&query, 0)?;
                 // The constant, non-NULL RHS makes the mark two-valued.
                 self.membership(query, probe, None)
@@ -351,14 +352,17 @@ impl Rewrite<'_> {
         if has_residual || !correlation.pairs.is_empty() {
             ensure!(
                 query.group_clause.is_empty()
-                    && query.distinct_clause.is_empty()
+                    && query.distinct_clause.iter().all(|key| key.node.is_none())
                     && query.having_clause.is_none()
                     && query.sort_clause.is_empty()
                     && query.limit_count.is_none()
                     && query.limit_offset.is_none()
                     && query.op == i32::from(pg::SetOperation::SetopNone),
-                "correlated IN requires a native projection/filter without grouping/DISTINCT/order/LIMIT"
+                "correlated IN requires a native projection/filter without grouping/DISTINCT ON/order/LIMIT"
             );
+            // A repeated RHS comparison cannot change a quantified truth value.
+            // Remove DISTINCT before adding the internal correlation columns.
+            query.distinct_clause.clear();
         }
         let mut conditions = Vec::new();
         for (index, (outer, inner)) in correlation.pairs.into_iter().enumerate() {

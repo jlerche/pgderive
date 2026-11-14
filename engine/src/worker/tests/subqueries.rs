@@ -534,10 +534,29 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
 }
 
 #[test]
+fn correlated_membership_elides_only_plain_distinct() -> Result<()> {
+    let native = native();
+    for comparison in ["IN", "NOT IN", "< ANY", ">= ALL"] {
+        let query = format!(
+            "SELECT a.other {comparison} (SELECT DISTINCT b.price FROM source.bid b
+             WHERE b.auction = a.id AND b.id > a.id) FROM source.auction a"
+        );
+        compile(&query, &native)?;
+        assert!(
+            compile(&query.replace("DISTINCT b.price", "DISTINCT ON (b.price) b.price"), &native)
+                .is_err()
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn exists_discards_row_preserving_targets() -> Result<()> {
     let native = native();
     for (projection, predicate) in [
         ("b.*", "b.auction=a.id"),
+        ("DISTINCT b.price", "b.auction=a.id"),
+        ("DISTINCT b.price", "b.price>a.id"),
         ("b.price, NULL, 1 OPERATOR(pg_catalog./) 0", "b.price>a.id"),
         ("", "b.price>a.id"),
     ] {

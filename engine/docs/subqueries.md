@@ -95,7 +95,9 @@ column lists, stars, literals, casts, and built-in arithmetic on integer literal
 PostgreSQL still validates the original select list during query registration.
 Aggregate and set-returning targets are outside this projection subset.
 A correlated RHS uses one native table, a simple projection, and supported
-local predicates. Qualify outer references in residual comparisons. Correlation
+local predicates. Plain SELECT DISTINCT is allowed because RHS duplicates do not
+affect membership or quantified truth values. DISTINCT ON still requires
+choosing a representative and remains outside this slice. Qualify outer references in residual comparisons. Correlation
 is limited to one outer query level.
 The membership probe must be safe to evaluate independently of the RHS.
 

@@ -45,6 +45,8 @@ class ResidualFixture(SqlFixture):
         if keyed:
             keys += ' AND b.auction=a.group_id'
         rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND NOT (a.ceiling<=b.cutoff AND (b.id<=a.floor OR b.id<a.id OR b.id=a.id))'
+        if mode in ('in', 'all-filter'):
+            rhs = rhs.replace('SELECT ', 'SELECT DISTINCT ', 1)
         if mode == 'quantified':
             projections = ['a.id']
             self.labels = ['id']
@@ -69,7 +71,7 @@ class ResidualFixture(SqlFixture):
         else:
             negation = 'NOT ' if mode == 'not-exists' else ''
             self.labels = ['id']
-            targets = 'b.price, NULL, 1 OPERATOR(pg_catalog./) 0' if mode == 'exists-projection' else 'b.*'
+            targets = 'b.price, NULL, 1 OPERATOR(pg_catalog./) 0' if mode == 'exists-projection' else 'DISTINCT b.*'
             exists = f'''EXISTS (SELECT {targets} FROM {b} b WHERE {keys}
                 AND NOT (b.cutoff>=a.ceiling AND (a.floor>=b.id OR b.id<a.id OR b.id=a.id)))'''
             if mode == 'exists-projection':
