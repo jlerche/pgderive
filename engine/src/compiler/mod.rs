@@ -90,3 +90,5 @@ pub fn compile(sql: &str, contract: &Contract) -> Result<Compiled> {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use typed::TEXT_OUTPUT_LIMIT;

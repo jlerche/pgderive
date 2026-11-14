@@ -27,7 +27,7 @@ mod types;
 mod visit;
 pub(super) use visit::Replace;
 
-const TEXT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
+pub const TEXT_OUTPUT_LIMIT: usize = 16 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Typed {
     oid: u32,
@@ -414,7 +414,7 @@ impl Typed {
             }
         }
     }
-    pub(in crate::compiler) const fn oid(&self) -> u32 {
+    pub(crate) const fn oid(&self) -> u32 {
         self.oid
     }
 }
@@ -496,6 +496,18 @@ impl Typed {
             return collation::explicit(clause, input);
         }
         bind(value, resolve, depth)
+    }
+
+    pub(super) fn string_agg_text(self) -> Result<Self> {
+        match self {
+            Self { value: Value::Collate { input, collation }, .. } => {
+                let input = input.string_agg_text()?;
+                Ok(Self { oid: 25, value: Value::Collate { input: Box::new(input), collation } })
+            }
+            value if value.oid == 0 => Ok(Self::null_text()),
+            value if value.oid == 705 => Ok(value.unknown_text()),
+            value => value.coerce_common(25),
+        }
     }
 
     pub(super) fn coerce_common(self, oid: u32) -> Result<Self> {

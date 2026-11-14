@@ -7,8 +7,8 @@ use crate::{
 use anyhow::{Context, Result};
 use std::fmt::Write;
 
-fn scalar(column: &ColumnRef, text: &str) -> Result<String> {
-    Ok(match crate::compiler::value::decode(column.oid, text)? {
+fn scalar(oid: u32, text: &str) -> Result<String> {
+    Ok(match crate::compiler::value::decode(oid, text)? {
         Value::Boolean(value) => if value { "1" } else { "0" }.into(),
         Value::Integer(value) => format!("{:016x}", super::super::order::biased(value, false)),
         Value::Timestamp(value) => {
@@ -26,7 +26,11 @@ fn scalar(column: &ColumnRef, text: &str) -> Result<String> {
             }
             text
         }
-        Value::Interval(_) => anyhow::bail!("interval ordering is unsupported"),
+        Value::Interval(value) => {
+            let (category, duration) = value.duration_key();
+            let key = u128::from_be_bytes(duration.to_be_bytes()) ^ (1_u128 << 127);
+            format!("{}{key:032x}", category + 1)
+        }
     })
 }
 
@@ -37,12 +41,23 @@ fn append(
     descending: bool,
     nulls_first: bool,
 ) -> Result<()> {
-    let Some(value) = row.get(&column.name).context("missing top-k ordering field")? else {
+    let value = row.get(&column.name).context("missing top-k ordering field")?;
+    append_scalar(token, column.oid, value.as_deref(), descending, nulls_first)
+}
+
+pub(in crate::worker::program) fn append_scalar(
+    token: &mut String,
+    oid: u32,
+    value: Option<&str>,
+    descending: bool,
+    nulls_first: bool,
+) -> Result<()> {
+    let Some(value) = value else {
         token.push(if nulls_first { '0' } else { '2' });
         return Ok(());
     };
     token.push('1');
-    let value = scalar(column, value)?;
+    let value = scalar(oid, value)?;
     for byte in value.bytes() {
         let byte = if descending { !byte } else { byte };
         write!(token, "{byte:02x}")?;

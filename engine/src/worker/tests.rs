@@ -503,4 +503,5 @@ mod grouping_sets;
 mod numeric_arithmetic;
 mod set_operations;
 mod sql_composition;
+mod string_agg;
 mod subqueries;

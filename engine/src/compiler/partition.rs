@@ -8,6 +8,7 @@ pub enum Function {
     Count,
     CountDistinct,
     Sum,
+    StringAgg,
     SumDistinct,
     Average,
     AverageDistinct,
@@ -78,7 +79,25 @@ pub struct Aggregate {
     pub(crate) navigation: Option<super::navigation::Navigation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) position: Option<super::typed::Typed>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) string_agg: Option<Box<StringAgg>>,
 }
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct StringAgg {
+    pub(crate) value: super::typed::Typed,
+    pub(crate) delimiter: super::typed::Typed,
+    pub(crate) order: Vec<AggregateOrder>,
+    pub(crate) distinct: bool,
+    pub(crate) collation: u32,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct AggregateOrder {
+    pub(crate) expression: super::typed::Typed,
+    pub(crate) descending: bool,
+    pub(crate) nulls_first: bool,
+}
+
 impl Aggregate {
     pub(super) fn output_column(&self) -> Result<ColumnRef> {
         let oid = self.navigation.as_ref().map_or_else(
@@ -95,7 +114,9 @@ impl Aggregate {
                 | Function::PercentRank
                 | Function::CumeDist
         );
-        let collation = if self.function.frame_value() {
+        let collation = if let Some(spec) = &self.string_agg {
+            spec.collation
+        } else if self.function.frame_value() {
             self.argument.as_ref().context("missing window value")?.collation
         } else {
             0
@@ -216,6 +237,7 @@ pub(in crate::compiler) fn result_type(
         | Function::DenseRank
         | Function::RowNumber => Ok(20),
         Function::Ntile => Ok(23),
+        Function::StringAgg => Ok(25),
         Function::PercentRank | Function::CumeDist => Ok(701),
         Function::BoolAnd | Function::BoolOr => {
             ensure!(

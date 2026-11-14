@@ -107,7 +107,7 @@ impl Interval {
             Self::PositiveInfinity
         })
     }
-    fn duration_key(self) -> (i8, i128) {
+    pub(crate) fn duration_key(self) -> (i8, i128) {
         match self {
             Self::NegativeInfinity => (-1, 0),
             Self::PositiveInfinity => (1, 0),

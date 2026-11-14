@@ -36,6 +36,14 @@ pub(in crate::compiler) struct Aggregate {
     pub window: Option<Window>,
     pub navigation: Option<super::navigation::Navigation>,
     pub position: Option<Box<Node>>,
+    pub string_agg: Option<StringAgg>,
+}
+#[derive(Clone)]
+pub(in crate::compiler) struct StringAgg {
+    pub value: Box<Node>,
+    pub delimiter: Box<Node>,
+    pub order: Vec<(Node, bool, bool)>,
+    pub distinct: bool,
 }
 #[derive(Clone)]
 pub(in crate::compiler) enum Argument {
@@ -163,6 +171,7 @@ fn group_function(name: &str) -> Option<Function> {
     Some(match name {
         "count" => Function::Count,
         "sum" => Function::Sum,
+        "string_agg" => Function::StringAgg,
         "avg" => Function::Average,
         "min" => Function::Min,
         "max" => Function::Max,
@@ -216,6 +225,9 @@ fn aggregate(
     function: Function,
     windows: &windows::Definitions<'_>,
 ) -> Result<Aggregate> {
+    if matches!(function, Function::StringAgg) {
+        return string_agg(call);
+    }
     let function = if call.agg_distinct { distinct_function(function, call)? } else { function };
     ensure!(
         !call.agg_within_group
@@ -271,7 +283,65 @@ fn aggregate(
         function,
         navigation,
         position: position.cloned().map(Box::new),
+        string_agg: None,
     })
+}
+fn string_agg(call: &pg::FuncCall) -> Result<Aggregate> {
+    ensure!(
+        !call.agg_within_group
+            && !call.func_variadic
+            && !call.agg_star
+            && call.over.is_none()
+            && call.funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall),
+        "unsupported STRING_AGG modifier"
+    );
+    let [value, delimiter] = call.args.as_slice() else {
+        anyhow::bail!("STRING_AGG requires a value and delimiter");
+    };
+    ensure!(!call.agg_order.is_empty(), "STRING_AGG requires aggregate ORDER BY");
+    let order = call
+        .agg_order
+        .iter()
+        .map(|sort| {
+            let (value, descending, nulls_first) = aggregate_sort_expression(sort)?;
+            Ok((value.clone(), descending, nulls_first))
+        })
+        .collect::<Result<_>>()?;
+    Ok(Aggregate {
+        function: Function::StringAgg,
+        argument: None,
+        filter: crate::compiler::syntax::predicate(call.agg_filter.as_deref())?,
+        window: None,
+        navigation: None,
+        position: None,
+        string_agg: Some(StringAgg {
+            value: Box::new(value.clone()),
+            delimiter: Box::new(delimiter.clone()),
+            order,
+            distinct: call.agg_distinct,
+        }),
+    })
+}
+fn aggregate_sort_expression(value: &Node) -> Result<(&Node, bool, bool)> {
+    let NodeEnum::SortBy(sort) = node(value)? else {
+        anyhow::bail!("invalid aggregate ordering");
+    };
+    if sort.use_op.is_empty() {
+        return sort_expression(value);
+    }
+    let names = super::expressions::names(&sort.use_op)?.0;
+    let descending = match super::expressions::builtin_name(&names) {
+        Some("<") => false,
+        Some(">") => true,
+        _ => anyhow::bail!("unsupported aggregate sort operator"),
+    };
+    let nulls_first = match pg::SortByNulls::try_from(sort.sortby_nulls)? {
+        pg::SortByNulls::SortbyNullsDefault => descending,
+        pg::SortByNulls::SortbyNullsFirst => true,
+        pg::SortByNulls::SortbyNullsLast => false,
+        pg::SortByNulls::Undefined => anyhow::bail!("unsupported NULL ordering"),
+    };
+    Ok((optional(sort.node.as_deref())?, descending, nulls_first))
 }
 fn integer_window_argument<'a>(
     call: &'a pg::FuncCall,

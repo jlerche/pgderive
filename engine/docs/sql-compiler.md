@@ -127,6 +127,7 @@ already resolved to text stays text in the outer operation. UNION, INTERSECT,
 and EXCEPT retain their existing DISTINCT and ALL multiplicities after coercion.
 
 See [Grouping sets](grouping-sets.md) for GROUPING SETS, ROLLUP, CUBE, and GROUPING().
+See [Ordered string_agg](string-agg.md) for text aggregation with aggregate ORDER BY.
 
 ## GROUP BY names and positions
 

@@ -60,6 +60,10 @@ impl Derivation {
 }
 
 impl Typed {
+    pub(in crate::compiler) const fn explicit_collation(&self) -> bool {
+        matches!(self.value, Value::Collate { .. })
+    }
+
     pub(in crate::compiler) fn collation(
         &self,
         resolve: &impl Fn(&ColumnRef) -> Result<u32>,

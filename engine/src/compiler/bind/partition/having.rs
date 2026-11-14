@@ -125,6 +125,7 @@ pub(super) fn build(
             window: None,
             navigation: None,
             position: None,
+            string_agg: None,
         });
     }
     let key_count = groups.len();

@@ -203,6 +203,13 @@ pub(super) fn fold_node(node: &mut Node) -> Result<()> {
         | Node::PrefixWindow { spec, .. } => {
             for aggregate in &mut spec.aggregates {
                 fold_optional(&mut aggregate.filter)?;
+                if let Some(spec) = &mut aggregate.string_agg {
+                    spec.value = spec.value.fold()?;
+                    spec.delimiter = spec.delimiter.fold()?;
+                    for key in &mut spec.order {
+                        key.expression = key.expression.fold()?;
+                    }
+                }
                 for expression in
                     [&mut aggregate.expression, &mut aggregate.position].into_iter().flatten()
                 {

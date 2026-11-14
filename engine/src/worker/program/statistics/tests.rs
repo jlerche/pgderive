@@ -28,6 +28,7 @@ fn spec(function: Function, oid: u32) -> Partition {
             field: "result".into(),
             navigation: None,
             position: None,
+            string_agg: None,
         }],
     }
 }

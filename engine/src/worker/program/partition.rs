@@ -3,6 +3,7 @@ mod range;
 mod ranking;
 mod selection;
 mod sliding;
+mod string_agg;
 use super::aggregate::{Linear, contribution};
 use crate::{
     compiler::{
@@ -31,7 +32,7 @@ pub(super) fn evaluate(
 ) -> Result<Bag> {
     let (limits, work) = context;
     match &spec.mode {
-        Mode::Grouped { keys } => grouped(spec, bag, keys, work),
+        Mode::Grouped { keys } => grouped(spec, bag, keys, (limits, work)),
         Mode::Ranking { order } => ranking::evaluate(spec, bag, order, (limits, work)),
         _ => framed(spec, bag, (limits, work), Frames::new(spec)),
     }
@@ -40,7 +41,7 @@ fn grouped(
     spec: &Partition,
     bag: &Bag,
     keys: &[ColumnRef],
-    work: &mut crate::engine::dataflow::PartitionWork,
+    (limits, work): (Limits, &mut crate::engine::dataflow::PartitionWork),
 ) -> Result<Bag> {
     let Some((((), first), _)) = bag.iter().next() else {
         return Batch::from_updates([]);
@@ -52,7 +53,12 @@ fn grouped(
         })
         .collect::<Result<Row>>()?;
     for aggregate in &spec.aggregates {
-        output.insert(aggregate.field.clone(), aggregate_value(aggregate, bag, work)?);
+        let value = if let Some(spec) = &aggregate.string_agg {
+            string_agg::evaluate(spec, aggregate.filter.as_ref(), bag, (limits, work))?
+        } else {
+            aggregate_value(aggregate, bag, work)?
+        };
+        output.insert(aggregate.field.clone(), value);
     }
     Batch::from_updates([(((), output), 1)])
 }

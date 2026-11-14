@@ -18,6 +18,7 @@ mod having;
 mod ordered;
 mod prefix;
 mod range;
+mod string_agg;
 mod windows;
 #[derive(Clone)]
 struct Body {
@@ -384,6 +385,12 @@ fn aggregate(
         .as_deref()
         .map(|ast| argument::integer_window_argument(ast, resolve))
         .transpose()?;
+    let string_agg = value
+        .string_agg
+        .as_ref()
+        .map(|parsed| string_agg::bind(parsed, resolve))
+        .transpose()?
+        .map(Box::new);
     let mut aggregate = Aggregate {
         function: value.function,
         expression,
@@ -392,6 +399,7 @@ fn aggregate(
         field: format!("@aggregate_{}", state.next),
         navigation,
         position,
+        string_agg,
     };
     let output = aggregate.output_column()?;
     // Integral extrema are invariant to duplicate inputs.

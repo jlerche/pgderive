@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::ensure;
 #[path = "topk_encoding.rs"]
-mod codec;
+pub(super) mod codec;
 use codec::encoding;
 const ORDER: &str = "\0ordered";
 pub(super) fn input(spec: &Spec) -> Project<Key, Row, Key, Row> {
