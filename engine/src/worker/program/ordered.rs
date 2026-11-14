@@ -43,6 +43,13 @@ fn measure(
         )?;
         return Ok((format!("0{order}"), Some(text.into())));
     }
+    if argument.oid == 1082 {
+        let date = crate::temporal::Date::parse(text)?;
+        return Ok((
+            token(date.sort_value(), aggregate.function == Function::Max),
+            Some(date.text()),
+        ));
+    }
     let temporal = matches!(argument.oid, 1114 | 1184);
     let value = if temporal {
         crate::temporal::Timestamp::parse(text, argument.oid)?.sort_value()

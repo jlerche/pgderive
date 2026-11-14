@@ -103,6 +103,7 @@ fn ordinary_value(
         let value = crate::compiler::value::decode(argument.oid, &text)?;
         let canonical = match &value {
             SortValue::Timestamp(value) => value.text(argument.oid)?,
+            SortValue::Date(value) => value.text(),
             SortValue::Integer(value) => value.to_string(),
             _ => text.into_owned(),
         };

@@ -233,8 +233,8 @@ pub(in crate::compiler) fn result_type(
     }
     if matches!(function, Function::MinDistinct | Function::MaxDistinct) {
         ensure!(
-            argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23 | 25 | 1043)),
-            "DISTINCT MIN/MAX requires integral or text input"
+            argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23 | 25 | 1043 | 1082)),
+            "DISTINCT MIN/MAX requires integral, date, or text input"
         );
     }
     match function {
@@ -279,7 +279,7 @@ pub(in crate::compiler) fn result_type(
                 return Ok(25);
             }
             ensure!(
-                matches!(column.oid, 20 | 21 | 23 | 1700 | 1114 | 1184),
+                matches!(column.oid, 20 | 21 | 23 | 1082 | 1700 | 1114 | 1184),
                 "unsupported MIN/MAX input type"
             );
             Ok(column.oid)

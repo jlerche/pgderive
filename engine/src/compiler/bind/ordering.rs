@@ -108,7 +108,7 @@ fn distinct_on(
     for index in indices {
         let column = &ir.output.columns.get(*index).context("missing DISTINCT ON key")?.column;
         ensure!(
-            crate::compiler::partition::orderable(column.oid) && column.oid != 1186,
+            crate::compiler::partition::orderable(column.oid),
             "unsupported DISTINCT ON key type"
         );
         ensure!(

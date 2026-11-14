@@ -13,9 +13,10 @@ and varchar keys. PostgreSQL's direction and NULL placement apply to
 each key, and peer groups use equality in the ordering domain. ROWS and
 row-position functions continue to require complete occurrence identity
 when row order affects the result. RANGE offsets retain their existing
-integral and timestamp input domains. Interval values can order DISTINCT ON
-queries, but interval DISTINCT ON keys require equality grouping support
-that is outside the current implementation.
+integral and timestamp input domains. Interval DISTINCT ON keys use PostgreSQL
+interval equality, including the equivalence between one month and 30 days.
+The selected row retains its original interval representation. Date MIN and
+MAX also support DISTINCT and preserve the full PostgreSQL date range.
 
 Pgderive compares C and POSIX text by UTF-8 bytes. Other locales need
 their PostgreSQL collation provider and version semantics, so variable

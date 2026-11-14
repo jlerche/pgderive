@@ -424,6 +424,10 @@ fn partition_by(
                     .map(|v| {
                         if key.oid == 1700 {
                             crate::numeric::Numeric::parse(v).map(|v| v.key())
+                        } else if key.oid == 1186 {
+                            let (category, duration) =
+                                crate::temporal::Interval::parse(v)?.duration_key();
+                            Ok(format!("{category}:{duration}"))
                         } else {
                             Ok(v.to_owned())
                         }

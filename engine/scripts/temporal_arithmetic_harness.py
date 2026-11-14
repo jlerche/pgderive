@@ -298,7 +298,6 @@ def qualify(output, command, mode):
                 'interval-group':f'SELECT iv FROM {b} GROUP BY iv',
                 'interval-distinct':f'SELECT DISTINCT iv FROM {b}',
                 'interval-set':f'SELECT iv FROM {b} UNION SELECT iv FROM {b}',
-                'date-minimum':f'SELECT MIN(d) FROM {b}',
             }.items():
                 fixture.rejected(command,label,query)
             for kind in ('INNER','LEFT','RIGHT','FULL'):
