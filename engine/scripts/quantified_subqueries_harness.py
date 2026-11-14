@@ -125,13 +125,21 @@ class QuantifiedFixture(SqlFixture):
                 self.sql(f"UPDATE {self.outer} SET probe=9007199254740993.000 WHERE id=1")
         key = 'a.correlation_key' if mode == 'correlated' else '1'
         self.value = 'term' if domains in ('C', 'POSIX', 'boolean', 'uuid', 'interval') or domains in TEMPORAL else 'price'
-        rhs = f'SELECT b.{self.value} FROM {self.inner} b WHERE b.auction={key}'
+        output = f'b.{self.value}'
+        if domains == 'integral' and group == 'lower':
+            output = f'{output}::numeric'
+        rhs = f'SELECT {output} FROM {self.inner} b WHERE b.auction={key}'
         projections = ['a.id']
         for label, symbol, _ in self.comparisons:
             for quantifier in ('ANY', 'ALL'):
                 name = f'{label}_{quantifier.lower()}'
                 self.labels.append(name)
-                projections.append(f'a.{self.probe} {symbol} {quantifier} ({rhs}) AS {name}')
+                probe = f'a.{self.probe}'
+                operator_sql = symbol
+                if domains == 'integral' and group == 'lower':
+                    probe = f'{probe}::numeric'
+                    operator_sql = f'OPERATOR(pg_catalog.{symbol})'
+                projections.append(f'{probe} {operator_sql} {quantifier} ({rhs}) AS {name}')
         self.query = f"SELECT {', '.join(projections)} FROM {self.outer} a"
 
     def verify(self):

@@ -140,8 +140,8 @@ fn validate_probe(
     (has_residual, quantified): (bool, bool),
 ) -> Result<()> {
     ensure!(
-        !has_residual || probe.total_scalar_input(),
-        "inequality correlation requires a total membership probe"
+        !(has_residual || quantified) || probe.total_scalar_input(),
+        "inequality correlation or quantified comparison requires a total membership probe"
     );
     if matches!(probe.oid(), 25 | 1043) {
         let resolve = |value: &ColumnRef| {

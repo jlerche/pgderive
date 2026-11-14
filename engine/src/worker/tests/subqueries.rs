@@ -579,6 +579,26 @@ fn quantified_inequality_rejects_unsupported_operands() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn quantified_accepts_total_conversions_and_catalog_operators() -> Result<()> {
+    let native = native();
+    let sql = "SELECT a.id::numeric OPERATOR(pg_catalog.<) ANY
+        (SELECT b.auction::bigint FROM source.bid b WHERE b.id > a.id)
+        FROM source.auction a";
+    compile(sql, &native)?;
+    for rejected in [
+        sql.replace("pg_catalog.<", "public.<"),
+        sql.replace("a.id::numeric", "(10 / a.id)::numeric"),
+        sql.replace("b.auction::bigint", "10 / b.auction"),
+    ] {
+        assert!(compile(&rejected, &native).is_err(), "{rejected}");
+    }
+    let aggregate = "SELECT a.id = ANY (SELECT count(*) FILTER (WHERE 1/(b.id-b.id)>0)
+        FROM source.bid b) FROM source.auction a";
+    assert!(compile(aggregate, &native).is_err());
+    Ok(())
+}
+
 #[tokio::test]
 async fn inequality_only_scan_obeys_contribution_limit() -> Result<()> {
     let native = native();

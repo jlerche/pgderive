@@ -124,8 +124,10 @@ compare by their 16 bytes. Dates, timestamps, and timestamps with time zone
 can be compared with each other in the engine's UTC session. A date compares
 as midnight, including when its finite value exceeds the timestamp range.
 Intervals compare by duration using PostgreSQL's 30-day month convention.
-A simple column or literal probe can appear
-in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
+A probe can appear in SELECT or WHERE and may use total scalar conversions,
+such as widening an integer to numeric. Built-in comparison operators can be
+qualified with pg_catalog. The RHS uses the nonaggregate scalar input shape
+above and can project total scalar conversions,
 with indexable column equalities, the residual comparisons described above, or both. Rows for which the residual expression
 is FALSE or NULL are absent from the quantified input.
 

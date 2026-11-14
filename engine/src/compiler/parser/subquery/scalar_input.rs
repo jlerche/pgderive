@@ -4,6 +4,14 @@ use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
 pub(super) fn validate(select: &pg::SelectStmt, depth: usize) -> Result<()> {
+    validate_scope(select, depth, false)
+}
+
+pub(super) fn validate_quantified(select: &pg::SelectStmt) -> Result<()> {
+    validate_scope(select, 0, true)
+}
+
+fn validate_scope(select: &pg::SelectStmt, depth: usize, quantified: bool) -> Result<()> {
     ensure!(depth < 16, "scalar RHS nesting exceeds limit");
     ensure!(
         select.with_clause.is_none()
@@ -19,7 +27,10 @@ pub(super) fn validate(select: &pg::SelectStmt, depth: usize) -> Result<()> {
     );
     for target in &select.target_list {
         let value = super::super::target(target)?;
-        ensure!(collated_plain(value)?, "nonaggregate scalar RHS requires a column or literal");
+        ensure!(
+            if quantified { conversion(value, 0)? } else { collated_plain(value)? },
+            "nonaggregate scalar RHS requires a column or literal"
+        );
     }
     for value in &select.values_lists {
         let NodeEnum::List(values) = node(value)? else {
@@ -46,9 +57,21 @@ pub(super) fn validate(select: &pg::SelectStmt, depth: usize) -> Result<()> {
         ensure!(plain(key)?, "nonaggregate scalar RHS distinct key requires a column or literal");
     }
     for child in [&select.larg, &select.rarg].into_iter().flatten() {
-        validate(child, depth + 1)?;
+        validate_scope(child, depth + 1, quantified)?;
     }
     Ok(())
+}
+
+// The bound expressions must additionally pass the runtime totality proof.
+// Preserve row count here and exclude calls that could introduce aggregates,
+// windows or set-returning operators into the independently maintained side.
+fn conversion(value: &Node, depth: usize) -> Result<bool> {
+    ensure!(depth < 32, "quantified RHS conversion depth exceeded");
+    match node(value)? {
+        NodeEnum::TypeCast(cast) => conversion(optional(cast.arg.as_deref())?, depth + 1),
+        NodeEnum::CollateClause(clause) => conversion(optional(clause.arg.as_deref())?, depth + 1),
+        _ => plain(value),
+    }
 }
 
 pub(super) const fn column(value: &Node) -> bool {

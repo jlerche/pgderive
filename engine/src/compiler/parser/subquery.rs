@@ -10,7 +10,7 @@ use super::{
     native_join::Tree,
 };
 use crate::compiler::syntax::Compare;
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 struct Rewrite<'a> {
     select: &'a pg::SelectStmt,
@@ -306,14 +306,9 @@ impl Rewrite<'_> {
                     return self.membership((**query).clone(), probe, None);
                 }
                 let operator = names(&link.oper_name)?;
-                let [operator] = operator.0.as_slice() else {
-                    anyhow::bail!("quantified comparison requires an unqualified operator");
-                };
+                let operator = super::expressions::builtin_name(&operator.0)
+                    .context("quantified comparison requires a built-in operator")?;
                 let comparison = Compare::parse(operator)?;
-                ensure!(
-                    scalar_input::collated_plain(&probe)?,
-                    "quantified probe requires a column or literal"
-                );
                 // ALL is the negation of ANY over the complementary strict comparison.
                 let comparison = if all { comparison.negate() } else { comparison };
                 let mark = self.membership((**query).clone(), probe, Some(comparison))?;
@@ -341,7 +336,11 @@ impl Rewrite<'_> {
         let alias = self.alias()?;
         let has_residual = !correlation.residuals.is_empty();
         if quantified.is_some() || has_residual {
-            scalar_input::validate(&query, 0)?;
+            if quantified.is_some() {
+                scalar_input::validate_quantified(&query)?;
+            } else {
+                scalar_input::validate(&query, 0)?;
+            }
             ensure!(
                 correlation.pairs.iter().all(
                     |(outer, inner)| scalar_input::column(outer) && scalar_input::column(inner)
