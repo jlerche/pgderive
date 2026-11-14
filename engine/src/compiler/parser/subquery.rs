@@ -284,9 +284,20 @@ impl Rewrite<'_> {
                 let probe = membership::existence_value(query)?;
                 let mut query = (**query).clone();
                 query.target_list = vec![ast::target(probe.clone(), "")];
+                let empty = query.limit_count.as_deref().is_some_and(membership::zero_limit);
                 membership::clear_exists_clauses(&mut query)?;
                 let correlation = correlation::extract(&mut query, true)?;
                 scalar_input::validate(&query, scalar_input::Input::Membership)?;
+                if empty {
+                    let mut local = query
+                        .where_clause
+                        .take()
+                        .map(|value| *value)
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    local.push(ast::boolean(false));
+                    query.where_clause = ast::logical(local, true);
+                }
                 // The constant, non-NULL RHS makes the mark two-valued.
                 self.membership_mark(query, probe, None, correlation)
             }

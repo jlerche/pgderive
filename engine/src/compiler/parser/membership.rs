@@ -62,7 +62,10 @@ pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
     );
     for target in &query.target_list {
         ensure!(
-            row_preserving(super::target(target)?, 0)?,
+            discardable(
+                super::target(target)?,
+                query.limit_count.as_deref().is_some_and(zero_limit)
+            )?,
             "EXISTS projection requires a supported row-preserving expression"
         );
     }
@@ -74,13 +77,21 @@ pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
     })
 }
 
-// With neither an offset nor WITH TIES, these clauses cannot turn a
-// nonempty set of rows into an empty set. Native prepare still validates them.
+fn discardable(value: &Node, total: bool) -> Result<bool> {
+    if total {
+        return Ok(matches!(node(value)?, NodeEnum::AConst(_) | NodeEnum::ColumnRef(_)));
+    }
+    row_preserving(value, 0)
+}
+
+// Native prepare validates the original clauses. A literal zero limit
+// becomes an empty RHS before the existence mark runs.
 pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<()> {
+    let total = query.limit_count.as_deref().is_some_and(zero_limit);
     if let Some(limit) = query.limit_count.as_deref() {
         ensure!(
-            query.limit_option == i32::from(pg::LimitOption::Count) && positive_limit(limit),
-            "EXISTS requires a positive literal LIMIT or LIMIT ALL"
+            query.limit_option == i32::from(pg::LimitOption::Count) && supported_limit(limit),
+            "EXISTS requires a nonnegative literal LIMIT or LIMIT ALL"
         );
         query.limit_count = None;
         query.limit_option = i32::from(pg::LimitOption::Default);
@@ -89,22 +100,28 @@ pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<()> {
         let NodeEnum::SortBy(sort) = node(sort)? else {
             anyhow::bail!("invalid EXISTS ORDER BY");
         };
+        ensure!(!total || sort.use_op.is_empty(), "EXISTS requires a default sort operator");
         ensure!(
-            row_preserving(optional(sort.node.as_deref())?, 0)?,
+            discardable(optional(sort.node.as_deref())?, total)?,
             "EXISTS ORDER BY requires a supported row-preserving expression"
         );
     }
     for key in query.distinct_clause.iter().filter(|key| key.node.is_some()) {
-        ensure!(row_preserving(key, 0)?, "EXISTS DISTINCT ON requires a row-preserving key");
+        ensure!(discardable(key, total)?, "EXISTS DISTINCT ON requires a row-preserving key");
     }
     query.distinct_clause.clear();
     query.sort_clause.clear();
     Ok(())
 }
 
-const fn positive_limit(node: &Node) -> bool {
+const fn supported_limit(node: &Node) -> bool {
     matches!(&node.node, Some(NodeEnum::AConst(value))
-        if value.isnull || matches!(&value.val, Some(pg::a_const::Val::Ival(n)) if n.ival > 0))
+        if value.isnull || matches!(&value.val, Some(pg::a_const::Val::Ival(n)) if n.ival >= 0))
+}
+
+pub(super) const fn zero_limit(node: &Node) -> bool {
+    matches!(&node.node, Some(NodeEnum::AConst(value))
+        if matches!(&value.val, Some(pg::a_const::Val::Ival(n)) if n.ival == 0))
 }
 
 // Dropping a scalar target does not change row existence. Calls are not
@@ -142,6 +159,9 @@ pub(super) fn uses_keyed_existence(select: &pg::SelectStmt, condition: &Node) ->
         return Ok(false);
     }
     let Some((query, _)) = exists(condition)? else { return Ok(false) };
+    if query.limit_count.as_deref().is_some_and(zero_limit) {
+        return Ok(false);
+    }
     super::subquery::correlation::only_cross_scope_equalities(query)
 }
 

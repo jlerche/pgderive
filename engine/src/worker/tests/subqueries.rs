@@ -590,7 +590,22 @@ fn exists_discards_row_preserving_targets() -> Result<()> {
         compile(&format!("SELECT a.id FROM source.auction a WHERE {exists}"), &native)?;
         compile(&format!("SELECT {exists} FROM source.auction a"), &native)?;
     }
-    for suffix in ["ORDER BY b.price LIMIT 1", "ORDER BY 1 LIMIT ALL", "LIMIT NULL"] {
+    for rhs in
+        ["SELECT 1/0 FROM source.bid b LIMIT 0", "SELECT 1 FROM source.bid b ORDER BY 1/0 LIMIT 0"]
+    {
+        let sql = format!("SELECT EXISTS ({rhs}) FROM source.auction");
+        assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
+    for negation in ["", "NOT "] {
+        compile(
+            &format!(
+                "SELECT a.id FROM source.auction a WHERE {negation}EXISTS
+                (SELECT 1 FROM source.bid b WHERE b.auction=a.id LIMIT 0)"
+            ),
+            &native,
+        )?;
+    }
+    for suffix in ["ORDER BY b.price LIMIT 1", "ORDER BY 1 LIMIT ALL", "LIMIT NULL", "LIMIT 0"] {
         compile(
             &format!(
                 "SELECT EXISTS (SELECT DISTINCT ON (b.price) b.price
@@ -600,7 +615,7 @@ fn exists_discards_row_preserving_targets() -> Result<()> {
         )?;
     }
     for suffix in [
-        "LIMIT 0",
+        "LIMIT -1",
         "OFFSET 1",
         "ORDER BY b.price FETCH FIRST 1 ROW WITH TIES",
         "ORDER BY generate_series(1,0)",
