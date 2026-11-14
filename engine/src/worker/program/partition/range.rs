@@ -134,7 +134,13 @@ impl Boundary {
 }
 
 fn order_value(row: &Ordered) -> Result<Option<i64>> {
-    row.0.first().copied().context("missing RANGE key")
+    use crate::compiler::value::Value;
+    match row.0.first().context("missing RANGE key")? {
+        None => Ok(None),
+        Some(Value::Integer(value)) => Ok(Some(*value)),
+        Some(Value::Timestamp(value)) => Ok(Some(value.sort_value())),
+        Some(_) => anyhow::bail!("unsupported RANGE offset key"),
+    }
 }
 
 fn oriented(value: i64, descending: bool) -> i128 {
@@ -175,7 +181,10 @@ mod tests {
         let rows = [(vec![None], crate::transaction::Row::new())];
         assert_eq!(cursor.bounds(&rows, &order, 0, &mut work)?, 0..1);
         let mut cursor = Cursor::temporal(&frame)?;
-        let rows = [(vec![Some(key)], crate::transaction::Row::new())];
+        let rows = [(
+            vec![Some(crate::compiler::value::Value::Timestamp(Timestamp::from_sort_value(key)))],
+            crate::transaction::Row::new(),
+        )];
         assert!(matches!(cursor.bounds(&rows, &order, 0, &mut work),
             Err(error) if error.is::<EvaluationFailed>()));
         Ok(())

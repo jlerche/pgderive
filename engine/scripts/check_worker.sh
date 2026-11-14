@@ -105,6 +105,7 @@ partition partition_compiler
 group-references group_references
 grouping-sets grouping_sets
 string-agg string_agg
+text-ordering text_ordering
 boolean-aggregates boolean_aggregate
 named-window named_window
 multiple-windows multiple_window

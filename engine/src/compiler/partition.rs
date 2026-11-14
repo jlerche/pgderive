@@ -46,6 +46,9 @@ impl Function {
         }
     }
 
+    pub(crate) const fn extremum(&self) -> bool {
+        matches!(self, Self::Min | Self::Max | Self::MinDistinct | Self::MaxDistinct)
+    }
     pub(crate) const fn boolean(&self) -> bool {
         matches!(self, Self::BoolAnd | Self::BoolOr)
     }
@@ -116,7 +119,7 @@ impl Aggregate {
         );
         let collation = if let Some(spec) = &self.string_agg {
             spec.collation
-        } else if self.function.frame_value() {
+        } else if self.function.frame_value() || self.function.extremum() && oid == 25 {
             self.argument.as_ref().context("missing window value")?.collation
         } else {
             0
@@ -222,12 +225,16 @@ pub(in crate::compiler) fn result_type(
     function: &Function,
     argument: Option<&ColumnRef>,
 ) -> Result<u32> {
-    if function.distinct_measure()
-        || matches!(function, Function::MinDistinct | Function::MaxDistinct)
-    {
+    if function.distinct_measure() {
         ensure!(
             argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23)),
             "DISTINCT aggregate requires an integral argument"
+        );
+    }
+    if matches!(function, Function::MinDistinct | Function::MaxDistinct) {
+        ensure!(
+            argument.is_some_and(|arg| matches!(arg.oid, 20 | 21 | 23 | 25 | 1043)),
+            "DISTINCT MIN/MAX requires integral or text input"
         );
     }
     match function {
@@ -268,9 +275,12 @@ pub(in crate::compiler) fn result_type(
         }
         Function::Min | Function::Max | Function::MinDistinct | Function::MaxDistinct => {
             let column = argument.context("missing aggregate argument")?;
+            if matches!(column.oid, 25 | 1043) {
+                return Ok(25);
+            }
             ensure!(
                 matches!(column.oid, 20 | 21 | 23 | 1700 | 1114 | 1184),
-                "MIN/MAX require integral or timestamp columns"
+                "unsupported MIN/MAX input type"
             );
             Ok(column.oid)
         }
@@ -279,3 +289,12 @@ pub(in crate::compiler) fn result_type(
 
 /// Private neutral occurrence that makes the SQL global group exist on empty input.
 pub const SEED: &str = "@sql_global_seed";
+
+pub(super) const fn orderable(oid: u32) -> bool {
+    matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1114 | 1184 | 1186 | 1700 | 2950)
+}
+
+pub(super) fn require_bytewise(collation: u32) -> Result<()> {
+    ensure!(matches!(collation, 950 | 951), "text ordering requires C/POSIX collation");
+    Ok(())
+}

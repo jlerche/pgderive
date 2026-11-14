@@ -297,8 +297,6 @@ def qualify(output, command, mode):
             for label,query in {
                 'interval-group':f'SELECT iv FROM {b} GROUP BY iv',
                 'interval-distinct':f'SELECT DISTINCT iv FROM {b}',
-                'interval-order':f'SELECT iv FROM {b} ORDER BY iv LIMIT 1',
-                'interval-hidden-order':f'SELECT iv FROM {b} ORDER BY id LIMIT 1',
                 'interval-set':f'SELECT iv FROM {b} UNION SELECT iv FROM {b}',
                 'date-minimum':f'SELECT MIN(d) FROM {b}',
             }.items():

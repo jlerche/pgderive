@@ -24,7 +24,8 @@ use selection::Selection;
 use sliding::Frames;
 use std::cmp::Ordering;
 type Bag = Batch<(), Row>;
-pub(super) type Ordered = (Vec<Option<i64>>, Row);
+type SortValue = crate::compiler::value::Value;
+pub(super) type Ordered = (Vec<Option<SortValue>>, Row);
 pub(super) fn evaluate(
     spec: &Partition,
     bag: &Bag,
@@ -99,29 +100,27 @@ fn ordinary_value(
             continue;
         };
         let argument = aggregate.argument.as_ref().context("missing aggregate argument")?;
-        let temporal = matches!(argument.oid, 1114 | 1184);
-        let (value, canonical) = if temporal {
-            let timestamp = crate::temporal::Timestamp::parse(&text, argument.oid)?;
-            (timestamp.sort_value(), timestamp.text(argument.oid)?)
-        } else {
-            let value = text.parse::<i64>()?;
-            (value, value.to_string())
+        let value = crate::compiler::value::decode(argument.oid, &text)?;
+        let canonical = match &value {
+            SortValue::Timestamp(value) => value.text(argument.oid)?,
+            SortValue::Integer(value) => value.to_string(),
+            _ => text.into_owned(),
         };
-        update_extremum(&mut extremum, value, &canonical, &aggregate.function);
+        update_extremum(&mut extremum, value, canonical, &aggregate.function);
     }
     Ok(extremum.map(|(_, text)| text))
 }
 
 fn update_extremum(
-    extremum: &mut Option<(i64, String)>,
-    value: i64,
-    text: &str,
+    extremum: &mut Option<(SortValue, String)>,
+    value: SortValue,
+    text: String,
     function: &Function,
 ) {
     if extremum.as_ref().is_none_or(|(prior, _)| {
         if matches!(function, Function::Min) { value < *prior } else { value > *prior }
     }) {
-        *extremum = Some((value, text.into()));
+        *extremum = Some((value, text));
     }
 }
 
@@ -141,7 +140,7 @@ fn ordered(
                 row.get(&key.column.name)
                     .context("missing sort field")?
                     .as_ref()
-                    .map(|value| super::order::value(value, key.column.oid))
+                    .map(|value| crate::compiler::value::decode(key.column.oid, value))
                     .transpose()
             })
             .collect::<Result<Vec<_>>>()?;
@@ -178,7 +177,11 @@ fn ordered(
     });
     Ok(rows)
 }
-pub(super) fn compare(left: &[Option<i64>], right: &[Option<i64>], order: &[Order]) -> Ordering {
+pub(super) fn compare<T: Ord>(
+    left: &[Option<T>],
+    right: &[Option<T>],
+    order: &[Order],
+) -> Ordering {
     for ((left, right), spec) in left.iter().zip(right).zip(order) {
         let comparison = match (left, right) {
             (None, None) => Ordering::Equal,

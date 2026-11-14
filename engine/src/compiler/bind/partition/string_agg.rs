@@ -57,10 +57,7 @@ fn matches_distinct(order: &Typed, cast: &Typed, raw: &Typed) -> bool {
 
 fn validate_order(expression: &Typed) -> Result<()> {
     ensure!(
-        matches!(
-            expression.oid(),
-            16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1114 | 1184 | 1186 | 1700 | 2950
-        ),
+        crate::compiler::partition::orderable(expression.oid()),
         "unsupported STRING_AGG ORDER BY type"
     );
     if matches!(expression.oid(), 25 | 1043) && !expression.is_constant() {

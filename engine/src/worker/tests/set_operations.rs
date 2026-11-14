@@ -357,7 +357,6 @@ fn temporal_set_operands_resolve_unknowns_pairwise() -> Result<()> {
         "SELECT NULL::interval UNION SELECT '30 days'",
         "SELECT NULL::interval INTERSECT ALL SELECT '30 days'",
         "SELECT NULL::interval EXCEPT ALL SELECT '30 days'",
-        "SELECT NULL::interval UNION ALL SELECT '1 mon' ORDER BY 1",
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");
     }

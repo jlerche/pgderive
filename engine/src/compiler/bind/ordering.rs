@@ -52,7 +52,7 @@ pub(super) fn apply(
             "COLLATE requires text ordering"
         );
         ensure!(
-            matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
+            crate::compiler::partition::orderable(column.oid),
             "unsupported ORDER BY native type"
         );
         ensure!(
@@ -76,14 +76,6 @@ pub(super) fn apply(
         .map(|column| column.column.clone())
         .filter(|column| seen.insert(column.name.clone()))
         .collect::<Vec<_>>();
-    ensure!(
-        (parsed.distinct_on.is_empty()
-            && order.is_empty()
-            && parsed.bounds.limit.is_none()
-            && parsed.bounds.offset == 0)
-            || identity.iter().all(|column| column.oid != 1186),
-        "interval ORDER BY/LIMIT tuple ordering is unsupported"
-    );
     if !parsed.distinct_on.is_empty() {
         distinct_on(ir, &parsed.distinct_on, &order, &identity)?;
     }
@@ -116,7 +108,7 @@ fn distinct_on(
     for index in indices {
         let column = &ir.output.columns.get(*index).context("missing DISTINCT ON key")?.column;
         ensure!(
-            matches!(column.oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1700 | 2950 | 1114 | 1184),
+            crate::compiler::partition::orderable(column.oid) && column.oid != 1186,
             "unsupported DISTINCT ON key type"
         );
         ensure!(

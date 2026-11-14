@@ -505,3 +505,4 @@ mod set_operations;
 mod sql_composition;
 mod string_agg;
 mod subqueries;
+mod text_ordering;

@@ -402,7 +402,7 @@ fn aggregate(
         string_agg,
     };
     let output = aggregate.output_column()?;
-    // Integral extrema are invariant to duplicate inputs.
+    // Extrema are invariant to duplicate inputs.
     if matches!(aggregate.function, Function::MinDistinct | Function::MaxDistinct) {
         aggregate.function = aggregate.function.ordinary();
     }
@@ -430,10 +430,6 @@ fn validate_order(
     identity: &crate::compiler::properties::Properties,
     partition: &[ColumnRef],
 ) -> Result<()> {
-    ensure!(
-        order.iter().all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
-        "positional window ordering requires integral or timestamp columns"
-    );
     let names = partition
         .iter()
         .map(|c| c.name.clone())
@@ -461,6 +457,16 @@ fn bind_window(
             Ok(Order { column: bind_key(name, resolve, computed, scope)?, descending, nulls_first })
         })
         .collect::<Result<Vec<_>>>()?;
+    for item in &order {
+        let column = &item.column;
+        ensure!(
+            crate::compiler::partition::orderable(column.oid),
+            "unsupported window ordering type"
+        );
+        if matches!(column.oid, 25 | 1043) {
+            crate::compiler::partition::require_bytewise(column.collation)?;
+        }
+    }
     let mode = match window.frame {
         syntax::WindowFrame::Range { start, end, exclusion } => {
             if context.1 {
@@ -469,14 +475,6 @@ fn bind_window(
             range::bind(start, end, order, (window.ranking, exclusion))?
         }
         syntax::WindowFrame::Position(frame) => {
-            if window.ranking || window.peers.is_some() {
-                ensure!(
-                    order
-                        .iter()
-                        .all(|value| matches!(value.column.oid, 20 | 21 | 23 | 1114 | 1184)),
-                    "peer ordering requires integral or timestamp columns"
-                );
-            }
             if context.1 || (!window.ranking && window.peers.is_none()) {
                 validate_order(&order, context.0, &window_keys)?;
             }

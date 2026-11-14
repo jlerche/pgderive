@@ -32,6 +32,9 @@ pub(super) fn bind(
             Some(Argument::Column(name)) => Some(resolve(&name)?),
             _ => None,
         };
+        if let Some(column) = &column {
+            validate_extremum(context.function, column.oid, false, || Ok(column.collation))?;
+        }
         return Ok(Bound { column, filter: filter.map(Predicate::new), expression: None });
     };
     let mut expression = if context.function.boolean() || context.function.frame_value() {
@@ -47,20 +50,23 @@ pub(super) fn bind(
         expression = expression.coerce_common(16)?;
     } else if expression.oid() == 0 {
         ensure!(
-            matches!(context.function, Function::Count),
+            matches!(context.function, Function::Count) || context.function.extremum(),
             "untyped NULL aggregate input requires an explicit cast"
         );
         expression = Typed::null_text();
     } else if expression.oid() == 705 {
         expression = expression.unknown_text();
     }
+    validate_extremum(context.function, expression.oid(), expression.is_constant(), || {
+        expression.collation(&|column| Ok(column.collation))
+    })?;
     if context.framed {
         let column = ColumnRef {
             name: "@frame_argument".into(),
             right: false,
             oid: expression.oid(),
             nullable: expression.nullable(),
-            collation: if context.function.frame_value() {
+            collation: if context.function.frame_value() || context.function.extremum() {
                 expression.collation(&|column| Ok(column.collation))?
             } else {
                 0
@@ -91,4 +97,16 @@ pub(super) fn integer_window_argument(
         "window function argument requires integer"
     );
     position.coerce_common(23)
+}
+
+fn validate_extremum(
+    function: &Function,
+    oid: u32,
+    constant: bool,
+    collation: impl FnOnce() -> Result<u32>,
+) -> Result<()> {
+    if function.extremum() && matches!(oid, 25 | 1043) && !constant {
+        crate::compiler::partition::require_bytewise(collation()?)?;
+    }
+    Ok(())
 }

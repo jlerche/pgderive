@@ -2571,10 +2571,10 @@
     "scripts/sql_compiler_harness.py": "d375949fcf1bd26bb83aa40eaa1d3e2787ad12c40e69f128e3b5d44ccee1e810",
     "scripts/sql_composition_harness.py": "72dab18750bbd6d81824713341d7543b55b2ac76379c576c79d38bd8467c8d98",
     "scripts/subquery_harness.py": "86ed2dc9f1e437018b32f1abb9c2febca123346a19d5e74e2c1d22f2a89637f9",
-    "scripts/temporal_arithmetic_harness.py": "eacc8ef3922f12b384b9b31ff357a1e6e7a0a8a583467742635a54efa73df8a4",
+    "scripts/temporal_arithmetic_harness.py": "2bec322d77d2a8b93895685b31758b80b7ad87398c17c5b1277d983596da9757",
     "scripts/temporal_oracle.py": "f709e469177d6a1f41ae6f35fd0bd8f1f25616354cc608df4b2ccb6fa0b769f6",
     "scripts/unordered_harness.py": "c0ec6814ed5c54000e12fc1f4785b9699822e8fcf263a26662b00a39f4d59eb6",
     "scripts/worker_harness.py": "005ab8aa6a1a488755973a0c728dbb41bd922d07d6065666379a26de047ff032"
   },
-  "fixture_sha256": "0f1611843f98dc6ed5f12c6aa773f17b035edea0d7da82b3000e092940e799f6"
+  "fixture_sha256": "78107b33a7eef0ceb0a09966b838ce7326fcc650d67c2d192db20eb4cd9e5ff3"
 }

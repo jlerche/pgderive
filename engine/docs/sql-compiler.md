@@ -128,6 +128,7 @@ and EXCEPT retain their existing DISTINCT and ALL multiplicities after coercion.
 
 See [Grouping sets](grouping-sets.md) for GROUPING SETS, ROLLUP, CUBE, and GROUPING().
 See [Ordered string_agg](string-agg.md) for text aggregation with aggregate ORDER BY.
+See [Text extrema and ordering](text-ordering.md) for text MIN/MAX and native sort domains.
 
 ## GROUP BY names and positions
 
@@ -942,7 +943,8 @@ offset range failures preserve the prior checkpoint and permit valid retry.
 ## DISTINCT aggregates
 
 Grouped and global COUNT, SUM, AVG, MIN and MAX accept DISTINCT over one
-int2, int4 or int8 column or supported scalar expression. Boolean bool_and,
+int2, int4 or int8 column or supported scalar expression. MIN and MAX also
+accept text or varchar with C/POSIX collation. Boolean bool_and,
 bool_or and every also accept DISTINCT. FILTER admits only true rows and runs
 before a computed argument. NULL inputs are ignored. Each distinct value
 contributes once, so retracting a duplicate changes the result only if it was
@@ -956,7 +958,7 @@ AVG returns numeric for all three widths. Multiple DISTINCT and ordinary
 aggregates can share a SELECT and feed a supported outer stage.
 
 DISTINCT with OVER, multiple arguments, aggregate ORDER BY, and nonintegral
-arguments to COUNT, SUM, AVG, MIN or MAX are outside this aggregate subset.
+arguments to COUNT, SUM or AVG are outside this aggregate subset.
 The [exact grouped membership path](#exact-grouped-distinct-membership) and
 affected-group recomputation both use the same result finalization.
 
@@ -1213,7 +1215,7 @@ one tick's `output_entries` and `contributions` budgets. A query whose aggregate
 and retained scales exceed the statistics width uses the affected-partition evaluator.
 
 MIN/MAX over numeric grouping keys use the existing affected-partition evaluator, including
-when the aggregate arguments are integral or timestamp values. Numeric-equal
+when the aggregate arguments are integral, timestamp, or text values. Numeric-equal
 keys such as `1.20` and `1.2000` share one group while retaining full raw row
 identity. The evaluator takes all grouping fields from one retained member;
 independent MIN/MAX winners cannot disagree about that member's display scale.
@@ -1571,7 +1573,7 @@ Other plans can differ, and these differences remain:
 [The M6 composition contract](m6-expression-composition.md) qualifies computed
 window aggregate arguments after FILTER and within frame membership. Computed
 partition keys use the existing deterministic scalar equality types; computed
-ordering results must be integral or timestamp. Positional windows still include
+ordering results use the supported native ordering types. Positional windows still include
 the complete raw logical occurrence key in partition/order. Valid empty frames
 return the aggregate's empty value without evaluating their argument. Ranking,
 RANGE and GROUPS retain peer semantics with computed keys.

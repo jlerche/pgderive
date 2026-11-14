@@ -1,4 +1,4 @@
-//! `PostgreSQL` integral/timestamp extrema through ordered full-tuple membership.
+//! `PostgreSQL` native extrema through ordered full-tuple membership.
 use super::relational::Key;
 use crate::{
     compiler::partition::{Function, Mode, Partition as Spec},
@@ -32,6 +32,17 @@ fn measure(
         return Ok(("1".into(), None));
     }
     let text = value.as_deref().context("missing nonNULL ordered value")?;
+    if matches!(argument.oid, 25 | 1043) {
+        let mut order = String::new();
+        super::topk::codec::append_scalar(
+            &mut order,
+            argument.oid,
+            Some(text),
+            matches!(aggregate.function, Function::Max),
+            false,
+        )?;
+        return Ok((format!("0{order}"), Some(text.into())));
+    }
     let temporal = matches!(argument.oid, 1114 | 1184);
     let value = if temporal {
         crate::temporal::Timestamp::parse(text, argument.oid)?.sort_value()
