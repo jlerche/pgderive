@@ -367,11 +367,12 @@ impl Expr {
                 .transpose(),
             Self::Null(value, not) => Ok(Some(value.is_null(rows)? != *not)),
             Self::Compare(op, left, right) => {
+                let oids = (left.oid(), right.oid());
                 let (Some(left), Some(right)) = (left.native_pair(rows)?, right.native_pair(rows)?)
                 else {
                     return Ok(None);
                 };
-                Ok(Some(compare(op, compare_order(&left, &right)?)))
+                Ok(Some(compare(op, predicate_order(&left, &right, oids)?)))
             }
             Self::Distinct { left, right, negated } => {
                 let distinct = match (left.native_pair(rows)?, right.native_pair(rows)?) {
@@ -414,6 +415,21 @@ fn logical(values: &[Expr], rows: (&Row, &Row), and: bool) -> Result<Option<bool
     }
     Ok((!unknown).then_some(and))
 }
+fn predicate_order(left: &Value, right: &Value, oids: (u32, u32)) -> Result<Ordering> {
+    // UTC conversion of a timestamp at the rounded upper edge overflows.
+    if let (Value::Timestamp(left), Value::Timestamp(right)) = (left, right)
+        && left.at_rounded_end()
+        && right.at_rounded_end()
+    {
+        match oids {
+            (1114, 1184) => return Ok(Ordering::Greater),
+            (1184, 1114) => return Ok(Ordering::Less),
+            _ => {}
+        }
+    }
+    compare_order(left, right)
+}
+
 pub(super) fn compare_order(left: &Value, right: &Value) -> Result<Ordering> {
     use crate::numeric::Numeric;
     Ok(match (left, right) {

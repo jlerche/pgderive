@@ -65,7 +65,14 @@ impl Date {
             i64::MAX => i128::MAX,
             micros => i128::from(micros),
         };
-        date.cmp(&timestamp)
+        // A finite date at this boundary overflows conversion to timestamp.
+        date.cmp(&timestamp).then_with(|| {
+            if right.at_rounded_end() {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
     }
     pub(crate) fn difference(self, right: Self) -> Result<i32> {
         ensure!(

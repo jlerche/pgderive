@@ -664,3 +664,31 @@ fn quantified_uuid_resolves_unknown_probes() -> Result<()> {
     )?;
     Ok(())
 }
+
+#[tokio::test]
+async fn quantified_temporal_preserves_mixed_types_and_edges() -> Result<()> {
+    let native = native();
+    let compiled = compile(
+        "SELECT date '5874897-12-31' > ANY (VALUES (timestamp '294276-12-31 00:00:00')) AS far_date,
+            date '5874897-12-31' <> ALL (VALUES (timestamptz 'infinity')) AS before_infinity,
+            timestamp '2000-01-01' = ANY (VALUES (timestamptz '1999-12-31 19:00:00-05')) AS same_instant,
+            '2000-01-01' = ANY (VALUES (date '2000-01-01')) AS unknown_date,
+            NULL >= ALL (SELECT timestamptz 'infinity' WHERE false) AS empty_all,
+            date '294277-01-01' > ANY (VALUES ('294276-12-31 23:59:59.999999'::timestamp(0))) AS rounded_date,
+            '294276-12-31 23:59:59.999999'::timestamp(0) > ALL
+                (VALUES ('294276-12-31 23:59:59.999999+00'::timestamptz(0))) AS rounded_timestamp
+         FROM source.auction a",
+        &native,
+    )?;
+    let names = compiled.output().columns.iter().map(|c| c.column.name.clone()).collect::<Vec<_>>();
+    let options = settings();
+    History::new((&native, &compiled, &options))
+        .run(
+            changes(),
+            |state| outputs(state, &names, |_, _| Ok(vec![Some("t".into()); 7])),
+            super::apply_joined,
+            |_| true,
+        )
+        .await?;
+    Ok(())
+}

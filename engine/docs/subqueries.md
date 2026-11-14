@@ -113,7 +113,10 @@ literals take the RHS type, and typed operands retain their types. Text and
 varchar operands may be mixed when the resolved comparison collation is
 deterministic C or POSIX. These comparisons use byte order and keep trailing
 spaces significant. Boolean comparisons order FALSE before TRUE. UUID values
-compare by their 16 bytes. A simple column or literal probe can appear
+compare by their 16 bytes. Dates, timestamps, and timestamps with time zone
+can be compared with each other in the engine's UTC session. A date compares
+as midnight, including when its finite value exceeds the timestamp range.
+A simple column or literal probe can appear
 in SELECT or WHERE. The RHS uses the nonaggregate scalar input shape above,
 with indexable column equalities, the inequalities described above, or both. Rows for which the inequality expression
 is FALSE or NULL are absent from the quantified input.

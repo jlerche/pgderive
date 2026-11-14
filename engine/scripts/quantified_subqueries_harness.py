@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare quantified subqueries with PostgreSQL and a raw-source oracle."""
 from collections import Counter
+from datetime import UTC, datetime
 from decimal import Decimal
 import json
 import operator
@@ -16,6 +17,25 @@ COMPARISONS = (
     ('ne', '!=', operator.ne), ('ge', '>=', operator.ge), ('gt', '>', operator.gt),
 )
 GROUPS = {'lower': COMPARISONS[:3], 'upper': COMPARISONS[3:]}
+
+
+TEMPORAL = {
+    'date': ('date', 'date'),
+    'timestamp': ('timestamp', 'timestamp'),
+    'timestamptz': ('timestamptz', 'timestamptz'),
+    'date-timestamptz': ('date', 'timestamptz'),
+    'timestamp-date': ('timestamp', 'date'),
+    'timestamptz-timestamp': ('timestamptz', 'timestamp'),
+}
+FIRST_DAY = '2000-01-01'
+NEXT_DAY = '2000-01-02'
+
+
+def utc_instant(value):
+    if value is None:
+        return None
+    instant = datetime.fromisoformat(value)
+    return instant.replace(tzinfo=UTC) if instant.tzinfo is None else instant.astimezone(UTC)
 
 
 def compare(probe, values, operation, all_rows):
@@ -67,6 +87,20 @@ class QuantifiedFixture(SqlFixture):
                 UPDATE {self.inner} SET term=CASE WHEN id=1
                     THEN '80000000-0000-0000-0000-000000000000'::uuid
                     ELSE 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid END WHERE id IN (1,2,4,6);''')
+        elif domains in TEMPORAL:
+            self.probe = 'probe'
+            probe_type, value_type = TEMPORAL[domains]
+            first = '1999-12-31 19:00:00-05' if probe_type == 'timestamptz' else FIRST_DAY
+            next_value = NEXT_DAY if value_type == 'date' else f'{FIRST_DAY} 00:00:00.000001'
+            first_value = FIRST_DAY
+            if value_type == 'timestamptz':
+                first_value = f'{FIRST_DAY} 00:00:00+00'
+                next_value += '+00'
+            self.sql(f'''ALTER TABLE {self.outer} ADD COLUMN probe {probe_type};
+                ALTER TABLE {self.inner} ADD COLUMN term {value_type};
+                UPDATE {self.outer} SET probe='{first}' WHERE id<>5;
+                UPDATE {self.inner} SET term='{first_value}' WHERE id=1;
+                UPDATE {self.inner} SET term='{next_value}' WHERE id IN (2,4,6);''')
         elif domains != 'integral':
             self.probe = 'probe'
             probe_type = 'bigint' if domains == 'integral-numeric' else 'numeric'
@@ -83,7 +117,7 @@ class QuantifiedFixture(SqlFixture):
             if domains == 'numeric':
                 self.sql(f"UPDATE {self.outer} SET probe=9007199254740993.000 WHERE id=1")
         key = 'a.correlation_key' if mode == 'correlated' else '1'
-        self.value = 'term' if domains in ('C', 'POSIX', 'boolean', 'uuid') else 'price'
+        self.value = 'term' if domains in ('C', 'POSIX', 'boolean', 'uuid') or domains in TEMPORAL else 'price'
         rhs = f'SELECT b.{self.value} FROM {self.inner} b WHERE b.auction={key}'
         projections = ['a.id']
         for label, symbol, _ in self.comparisons:
@@ -106,6 +140,9 @@ class QuantifiedFixture(SqlFixture):
             if self.domains == 'uuid':
                 probe = None if probe is None else UUID(probe)
                 values = [None if value is None else UUID(value) for value in values]
+            elif self.domains in TEMPORAL:
+                probe = utc_instant(probe)
+                values = list(map(utc_instant, values))
             truth = tuple(
                 compare(probe, values, operation, all_rows)
                 for _, _, operation in self.comparisons for all_rows in (False, True)
@@ -119,6 +156,10 @@ def qualify(output, command, mode, group, domains):
     a, b = fixture.outer, fixture.inner
     new_value = {'boolean': 'true', 'uuid': 'ffffffff-ffff-ffff-ffff-ffffffffffff'}.get(domains, '2')
     new_probe = '80000000-0000-0000-0000-000000000000' if domains == 'uuid' else '1'
+    if domains in TEMPORAL:
+        probe_type, value_type = TEMPORAL[domains]
+        new_value = f'{NEXT_DAY} 00:00:00+00' if value_type == 'timestamptz' else NEXT_DAY
+        new_probe = f'{FIRST_DAY} 00:00:00+00' if probe_type == 'timestamptz' else FIRST_DAY
     with fixture.managed():
         fixture.run_history(command, History(
             changes=[
@@ -147,4 +188,8 @@ if __name__ == '__main__':
                    ('correlated', 'C'), ('uncorrelated', 'POSIX'),
                    ('correlated', 'boolean'), ('uncorrelated', 'boolean'),
                    ('correlated', 'uuid'), ('uncorrelated', 'uuid'),
+                   ('correlated', 'date'), ('correlated', 'timestamp'),
+                   ('uncorrelated', 'timestamptz'),
+                   ('correlated', 'date-timestamptz'), ('uncorrelated', 'timestamp-date'),
+                   ('uncorrelated', 'timestamptz-timestamp'),
                ) for group in GROUPS), qualify)

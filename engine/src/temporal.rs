@@ -135,6 +135,9 @@ impl Timestamp {
         let micros = precision.round(self.0).context("timestamp out of range")?;
         if micros == END { Ok(Self(END)) } else { Self::from_micros(micros) }
     }
+    pub(crate) const fn at_rounded_end(self) -> bool {
+        self.0 == END
+    }
     pub(crate) fn cast_zone(self) -> Result<Self> {
         // The timezone conversion checks the ordinary timestamp range even in UTC.
         ensure!(self.0 != END, "timestamp out of range");
