@@ -55,17 +55,15 @@ pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
     clear_exists_clauses(&mut shape)?;
     super::validate_query(&shape)?;
     ensure!(
-        query.group_clause.is_empty()
+        query.group_clause.iter().all(|key| super::expressions::column(key).is_ok())
             && query.having_clause.is_none()
             && query.window_clause.is_empty(),
-        "EXISTS grouping/HAVING/WINDOW unsupported"
+        "EXISTS requires plain column groups without HAVING or WINDOW"
     );
     for target in &query.target_list {
+        let value = super::target(target)?;
         ensure!(
-            discardable(
-                super::target(target)?,
-                query.limit_count.as_deref().is_some_and(zero_limit)
-            )?,
+            discardable(value, requires_total_discarded_expressions(query))?,
             "EXISTS projection requires a supported row-preserving expression"
         );
     }
@@ -75,6 +73,14 @@ pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
             ..pg::AConst::default()
         })),
     })
+}
+
+// PostgreSQL can evaluate projection and ordering when OFFSET or GROUP BY
+// prevents its ordinary EXISTS simplification.
+fn requires_total_discarded_expressions(query: &pg::SelectStmt) -> bool {
+    query.limit_offset.is_some()
+        || !query.group_clause.is_empty()
+        || query.limit_count.as_deref().is_some_and(zero_limit)
 }
 
 fn discardable(value: &Node, total: bool) -> Result<bool> {
@@ -87,7 +93,18 @@ fn discardable(value: &Node, total: bool) -> Result<bool> {
 // Native prepare validates the original clauses. A literal zero limit
 // becomes an empty RHS before the existence mark runs.
 pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<()> {
-    let total = query.limit_count.as_deref().is_some_and(zero_limit);
+    let total = requires_total_discarded_expressions(query);
+    if let Some(offset) = query.limit_offset.as_deref() {
+        ensure!(
+            zero_limit(offset)
+                || matches!(&offset.node, Some(NodeEnum::AConst(value)) if value.isnull),
+            "EXISTS requires OFFSET zero or NULL"
+        );
+        query.limit_offset = None;
+        if query.limit_count.is_none() {
+            query.limit_option = i32::from(pg::LimitOption::Default);
+        }
+    }
     if let Some(limit) = query.limit_count.as_deref() {
         ensure!(
             query.limit_option == i32::from(pg::LimitOption::Count) && supported_limit(limit),
@@ -110,6 +127,7 @@ pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<()> {
         ensure!(discardable(key, total)?, "EXISTS DISTINCT ON requires a row-preserving key");
     }
     query.distinct_clause.clear();
+    query.group_clause.clear();
     query.sort_clause.clear();
     Ok(())
 }

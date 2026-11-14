@@ -110,6 +110,9 @@ class ResidualFixture(SqlFixture):
             if mode == 'exists':
                 exists = exists.replace('DISTINCT b.*', 'DISTINCT ON (b.price) b.price')
                 exists = exists.removesuffix(')') + ' ORDER BY b.price, b.id LIMIT 1)'
+            if mode == 'exists-group':
+                exists = exists.replace('DISTINCT b.*', 'b.price')
+                exists = exists.removesuffix(')') + ' GROUP BY b.price OFFSET 0)'
             if mode == 'exists-zero':
                 empty = exists.removesuffix(')') + ' LIMIT 0)'
                 self.labels = ['id', 'present', 'absent']
@@ -174,7 +177,7 @@ class ResidualFixture(SqlFixture):
                 memory[(row['id'], False, True)] += 1
             elif self.mode == 'exists-projection':
                 memory[(row['id'], bool(values), not values)] += 1
-            elif bool(values) == (self.mode == 'exists'):
+            elif bool(values) == (self.mode in ('exists', 'exists-group')):
                 memory[(row['id'],)] += 1
         self.verify_memory(memory)
 
@@ -203,6 +206,6 @@ def qualify(output, command, mode, keyed):
 
 
 if __name__ == '__main__':
-    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined', 'exists-zero')
+    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined', 'exists-zero', 'exists-group')
     run_cases(((mode if keyed else f'{mode}-inequality-only', mode, keyed)
                for keyed in (True, False) for mode in modes), qualify)

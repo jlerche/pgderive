@@ -590,11 +590,22 @@ fn exists_discards_row_preserving_targets() -> Result<()> {
         compile(&format!("SELECT a.id FROM source.auction a WHERE {exists}"), &native)?;
         compile(&format!("SELECT {exists} FROM source.auction a"), &native)?;
     }
-    for rhs in
-        ["SELECT 1/0 FROM source.bid b LIMIT 0", "SELECT 1 FROM source.bid b ORDER BY 1/0 LIMIT 0"]
-    {
+    for rhs in [
+        "SELECT 1/0 FROM source.bid b LIMIT 0",
+        "SELECT 1 FROM source.bid b ORDER BY 1/0 LIMIT 0",
+        "SELECT b.price::smallint FROM source.bid b OFFSET 0",
+        "SELECT b.price::smallint FROM source.bid b OFFSET NULL",
+        "SELECT b.price FROM source.bid b GROUP BY b.price ORDER BY b.price::smallint",
+    ] {
         let sql = format!("SELECT EXISTS ({rhs}) FROM source.auction");
         assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
+    for clause in ["GROUP BY b.price", "GROUP BY b.price OFFSET 0", "OFFSET NULL"] {
+        let sql = format!(
+            "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id {clause})
+            FROM source.auction a"
+        );
+        compile(&sql, &native).map_err(|error| error.context(sql))?;
     }
     for negation in ["", "NOT "] {
         compile(
@@ -615,6 +626,9 @@ fn exists_discards_row_preserving_targets() -> Result<()> {
         )?;
     }
     for suffix in [
+        "GROUP BY ()",
+        "GROUP BY b.price HAVING count(*) > 1",
+        "GROUP BY b.price / 0",
         "LIMIT -1",
         "OFFSET 1",
         "ORDER BY b.price FETCH FIRST 1 ROW WITH TIES",
