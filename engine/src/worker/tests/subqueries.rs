@@ -466,6 +466,11 @@ fn explicit_quantified_equality_rejects_unsupported_operands() {
     for quantifier in ["= ANY", "<> ALL"] {
         for (probe, rhs) in [
             ("a.category", "SELECT 'x'::text"),
+            ("'invalid'", "SELECT '00000000-0000-0000-0000-000000000001'::uuid"),
+            (
+                "'00000000-0000-0000-0000-000000000001'::text",
+                "SELECT '00000000-0000-0000-0000-000000000001'::uuid",
+            ),
             ("1::double precision", "SELECT 1.0"),
             ("a.other", "SELECT b.price + 1 FROM source.bid b"),
             ("a.other", "SELECT b.price FROM source.bid b WHERE b.auction=a.other + 1"),
@@ -645,5 +650,17 @@ fn quantified_boolean_resolves_unknown_probes_and_rejects_other_types() -> Resul
     ] {
         assert!(compile(&format!("SELECT {expression}"), &native).is_err(), "{expression}");
     }
+    Ok(())
+}
+
+#[test]
+fn quantified_uuid_resolves_unknown_probes() -> Result<()> {
+    let native = native();
+    compile(
+        "SELECT '{80000000000000000000000000000000}' = ANY
+            (VALUES ('80000000-0000-0000-0000-000000000000'::uuid), (NULL)),
+            NULL < ALL (SELECT 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid WHERE FALSE)",
+        &native,
+    )?;
     Ok(())
 }

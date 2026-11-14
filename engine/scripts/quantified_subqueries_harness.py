@@ -4,6 +4,7 @@ from collections import Counter
 from decimal import Decimal
 import json
 import operator
+from uuid import UUID
 
 from native_mv_oracle import binary_difference, expected
 from sql_compiler_harness import SqlFixture
@@ -30,6 +31,7 @@ class QuantifiedFixture(SqlFixture):
     def __init__(self, output, mode, group, domains):
         super().__init__(output, False)
         self.mode = mode
+        self.domains = domains
         self.comparisons = GROUPS[group]
         self.labels = ['id']
         self.outer = self.name + '.auction'
@@ -55,6 +57,16 @@ class QuantifiedFixture(SqlFixture):
                 ALTER TABLE {self.inner} ADD COLUMN term boolean;
                 UPDATE {self.outer} SET probe=(id % 2 = 0) WHERE id<>5;
                 UPDATE {self.inner} SET term=(id<>1) WHERE id IN (1,2,4,6);''')
+        elif domains == 'uuid':
+            self.probe = 'probe'
+            self.sql(f'''ALTER TABLE {self.outer} ADD COLUMN probe uuid;
+                ALTER TABLE {self.inner} ADD COLUMN term uuid;
+                UPDATE {self.outer} SET probe=CASE WHEN id=1
+                    THEN '80000000-0000-0000-0000-000000000000'::uuid
+                    ELSE '00000000-0000-0000-0000-000000000001'::uuid END WHERE id<>5;
+                UPDATE {self.inner} SET term=CASE WHEN id=1
+                    THEN '80000000-0000-0000-0000-000000000000'::uuid
+                    ELSE 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid END WHERE id IN (1,2,4,6);''')
         elif domains != 'integral':
             self.probe = 'probe'
             probe_type = 'bigint' if domains == 'integral-numeric' else 'numeric'
@@ -71,7 +83,7 @@ class QuantifiedFixture(SqlFixture):
             if domains == 'numeric':
                 self.sql(f"UPDATE {self.outer} SET probe=9007199254740993.000 WHERE id=1")
         key = 'a.correlation_key' if mode == 'correlated' else '1'
-        self.value = 'term' if domains in ('C', 'POSIX', 'boolean') else 'price'
+        self.value = 'term' if domains in ('C', 'POSIX', 'boolean', 'uuid') else 'price'
         rhs = f'SELECT b.{self.value} FROM {self.inner} b WHERE b.auction={key}'
         projections = ['a.id']
         for label, symbol, _ in self.comparisons:
@@ -90,8 +102,12 @@ class QuantifiedFixture(SqlFixture):
         for row in outer:
             key = row['correlation_key'] if self.mode == 'correlated' else 1
             values = [item[self.value] for item in inner if key is not None and item['auction'] == key]
+            probe = row[self.probe]
+            if self.domains == 'uuid':
+                probe = None if probe is None else UUID(probe)
+                values = [None if value is None else UUID(value) for value in values]
             truth = tuple(
-                compare(row[self.probe], values, operation, all_rows)
+                compare(probe, values, operation, all_rows)
                 for _, _, operation in self.comparisons for all_rows in (False, True)
             )
             memory[(row['id'], *truth)] += 1
@@ -101,14 +117,15 @@ class QuantifiedFixture(SqlFixture):
 def qualify(output, command, mode, group, domains):
     fixture = QuantifiedFixture(output, mode, group, domains)
     a, b = fixture.outer, fixture.inner
-    new_value = "true" if domains == "boolean" else "2"
+    new_value = {'boolean': 'true', 'uuid': 'ffffffff-ffff-ffff-ffff-ffffffffffff'}.get(domains, '2')
+    new_probe = '80000000-0000-0000-0000-000000000000' if domains == 'uuid' else '1'
     with fixture.managed():
         fixture.run_history(command, History(
             changes=[
                 f'DELETE FROM {b} WHERE id IN (1,2)',
                 f'DELETE FROM {b} WHERE id=4; UPDATE {a} SET {fixture.probe}=NULL WHERE id=1',
                 f'DELETE FROM {b} WHERE id=3',
-                f"INSERT INTO {b}(id,auction,{fixture.value}) VALUES(7,1,'{new_value}'),(8,1,'{new_value}'); UPDATE {a} SET {fixture.probe}='1' WHERE id=1",
+                f"INSERT INTO {b}(id,auction,{fixture.value}) VALUES(7,1,'{new_value}'),(8,1,'{new_value}'); UPDATE {a} SET {fixture.probe}='{new_probe}' WHERE id=1",
             ],
             final=f'UPDATE {b} SET auction=4 WHERE id IN (7,8)',
             normalized=fixture.query.replace('ANY', 'SOME').replace('!=', '<>'),
@@ -129,4 +146,5 @@ if __name__ == '__main__':
                    ('correlated', 'numeric-integral'),
                    ('correlated', 'C'), ('uncorrelated', 'POSIX'),
                    ('correlated', 'boolean'), ('uncorrelated', 'boolean'),
+                   ('correlated', 'uuid'), ('uncorrelated', 'uuid'),
                ) for group in GROUPS), qualify)

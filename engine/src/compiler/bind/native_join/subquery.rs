@@ -122,8 +122,8 @@ fn quantified_probe(
         (matches!(rhs_oid, 20 | 21 | 23 | 1700)
             && (unknown || matches!(probe_oid, 20 | 21 | 23 | 1700)))
             || (matches!(rhs_oid, 25 | 1043) && (unknown || matches!(probe_oid, 25 | 1043)))
-            || (rhs_oid == 16 && (unknown || probe_oid == 16)),
-        "quantified comparisons require two exact numeric, two text, or two Boolean operands"
+            || (matches!(rhs_oid, 16 | 2950) && (unknown || probe_oid == rhs_oid)),
+        "quantified comparisons require compatible exact numeric, text, Boolean, or UUID operands"
     );
     if matches!(probe.oid(), 0 | 705) { probe.coerce_common(rhs_oid) } else { Ok(probe) }
 }
