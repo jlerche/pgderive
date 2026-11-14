@@ -53,7 +53,7 @@ def main():
             destination=output/label; destination.mkdir()
             environment['CARGO_TARGET_DIR']=str(build_root/label)
             manifest[label]=build(source,destination,environment)
-    sources=[root/'Cargo.toml',root/'Cargo.lock',*sorted((root/'src').rglob('*.rs')),*sorted((root/'scripts').glob('*sink*.py'))]
+    sources=[root/'Cargo.toml',root/'Cargo.lock',root/'worker/Cargo.toml',root/'worker/src/main.rs',*sorted((root/'src').rglob('*.rs')),*sorted((root/'scripts').glob('*sink*.py'))]
     manifest['source_sha256']={str(path.relative_to(root)):hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}
     (output/'build.json').write_text(json.dumps(manifest,indent=2)+'\n')
     live=output/'live'; live.mkdir()

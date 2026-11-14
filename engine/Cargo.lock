@@ -1620,6 +1620,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgderive-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pgderive",
+ "tokio",
+]
+
+[[package]]
 name = "pgwire-replication"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -54,7 +54,7 @@ def verify(output, counts=LIVE_COUNTS):
 def main(output, binaries):
     count = verify(output)
     root = pathlib.Path.cwd()
-    files = [root/'Cargo.lock', root/'Cargo.toml', root/'docs/postgres-support-matrix.json', *map(pathlib.Path, binaries),
+    files = [root/'Cargo.lock',root/'worker/Cargo.toml',root/'worker/src/main.rs', root/'Cargo.toml', root/'docs/postgres-support-matrix.json', *map(pathlib.Path, binaries),
              *sorted((root/'src').rglob('*.rs')), *sorted((root/'src').rglob('*.sql')),
              *sorted((root/'scripts').glob('*.py')), *sorted((root/'scripts').glob('*.json')), *sorted((root/'scripts').glob('*.sh')),
              *sorted((root/'queries').rglob('*.sql')),

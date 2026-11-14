@@ -1,0 +1,18 @@
+[package]
+name = "pgderive-worker"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[[bin]]
+name = "pgderive_worker"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+pgderive = { path = ".." }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

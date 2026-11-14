@@ -1,4 +1,4 @@
-//! Run a native-bound, durable grouped inner-join worker.
+//! Run the Pgderive data-plane worker.
 use anyhow::{Context, Result, ensure};
 #[tokio::main]
 async fn main() -> Result<()> {

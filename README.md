@@ -20,8 +20,10 @@ port. Use the `localhost` hostname for Better Auth's configured origin.
 - `services/api` runs Axum. `GET /api/v1/organizations/{id}` returns the
   authenticated user's organization context after Envoy verifies membership.
 - `deploy/envoy` contains routing and the external authorization configuration.
-- `engine` contains the engine and existing worker. It has its own Cargo
-  manifest and qualification harness. The root Cargo workspace builds the API.
+- `engine` contains the `pgderive` library and CLI. The separate
+  `engine/worker` package imports that library and builds `pgderive_worker`.
+  Both use the engine workspace and its qualification harness. The root Cargo
+  workspace builds the API.
 
 Run `python3 scripts/check_control_plane.py` with the stack running to create
 two disposable users and an organization and verify the access boundary.

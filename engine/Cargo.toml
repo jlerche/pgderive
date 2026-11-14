@@ -1,9 +1,15 @@
+[workspace]
+members = ["worker"]
+default-members = [".", "worker"]
+resolver = "3"
+
 [package]
 name = "pgderive"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
+default-run = "pgderive"
 
 [dependencies]
 async-trait = "0.1"
@@ -33,18 +39,21 @@ foyer = "=0.22.6"
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"] }
 
-[lints.rust]
+[lints]
+workspace = true
+
+[workspace.lints.rust]
 warnings = "deny"
 unsafe_code = "forbid"
 dead_code = "deny"
 unused = { level = "deny", priority = -1 }
 missing_docs = "deny"
 
-[lints.rustdoc]
+[workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 private_intra_doc_links = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
