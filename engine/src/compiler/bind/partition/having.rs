@@ -29,7 +29,7 @@ struct Rewrite<'a, F> {
     visited: usize,
     grouping: Vec<Vec<usize>>,
     dependent: Vec<(Name, ColumnRef)>,
-    base_dependency: bool,
+    dependent_sources: Vec<usize>,
 }
 pub(super) fn column(kind: char, index: usize) -> Node {
     name_node(&Name(vec![String::new(), format!("{kind}{index}")]))
@@ -116,7 +116,7 @@ pub(super) fn build(
     context: Stage<'_>,
 ) -> Result<Compiled> {
     let mut rewrite = Rewrite::new(&groups, body, resolve, context.scalar_scope)?;
-    rewrite.base_dependency = base_dependency(body, &rewrite, &context);
+    rewrite.dependent_sources = dependent_sources(body, &rewrite, &context);
     let targets = rewrite.targets(&body.targets)?;
     let mut condition = body.having.as_deref().cloned();
     if let Some(condition) = &mut condition {
@@ -184,16 +184,21 @@ pub(super) fn build(
     apply_filter(&mut compiled.relational, condition.as_ref(), &post_resolve)?;
     let post = post_projection(targets);
     let post_resolve: &Resolver<'_> = &post_resolve;
-    let mut outer =
-        super::composition::stage(&compiled.relational, &post, &post_resolve, contract, boundary)?;
+    let mut outer = super::composition::stage(
+        &compiled.relational,
+        &post,
+        &post_resolve,
+        contract,
+        (boundary, &[]),
+    )?;
     super::composition::compose(&mut compiled.relational, &mut outer)?;
     Ok(compiled)
 }
 // PostgreSQL recognizes only the declared base-table primary key here.
 // When every grouping set contains it, adding a dependent column does
 // not split a group. Keep these physical keys separate from SQL GROUPING().
-fn base_dependency<F>(body: &Body, rewrite: &Rewrite<'_, F>, context: &Stage<'_>) -> bool {
-    primary_key_covered(context, |field| {
+fn dependent_sources<F>(body: &Body, rewrite: &Rewrite<'_, F>, context: &Stage<'_>) -> Vec<usize> {
+    covered_primary_keys(context, |field| {
         body.grouping_sets.as_ref().map_or_else(
             || rewrite.keys.iter().any(|key| key.name == field),
             |sets| {
@@ -203,6 +208,7 @@ fn base_dependency<F>(body: &Body, rewrite: &Rewrite<'_, F>, context: &Stage<'_>
             },
         )
     })
+    .collect()
 }
 
 pub(super) fn ordinary_base_dependency(
@@ -210,19 +216,25 @@ pub(super) fn ordinary_base_dependency(
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
     context: &Stage<'_>,
 ) -> bool {
-    primary_key_covered(context, |field| {
+    covered_primary_keys(context, |field| {
         groups.iter().any(|key| {
             super::bind_key(key.clone(), resolve, &mut Vec::new(), context.scalar_scope)
                 .is_ok_and(|resolved| resolved.name == field)
         })
     })
+    .next()
+    .is_some()
 }
 
-fn primary_key_covered(context: &Stage<'_>, contains: impl Fn(&str) -> bool) -> bool {
-    let Some(relation) = context.base_relation else { return false };
-    let mut primary = relation.columns.iter().filter(|column| column.primary).peekable();
-    primary.peek().is_some()
-        && primary.all(|column| contains(&crate::compiler::relational::field(0, &column.name)))
+fn covered_primary_keys(
+    context: &Stage<'_>,
+    contains: impl Fn(&str) -> bool,
+) -> impl Iterator<Item = usize> {
+    context
+        .primary_keys
+        .iter()
+        .filter(move |key| key.fields.iter().all(|field| contains(field)))
+        .map(|key| key.source)
 }
 
 fn render_aggregate(value: &Node) -> Result<syntax::Aggregate> {
@@ -310,7 +322,7 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
             visited: 0,
             grouping: Vec::new(),
             dependent: Vec::new(),
-            base_dependency: false,
+            dependent_sources: Vec::new(),
         })
     }
 
@@ -391,12 +403,18 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
     }
 
     fn dependent_column(&mut self, value: &Node) -> Result<Option<Node>> {
-        if !self.base_dependency || !matches!(value.node, Some(NodeEnum::ColumnRef(_))) {
+        if self.dependent_sources.is_empty() || !matches!(value.node, Some(NodeEnum::ColumnRef(_)))
+        {
             return Ok(None);
         }
         let name = crate::compiler::parser::expressions::column(value)?;
         let resolved = (self.resolve)(&name)?;
-        if resolved.name == crate::compiler::expansion::FIELD {
+        if !resolved
+            .name
+            .split_once(':')
+            .and_then(|(source, _)| source.parse::<usize>().ok())
+            .is_some_and(|source| self.dependent_sources.contains(&source))
+        {
             return Ok(None);
         }
         let index = self.dependent.iter().position(|(_, column)| *column == resolved);

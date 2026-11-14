@@ -33,7 +33,7 @@ struct Body {
 #[derive(Clone)]
 struct Stage<'a> {
     contract: &'a Contract,
-    base_relation: Option<&'a crate::source::Relation>,
+    primary_keys: &'a [PrimaryKey],
     unit: bool,
     sources: Vec<Source>,
     occurrence_keys: &'a crate::compiler::properties::Properties,
@@ -65,7 +65,7 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
                 Stage {
                     contract,
                     unit: true,
-                    base_relation: None,
+                    primary_keys: &[],
                     sources: vec![Source {
                         schema: relation.schema.clone(),
                         table: relation.table.clone(),
@@ -79,8 +79,13 @@ pub(super) fn bind(parsed: syntax::Parsed, contract: &Contract) -> Result<Compil
         syntax::Source::Native(table) => bind_native(table, &body, contract),
         syntax::Source::Join(tree) => {
             let scope = super::native_join::scope(tree, contract)?;
-            let mut outer =
-                composition::stage(&scope.ir, &body, &|name| scope.resolve(name), contract, None)?;
+            let mut outer = composition::stage(
+                &scope.ir,
+                &body,
+                &|name| scope.resolve(name),
+                contract,
+                (None, &scope.primary_keys),
+            )?;
             let mut relational = scope.ir;
             composition::compose(&mut relational, &mut outer)?;
             Ok(Compiled { result_columns: Vec::new(), relational })
@@ -107,13 +112,14 @@ fn bind_native(
     };
     let occurrence_keys =
         crate::compiler::properties::Analysis::source_relation(scopes[0].relation, 0)?;
+    let primary_key = PrimaryKey::from_relation(0, scopes[0].relation);
     build(
         parsed,
         &resolve,
         Stage {
             contract,
             unit: false,
-            base_relation: Some(scopes[0].relation),
+            primary_keys: primary_key.as_slice(),
             sources: vec![Source {
                 schema: scopes[0].relation.schema.clone(),
                 table: scopes[0].relation.table.clone(),
@@ -124,6 +130,23 @@ fn bind_native(
         },
     )
 }
+pub(super) struct PrimaryKey {
+    pub(super) source: usize,
+    pub(super) fields: Vec<String>,
+}
+
+impl PrimaryKey {
+    pub(super) fn from_relation(source: usize, relation: &crate::source::Relation) -> Option<Self> {
+        let fields = relation
+            .columns
+            .iter()
+            .filter(|column| column.primary)
+            .map(|column| field(source, &column.name))
+            .collect::<Vec<_>>();
+        (!fields.is_empty()).then_some(Self { source, fields })
+    }
+}
+
 fn build(
     parsed: &Body,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,

@@ -22,6 +22,9 @@ fn grouping_syntax_composes_with_ordinary_query_clauses() -> Result<()> {
         "SELECT id::integer, category FROM source.auction GROUP BY 1",
         "SELECT id, category, COUNT(*) FROM source.auction GROUP BY id",
         "SELECT id, category, COUNT(*) FROM source.auction GROUP BY 1 HAVING category IS NOT NULL",
+        "SELECT a.category, COUNT(*) FROM source.auction a JOIN source.bid b USING (id) GROUP BY id",
+        "SELECT a.category, COUNT(*) FROM source.auction a FULL JOIN source.bid b USING (id) GROUP BY a.id",
+        "SELECT a.category, GROUPING(a.id), COUNT(*) FROM source.auction a JOIN source.bid b ON a.id=b.auction GROUP BY a.id, ROLLUP(b.price)",
         "SELECT id, category, GROUPING(id), COUNT(*) FROM source.auction GROUP BY id, ROLLUP(other)",
     ] {
         compile(sql, &contract).map_err(|error| error.context(sql))?;
@@ -35,6 +38,9 @@ fn grouping_syntax_composes_with_ordinary_query_clauses() -> Result<()> {
         "SELECT GROUPING(-id) FROM source.auction GROUP BY ROLLUP(0-id)",
         "SELECT 'literal' AS k, GROUPING('literal') FROM source.auction GROUP BY ROLLUP(k)",
         "SELECT id, category, COUNT(*) FROM source.auction GROUP BY ROLLUP(id)",
+        "SELECT b.price, COUNT(*) FROM source.auction a LEFT JOIN source.bid b USING (id) GROUP BY id",
+        "SELECT a.category, COUNT(*) FROM source.auction a FULL JOIN source.bid b USING (id) GROUP BY id",
+        "SELECT d.category, COUNT(*) FROM (SELECT id,category FROM source.auction) d JOIN source.bid b ON d.id=b.auction GROUP BY d.id",
         "SELECT +id, category FROM source.auction GROUP BY 1",
         "SELECT id::bigint, category FROM source.auction GROUP BY 1",
         "SELECT id, category FROM (SELECT id, category FROM source.auction) s GROUP BY id",

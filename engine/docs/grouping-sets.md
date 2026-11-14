@@ -26,8 +26,9 @@ share the input stream and their outputs are consolidated as a bag at
 the same transaction boundary. The existing work and memory limits
 apply to the expanded plan.
 
-A single base-table query can also project columns of supported grouping types that depend on its
-declared primary key when every grouping set includes that full key.
+A query can also project columns of supported grouping types from a base
+table when every grouping set includes that occurrence’s full primary key.
 GROUPING() arguments still have to be explicit grouping expressions.
-The same rule applies to ordinary GROUP BY on a single base table.
-Primary-key dependencies across joins remain unsupported.
+The same rule applies to ordinary GROUP BY and joins. A merged USING key
+qualifies when it resolves to the original primary-key column. Derived
+outputs and join equalities do not transfer primary-key dependencies.

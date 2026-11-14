@@ -1,5 +1,5 @@
 //! Compose typed SQL scopes; `compiler::plan` then decides where their predicates run.
-use super::{Body, Stage, build};
+use super::{Body, PrimaryKey, Stage, build};
 use crate::{
     compiler::{
         Compiled, Predicate,
@@ -20,7 +20,7 @@ pub(super) fn bind(
     let resolve = |name: &crate::compiler::parser::Name| {
         crate::compiler::bind::derived::resolve_output(name, alias, &relational.output.columns)
     };
-    let mut outer = stage(relational, body, &resolve, contract, None)?;
+    let mut outer = stage(relational, body, &resolve, contract, (None, &[]))?;
     compose(relational, &mut outer)?;
     Ok(compiled)
 }
@@ -29,7 +29,7 @@ pub(super) fn stage(
     body: &Body,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<crate::compiler::ColumnRef>,
     contract: &Contract,
-    input: Option<&crate::compiler::properties::Properties>,
+    (input, primary_keys): (Option<&crate::compiler::properties::Properties>, &[PrimaryKey]),
 ) -> Result<Relational> {
     let occurrence = crate::compiler::properties::occurrence_from(relational, contract, input)?;
     let known_occurrence = occurrence.unique_rows();
@@ -40,7 +40,7 @@ pub(super) fn stage(
         Stage {
             contract,
             unit: false,
-            base_relation: None,
+            primary_keys,
             sources: Vec::new(),
             occurrence_keys: &occurrence,
             aggregate_base: aggregate_base(relational)?,

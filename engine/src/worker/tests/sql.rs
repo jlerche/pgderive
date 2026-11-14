@@ -87,7 +87,7 @@ fn rejects_unsupported_syntax_names_types_and_shapes() {
         SQL.replace("a.other", "auction.other"),
         SQL.replace("a.other", "a.missing"),
         SQL.replace("source.bid", "source.missing"),
-        SQL.replace("GROUP BY a.category", "GROUP BY a.id"),
+        SQL.replace("GROUP BY a.category", "GROUP BY b.id"),
         format!("{SQL} FETCH FIRST 1 ROW WITH TIES"),
         format!("{SQL}; {SQL}"),
         "SELECT *".into(),

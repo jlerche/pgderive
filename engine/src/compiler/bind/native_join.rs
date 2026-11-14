@@ -2,7 +2,7 @@
 mod keys;
 mod subquery;
 mod using;
-use super::scope as native_source;
+use super::{partition::PrimaryKey, scope as native_source};
 use crate::{
     compiler::{
         ColumnRef,
@@ -31,9 +31,11 @@ struct Builder<'a> {
     sources: Vec<Source>,
     nodes: Vec<Node>,
     joins: usize,
+    primary_keys: Vec<PrimaryKey>,
 }
 pub(super) struct Scope {
     pub(super) ir: Relational,
+    pub(super) primary_keys: Vec<PrimaryKey>,
     columns: Vec<Column>,
 }
 impl Scope {
@@ -42,7 +44,13 @@ impl Scope {
     }
 }
 pub(super) fn scope(tree: Tree, contract: &Contract) -> Result<Scope> {
-    let mut builder = Builder { contract, sources: Vec::new(), nodes: Vec::new(), joins: 0 };
+    let mut builder = Builder {
+        contract,
+        sources: Vec::new(),
+        nodes: Vec::new(),
+        joins: 0,
+        primary_keys: Vec::new(),
+    };
     let edge = builder.tree(tree)?;
     let columns = edge
         .columns
@@ -60,6 +68,7 @@ pub(super) fn scope(tree: Tree, contract: &Contract) -> Result<Scope> {
             nodes: builder.nodes,
             output: crate::compiler::Projected { columns },
         },
+        primary_keys: builder.primary_keys,
         columns: edge.columns,
     })
 }
@@ -216,6 +225,9 @@ impl Builder<'_> {
         let native = native_source(table, self.contract)?;
         let index = self.sources.len();
         ensure!(index < 16, "join source occurrence limit exceeded");
+        if let Some(key) = PrimaryKey::from_relation(index, native.relation) {
+            self.primary_keys.push(key);
+        }
         let qualifiers = native.table.alias.as_ref().map_or_else(
             || vec![native.relation.schema.clone(), native.relation.table.clone()],
             |alias| vec![alias.clone()],
