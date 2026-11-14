@@ -226,7 +226,7 @@ fn aggregate(
     windows: &windows::Definitions<'_>,
 ) -> Result<Aggregate> {
     if matches!(function, Function::StringAgg) {
-        return string_agg(call);
+        return string_agg(call, windows);
     }
     let function = if call.agg_distinct { distinct_function(function, call)? } else { function };
     ensure!(
@@ -286,19 +286,29 @@ fn aggregate(
         string_agg: None,
     })
 }
-fn string_agg(call: &pg::FuncCall) -> Result<Aggregate> {
+fn string_agg(call: &pg::FuncCall, windows: &windows::Definitions<'_>) -> Result<Aggregate> {
     ensure!(
         !call.agg_within_group
             && !call.func_variadic
             && !call.agg_star
-            && call.over.is_none()
             && call.funcformat == i32::from(pg::CoercionForm::CoerceExplicitCall),
         "unsupported STRING_AGG modifier"
     );
     let [value, delimiter] = call.args.as_slice() else {
         anyhow::bail!("STRING_AGG requires a value and delimiter");
     };
-    ensure!(!call.agg_order.is_empty(), "STRING_AGG requires aggregate ORDER BY");
+    let window = if let Some(over) = call.over.as_deref() {
+        ensure!(
+            !call.agg_distinct && call.agg_order.is_empty(),
+            "window STRING_AGG disallows DISTINCT and aggregate ORDER BY"
+        );
+        let window = window(windows.resolve(over)?, false)?;
+        ensure!(!window.order.is_empty(), "window STRING_AGG requires window ORDER BY");
+        Some(window)
+    } else {
+        ensure!(!call.agg_order.is_empty(), "STRING_AGG requires aggregate ORDER BY");
+        None
+    };
     let order = call
         .agg_order
         .iter()
@@ -311,7 +321,7 @@ fn string_agg(call: &pg::FuncCall) -> Result<Aggregate> {
         function: Function::StringAgg,
         argument: None,
         filter: crate::compiler::syntax::predicate(call.agg_filter.as_deref())?,
-        window: None,
+        window,
         navigation: None,
         position: None,
         string_agg: Some(StringAgg {

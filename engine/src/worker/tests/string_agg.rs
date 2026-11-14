@@ -68,10 +68,17 @@ fn string_agg_checks_distinct_arguments_and_sort_domains() -> Result<()> {
     let mut contract = contract();
     contract.relations[0].columns[1].oid = 1043;
     contract.relations[0].columns[1].collation = 950;
+    let expanded = "SELECT string_agg(b.id::text, ',') OVER (ORDER BY b.id, w.n)
+        FROM source.bid b CROSS JOIN generate_series(0,2) w(n)";
+    compile(expanded, &contract)?;
+    assert!(compile(&expanded.replace(", w.n", ""), &contract).is_err());
     for sql in [
         "SELECT string_agg(DISTINCT category, ',' ORDER BY category) FROM source.auction",
         "SELECT string_agg(DISTINCT category COLLATE \"C\", ',' ORDER BY category::text COLLATE \"C\") FROM source.auction",
         "SELECT string_agg(category, NULL ORDER BY id USING > NULLS LAST) FROM source.auction",
+        "SELECT string_agg(v, ',' ORDER BY id) FROM (VALUES (1, 'a'), (1, 'a')) t(id, v)",
+        "SELECT string_agg(category, other) OVER (ORDER BY id ROWS 1 PRECEDING) FROM source.auction",
+        "SELECT string_agg(MIN(category COLLATE \"C\"), ':') OVER (ORDER BY id) FROM source.auction GROUP BY id",
         "SELECT string_agg(category, ',' ORDER BY INTERVAL '1 hour', id) FROM source.auction",
         "SELECT string_agg(category, ',' ORDER BY 'constant') FROM source.auction",
     ] {
@@ -84,6 +91,8 @@ fn string_agg_checks_distinct_arguments_and_sort_domains() -> Result<()> {
         "SELECT string_agg(DISTINCT category, ',' ORDER BY id) FROM source.auction",
         "SELECT string_agg(category, ',' ORDER BY other) FROM source.auction",
         "SELECT string_agg(category, ',') FROM source.auction",
+        "SELECT string_agg(category, ',') OVER () FROM source.auction",
+        "SELECT string_agg(DISTINCT category, ',') OVER (ORDER BY id) FROM source.auction",
         "SELECT string_agg(category, ',' ORDER BY id) OVER () FROM source.auction",
         "SELECT string_agg(id, ',' ORDER BY id) FROM source.auction",
     ] {

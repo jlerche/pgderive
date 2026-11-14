@@ -53,7 +53,7 @@ impl Function {
         matches!(self, Self::BoolAnd | Self::BoolOr)
     }
     pub(crate) const fn occurrence_order(&self) -> bool {
-        matches!(self, Self::RowNumber | Self::Ntile | Self::Lag | Self::Lead)
+        matches!(self, Self::RowNumber | Self::Ntile | Self::Lag | Self::Lead | Self::StringAgg)
     }
     pub(crate) const fn frame_value(&self) -> bool {
         matches!(self, Self::FirstValue | Self::LastValue | Self::NthValue)

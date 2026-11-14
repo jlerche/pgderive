@@ -21,6 +21,13 @@ class StringAggFixture(SqlFixture):
                 string_agg(payload, delimiter ORDER BY price DESC NULLS LAST, id)
                   FILTER (WHERE id <> 105) AS result
                 FROM {self.source} GROUP BY auction'''
+        elif mode == 'window':
+            self.labels = ['id', 'result']
+            self.query = f'''SELECT id, string_agg(payload, delimiter)
+                FILTER (WHERE id <> 105) OVER (
+                    PARTITION BY auction ORDER BY price DESC NULLS LAST, id
+                    ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING EXCLUDE CURRENT ROW
+                ) AS result FROM {self.source}'''
         else:
             self.labels = ['result']
             self.query = f'''SELECT string_agg(DISTINCT payload, delimiter
@@ -56,4 +63,4 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    run_modes(('grouped', 'distinct'), qualify)
+    run_modes(('grouped', 'distinct', 'window'), qualify)

@@ -20,6 +20,13 @@ when the materialized value must match across engines. Unordered
 string_agg also depends on PostgreSQL's unspecified input order and
 requires an aggregate ORDER BY in Pgderive.
 
+Windowed text aggregation uses `string_agg(value, delimiter) OVER
+(ORDER BY ...)` and accepts FILTER. It follows frame order and honors
+frame bounds and exclusions. The window partition and ORDER BY must
+identify each occurrence so changes can reproduce that order. As in
+PostgreSQL, DISTINCT and aggregate-local ORDER BY are unavailable in a
+window call.
+
 The operator reevaluates only affected groups over their weighted row
 bags at transaction boundaries. Duplicate occurrences are preserved
 unless DISTINCT is specified. Output is limited to 16 MiB of UTF-8

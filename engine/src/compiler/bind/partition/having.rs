@@ -66,7 +66,9 @@ fn key_aggregate(key: &Key) -> bool {
 fn window_aggregate(value: &syntax::Aggregate) -> bool {
     value.argument.as_ref().is_some_and(
         |argument| matches!(argument,Argument::Expression(value) if contains_aggregate(value)),
-    ) || value.filter.as_deref().is_some_and(contains_aggregate)
+    ) || value.string_agg.as_ref().is_some_and(|string| {
+        contains_aggregate(&string.value) || contains_aggregate(&string.delimiter)
+    }) || value.filter.as_deref().is_some_and(contains_aggregate)
         || value.position.as_deref().is_some_and(contains_aggregate)
         || value.window.as_ref().is_some_and(|window| {
             window.keys.iter().any(key_aggregate)
@@ -482,6 +484,10 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
         Ok(())
     }
     fn window(&mut self, value: &mut syntax::Aggregate) -> Result<()> {
+        if let Some(string) = &mut value.string_agg {
+            self.expression(&mut string.value, true, 0)?;
+            self.expression(&mut string.delimiter, true, 0)?;
+        }
         if let Some(argument) = &mut value.argument {
             let mut node = match argument {
                 Argument::Column(name) => name_node(name),

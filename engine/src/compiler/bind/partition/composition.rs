@@ -87,7 +87,7 @@ fn aggregate_base(relational: &Relational) -> Result<usize> {
 fn validate_occurrences(known: bool, outer: &Relational) -> Result<bool> {
     use crate::compiler::partition::Mode;
     let positional = outer.nodes.iter().any(|node| matches!(node, Node::Partition { spec, .. }
-        if matches!(spec.mode, Mode::Rows { .. }) || spec.aggregates.iter().any(|value| value.function.occurrence_order())));
+        if matches!(spec.mode, Mode::Rows { .. }) || (!matches!(spec.mode, Mode::Grouped { .. }) && spec.aggregates.iter().any(|value| value.function.occurrence_order()))));
     ensure!(
         !positional || known,
         "derived positional windows require proven logical occurrence identity"

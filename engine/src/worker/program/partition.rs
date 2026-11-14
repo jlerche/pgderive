@@ -224,21 +224,27 @@ fn framed_fields(
     frame: Selection<'_>,
     context: (Limits, &mut crate::engine::dataflow::PartitionWork),
 ) -> Result<Row> {
-    let mut aggregates =
-        spec.aggregates.iter().filter(|value| !value.function.frame_value()).peekable();
-    if aggregates.peek().is_none() {
-        return Ok(Row::new());
-    }
     let (limits, work) = context;
-    work.charge(frame.len())?;
-    let frame = Batch::from_updates(frame.iter().map(|(_, row)| (((), row.clone()), 1)))?;
-    limits.check_batch(&frame)?;
     let mut output = Row::new();
-    for aggregate in aggregates {
-        output.insert(aggregate.field.clone(), aggregate_value(aggregate, &frame, work)?);
+    let mut bag = None;
+    for aggregate in spec.aggregates.iter().filter(|value| !value.function.frame_value()) {
+        let value = if let Some(string) = &aggregate.string_agg {
+            string_agg::frame(string, aggregate.filter.as_ref(), frame, work)?
+        } else {
+            if bag.is_none() {
+                work.charge(frame.len())?;
+                let rows =
+                    Batch::from_updates(frame.iter().map(|(_, row)| (((), row.clone()), 1)))?;
+                limits.check_batch(&rows)?;
+                bag = Some(rows);
+            }
+            aggregate_value(aggregate, bag.as_ref().context("missing aggregate frame")?, work)?
+        };
+        output.insert(aggregate.field.clone(), value);
     }
     Ok(output)
 }
+
 fn framed(
     spec: &Partition,
     bag: &Bag,

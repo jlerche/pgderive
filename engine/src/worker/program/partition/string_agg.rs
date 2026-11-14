@@ -1,5 +1,5 @@
 //! Build an ordered text result from a complete affected partition.
-use super::Bag;
+use super::{Bag, selection::Selection};
 use crate::{
     compiler::{
         Predicate, TEXT_OUTPUT_LIMIT,
@@ -48,6 +48,28 @@ pub(super) fn evaluate(
         // equal pairs also share the same token and occupy one map entry.
         let count = if spec.distinct { 1 } else { count };
         append(&mut output, &input, count, work)?;
+    }
+    Ok(output)
+}
+
+// Window frames already enumerate occurrences in SQL order, including
+// frame exclusions. Never consolidate that sequence into a bag.
+pub(super) fn frame(
+    spec: &StringAgg,
+    filter: Option<&Predicate>,
+    frame: Selection<'_>,
+    work: &mut PartitionWork,
+) -> Result<Option<String>> {
+    let mut output = None;
+    for (_, row) in frame.iter() {
+        work.charge(1)?;
+        if filter.map(|filter| filter.qualifies(row)).transpose()? == Some(false) {
+            continue;
+        }
+        work.charge(2)?;
+        if let Some(input) = inputs(spec, row)? {
+            append(&mut output, &input, 1, work)?;
+        }
     }
     Ok(output)
 }
