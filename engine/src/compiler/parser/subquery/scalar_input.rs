@@ -3,32 +3,45 @@ use super::super::expressions::{distinct_kind, node, optional};
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
-pub(super) fn validate(select: &pg::SelectStmt, depth: usize) -> Result<()> {
-    validate_scope(select, depth, false)
+#[derive(Clone, Copy)]
+pub(super) enum Input {
+    Scalar,
+    Membership,
+    Quantified,
 }
 
-pub(super) fn validate_quantified(select: &pg::SelectStmt) -> Result<()> {
-    validate_scope(select, 0, true)
+pub(super) fn validate(select: &pg::SelectStmt, input: Input) -> Result<()> {
+    validate_scope(select, 0, input)
 }
 
-fn validate_scope(select: &pg::SelectStmt, depth: usize, quantified: bool) -> Result<()> {
+fn validate_scope(select: &pg::SelectStmt, depth: usize, input: Input) -> Result<()> {
     ensure!(depth < 16, "scalar RHS nesting exceeds limit");
     ensure!(
         select.with_clause.is_none()
             && select.group_clause.is_empty()
             && select.having_clause.is_none()
             && select.window_clause.is_empty()
-            && select.from_clause.len() <= 1
-            && select
-                .from_clause
-                .iter()
-                .all(|source| matches!(source.node, Some(NodeEnum::RangeVar(_)))),
-        "nonaggregate scalar RHS requires a native table or constant/set input"
+            && select.from_clause.len() <= 1,
+        "nonaggregate scalar RHS requires native tables, a total native join, or constant/set input"
     );
+    if let [source] = select.from_clause.as_slice() {
+        ensure!(
+            if matches!(input, Input::Scalar) {
+                matches!(source.node, Some(NodeEnum::RangeVar(_)))
+            } else {
+                total_source(source, 0)?
+            },
+            "scalar RHS requires native tables and simple local join predicates"
+        );
+    }
     for target in &select.target_list {
         let value = super::super::target(target)?;
         ensure!(
-            if quantified { conversion(value, 0)? } else { collated_plain(value)? },
+            if matches!(input, Input::Quantified) {
+                conversion(value, 0)?
+            } else {
+                collated_plain(value)?
+            },
             "nonaggregate scalar RHS requires a column or literal"
         );
     }
@@ -57,9 +70,28 @@ fn validate_scope(select: &pg::SelectStmt, depth: usize, quantified: bool) -> Re
         ensure!(plain(key)?, "nonaggregate scalar RHS distinct key requires a column or literal");
     }
     for child in [&select.larg, &select.rarg].into_iter().flatten() {
-        validate_scope(child, depth + 1, quantified)?;
+        validate_scope(child, depth + 1, input)?;
     }
     Ok(())
+}
+
+// A lifted join runs independently of its outer query. Only ordinary native
+// joins with simple local predicates enter this path.
+fn total_source(value: &Node, depth: usize) -> Result<bool> {
+    ensure!(depth < 16, "scalar RHS join depth exceeded");
+    match node(value)? {
+        NodeEnum::RangeVar(_) => Ok(true),
+        NodeEnum::JoinExpr(join) => {
+            let left = optional(join.larg.as_deref())?;
+            let right = optional(join.rarg.as_deref())?;
+            let total_condition = match join.quals.as_deref() {
+                Some(condition) => predicate(condition, 0)?,
+                None => true,
+            };
+            Ok(total_condition && total_source(left, depth + 1)? && total_source(right, depth + 1)?)
+        }
+        _ => Ok(false),
+    }
 }
 
 // The bound expressions must additionally pass the runtime totality proof.

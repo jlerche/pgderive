@@ -482,6 +482,29 @@ fn explicit_quantified_equality_rejects_unsupported_operands() {
 }
 
 #[test]
+fn membership_with_native_join_rhs_retains_correlation() -> Result<()> {
+    let contract = native();
+    let rhs = "SELECT c.price FROM source.bid b LEFT JOIN source.bid c ON b.id=c.auction
+               WHERE b.auction=a.id AND c.price>a.other";
+    for expression in [
+        format!("EXISTS ({rhs})"),
+        format!("a.other IN ({rhs})"),
+        format!("a.other < ANY ({rhs})"),
+        format!("a.other <= ALL ({rhs})"),
+    ] {
+        let sql = format!("SELECT {expression} FROM source.auction a");
+        compile(&sql, &contract).map_err(|error| error.context(sql))?;
+    }
+    let rhs = "SELECT c.price FROM source.bid b JOIN source.bid c
+               ON b.id=10/c.auction WHERE b.auction=a.id";
+    for expression in [format!("a.other IN ({rhs})"), format!("a.other < ANY ({rhs})")] {
+        let sql = format!("SELECT {expression} FROM source.auction a");
+        assert!(compile(&sql, &contract).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
 fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
     let native = native();
     for predicate in [

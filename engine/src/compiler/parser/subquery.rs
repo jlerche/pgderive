@@ -286,7 +286,7 @@ impl Rewrite<'_> {
                 query.target_list = vec![ast::target(probe.clone(), "")];
                 membership::clear_exists_clauses(&mut query)?;
                 let correlation = correlation::extract(&mut query, true)?;
-                scalar_input::validate(&query, 0)?;
+                scalar_input::validate(&query, scalar_input::Input::Membership)?;
                 // The constant, non-NULL RHS makes the mark two-valued.
                 self.membership_mark(query, probe, None, correlation)
             }
@@ -346,11 +346,15 @@ impl Rewrite<'_> {
     ) -> Result<Node> {
         let alias = self.alias()?;
         let has_residual = !correlation.residuals.is_empty();
-        if quantified.is_some() || has_residual {
+        let joined = query
+            .from_clause
+            .iter()
+            .any(|source| matches!(source.node, Some(NodeEnum::JoinExpr(_))));
+        if quantified.is_some() || has_residual || joined {
             if quantified.is_some() {
-                scalar_input::validate_quantified(&query)?;
+                scalar_input::validate(&query, scalar_input::Input::Quantified)?;
             } else {
-                scalar_input::validate(&query, 0)?;
+                scalar_input::validate(&query, scalar_input::Input::Membership)?;
             }
             ensure!(
                 correlation.pairs.iter().all(

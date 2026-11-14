@@ -98,8 +98,9 @@ Aggregate and set-returning targets are outside this projection subset.
 For EXISTS, sorting and DISTINCT ON do not change whether rows exist.
 A positive literal LIMIT, LIMIT ALL, and LIMIT NULL also leave presence
 unchanged. OFFSET, LIMIT 0, and WITH TIES are outside this simplification.
-A correlated RHS uses one native table, a simple projection, and supported
-local predicates. Plain SELECT DISTINCT is allowed because RHS duplicates do not
+A correlated membership RHS can read native tables through supported
+joins with simple local ON predicates. Correlation is extracted from WHERE,
+and the RHS keeps a simple projection and supported local filters. Plain SELECT DISTINCT is allowed because RHS duplicates do not
 affect membership or quantified truth values. For comparisons, DISTINCT ON
 still requires choosing a representative and remains outside this slice. Qualify outer references in residual comparisons. Correlation
 is limited to one outer query level.

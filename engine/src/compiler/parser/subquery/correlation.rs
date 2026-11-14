@@ -23,16 +23,25 @@ pub(super) struct ResidualComparison {
     pub outer_first: bool,
 }
 pub(super) fn extract(query: &mut pg::SelectStmt, inequality: bool) -> Result<Correlation> {
-    let [source] = query.from_clause.as_slice() else {
+    if !inequality
+        && !matches!(query.from_clause.as_slice(), [source]
+        if matches!(source.node, Some(NodeEnum::RangeVar(_))))
+    {
         return Ok(Correlation::default());
-    };
-    let Ok(table) = crate::compiler::parser::table(source) else {
+    }
+    let mut tables = Vec::new();
+    for source in &query.from_clause {
+        if !collect_tables(source, &mut tables, 0)? {
+            return Ok(Correlation::default());
+        }
+    }
+    if tables.is_empty() {
         return Ok(Correlation::default());
-    };
+    }
     let mut local = Vec::new();
     let mut correlation = Correlation::default();
     if let Some(condition) = query.where_clause.take() {
-        conjunct(*condition, &table, &mut local, (&mut correlation, inequality), 0)?;
+        conjunct(*condition, &tables, &mut local, (&mut correlation, inequality), 0)?;
     }
     query.where_clause = ast::logical(local, true);
     for value in query
@@ -42,28 +51,46 @@ pub(super) fn extract(query: &mut pg::SelectStmt, inequality: bool) -> Result<Co
         .chain(query.having_clause.iter().map(Box::as_ref))
     {
         ensure!(
-            references(value, &table, 0)? & 2 == 0,
+            references(value, &tables, 0)? & 2 == 0,
             "outer references require top-level AND correlation equalities"
         );
     }
     Ok(correlation)
 }
+fn collect_tables(value: &Node, tables: &mut Vec<Table>, depth: usize) -> Result<bool> {
+    ensure!(depth < 16 && tables.len() < 16, "subquery source scope budget exceeded");
+    match node(value)? {
+        NodeEnum::RangeVar(_) => {
+            let Ok(table) = crate::compiler::parser::table(value) else { return Ok(false) };
+            tables.push(table);
+            Ok(true)
+        }
+        NodeEnum::JoinExpr(join) if join.alias.is_none() && join.join_using_alias.is_none() => {
+            let left = super::super::optional(join.larg.as_deref())?;
+            let right = super::super::optional(join.rarg.as_deref())?;
+            Ok(collect_tables(left, tables, depth + 1)?
+                && collect_tables(right, tables, depth + 1)?)
+        }
+        _ => Ok(false),
+    }
+}
+
 pub(in crate::compiler::parser) fn only_cross_scope_equalities(
     query: &pg::SelectStmt,
 ) -> Result<bool> {
-    fn check(value: &Node, table: &Table, depth: usize) -> Result<bool> {
+    fn check(value: &Node, tables: &[Table], depth: usize) -> Result<bool> {
         ensure!(depth < 16, "EXISTS correlation nesting exceeded");
         if let NodeEnum::BoolExpr(logical) = node(value)?
             && logical.boolop == i32::from(pg::BoolExprType::AndExpr)
         {
             for term in &logical.args {
-                if !check(term, table, depth + 1)? {
+                if !check(term, tables, depth + 1)? {
                     return Ok(false);
                 }
             }
             return Ok(!logical.args.is_empty());
         }
-        if comparison(value, table).is_ok_and(|(operator, _)| operator == "=") {
+        if comparison(value, tables).is_ok_and(|(operator, _)| operator == "=") {
             return Ok(true);
         }
         let NodeEnum::AExpr(expression) = node(value)? else { return Ok(false) };
@@ -76,14 +103,14 @@ pub(in crate::compiler::parser) fn only_cross_scope_equalities(
             return Ok(false);
         };
         // Leave unqualified equality operands to the existing native scope binder.
-        Ok(references(left, table, 0)? != 0
-            && references(right, table, 0)? != 0
+        Ok(references(left, tables, 0)? != 0
+            && references(right, tables, 0)? != 0
             && (has_unqualified(left)? || has_unqualified(right)?))
     }
     let [source] = query.from_clause.as_slice() else { return Ok(false) };
     let Ok(table) = crate::compiler::parser::table(source) else { return Ok(false) };
     let Some(filter) = query.where_clause.as_deref() else { return Ok(false) };
-    check(filter, &table, 0)
+    check(filter, &[table], 0)
 }
 
 fn has_unqualified(value: &Node) -> Result<bool> {
@@ -100,7 +127,7 @@ fn has_unqualified(value: &Node) -> Result<bool> {
 
 fn conjunct(
     value: Node,
-    table: &Table,
+    tables: &[Table],
     local: &mut Vec<Node>,
     state: (&mut Correlation, bool),
     depth: usize,
@@ -111,21 +138,21 @@ fn conjunct(
         && value.boolop == i32::from(pg::BoolExprType::AndExpr)
     {
         for value in &value.args {
-            conjunct(value.clone(), table, local, (correlation, inequality), depth + 1)?;
+            conjunct(value.clone(), tables, local, (correlation, inequality), depth + 1)?;
         }
         return Ok(());
     }
-    let sides = references(&value, table, 0)?;
+    let sides = references(&value, tables, 0)?;
     if sides & 2 == 0 {
         local.push(value);
         return Ok(());
     }
     if inequality && matches!(node(&value)?, NodeEnum::BoolExpr(_)) {
-        let term = residual(&value, table, &mut correlation.residual_count, depth)?;
+        let term = residual(&value, tables, &mut correlation.residual_count, depth)?;
         correlation.residuals.push(term);
         return Ok(());
     }
-    let (operator, operands) = comparison(&value, table)?;
+    let (operator, operands) = comparison(&value, tables)?;
     if operator == "=" {
         ensure!(correlation.pairs.len() < 8, "subquery correlation key count exceeded");
         correlation.pairs.push((operands.outer, operands.inner));
@@ -139,7 +166,7 @@ fn conjunct(
     }
     Ok(())
 }
-fn residual(value: &Node, table: &Table, count: &mut usize, depth: usize) -> Result<Residual> {
+fn residual(value: &Node, tables: &[Table], count: &mut usize, depth: usize) -> Result<Residual> {
     ensure!(depth < 16, "correlation residual nesting limit exceeded");
     if let NodeEnum::BoolExpr(logical) = node(value)? {
         let kind = pg::BoolExprType::try_from(logical.boolop)?;
@@ -154,11 +181,11 @@ fn residual(value: &Node, table: &Table, count: &mut usize, depth: usize) -> Res
         let terms = logical
             .args
             .iter()
-            .map(|term| residual(term, table, count, depth + 1))
+            .map(|term| residual(term, tables, count, depth + 1))
             .collect::<Result<Vec<_>>>()?;
         return Ok(Residual::Logical { terms, kind });
     }
-    let (operator, operands) = comparison(value, table)?;
+    let (operator, operands) = comparison(value, tables)?;
     residual_term(&operator, operands, count)
 }
 
@@ -168,7 +195,7 @@ struct Operands {
     outer_first: bool,
 }
 
-fn comparison(value: &Node, table: &Table) -> Result<(String, Operands)> {
+fn comparison(value: &Node, tables: &[Table]) -> Result<(String, Operands)> {
     let NodeEnum::AExpr(expression) = node(value)? else {
         anyhow::bail!("correlation requires top-level AND equalities");
     };
@@ -185,7 +212,7 @@ fn comparison(value: &Node, table: &Table) -> Result<(String, Operands)> {
         .rexpr
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("missing correlation right operand"))?;
-    let sides = (references(left, table, 0)?, references(right, table, 0)?);
+    let sides = (references(left, tables, 0)?, references(right, tables, 0)?);
     ensure!(
         matches!(sides, (1, 2) | (2, 1)),
         "correlation operands must be local to opposite scopes"
@@ -209,20 +236,24 @@ fn residual_term(operator: &str, operands: Operands, count: &mut usize) -> Resul
         outer_first: operands.outer_first,
     })))
 }
-fn references(value: &Node, table: &Table, depth: usize) -> Result<u8> {
+fn references(value: &Node, tables: &[Table], depth: usize) -> Result<u8> {
     ensure!(depth < 64, "subquery reference depth exceeded");
     if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
         let name = column(value)?;
         return Ok(match name.0.as_slice() {
             [_] => 1,
             [qualifier, _]
-                if Some(qualifier) == table.alias.as_ref().or_else(|| table.name.0.last()) =>
+                if tables.iter().any(|table| {
+                    Some(qualifier) == table.alias.as_ref().or_else(|| table.name.0.last())
+                }) =>
             {
                 1
             }
             [schema, relation, _]
-                if table.alias.is_none()
-                    && table.name.0.as_slice() == [schema.clone(), relation.clone()] =>
+                if tables.iter().any(|table| {
+                    table.alias.is_none()
+                        && table.name.0.as_slice() == [schema.clone(), relation.clone()]
+                }) =>
             {
                 1
             }
@@ -231,7 +262,7 @@ fn references(value: &Node, table: &Table, depth: usize) -> Result<u8> {
     }
     let mut result = 0;
     for child in children(value) {
-        result |= references(child, table, depth + 1)?;
+        result |= references(child, tables, depth + 1)?;
     }
     Ok(result)
 }

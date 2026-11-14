@@ -66,7 +66,14 @@ class ResidualFixture(SqlFixture):
         rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND NOT (a.ceiling::bigint<=b.cutoff::numeric AND (b.id<=a.floor OR b.id<a.id OR b.id=a.id))'
         if mode in ('in', 'all-filter'):
             rhs = rhs.replace('SELECT ', 'SELECT DISTINCT ', 1)
-        if mode == 'quantified':
+        if mode == 'joined':
+            rhs = rhs.replace(f'SELECT b.price FROM {b} b',
+                f'SELECT c.price FROM {b} b LEFT JOIN {b} c ON c.auction=b.id AND c.id<>99')
+            self.labels = ['id', 'present', 'member', 'earlier', 'before_all']
+            self.query = f'''SELECT a.id, EXISTS ({rhs}) AS present, a.probe IN ({rhs}) AS member,
+                a.probe < ANY ({rhs}) AS earlier, a.probe < ALL ({rhs}) AS before_all
+                FROM {a} a'''
+        elif mode == 'quantified':
             projections = ['a.id']
             self.labels = ['id']
             for label, symbol, _ in QUANTIFIED:
@@ -128,7 +135,16 @@ class ResidualFixture(SqlFixture):
                 )
             ]
             values = [item['price'] for item in matches]
-            if self.mode == 'row':
+            if self.mode == 'joined':
+                values = [
+                    value for item in matches for value in
+                    ([peer['price'] for peer in inner
+                      if peer['auction'] == item['id'] and peer['id'] != 99] or [None])
+                ]
+                memory[(row['id'], bool(values), membership(row['probe'], values),
+                        compare(row['probe'], values, operator.lt, False),
+                        compare(row['probe'], values, operator.lt, True))] += 1
+            elif self.mode == 'row':
                 probe = (row['probe'], floor)
                 terms = [(item['price'], item['cutoff']) for item in matches]
                 member = reduce_truth([row_truth(probe, term, False) for term in terms])
@@ -181,6 +197,6 @@ def qualify(output, command, mode, keyed):
 
 
 if __name__ == '__main__':
-    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row')
+    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined')
     run_cases(((mode if keyed else f'{mode}-inequality-only', mode, keyed)
                for keyed in (True, False) for mode in modes), qualify)

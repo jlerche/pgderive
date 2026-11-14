@@ -123,7 +123,7 @@ impl Rewrite<'_> {
             "nonaggregate scalar subquery does not support GROUP BY/HAVING"
         );
         let correlation = correlation::extract(&mut select, false)?;
-        super::scalar_input::validate(&select, 0)?;
+        super::scalar_input::validate(&select, super::scalar_input::Input::Scalar)?;
         let alias = self.alias()?;
         let mut labels = vec![ast::VALUE.into()];
         let mut conditions = Vec::new();
