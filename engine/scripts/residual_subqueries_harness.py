@@ -69,7 +69,22 @@ class ResidualFixture(SqlFixture):
         rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND NOT (a.ceiling::bigint<=b.cutoff::numeric AND (b.id<=a.floor OR b.id<a.id OR b.id=a.id))'
         if mode in ('in', 'all-filter'):
             rhs = rhs.replace('SELECT ', 'SELECT DISTINCT ', 1)
-        if mode == 'joined':
+        if mode == 'ordered':
+            selected = f"""SELECT b.price FROM {b} b WHERE {keys}
+                ORDER BY b.id DESC OFFSET 1 LIMIT 2"""
+            unique = f"""SELECT DISTINCT b.price FROM {b} b WHERE {keys}
+                ORDER BY 1 ASC NULLS LAST OFFSET 1 LIMIT 1"""
+            ties = f"""SELECT b.price FROM {b} b WHERE {keys}
+                ORDER BY b.cutoff DESC NULLS LAST FETCH FIRST 1 ROW WITH TIES"""
+            self.labels = ['id', 'member', 'excluded', 'earlier', 'before_all', 'unique_member', 'ties_earlier']
+            self.query = f'''SELECT a.id, a.probe IN ({selected}) AS member,
+                a.probe NOT IN ({selected}) AS excluded,
+                a.probe < ANY ({selected}) AS earlier,
+                a.probe < ALL ({selected}) AS before_all,
+                a.probe IN ({unique}) AS unique_member, a.probe < ANY ({ties}) AS ties_earlier
+                FROM {a} a'''
+            self.sql(f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (13,1,8,12)')
+        elif mode == 'joined':
             rhs = rhs.replace(f'SELECT b.price FROM {b} b',
                 f'SELECT c.price FROM {b} b LEFT JOIN {b} c ON c.auction=b.id AND c.id<>99')
             self.labels = ['id', 'present', 'member', 'earlier', 'before_all']
@@ -160,7 +175,21 @@ class ResidualFixture(SqlFixture):
                 )
             ]
             values = [item['price'] for item in matches]
-            if self.mode == 'joined':
+            if self.mode == 'ordered':
+                bucket = sorted((item for item in inner if key is not None and key == item['auction']
+                                 and item['id'] != 99), key=lambda item: -item['id'])
+                values = [item['price'] for item in bucket[1:3]]
+                mark = membership(row['probe'], values)
+                unique = sorted({item['price'] for item in bucket},
+                                key=lambda price: (price is None, price or 0))
+                first = max((item['cutoff'] for item in bucket if item['cutoff'] is not None), default=None)
+                peers = [item['price'] for item in bucket if item['cutoff'] == first]
+                memory[(row['id'], mark, None if mark is None else not mark,
+                        compare(row['probe'], values, operator.lt, False),
+                        compare(row['probe'], values, operator.lt, True),
+                        membership(row['probe'], unique[1:2]),
+                        compare(row['probe'], peers, operator.lt, False))] += 1
+            elif self.mode == 'joined':
                 values = [
                     value for item in matches for value in
                     ([peer['price'] for peer in inner
@@ -240,5 +269,6 @@ def qualify(output, command, mode, keyed):
 if __name__ == '__main__':
     modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined', 'exists-zero', 'exists-group', 'exists-offset',
              'exists-ties', *GROUP_OFFSET_MODES)
-    run_cases(((mode if keyed else f'{mode}-inequality-only', mode, keyed)
-               for keyed in (True, False) for mode in modes), qualify)
+    cases = [(mode if keyed else f'{mode}-inequality-only', mode, keyed)
+             for keyed in (True, False) for mode in modes]
+    run_cases([*cases, ('ordered', 'ordered', True)], qualify)

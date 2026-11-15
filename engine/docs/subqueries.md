@@ -112,7 +112,12 @@ when further rows tie with the cutoff. The original ORDER BY is required.
 A correlated membership RHS can read native tables through supported
 joins with simple local ON predicates. Correlation is extracted from WHERE,
 and the RHS keeps a simple projection and supported local filters. Plain SELECT DISTINCT is allowed because RHS duplicates do not
-affect membership or quantified truth values. For comparisons, DISTINCT ON
+affect membership or quantified truth values. With equality-only correlation,
+ORDER BY, literal LIMIT and OFFSET, and FETCH WITH TIES can select RHS
+occurrences separately for each key. A cutoff that can cut through a peer
+group requires the sort and correlation keys to determine the compared
+values, or to identify each original occurrence. Selection precedes
+three-valued comparison and keeps the existing ordering budgets. For comparisons, DISTINCT ON
 still requires choosing a representative and remains outside this slice. Qualify outer references in residual comparisons. Correlation
 is limited to one outer query level.
 The membership probe must be safe to evaluate independently of the RHS.

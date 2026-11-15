@@ -130,6 +130,7 @@ pub(super) fn bind(parsed: SetOperation, contract: &Contract) -> Result<Compiled
             visible: width,
             distinct: false,
             distinct_on: Vec::new(),
+            correlation_keys: Vec::new(),
             bounds: parsed.bounds,
         },
         contract,

@@ -9,6 +9,7 @@ pub(in crate::compiler) struct Parsed {
     pub visible: usize,
     pub distinct: bool,
     pub distinct_on: Vec<usize>,
+    pub correlation_keys: Vec<usize>,
     pub bounds: Bounds,
 }
 pub(in crate::compiler) struct Order {
@@ -60,6 +61,7 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         visible,
         distinct: !plain.distinct_clause.is_empty(),
         distinct_on: keys,
+        correlation_keys: Vec::new(),
         order,
         bounds,
     }))

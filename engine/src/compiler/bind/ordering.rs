@@ -20,6 +20,7 @@ pub(super) fn bind(parsed: Parsed, contract: &Contract) -> Result<Compiled> {
             visible: parsed.visible,
             distinct: parsed.distinct,
             distinct_on: parsed.distinct_on,
+            correlation_keys: parsed.correlation_keys,
             bounds: parsed.bounds,
         },
         contract,
@@ -30,6 +31,7 @@ pub(super) struct Clause {
     pub(super) visible: usize,
     pub(super) distinct: bool,
     pub(super) distinct_on: Vec<usize>,
+    pub(super) correlation_keys: Vec<usize>,
     pub(super) bounds: Bounds,
 }
 pub(super) fn apply(
@@ -82,6 +84,7 @@ pub(super) fn apply(
         distinct_on(ir, &parsed.distinct_on, &order, &identity)?;
     }
     ir.output.columns.truncate(parsed.visible);
+    let keys = selection_keys(ir, &parsed.correlation_keys, &order, &facts, &parsed.bounds)?;
     let sorted = order.iter().map(|value| value.column.clone()).collect();
     let empty = crate::compiler::properties::occurrence(ir, contract)?.maximum_rows() == Some(0);
     if parsed.bounds.limit == Some(0) || empty {
@@ -95,9 +98,47 @@ pub(super) fn apply(
             .map(|limit| limit.checked_add(offset).context("LIMIT + OFFSET overflow"))
             .transpose()?
             .unwrap_or(usize::MAX);
-        select(ir, Spec { order, field: None, limit, offset, with_ties, identity }, None)?;
+        select(ir, Spec { order, field: None, limit, offset, with_ties, identity }, keys)?;
     }
     Ok(compiled)
+}
+fn selection_keys(
+    ir: &crate::compiler::relational::Relational,
+    keys: &[usize],
+    order: &[Order],
+    facts: &crate::compiler::properties::Properties,
+    bounds: &Bounds,
+) -> Result<Option<Vec<crate::compiler::ColumnRef>>> {
+    if keys.is_empty() {
+        return Ok(None);
+    }
+    let keys = keys
+        .iter()
+        .map(|index| {
+            Ok(ir
+                .output
+                .columns
+                .get(*index)
+                .context("missing correlation sort key")?
+                .column
+                .clone())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if bounds.limit != Some(0)
+        && (bounds.offset != 0 || bounds.limit.is_some() && !bounds.with_ties)
+    {
+        let names = keys
+            .iter()
+            .chain(order.iter().map(|item| &item.column))
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+        ensure!(
+            facts.proves_key(&names)
+                || ir.output.columns.iter().all(|entry| names.contains(&entry.column.name)),
+            "correlated row cutoff requires ORDER BY that determines the selected values"
+        );
+    }
+    Ok(Some(keys))
 }
 fn distinct_on(
     ir: &mut crate::compiler::relational::Relational,

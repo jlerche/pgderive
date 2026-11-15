@@ -381,44 +381,15 @@ impl Rewrite<'_> {
     ) -> Result<Node> {
         let alias = self.alias()?;
         let has_residual = !correlation.residuals.is_empty();
-        let joined = query
-            .from_clause
-            .iter()
-            .any(|source| matches!(source.node, Some(NodeEnum::JoinExpr(_))));
-        if quantified.is_some() || has_residual || joined {
-            if quantified.is_some() {
-                scalar_input::validate(&query, scalar_input::Input::Quantified)?;
-            } else {
-                scalar_input::validate(&query, scalar_input::Input::Membership)?;
-            }
-            ensure!(
-                correlation.pairs.iter().all(
-                    |(outer, inner)| scalar_input::column(outer) && scalar_input::column(inner)
-                ),
-                "correlation requires column equalities"
-            );
-        }
-        if has_residual || !correlation.pairs.is_empty() {
-            ensure!(
-                query.group_clause.is_empty()
-                    && query.distinct_clause.iter().all(|key| key.node.is_none())
-                    && query.having_clause.is_none()
-                    && query.sort_clause.is_empty()
-                    && query.limit_count.is_none()
-                    && query.limit_offset.is_none()
-                    && query.op == i32::from(pg::SetOperation::SetopNone),
-                "correlated IN requires a native projection/filter without grouping/DISTINCT ON/order/LIMIT"
-            );
-            // A repeated RHS comparison cannot change a quantified truth value.
-            // Remove DISTINCT before adding the internal correlation columns.
-            query.distinct_clause.clear();
-        }
+        let ordered_keyed = prepare_membership_rhs(&mut query, &correlation, quantified.is_some())?;
+        let key_start = query.target_list.len();
         let mut conditions = Vec::new();
         for (index, (outer, inner)) in correlation.pairs.into_iter().enumerate() {
             let label = format!("\0key_{index}");
             query.target_list.push(ast::target(inner, &label));
             conditions.push(ast::comparison(outer, ast::column(&alias, &label), "="));
         }
+        let key_end = query.target_list.len();
         let mut index = 0;
         conditions.extend(
             correlation
@@ -426,10 +397,17 @@ impl Rewrite<'_> {
                 .into_iter()
                 .map(|term| residual_condition(term, &alias, &mut query.target_list, &mut index)),
         );
+        let mut right = super::query(&query)?;
+        if ordered_keyed {
+            let Parsed::Ordered(ordering) = &mut right else {
+                anyhow::bail!("correlated comparison requires an ordinary ordered SELECT");
+            };
+            ordering.correlation_keys = (key_start..key_end).collect();
+        }
         let left = self.take_tree()?;
         self.tree = Some(Tree::Mark {
             left: Box::new(left),
-            right: Box::new(super::query(&query)?),
+            right: Box::new(right),
             probe: Box::new(probe),
             alias: alias.clone(),
             condition: ast::logical(conditions, true),
@@ -441,6 +419,62 @@ impl Rewrite<'_> {
         });
         Ok(ast::column(&alias, ast::VALUE))
     }
+}
+fn prepare_membership_rhs(
+    query: &mut pg::SelectStmt,
+    correlation: &correlation::Correlation,
+    quantified: bool,
+) -> Result<bool> {
+    let residual = !correlation.residuals.is_empty();
+    let keyed = !correlation.pairs.is_empty();
+    let ordered = !query.sort_clause.is_empty()
+        || query.limit_count.is_some()
+        || query.limit_offset.is_some();
+    let joined =
+        query.from_clause.iter().any(|source| matches!(source.node, Some(NodeEnum::JoinExpr(_))));
+    if quantified || residual || joined || ordered && keyed {
+        let input = if quantified {
+            scalar_input::Input::Quantified
+        } else {
+            scalar_input::Input::Membership
+        };
+        scalar_input::validate(query, input)?;
+        ensure!(
+            correlation
+                .pairs
+                .iter()
+                .all(|(outer, inner)| scalar_input::column(outer) && scalar_input::column(inner)),
+            "correlation requires column equalities"
+        );
+    }
+    if residual || keyed {
+        ensure!(!ordered || !residual, "ordered RHS requires equality-only correlation");
+        ensure!(
+            query.group_clause.is_empty()
+                && query.distinct_clause.iter().all(|key| key.node.is_none())
+                && query.having_clause.is_none()
+                && query.op == i32::from(pg::SetOperation::SetopNone),
+            "correlated comparisons require a native projection without grouping or DISTINCT ON"
+        );
+        if ordered {
+            validate_sort_scope(query)?;
+        } else {
+            // Repeated RHS comparisons cannot change the truth value.
+            query.distinct_clause.clear();
+        }
+    }
+    Ok(ordered && keyed)
+}
+// Adding hidden correlation columns must not expand the user's ordinal scope.
+fn validate_sort_scope(query: &pg::SelectStmt) -> Result<()> {
+    let targets = super::partition::parse_targets(query)?;
+    for sort in &query.sort_clause {
+        let (value, _, _) = super::partition::sort_expression(sort)?;
+        if matches!(value.node, Some(NodeEnum::AConst(_))) {
+            super::ordering::target_index(value, &targets, false)?;
+        }
+    }
+    Ok(())
 }
 fn residual_condition(
     term: correlation::Residual,

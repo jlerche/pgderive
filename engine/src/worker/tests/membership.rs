@@ -301,3 +301,100 @@ async fn select_distinct_cursor_avoids_cold_hot_group_reads_and_rejects_tail_ret
     eprintln!("SELECT DISTINCT full/cursor cold reads: {reads:?}");
     Ok(())
 }
+
+fn ordered_contract() -> crate::source::Contract {
+    let mut native = contract();
+    native.relations[0].columns[2].oid = 23;
+    native.relations[0].columns[2].collation = 0;
+    native
+}
+
+#[test]
+fn correlated_comparison_cuts_off_within_each_equality_bucket() -> Result<()> {
+    let native = ordered_contract();
+    for comparison in ["IN", "NOT IN", "< ANY", ">= ALL"] {
+        let query = format!(
+            "SELECT a.other {comparison} (SELECT b.price FROM source.bid b
+             WHERE b.auction=a.id ORDER BY b.id DESC NULLS FIRST LIMIT 2 OFFSET 1)
+             FROM source.auction a"
+        );
+        compile(&query, &native).map_err(|error| error.context(query))?;
+    }
+    for rhs in [
+        "SELECT DISTINCT b.price FROM source.bid b WHERE b.auction=a.id
+         ORDER BY 1 ASC NULLS LAST LIMIT 1 OFFSET 1",
+        "SELECT b.price FROM source.bid b WHERE b.auction=a.id
+         ORDER BY b.auction FETCH FIRST 1 ROW WITH TIES",
+    ] {
+        let query = format!("SELECT a.other IN ({rhs}) FROM source.auction a");
+        compile(&query, &native).map_err(|error| error.context(query))?;
+    }
+    let wildcard = "SELECT (a.id,a.id,a.other) IN (SELECT b.* FROM source.bid b
+        WHERE b.auction=a.id ORDER BY b.id LIMIT 1) FROM source.auction a";
+    compile(wildcard, &native).map_err(|error| error.context(wildcard))?;
+    for tail in ["LIMIT 2", "ORDER BY 2 LIMIT 2", "ORDER BY b.auction LIMIT 2"] {
+        let query = format!(
+            "SELECT a.other IN (SELECT b.price FROM source.bid b
+             WHERE b.auction=a.id {tail}) FROM source.auction a"
+        );
+        assert!(compile(&query, &native).is_err(), "{query}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_membership_retracts_each_buckets_cutoff_independently() -> Result<()> {
+    let native = ordered_contract();
+    let sql = "SELECT a.id, a.other IN (SELECT b.price FROM source.bid b WHERE b.auction=a.id
+        ORDER BY b.id DESC LIMIT 1 OFFSET 1) AS member FROM source.auction a";
+    let compiled = compile(sql, &native)?;
+    let field = &compiled.output().columns[1].column.name;
+    let options = settings();
+    let a = row(&[("id", Some("1")), ("category", None), ("other", Some("7"))]);
+    let c = row(&[("id", Some("2")), ("category", None), ("other", Some("7"))]);
+    let b1 = row(&[("id", Some("1")), ("auction", Some("1")), ("price", Some("7"))]);
+    let b2 = row(&[("id", Some("2")), ("auction", Some("1")), ("price", None)]);
+    let b3 = row(&[("id", Some("3")), ("auction", Some("2")), ("price", Some("9"))]);
+    let b4 = row(&[("id", Some("4")), ("auction", Some("2")), ("price", Some("8"))]);
+    let b5 = row(&[("id", Some("5")), ("auction", Some("1")), ("price", Some("9"))]);
+    let histories = [
+        batch(vec![
+            ("auction", a, 1),
+            ("auction", c, 1),
+            ("bid", b1, 1),
+            ("bid", b2, 1),
+            ("bid", b3, 1),
+            ("bid", b4, 1),
+        ]),
+        batch(vec![("bid", b5.clone(), 1)]),
+        batch(vec![("bid", b5, -1)]),
+    ];
+    super::History::new((&native, &compiled, &options))
+        .run(
+            histories,
+            |state| ordered_probe_oracle(state, field),
+            super::apply_joined,
+            |tick| tick == 1,
+        )
+        .await?;
+    Ok(())
+}
+
+fn ordered_probe_oracle(
+    (outer, inner): &super::JoinedState,
+    field: &str,
+) -> Result<super::RowBatch> {
+    Batch::from_updates(outer.iter().map(|(outer, weight)| {
+        let mut sorted = inner
+            .iter()
+            .filter(|(rhs, count)| **count > 0 && rhs["auction"] == outer["id"])
+            .map(|(rhs, _)| rhs)
+            .collect::<Vec<_>>();
+        sorted.sort_by(|a, b| b["id"].cmp(&a["id"]));
+        let member = sorted.get(1).map_or(Some("f"), |rhs| {
+            rhs["price"].as_ref().map(|_| if rhs["price"] == outer["other"] { "t" } else { "f" })
+        });
+        let output = row(&[("0:id", outer["id"].as_deref()), (field, member)]);
+        ((relational::Key::new(), output), *weight)
+    }))
+}

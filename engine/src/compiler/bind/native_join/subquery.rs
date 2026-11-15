@@ -40,9 +40,11 @@ impl Builder<'_> {
             skip,
             distinct,
         } = arguments;
+        let ordered =
+            matches!(&*parsed, Parsed::Ordered(value) if !value.correlation_keys.is_empty());
         let start = self.nodes.len();
         let right = self.derived(parsed, alias.clone())?;
-        if quantified.is_some() || has_residual {
+        if quantified.is_some() || has_residual || ordered {
             super::validate_scalar_input(&self.nodes[start..])?;
         }
         let distinct = distinct_columns(&right, distinct)?;
@@ -51,14 +53,14 @@ impl Builder<'_> {
             probe,
             &right,
             &left.columns,
-            (quantified.as_ref(), has_residual),
+            (quantified.as_ref(), has_residual || ordered),
             (&mut computed, self.joins),
         )?;
         self.map(&mut left, computed, &format!("mark_{}_probe", self.joins));
         let columns = left.columns.clone();
         let id = format!("tree_join_{}", self.joins);
         let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
-        validate_correlation(&bound, quantified.is_some(), has_residual)?;
+        validate_correlation(&bound, quantified.is_some() || ordered, has_residual)?;
         let edge = self.join(left, right, bound, crate::compiler::left_join::Kind::Left)?;
         let Some(Node::LeftJoin { id, input, spec }) = self.nodes.pop() else {
             anyhow::bail!("missing marker tagged join");
@@ -115,7 +117,7 @@ fn bind_comparison(
     ast: &Ast,
     right: &Edge,
     left: &[Column],
-    (quantified, has_residual): (Option<&Compare>, bool),
+    (quantified, requires_total_probe): (Option<&Compare>, bool),
     (computed, join): (&mut Vec<scalar::Computed>, usize),
 ) -> Result<(ColumnRef, ColumnRef, Predicate)> {
     let row = matches!(ast.node, Some(NodeEnum::RowExpr(_)));
@@ -137,7 +139,12 @@ fn bind_comparison(
         } else {
             typed::operand(item, &resolve_left)?.coerce(value.oid)?
         };
-        validate_probe(&probe, left, field.collation, (has_residual, quantified.is_some()))?;
+        validate_probe(
+            &probe,
+            left,
+            field.collation,
+            (requires_total_probe, quantified.is_some()),
+        )?;
         let probe = if let Some(column) = probe.as_column() {
             column.clone()
         } else {
@@ -208,11 +215,11 @@ fn validate_probe(
     probe: &typed::Typed,
     left: &[Column],
     rhs_collation: u32,
-    (has_residual, quantified): (bool, bool),
+    (requires_total_probe, quantified): (bool, bool),
 ) -> Result<()> {
     ensure!(
-        !(has_residual || quantified) || probe.total_scalar_input(),
-        "inequality correlation or quantified comparison requires a total membership probe"
+        !(requires_total_probe || quantified) || probe.total_scalar_input(),
+        "this correlated or quantified comparison requires a total membership probe"
     );
     if matches!(probe.oid(), 25 | 1043) {
         let resolve = |value: &ColumnRef| {
