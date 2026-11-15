@@ -399,9 +399,28 @@ fn quantified_grouped_inputs_reuse_ordinary_grouping() -> Result<()> {
     let fallible = "SELECT a.other < ANY (SELECT max(b.price) FROM source.bid b
         GROUP BY 1/(b.id-b.id)) FROM source.auction a";
     assert!(compile(fallible, &native).is_err());
-    let correlated = "SELECT a.other < ANY (SELECT max(b.price) FROM source.bid b
-        WHERE b.auction=a.id GROUP BY b.id) FROM source.auction a";
-    assert!(compile(correlated, &native).is_err());
+    Ok(())
+}
+
+#[test]
+fn equality_correlated_grouped_comparisons_preserve_local_grouping() -> Result<()> {
+    let native = ordered_contract();
+    for comparison in ["IN", "< ANY", ">= ALL"] {
+        let sql = format!(
+            "SELECT a.other {comparison} (SELECT max(b.price) FROM source.bid b
+             WHERE b.auction=a.id GROUP BY b.id HAVING count(*)>0) FROM source.auction a"
+        );
+        compile(&sql, &native).map_err(|error| error.context(sql))?.validate_execution()?;
+    }
+    for invalid in [
+        "SELECT b.auction FROM source.bid b WHERE b.auction=a.id GROUP BY b.price",
+        "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id AND b.id>a.id GROUP BY b.price",
+        "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY ROLLUP(b.price)",
+        "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY b.price LIMIT 1",
+    ] {
+        let sql = format!("SELECT a.other < ANY ({invalid}) FROM source.auction a");
+        assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
     Ok(())
 }
 

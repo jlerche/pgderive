@@ -400,7 +400,15 @@ impl Rewrite<'_> {
     ) -> Result<Node> {
         let alias = self.alias()?;
         let has_residual = !correlation.residuals.is_empty();
-        let ordered = prepare_membership_rhs(&mut query, &correlation, quantified.is_some())?;
+        let grouped = !query.group_clause.is_empty() && !correlation.pairs.is_empty();
+        let ordered = if grouped {
+            validate_keyed_grouping(&query, &correlation)?;
+            self.validation.push(super::query(&query)?);
+            query.distinct_clause.clear();
+            false
+        } else {
+            prepare_membership_rhs(&mut query, &correlation, quantified.is_some())?
+        };
         let deferred =
             ordered && (has_residual || query.distinct_clause.iter().any(|key| key.node.is_some()));
         let cutoff = if deferred { Some(defer_membership_cutoff(&mut query)?) } else { None };
@@ -408,6 +416,9 @@ impl Rewrite<'_> {
         let mut conditions = Vec::new();
         for (index, (outer, inner)) in correlation.pairs.into_iter().enumerate() {
             let label = format!("\0key_{index}");
+            if grouped {
+                query.group_clause.push(inner.clone());
+            }
             query.target_list.push(ast::target(inner, &label));
             conditions.push(ast::comparison(outer, ast::column(&alias, &label), "="));
         }
@@ -443,6 +454,31 @@ impl Rewrite<'_> {
         Ok(ast::column(&alias, ast::VALUE))
     }
 }
+fn validate_keyed_grouping(
+    query: &pg::SelectStmt,
+    correlation: &correlation::Correlation,
+) -> Result<()> {
+    ensure!(
+        correlation.residuals.is_empty()
+            && query.sort_clause.is_empty()
+            && query.limit_count.is_none()
+            && query.limit_offset.is_none()
+            && query.distinct_clause.iter().all(|node| node.node.is_none())
+            && query.group_clause.iter().all(|node| {
+                !matches!(node.node, Some(NodeEnum::GroupingSet(_) | NodeEnum::RowExpr(_)))
+            }),
+        "correlated grouping requires ordinary GROUP BY and equality keys without ordered cutoffs"
+    );
+    ensure!(
+        correlation
+            .pairs
+            .iter()
+            .all(|(outer, inner)| scalar_input::column(outer) && scalar_input::column(inner)),
+        "correlated grouping requires column equalities"
+    );
+    scalar_input::validate(query, scalar_input::Input::Quantified)
+}
+
 fn prepare_membership_rhs(
     query: &mut pg::SelectStmt,
     correlation: &correlation::Correlation,

@@ -165,6 +165,12 @@ outputs using the same expression restrictions. The comparison sees one
 row per surviving group, including any NULL result. When no group survives,
 `ANY` is FALSE and `ALL` is TRUE, even with a NULL probe.
 
+`IN`, `ANY`, and `ALL` also support ordinary GROUP BY and HAVING with
+column equality correlation keys. Each outer row compares only against
+groups formed from the rows matching its keys. NULL correlation keys
+have no matches. Grouping sets, residual correlation, and ordered
+cutoffs in correlated grouped inputs remain unsupported.
+
 The operators `=`, `<>` (also spelled `!=`), `<`, `<=`, `>`, and `>=`
 support `ANY` (also spelled `SOME`) and `ALL` over a one-column subquery. Both operands
 may be smallint, integer, bigint, or numeric, including mixed pairs. Comparisons

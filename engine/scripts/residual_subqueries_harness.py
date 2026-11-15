@@ -111,6 +111,15 @@ class ResidualFixture(SqlFixture):
                 FROM {a} a"""
             self.sql(f'''INSERT INTO {b}(id,auction,price,cutoff) VALUES (14,2,NULL,3);
                 UPDATE {a} SET probe=2 WHERE id=9''')
+        elif mode == 'keyed-grouped-comparisons':
+            per_key_group = f"""SELECT max(b.price) FROM {b} b WHERE {keys}
+                GROUP BY b.cutoff HAVING count(*)>1"""
+            self.labels = ['id', 'key_group_in', 'key_group_any', 'key_group_all']
+            self.query = f"""SELECT a.id, a.probe IN ({per_key_group}) AS key_group_in,
+                a.probe < ANY ({per_key_group}) AS key_group_any,
+                a.probe < ALL ({per_key_group}) AS key_group_all FROM {a} a"""
+            self.sql(f"""INSERT INTO {b}(id,auction,price,cutoff) VALUES
+                (14,2,NULL,2),(15,1,10,1),(16,1,8,1)""")
         elif mode == 'nested-exists':
             scope = keys if keyed else keys + ' AND b.id>a.id'
             exists = f"""EXISTS (SELECT 1 FROM {b} b WHERE {scope}
@@ -246,6 +255,16 @@ class ResidualFixture(SqlFixture):
                         compare(row['probe'], maximum, operator.lt, True),
                         compare(row['probe'], maxima, operator.lt, False),
                         compare(row['probe'], maxima, operator.lt, True))] += 1
+            elif self.mode == 'keyed-grouped-comparisons':
+                groups = {}
+                for item in inner:
+                    if item['id'] != 99 and key is not None and key == item['auction']:
+                        groups.setdefault(item['cutoff'], []).append(item['price'])
+                maxima = [max((price for price in prices if price is not None), default=None)
+                          for prices in groups.values() if len(prices) > 1]
+                memory[(row['id'], membership(row['probe'], maxima),
+                        compare(row['probe'], maxima, operator.lt, False),
+                        compare(row['probe'], maxima, operator.lt, True))] += 1
             elif self.mode == 'nested-exists':
                 probe = row['probe']
                 present = any(
@@ -329,6 +348,7 @@ def qualify(output, command, mode, keyed):
             changes=[
                 f'DELETE FROM {b} WHERE id=1; UPDATE {a} SET floor=2 WHERE id IN (1,3)',
                 f'UPDATE {b} SET cutoff=4 WHERE id=3; DELETE FROM {b} WHERE id IN (2,8)',
+                *([f'DELETE FROM {b} WHERE id=14'] if mode == 'keyed-grouped-comparisons' else []),
                 f'UPDATE {b} SET cutoff=NULL WHERE id=3; UPDATE {a} SET ceiling=20 WHERE id=2',
                 f'UPDATE {b} SET auction=3,cutoff=1 WHERE id=3; UPDATE {a} SET probe=7 WHERE id=7',
                 f'DELETE FROM {b}',
@@ -352,4 +372,5 @@ if __name__ == '__main__':
     cases = [(mode if keyed else f'{mode}-inequality-only', mode, keyed)
              for keyed in (True, False) for mode in modes]
     run_cases([*cases, ('ordered', 'ordered', True),
-               ('aggregate-quantified', 'aggregate-quantified', True)], qualify)
+               ('aggregate-quantified', 'aggregate-quantified', True),
+               ('keyed-grouped-comparisons', 'keyed-grouped-comparisons', True)], qualify)
