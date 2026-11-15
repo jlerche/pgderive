@@ -128,8 +128,14 @@ before the cutoff. DISTINCT ON chooses the first qualifying row per key
 and then applies the cutoff. Its ORDER BY must follow PostgreSQL's prefix
 rule and determine the compared values of each representative. Retained
 distinct keys also count against the resident output-byte limit.
-Qualify outer references in residual comparisons. Correlation
-is limited to one outer query level.
+Qualify outer references in residual comparisons. A positive EXISTS
+conjunct inside another EXISTS can reference qualified native columns
+from multiple enclosing levels. The compiler checks each reference in
+its original scope and joins the witnesses before evaluating presence.
+Direct witness-to-witness column equalities supply native join keys.
+It admits up to eight witness sources with distinct qualifiers and
+row-preserving bounds. Nested EXISTS inside OR or NOT, and other
+multilevel correlation shapes, remain unsupported.
 The membership probe must be safe to evaluate independently of the RHS.
 
 The mark scans the matching equality bucket, or the shared bucket for a

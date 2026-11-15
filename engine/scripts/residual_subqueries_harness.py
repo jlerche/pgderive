@@ -98,6 +98,13 @@ class ResidualFixture(SqlFixture):
                 a.probe IN ({unique}) AS unique_member, a.probe < ANY ({ties}) AS ties_earlier,
                 a.probe IN ({representatives}) AS representative_member FROM {a} a"""
             self.sql(f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (13,1,8,12)')
+        elif mode == 'nested-exists':
+            scope = keys if keyed else keys + ' AND b.id>a.id'
+            exists = f"""EXISTS (SELECT 1 FROM {b} b WHERE {scope}
+                AND EXISTS (SELECT 1 FROM {b} c WHERE c.id<>99
+                    AND c.auction=b.id AND c.price>=a.probe))"""
+            self.labels = ['id', 'present', 'absent']
+            self.query = f'SELECT a.id, {exists} AS present, NOT {exists} AS absent FROM {a} a'
         elif mode == 'joined':
             rhs = rhs.replace(f'SELECT b.price FROM {b} b',
                 f'SELECT c.price FROM {b} b LEFT JOIN {b} c ON c.auction=b.id AND c.id<>99')
@@ -206,6 +213,18 @@ class ResidualFixture(SqlFixture):
                         membership(row['probe'], unique[1:2]),
                         compare(row['probe'], peers, operator.lt, False),
                         membership(row['probe'], distinct_on_values(bucket)))] += 1
+            elif self.mode == 'nested-exists':
+                probe = row['probe']
+                present = any(
+                    probe is not None and witness['id'] != 99
+                    and (key is not None and key == witness['auction'] if self.keyed
+                         else witness['id'] > row['id'])
+                    and any(child['id'] != 99 and child['auction'] == witness['id']
+                            and child['price'] is not None and child['price'] >= probe
+                            for child in inner)
+                    for witness in inner
+                )
+                memory[(row['id'], present, not present)] += 1
             elif self.mode == 'joined':
                 values = [
                     value for item in matches for value in
@@ -262,6 +281,12 @@ def qualify(output, command, mode, keyed):
         f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (12,3,9,1)',
         f'DELETE FROM {b} WHERE id=12',
     ] if mode in GROUP_OFFSET_MODES else []
+    nested_changes = [
+        f"""INSERT INTO {b}(id,auction,price,cutoff)
+            VALUES (20,1,NULL,1), (21,20,7,1), (22,20,7,1)""",
+        f'DELETE FROM {b} WHERE id=21',
+        f'DELETE FROM {b} WHERE id=22',
+    ] if mode == 'nested-exists' else []
     with fixture.managed():
         fixture.run_history(command, History(
             changes=[
@@ -272,6 +297,7 @@ def qualify(output, command, mode, keyed):
                 f'DELETE FROM {b}',
                 f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (3,3,NULL,1)',
                 *group_changes,
+                *nested_changes,
             ],
             final=f'UPDATE {b} SET auction=1,price=7 WHERE id=3',
             normalized=fixture.query.replace('SELECT', 'select').replace('ANY', 'SOME'),
@@ -285,7 +311,7 @@ def qualify(output, command, mode, keyed):
 
 if __name__ == '__main__':
     modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined', 'exists-zero', 'exists-group', 'exists-offset',
-             'exists-ties', 'residual-ordered', *GROUP_OFFSET_MODES)
+             'exists-ties', 'residual-ordered', 'nested-exists', *GROUP_OFFSET_MODES)
     cases = [(mode if keyed else f'{mode}-inequality-only', mode, keyed)
              for keyed in (True, False) for mode in modes]
     run_cases([*cases, ('ordered', 'ordered', True)], qualify)

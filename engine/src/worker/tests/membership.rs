@@ -364,6 +364,32 @@ fn residual_comparison_orders_after_correlation() -> Result<()> {
 }
 
 #[test]
+fn nested_positive_exists_preserves_scope_and_presence() -> Result<()> {
+    let native = ordered_contract();
+    let exists = "SELECT a.id, EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id
+        AND EXISTS (SELECT 1 FROM source.bid c WHERE c.auction=b.id AND c.price>a.other))
+        FROM source.auction a";
+    compile(exists, &native).map_err(|error| error.context(exists))?;
+    let siblings = exists.replace(
+        "c.price>a.other))",
+        "c.price>a.other) AND EXISTS (SELECT 1 FROM source.bid d WHERE d.auction=b.id))",
+    );
+    compile(&siblings, &native).map_err(|error| error.context(siblings.clone()))?;
+    for invalid in [
+        siblings.replace("d.auction=b.id", "d.auction=c.id"),
+        exists.replace("b.auction=a.id", "b.auction=c.id"),
+        exists.replace("b.auction=a.id", "auction=a.id"),
+        exists.replace("AND EXISTS", "OR EXISTS"),
+        exists.replace("AND EXISTS", "AND NOT EXISTS"),
+        exists.replace("c.price>a.other", "c.price>a.other OFFSET 1"),
+        exists.replace("source.bid c", "source.bid a"),
+    ] {
+        assert!(compile(&invalid, &native).is_err(), "{invalid}");
+    }
+    Ok(())
+}
+
+#[test]
 fn correlated_comparisons_bind_distinct_keys_before_the_cutoff() -> Result<()> {
     let native = ordered_contract();
     for condition in ["b.auction=a.id", "b.auction=a.id AND b.id>a.id", "b.id>a.id"] {

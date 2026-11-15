@@ -1,6 +1,7 @@
 //! Lift bounded scalar/IN subqueries into the ordinary relational source tree.
 mod ast;
 pub(super) mod correlation;
+mod nested_exists;
 mod scalar;
 mod scalar_input;
 use super::{
@@ -270,10 +271,15 @@ impl Rewrite<'_> {
         let NodeEnum::SelectStmt(query) = node(optional(link.subselect.as_deref())?)? else {
             anyhow::bail!("subquery requires SELECT");
         };
-        ensure!(
-            !nested_query(query),
-            "nested scalar/IN subqueries inside a lifted subquery are unsupported"
-        );
+        if nested_query(query) {
+            ensure!(
+                link.sub_link_type == i32::from(pg::SubLinkType::ExistsSublink),
+                "nested scalar/IN subqueries inside a lifted subquery are unsupported"
+            );
+            ensure!(link.testexpr.is_none() && link.oper_name.is_empty(), "invalid EXISTS sublink");
+            let flattened = nested_exists::flatten(self.select, query)?;
+            return self.existence(&flattened);
+        }
         ensure!(
             link.sub_link_type == i32::from(pg::SubLinkType::ExistsSublink)
                 || query.op != i32::from(pg::SetOperation::SetopNone)
