@@ -19,8 +19,13 @@ fn native() -> crate::source::Contract {
         column.oid = oid;
         native.relations[0].columns.push(column);
     }
-    let mut person =
-        Relation { oid: 3, schema: "source".into(), table: "person".into(), columns: Vec::new() };
+    let mut person = Relation {
+        oid: 3,
+        schema: "source".into(),
+        table: "person".into(),
+        primary_key_deferrable: false,
+        columns: Vec::new(),
+    };
     for (position, name, oid, primary) in
         [(1, "id", 23, true), (2, "name", 25, false), (3, "date_time", 1184, false)]
     {

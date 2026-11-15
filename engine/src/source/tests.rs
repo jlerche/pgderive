@@ -24,6 +24,7 @@ pub fn contract() -> Contract {
             oid: 42,
             schema: "public".into(),
             table: "items".into(),
+            primary_key_deferrable: false,
             columns: vec![Column {
                 position: 1,
                 name: "id".into(),

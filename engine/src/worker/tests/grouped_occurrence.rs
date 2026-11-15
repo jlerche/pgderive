@@ -30,6 +30,7 @@ fn native() -> Contract {
         oid: 3,
         schema: "source".into(),
         table: "global_clock".into(),
+        primary_key_deferrable: false,
         columns: vec![id, time],
     });
     native

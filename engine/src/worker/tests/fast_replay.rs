@@ -77,6 +77,7 @@ fn native() -> Contract {
         oid,
         schema: "source".into(),
         table: table.into(),
+        primary_key_deferrable: false,
         columns: columns
             .into_iter()
             .zip(1..)

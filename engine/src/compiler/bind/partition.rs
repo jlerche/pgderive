@@ -137,6 +137,9 @@ pub(super) struct PrimaryKey {
 
 impl PrimaryKey {
     pub(super) fn from_relation(source: usize, relation: &crate::source::Relation) -> Option<Self> {
+        if relation.primary_key_deferrable {
+            return None;
+        }
         let fields = relation
             .columns
             .iter()

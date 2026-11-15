@@ -46,7 +46,11 @@ SELECT s.system_identifier::text, ck.timeline_id::bigint, current_database(),
        COALESCE((
            SELECT jsonb_agg(jsonb_build_object(
                'layout', jsonb_build_object('oid', c.oid::bigint, 'schema', n.nspname,
-                   'table', c.relname, 'columns', attrs.columns),
+                   'table', c.relname, 'columns', attrs.columns,
+                   'primary_key_deferrable', EXISTS (
+                       SELECT 1 FROM pg_catalog.pg_constraint k
+                       WHERE k.conrelid=c.oid AND k.contype='p' AND k.condeferrable
+                   )),
                'supported', c.relkind='r' AND c.relpersistence='p' AND c.relreplident='f'
                    AND pr.prattrs IS NULL AND pr.prqual IS NULL AND attrs.supported
                    AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i

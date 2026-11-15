@@ -2544,7 +2544,7 @@
     "scripts/case_compiler_harness.py": "523c49ab1fa43697696e7a61dc04923ab24488787fc9aefcba67cbbbcb64e695",
     "scripts/circuit_numeric_harness.py": "41842c6a7931ce9cd5f157cb89df8347722bd96c8efe7002c5cd27e27167d294",
     "scripts/computed_join_harness.py": "490566b3b11d12a4943842d0a3906fd32eebeddaa70e1dd53dfe7c889efdd9fb",
-    "scripts/export_semantics.py": "e2d8582ae5efc354e751289ed71c656d790e038682d9566c81cfd4b1218a48e4",
+    "scripts/export_semantics.py": "0c113ea19159c4da3eeba1b4fd840fc6168f4e559d3d75e6dfbbf53f53c2dcf1",
     "scripts/expression_composition_harness.py": "9dda5ce9df02ad2e6b59500261f5bf5ab4f87e9cb3225ca0978e9cad9a812c88",
     "scripts/functions_compiler_harness.py": "5a95750210017cc1b6751c856c3386de3a0ceacf7d5700b9a00c31a16fe8c3ef",
     "scripts/harness_control.py": "75c66f7afa7bffed56f1375b57a2210215f6e910f4af67a7fb62a3fd4ca6d4a4",
@@ -2576,5 +2576,5 @@
     "scripts/unordered_harness.py": "c0ec6814ed5c54000e12fc1f4785b9699822e8fcf263a26662b00a39f4d59eb6",
     "scripts/worker_harness.py": "005ab8aa6a1a488755973a0c728dbb41bd922d07d6065666379a26de047ff032"
   },
-  "fixture_sha256": "992d82e53edcca98db3bfb56cde069d68fe846adab21f9f26ff65203a33df781"
+  "fixture_sha256": "335942ad529cd63daae0f14bada063784d3a8bdd3b51a554ec4bf7aa0e6a9af4"
 }

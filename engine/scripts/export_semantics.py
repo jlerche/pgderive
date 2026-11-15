@@ -87,7 +87,9 @@ def updates(rows):
 
 def relations(fixture):
     rows = json.loads(sql(fixture, f"""SELECT json_agg(json_build_object(
-      'oid',c.oid,'schema','source','table',c.relname,'columns',
+      'oid',c.oid,'schema','source','table',c.relname,
+      'primary_key_deferrable',EXISTS(SELECT 1 FROM pg_constraint k
+        WHERE k.conrelid=c.oid AND k.contype='p' AND k.condeferrable),'columns',
       (SELECT json_agg(json_build_object('position',a.attnum,'name',a.attname,
         'oid',a.atttypid,'modifier',a.atttypmod,'nullable',NOT a.attnotnull,
         'primary',EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=c.oid

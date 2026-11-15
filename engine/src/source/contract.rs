@@ -33,6 +33,8 @@ pub struct Relation {
     pub schema: String,
     /// Case-sensitive relation name.
     pub table: String,
+    /// Whether the declared primary key can be deferred.
+    pub primary_key_deferrable: bool,
     /// Full visible source row layout in physical attribute order.
     pub columns: Vec<Column>,
 }

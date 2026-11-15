@@ -29,6 +29,7 @@ pub(super) fn contract() -> Contract {
                 oid: 1,
                 schema: "source".into(),
                 table: "auction".into(),
+                primary_key_deferrable: false,
                 columns: vec![
                     column(1, "id", 23, true),
                     column(2, "category", 25, false),
@@ -39,6 +40,7 @@ pub(super) fn contract() -> Contract {
                 oid: 2,
                 schema: "source".into(),
                 table: "bid".into(),
+                primary_key_deferrable: false,
                 columns: vec![
                     column(1, "id", 23, true),
                     column(2, "auction", 23, false),

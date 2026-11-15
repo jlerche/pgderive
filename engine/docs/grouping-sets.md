@@ -27,8 +27,12 @@ the same transaction boundary. The existing work and memory limits
 apply to the expanded plan.
 
 A query can also project columns of supported grouping types from a base
-table when every grouping set includes that occurrence’s full primary key.
+table when every grouping set includes that occurrence’s full nondeferrable primary key.
 GROUPING() arguments still have to be explicit grouping expressions.
 The same rule applies to ordinary GROUP BY and joins. A merged USING key
 qualifies when it resolves to the original primary-key column. Derived
 outputs and join equalities do not transfer primary-key dependencies.
+
+Source contracts now record primary-key deferrability. Retire existing
+registrations with the previous binary before upgrading, then use
+`query create` with the updated binary to capture the new contract.

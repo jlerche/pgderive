@@ -2,6 +2,7 @@
 """Verify grouping sets against PostgreSQL and a direct weighted count."""
 from collections import Counter
 import json
+import subprocess
 
 from native_mv_oracle import binary_difference, expected
 from sql_compiler_harness import SqlFixture
@@ -46,7 +47,9 @@ class GroupingFixture(SqlFixture):
             self.query = f'''SELECT auction AS k, GROUPING(auction), COUNT(*) AS n
                 FROM {self.source} GROUP BY {clause}'''
         if mode == 'metadata':
-            self.sql(f"""ALTER TABLE {self.source} ADD COLUMN tag varchar(3) COLLATE "C" DEFAULT 'abc'""")
+            self.sql(f"""ALTER TABLE {self.source}
+                ADD COLUMN tag varchar(3) COLLATE "C" DEFAULT 'abc',
+                DROP CONSTRAINT bid_pkey, ADD PRIMARY KEY (id) DEFERRABLE""")
             self.labels = ['k', 'grouping', 'n']
             self.query = f'SELECT tag AS k, GROUPING(tag), COUNT(*) AS n FROM {self.source} GROUP BY {clause}'
         if mode == 'constants':
@@ -119,6 +122,12 @@ def qualify(output, command, mode):
     fixture = GroupingFixture(output, mode)
     source = fixture.source
     with fixture.managed():
+        if mode == 'metadata':
+            query = f'SELECT price, COUNT(*) FROM {source} GROUP BY id, ROLLUP(auction)'
+            native = subprocess.run(fixture.pg + [query], env=fixture.environment,
+                                    capture_output=True, text=True, check=False)
+            assert native.returncode and 'must appear in the GROUP BY' in native.stderr, native.stderr
+            fixture.rejected(command, 'deferrable-dependency', query)
         fixture.run_history(command, History(
             changes=[
                 f'INSERT INTO {source}(id,auction,price) VALUES (100,1,5),(101,NULL,NULL),(102,NULL,7),(103,1,5)',

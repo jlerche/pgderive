@@ -52,6 +52,22 @@ fn grouping_syntax_composes_with_ordinary_query_clauses() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn deferrable_primary_key_does_not_prove_grouping_dependency() -> Result<()> {
+    let mut native = contract();
+    native.relations[0].primary_key_deferrable = true;
+    for sql in [
+        "SELECT category, COUNT(*) FROM source.auction GROUP BY id",
+        "SELECT category, COUNT(*) FROM source.auction GROUP BY id, ROLLUP(other)",
+        "SELECT a.category, COUNT(*) FROM source.auction a JOIN source.bid b
+         ON a.id=b.auction GROUP BY a.id",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    compile("SELECT category, COUNT(*) FROM source.auction GROUP BY id, category", &native)?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn grouping_set_deltas_keep_repeated_groups_and_generated_nulls() -> Result<()> {
     let contract = contract();
