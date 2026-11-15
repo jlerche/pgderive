@@ -944,7 +944,7 @@ offset range failures preserve the prior checkpoint and permit valid retry.
 
 Grouped and global COUNT, SUM, AVG, MIN and MAX accept DISTINCT over one
 int2, int4 or int8 column or supported scalar expression. MIN and MAX also
-accept text or varchar with C/POSIX collation. Boolean bool_and,
+accept text or varchar with a [built-in bytewise collation](text-ordering.md). Boolean bool_and,
 bool_or and every also accept DISTINCT. FILTER admits only true rows and runs
 before a computed argument. NULL inputs are ignored. Each distinct value
 contributes once, so retracting a duplicate changes the result only if it was

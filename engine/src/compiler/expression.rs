@@ -254,8 +254,8 @@ pub(super) fn check_comparison(
         ensure!(left_collation != 0 && right_collation != 0, "unresolved ON text collation");
         let collation = typed::collation::common(left_collation, right_collation)?;
         ensure!(
-            matches!(op, Compare::Eq | Compare::Ne) || matches!(collation, 950 | 951),
-            "text ON ordering requires C/POSIX collation"
+            matches!(op, Compare::Eq | Compare::Ne) || typed::collation::bytewise(collation),
+            "text ON ordering requires a built-in bytewise collation"
         );
     }
     Ok(())

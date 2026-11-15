@@ -58,8 +58,10 @@ pub(super) fn apply(
         ensure!(
             !matches!(column.oid, 25 | 1043)
                 || value.bytewise
-                || matches!(facts.collation(&column), Some(950 | 951)),
-            "text ORDER BY requires built-in C/POSIX collation or explicit COLLATE"
+                || facts
+                    .collation(&column)
+                    .is_some_and(crate::compiler::typed::collation::bytewise),
+            "text ORDER BY requires a built-in bytewise collation"
         );
         ensure!(
             !parsed.distinct

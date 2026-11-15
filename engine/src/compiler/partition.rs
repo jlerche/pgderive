@@ -311,6 +311,9 @@ pub(super) const fn orderable(oid: u32) -> bool {
 }
 
 pub(super) fn require_bytewise(collation: u32) -> Result<()> {
-    ensure!(matches!(collation, 950 | 951), "text ordering requires C/POSIX collation");
+    ensure!(
+        crate::compiler::typed::collation::bytewise(collation),
+        "text ordering requires a built-in bytewise collation"
+    );
     Ok(())
 }

@@ -11,16 +11,22 @@ class OrderingFixture(SqlFixture):
     def __init__(self, output, mode):
         super().__init__(output, False)
         self.mode = mode
+        collation = 'pg_c_utf8' if mode.startswith('codepoint-') else '"C"'
         self.source = self.name + '.bid'
         self.sql(f'''ALTER TABLE {self.source}
-            ADD COLUMN payload varchar(12) COLLATE "C",
+            ADD COLUMN payload varchar(12) COLLATE {collation},
             ADD COLUMN duration interval, ADD COLUMN observed date''')
         self.sql(f'DELETE FROM {self.source}')
-        if mode == 'extrema':
+        if mode in ('extrema', 'codepoint-extrema'):
+            override = ' COLLATE pg_catalog.ucs_basic' if mode == 'codepoint-extrema' else ''
             self.labels = ['auction', 'lo', 'hi']
             self.query = f'''SELECT auction, min(DISTINCT payload) AS lo,
-                max(payload) FILTER (WHERE id <> 104) AS hi
+                max(payload{override}) FILTER (WHERE id <> 104) AS hi
                 FROM {self.source} GROUP BY auction'''
+        elif mode == 'codepoint-topk':
+            self.labels = ['id', 'payload']
+            self.query = f'''SELECT id, payload FROM {self.source}
+                ORDER BY payload COLLATE pg_catalog.ucs_basic DESC NULLS LAST, id LIMIT 3'''
         elif mode == 'date-extrema':
             self.labels = ['auction', 'lo', 'hi']
             self.query = f'''SELECT auction, min(DISTINCT observed) AS lo,
@@ -65,7 +71,7 @@ class OrderingFixture(SqlFixture):
     def verify(self):
         self.verify_sql(expected(self, self.labels))
         assert binary_difference(self) == '0'
-        if self.mode in ('extrema', 'date-extrema'):
+        if self.mode in ('extrema', 'codepoint-extrema', 'date-extrema'):
             columns = self.sql(f"""SELECT attname,atttypid,atttypmod,attcollation
                 FROM pg_attribute WHERE attrelid IN ('{self.name}.groups'::regclass,
                     '{self.name}.pgderive_native_oracle'::regclass)
@@ -82,14 +88,15 @@ def qualify(output, command, mode):
                 f"""INSERT INTO {source}(id,auction,payload,duration,price) VALUES
                     (100,1,'a','1 month',1),(101,1,'a','30 days',2),
                     (102,1,'A','1 day',3),(103,2,NULL,NULL,NULL),(104,1,'é','10 hours',4),
-                    (105,2,'','-1 day',4),(106,1,'ab','2 months',7);
+                    (105,2,'','-1 day',4),(106,1,'ab','2 months',7),
+                    (109,1,U&'e\\0301','3 days',8),(110,1,U&'\\+01F600','4 days',9);
                     UPDATE {source} SET observed = CASE id
                         WHEN 100 THEN date 'infinity'
                         WHEN 101 THEN date '5874897-12-31'
                         WHEN 102 THEN date '0001-01-01 BC'
                         WHEN 104 THEN date '-infinity'
                         ELSE NULL END""",
-                f"""UPDATE {source} SET payload='zz',duration='-2 days',observed=date '2025-01-01' WHERE id=106""",
+                f"""UPDATE {source} SET payload='zz',duration='-2 days',observed=date '2025-01-01' WHERE id IN (106,110)""",
                 f'DELETE FROM {source} WHERE id IN (100,102,105)',
                 f'DELETE FROM {source}',
             ],
@@ -104,4 +111,7 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    run_modes(('extrema', 'window', 'interval-ties', 'date-extrema', 'interval-distinct', 'numeric-range', 'temporal-range'), qualify)
+    run_modes((
+        'extrema', 'codepoint-extrema', 'codepoint-topk', 'window', 'interval-ties',
+        'date-extrema', 'interval-distinct', 'numeric-range', 'temporal-range',
+    ), qualify)

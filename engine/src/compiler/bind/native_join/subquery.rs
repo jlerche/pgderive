@@ -208,8 +208,8 @@ fn validate_probe(
                 })?
                 .oid()?;
             ensure!(
-                matches!(collation, 950 | 951),
-                "quantified text comparison requires deterministic C/POSIX collation"
+                crate::compiler::typed::collation::bytewise(collation),
+                "quantified text comparison requires a built-in bytewise collation"
             );
             return Ok(());
         }

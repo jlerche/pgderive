@@ -27,7 +27,8 @@ impl Environment {
         collations: &[u32],
     ) -> Result<Self> {
         let mut collations = collations.to_vec();
-        collations.extend([100, 950, 951]); // Default and built-in C/POSIX collations.
+        collations.push(100); // Database default.
+        collations.extend(crate::compiler::BYTEWISE_COLLATIONS.map(|(_, oid)| oid));
         collations.sort_unstable();
         collations.dedup();
         collations.retain(|oid| *oid != 0);

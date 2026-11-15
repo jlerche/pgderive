@@ -10,10 +10,11 @@ ordering use the existing typed codec. Numeric ordering shares the production
 Numeric comparator's canonical order key, including scale-equivalent values,
 negative infinity, positive infinity and PostgreSQL NaN (greater than infinity).
 
-Text/varchar keys must have the built-in C/POSIX source collation (OID 950/951),
-or use explicit `COLLATE pg_catalog."C"` / `COLLATE pg_catalog."POSIX"` in ORDER BY.
+Text and varchar keys require a built-in bytewise collation (C, POSIX,
+`ucs_basic`, or `pg_c_utf8`). Use a source column with one of these collations
+or specify it explicitly in ORDER BY, such as `COLLATE pg_catalog."C"`.
 Computed text requires explicit COLLATE because its source collation is not
-proven. Unqualified built-in C/POSIX names also resolve in the fixed pg_catalog
+proven. Unqualified built-in bytewise collation names also resolve in the fixed pg_catalog
 binding context. Default and other locale/provider collations reject; the engine
 does not substitute byte ordering for locale ordering. UTF8 byte comparison
 preserves prefixes, case, normalization distinctions and varchar trailing spaces.
@@ -27,8 +28,8 @@ binder and never become destination columns. DISTINCT requires sort expressions
 to resolve to selected values. The existing 64-target budget includes hidden
 targets; aggregate expressions can also be referenced by their selected alias.
 Explicit ORDER BY COLLATE with DISTINCT rejects because collated SELECT targets
-are not yet admitted; use an already C/POSIX-collated source column with ordinary
-ORDER BY for this bounded DISTINCT form.
+are not yet admitted. Use ordinary ORDER BY on a source column with a
+built-in bytewise collation for this DISTINCT form.
 
 ```sql
 SELECT b.auction, b.price

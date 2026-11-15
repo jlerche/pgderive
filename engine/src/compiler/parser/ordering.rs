@@ -114,11 +114,10 @@ fn include_target(
 
 fn byte_order(value: &Node) -> Result<(&Node, bool)> {
     let NodeEnum::CollateClause(collate) = node(value)? else { return Ok((value, false)) };
-    let name = super::expressions::names(&collate.collname)?.0;
+    let name = super::expressions::names(&collate.collname)?;
     ensure!(
-        matches!(name.as_slice(), [schema, name] if schema == "pg_catalog" && matches!(name.as_str(), "C" | "POSIX"))
-            || matches!(name.as_slice(), [name] if matches!(name.as_str(), "C" | "POSIX")),
-        "ORDER BY COLLATE requires built-in C or POSIX"
+        crate::compiler::typed::collation::builtin_bytewise(&name).is_some(),
+        "ORDER BY COLLATE requires a built-in bytewise collation"
     );
     Ok((super::optional(collate.arg.as_deref())?, true))
 }

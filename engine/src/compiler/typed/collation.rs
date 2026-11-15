@@ -1,7 +1,19 @@
 //! Collation derivation for collatable scalar expressions.
 use super::{ColumnRef, Name, Typed, Value};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use pg_query::protobuf as pg;
+
+pub(in crate::compiler) fn bytewise(oid: u32) -> bool {
+    crate::compiler::BYTEWISE_COLLATIONS.iter().any(|(_, value)| *value == oid)
+}
+
+pub(in crate::compiler) fn builtin_bytewise(name: &Name) -> Option<u32> {
+    use crate::compiler::parser::expressions::builtin_name;
+    let name = builtin_name(&name.0)?;
+    crate::compiler::BYTEWISE_COLLATIONS
+        .iter()
+        .find_map(|(key, oid)| (*key == name).then_some(*oid))
+}
 
 pub(super) fn bind(
     clause: &pg::CollateClause,
@@ -18,13 +30,10 @@ pub(super) fn bind(
 
 // Some callers resolve leading collated unknowns in their own type context.
 pub(super) fn explicit(clause: &pg::CollateClause, input: Typed) -> Result<Typed> {
-    use crate::compiler::parser::expressions::{builtin_name, names};
+    use crate::compiler::parser::expressions::names;
     let name = names(&clause.collname)?;
-    let collation = match builtin_name(&name.0) {
-        Some("C") => 950,
-        Some("POSIX") => 951,
-        _ => anyhow::bail!("explicit text collation must be pg_catalog.C or pg_catalog.POSIX"),
-    };
+    let collation = builtin_bytewise(&name)
+        .context("explicit text collation requires a supported pg_catalog bytewise collation")?;
     ensure!(matches!(input.oid, 0 | 25 | 705 | 1043), "COLLATE requires a text or varchar operand");
     Ok(Typed { oid: input.oid, value: Value::Collate { input: Box::new(input), collation } })
 }

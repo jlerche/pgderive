@@ -20,7 +20,7 @@ cannot become keys remain predicates over candidate pairs; a keyless condition
 uses the existing Cartesian join key and work limits.
 
 Text predicate binding follows source and derived expression collation lineage.
-Conflicting collations reject. Text ordering requires C/POSIX byte order; no locale
+Conflicting collations reject. Text ordering requires a built-in bytewise collation (C, POSIX, `ucs_basic`, or `pg_c_utf8`); no locale
 comparison approximation is introduced. Ordinary join comparisons reject explicit
 `COLLATE`. `LIKE` predicates accept the built-in C and POSIX collations.
 Existing strictness, resource budgets and unsupported-overload checks still apply.

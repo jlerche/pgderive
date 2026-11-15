@@ -62,8 +62,10 @@ fn validate_order(expression: &Typed) -> Result<()> {
     );
     if matches!(expression.oid(), 25 | 1043) && !expression.is_constant() {
         ensure!(
-            matches!(expression.collation(&|column| Ok(column.collation))?, 950 | 951),
-            "STRING_AGG text ordering requires C/POSIX collation"
+            crate::compiler::typed::collation::bytewise(
+                expression.collation(&|column| Ok(column.collation))?
+            ),
+            "STRING_AGG text ordering requires a built-in bytewise collation"
         );
     }
     Ok(())
