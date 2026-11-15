@@ -3,6 +3,7 @@
 import collections
 import json
 import pathlib
+import re
 import subprocess
 from decimal import Decimal
 from numeric_arithmetic_oracle import clean,division,number,rounding
@@ -66,9 +67,15 @@ LOWER_C = str.maketrans(ASCII_UPPER, ASCII_LOWER)
 UPPER_C = str.maketrans(ASCII_LOWER, ASCII_UPPER)
 
 
+def initcap_c(text):
+    return re.sub(r'[A-Za-z0-9]+', lambda word: word[0].capitalize(), text)
+
+
 def included(row):
     category = row['category'] or ''
-    return not category.translate(LOWER_C).startswith('skip') and category.translate(UPPER_C) != 'EXCLUDE'
+    return (not category.translate(LOWER_C).startswith('skip')
+            and category.translate(UPPER_C) != 'EXCLUDE'
+            and initcap_c(category) != 'Hide_Me')
 
 
 def evaluate(case, row):
@@ -88,6 +95,8 @@ def evaluate(case, row):
         return chr(text)
     if name in ['lower', 'upper']:
         return text.translate(LOWER_C if name == 'lower' else UPPER_C)
+    if name == 'initcap':
+        return initcap_c(text)
     if name == 'reverse':
         return text[::-1]
     if name == 'left':
@@ -144,10 +153,10 @@ def evaluate(case, row):
 
 
 class SupportFixture(SqlFixture):
-    def __init__(self, output, matrix):
+    def __init__(self, output, cases):
         super().__init__(output, False)
         self.pg[1:1] = ['-q','-c',"SET DateStyle='ISO,MDY'; SET TimeZone='UTC'; SET IntervalStyle='iso_8601'"]
-        self.cases = matrix['scalar_functions'] + matrix['coercion_cases']
+        self.cases = cases
         self.labels = ['v' + str(index) for index in range(len(self.cases))]
         self.sql(f'''ALTER TABLE {self.name}.auction
             ADD COLUMN small_value smallint, ADD COLUMN large_value bigint,
@@ -155,7 +164,7 @@ class SupportFixture(SqlFixture):
             ADD COLUMN event_time timestamptz, ADD COLUMN local_time timestamp, ADD COLUMN amount numeric,
             ADD COLUMN on_date date, ADD COLUMN span interval;
             UPDATE {self.name}.auction SET
-            category=CASE WHEN id IN(1,2) THEN 'É🙂á Zıß' WHEN id=3 THEN ''
+            category=CASE WHEN id IN(1,2) THEN '2ABC_fOO-bar BOB''S É🙂á Zıß' WHEN id=3 THEN ''
                           WHEN id=4 THEN NULL ELSE 'sKip me' END,
             group_id=CASE WHEN id IN(1,2) THEN 8 WHEN id=3 THEN -2 ELSE NULL END,
             small_value=CASE WHEN id=4 THEN NULL ELSE -7 END,
@@ -170,6 +179,8 @@ class SupportFixture(SqlFixture):
                       + f""" FROM {self.name}.auction a
                           WHERE NOT starts_with(lower(COALESCE(a.category,'') COLLATE pg_catalog."C"),'skip')
                             AND (upper(a.category COLLATE pg_catalog."POSIX") <> 'EXCLUDE'
+                                 OR a.category IS NULL)
+                            AND (initcap(a.category COLLATE pg_catalog."C") <> 'Hide_Me'
                                  OR a.category IS NULL)""")
 
     def verify(self):
@@ -184,74 +195,97 @@ class SupportFixture(SqlFixture):
         self.verify_memory(dict(memory), parse_float=Decimal)
 
 
+def verify_types(fixture):
+    for case in fixture.cases:
+        actual = int(fixture.sql(f"SELECT pg_typeof({case['expression']})::oid FROM {fixture.name}.auction a LIMIT 1"))
+        assert actual == case['result_oid'], (case, actual)
+        for argument, oid in zip(case['arguments'], case['input_oids']):
+            if 'column' in argument:
+                actual = int(fixture.sql(f"SELECT pg_typeof(a.{argument['column']})::oid FROM {fixture.name}.auction a LIMIT 1"))
+                assert actual == oid, (case, argument, actual)
+
+
+def verify_rejections(fixture, output, command, matrix):
+    admitted = json.loads(fixture.sql(f"SELECT json_agg(DISTINCT a.atttypid::integer) FROM pg_publication_rel pr JOIN pg_publication p ON p.oid=pr.prpubid JOIN pg_attribute a ON a.attrelid=pr.prrelid AND a.attnum>0 AND NOT a.attisdropped WHERE p.pubname='{fixture.name}'"))
+    assert set(admitted) == set(matrix['source_type_oids']), admitted
+    for case in matrix['rejections']:
+        query = f"SELECT {case['expression']} FROM {fixture.name}.auction a"
+        fixture.sql('EXPLAIN ' + query)  # Valid PostgreSQL SQL, unsupported by this engine.
+        fixture.rejected(command, case['id'], query)
+        diagnostic = (output / case['id'] / 'stderr.log').read_text()
+        assert case['error_contains'] in diagnostic, (case['id'], diagnostic)
+        assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
+        assert fixture.sql(f"SELECT to_regclass('{fixture.name}.groups') IS NULL").strip() == 't'
+        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{fixture.name}'").strip() == '0'
+    for case in matrix['source_rejections']:
+        assert int(fixture.sql(f"SELECT pg_typeof(NULL::{case['sql_type']})::oid")) == case['oid']
+        fixture.sql(f"ALTER TABLE {fixture.name}.auction ADD COLUMN unsupported {case['sql_type']}")
+        fixture.rejected(command, 'source-' + str(case['oid']), fixture.query)
+        diagnostic = (output / ('source-' + str(case['oid'])) / 'stderr.log').read_text()
+        assert case['error_contains'] in diagnostic, diagnostic
+        assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
+        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{fixture.name}'").strip() == '0'
+        assert fixture.sql(f"SELECT to_regclass('{fixture.name}.groups') IS NULL").strip() == 't'
+        fixture.sql(f'ALTER TABLE {fixture.name}.auction DROP COLUMN unsupported')
+
+
+def verify_history(fixture, command):
+    changes = [
+        f"UPDATE {fixture.name}.auction SET category='Exclude',group_id=-1,codepoint=233 WHERE id=2",
+        f"DELETE FROM {fixture.name}.auction WHERE id=1; UPDATE {fixture.name}.auction SET category='é🙂',group_id=0 WHERE id=3",
+        f"INSERT INTO {fixture.name}.auction(id,category,group_id) VALUES(100,NULL,NULL),(101,'é🙂',0),(102,'hIDE_mE',0)",
+        f"UPDATE {fixture.name}.auction SET category='MiXéß' WHERE id=2; UPDATE {fixture.name}.auction SET category='é🙂',group_id=2 WHERE id=5",
+        f"DELETE FROM {fixture.name}.auction WHERE id=100; UPDATE {fixture.name}.auction SET category='',group_id=7 WHERE id IN (101,102)",
+    ]
+    def initial():
+        assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
+    fixture.run_history(command, History(changes=changes,
+        final=f"UPDATE {fixture.name}.auction SET category='é🙂',group_id=9 WHERE id=101",
+        normalized=fixture.query, rejected=[]), initial=initial)
+    return len(changes) + 1
+
+
+def verify_recovery(fixture, output, command, scenario):
+    label, small_value, native_error, worker_error = scenario
+    worker = fixture.start(command, label + '-recovery')
+    worker.event('ready')
+    # Keep other scalar arguments in range to isolate the intended error.
+    fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,small_value) VALUES(999,'x',1,{small_value})")
+    native = subprocess.run(fixture.pg + [fixture.query], env=fixture.environment,
+                            capture_output=True, text=True)
+    (output / ('native-' + label + '-error.txt')).write_text(native.stderr)
+    assert native.returncode != 0 and native_error in native.stderr
+    assert worker_error in blocked_recovery(fixture, worker,
+                                            f'DELETE FROM {fixture.name}.auction WHERE id=999')
+    fixture.verify()
+    assert fixture.acknowledgement_ahead().strip() == '0'
+
+
 def qualify(output, command):
     matrix = load_matrix()
-    fixture = SupportFixture(output, matrix)
+    signatures = output / 'signatures'
+    coercions = output / 'coercions'
+    signatures.mkdir()
+    coercions.mkdir()
+    fixture = SupportFixture(signatures, matrix['scalar_functions'])
     with fixture.managed():
-        admitted = json.loads(fixture.sql(f"SELECT json_agg(DISTINCT a.atttypid::integer) FROM pg_publication_rel pr JOIN pg_publication p ON p.oid=pr.prpubid JOIN pg_attribute a ON a.attrelid=pr.prrelid AND a.attnum>0 AND NOT a.attisdropped WHERE p.pubname='{fixture.name}'"))
-        assert set(admitted) == set(matrix['source_type_oids']), admitted
-        for case in fixture.cases:
-            actual = int(fixture.sql(f"SELECT pg_typeof({case['expression']})::oid FROM {fixture.name}.auction a LIMIT 1"))
-            assert actual == case['result_oid'], (case, actual)
-            for argument, oid in zip(case['arguments'], case['input_oids']):
-                if 'column' in argument:
-                    actual = int(fixture.sql(f"SELECT pg_typeof(a.{argument['column']})::oid FROM {fixture.name}.auction a LIMIT 1"))
-                    assert actual == oid, (case, argument, actual)
-        for case in matrix['rejections']:
-            query = f"SELECT {case['expression']} FROM {fixture.name}.auction a"
-            fixture.sql('EXPLAIN ' + query)  # Valid PostgreSQL SQL, unsupported by this engine.
-            fixture.rejected(command, case['id'], query)
-            diagnostic = (output / case['id'] / 'stderr.log').read_text()
-            assert case['error_contains'] in diagnostic, (case['id'], diagnostic)
-            assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
-            assert fixture.sql(f"SELECT to_regclass('{fixture.name}.groups') IS NULL").strip() == 't'
-            assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{fixture.name}'").strip() == '0'
-        for case in matrix['source_rejections']:
-            assert int(fixture.sql(f"SELECT pg_typeof(NULL::{case['sql_type']})::oid")) == case['oid']
-            fixture.sql(f"ALTER TABLE {fixture.name}.auction ADD COLUMN unsupported {case['sql_type']}")
-            fixture.rejected(command, 'source-' + str(case['oid']), fixture.query)
-            diagnostic = (output / ('source-' + str(case['oid'])) / 'stderr.log').read_text()
-            assert case['error_contains'] in diagnostic, diagnostic
-            assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
-            assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name='{fixture.name}'").strip() == '0'
-            assert fixture.sql(f"SELECT to_regclass('{fixture.name}.groups') IS NULL").strip() == 't'
-            fixture.sql(f'ALTER TABLE {fixture.name}.auction DROP COLUMN unsupported')
-        changes = [
-            f"UPDATE {fixture.name}.auction SET category='Exclude',group_id=-1,codepoint=233 WHERE id=2",
-            f"DELETE FROM {fixture.name}.auction WHERE id=1; UPDATE {fixture.name}.auction SET category='é🙂',group_id=0 WHERE id=3",
-            f"INSERT INTO {fixture.name}.auction(id,category,group_id) VALUES(100,NULL,NULL),(101,'é🙂',0)",
-            f"UPDATE {fixture.name}.auction SET category='MiXéß' WHERE id=2; UPDATE {fixture.name}.auction SET category='é🙂',group_id=2 WHERE id=5",
-            f"DELETE FROM {fixture.name}.auction WHERE id=100; UPDATE {fixture.name}.auction SET category='',group_id=7 WHERE id=101",
-        ]
-        def initial():
-            assert fixture.sql(f'SELECT max(weight) FROM {fixture.bag_relation()}').strip() == '2'
-        fixture.run_history(command, History(changes=changes,
-            final=f"UPDATE {fixture.name}.auction SET category='é🙂',group_id=9 WHERE id=101",
-            normalized=fixture.query, rejected=[]), initial=initial)
-        for label, small_value, native_error, worker_error in [
-            ('overflow', -32768, 'out of range', 'overflow'),
-            ('division-by-zero', 0, 'division by zero', 'division by zero'),
-        ]:
-            worker = fixture.start(command, label + '-recovery')
-            worker.event('ready')
-            # Keep other scalar arguments in range to isolate the intended error.
-            fixture.sql(f"INSERT INTO {fixture.name}.auction(id,category,group_id,small_value) VALUES(999,'x',1,{small_value})")
-            native = subprocess.run(fixture.pg + [fixture.query], env=fixture.environment,
-                                    capture_output=True, text=True)
-            (output / ('native-' + label + '-error.txt')).write_text(native.stderr)
-            assert native.returncode != 0 and native_error in native.stderr
-            assert worker_error in blocked_recovery(fixture, worker,
-                                                    f'DELETE FROM {fixture.name}.auction WHERE id=999')
-            fixture.verify()
-            assert fixture.acknowledgement_ahead().strip() == '0'
-        (output / 'result.json').write_text(json.dumps({
-            'strict_signatures': len(matrix['scalar_functions']),
-            'coercion_cases': len(matrix['coercion_cases']), 'rejected_cases': len(matrix['rejections']),
-            'unsupported_source_types': len(matrix['source_rejections']),
-            'native_oracle': 'refreshed original SQL, weighted bag, send bytes and column metadata',
-            'independent_oracle': 'Python Unicode, integer widths, Decimal rounding and exact quotients',
-            'transactions': len(changes) + 1, 'restart': 'same slot and durable state',
-            'duplicates_nulls_retractions': 'exact'}) + '\n')
+        verify_types(fixture)
+        verify_rejections(fixture, signatures, command, matrix)
+        transactions = verify_history(fixture, command)
+        verify_recovery(fixture, signatures, command, ('overflow', -32768, 'out of range', 'overflow'))
+    fixture = SupportFixture(coercions, matrix['coercion_cases'])
+    with fixture.managed():
+        verify_types(fixture)
+        transactions += verify_history(fixture, command)
+        verify_recovery(fixture, coercions, command, ('division-by-zero', 0, 'division by zero', 'division by zero'))
+    (output / 'result.json').write_text(json.dumps({
+        'strict_signatures': len(matrix['scalar_functions']),
+        'coercion_cases': len(matrix['coercion_cases']), 'rejected_cases': len(matrix['rejections']),
+        'unsupported_source_types': len(matrix['source_rejections']),
+        'native_oracle': 'refreshed original SQL, weighted bag, send bytes and column metadata',
+        'independent_oracle': 'Python Unicode, integer widths, Decimal rounding and exact quotients',
+        'transactions': transactions, 'histories': 2, 'restart': 'same slot and durable state',
+        'duplicates_nulls_retractions': 'exact'}) + '\n')
 
 
 if __name__ == '__main__':

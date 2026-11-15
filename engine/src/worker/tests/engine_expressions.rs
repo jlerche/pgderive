@@ -4,7 +4,7 @@ use crate::compiler::compile;
 use anyhow::{Context, Result};
 #[test]
 fn unsupported_functions_fail_before_registration_with_engine_reason() {
-    for function in ["initcap(category)", "random()", "to_char(id,'999')"] {
+    for function in ["regexp_replace(category,'x','y')", "random()", "to_char(id,'999')"] {
         let error =
             compile(&format!("SELECT {function} AS value FROM source.auction"), &contract()).err();
         assert!(error.is_some(), "{function}");

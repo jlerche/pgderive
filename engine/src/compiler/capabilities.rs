@@ -38,11 +38,12 @@ pub(in crate::compiler) enum Builtin {
     LikeEscape,
     Lower,
     Upper,
+    Initcap,
 }
 
 impl Builtin {
     pub(in crate::compiler) const fn is_ascii_case_conversion(self) -> bool {
-        matches!(self, Self::Lower | Self::Upper)
+        matches!(self, Self::Lower | Self::Upper | Self::Initcap)
     }
 
     pub(in crate::compiler) const fn is_strict(self) -> bool {
@@ -84,6 +85,7 @@ const SIGNATURES: &[Signature] = &[
     Signature::strict("chr", &[23], 25, Builtin::Chr),
     Signature::strict("lower", &[25], 25, Builtin::Lower),
     Signature::strict("upper", &[25], 25, Builtin::Upper),
+    Signature::strict("initcap", &[25], 25, Builtin::Initcap),
     Signature::strict("reverse", &[25], 25, Builtin::Reverse),
     Signature::strict("left", &[25, 23], 25, Builtin::Left),
     Signature::strict("right", &[25, 23], 25, Builtin::Right),

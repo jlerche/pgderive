@@ -10,7 +10,7 @@ not a certification of every valid combination.
 | Priority | Successful-result gap | Admission / environment boundary | Failure behavior and disposition |
 | --- | --- | --- | --- |
 | First slice | UTF8 `lpad` and `rpad`, useful for report labels and identifiers | Only `(text,int4)` and `(text,int4,text)` with existing varchar/smallint coercions; UTF8, no locale lookup | Reuse strict calls, deferred folding and lazy expressions; exact output-size budget is an engine resource limit |
-| High | Locale-sensitive case conversion and pattern matching, formatting | Locale/provider and version dependencies must be qualified before admission | `lower`/`upper` and `LIKE` already support built-in C/POSIX |
+| High | Locale-sensitive case conversion and pattern matching, formatting | Locale/provider and version dependencies must be qualified before admission | `lower`, `upper`, `initcap`, and `LIKE` already support built-in C/POSIX |
 | High | float, JSON/JSONB, arrays and broader casts | Source codecs, scalar operators and relational contexts need separate qualification | Keep unsupported sources/signatures rejected before activation |
 | High | Arbitrary scalar subqueries and broader correlation | Current aggregate scalar and equality correlation contracts remain bounded | Cardinality, guarded reads and error recovery need a coherent extension |
 | Medium | Recursion, named zones, broader windows | No frontier/recursive execution or named-zone runtime | Architectural work; no fallback evaluation |

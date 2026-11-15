@@ -8,6 +8,11 @@ fn ascii_case_conversion_preserves_result_collation_and_nulls() -> Result<()> {
         (r#"lower('AZéİ🙂' COLLATE "C")"#, 950, Some("azéİ🙂")),
         (r#"pg_catalog.upper('azÉıß'::varchar COLLATE "POSIX")"#, 951, Some("AZÉıß")),
         (r#"upper('' COLLATE "C")"#, 950, Some("")),
+        (r#"initcap('2ABC_fOO-bar BOB''S' COLLATE "C")"#, 950, Some("2abc_Foo-Bar Bob'S")),
+        (r#"pg_catalog.initcap('AéBC🙂dÉf'::varchar COLLATE "POSIX")"#, 951, Some("AéBc🙂DÉF")),
+        (r#"initcap('' COLLATE "POSIX")"#, 951, Some("")),
+        (r#"initcap(NULL COLLATE "C")"#, 950, None),
+        (r#"initcap(COALESCE(NULL COLLATE "POSIX", 'hELLO'))"#, 951, Some("Hello")),
         (r#"lower(COALESCE(NULL::text COLLATE "C", 'A'))"#, 950, Some("a")),
         (r#"upper(CASE WHEN false THEN 'a' COLLATE "POSIX" ELSE 'b' END)"#, 951, Some("B")),
         (r#"lower(upper(NULL COLLATE "POSIX"))"#, 951, None),
@@ -19,6 +24,9 @@ fn ascii_case_conversion_preserves_result_collation_and_nulls() -> Result<()> {
     }
     for sql in [
         "lower('a')",
+        "initcap('a')",
+        "initcap('a' COLLATE ucs_basic)",
+        r#"initcap('a' COLLATE "C" || 'b' COLLATE "POSIX")"#,
         r#"lower('a') COLLATE "C""#,
         "upper('a' COLLATE ucs_basic)",
         r#"upper('a' COLLATE "C" || 'b' COLLATE "POSIX")"#,

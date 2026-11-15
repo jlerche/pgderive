@@ -47,17 +47,7 @@ pub(super) fn evaluate(
         Builtin::BitLength => count(first.len().checked_mul(8).context("bit length overflow")?),
         Builtin::Ascii => Ok(first.chars().next().map_or(0, u32::from).to_string()),
         Builtin::Chr => character(first),
-        Builtin::Lower | Builtin::Upper => {
-            ensure!(
-                first.len() <= TEXT_OUTPUT_LIMIT,
-                "case conversion output exceeds 16 MiB engine budget"
-            );
-            Ok(if operation == Builtin::Lower {
-                first.to_ascii_lowercase()
-            } else {
-                first.to_ascii_uppercase()
-            })
-        }
+        Builtin::Lower | Builtin::Upper | Builtin::Initcap => case_conversion(first, operation),
         Builtin::Reverse => Ok(first.chars().rev().collect()),
         Builtin::Left | Builtin::Right => {
             edge(first, second()?.parse()?, operation == Builtin::Right)
@@ -115,6 +105,28 @@ pub(super) fn join_text(
         result.push_str(value);
     }
     Ok(Some(result))
+}
+
+fn case_conversion(text: &str, operation: Builtin) -> Result<String> {
+    ensure!(text.len() <= TEXT_OUTPUT_LIMIT, "case conversion output exceeds 16 MiB engine budget");
+    match operation {
+        Builtin::Lower => Ok(text.to_ascii_lowercase()),
+        Builtin::Upper => Ok(text.to_ascii_uppercase()),
+        Builtin::Initcap => {
+            let mut output = String::with_capacity(text.len());
+            let mut in_word = false;
+            for character in text.chars() {
+                output.push(if in_word {
+                    character.to_ascii_lowercase()
+                } else {
+                    character.to_ascii_uppercase()
+                });
+                in_word = character.is_ascii_alphanumeric();
+            }
+            Ok(output)
+        }
+        _ => anyhow::bail!("unexpected case conversion operation"),
+    }
 }
 
 fn count(value: usize) -> Result<String> {
