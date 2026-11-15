@@ -403,7 +403,14 @@ impl Rewrite<'_> {
         let grouped = !query.group_clause.is_empty() && !correlation.pairs.is_empty();
         let ordered = if grouped {
             validate_keyed_grouping(&query, &correlation)?;
-            self.validation.push(super::query(&query)?);
+            let mut original = super::query(&query)?;
+            if let Some(sets) = grouping_sets(&mut original) {
+                ensure!(
+                    sets.groups.iter().all(|set| !set.is_empty()),
+                    "correlated grouping sets require a grouping key in every branch"
+                );
+            }
+            self.validation.push(original);
             let ordered = membership_ordered(&query);
             if !ordered {
                 query.distinct_clause.clear();
@@ -434,6 +441,9 @@ impl Rewrite<'_> {
                 .map(|term| residual_condition(term, &alias, &mut query.target_list, &mut index)),
         );
         let mut right = super::query(&query)?;
+        if grouped && let Some(sets) = grouping_sets(&mut right) {
+            sets.correlation_keys = key_end - key_start;
+        }
         if ordered && !deferred {
             let Parsed::Ordered(ordering) = &mut right else {
                 anyhow::bail!("correlated comparison requires an ordinary ordered SELECT");
@@ -457,17 +467,24 @@ impl Rewrite<'_> {
         Ok(ast::column(&alias, ast::VALUE))
     }
 }
+fn grouping_sets(parsed: &mut Parsed) -> Option<&mut super::grouping_sets::Sets> {
+    match parsed {
+        Parsed::Partition(partition) | Parsed::Membership { parsed: partition, .. } => {
+            partition.grouping_sets.as_mut()
+        }
+        Parsed::Ordered(order) => grouping_sets(&mut order.inner),
+        _ => None,
+    }
+}
+
 fn validate_keyed_grouping(
     query: &pg::SelectStmt,
     correlation: &correlation::Correlation,
 ) -> Result<()> {
     ensure!(
         correlation.residuals.is_empty()
-            && query.distinct_clause.iter().all(|node| node.node.is_none())
-            && query.group_clause.iter().all(|node| {
-                !matches!(node.node, Some(NodeEnum::GroupingSet(_) | NodeEnum::RowExpr(_)))
-            }),
-        "correlated grouping requires ordinary GROUP BY and equality keys without DISTINCT ON"
+            && query.distinct_clause.iter().all(|node| node.node.is_none()),
+        "correlated grouping requires equality keys without residual predicates or DISTINCT ON"
     );
     ensure!(
         correlation

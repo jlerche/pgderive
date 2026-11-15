@@ -116,6 +116,9 @@ pub(super) fn build(
     context: Stage<'_>,
 ) -> Result<Compiled> {
     let mut rewrite = Rewrite::new(&groups, body, resolve, context.scalar_scope)?;
+    if let Some(sets) = &body.grouping_sets {
+        validate_correlation_keys(sets, &rewrite.keys)?;
+    }
     rewrite.dependent_sources = dependent_sources(body, &rewrite, &context);
     let targets = rewrite.targets(&body.targets)?;
     let mut condition = body.having.as_deref().cloned();
@@ -194,6 +197,31 @@ pub(super) fn build(
     super::composition::compose(&mut compiled.relational, &mut outer)?;
     Ok(compiled)
 }
+// A correlation key belongs to every physical branch. If SQL groups by
+// that same column in only some branches, it needs a separate logical slot
+// so those other branches can still produce a grouping-generated NULL.
+fn validate_correlation_keys(
+    sets: &crate::compiler::parser::grouping_sets::Sets,
+    keys: &[ColumnRef],
+) -> Result<()> {
+    let start = keys
+        .len()
+        .checked_sub(sets.correlation_keys)
+        .context("missing grouping correlation keys")?;
+    for key in &keys[start..] {
+        let count = sets
+            .groups
+            .iter()
+            .filter(|set| set.iter().any(|&i| i < start && keys[i] == *key))
+            .count();
+        ensure!(
+            count == 0 || count == sets.groups.len(),
+            "a correlated grouping key must occur in all or none of the grouping sets"
+        );
+    }
+    Ok(())
+}
+
 // PostgreSQL recognizes only the declared base-table primary key here.
 // When every grouping set contains it, adding a dependent column does
 // not split a group. Keep these physical keys separate from SQL GROUPING().
@@ -280,6 +308,7 @@ fn aggregate_stage<F: Fn(&Name) -> Result<ColumnRef>>(
     let ordinary = sets.is_none().then(|| crate::compiler::parser::grouping_sets::Sets {
         groups: vec![(0..groups.len()).collect()],
         distinct: false,
+        correlation_keys: 0,
     });
     let sets = sets.or(ordinary.as_ref()).context("missing grouping sets")?;
 

@@ -118,14 +118,17 @@ class ResidualFixture(SqlFixture):
             unique = per_key_group.replace('SELECT ', 'SELECT DISTINCT ', 1)
             second = f'{unique} {order} OFFSET 1 LIMIT 1'
             first = f'{per_key_group} ORDER BY count(*) DESC FETCH FIRST 1 ROW WITH TIES'
+            sets = f"""SELECT b.price FROM {b} b WHERE {keys}
+                GROUP BY GROUPING SETS ((b.price), (b.cutoff))"""
             self.labels = ['id', 'key_group_in', 'key_group_any', 'key_group_all',
-                           'key_group_second', 'key_group_first_any', 'key_group_first_all']
+                           'key_group_second', 'key_group_first_any', 'key_group_first_all', 'key_group_sets']
             self.query = f"""SELECT a.id, a.probe IN ({per_key_group}) AS key_group_in,
                 a.probe < ANY ({per_key_group}) AS key_group_any,
                 a.probe < ALL ({per_key_group}) AS key_group_all,
                 a.probe IN ({second}) AS key_group_second,
                 a.probe < ANY ({first}) AS key_group_first_any,
-                a.probe < ALL ({first}) AS key_group_first_all FROM {a} a"""
+                a.probe < ALL ({first}) AS key_group_first_all,
+                a.probe >= ALL ({sets}) AS key_group_sets FROM {a} a"""
             self.sql(f"""INSERT INTO {b}(id,auction,price,cutoff) VALUES
                 (14,2,NULL,2),(15,1,10,1),(16,1,8,1),(17,1,10,4),(18,1,8,4)""")
         elif mode == 'nested-exists':
@@ -268,6 +271,8 @@ class ResidualFixture(SqlFixture):
                 for item in inner:
                     if item['id'] != 99 and key is not None and key == item['auction']:
                         groups.setdefault(item['cutoff'], []).append(item['price'])
+                prices = {price for values in groups.values() for price in values}
+                set_values = list(prices | {None}) if groups else []
                 summaries = [(len(prices), max((price for price in prices if price is not None),
                                                  default=None))
                              for prices in groups.values() if len(prices) > 1]
@@ -280,7 +285,8 @@ class ResidualFixture(SqlFixture):
                         compare(row['probe'], maxima, operator.lt, True),
                         membership(row['probe'], unique[1:2]),
                         compare(row['probe'], first, operator.lt, False),
-                        compare(row['probe'], first, operator.lt, True))] += 1
+                        compare(row['probe'], first, operator.lt, True),
+                        compare(row['probe'], set_values, operator.ge, True))] += 1
             elif self.mode == 'nested-exists':
                 probe = row['probe']
                 present = any(

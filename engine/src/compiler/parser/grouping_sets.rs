@@ -16,6 +16,7 @@ const MAX_SETS: usize = 64;
 pub(in crate::compiler) struct Sets {
     pub groups: Vec<Vec<usize>>,
     pub distinct: bool,
+    pub correlation_keys: usize,
 }
 
 pub(super) struct Grouping {
@@ -38,7 +39,10 @@ pub(super) fn parse(select: &SelectStmt, targets: &[Target]) -> Result<Grouping>
     for value in &select.group_clause {
         groups = product(&groups, &expand(value, targets, &mut keys, 0)?)?;
     }
-    Ok(Grouping { keys, sets: Some(Sets { groups, distinct: select.group_distinct }) })
+    Ok(Grouping {
+        keys,
+        sets: Some(Sets { groups, distinct: select.group_distinct, correlation_keys: 0 }),
+    })
 }
 
 fn product(left: &[Vec<usize>], right: &[Vec<usize>]) -> Result<Vec<Vec<usize>>> {
