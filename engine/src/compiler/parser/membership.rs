@@ -107,10 +107,18 @@ pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<(usize,
         }
     }
     if let Some(limit) = query.limit_count.as_deref() {
+        let option = pg::LimitOption::try_from(query.limit_option)?;
         ensure!(
-            query.limit_option == i32::from(pg::LimitOption::Count) && supported_limit(limit),
+            matches!(option, pg::LimitOption::Count | pg::LimitOption::WithTies)
+                && supported_limit(limit),
             "EXISTS requires a nonnegative literal LIMIT or LIMIT ALL"
         );
+        ensure!(
+            option != pg::LimitOption::WithTies || !query.sort_clause.is_empty(),
+            "FETCH WITH TIES requires ORDER BY"
+        );
+        // WITH TIES can only add rows after a positive cutoff. EXISTS tests
+        // whether the first occurrence after OFFSET qualifies.
         query.limit_count = None;
         query.limit_option = i32::from(pg::LimitOption::Default);
     }

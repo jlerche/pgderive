@@ -597,6 +597,31 @@ fn exists_positive_offset_preserves_count_and_rejects_fallible_sort_targets() ->
 }
 
 #[test]
+fn exists_fetch_with_ties_requires_order_and_preserves_totality_guards() -> Result<()> {
+    let native = native();
+    for tail in [
+        "ORDER BY b.price FETCH FIRST ROW WITH TIES",
+        "ORDER BY b.price FETCH FIRST 0 ROWS WITH TIES",
+        "ORDER BY b.price OFFSET 1 FETCH FIRST 1 ROW WITH TIES",
+    ] {
+        let sql = format!(
+            "SELECT EXISTS (SELECT b.price FROM source.bid b WHERE b.auction=a.id {tail})
+             FROM source.auction a"
+        );
+        compile(&sql, &native).map_err(|error| error.context(sql))?;
+    }
+    for tail in [
+        "FETCH FIRST 1 ROW WITH TIES",
+        "ORDER BY 1/0 FETCH FIRST 0 ROWS WITH TIES",
+        "ORDER BY b.price::smallint OFFSET 1 FETCH FIRST 1 ROW WITH TIES",
+    ] {
+        let sql = format!("SELECT EXISTS (SELECT 1 FROM source.bid b {tail})");
+        assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
 fn exists_positive_offset_counts_grouping_and_distinct_keys() -> Result<()> {
     let native = native();
     for (target, tail) in [
@@ -673,7 +698,7 @@ fn exists_discards_row_preserving_targets() -> Result<()> {
         "OFFSET -1",
         "GROUP BY b.price, b.auction OFFSET -1",
         "ORDER BY 1/0 OFFSET 1",
-        "ORDER BY b.price FETCH FIRST 1 ROW WITH TIES",
+        "FETCH FIRST 1 ROW WITH TIES",
         "ORDER BY generate_series(1,0)",
         "ORDER BY count(*)",
     ] {

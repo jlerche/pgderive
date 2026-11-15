@@ -105,7 +105,10 @@ SELECT DISTINCT with explicit column or literal targets, and plain-column
 DISTINCT ON, it counts unique key tuples after applying correlation. NULLs
 form one key per otherwise equal tuple. Scans and resident keys are bounded
 by the existing work and output-byte limits. Combining grouping and DISTINCT
-with a positive offset, HAVING, and WITH TIES are unsupported.
+with a positive offset and HAVING remain unsupported. FETCH with a literal
+count and WITH TIES has the same presence semantics as ordinary LIMIT.
+A positive fetch tests for at least one occurrence after OFFSET, including
+when further rows tie with the cutoff. The original ORDER BY is required.
 A correlated membership RHS can read native tables through supported
 joins with simple local ON predicates. Correlation is extracted from WHERE,
 and the RHS keeps a simple projection and supported local filters. Plain SELECT DISTINCT is allowed because RHS duplicates do not
