@@ -186,7 +186,7 @@ may be smallint, integer, bigint, or numeric, including mixed pairs. Comparisons
 use exact values and ignore differences in numeric display scale. Unknown probe
 literals take the RHS type, and typed operands retain their types. Text and
 varchar operands may be mixed when the resolved comparison collation is
-a supported built-in bytewise collation (C, POSIX, `ucs_basic`, or `pg_c_utf8`). These comparisons use byte order and keep trailing
+a supported built-in bytewise collation (C, POSIX, `ucs_basic`, `pg_c_utf8`, or `pg_unicode_fast`). These comparisons use byte order and keep trailing
 spaces significant. Boolean comparisons order FALSE before TRUE. UUID values
 compare by their 16 bytes. Dates, timestamps, and timestamps with time zone
 can be compared with each other in the engine's UTC session. A date compares

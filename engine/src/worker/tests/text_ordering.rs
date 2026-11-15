@@ -21,6 +21,8 @@ fn text_extrema_and_ordering_admit_only_supported_collations() -> Result<()> {
     }
     for sql in [
         "SELECT category FROM source.auction ORDER BY category COLLATE pg_catalog.pg_c_utf8",
+        "SELECT category FROM source.auction ORDER BY category COLLATE pg_catalog.pg_unicode_fast",
+        "SELECT min(category COLLATE pg_catalog.pg_unicode_fast) FROM source.auction",
         "SELECT RANK() OVER (ORDER BY category COLLATE ucs_basic) FROM source.auction",
         "SELECT MIN(NULL), MAX('x') FROM source.auction",
         "SELECT id, ROW_NUMBER() OVER (ORDER BY category, id) FROM source.auction",

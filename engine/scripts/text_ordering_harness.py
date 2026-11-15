@@ -11,7 +11,10 @@ class OrderingFixture(SqlFixture):
     def __init__(self, output, mode):
         super().__init__(output, False)
         self.mode = mode
-        collation = 'pg_c_utf8' if mode.startswith('codepoint-') else '"C"'
+        collation = '"C"'
+        if mode.startswith('codepoint-'):
+            builtin = self.sql("SELECT to_regcollation('pg_catalog.pg_unicode_fast') IS NOT NULL")
+            collation = 'pg_unicode_fast' if builtin.strip() == 't' else 'pg_c_utf8'
         self.source = self.name + '.bid'
         self.sql(f'''ALTER TABLE {self.source}
             ADD COLUMN payload varchar(12) COLLATE {collation},
@@ -24,9 +27,10 @@ class OrderingFixture(SqlFixture):
                 max(payload{override}) FILTER (WHERE id <> 104) AS hi
                 FROM {self.source} GROUP BY auction'''
         elif mode == 'codepoint-topk':
+            explicit = 'pg_unicode_fast' if collation == 'pg_unicode_fast' else 'ucs_basic'
             self.labels = ['id', 'payload']
             self.query = f'''SELECT id, payload FROM {self.source}
-                ORDER BY payload COLLATE pg_catalog.ucs_basic DESC NULLS LAST, id LIMIT 3'''
+                ORDER BY payload COLLATE pg_catalog.{explicit} DESC NULLS LAST, id LIMIT 3'''
         elif mode == 'date-extrema':
             self.labels = ['auction', 'lo', 'hi']
             self.query = f'''SELECT auction, min(DISTINCT observed) AS lo,

@@ -9,7 +9,7 @@ deduplicates the pair of value and delimiter.
 
 Aggregate ORDER BY uses the supported native ordering types and sort
 directions, with explicit or default NULL placement. Text ordering
-requires a built-in bytewise collation (C, POSIX, `ucs_basic`, or `pg_c_utf8`)
+requires a built-in bytewise collation (C, POSIX, `ucs_basic`, `pg_c_utf8`, or `pg_unicode_fast`)
 for nonconstant keys. Sort expressions refer to
 input expressions. Select-list aliases and ordinals do not apply.
 

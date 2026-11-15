@@ -1,6 +1,6 @@
 # Text extrema and ordering
 
-`MIN` and `MAX` accept text and varchar with the built-in C, POSIX, `ucs_basic`, or `pg_c_utf8`
+`MIN` and `MAX` accept text and varchar with the built-in C, POSIX, `ucs_basic`, `pg_c_utf8`, or `pg_unicode_fast`
 collation. They return text with the argument's collation and no type
 modifier. NULL inputs are ignored, including for DISTINCT. Empty input,
 all-NULL input, and empty window frames return NULL. FILTER admits only
@@ -20,9 +20,11 @@ interval equality, including the equivalence between one month and 30 days.
 The selected row retains its original interval representation. Date MIN and
 MAX also support DISTINCT and preserve the full PostgreSQL date range.
 
-Pgderive compares these four collations by UTF-8 bytes. The source catalog
-fingerprint includes all four collation definitions, so registrations made
-with the previous fingerprint require a rebuild. The PostgreSQL 18 built-in `pg_unicode_fast` collation is outside this set.
+Pgderive compares these collations by UTF-8 bytes. The source catalog
+fingerprint includes their definitions and provider versions. The
+`pg_unicode_fast` collation is available on PostgreSQL 18 and later.
+Existing registrations on those versions need a rebuild to capture
+the added collation in the fingerprint.
 Locale-sensitive collations need
 their PostgreSQL collation provider and version semantics, so variable
 text extrema and ordering require a supported collation. Specify

@@ -11,7 +11,7 @@ Numeric comparator's canonical order key, including scale-equivalent values,
 negative infinity, positive infinity and PostgreSQL NaN (greater than infinity).
 
 Text and varchar keys require a built-in bytewise collation (C, POSIX,
-`ucs_basic`, or `pg_c_utf8`). Use a source column with one of these collations
+`ucs_basic`, `pg_c_utf8`, or `pg_unicode_fast`). Use a source column with one of these collations
 or specify it explicitly in ORDER BY, such as `COLLATE pg_catalog."C"`.
 Computed text requires explicit COLLATE because its source collation is not
 proven. Unqualified built-in bytewise collation names also resolve in the fixed pg_catalog

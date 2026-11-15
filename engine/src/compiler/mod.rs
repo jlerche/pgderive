@@ -31,8 +31,8 @@ pub(crate) use expression::native_key;
 use serde::Serialize;
 
 /// `PostgreSQL` built-in collations with bytewise ordering on UTF-8 text.
-pub(crate) const BYTEWISE_COLLATIONS: [(&str, u32); 4] =
-    [("pg_c_utf8", 811), ("C", 950), ("POSIX", 951), ("ucs_basic", 962)];
+pub(crate) const BYTEWISE_COLLATIONS: [(&str, u32); 5] =
+    [("pg_c_utf8", 811), ("C", 950), ("POSIX", 951), ("ucs_basic", 962), ("pg_unicode_fast", 6411)];
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(crate) struct ColumnRef {
