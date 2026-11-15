@@ -35,6 +35,21 @@ pub(super) fn validate_quantified_aggregate(select: &pg::SelectStmt) -> Result<(
         let (value, _, _) = super::super::partition::sort_expression(sort)?;
         ensure!(aggregate_operand(value, 0)?, "quantified aggregate requires total ordering");
     }
+    validate_distinct_keys(select)
+}
+
+fn validate_grouping(values: &[Node], depth: usize) -> Result<()> {
+    ensure!(depth < 16, "quantified RHS grouping depth exceeded");
+    for value in values {
+        match node(value)? {
+            NodeEnum::GroupingSet(set) => validate_grouping(&set.content, depth + 1)?,
+            NodeEnum::RowExpr(row) => validate_grouping(&row.args, depth + 1)?,
+            _ => ensure!(
+                collated_plain(value)?,
+                "quantified RHS grouping requires columns or output ordinals"
+            ),
+        }
+    }
     Ok(())
 }
 
@@ -73,6 +88,12 @@ fn aggregate_call(call: &pg::FuncCall, depth: usize) -> Result<bool> {
 
 fn validate_scope(select: &pg::SelectStmt, depth: usize, input: Input) -> Result<()> {
     ensure!(depth < 16, "scalar RHS nesting exceeds limit");
+    if matches!(input, Input::Quantified)
+        && (!select.group_clause.is_empty() || select.having_clause.is_some())
+    {
+        validate_grouping(&select.group_clause, 0)?;
+        return validate_quantified_aggregate(select);
+    }
     ensure!(
         select.group_clause.is_empty() && select.having_clause.is_none(),
         "nonaggregate scalar RHS requires native tables, a total native join, or constant/set input"
@@ -110,11 +131,16 @@ fn validate_scope(select: &pg::SelectStmt, depth: usize, input: Input) -> Result
         let (value, _, _) = super::super::partition::sort_expression(sort)?;
         ensure!(plain(value)?, "nonaggregate scalar RHS ordering requires a column or literal");
     }
-    for key in select.distinct_clause.iter().filter(|value| value.node.is_some()) {
-        ensure!(plain(key)?, "nonaggregate scalar RHS distinct key requires a column or literal");
-    }
+    validate_distinct_keys(select)?;
     for child in [&select.larg, &select.rarg].into_iter().flatten() {
         validate_scope(child, depth + 1, input)?;
+    }
+    Ok(())
+}
+
+fn validate_distinct_keys(select: &pg::SelectStmt) -> Result<()> {
+    for key in select.distinct_clause.iter().filter(|value| value.node.is_some()) {
+        ensure!(plain(key)?, "scalar RHS distinct key requires a column or literal");
     }
     Ok(())
 }

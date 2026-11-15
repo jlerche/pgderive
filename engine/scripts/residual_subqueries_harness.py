@@ -102,9 +102,12 @@ class ResidualFixture(SqlFixture):
             grouped = f'FROM {b} b WHERE {keys}'
             count = f'SELECT count(*) {grouped}'
             maximum = f'SELECT max(b.price) {grouped} HAVING count(*)>1'
-            self.labels = ['id', 'count_any', 'max_any', 'max_all']
+            per_group = f'''SELECT max(b.price) FROM {b} b WHERE b.id<>99
+                GROUP BY b.auction HAVING count(*)>1'''
+            self.labels = ['id', 'count_any', 'max_any', 'max_all', 'group_any', 'group_all']
             self.query = f"""SELECT a.id, a.probe >= ANY ({count}) AS count_any,
-                a.probe < ANY ({maximum}) AS max_any, a.probe < ALL ({maximum}) AS max_all
+                a.probe < ANY ({maximum}) AS max_any, a.probe < ALL ({maximum}) AS max_all,
+                a.probe < ANY ({per_group}) AS group_any, a.probe < ALL ({per_group}) AS group_all
                 FROM {a} a"""
             self.sql(f'''INSERT INTO {b}(id,auction,price,cutoff) VALUES (14,2,NULL,3);
                 UPDATE {a} SET probe=2 WHERE id=9''')
@@ -232,9 +235,17 @@ class ResidualFixture(SqlFixture):
                               and key is not None and key == item['auction']]
                 maximum = [max((value for value in qualifying if value is not None), default=None)
                            ] if len(qualifying) > 1 else []
+                groups = {}
+                for item in inner:
+                    if item['id'] != 99:
+                        groups.setdefault(item['auction'], []).append(item['price'])
+                maxima = [max((price for price in prices if price is not None), default=None)
+                          for prices in groups.values() if len(prices) > 1]
                 memory[(row['id'], compare(row['probe'], [len(qualifying)], operator.ge, False),
                         compare(row['probe'], maximum, operator.lt, False),
-                        compare(row['probe'], maximum, operator.lt, True))] += 1
+                        compare(row['probe'], maximum, operator.lt, True),
+                        compare(row['probe'], maxima, operator.lt, False),
+                        compare(row['probe'], maxima, operator.lt, True))] += 1
             elif self.mode == 'nested-exists':
                 probe = row['probe']
                 present = any(

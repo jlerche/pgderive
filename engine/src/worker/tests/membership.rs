@@ -384,6 +384,28 @@ fn quantified_global_aggregates_use_the_single_result_or_empty_identity() -> Res
 }
 
 #[test]
+fn quantified_grouped_inputs_reuse_ordinary_grouping() -> Result<()> {
+    let native = ordered_contract();
+    for comparison in ["< ANY", ">= ALL"] {
+        for rhs in [
+            "SELECT max(b.price) FROM source.bid b GROUP BY b.auction HAVING count(*)>1",
+            "SELECT b.price FROM source.bid b GROUP BY ROLLUP(b.price)",
+            "SELECT b.price FROM source.bid b GROUP BY 1",
+        ] {
+            let sql = format!("SELECT a.other {comparison} ({rhs}) FROM source.auction a");
+            compile(&sql, &native).map_err(|error| error.context(sql))?.validate_execution()?;
+        }
+    }
+    let fallible = "SELECT a.other < ANY (SELECT max(b.price) FROM source.bid b
+        GROUP BY 1/(b.id-b.id)) FROM source.auction a";
+    assert!(compile(fallible, &native).is_err());
+    let correlated = "SELECT a.other < ANY (SELECT max(b.price) FROM source.bid b
+        WHERE b.auction=a.id GROUP BY b.id) FROM source.auction a";
+    assert!(compile(correlated, &native).is_err());
+    Ok(())
+}
+
+#[test]
 fn nested_positive_exists_preserves_scope_and_presence() -> Result<()> {
     let native = ordered_contract();
     let exists = "SELECT a.id, EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id

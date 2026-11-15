@@ -160,6 +160,11 @@ subquery. A row suppressed
 by HAVING or a supported bound gives the empty-input result. A present row
 with a NULL aggregate result participates in three-valued comparison.
 
+Uncorrelated explicit `ANY` and `ALL` can also compare against grouped
+outputs using the same expression restrictions. The comparison sees one
+row per surviving group, including any NULL result. When no group survives,
+`ANY` is FALSE and `ALL` is TRUE, even with a NULL probe.
+
 The operators `=`, `<>` (also spelled `!=`), `<`, `<=`, `>`, and `>=`
 support `ANY` (also spelled `SOME`) and `ALL` over a one-column subquery. Both operands
 may be smallint, integer, bigint, or numeric, including mixed pairs. Comparisons
