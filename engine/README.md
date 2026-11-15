@@ -124,11 +124,14 @@ compiler and engine with paused Tokio time, plus the pinned expression-error
 corpus and virtual checkpoint/epoch/upload-batching timer tests. It then runs
 focused live checks for CDC, result-table decoding, checkpoint publication,
 COMMIT faults, process kills, tenant isolation/offline reclamation, lifecycle and
-rebuild. Synthetic S3 latency is disabled. Four independent, owned tmpfs
-PostgreSQL instances run live groups concurrently; mutating harnesses remain
-sequential within each instance. Unit tests overlap the live suites after their
-shared build; coverage reporting waits for both phases to pass. Production line
-coverage must still be at least 80%.
+rebuild. Synthetic S3 latency is disabled. Live tasks use a pool of up to eight
+independent tmpfs PostgreSQL instances by default. Long suites distribute their
+complete histories across lanes while writes remain sequential on each
+instance. Set `PGDERIVE_GATE_LANES` to adjust the pool size. The root gate runs
+control-plane and engine checks concurrently. The engine runs its independent
+checks alongside the coverage phase, which overlaps instrumented Rust tests and
+live suites after their shared build. Coverage reporting waits for both phases
+to pass and enforces at least 80% production line coverage.
 
 `./scripts/check.sh --full` retains the exhaustive live query matrix and operational
 release qualification, including native-oracle refresh, TLS, backup recovery,
@@ -142,7 +145,7 @@ Frozen oracles are never regenerated during a gate. Recipe fingerprints, exact
 family counts, per-history oracle checks and cold reopen reports are verified.
 For fixture refresh and coverage boundaries, see [the gate design](docs/gate.md).
 
-The default gate needs `psql` and Docker for its four owned PostgreSQL instances
+The default gate needs `psql` and Docker for its owned PostgreSQL instances
 and local object service. Standalone/full harnesses can use a separately owned
 logical-replication endpoint. Full qualification additionally needs BuildKit for
 actual image/runtime checks.

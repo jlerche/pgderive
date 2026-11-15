@@ -6,6 +6,7 @@ import subprocess
 
 from native_mv_oracle import binary_difference, expected
 from sql_compiler_harness import SqlFixture
+from worker_case_shard import select_cases
 from worker_harness import History, run_modes
 
 
@@ -145,4 +146,5 @@ def qualify(output, command, mode):
 
 
 if __name__ == '__main__':
-    run_modes(('sets', 'rollup', 'cube', 'distinct', 'product', 'metadata', 'constants', 'primary', 'ordinary-primary', 'joined-primary'), qualify)
+    modes = ('sets', 'rollup', 'cube', 'distinct', 'product', 'metadata', 'constants', 'primary', 'ordinary-primary', 'joined-primary')
+    run_modes(select_cases(modes), qualify)

@@ -13,7 +13,7 @@ from verify_worker_core import LIVE_COUNTS
 
 class LiveGateTests(unittest.TestCase):
     def test_inventory_keeps_every_live_boundary_and_builds_explicit_commands(self):
-        names=[name for group in live_gate.GROUPS for name in group]
+        names=[name for name, _ in live_gate.SUITES]
         self.assertEqual(len(names),len(set(names)))
         self.assertEqual(set(names),set(LIVE_COUNTS)|{'replication','tenant-storage','tenant-storage-commit','multi-query','query-rebuild'})
         binaries={'worker':'/worker','admin':'/admin'}
@@ -34,19 +34,29 @@ class LiveGateTests(unittest.TestCase):
                     first=port not in ports
                     ports.setdefault(port,[]).append(str(log))
                 if first:barrier.wait(timeout=5)
-                self.assert_environment(environment,log.parent.name)
+                name, _, shard = str(log.parent.relative_to(root)).partition('/')
+                self.assert_environment(environment, name)
+                if shard:
+                    count = dict(live_gate.SUITES)[name]
+                    assert environment['PGDERIVE_TEST_CASE_SHARD'] == f'{int(shard.split("-")[1])-1}/{count}'
+                else:
+                    assert 'PGDERIVE_TEST_CASE_SHARD' not in environment
             @staticmethod
             def assert_environment(environment,name):
                 if name=='replication':assert 'PGDERIVE__WORKER__RETRY_DELAY_MS' not in environment
                 else:assert environment['PGDERIVE__WORKER__RETRY_DELAY_MS']=='1'
                 assert 'PGDERIVE__POSTGRES__DATABASE' not in environment
             def cancel(self):raise AssertionError('unexpected cancellation')
-        with tempfile.TemporaryDirectory() as directory, patch.object(live_gate,'prepare'), patch.object(live_gate,'Server',Server), patch.object(live_gate,'Commands',Commands), patch.object(live_gate,'verify_worker'), patch.dict(os.environ,{'PGDERIVE_GATE_REPLICATION':'1','PGDERIVE__POSTGRES__DATABASE':'foreign'}):
+        with tempfile.TemporaryDirectory() as directory, patch.object(live_gate,'prepare'), patch.object(live_gate,'Server',Server), patch.object(live_gate,'Commands',Commands), patch.object(live_gate,'verify_worker'), patch.dict(os.environ,{'PGDERIVE_GATE_REPLICATION':'1','PGDERIVE__POSTGRES__DATABASE':'foreign', 'PGDERIVE_GATE_LANES':'4'}):
             root=pathlib.Path(directory)
             live_gate.run(root,{'worker':'/worker','admin':'/admin'})
             evidence=json.loads((root/'lanes.json').read_text())
         self.assertEqual(len(ports),4)
-        self.assertEqual(sorted(len(v) for v in ports.values()),sorted(map(len,live_gate.GROUPS)))
+        expected = {name if count == 1 else f'{name}/shard-{shard+1}'
+                    for name, shard, count in live_gate.tasks(True)}
+        completed = [task for lane in evidence['groups'] for task in lane]
+        self.assertEqual(len(completed), len(expected))
+        self.assertEqual(set(completed), expected)
         self.assertTrue(all(success for _,success in finished))
         self.assertTrue(evidence['passed'])
 

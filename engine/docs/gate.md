@@ -46,7 +46,7 @@ or supplying a report with missing histories or oracle checks.
 
 ## Focused live boundaries
 
-The default worker suite retains 21 result cases plus rebuild and tenant reports:
+The default worker suite retains 131 result cases plus rebuild and tenant reports:
 
 - A memtable/checkpoint case and publication while a checkpoint upload is held.
 - Real result-table pgoutput decoding, PostgreSQL codec/support checks and
@@ -57,13 +57,18 @@ The default worker suite retains 21 result cases plus rebuild and tenant reports
 - Multi-query execution, tenant-separated cross-database packs, unavailable-source
   reclamation and central-manifest COMMIT faults.
 - Query lifecycle and fresh-generation rebuild with pinned-reader reclamation.
+- Quantified and residual subqueries, grouping sets, ordered string aggregation
+  and text ordering against live PostgreSQL.
 
 The complete low-level replication harness remains live. The default gate
-provisions four independently owned PostgreSQL containers with tmpfs storage.
-Live groups run concurrently across these instances, with strictly sequential
-harnesses within each instance. A database never serves overlapping mutating
-harnesses. These checks use real PostgreSQL/object storage, event witnesses and
-explicit fault barriers. Their timeouts are failure bounds, not a way to simulate scheduling.
+provisions a pool of independently owned PostgreSQL containers with tmpfs
+storage. The default pool size is the CPU count capped at eight and can be
+adjusted with `PGDERIVE_GATE_LANES`. Each lane takes pending work as it becomes
+free. Residual and quantified subqueries, grouping sets, and text ordering are
+split into disjoint shards of whole histories. Each lane runs one harness at a
+time against its own database. The result verifier requires the same counts and
+rejects duplicate case evidence across shards. These checks use real
+PostgreSQL/object storage, event witnesses and explicit fault barriers.
 The exhaustive capacity, query-family, binding and operational matrices remain
 in `--full`. Live-only callback witnesses in the source harnesses remain there;
 the frozen replay covers their committed semantic histories.
@@ -75,8 +80,11 @@ publication, process death and recovery.
 
 Covered executables and the ignored manifest protocol test are built once with
 one unified Cargo target/feature set. Live suites invoke those exact artifacts;
-no Cargo compilation or coverage-counter cleanup runs concurrently with them.
-The unit tests and live suites start together after this build. All processes
+no rebuild or coverage-counter cleanup runs concurrently in the instrumented
+target. Ordinary Rust checks use a separate target. The root control-plane and
+engine checks run concurrently, as do independent Python, file-length, Rust,
+dependency, and coverage checks. The instrumented unit tests and live suites
+start together after their build. All processes
 inherit the same per-process coverage output pattern. Reporting waits for both
 phases and the semantic-report verifier to pass. A unit or semantic-report
 failure still waits for live cleanup/evidence preservation before returning an

@@ -9,6 +9,7 @@ from uuid import UUID
 
 from native_mv_oracle import binary_difference, expected
 from sql_compiler_harness import SqlFixture
+from worker_case_shard import select_cases
 from worker_harness import History, run_cases
 
 
@@ -202,7 +203,7 @@ def qualify(output, command, mode, group, domains):
 
 
 if __name__ == '__main__':
-    run_cases(((f'{mode}-{group}-{domains}', mode, group, domains)
+    cases = ((f'{mode}-{group}-{domains}', mode, group, domains)
                for mode, domains in (
                    ('uncorrelated', 'integral'), ('correlated', 'integral'),
                    ('correlated', 'numeric'), ('uncorrelated', 'integral-numeric'),
@@ -215,4 +216,5 @@ if __name__ == '__main__':
                    ('uncorrelated', 'timestamptz'),
                    ('correlated', 'date-timestamptz'), ('uncorrelated', 'timestamp-date'),
                    ('uncorrelated', 'timestamptz-timestamp'),
-               ) for group in GROUPS), qualify)
+               ) for group in GROUPS)
+    run_cases(select_cases(cases), qualify)

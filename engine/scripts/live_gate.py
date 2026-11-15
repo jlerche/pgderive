@@ -20,12 +20,31 @@ from harness_control import Server
 from run_with_s3_proxy import prepare
 from verify_worker_core import main as verify_worker
 
-GROUPS=(
-    ('replication','result-table','operation-budget','multi-query','query-lifecycle'),
-    ('tenant-storage','tenant-storage-commit','projection-compiler','quantified-subqueries'),
-    ('memtable','postgres-support','checkpoint','query-rebuild','residual-subqueries','grouping-sets','string-agg','text-ordering'),
-    ('transactions','crashes'),
+# Start slow suites early. Each shard still runs complete histories and
+# each lane owns one isolated PostgreSQL instance.
+SUITES = (
+    ('residual-subqueries', 8), ('quantified-subqueries', 4),
+    ('tenant-storage', 1), ('text-ordering', 2), ('grouping-sets', 2),
+    ('transactions', 1), ('crashes', 1), ('postgres-support', 1),
+    ('query-rebuild', 1), ('projection-compiler', 1), ('memtable', 1),
+    ('string-agg', 1), ('query-lifecycle', 1), ('checkpoint', 1),
+    ('result-table', 1), ('multi-query', 1), ('tenant-storage-commit', 1),
+    ('operation-budget', 1), ('replication', 1),
 )
+
+
+def tasks(with_replication):
+    return [(name, index, shards) for name, shards in SUITES
+            if name != 'replication' or with_replication
+            for index in range(shards)]
+
+
+def workers(task_count):
+    default = min(8, os.cpu_count() or 1)
+    configured = int(os.environ.get('PGDERIVE_GATE_LANES', default))
+    if configured < 1:
+        raise ValueError('PGDERIVE_GATE_LANES must be positive')
+    return min(configured, task_count)
 
 
 def command(name, output, binaries):
@@ -87,41 +106,60 @@ def provision(index, output, servers):
     return server
 
 
-def lane(index, names, output, binaries, commands, server):
-    environment={**{k:v for k,v in os.environ.items() if not k.startswith('PGDERIVE__')},
-                 'PGDERIVE_TEST_POSTGRES_PORT':str(server.port),
-                 'PGDERIVE__POSTGRES__PORT':str(server.port),
-                 'PGPASSWORD':'postgres','PGDERIVE__POSTGRES__PASSWORD':'postgres',
-                 'PGDERIVE_S3_LATENCY_SCALE':'0'}
-    for name in names:
-        directory=output/name; directory.mkdir()
-        argv=command(name,directory,binaries)
-        if name!='replication':
-            argv=[sys.executable,'scripts/run_with_s3_proxy.py',str(directory),*argv]
-        task_environment=environment.copy()
-        if name!='replication':
-            # Same retry count; timer scheduling is checked with paused time.
-            task_environment['PGDERIVE__WORKER__RETRY_DELAY_MS']='1'
-        commands.run(argv,task_environment,directory/'console.log')
-        print(f'Lane {index}: {name} passed',flush=True)
+def lane(index, pending, output, binaries, commands, server, completed):
+    environment = {
+        **{key: value for key, value in os.environ.items()
+           if not key.startswith('PGDERIVE__') and key != 'PGDERIVE_TEST_CASE_SHARD'},
+        'PGDERIVE_TEST_POSTGRES_PORT': str(server.port),
+        'PGDERIVE__POSTGRES__PORT': str(server.port),
+        'PGPASSWORD': 'postgres', 'PGDERIVE__POSTGRES__PASSWORD': 'postgres',
+        'PGDERIVE_S3_LATENCY_SCALE': '0',
+    }
+    while True:
+        try:
+            name, shard, shards = pending.get_nowait()
+        except queue.Empty:
+            return
+        relative = pathlib.Path(name)
+        task_environment = environment.copy()
+        if shards > 1:
+            relative /= f'shard-{shard + 1}'
+            task_environment['PGDERIVE_TEST_CASE_SHARD'] = f'{shard}/{shards}'
+        directory = output / relative
+        directory.mkdir(parents=True)
+        argv = command(name, directory, binaries)
+        if name != 'replication':
+            argv = [sys.executable, 'scripts/run_with_s3_proxy.py', str(directory), *argv]
+            # Retry count stays the same. Paused-time tests check timer scheduling.
+            task_environment['PGDERIVE__WORKER__RETRY_DELAY_MS'] = '1'
+        commands.run(argv, task_environment, directory / 'console.log')
+        completed.append(str(relative))
+        print(f'Lane {index}: {relative} passed', flush=True)
 
 
 def run(output, binaries):
     output.mkdir(parents=True,exist_ok=True)
     commands=Commands(); servers=queue.Queue(); success=False
-    with_replication=os.environ.get('PGDERIVE_GATE_REPLICATION')=='1'
+    scheduled = tasks(os.environ.get('PGDERIVE_GATE_REPLICATION') == '1')
+    pending = queue.Queue()
+    for task in scheduled:
+        pending.put(task)
+    lane_count = workers(len(scheduled))
+    print(f'Live gate: {len(scheduled)} tasks across {lane_count} PostgreSQL lanes', flush=True)
+    completed = [[] for _ in range(lane_count)]
     try:
         # Initialize the shared object service/bucket once, before any lane.
         prepare()
-        with ThreadPoolExecutor(max_workers=len(GROUPS)) as pool:
+        with ThreadPoolExecutor(max_workers=lane_count) as pool:
             try:
-                prepared=[pool.submit(provision,index,output,servers) for index in range(len(GROUPS))]
+                prepared=[pool.submit(provision,index,output,servers) for index in range(lane_count)]
                 owned=[job.result() for job in prepared]
-                if len({server.port for server in owned})!=len(GROUPS) or len({server.name for server in owned})!=len(GROUPS):
+                if len({server.port for server in owned})!=lane_count or len({server.name for server in owned})!=lane_count:
                     raise RuntimeError('Live lanes do not have distinct PostgreSQL servers')
-                jobs=[pool.submit(lane,index,[n for n in names if n!='replication' or with_replication],
-                                  output,binaries,commands,owned[index]) for index,names in enumerate(GROUPS)]
-                for job in as_completed(jobs):job.result()
+                jobs = [pool.submit(lane, index, pending, output, binaries, commands, server,
+                                    completed[index]) for index, server in enumerate(owned)]
+                for job in as_completed(jobs):
+                    job.result()
                 verify_worker(output,[binaries['worker'],binaries['admin']])
                 success=True
             except BaseException:
@@ -131,13 +169,14 @@ def run(output, binaries):
         records=[]
         while not servers.empty():
             server=servers.get()
-            records.append({'container':server.name,'port':server.port})
+            records.append({'lane': server.output.name, 'container': server.name, 'port': server.port})
             if not success:
                 try:archive(server)
                 except Exception as error:print(f'Archive failed; server retained: {server.name}: {error}',file=sys.stderr)
             server.finish(success)
-        (output/'lanes.json').write_text(json.dumps({'passed':success,'servers':records,
-             'groups':[[n for n in names if n!='replication' or with_replication] for names in GROUPS]},indent=2)+'\n')
+        records.sort(key=lambda record: int(record['lane'].split('-')[1]))
+        evidence = {'passed': success, 'servers': records, 'groups': completed}
+        (output / 'lanes.json').write_text(json.dumps(evidence, indent=2) + '\n')
 
 
 def archive(server):

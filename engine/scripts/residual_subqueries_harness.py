@@ -7,6 +7,7 @@ import operator
 from native_mv_oracle import binary_difference, expected
 from quantified_subqueries_harness import COMPARISONS, compare
 from sql_compiler_harness import SqlFixture
+from worker_case_shard import select_cases
 from worker_harness import History, run_cases
 
 
@@ -527,7 +528,10 @@ if __name__ == '__main__':
              'exists-ties', 'residual-ordered', 'nested-exists', 'nested-domain', 'nested-quantified', 'null-safe-residual', 'grouped-residual', *GROUP_OFFSET_MODES)
     cases = [(mode if keyed else f'{mode}-inequality-only', mode, keyed)
              for keyed in (True, False) for mode in modes]
-    run_cases([*cases, ('ordered', 'ordered', True),
-               ('aggregate-quantified', 'aggregate-quantified', True),
-               ('keyed-grouped-comparisons', 'keyed-grouped-comparisons', True),
-               ('keyed-empty-grouping-sets', 'keyed-empty-grouping-sets', True)], qualify)
+    cases.extend([
+        ('ordered', 'ordered', True),
+        ('aggregate-quantified', 'aggregate-quantified', True),
+        ('keyed-grouped-comparisons', 'keyed-grouped-comparisons', True),
+        ('keyed-empty-grouping-sets', 'keyed-empty-grouping-sets', True),
+    ])
+    run_cases(select_cases(cases), qualify)

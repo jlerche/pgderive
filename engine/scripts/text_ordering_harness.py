@@ -7,6 +7,7 @@ import uuid
 
 from native_mv_oracle import binary_difference, expected
 from sql_compiler_harness import SqlFixture
+from worker_case_shard import select_cases
 from worker_harness import History, run_modes
 
 
@@ -153,8 +154,9 @@ def run_history(output, command, mode, database):
 
 
 if __name__ == '__main__':
-    run_modes((
+    modes = (
         'extrema', 'codepoint-extrema', 'codepoint-topk', 'window', 'interval-ties',
         'date-extrema', 'interval-distinct', 'numeric-range', 'temporal-range',
         'default-extrema', 'default-topk', 'default-window', 'default-override',
-    ), qualify)
+    )
+    run_modes(select_cases(modes), qualify)

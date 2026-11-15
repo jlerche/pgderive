@@ -35,9 +35,18 @@ def qualifications(output):
 def verify(output, counts=LIVE_COUNTS):
     expected = set()
     for name, count in counts.items():
-        results = list((output/name).rglob('result.json'))
+        suite = output / name
+        results = list(suite.rglob('result.json'))
         if len(results) != count:
             raise ValueError(f'{name}: expected {count} results, found {len(results)}')
+        cases = set()
+        for result in results:
+            case = result.parent.relative_to(suite).parts
+            if case and case[0].startswith('shard-'):
+                case = case[1:]
+            if case in cases:
+                raise ValueError(f'{name}: duplicate result for {"/".join(case)}')
+            cases.add(case)
         for result in results:
             if not isinstance(json.loads(result.read_text()), dict):
                 raise ValueError(f'invalid result evidence: {result}')

@@ -68,3 +68,31 @@ class CoveragePhasesTests(unittest.TestCase):
                 self.assertTrue((root/(last+'.done')).exists())
                 self.assertEqual((root/'live.started').exists(),failure!='integration')
                 self.assertEqual((root/'reported').exists(),failure is None)
+
+
+class GateParallelChecksTests(unittest.TestCase):
+    def test_independent_check_failure_still_joins_peer(self):
+        helper = pathlib.Path(__file__).with_name('check_parallel.sh')
+        script = """
+set -euo pipefail
+source "$1"
+first() {
+    touch first
+    for _ in {1..100}; do
+        [[ ! -f second ]] || return 7
+        sleep 0.01
+    done
+    return 99
+}
+second() {
+    touch second
+    sleep 0.1
+    touch second_finished
+}
+run_parallel_checks first second
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(['bash', '-c', script, 'check-parallel', str(helper)],
+                                    cwd=directory, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 7, result.stderr)
+            self.assertTrue((pathlib.Path(directory) / 'second_finished').is_file())

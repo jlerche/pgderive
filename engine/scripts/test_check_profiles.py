@@ -46,6 +46,19 @@ class CheckProfiles(unittest.TestCase):
             with self.assertRaises(ValueError):
                 verify(root,{'compiler':1})
 
+    def test_core_evidence_rejects_duplicate_cases_across_shards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            rebuild = root / 'query-rebuild/qualification.json'
+            rebuild.parent.mkdir()
+            rebuild.write_text('{}')
+            for shard in ('shard-1', 'shard-2'):
+                result = root / 'compiler' / shard / 'same/result.json'
+                result.parent.mkdir(parents=True)
+                result.write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'duplicate result for same'):
+                verify(root, {'compiler': 2})
+
     def test_timings_record_success_failure_and_interruption(self):
         for code in (0,1,None):
             with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stderr(io.StringIO()):
