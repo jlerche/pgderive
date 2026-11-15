@@ -134,6 +134,15 @@ class ResidualFixture(SqlFixture):
                 a.probe >= ALL ({partial_key}) AS key_group_partial FROM {a} a"""
             self.sql(f"""INSERT INTO {b}(id,auction,price,cutoff) VALUES
                 (14,2,NULL,2),(15,1,10,1),(16,1,8,1),(17,1,10,4),(18,1,8,4)""")
+        elif mode == 'keyed-empty-grouping-sets':
+            nullable = f"""SELECT max(b.price) FROM {b} b WHERE {keys}
+                GROUP BY ROLLUP(b.price) HAVING count(*)=0"""
+            counted = f"""SELECT count(*) FROM {b} b WHERE {keys}
+                GROUP BY GROUPING SETS ((b.cutoff), (), ()) ORDER BY 1 OFFSET 1 LIMIT 1"""
+            self.labels = ['id', 'empty_group_all', 'bounded_empty_group_in']
+            self.query = f"""SELECT a.id, a.probe >= ALL ({nullable}) AS empty_group_all,
+                a.probe IN ({counted}) AS bounded_empty_group_in FROM {a} a"""
+            self.sql(f'UPDATE {a} SET probe=0 WHERE id IN (5,9)')
         elif mode == 'nested-exists':
             scope = keys if keyed else keys + ' AND b.id>a.id'
             exists = f"""EXISTS (SELECT 1 FROM {b} b WHERE {scope}
@@ -291,6 +300,13 @@ class ResidualFixture(SqlFixture):
                         compare(row['probe'], first, operator.lt, True),
                         compare(row['probe'], set_values, operator.ge, True),
                         compare(row['probe'], [key, None] if groups else [], operator.ge, True))] += 1
+            elif self.mode == 'keyed-empty-grouping-sets':
+                groups = Counter(item['cutoff'] for item in inner
+                                 if item['id'] != 99 and key is not None and key == item['auction'])
+                count = sum(groups.values())
+                counts = sorted([*groups.values(), count, count])
+                memory[(row['id'], compare(row['probe'], [] if count else [None], operator.ge, True),
+                        membership(row['probe'], counts[1:2]))] += 1
             elif self.mode == 'nested-exists':
                 probe = row['probe']
                 present = any(
@@ -399,4 +415,5 @@ if __name__ == '__main__':
              for keyed in (True, False) for mode in modes]
     run_cases([*cases, ('ordered', 'ordered', True),
                ('aggregate-quantified', 'aggregate-quantified', True),
-               ('keyed-grouped-comparisons', 'keyed-grouped-comparisons', True)], qualify)
+               ('keyed-grouped-comparisons', 'keyed-grouped-comparisons', True),
+               ('keyed-empty-grouping-sets', 'keyed-empty-grouping-sets', True)], qualify)

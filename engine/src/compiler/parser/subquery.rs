@@ -384,6 +384,9 @@ impl Rewrite<'_> {
         quantified: Option<Compare>,
     ) -> Result<Node> {
         let correlation = correlation::extract(&mut query, true)?;
+        if !correlation.pairs.is_empty() && has_empty_grouping_set(&query)? {
+            return self.membership_with_empty_group(query, probe, quantified, correlation);
+        }
         self.membership_mark(
             query,
             probe,
@@ -391,6 +394,52 @@ impl Rewrite<'_> {
             correlation,
         )
     }
+
+    fn membership_with_empty_group(
+        &mut self,
+        query: pg::SelectStmt,
+        probe: Node,
+        quantified: Option<Compare>,
+        correlation: correlation::Correlation,
+    ) -> Result<Node> {
+        validate_keyed_grouping(&query, &correlation)?;
+        let present = self.group_input_present(&query, &correlation)?;
+        let mut empty = query.clone();
+        empty.where_clause = Some(Box::new(ast::boolean(false)));
+        let without_rows = self.membership_mark(
+            empty,
+            probe.clone(),
+            MembershipOptions { quantified: quantified.clone(), ..MembershipOptions::default() },
+            correlation::Correlation::default(),
+        )?;
+        let with_rows = self.membership_mark(
+            query,
+            probe,
+            MembershipOptions { quantified, ..MembershipOptions::default() },
+            correlation,
+        )?;
+        Ok(ast::case(present, with_rows, without_rows))
+    }
+
+    fn group_input_present(
+        &mut self,
+        query: &pg::SelectStmt,
+        correlation: &correlation::Correlation,
+    ) -> Result<Node> {
+        let value = ast::boolean(true);
+        let witness = pg::SelectStmt {
+            target_list: vec![ast::target(value.clone(), "")],
+            from_clause: query.from_clause.clone(),
+            where_clause: query.where_clause.clone(),
+            op: i32::from(pg::SetOperation::SetopNone),
+            limit_option: i32::from(pg::LimitOption::Default),
+            ..pg::SelectStmt::default()
+        };
+        let mut keys = correlation::Correlation::default();
+        keys.pairs.clone_from(&correlation.pairs);
+        self.membership_mark(witness, value, MembershipOptions::default(), keys)
+    }
+
     fn membership_mark(
         &mut self,
         mut query: pg::SelectStmt,
@@ -403,14 +452,7 @@ impl Rewrite<'_> {
         let grouped = !query.group_clause.is_empty() && !correlation.pairs.is_empty();
         let ordered = if grouped {
             validate_keyed_grouping(&query, &correlation)?;
-            let mut original = super::query(&query)?;
-            if let Some(sets) = grouping_sets(&mut original) {
-                ensure!(
-                    sets.groups.iter().all(|set| !set.is_empty()),
-                    "correlated grouping sets require a grouping key in every branch"
-                );
-            }
-            self.validation.push(original);
+            self.validation.push(super::query(&query)?);
             let ordered = membership_ordered(&query);
             if !ordered {
                 query.distinct_clause.clear();
@@ -467,6 +509,15 @@ impl Rewrite<'_> {
         Ok(ast::column(&alias, ast::VALUE))
     }
 }
+fn has_empty_grouping_set(query: &pg::SelectStmt) -> Result<bool> {
+    if query.group_clause.is_empty() {
+        return Ok(false);
+    }
+    let targets = super::partition::parse_targets(query)?;
+    let grouping = super::grouping_sets::parse(query, &targets)?;
+    Ok(grouping.sets.is_some_and(|sets| sets.groups.iter().any(Vec::is_empty)))
+}
+
 fn grouping_sets(parsed: &mut Parsed) -> Option<&mut super::grouping_sets::Sets> {
     match parsed {
         Parsed::Partition(partition) | Parsed::Membership { parsed: partition, .. } => {

@@ -170,11 +170,15 @@ column equality correlation keys. Each outer row compares only against
 groups formed from the rows matching its keys. NULL correlation keys
 have no matches. Supported ordering and literal row bounds select
 rows per key after grouping and HAVING. Plain DISTINCT deduplicates
-within each key before a cutoff. Equality-correlated grouping sets are
-supported when every branch has a grouping key. A correlation column
-omitted in a branch is projected as SQL NULL in that branch while the
-hidden key continues to match the outer row. Empty grouping sets and
-residual correlation in grouped inputs remain unsupported.
+within each key before a cutoff. In equality-correlated grouping sets,
+a correlation column omitted from the visible grouping has SQL NULL
+in that branch while its hidden key continues to match the outer row.
+An empty grouping set
+produces its empty-input row when no source rows match the outer key,
+including a NULL outer key. HAVING and row cutoffs apply to that branch.
+A comparison with an empty grouping set uses three of the eight
+subquery lift slots. Residual correlation in grouped inputs remains
+unsupported.
 
 The operators `=`, `<>` (also spelled `!=`), `<`, `<=`, `>`, and `>=`
 support `ANY` (also spelled `SOME`) and `ALL` over a one-column subquery. Both operands

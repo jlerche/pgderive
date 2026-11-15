@@ -428,6 +428,10 @@ fn equality_correlated_grouped_comparisons_preserve_local_grouping() -> Result<(
          GROUP BY GROUPING SETS ((b.price), (b.auction))",
         "SELECT b.auction FROM source.bid b WHERE b.auction=a.id
          GROUP BY GROUPING SETS ((1), (b.id)) ORDER BY 1 DESC NULLS FIRST LIMIT 1",
+        "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id
+         GROUP BY ROLLUP(b.price) HAVING count(*)=0",
+        "SELECT count(*) FROM source.bid b WHERE b.auction=a.id
+         GROUP BY GROUPING SETS ((b.id), (), ()) ORDER BY 1 OFFSET 1 LIMIT 1",
     ] {
         let sql = format!("SELECT a.other < ANY ({rhs}) FROM source.auction a");
         compile(&sql, &native).map_err(|error| error.context(sql))?.validate_execution()?;
@@ -435,7 +439,6 @@ fn equality_correlated_grouped_comparisons_preserve_local_grouping() -> Result<(
     for invalid in [
         "SELECT b.auction FROM source.bid b WHERE b.auction=a.id GROUP BY b.price",
         "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id AND b.id>a.id GROUP BY b.price",
-        "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY ROLLUP(b.price)",
         "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY b.price LIMIT 1",
         "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY b.price ORDER BY 2",
     ] {
