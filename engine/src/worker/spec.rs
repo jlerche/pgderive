@@ -22,7 +22,9 @@ impl QueryDefinition {
         sql: &(impl tokio_postgres::GenericClient + Sync),
         contract: &Contract,
     ) -> Result<(crate::compiler::Compiled, Vec<serde_json::Value>)> {
-        let mut compiled = self.compile(contract)?;
+        let mut bound = contract.clone();
+        bound.environment.bind_default_collation(sql).await?;
+        let mut compiled = self.compile(&bound)?;
         let (columns, description) = super::results::columns(sql, self).await?;
         compiled.result_columns = columns;
         Ok((compiled, description))

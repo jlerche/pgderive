@@ -44,13 +44,13 @@ pub(super) fn apply(
     let mut order = Vec::new();
     for value in parsed.order {
         ensure!(
-            !parsed.distinct || !value.bytewise,
+            !parsed.distinct || value.collation.is_none(),
             "DISTINCT ORDER BY COLLATE requires a selected collated expression, which is unsupported"
         );
         let column =
             ir.output.columns.get(value.index).context("missing ORDER BY target")?.column.clone();
         ensure!(
-            !value.bytewise || matches!(column.oid, 25 | 1043),
+            value.collation.is_none() || matches!(column.oid, 25 | 1043),
             "COLLATE requires text ordering"
         );
         ensure!(
@@ -59,10 +59,12 @@ pub(super) fn apply(
         );
         ensure!(
             !matches!(column.oid, 25 | 1043)
-                || value.bytewise
-                || facts
-                    .collation(&column)
-                    .is_some_and(crate::compiler::typed::collation::bytewise),
+                || value.collation.or_else(|| facts.collation(&column)).is_some_and(|oid| {
+                    crate::compiler::partition::bytewise_ordering(
+                        oid,
+                        contract.environment.default_bytewise(),
+                    )
+                }),
             "text ORDER BY requires a built-in bytewise collation"
         );
         ensure!(

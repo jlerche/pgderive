@@ -187,6 +187,7 @@ fn build_direct(
         resolve,
         &mut computed,
         TargetContext {
+            default_bytewise: context.contract.environment.default_bytewise(),
             groups: &group_keys,
             occurrence_keys: context.occurrence_keys,
             scalar_scope: context.scalar_scope,
@@ -295,6 +296,7 @@ fn source_predicate(
 }
 #[derive(Clone, Copy)]
 struct TargetContext<'a> {
+    default_bytewise: bool,
     groups: &'a [ColumnRef],
     occurrence_keys: &'a crate::compiler::properties::Properties,
     scalar_scope: Option<usize>,
@@ -406,9 +408,8 @@ fn aggregate(
             bind_window(
                 window,
                 resolve,
-                (context.occurrence_keys, &value.function, string_agg.as_deref()),
+                (context, &value.function, string_agg.as_deref()),
                 computed,
-                context.scalar_scope,
             )
         })
         .transpose()?;
@@ -421,6 +422,7 @@ fn aggregate(
             scope: context.scalar_scope,
             function: &value.function,
             framed: window.is_some(),
+            default_bytewise: context.default_bytewise,
         },
     )?;
     let navigation = value
@@ -493,20 +495,19 @@ fn validate_order(
 fn bind_window(
     window: syntax::Window,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
-    context: (
-        &crate::compiler::properties::Properties,
-        &Function,
-        Option<&crate::compiler::partition::StringAgg>,
-    ),
+    context: (TargetContext<'_>, &Function, Option<&crate::compiler::partition::StringAgg>),
     computed: &mut Vec<crate::compiler::scalar::Computed>,
-    scope: Option<usize>,
 ) -> Result<(Mode, Vec<ColumnRef>)> {
-    let window_keys = keys(window.keys, resolve, computed, scope)?;
+    let window_keys = keys(window.keys, resolve, computed, context.0.scalar_scope)?;
     let order = window
         .order
         .into_iter()
         .map(|(name, descending, nulls_first)| {
-            Ok(Order { column: bind_key(name, resolve, computed, scope)?, descending, nulls_first })
+            Ok(Order {
+                column: bind_key(name, resolve, computed, context.0.scalar_scope)?,
+                descending,
+                nulls_first,
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     for item in &order {
@@ -516,7 +517,10 @@ fn bind_window(
             "unsupported window ordering type"
         );
         if matches!(column.oid, 25 | 1043) {
-            crate::compiler::partition::require_bytewise(column.collation)?;
+            crate::compiler::partition::require_bytewise_ordering(
+                column.collation,
+                context.0.default_bytewise,
+            )?;
         }
     }
     let mode = match window.frame {
@@ -534,7 +538,7 @@ fn bind_window(
         }
     };
     if mode.requires_occurrence_order(context.1, context.2) {
-        validate_order(mode.order(), context.0, &window_keys)?;
+        validate_order(mode.order(), context.0.occurrence_keys, &window_keys)?;
     }
     Ok((mode, window_keys))
 }

@@ -15,6 +15,11 @@ pub(in crate::compiler) fn builtin_bytewise(name: &Name) -> Option<u32> {
         .find_map(|(key, oid)| (*key == name).then_some(*oid))
 }
 
+pub(in crate::compiler) fn explicit_oid(name: &Name) -> Option<u32> {
+    use crate::compiler::parser::expressions::builtin_name;
+    if builtin_name(&name.0) == Some("default") { Some(100) } else { builtin_bytewise(name) }
+}
+
 pub(super) fn bind(
     clause: &pg::CollateClause,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
@@ -32,8 +37,9 @@ pub(super) fn bind(
 pub(super) fn explicit(clause: &pg::CollateClause, input: Typed) -> Result<Typed> {
     use crate::compiler::parser::expressions::names;
     let name = names(&clause.collname)?;
-    let collation = builtin_bytewise(&name)
-        .context("explicit text collation requires a supported pg_catalog bytewise collation")?;
+    let collation = explicit_oid(&name).context(
+        "explicit text collation requires default or a supported pg_catalog bytewise collation",
+    )?;
     ensure!(matches!(input.oid, 0 | 25 | 705 | 1043), "COLLATE requires a text or varchar operand");
     Ok(Typed { oid: input.oid, value: Value::Collate { input: Box::new(input), collation } })
 }

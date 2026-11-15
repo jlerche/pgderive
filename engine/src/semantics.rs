@@ -14,6 +14,8 @@ pub struct Environment {
     encoding: String,
     catalog: String,
     revision: i64,
+    #[serde(skip)]
+    default_bytewise: bool,
 }
 impl Environment {
     /// Configure a worker session during initialization.
@@ -41,10 +43,27 @@ impl Environment {
             encoding: row.try_get(1)?,
             catalog: row.try_get(2)?,
             revision: maintenance::revision(sql).await?,
+            default_bytewise: false,
         };
         environment.validate()?;
         Ok(environment)
     }
+    // Binding uses the verified native default without changing the SQL collation OID.
+    pub(crate) async fn bind_default_collation(
+        &mut self,
+        sql: &(impl GenericClient + Sync),
+    ) -> Result<()> {
+        self.default_bytewise = sql
+            .query_one(include_str!("semantics/default_collation.sql"), &[])
+            .await?
+            .try_get(0)?;
+        Ok(())
+    }
+
+    pub(crate) const fn default_bytewise(&self) -> bool {
+        self.default_bytewise
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(self.server.parse::<u32>()? >= 170_000, "PostgreSQL 17 or newer required");
         ensure!(self.revision >= 0, "invalid semantic environment revision");
@@ -62,6 +81,7 @@ impl Environment {
             encoding: "UTF8".into(),
             catalog: "0".repeat(64),
             revision: 0,
+            default_bytewise: false,
         }
     }
 }

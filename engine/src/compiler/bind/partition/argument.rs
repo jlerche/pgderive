@@ -13,6 +13,7 @@ pub(super) struct Context<'a> {
     pub scope: Option<usize>,
     pub function: &'a Function,
     pub framed: bool,
+    pub default_bytewise: bool,
 }
 pub(super) struct Bound {
     pub column: Option<ColumnRef>,
@@ -33,7 +34,7 @@ pub(super) fn bind(
             _ => None,
         };
         if let Some(column) = &column {
-            validate_extremum(context.function, column.oid, false, || Ok(column.collation))?;
+            validate_extremum(context, column.oid, false, || Ok(column.collation))?;
         }
         return Ok(Bound { column, filter: filter.map(Predicate::new), expression: None });
     };
@@ -57,7 +58,7 @@ pub(super) fn bind(
     } else if expression.oid() == 705 {
         expression = expression.unknown_text();
     }
-    validate_extremum(context.function, expression.oid(), expression.is_constant(), || {
+    validate_extremum(context, expression.oid(), expression.is_constant(), || {
         expression.collation(&|column| Ok(column.collation))
     })?;
     if context.framed {
@@ -100,13 +101,16 @@ pub(super) fn integer_window_argument(
 }
 
 fn validate_extremum(
-    function: &Function,
+    context: Context<'_>,
     oid: u32,
     constant: bool,
     collation: impl FnOnce() -> Result<u32>,
 ) -> Result<()> {
-    if function.extremum() && matches!(oid, 25 | 1043) && !constant {
-        crate::compiler::partition::require_bytewise(collation()?)?;
+    if context.function.extremum() && matches!(oid, 25 | 1043) && !constant {
+        crate::compiler::partition::require_bytewise_ordering(
+            collation()?,
+            context.default_bytewise,
+        )?;
     }
     Ok(())
 }

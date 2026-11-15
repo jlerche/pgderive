@@ -239,7 +239,7 @@ fn ordering(
                 index,
                 descending: value.descending,
                 nulls_first: value.nulls_first,
-                bytewise: false,
+                collation: None,
             })
         })
         .collect::<Result<_>>()?;

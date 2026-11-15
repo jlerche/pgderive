@@ -16,7 +16,7 @@ pub(in crate::compiler) struct Order {
     pub index: usize,
     pub descending: bool,
     pub nulls_first: bool,
-    pub bytewise: bool,
+    pub collation: Option<u32>,
 }
 
 pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
@@ -39,10 +39,11 @@ pub(super) fn parse(select: &pg::SelectStmt) -> Result<Option<Parsed>> {
         .iter()
         .map(|value| {
             let (expression, descending, nulls_first) = partition::sort_expression(value)?;
-            let (unwrapped, bytewise) = byte_order(expression)?;
+            let (unwrapped, collation) = sort_collation(expression)?;
             let expression = if distinct_on { expression } else { unwrapped };
-            let index = include_target(expression, &targets, &mut plain, bytewise, distinct_on)?;
-            Ok(Order { index, descending, nulls_first, bytewise })
+            let index =
+                include_target(expression, &targets, &mut plain, collation.is_some(), distinct_on)?;
+            Ok(Order { index, descending, nulls_first, collation })
         })
         .collect::<Result<_>>()?;
     plain.sort_clause.clear();
@@ -88,8 +89,8 @@ fn distinct_keys(
         .distinct_clause
         .iter()
         .map(|value| {
-            let (_, collated) = byte_order(value)?;
-            include_target(value, targets, plain, collated, true)
+            let (_, collation) = sort_collation(value)?;
+            include_target(value, targets, plain, collation.is_some(), true)
         })
         .collect()
 }
@@ -114,14 +115,12 @@ fn include_target(
     Ok(index)
 }
 
-fn byte_order(value: &Node) -> Result<(&Node, bool)> {
-    let NodeEnum::CollateClause(collate) = node(value)? else { return Ok((value, false)) };
+fn sort_collation(value: &Node) -> Result<(&Node, Option<u32>)> {
+    let NodeEnum::CollateClause(collate) = node(value)? else { return Ok((value, None)) };
     let name = super::expressions::names(&collate.collname)?;
-    ensure!(
-        crate::compiler::typed::collation::builtin_bytewise(&name).is_some(),
-        "ORDER BY COLLATE requires a built-in bytewise collation"
-    );
-    Ok((super::optional(collate.arg.as_deref())?, true))
+    let oid = crate::compiler::typed::collation::explicit_oid(&name)
+        .context("ORDER BY COLLATE requires default or a built-in bytewise collation")?;
+    Ok((super::optional(collate.arg.as_deref())?, Some(oid)))
 }
 
 pub(super) fn count(value: &Node) -> Result<Option<usize>> {

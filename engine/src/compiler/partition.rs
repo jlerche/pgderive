@@ -349,9 +349,17 @@ pub(super) const fn orderable(oid: u32) -> bool {
     matches!(oid, 16 | 20 | 21 | 23 | 25 | 1043 | 1082 | 1114 | 1184 | 1186 | 1700 | 2950)
 }
 
+pub(super) fn bytewise_ordering(collation: u32, default_bytewise: bool) -> bool {
+    (collation == 100 && default_bytewise) || crate::compiler::typed::collation::bytewise(collation)
+}
+
 pub(super) fn require_bytewise(collation: u32) -> Result<()> {
+    require_bytewise_ordering(collation, false)
+}
+
+pub(super) fn require_bytewise_ordering(collation: u32, default_bytewise: bool) -> Result<()> {
     ensure!(
-        crate::compiler::typed::collation::bytewise(collation),
+        bytewise_ordering(collation, default_bytewise),
         "text ordering requires a built-in bytewise collation"
     );
     Ok(())

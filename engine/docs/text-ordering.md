@@ -20,6 +20,14 @@ interval equality, including the equivalence between one month and 30 days.
 The selected row retains its original interval representation. Date MIN and
 MAX also support DISTINCT and preserve the full PostgreSQL date range.
 
+`MIN` and `MAX`, top-level `ORDER BY`, and window ordering also accept
+the database default when PostgreSQL selects libc `C` or `POSIX`, or
+the built-in `C`, `C.UTF-8`, or `PG_UNICODE_FAST` locale. The compiler
+checks the provider and locale on the source connection. Explicit
+`COLLATE pg_catalog."default"` can select that same ordering. Results retain
+PostgreSQL's default collation identity. Other libc and ICU database
+defaults still require locale-aware ordering support.
+
 Pgderive compares these collations by UTF-8 bytes. The source catalog
 fingerprint includes their definitions and provider versions. The
 `pg_unicode_fast` collation is available on PostgreSQL 18 and later.
