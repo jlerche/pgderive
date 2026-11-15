@@ -108,6 +108,11 @@ fn string_agg_checks_distinct_arguments_and_sort_domains() -> Result<()> {
         "SELECT string_agg(MIN(category COLLATE \"C\"), ':') OVER (ORDER BY id) FROM source.auction GROUP BY id",
         "SELECT string_agg(category, ',' ORDER BY INTERVAL '1 hour', id) FROM source.auction",
         "SELECT string_agg(category, ',' ORDER BY 'constant') FROM source.auction",
+        "SELECT string_agg('a', ',') FILTER (WHERE id > 0) FROM source.auction",
+        "SELECT string_agg(DISTINCT 'a', NULL) FROM source.auction",
+        "SELECT string_agg(category, ',') FROM source.auction GROUP BY category",
+        "SELECT string_agg('a', ',') OVER () FROM source.auction",
+        "SELECT string_agg('a', ',') OVER (PARTITION BY id ROWS 1 PRECEDING) FROM source.auction",
     ] {
         let compiled = compile(sql, &contract).map_err(|error| error.context(sql))?;
         assert_eq!(compiled.output().columns[0].column.oid, 25);
@@ -119,6 +124,8 @@ fn string_agg_checks_distinct_arguments_and_sort_domains() -> Result<()> {
         "SELECT string_agg(category, ',' ORDER BY other) FROM source.auction",
         "SELECT string_agg(category, ',') FROM source.auction",
         "SELECT string_agg(category, ',') OVER () FROM source.auction",
+        "SELECT string_agg(category, other) FROM source.auction GROUP BY category",
+        "SELECT string_agg('a', ',') OVER (ROWS 1 PRECEDING) FROM source.auction",
         "SELECT string_agg(DISTINCT category, ',') OVER (ORDER BY id) FROM source.auction",
         "SELECT string_agg(category, ',' ORDER BY id) OVER () FROM source.auction",
         "SELECT string_agg(id, ',' ORDER BY id) FROM source.auction",

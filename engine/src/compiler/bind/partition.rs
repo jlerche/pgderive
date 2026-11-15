@@ -391,7 +391,9 @@ fn aggregate(
     let string_agg = value
         .string_agg
         .as_ref()
-        .map(|parsed| string_agg::bind(parsed, resolve))
+        .map(|parsed| {
+            string_agg::bind(parsed, resolve, value.window.is_none().then_some(context.groups))
+        })
         .transpose()?
         .map(Box::new);
     let window = value

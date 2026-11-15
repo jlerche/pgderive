@@ -11,6 +11,7 @@ use pg_query::Node;
 pub(super) fn bind(
     parsed: &Parsed,
     resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    groups: Option<&[ColumnRef]>,
 ) -> Result<StringAgg> {
     let value_input = text(&parsed.value, resolve)?;
     let delimiter_input = text(&parsed.delimiter, resolve)?;
@@ -42,7 +43,15 @@ pub(super) fn bind(
         })
         .collect::<Result<_>>()?;
     let collation = derivation.oid().unwrap_or(0);
-    Ok(StringAgg { value, delimiter, order, distinct: parsed.distinct, collation })
+    let aggregate = StringAgg { value, delimiter, order, distinct: parsed.distinct, collation };
+    if let Some(groups) = groups {
+        ensure!(
+            !aggregate.order.is_empty()
+                || aggregate.inputs_fixed_by(|column| groups.contains(column)),
+            "STRING_AGG requires aggregate ORDER BY when input pairs can differ"
+        );
+    }
+    Ok(aggregate)
 }
 
 fn text(node: &Node, resolve: &impl Fn(&Name) -> Result<ColumnRef>) -> Result<Typed> {

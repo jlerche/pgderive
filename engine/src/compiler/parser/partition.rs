@@ -302,11 +302,8 @@ fn string_agg(call: &pg::FuncCall, windows: &windows::Definitions<'_>) -> Result
             !call.agg_distinct && call.agg_order.is_empty(),
             "window STRING_AGG disallows DISTINCT and aggregate ORDER BY"
         );
-        let window = window(windows.resolve(over)?, false)?;
-        ensure!(!window.order.is_empty(), "window STRING_AGG requires window ORDER BY");
-        Some(window)
+        Some(window(windows.resolve(over)?, false)?)
     } else {
-        ensure!(!call.agg_order.is_empty(), "STRING_AGG requires aggregate ORDER BY");
         None
     };
     let order = call

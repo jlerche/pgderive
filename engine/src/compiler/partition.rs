@@ -95,13 +95,10 @@ pub struct StringAgg {
 }
 
 impl StringAgg {
-    fn peer_invariant(&self, order: &[Order]) -> bool {
-        [&self.value, &self.delimiter].into_iter().all(|value| {
-            value.is_constant()
-                || value
-                    .string_agg_column()
-                    .is_some_and(|column| order.iter().any(|key| &key.column == column))
-        })
+    pub(super) fn inputs_fixed_by(&self, contains: impl Fn(&ColumnRef) -> bool) -> bool {
+        [&self.value, &self.delimiter]
+            .into_iter()
+            .all(|value| value.is_constant() || value.string_agg_column().is_some_and(&contains))
     }
 }
 
@@ -242,7 +239,11 @@ impl Mode {
             Self::Rows { .. } => true,
             _ => {
                 function.occurrence_order()
-                    && !string_agg.is_some_and(|aggregate| aggregate.peer_invariant(self.order()))
+                    && !string_agg.is_some_and(|aggregate| {
+                        aggregate.inputs_fixed_by(|column| {
+                            self.order().iter().any(|key| &key.column == column)
+                        })
+                    })
             }
         }
     }

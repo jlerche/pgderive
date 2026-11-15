@@ -16,13 +16,14 @@ class StringAggFixture(SqlFixture):
             ADD COLUMN delimiter text COLLATE "C"''')
         self.sql(f'DELETE FROM {self.source}')
         if mode == 'grouped':
-            self.labels = ['auction', 'result']
+            self.labels = ['auction', 'result', 'unordered']
             self.query = f'''SELECT auction,
                 string_agg(payload, delimiter ORDER BY price DESC NULLS LAST, id)
-                  FILTER (WHERE id <> 105) AS result
+                  FILTER (WHERE id <> 105) AS result,
+                string_agg('é', NULL) FILTER (WHERE id <> 101) AS unordered
                 FROM {self.source} GROUP BY auction'''
         elif mode == 'window':
-            self.labels = ['id', 'result', 'peer_result']
+            self.labels = ['id', 'result', 'peer_result', 'unordered']
             self.query = f'''SELECT id, string_agg(payload, delimiter)
                 FILTER (WHERE id <> 105) OVER (
                     PARTITION BY auction ORDER BY price DESC NULLS LAST, id
@@ -31,7 +32,9 @@ class StringAggFixture(SqlFixture):
                 string_agg(payload, delimiter) FILTER (WHERE id <> 101) OVER (
                     PARTITION BY auction ORDER BY payload, delimiter
                     GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW EXCLUDE TIES
-                ) AS peer_result FROM {self.source}'''
+                ) AS peer_result,
+                string_agg('x', ',') FILTER (WHERE id <> 101)
+                  OVER (PARTITION BY auction) AS unordered FROM {self.source}'''
         else:
             self.labels = ['result']
             self.query = f'''SELECT string_agg(DISTINCT payload, delimiter
