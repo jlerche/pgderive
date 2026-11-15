@@ -7,20 +7,23 @@ use crate::compiler::parser::{
 };
 use anyhow::{Context, Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
-use std::collections::BTreeSet;
 
 #[derive(Default)]
 struct Witnesses {
     sources: Vec<(Node, Table)>,
-    qualifiers: BTreeSet<String>,
-    active: Vec<Table>,
+    active: Vec<ScopeBinding>,
     filters: Vec<Node>,
+}
+
+struct ScopeBinding {
+    original: Table,
+    alias: Option<String>,
 }
 
 pub(super) fn flatten(outer: &pg::SelectStmt, first: &pg::SelectStmt) -> Result<pg::SelectStmt> {
     let mut witnesses = Witnesses::default();
     for source in &outer.from_clause {
-        witnesses.push_source(source)?;
+        witnesses.active.push(ScopeBinding { original: table(source)?, alias: None });
     }
     witnesses.select(first)?;
     let (from, filters) = join_witnesses(witnesses.sources, witnesses.filters)?;
@@ -43,8 +46,7 @@ impl Witnesses {
         let [source] = query.from_clause.as_slice() else {
             anyhow::bail!("nested EXISTS requires one native table per level");
         };
-        let relation = self.push_source(source)?;
-        self.sources.push((source.clone(), relation));
+        self.push_witness(source)?;
         if let Some(filter) = query.where_clause.as_deref() {
             self.conjunct(filter, 0)?;
         }
@@ -52,19 +54,18 @@ impl Witnesses {
         Ok(())
     }
 
-    fn push_source(&mut self, source: &Node) -> Result<Table> {
-        let relation = table(source).context("nested EXISTS requires native table qualifiers")?;
-        let qualifier = relation
-            .alias
-            .as_ref()
-            .or_else(|| relation.name.0.last())
-            .context("missing nested EXISTS qualifier")?;
-        ensure!(
-            self.qualifiers.insert(qualifier.clone()),
-            "nested EXISTS uses a shadowed table qualifier"
-        );
-        self.active.push(relation.clone());
-        Ok(relation)
+    fn push_witness(&mut self, source: &Node) -> Result<()> {
+        let original = table(source).context("nested EXISTS requires native table qualifiers")?;
+        let alias = format!("\0exists_witness_{}", self.sources.len());
+        let mut rewritten = source.clone();
+        let Some(NodeEnum::RangeVar(table)) = &mut rewritten.node else {
+            anyhow::bail!("nested EXISTS requires a native table");
+        };
+        table.alias = Some(pg::Alias { aliasname: alias.clone(), ..pg::Alias::default() });
+        let canonical = Table { name: original.name.clone(), alias: Some(alias.clone()) };
+        self.sources.push((rewritten, canonical));
+        self.active.push(ScopeBinding { original, alias: Some(alias) });
+        Ok(())
     }
 
     fn conjunct(&mut self, value: &Node, depth: usize) -> Result<()> {
@@ -90,26 +91,57 @@ impl Witnesses {
             }
             _ => {
                 ensure!(!nested_node(value), "nested EXISTS must be a positive WHERE conjunct");
-                qualified(value, &self.active, 0)?;
-                self.filters.push(value.clone());
+                let mut rewritten = value.clone();
+                rewrite_filter(&mut rewritten, &self.active, 0)?;
+                self.filters.push(rewritten);
             }
         }
         Ok(())
     }
 }
 
-fn qualified(value: &Node, active: &[Table], depth: usize) -> Result<()> {
+fn rewrite_filter(value: &mut Node, active: &[ScopeBinding], depth: usize) -> Result<()> {
     ensure!(depth < 32, "nested EXISTS predicate depth exceeded");
     if matches!(node(value)?, NodeEnum::ColumnRef(_)) {
         let name = column(value)?;
-        let (_, qualifier) = name.0.split_last().context("missing nested EXISTS column name")?;
-        ensure!(
-            !qualifier.is_empty() && active.iter().any(|table| table.matches_qualifier(qualifier)),
-            "nested EXISTS requires a column qualified in the original scope"
-        );
+        let (field, qualifier) =
+            name.0.split_last().context("missing nested EXISTS column name")?;
+        let binding = active
+            .iter()
+            .rev()
+            .find(|binding| !qualifier.is_empty() && binding.original.matches_qualifier(qualifier))
+            .context("nested EXISTS requires a column qualified in the original scope")?;
+        if let Some(alias) = &binding.alias {
+            *value = ast::column(alias, field);
+        }
+        return Ok(());
     }
-    for child in correlation::children(value) {
-        qualified(child, active, depth + 1)?;
+    let next = |child: &mut Node| rewrite_filter(child, active, depth + 1);
+    match &mut value.node {
+        Some(NodeEnum::BoolExpr(value)) => value.args.iter_mut().try_for_each(next)?,
+        Some(NodeEnum::AExpr(value)) => {
+            value
+                .lexpr
+                .as_deref_mut()
+                .into_iter()
+                .chain(value.rexpr.as_deref_mut())
+                .try_for_each(next)?;
+        }
+        Some(NodeEnum::NullTest(value)) => {
+            value.arg.as_deref_mut().into_iter().try_for_each(next)?;
+        }
+        Some(NodeEnum::BooleanTest(value)) => {
+            value.arg.as_deref_mut().into_iter().try_for_each(next)?;
+        }
+        Some(NodeEnum::TypeCast(value)) => {
+            value.arg.as_deref_mut().into_iter().try_for_each(next)?;
+        }
+        Some(NodeEnum::CollateClause(value)) => {
+            value.arg.as_deref_mut().into_iter().try_for_each(next)?;
+        }
+        _ => {
+            ensure!(correlation::children(value).is_empty(), "unsupported nested EXISTS predicate");
+        }
     }
     Ok(())
 }

@@ -375,7 +375,16 @@ fn nested_positive_exists_preserves_scope_and_presence() -> Result<()> {
         "c.price>a.other) AND EXISTS (SELECT 1 FROM source.bid d WHERE d.auction=b.id))",
     );
     compile(&siblings, &native).map_err(|error| error.context(siblings.clone()))?;
+    let repeated_alias =
+        siblings.replace("source.bid d WHERE d.auction", "source.bid c WHERE c.auction");
+    compile(&repeated_alias, &native).map_err(|error| error.context(repeated_alias))?;
+    let shadowed = "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id
+        AND EXISTS (SELECT 1 FROM source.bid b WHERE b.price>a.other AND b.auction=a.id))
+        FROM source.auction a";
+    compile(shadowed, &native).map_err(|error| error.context(shadowed))?;
     for invalid in [
+        shadowed
+            .replace("source.bid b WHERE b.price>a.other", "source.bid a WHERE a.other>b.price"),
         siblings.replace("d.auction=b.id", "d.auction=c.id"),
         exists.replace("b.auction=a.id", "b.auction=c.id"),
         exists.replace("b.auction=a.id", "auction=a.id"),

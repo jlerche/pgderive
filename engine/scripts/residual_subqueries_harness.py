@@ -103,8 +103,12 @@ class ResidualFixture(SqlFixture):
             exists = f"""EXISTS (SELECT 1 FROM {b} b WHERE {scope}
                 AND EXISTS (SELECT 1 FROM {b} c WHERE c.id<>99
                     AND c.auction=b.id AND c.price>=a.probe))"""
-            self.labels = ['id', 'present', 'absent']
-            self.query = f'SELECT a.id, {exists} AS present, NOT {exists} AS absent FROM {a} a'
+            shadowed = exists.removesuffix(')') + f""" AND EXISTS (
+                SELECT 1 FROM {b} b WHERE b.id<>99 AND b.auction=a.group_id
+                    AND b.price>=a.probe))"""
+            self.labels = ['id', 'present', 'absent', 'shadow_present']
+            self.query = f"""SELECT a.id, {exists} AS present, NOT {exists} AS absent,
+                {shadowed} AS shadow_present FROM {a} a"""
         elif mode == 'joined':
             rhs = rhs.replace(f'SELECT b.price FROM {b} b',
                 f'SELECT c.price FROM {b} b LEFT JOIN {b} c ON c.auction=b.id AND c.id<>99')
@@ -224,7 +228,11 @@ class ResidualFixture(SqlFixture):
                             for child in inner)
                     for witness in inner
                 )
-                memory[(row['id'], present, not present)] += 1
+                shadow_witness = key is not None and probe is not None and any(
+                    child['id'] != 99 and child['auction'] == key
+                    and child['price'] is not None and child['price'] >= probe for child in inner
+                )
+                memory[(row['id'], present, not present, present and shadow_witness)] += 1
             elif self.mode == 'joined':
                 values = [
                     value for item in matches for value in
@@ -283,7 +291,7 @@ def qualify(output, command, mode, keyed):
     ] if mode in GROUP_OFFSET_MODES else []
     nested_changes = [
         f"""INSERT INTO {b}(id,auction,price,cutoff)
-            VALUES (20,1,NULL,1), (21,20,7,1), (22,20,7,1)""",
+            VALUES (20,1,NULL,1), (21,20,7,1), (22,20,7,1), (23,1,7,1)""",
         f'DELETE FROM {b} WHERE id=21',
         f'DELETE FROM {b} WHERE id=22',
     ] if mode == 'nested-exists' else []

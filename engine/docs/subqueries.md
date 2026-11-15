@@ -133,8 +133,9 @@ conjunct inside another EXISTS can reference qualified native columns
 from multiple enclosing levels. The compiler checks each reference in
 its original scope and joins the witnesses before evaluating presence.
 Direct witness-to-witness column equalities supply native join keys.
-It admits up to eight witness sources with distinct qualifiers and
-row-preserving bounds. Nested EXISTS inside OR or NOT, and other
+It admits up to eight witness sources with row-preserving bounds.
+Repeated qualifiers resolve to the closest enclosing source, and the
+compiler gives each witness occurrence its own internal alias. Nested EXISTS inside OR or NOT, and other
 multilevel correlation shapes, remain unsupported.
 The membership probe must be safe to evaluate independently of the RHS.
 
