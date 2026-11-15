@@ -406,17 +406,25 @@ fn quantified_grouped_inputs_reuse_ordinary_grouping() -> Result<()> {
 fn equality_correlated_grouped_comparisons_preserve_local_grouping() -> Result<()> {
     let native = ordered_contract();
     for comparison in ["IN", "< ANY", ">= ALL"] {
-        let sql = format!(
-            "SELECT a.other {comparison} (SELECT max(b.price) FROM source.bid b
-             WHERE b.auction=a.id GROUP BY b.id HAVING count(*)>0) FROM source.auction a"
-        );
-        compile(&sql, &native).map_err(|error| error.context(sql))?.validate_execution()?;
+        for tail in [
+            "",
+            "ORDER BY 1 DESC OFFSET 1 LIMIT 2",
+            "ORDER BY peak DESC NULLS LAST FETCH FIRST 1 ROW WITH TIES",
+            "LIMIT 0",
+        ] {
+            let sql = format!(
+                "SELECT a.other {comparison} (SELECT max(b.price) AS peak FROM source.bid b
+                 WHERE b.auction=a.id GROUP BY b.id HAVING count(*)>0 {tail}) FROM source.auction a"
+            );
+            compile(&sql, &native).map_err(|error| error.context(sql))?.validate_execution()?;
+        }
     }
     for invalid in [
         "SELECT b.auction FROM source.bid b WHERE b.auction=a.id GROUP BY b.price",
         "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id AND b.id>a.id GROUP BY b.price",
         "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY ROLLUP(b.price)",
         "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY b.price LIMIT 1",
+        "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY b.price ORDER BY 2",
     ] {
         let sql = format!("SELECT a.other < ANY ({invalid}) FROM source.auction a");
         assert!(compile(&sql, &native).is_err(), "{sql}");

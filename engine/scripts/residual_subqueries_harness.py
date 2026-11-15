@@ -114,12 +114,20 @@ class ResidualFixture(SqlFixture):
         elif mode == 'keyed-grouped-comparisons':
             per_key_group = f"""SELECT max(b.price) FROM {b} b WHERE {keys}
                 GROUP BY b.cutoff HAVING count(*)>1"""
-            self.labels = ['id', 'key_group_in', 'key_group_any', 'key_group_all']
+            order = 'ORDER BY 1 DESC NULLS LAST'
+            unique = per_key_group.replace('SELECT ', 'SELECT DISTINCT ', 1)
+            second = f'{unique} {order} OFFSET 1 LIMIT 1'
+            first = f'{per_key_group} ORDER BY count(*) DESC FETCH FIRST 1 ROW WITH TIES'
+            self.labels = ['id', 'key_group_in', 'key_group_any', 'key_group_all',
+                           'key_group_second', 'key_group_first_any', 'key_group_first_all']
             self.query = f"""SELECT a.id, a.probe IN ({per_key_group}) AS key_group_in,
                 a.probe < ANY ({per_key_group}) AS key_group_any,
-                a.probe < ALL ({per_key_group}) AS key_group_all FROM {a} a"""
+                a.probe < ALL ({per_key_group}) AS key_group_all,
+                a.probe IN ({second}) AS key_group_second,
+                a.probe < ANY ({first}) AS key_group_first_any,
+                a.probe < ALL ({first}) AS key_group_first_all FROM {a} a"""
             self.sql(f"""INSERT INTO {b}(id,auction,price,cutoff) VALUES
-                (14,2,NULL,2),(15,1,10,1),(16,1,8,1)""")
+                (14,2,NULL,2),(15,1,10,1),(16,1,8,1),(17,1,10,4),(18,1,8,4)""")
         elif mode == 'nested-exists':
             scope = keys if keyed else keys + ' AND b.id>a.id'
             exists = f"""EXISTS (SELECT 1 FROM {b} b WHERE {scope}
@@ -260,11 +268,19 @@ class ResidualFixture(SqlFixture):
                 for item in inner:
                     if item['id'] != 99 and key is not None and key == item['auction']:
                         groups.setdefault(item['cutoff'], []).append(item['price'])
-                maxima = [max((price for price in prices if price is not None), default=None)
-                          for prices in groups.values() if len(prices) > 1]
+                summaries = [(len(prices), max((price for price in prices if price is not None),
+                                                 default=None))
+                             for prices in groups.values() if len(prices) > 1]
+                maxima = [price for _, price in summaries]
+                unique = sorted(set(maxima), key=lambda price: (price is None, -(price or 0)))
+                largest = max((count for count, _ in summaries), default=0)
+                first = [price for count, price in summaries if count == largest]
                 memory[(row['id'], membership(row['probe'], maxima),
                         compare(row['probe'], maxima, operator.lt, False),
-                        compare(row['probe'], maxima, operator.lt, True))] += 1
+                        compare(row['probe'], maxima, operator.lt, True),
+                        membership(row['probe'], unique[1:2]),
+                        compare(row['probe'], first, operator.lt, False),
+                        compare(row['probe'], first, operator.lt, True))] += 1
             elif self.mode == 'nested-exists':
                 probe = row['probe']
                 present = any(

@@ -404,8 +404,11 @@ impl Rewrite<'_> {
         let ordered = if grouped {
             validate_keyed_grouping(&query, &correlation)?;
             self.validation.push(super::query(&query)?);
-            query.distinct_clause.clear();
-            false
+            let ordered = membership_ordered(&query);
+            if !ordered {
+                query.distinct_clause.clear();
+            }
+            ordered
         } else {
             prepare_membership_rhs(&mut query, &correlation, quantified.is_some())?
         };
@@ -460,14 +463,11 @@ fn validate_keyed_grouping(
 ) -> Result<()> {
     ensure!(
         correlation.residuals.is_empty()
-            && query.sort_clause.is_empty()
-            && query.limit_count.is_none()
-            && query.limit_offset.is_none()
             && query.distinct_clause.iter().all(|node| node.node.is_none())
             && query.group_clause.iter().all(|node| {
                 !matches!(node.node, Some(NodeEnum::GroupingSet(_) | NodeEnum::RowExpr(_)))
             }),
-        "correlated grouping requires ordinary GROUP BY and equality keys without ordered cutoffs"
+        "correlated grouping requires ordinary GROUP BY and equality keys without DISTINCT ON"
     );
     ensure!(
         correlation
@@ -479,6 +479,13 @@ fn validate_keyed_grouping(
     scalar_input::validate(query, scalar_input::Input::Quantified)
 }
 
+fn membership_ordered(query: &pg::SelectStmt) -> bool {
+    !query.sort_clause.is_empty()
+        || query.limit_count.is_some()
+        || query.limit_offset.is_some()
+        || query.distinct_clause.iter().any(|key| key.node.is_some())
+}
+
 fn prepare_membership_rhs(
     query: &mut pg::SelectStmt,
     correlation: &correlation::Correlation,
@@ -486,10 +493,7 @@ fn prepare_membership_rhs(
 ) -> Result<bool> {
     let residual = !correlation.residuals.is_empty();
     let keyed = !correlation.pairs.is_empty();
-    let ordered = !query.sort_clause.is_empty()
-        || query.limit_count.is_some()
-        || query.limit_offset.is_some()
-        || query.distinct_clause.iter().any(|key| key.node.is_some());
+    let ordered = membership_ordered(query);
     let joined =
         query.from_clause.iter().any(|source| matches!(source.node, Some(NodeEnum::JoinExpr(_))));
     if quantified || residual || joined || ordered && keyed {
