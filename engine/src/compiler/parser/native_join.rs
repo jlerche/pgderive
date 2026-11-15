@@ -32,6 +32,7 @@ pub(in crate::compiler) enum Tree {
         has_residual: bool,
         skip: Option<std::num::NonZeroUsize>,
         distinct: Vec<String>,
+        cutoff: Option<MembershipCutoff>,
     },
     Join {
         left: Box<Self>,
@@ -40,6 +41,11 @@ pub(in crate::compiler) enum Tree {
         clause: JoinClause,
     },
 }
+pub(in crate::compiler) struct MembershipCutoff {
+    pub bounds: super::ordering::Bounds,
+    pub order: Vec<(String, bool, bool)>,
+}
+
 pub(in crate::compiler) enum JoinClause {
     Condition(Option<Box<Node>>),
     Using(Vec<String>),

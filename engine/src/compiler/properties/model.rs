@@ -87,6 +87,14 @@ impl Properties {
     pub(in crate::compiler) fn proves_key(&self, names: &[String]) -> bool {
         self.covers(names)
     }
+    pub(in crate::compiler) fn same_identity(&self, field: &str, names: &[String]) -> bool {
+        self.columns.get(field).is_some_and(|column| {
+            names
+                .iter()
+                .filter_map(|name| self.columns.get(name))
+                .any(|other| column.identity == other.identity)
+        })
+    }
     pub(super) fn non_null(&mut self, names: impl IntoIterator<Item = String>) {
         for name in names {
             if let Some(c) = self.columns.get_mut(&name) {

@@ -5,11 +5,15 @@ use crate::{
     engine::dataflow::{OrderedSelection, Project},
     transaction::Row,
 };
-use anyhow::ensure;
+use anyhow::{Context, Result, ensure};
 #[path = "topk_encoding.rs"]
 pub(super) mod codec;
 use codec::encoding;
 const ORDER: &str = "\0ordered";
+pub(super) fn order_token(row: &Row) -> Result<&str> {
+    row.get(ORDER).and_then(Option::as_deref).context("missing ordered RHS token")
+}
+
 pub(super) fn input(spec: &Spec) -> Project<Key, Row, Key, Row> {
     let spec = spec.clone();
     Project::new(move |key: &Key, row: &Row| {

@@ -114,6 +114,7 @@ impl Builder<'_> {
                 has_residual,
                 skip,
                 distinct,
+                cutoff,
             } => {
                 let left = self.tree(*left)?;
                 self.mark(
@@ -128,6 +129,7 @@ impl Builder<'_> {
                         has_residual,
                         skip,
                         distinct,
+                        cutoff,
                     },
                 )
             }

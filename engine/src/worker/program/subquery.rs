@@ -31,6 +31,7 @@ struct RightValues {
 const fn indexed(spec: &Mark) -> bool {
     // Component-preserving interval encodings can differ for equal durations.
     spec.skip.is_none()
+        && spec.cutoff.is_none()
         && spec.probe.oid != 1186
         && spec.comparison.is_equality()
         && spec.correlation.is_none()
@@ -143,15 +144,33 @@ async fn membership(
     work: &mut PartitionWork,
     limits: Limits,
 ) -> Result<Option<bool>> {
+    let mut cutoff = spec.cutoff.as_ref().map(CandidateCutoff::new);
+    if cutoff.as_ref().is_some_and(CandidateCutoff::empty) {
+        return Ok(Some(false));
+    }
     let mut seen = DistinctKeys::default();
     let mut unknown = false;
     let mut skip = spec.skip.map_or(0, std::num::NonZeroUsize::get);
-    while let Some((row, weight)) = right.next(work).await? {
+    // Tagged RHS rows have the same side field followed by the ordered token,
+    // so equal peers are contiguous in the cursor before ordinary row fields.
+    while !cutoff.as_ref().is_some_and(CandidateCutoff::finished)
+        && let Some((row, weight)) = right.next(work).await?
+    {
         if left(&row)? {
             continue;
         }
+        if let Some(cutoff) = &cutoff
+            && cutoff.past_peers(&row)?
+        {
+            break;
+        }
         let joined = pair(probe, &row)?;
         if !spec.correlation.as_ref().map_or(Ok(true), |condition| condition.qualifies(&joined))? {
+            continue;
+        }
+        if let Some(cutoff) = &mut cutoff
+            && !cutoff.include(&row, usize::try_from(weight)?)?
+        {
             continue;
         }
         match spec.comparison.truth((&joined, &joined))? {
@@ -172,6 +191,48 @@ async fn membership(
         }
     }
     Ok((!unknown).then_some(false))
+}
+
+/// Walk the ordered RHS of a single outer occurrence after residual filtering.
+struct CandidateCutoff<'a> {
+    spec: &'a crate::compiler::topk::Spec,
+    position: usize,
+    peer: Option<String>,
+}
+
+impl<'a> CandidateCutoff<'a> {
+    const fn new(spec: &'a crate::compiler::topk::Spec) -> Self {
+        Self { spec, position: 0, peer: None }
+    }
+
+    const fn empty(&self) -> bool {
+        self.spec.limit == self.spec.offset
+    }
+
+    const fn finished(&self) -> bool {
+        self.spec.limit != usize::MAX && self.position >= self.spec.limit && self.peer.is_none()
+    }
+
+    fn past_peers(&self, row: &Row) -> Result<bool> {
+        let Some(peer) = &self.peer else { return Ok(false) };
+        Ok(peer != super::topk::order_token(row)?)
+    }
+
+    fn include(&mut self, row: &Row, weight: usize) -> Result<bool> {
+        self.position = self.position.saturating_add(weight);
+        if self.position <= self.spec.offset {
+            return Ok(false);
+        }
+        if self.spec.with_ties
+            && self.spec.limit != usize::MAX
+            && self.position >= self.spec.limit
+            && self.peer.is_none()
+        {
+            // The residual mark's input order deliberately has no identity suffix.
+            self.peer = Some(super::topk::order_token(row)?.to_owned());
+        }
+        Ok(true)
+    }
 }
 
 #[derive(Default)]

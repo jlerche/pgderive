@@ -21,6 +21,7 @@ pub(super) struct MarkArguments<'a> {
     pub(super) has_residual: bool,
     pub(super) skip: Option<std::num::NonZeroUsize>,
     pub(super) distinct: Vec<String>,
+    pub(super) cutoff: Option<crate::compiler::parser::native_join::MembershipCutoff>,
 }
 
 impl Builder<'_> {
@@ -39,11 +40,12 @@ impl Builder<'_> {
             has_residual,
             skip,
             distinct,
+            cutoff,
         } = arguments;
         let ordered =
             matches!(&*parsed, Parsed::Ordered(value) if !value.correlation_keys.is_empty());
         let start = self.nodes.len();
-        let right = self.derived(parsed, alias.clone())?;
+        let mut right = self.derived(parsed, alias.clone())?;
         if quantified.is_some() || has_residual || ordered {
             super::validate_scalar_input(&self.nodes[start..])?;
         }
@@ -61,6 +63,8 @@ impl Builder<'_> {
         let id = format!("tree_join_{}", self.joins);
         let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
         validate_correlation(&bound, quantified.is_some() || ordered, has_residual)?;
+        let cutoff =
+            cutoff.map(|cutoff| self.mark_cutoff(&mut right, cutoff, &bound)).transpose()?;
         let edge = self.join(left, right, bound, crate::compiler::left_join::Kind::Left)?;
         let Some(Node::LeftJoin { id, input, spec }) = self.nodes.pop() else {
             anyhow::bail!("missing marker tagged join");
@@ -85,6 +89,7 @@ impl Builder<'_> {
                 semijoin,
                 skip,
                 distinct,
+                cutoff,
             }),
         });
         let mut columns = columns;
@@ -98,6 +103,79 @@ impl Builder<'_> {
         });
         ensure!(edge.id == id, "marker join edge differs");
         Ok(Edge { id, columns })
+    }
+}
+impl Builder<'_> {
+    fn mark_cutoff(
+        &mut self,
+        right: &mut Edge,
+        cutoff: crate::compiler::parser::native_join::MembershipCutoff,
+        correlation: &keys::Bound,
+    ) -> Result<crate::compiler::topk::Spec> {
+        let order = cutoff
+            .order
+            .into_iter()
+            .map(|(name, descending, nulls_first)| {
+                let column = resolve(&Name(vec![name]), &right.columns)?.value.clone();
+                ensure!(
+                    crate::compiler::partition::orderable(column.oid),
+                    "unsupported ORDER BY native type"
+                );
+                if matches!(column.oid, 25 | 1043) {
+                    crate::compiler::partition::require_bytewise(column.collation)?;
+                }
+                Ok(crate::compiler::partition::Order { column, descending, nulls_first })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let bounds = cutoff.bounds;
+        if bounds.limit != Some(0)
+            && (bounds.offset != 0 || bounds.limit.is_some() && !bounds.with_ties)
+        {
+            self.prove_mark_cutoff(right, &order, correlation)?;
+        }
+        let spec = crate::compiler::topk::Spec {
+            order,
+            field: None,
+            limit: bounds.limit.map_or(usize::MAX, |limit| limit + bounds.offset),
+            offset: bounds.offset,
+            with_ties: bounds.with_ties,
+            identity: Vec::new(),
+        };
+        let id = format!("tree_join_{}_membership_order", self.joins);
+        let input = std::mem::replace(&mut right.id, id.clone());
+        self.nodes.push(Node::TopKInput { id, input, spec: spec.clone() });
+        Ok(spec)
+    }
+    fn prove_mark_cutoff(
+        &self,
+        right: &Edge,
+        order: &[crate::compiler::partition::Order],
+        correlation: &keys::Bound,
+    ) -> Result<()> {
+        use crate::compiler::{properties::Analysis, relational::Relational};
+        let temporary = Relational {
+            sources: self.sources.clone(),
+            nodes: self.nodes.clone(),
+            projection: Vec::new(),
+            output: crate::compiler::Projected { columns: Vec::new() },
+        };
+        let analysis = Analysis::infer(self.contract, &temporary)?;
+        let facts = analysis.edge(&right.id)?;
+        let names = order
+            .iter()
+            .map(|value| value.column.name.clone())
+            .chain(correlation.keys.iter().map(|(_, rhs)| rhs.name.clone()))
+            .collect::<Vec<_>>();
+        ensure!(
+            facts.proves_key(&names)
+                || right
+                    .columns
+                    .iter()
+                    .take_while(|value| !value.label.starts_with('\0'))
+                    .all(|value| facts.same_identity(&value.value.name, &names)),
+            "correlated row cutoff requires ORDER BY that determines the selected values"
+        );
+        Ok(())
     }
 }
 fn distinct_columns(right: &Edge, labels: Vec<String>) -> Result<Vec<ColumnRef>> {

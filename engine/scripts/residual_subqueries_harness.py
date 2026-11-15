@@ -84,6 +84,18 @@ class ResidualFixture(SqlFixture):
                 a.probe IN ({unique}) AS unique_member, a.probe < ANY ({ties}) AS ties_earlier
                 FROM {a} a'''
             self.sql(f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (13,1,8,12)')
+        elif mode == 'residual-ordered':
+            selected = f"""SELECT b.price FROM {b} b WHERE {keys} AND b.id>a.id
+                ORDER BY b.id DESC OFFSET 1 LIMIT 2"""
+            ties = f"""SELECT b.price FROM {b} b WHERE {keys} AND b.id>a.id
+                ORDER BY b.cutoff DESC NULLS LAST FETCH FIRST 1 ROW WITH TIES"""
+            self.labels = ['id', 'member', 'excluded', 'earlier', 'before_all', 'ties_earlier']
+            self.query = f"""SELECT a.id, a.probe IN ({selected}) AS member,
+                a.probe NOT IN ({selected}) AS excluded,
+                a.probe < ANY ({selected}) AS earlier,
+                a.probe < ALL ({selected}) AS before_all,
+                a.probe < ANY ({ties}) AS ties_earlier FROM {a} a"""
+            self.sql(f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (13,1,8,12)')
         elif mode == 'joined':
             rhs = rhs.replace(f'SELECT b.price FROM {b} b',
                 f'SELECT c.price FROM {b} b LEFT JOIN {b} c ON c.auction=b.id AND c.id<>99')
@@ -189,6 +201,18 @@ class ResidualFixture(SqlFixture):
                         compare(row['probe'], values, operator.lt, True),
                         membership(row['probe'], unique[1:2]),
                         compare(row['probe'], peers, operator.lt, False))] += 1
+            elif self.mode == 'residual-ordered':
+                bucket = sorted((item for item in inner if item['id'] != 99 and item['id'] > row['id']
+                                 and (not self.keyed or key is not None and key == item['auction'])),
+                                key=lambda item: -item['id'])
+                values = [item['price'] for item in bucket[1:3]]
+                mark = membership(row['probe'], values)
+                first = max((item['cutoff'] for item in bucket if item['cutoff'] is not None), default=None)
+                peers = [item['price'] for item in bucket if item['cutoff'] == first]
+                memory[(row['id'], mark, None if mark is None else not mark,
+                        compare(row['probe'], values, operator.lt, False),
+                        compare(row['probe'], values, operator.lt, True),
+                        compare(row['probe'], peers, operator.lt, False))] += 1
             elif self.mode == 'joined':
                 values = [
                     value for item in matches for value in
@@ -268,7 +292,7 @@ def qualify(output, command, mode, keyed):
 
 if __name__ == '__main__':
     modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined', 'exists-zero', 'exists-group', 'exists-offset',
-             'exists-ties', *GROUP_OFFSET_MODES)
+             'exists-ties', 'residual-ordered', *GROUP_OFFSET_MODES)
     cases = [(mode if keyed else f'{mode}-inequality-only', mode, keyed)
              for keyed in (True, False) for mode in modes]
     run_cases([*cases, ('ordered', 'ordered', True)], qualify)

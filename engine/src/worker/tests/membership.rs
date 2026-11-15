@@ -342,12 +342,46 @@ fn correlated_comparison_cuts_off_within_each_equality_bucket() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn residual_comparison_orders_after_correlation() -> Result<()> {
+    let native = ordered_contract();
+    for condition in ["b.auction=a.id AND b.id>a.id", "b.id>a.id"] {
+        for comparison in ["IN", "< ANY", "< ALL"] {
+            for tail in [
+                "ORDER BY b.id DESC LIMIT 2 OFFSET 1",
+                "ORDER BY 1 FETCH FIRST 1 ROW WITH TIES",
+                "ORDER BY b.id LIMIT 0",
+            ] {
+                let query = format!(
+                    "SELECT a.other {comparison} (SELECT b.price FROM source.bid b
+                     WHERE {condition} {tail}) FROM source.auction a"
+                );
+                compile(&query, &native).map_err(|error| error.context(query))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn ordered_membership_retracts_each_buckets_cutoff_independently() -> Result<()> {
+    for (condition, keyed, residual) in [
+        ("b.auction=a.id", true, false),
+        ("b.auction=a.id AND b.id<>a.id", true, true),
+        ("b.id<>a.id", false, true),
+    ] {
+        ordered_membership_history(condition, keyed, residual).await?;
+    }
+    Ok(())
+}
+
+async fn ordered_membership_history(condition: &str, keyed: bool, residual: bool) -> Result<()> {
     let native = ordered_contract();
-    let sql = "SELECT a.id, a.other IN (SELECT b.price FROM source.bid b WHERE b.auction=a.id
-        ORDER BY b.id DESC LIMIT 1 OFFSET 1) AS member FROM source.auction a";
-    let compiled = compile(sql, &native)?;
+    let sql = format!(
+        "SELECT a.id, a.other IN (SELECT b.price FROM source.bid b WHERE {condition}
+        ORDER BY b.id DESC LIMIT 1 OFFSET 1) AS member FROM source.auction a"
+    );
+    let compiled = compile(&sql, &native)?;
     let field = &compiled.output().columns[1].column.name;
     let options = settings();
     let a = row(&[("id", Some("1")), ("category", None), ("other", Some("7"))]);
@@ -372,7 +406,7 @@ async fn ordered_membership_retracts_each_buckets_cutoff_independently() -> Resu
     super::History::new((&native, &compiled, &options))
         .run(
             histories,
-            |state| ordered_probe_oracle(state, field),
+            |state| ordered_probe_oracle(state, field, keyed, residual),
             super::apply_joined,
             |tick| tick == 1,
         )
@@ -383,11 +417,17 @@ async fn ordered_membership_retracts_each_buckets_cutoff_independently() -> Resu
 fn ordered_probe_oracle(
     (outer, inner): &super::JoinedState,
     field: &str,
+    keyed: bool,
+    residual: bool,
 ) -> Result<super::RowBatch> {
     Batch::from_updates(outer.iter().map(|(outer, weight)| {
         let mut sorted = inner
             .iter()
-            .filter(|(rhs, count)| **count > 0 && rhs["auction"] == outer["id"])
+            .filter(|(rhs, count)| {
+                **count > 0
+                    && (!keyed || rhs["auction"] == outer["id"])
+                    && (!residual || rhs["id"] != outer["id"])
+            })
             .map(|(rhs, _)| rhs)
             .collect::<Vec<_>>();
         sorted.sort_by(|a, b| b["id"].cmp(&a["id"]));

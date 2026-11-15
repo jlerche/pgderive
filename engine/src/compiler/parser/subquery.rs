@@ -7,7 +7,7 @@ use super::{
     Parsed,
     expressions::{between_kind, distinct_kind, names, node, optional},
     membership,
-    native_join::Tree,
+    native_join::{MembershipCutoff, Tree},
 };
 use crate::compiler::syntax::Compare;
 use anyhow::{Context, Result, ensure};
@@ -381,7 +381,9 @@ impl Rewrite<'_> {
     ) -> Result<Node> {
         let alias = self.alias()?;
         let has_residual = !correlation.residuals.is_empty();
-        let ordered_keyed = prepare_membership_rhs(&mut query, &correlation, quantified.is_some())?;
+        let ordered = prepare_membership_rhs(&mut query, &correlation, quantified.is_some())?;
+        let cutoff =
+            if ordered && has_residual { Some(defer_membership_cutoff(&mut query)?) } else { None };
         let key_start = query.target_list.len();
         let mut conditions = Vec::new();
         for (index, (outer, inner)) in correlation.pairs.into_iter().enumerate() {
@@ -398,7 +400,7 @@ impl Rewrite<'_> {
                 .map(|term| residual_condition(term, &alias, &mut query.target_list, &mut index)),
         );
         let mut right = super::query(&query)?;
-        if ordered_keyed {
+        if ordered && !has_residual {
             let Parsed::Ordered(ordering) = &mut right else {
                 anyhow::bail!("correlated comparison requires an ordinary ordered SELECT");
             };
@@ -416,6 +418,7 @@ impl Rewrite<'_> {
             has_residual,
             skip,
             distinct,
+            cutoff,
         });
         Ok(ast::column(&alias, ast::VALUE))
     }
@@ -448,7 +451,10 @@ fn prepare_membership_rhs(
         );
     }
     if residual || keyed {
-        ensure!(!ordered || !residual, "ordered RHS requires equality-only correlation");
+        ensure!(
+            !(ordered && residual) || query.distinct_clause.is_empty(),
+            "ordered residual comparisons require an RHS without DISTINCT"
+        );
         ensure!(
             query.group_clause.is_empty()
                 && query.distinct_clause.iter().all(|key| key.node.is_none())
@@ -463,7 +469,26 @@ fn prepare_membership_rhs(
             query.distinct_clause.clear();
         }
     }
-    Ok(ordered && keyed)
+    Ok(ordered && (keyed || residual))
+}
+fn defer_membership_cutoff(query: &mut pg::SelectStmt) -> Result<MembershipCutoff> {
+    let bounds = super::ordering::bounds(query)?;
+    let targets = super::partition::parse_targets(query)?;
+    let mut order = Vec::new();
+    let sorts = std::mem::take(&mut query.sort_clause);
+    ensure!(sorts.len() <= 16, "ORDER BY exceeds 16 keys");
+    for (index, sort) in sorts.iter().enumerate() {
+        let (value, descending, nulls_first) = super::partition::sort_expression(sort)?;
+        let indexed = super::ordering::target_index(value, &targets, false)?;
+        let value = indexed.map_or(Ok(value), |index| super::target(&query.target_list[index]))?;
+        let name = format!("\0membership_order_{index}");
+        query.target_list.push(ast::target(value.clone(), &name));
+        order.push((name, descending, nulls_first));
+    }
+    query.limit_count = None;
+    query.limit_offset = None;
+    query.limit_option = i32::from(pg::LimitOption::Default);
+    Ok(MembershipCutoff { bounds, order })
 }
 // Adding hidden correlation columns must not expand the user's ordinal scope.
 fn validate_sort_scope(query: &pg::SelectStmt) -> Result<()> {
