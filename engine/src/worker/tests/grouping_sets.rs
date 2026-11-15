@@ -119,3 +119,37 @@ async fn grouping_set_deltas_keep_repeated_groups_and_generated_nulls() -> Resul
         .await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn false_having_keeps_other_grouping_branches_live() -> Result<()> {
+    let contract = contract();
+    let compiled = compile(
+        "SELECT other AS k, COUNT(*) AS n FROM source.auction
+         GROUP BY GROUPING SETS ((category), (other)) HAVING GROUPING(category) = 1",
+        &contract,
+    )?;
+    let names = compiled.output().columns.iter().map(|c| c.column.name.clone()).collect::<Vec<_>>();
+    let options = settings();
+    let auction = row(&[("id", Some("1")), ("category", Some("a")), ("other", Some("b"))]);
+    let oracle = |state: &JoinedState| {
+        let count = state.0.values().sum::<i64>();
+        let item = (
+            crate::worker::program::relational::Key::new(),
+            names.iter().cloned().zip([Some("b".into()), Some(count.to_string())]).collect(),
+        );
+        Batch::from_updates((count > 0).then_some((item, 1)))
+    };
+    History::new((&contract, &compiled, &options))
+        .run(
+            [
+                batch(vec![]),
+                batch(vec![("auction", auction.clone(), 1)]),
+                batch(vec![("auction", auction, -1)]),
+            ],
+            oracle,
+            apply_joined,
+            |_| true,
+        )
+        .await?;
+    Ok(())
+}

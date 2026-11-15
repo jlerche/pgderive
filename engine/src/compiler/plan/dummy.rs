@@ -75,7 +75,10 @@ fn join(graph: &mut Graph<'_>, id: &str) -> Result<bool> {
         spec.predicate = Predicate::from_conjuncts(kept);
         return Ok(true);
     }
-    empty_sources(graph, &join.right.input)
+    if graph.only_consumer(&join.right.input).is_some_and(|reader| reader.id() == join.right.id) {
+        return empty_sources(graph, &join.right.input);
+    }
+    Ok(false)
 }
 fn constant_true(value: &Expr) -> bool {
     value.is_constant() && matches!(value.constant_truth(), Ok(Some(true)))
@@ -155,9 +158,10 @@ fn emits_nothing(graph: &Graph<'_>, edge: &str) -> Result<bool> {
         .all(|node| silenced(graph, node.id())))
 }
 fn empty_sources(graph: &mut Graph<'_>, scope: &str) -> Result<bool> {
+    let shared = shared_sources(graph, scope)?;
     let mut changed = false;
     for source in graph.sources(scope)? {
-        if silenced(graph, &source) {
+        if shared.contains(&source) || silenced(graph, &source) {
             continue;
         }
         let id = graph.fresh("empty");
@@ -166,6 +170,18 @@ fn empty_sources(graph: &mut Graph<'_>, scope: &str) -> Result<bool> {
         changed = true;
     }
     Ok(changed)
+}
+/// Consumers outside the dummy scope still need their ancestors to produce rows.
+fn shared_sources(graph: &Graph<'_>, scope: &str) -> Result<BTreeSet<String>> {
+    let ancestors = graph.ancestors(scope)?;
+    let local = ancestors.iter().map(|node| node.id()).collect::<BTreeSet<_>>();
+    let mut shared = BTreeSet::new();
+    for id in local.iter().copied().filter(|id| *id != scope) {
+        if graph.consumers(id).any(|consumer| !local.contains(consumer.id())) {
+            shared.extend(graph.sources(id)?);
+        }
+    }
+    Ok(shared)
 }
 /// A constant only needs its source to tick, so it keeps the source itself.
 fn redirect_readers(graph: &mut Graph<'_>, source: &str, id: &str) {
