@@ -43,8 +43,13 @@ class ProjectionFixture(SqlFixture):
 def qualify(output,command,query,mode):
     fixture = ProjectionFixture(output,query,mode)
     with fixture.managed():
-        invalid = fixture.query.replace('pg_catalog.mod(auction,123)','pg_catalog.mod(auction,0)') if query=='q2' else fixture.query.replace('SELECT auction,','SELECT auction/0,')
-        fixture.rejected(command,'unsupported',invalid)
+        # A constant fault exercises admission. A row-dependent zero divisor
+        # can fail during bootstrap after the registration has been created.
+        invalid = (fixture.query.replace('pg_catalog.mod(auction,123)', 'pg_catalog.mod(1,0)')
+                   if query == 'q2' else fixture.query.replace('SELECT auction,', 'SELECT 1/0 AS auction,'))
+        fixture.rejected(command, 'unsupported', invalid)
+        diagnostic = (output / 'unsupported/stderr.log').read_text()
+        assert 'division by zero' in diagnostic, diagnostic
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
         changes = [

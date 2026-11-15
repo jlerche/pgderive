@@ -2,7 +2,7 @@
 """Run unchanged live suites concurrently on independent owned PostgreSQL servers.
 
 A lane never overlaps PostgreSQL-mutating harnesses. Different lanes never share
-an instance. Failure retains every owned server and stops all harness processes.
+an instance. Failure retains every owned server and prevents new work.
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import threading
+import full_live_gate
 from harness_control import Server
 from run_with_s3_proxy import prepare
 from verify_worker_core import main as verify_worker
@@ -33,10 +34,31 @@ SUITES = (
 )
 
 
-def tasks(with_replication):
-    return [(name, index, shards) for name, shards in SUITES
-            if name != 'replication' or with_replication
-            for index in range(shards)]
+def tasks(with_replication, full=False):
+    suites = SUITES
+    if full:
+        shards_by_name = dict(SUITES)
+        names = full_live_gate.suites()
+        prioritized = (
+            'replication', 'error-order', 'residual-subqueries', 'quantified-subqueries',
+            'subqueries', 'composition-matrix', 'outer-joins', 'join-predicates',
+            'set-operations', 'temporal-arithmetic',
+            'application', *full_live_gate.RELEASE, 'tenant-storage', 'text-ordering', 'grouping-sets',
+        )
+        names = (*prioritized, *(name for name in names if name not in prioritized))
+        shards_by_name['error-order'] = full_live_gate.ERROR_ORDER_SHARDS
+        shards_by_name['composition-matrix'] = 8
+        suites = [(name, shards_by_name.get(name, 1)) for name in names]
+    pending = [(name, index, shards) for name, shards in suites
+               if with_replication or name not in ('replication', 'error-order')
+               for index in range(shards)]
+    if full:
+        # Interleave the long histories with replication and the error corpus
+        # so no single suite occupies the entire pool while peers are pending.
+        first = {'replication', 'error-order', 'residual-subqueries', 'quantified-subqueries',
+                 'composition-matrix', 'subqueries', 'outer-joins', 'join-predicates'}
+        pending.sort(key=lambda task: (task[0] not in first, task[1] if task[0] in first else 0))
+    return pending
 
 
 def workers(task_count):
@@ -65,7 +87,8 @@ def command(name, output, binaries):
 
 
 class Commands:
-    def __init__(self):
+    def __init__(self, timeout):
+        self.timeout = timeout
         self.lock=threading.Lock()
         self.active=set()
         self.cancelled=False
@@ -75,10 +98,10 @@ class Commands:
         try:os.killpg(process.pid,signal.SIGKILL)
         except ProcessLookupError:pass
 
-    def cancel(self):
+    def cancel(self, *, kill_active):
         with self.lock:
             self.cancelled=True
-            processes=list(self.active)
+            processes = list(self.active) if kill_active else []
         for process in processes:self.kill(process)
 
     def run(self, argv, environment, log):
@@ -88,7 +111,7 @@ class Commands:
                 process=subprocess.Popen(argv,env=environment,stdout=stream,stderr=stream,start_new_session=True)
                 self.active.add(process)
             try:
-                code=process.wait(timeout=1800)
+                code=process.wait(timeout=self.timeout)
                 if code:raise RuntimeError(f'Live suite failed (exit {code}); see {log}')
             finally:
                 # Kill only descendants in this owned process group, including
@@ -106,15 +129,18 @@ def provision(index, output, servers):
     return server
 
 
-def lane(index, pending, output, binaries, commands, server, completed):
+def lane(index, pending, output, binaries, commands, server, completed, package):
+    full = package is not None
     environment = {
         **{key: value for key, value in os.environ.items()
            if not key.startswith('PGDERIVE__') and key != 'PGDERIVE_TEST_CASE_SHARD'},
         'PGDERIVE_TEST_POSTGRES_PORT': str(server.port),
-        'PGDERIVE__POSTGRES__PORT': str(server.port),
         'PGPASSWORD': 'postgres', 'PGDERIVE__POSTGRES__PASSWORD': 'postgres',
         'PGDERIVE_S3_LATENCY_SCALE': '0',
+        'PGDERIVE_CHECK_PROFILE': 'full' if full else 'core',
     }
+    if not full:
+        environment['PGDERIVE__POSTGRES__PORT'] = str(server.port)
     while True:
         try:
             name, shard, shards = pending.get_nowait()
@@ -126,21 +152,41 @@ def lane(index, pending, output, binaries, commands, server, completed):
             relative /= f'shard-{shard + 1}'
             task_environment['PGDERIVE_TEST_CASE_SHARD'] = f'{shard}/{shards}'
         directory = output / relative
-        directory.mkdir(parents=True)
-        argv = command(name, directory, binaries)
-        if name != 'replication':
-            argv = [sys.executable, 'scripts/run_with_s3_proxy.py', str(directory), *argv]
-            # Retry count stays the same. Paused-time tests check timer scheduling.
-            task_environment['PGDERIVE__WORKER__RETRY_DELAY_MS'] = '1'
-        commands.run(argv, task_environment, directory / 'console.log')
+        if name in full_live_gate.RELEASE:
+            package.result()
+        if name == 'query-container':
+            full_live_gate.qualify_container(output, commands, task_environment)
+        else:
+            directory.mkdir(parents=True)
+            if full:
+                argv = full_live_gate.command(name, directory, binaries, environment['PGDERIVE_TEST_POSTGRES_PORT'])
+                if name in full_live_gate.MATRIX:
+                    task_environment['PGDERIVE_HARNESS_TIMEOUT_SECONDS'] = (
+                        task_environment.get('PGDERIVE_HARNESS_TIMEOUT_SECONDS') or '1800')
+                if name in ('replication', 'crashes'):
+                    task_environment['PGDERIVE_S3_LATENCY_SCALE'] = (
+                        os.environ.get('PGDERIVE_S3_LATENCY_SCALE') or '1')
+            else:
+                argv = command(name, directory, binaries)
+                if name != 'replication':
+                    # Retry count stays the same. Paused-time tests check timer scheduling.
+                    task_environment['PGDERIVE__WORKER__RETRY_DELAY_MS'] = '1'
+            if name == 'error-order':
+                task_environment['PGDERIVE_ERROR_ORDER_EVIDENCE'] = str(directory / 'cases.json')
+            elif name != 'replication':
+                argv = [sys.executable, 'scripts/run_with_s3_proxy.py', str(directory), *argv]
+            commands.run(argv, task_environment, directory / 'console.log')
         completed.append(str(relative))
         print(f'Lane {index}: {relative} passed', flush=True)
 
 
-def run(output, binaries):
+def run(output, binaries, full=False):
     output.mkdir(parents=True,exist_ok=True)
-    commands=Commands(); servers=queue.Queue(); success=False
-    scheduled = tasks(os.environ.get('PGDERIVE_GATE_REPLICATION') == '1')
+    commands = Commands(timeout=None if full else 1800)
+    servers = queue.Queue()
+    success = False
+    with_replication = os.environ.get('PGDERIVE_GATE_REPLICATION') == '1'
+    scheduled = tasks(with_replication, full)
     pending = queue.Queue()
     for task in scheduled:
         pending.put(task)
@@ -150,20 +196,32 @@ def run(output, binaries):
     try:
         # Initialize the shared object service/bucket once, before any lane.
         prepare()
-        with ThreadPoolExecutor(max_workers=lane_count) as pool:
+        with ThreadPoolExecutor(max_workers=lane_count + int(full)) as pool:
             try:
+                package = None
+                if full:
+                    package = pool.submit(commands.run,
+                                          ['bash', 'scripts/package_release.sh', str(output / 'package')],
+                                          os.environ.copy(), output / 'package.log')
                 prepared=[pool.submit(provision,index,output,servers) for index in range(lane_count)]
                 owned=[job.result() for job in prepared]
                 if len({server.port for server in owned})!=lane_count or len({server.name for server in owned})!=lane_count:
                     raise RuntimeError('Live lanes do not have distinct PostgreSQL servers')
                 jobs = [pool.submit(lane, index, pending, output, binaries, commands, server,
-                                    completed[index]) for index, server in enumerate(owned)]
+                                    completed[index], package) for index, server in enumerate(owned)]
+                if package is not None:
+                    jobs.append(package)
                 for job in as_completed(jobs):
                     job.result()
-                verify_worker(output,[binaries['worker'],binaries['admin']])
+                if full:
+                    full_live_gate.verify(output, binaries, str(owned[0].port), with_replication)
+                else:
+                    verify_worker(output,[binaries['worker'],binaries['admin']])
                 success=True
             except BaseException:
-                commands.cancel()
+                # Full harnesses may own additional fixtures. Let active jobs
+                # finish their cleanup so that their failure evidence survives.
+                commands.cancel(kill_active=not full)
                 raise
     finally:
         records=[]
@@ -207,4 +265,5 @@ def interrupted(_signal,_frame):
 
 if __name__=='__main__':
     signal.signal(signal.SIGTERM,interrupted)
-    run(pathlib.Path(sys.argv[1]),json.loads(pathlib.Path(sys.argv[2]).read_text()))
+    run(pathlib.Path(sys.argv[1]), json.loads(pathlib.Path(sys.argv[2]).read_text()),
+        full=sys.argv[3] == 'full')

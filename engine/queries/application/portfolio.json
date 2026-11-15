@@ -36,8 +36,8 @@
     {
       "id": "locale_label",
       "sql": "SELECT lower(label) AS label FROM {schema}.account",
-      "blocker": "locale-sensitive text kernel (function backlog)",
-      "diagnostic": "not available in-engine"
+      "blocker": "case conversion requires built-in C or POSIX collation",
+      "diagnostic": "function lower requires C/POSIX collation"
     }
   ],
   "qualified_compositions": [

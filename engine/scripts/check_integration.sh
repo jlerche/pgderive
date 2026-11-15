@@ -26,7 +26,7 @@ if [[ "$exists" != 1 ]]; then
 fi
 # The pinned error corpus already runs against the engine in paused-clock tests.
 # Refresh its PostgreSQL differential during full qualification, not every edit.
-if [[ "$profile" == full ]]; then
+if [[ "$profile" == full && "${1:-}" != --replication-only ]]; then
     mkdir -p artifacts/error-order
     export PGDERIVE_ERROR_ORDER_EVIDENCE="$(mktemp "$PWD/artifacts/error-order/run-XXXXXXXX.json")"
     python3 scripts/error_order_differential.py "${pg[@]}" -Atq

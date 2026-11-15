@@ -25,9 +25,11 @@ class LiveGateTests(unittest.TestCase):
         finished=[]; ports={}; lock=threading.Lock(); barrier=threading.Barrier(4)
         class Server:
             def __init__(self,output,label,**options):
-                self.output=output;self.name=options['name'];self.port=output.name[-1]
+                self.output=output;self.name=options['name'];self.port=output.name.removeprefix('lane-')
             def finish(self,success):finished.append((self.port,success))
         class Commands:
+            def __init__(self, timeout):
+                pass
             def run(self,argv,environment,log):
                 port=environment['PGDERIVE_TEST_POSTGRES_PORT']
                 with lock:
@@ -46,7 +48,7 @@ class LiveGateTests(unittest.TestCase):
                 if name=='replication':assert 'PGDERIVE__WORKER__RETRY_DELAY_MS' not in environment
                 else:assert environment['PGDERIVE__WORKER__RETRY_DELAY_MS']=='1'
                 assert 'PGDERIVE__POSTGRES__DATABASE' not in environment
-            def cancel(self):raise AssertionError('unexpected cancellation')
+            def cancel(self, *, kill_active):raise AssertionError('unexpected cancellation')
         with tempfile.TemporaryDirectory() as directory, patch.object(live_gate,'prepare'), patch.object(live_gate,'Server',Server), patch.object(live_gate,'Commands',Commands), patch.object(live_gate,'verify_worker'), patch.dict(os.environ,{'PGDERIVE_GATE_REPLICATION':'1','PGDERIVE__POSTGRES__DATABASE':'foreign', 'PGDERIVE_GATE_LANES':'4'}):
             root=pathlib.Path(directory)
             live_gate.run(root,{'worker':'/worker','admin':'/admin'})
@@ -63,18 +65,116 @@ class LiveGateTests(unittest.TestCase):
     def test_failed_lane_cancels_workers_and_preserves_servers(self):
         finished=[]; cancelled=[]; archived=[]
         class Server:
-            def __init__(self,output,label,**options):self.output=output;self.name=options['name'];self.port=output.name[-1]
+            def __init__(self,output,label,**options):self.output=output;self.name=options['name'];self.port=output.name.removeprefix('lane-')
             def finish(self,success):finished.append(success)
         class Commands:
+            def __init__(self, timeout):
+                pass
             def run(self,*args):raise RuntimeError('fault witness')
-            def cancel(self):cancelled.append(True)
+            def cancel(self, *, kill_active):cancelled.append(kill_active)
         with tempfile.TemporaryDirectory() as directory, patch.object(live_gate,'prepare'), patch.object(live_gate,'Server',Server), patch.object(live_gate,'Commands',Commands), patch.object(live_gate,'archive',side_effect=lambda server:archived.append(server.name)):
             with self.assertRaisesRegex(RuntimeError,'fault witness'):
                 live_gate.run(pathlib.Path(directory),{'worker':'/worker','admin':'/admin'})
-        self.assertTrue(cancelled)
+        self.assertEqual(cancelled, [True])
         self.assertTrue(finished)
         self.assertTrue(all(not success for success in finished))
         self.assertEqual(len(archived),len(finished))
+
+    def test_full_failure_lets_active_harness_finish_before_archiving(self):
+        import sys
+        import time
+
+        commands = live_gate.Commands(timeout=None)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            started = root / 'started'
+            finished = root / 'finished'
+            release = root / 'release'
+            script = (
+                'from pathlib import Path; import time; '
+                f'Path({str(started)!r}).touch(); '
+                f'exec("while not Path({str(release)!r}).exists(): time.sleep(.01)"); '
+                f'Path({str(finished)!r}).touch()'
+            )
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor() as pool:
+                job = pool.submit(commands.run, [sys.executable, '-c', script],
+                                  os.environ, root / 'peer.log')
+                deadline = time.monotonic() + 5
+                try:
+                    while not started.exists() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(started.exists())
+                    commands.cancel(kill_active=False)
+                    with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+                        commands.run([sys.executable, '-c', 'pass'], os.environ, root / 'pending.log')
+                finally:
+                    release.touch()
+                job.result(timeout=5)
+            self.assertTrue(finished.exists())
+
+    def test_full_release_uses_isolated_lanes_and_package_dependencies(self):
+        from live_gate import full_live_gate
+
+        outputs = {}
+        barrier = threading.Barrier(2)
+        packaged = threading.Event()
+        verified = []
+
+        class Server:
+            def __init__(self, output, label, **options):
+                self.output = output
+                self.name = options['name']
+                self.port = output.name.removeprefix('lane-')
+
+            def finish(self, success):
+                assert success
+
+        class Commands:
+            def __init__(self, timeout):
+                pass
+            def run(self, argv, environment, log):
+                if log.name == 'package.log':
+                    barrier.wait(timeout=5)
+                    packaged.set()
+                    return
+                if log.parent.name == 'replication':
+                    barrier.wait(timeout=5)
+                if log.name in ('container-image.log', 'query-container.log') or log.parent.name == 'query-capacity':
+                    assert packaged.is_set()
+                outputs[log] = (argv, environment)
+
+            def cancel(self, *, kill_active):
+                raise AssertionError('unexpected cancellation')
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(live_gate, 'prepare'), patch.object(live_gate, 'Server', Server), \
+                patch.object(live_gate, 'Commands', Commands), \
+                patch.object(full_live_gate, 'verify', side_effect=lambda *args: verified.append(args)), \
+                patch.dict(os.environ, {'PGDERIVE_GATE_REPLICATION': '1', 'PGDERIVE_GATE_LANES': '2'}):
+            root = pathlib.Path(directory)
+            binaries = {'worker': '/worker', 'admin': '/admin'}
+            live_gate.run(root, binaries, full=True)
+            evidence = json.loads((root/'lanes.json').read_text())
+
+        tasks = [task for lane in evidence['groups'] for task in lane]
+        self.assertEqual(len(tasks), len(live_gate.tasks(True, True)))
+        self.assertEqual(len(set(tasks)), len(tasks))
+        self.assertEqual({port for _, env in outputs.values()
+                          if (port := env.get('PGDERIVE_TEST_POSTGRES_PORT'))}, {'0', '1'})
+        self.assertEqual(verified, [(root, binaries, '0', True)])
+        self.assertEqual(outputs[root/'replication/console.log'][1]['PGDERIVE_CHECK_PROFILE'], 'full')
+        self.assertIn('--replication-only', outputs[root/'replication/console.log'][0])
+        self.assertTrue(outputs[root/'error-order/shard-1/console.log'][1]['PGDERIVE_ERROR_ORDER_EVIDENCE'])
+        self.assertIn('/admin', outputs[root/'query-recovery/console.log'][0])
+        self.assertIn(str(root/'package/bin/pgderive'), outputs[root/'query-capacity/console.log'][0])
+        self.assertIn('35', outputs[root/'query-container.log'][0])
+        self.assertEqual(outputs[root/'query-storage-soak/console.log'][0][-9:],
+                         ['--duration', '1', '--transactions', '6', '--rows', '256',
+                          str(root/'query-storage-soak'), '--', '/worker'])
+        self.assertTrue(all('PGDERIVE__POSTGRES__PORT' not in env for _, env in outputs.values()))
+        self.assertTrue(all('PGDERIVE__WORKER__RETRY_DELAY_MS' not in env
+                            for _, env in outputs.values()))
 
     def test_build_manifest_rejects_missing_or_ambiguous_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:

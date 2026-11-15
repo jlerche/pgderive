@@ -18,7 +18,6 @@ def qualify(output, binary, kind):
     fixture = grouped(output)
     proxy = None
     blocker = None
-    original_environment = fixture.environment.copy()
     try:
         config = configured(fixture)
         text = config.read_text().replace('retry_attempts=8', 'retry_attempts=1')
@@ -29,6 +28,8 @@ def qualify(output, binary, kind):
             text = text.replace('maintenance_ticks=4', 'maintenance_ticks=64')+'\n'
             text = text.replace('[execution]', '[execution]\nscratch_bytes=65536')
         if kind == 'scratch_directory':
+            # Ensure the witnessed transaction must spill instead of finishing in memory.
+            text = text.replace('resident_entries=128', 'resident_entries=8')
             scratch = output/'scratch'
             scratch.mkdir()
             fixture.environment['TMPDIR'] = str(scratch.resolve())
@@ -63,6 +64,8 @@ def qualify(output, binary, kind):
             scratch.rmdir()
         if kind == 'engine_scratch':
             fixture.sql(f'UPDATE {fixture.name}.auction SET group_id=13 WHERE id=2')
+        elif kind == 'scratch_directory':
+            fixture.sql(f'UPDATE {fixture.name}.bid SET price=COALESCE(price,0)+1')
         elif kind not in ('diagnostic_connection','diagnostic_lock'):
             fixture.sql(f'BEGIN; UPDATE {fixture.name}.auction SET group_id=13 WHERE id=1; UPDATE {fixture.name}.bid SET price=NULL WHERE id=1; COMMIT')
         elif kind == 'diagnostic_lock':
@@ -128,8 +131,8 @@ def qualify(output, binary, kind):
             blocker.wait(timeout=10)
             blocker = None
         if proxy is not None:
+            # Restart through the same endpoint bound to durable storage ownership.
             proxy.send_signal(signal.SIGCONT)
-        fixture.environment = original_environment
         if kind == 'scratch_directory':
             scratch.mkdir()
         recovery_logs = output/'recovered'

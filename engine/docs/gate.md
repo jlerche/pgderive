@@ -88,10 +88,16 @@ start together after their build. All processes
 inherit the same per-process coverage output pattern. Reporting waits for both
 phases and the semantic-report verifier to pass. A unit or semantic-report
 failure still waits for live cleanup/evidence preservation before returning an
-error. Within the full live phase, integration and worker qualification remain
-sequential. The protocol
-log must show the exact named test and one passing test, preventing an obsolete
-filter from silently running zero tests.
+error. In the full profile, the same isolated lanes run replication, the
+PostgreSQL expression-error corpus, the complete query matrix and operational
+harnesses. The full worker verifier requires 918 distinct result reports and
+the named rebuild, health, TLS, recovery, container and capacity evidence. The expression-error shards retain all 1,257 cases in the original
+order within each shard; the gate verifies each shard against the pinned corpus.
+The 80 composition-matrix histories also run in shards with complete transactions
+and restart checks. The release package builds in parallel with the live lanes. Once it is ready,
+the capacity check can overlap image construction and container qualification.
+The protocol log must show the exact named test and one passing test, preventing
+an obsolete filter from silently running zero tests.
 
 All lane servers are removed only after the final result/report verifier passes.
 On failure, owned harness process groups stop, the servers remain available, and

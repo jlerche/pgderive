@@ -111,8 +111,8 @@ cargo install cargo-llvm-cov --version 0.8.4 --locked
 ./scripts/check.sh
 ```
 
-To use a separately owned PostgreSQL fixture endpoint, set
-`PGDERIVE_TEST_POSTGRES_PORT=55534 ./scripts/check.sh`. Readiness checks, worker
+To use a separately owned PostgreSQL fixture endpoint for standalone harnesses
+that accept one, set `PGDERIVE_TEST_POSTGRES_PORT=55534`. Readiness checks, worker
 configuration, COMMIT-fault proxies, provenance and failure dumps use that port.
 The instance needs logical replication and the `pgderive_dev` database. Docker
 fixtures must use tmpfs for database storage; leave shared PoC containers intact.
@@ -135,7 +135,9 @@ to pass and enforces at least 80% production line coverage.
 
 `./scripts/check.sh --full` retains the exhaustive live query matrix and operational
 release qualification, including native-oracle refresh, TLS, backup recovery,
-packaging, containers and capacity. Push and PR CI use the default gate; the
+packaging, containers and capacity. It uses the same isolated PostgreSQL lane
+pool and starts the package build alongside live qualification. Push and PR CI
+use the default gate; the
 Checks workflow's manual `full` input runs release qualification. Core success is
 not a full release claim. Standalone `check_worker.sh`, `check_integration.sh` and
 `check_coverage.sh` retain the full profile by default; set

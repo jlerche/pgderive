@@ -119,9 +119,9 @@
   ],
   "rejected": [
     {
-      "id": "distinct-on",
-      "sql": "SELECT DISTINCT ON(id) id FROM {schema}.account",
-      "diagnostic": "DISTINCT ON unsupported"
+      "id": "distinct-on-computed-payload",
+      "sql": "SELECT DISTINCT ON(id) id+1 AS next_id FROM {schema}.account",
+      "diagnostic": "DISTINCT ON payload requires plain columns"
     },
     {
       "id": "mixed-exists-key",
@@ -131,10 +131,15 @@
     {
       "id": "computed-inequality-correlation",
       "sql": "SELECT a.id FROM {schema}.account a WHERE EXISTS(SELECT 1 FROM {schema}.entry b WHERE a.id+1<b.account_id)",
-      "diagnostic": "correlation inequality requires plain columns"
+      "diagnostic": "correlation residual requires total comparison operands"
     }
   ],
   "qualified_compositions": [
+    {
+      "id": "distinct-on",
+      "sql": "SELECT DISTINCT ON(id) id FROM {schema}.account",
+      "qualification": "scripts/distinct_on_harness.py"
+    },
     {
       "id": "mixed-left-key",
       "sql": "SELECT a.id FROM {schema}.account a LEFT JOIN {schema}.entry b ON a.id+b.id=b.account_id",

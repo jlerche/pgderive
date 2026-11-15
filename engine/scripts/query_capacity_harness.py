@@ -149,6 +149,8 @@ def qualify(output,binary):
         retry,sampler = start('restart','supervisor-unavailable')
         retry.process.wait(timeout=20); assert retry.process.returncode != 0
         retry.abort(); peak=max(peak,sampler.finish())
+        startup_error = (output / 'supervisor-unavailable/stderr.log').read_text()
+        assert 'worker storage startup timed out' in startup_error, startup_error
         retried = command(fixture,binary,'status',config)['progress']
         assert {key:value for key,value in after.items() if key!='fence'} == {key:value for key,value in retried.items() if key!='fence'}
         assert fixture.sql(f"SELECT confirmed_flush_lsn > '{before['checkpoint_lsn']}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'").strip()=='f'

@@ -26,7 +26,12 @@ async fn start_owned(config: Config, restart: bool) -> Result<()> {
     let settings = config.worker.clone().context("configuration requires a worker section")?;
     let mut session = Session::connect(&config).await?;
     session.own(&settings.catalog_schema, &settings.query_id, &settings.tenant_id).await?;
-    super::tenant::namespace(&config, &settings, &session).await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(settings.startup_timeout_secs),
+        super::tenant::namespace(&config, &settings, &session),
+    )
+    .await
+    .context("worker storage startup timed out")??;
     if !restart && super::lifecycle::recreate(&*session.client, &settings).await? {
         session =
             Box::pin(super::lifecycle::rebuild_owned(&config, &settings, session, true)).await?;

@@ -38,6 +38,36 @@ def proxy(output, certificate, key, host):
     return process, ready['port'], log_path
 
 
+def tls_config(fixture, endpoint, ca_file, credentials):
+    config = configured(fixture)
+    original = config.read_text().replace('retry_attempts=8', 'retry_attempts=1')
+    section = ('[object_store]\nendpoint=' + json.dumps(endpoint) +
+               '\nbucket="pgderive-mvp-tests"\nregion="fixture-region"\nca_file=' +
+               json.dumps(str(ca_file.resolve())) + '\ncredentials_file=' +
+               json.dumps(str(credentials.resolve())) + '\n')
+    before, rest = original.split('[object_store]')
+    _, after = rest.split('[worker]', 1)
+    config.write_text(before + section + '[worker]' + after)
+    fixture.environment.pop('PGDERIVE__OBJECT_STORE__ENDPOINT', None)
+    return config
+
+
+def reject_certificate(directory, binary, endpoint, ca_file, credentials, diagnostics):
+    directory.mkdir()
+    fixture = grouped(directory)
+    try:
+        config = tls_config(fixture, endpoint, ca_file, credentials)
+        error = rejected(binary, fixture, 'create', config).lower()
+        assert 'certificate' in error and any(reason in error for reason in diagnostics), error
+        assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip() == 't'
+        assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip() == '0'
+        fixture.sql(f'DROP PUBLICATION {fixture.name}; DROP SCHEMA {fixture.name} CASCADE')
+        fixture.cleanup_storage()
+    except BaseException:
+        fixture.preserve()
+        raise
+
+
 def qualify(output, binary):
     addresses = json.loads(subprocess.check_output(['ip','-4','-j','addr','show','docker0']))
     host = next(item['local'] for item in addresses[0]['addr_info'] if item['family']=='inet')
@@ -54,27 +84,17 @@ def qualify(output, binary):
                 remote_port, remote_log = port, log
             else:
                 wrong_name_port = port
-        config = configured(fixture)
         credentials = output/'credentials.json'
         credentials.write_text(json.dumps({'access_key_id':'local','secret_access_key':'local',
             'session_token':'fixture-session-token'})+'\n')
         credentials.chmod(0o600)
-        original = config.read_text().replace('retry_attempts=8','retry_attempts=1')
-        section = ('[object_store]\nendpoint='+json.dumps(f'https://{host}:{remote_port}')+
-            '\nbucket="pgderive-mvp-tests"\nregion="fixture-region"\nca_file='+json.dumps(str((output/'ca.pem').resolve()))+
-            '\ncredentials_file='+json.dumps(str(credentials.resolve()))+'\n')
-        before, rest = original.split('[object_store]')
-        _, after = rest.split('[worker]',1)
-        healthy = before+section+'[worker]'+after
-        fixture.environment.pop('PGDERIVE__OBJECT_STORE__ENDPOINT',None)
-        for bad in [healthy.replace(str((output/'ca.pem').resolve()),str((output/'wrong-ca.pem').resolve())),
-                    healthy.replace(f'https://{host}:{remote_port}',f'https://127.0.0.1:{wrong_name_port}')]:
-            config.write_text(bad)
-            error = rejected(binary,fixture,'create',config)
-            assert 'preflight' in error,error
-            assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
-            assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%'").strip()=='0'
-        config.write_text(healthy)
+        endpoint = f'https://{host}:{remote_port}'
+        reject_certificate(output/'reject-ca', binary, endpoint, output/'wrong-ca.pem', credentials,
+                           ('unknownissuer', 'unknown issuer'))
+        reject_certificate(output/'reject-name', binary, f'https://127.0.0.1:{wrong_name_port}',
+                           output/'ca.pem', credentials,
+                           ('notvalidforname', 'not valid for name', 'hostname mismatch'))
+        config = tls_config(fixture, endpoint, output/'ca.pem', credentials)
         labels = [column['name'] for column in command(fixture,binary,'validate',config)['columns']]
         logs = output/'initial'
         logs.mkdir()

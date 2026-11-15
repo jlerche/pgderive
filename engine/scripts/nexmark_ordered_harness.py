@@ -78,7 +78,7 @@ def qualify(output,command,query,instant):
     fixture = OrderedFixture(output,query,instant)
     with fixture.managed():
         fixture.rejected(command,'missing-stable-key',fixture.query.replace(',b.id ASC',''))
-        fixture.rejected(command,'unsupported-function',fixture.query.replace('row_number()','ntile(10)'))
+        fixture.rejected(command,'unsupported-function',fixture.query.replace('row_number()', 'bit_and(b.id)'))
         assert fixture.sql(f"SELECT to_regclass('{fixture.name}.pgderive_worker_registration') IS NULL").strip()=='t'
         assert fixture.sql(f"SELECT count(*) FROM pg_replication_slots WHERE slot_name LIKE '{fixture.name}%' ").strip()=='0'
         changes = [

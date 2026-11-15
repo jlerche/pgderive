@@ -20,15 +20,9 @@ source "$output/build/coverage.env"
 # Always execute the checked-in oracles, regardless of benchmark shell settings.
 unset PGDERIVE_SEMANTICS_REPLAY PGDERIVE_FAST_REPLAY PGDERIVE_FAST_REPORT
 export PGDERIVE_SEMANTICS_REPORT="$output/semantics.json"
-run_live() {
-    if [[ "$profile" == full ]]; then
-        PGDERIVE_COVERAGE=1 ./scripts/check_integration.sh
-    fi
-    PGDERIVE_GATE_REPLICATION=1 PGDERIVE_COVERAGE=1 ./scripts/check_worker.sh
-}
 # Units use no live PostgreSQL. Both phases use the finished build and separate
 # per-process counters; no cleanup or report may run until both have stopped.
-run_live &
+PGDERIVE_GATE_REPLICATION=1 PGDERIVE_COVERAGE=1 ./scripts/check_worker.sh &
 live_pid=$!
 # Even a unit/oracle failure must await live cleanup and evidence preservation.
 trap 'wait "$live_pid" || true' EXIT

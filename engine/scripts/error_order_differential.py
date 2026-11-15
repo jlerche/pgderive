@@ -7,6 +7,8 @@ import pathlib
 import subprocess
 import sys
 
+from worker_case_shard import select_cases
+
 SETUP = '''BEGIN;
 CREATE SCHEMA source;
 CREATE TABLE source.auction(id int PRIMARY KEY, category text, other int);
@@ -51,7 +53,7 @@ def outcome(pg, case):
 def main():
     pg = sys.argv[1:]
     path = pathlib.Path(__file__).with_name('error_order_corpus.json')
-    corpus = json.loads(path.read_text())
+    corpus = select_cases(json.loads(path.read_text()))
     evidence_path = os.environ.get('PGDERIVE_ERROR_ORDER_EVIDENCE')
     environment = subprocess.run(pg, input="SELECT json_build_object('version',version(),'settings',(SELECT json_object_agg(name,setting) FROM pg_settings));", capture_output=True, text=True, check=True).stdout
     evidence = []

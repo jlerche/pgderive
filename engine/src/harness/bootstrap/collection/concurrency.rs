@@ -65,7 +65,8 @@ async fn paused(
         .context("GC object I/O blocked checkpoint publication")??;
     let current = graph.checkpoint()?;
     store.release.notify_one();
-    timeout(Duration::from_secs(10), &mut collection)
+    // Allow object I/O to drain under a shared gate load after the barrier opens.
+    timeout(Duration::from_mins(1), &mut collection)
         .await
         .context("GC race collection timed out")??;
     graph.restore_checkpoint(pinned).await?;

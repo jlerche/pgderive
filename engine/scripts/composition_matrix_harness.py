@@ -11,6 +11,7 @@ from application_portfolio_harness import ApplicationFixture, DifferentialFailur
 from composition_matrix_model import FAMILIES, expected
 from composition_matrix_trace import generate, validate
 from native_mv_oracle import binary_difference
+from worker_case_shard import select_cases
 
 
 class MatrixFixture(ApplicationFixture):
@@ -85,6 +86,7 @@ def main():
                     rollback = next(step for step in steps if step.get('rollback'))
                     trace['history'] = committed[:3]+[rollback,{'restart':True}]+committed[3:7]
                 traces.append(trace)
+    traces = select_cases(traces)
     if args.completed_root:
         from verify_composition_matrix import case
         complete = []
