@@ -20,6 +20,7 @@ pub(super) struct MarkArguments<'a> {
     pub(super) quantified: Option<Compare>,
     pub(super) has_residual: bool,
     pub(super) skip: Option<std::num::NonZeroUsize>,
+    pub(super) distinct: Vec<String>,
 }
 
 impl Builder<'_> {
@@ -29,13 +30,22 @@ impl Builder<'_> {
         parsed: Box<Parsed>,
         arguments: MarkArguments<'_>,
     ) -> Result<Edge> {
-        let MarkArguments { probe, alias, condition, semijoin, quantified, has_residual, skip } =
-            arguments;
+        let MarkArguments {
+            probe,
+            alias,
+            condition,
+            semijoin,
+            quantified,
+            has_residual,
+            skip,
+            distinct,
+        } = arguments;
         let start = self.nodes.len();
         let right = self.derived(parsed, alias.clone())?;
         if quantified.is_some() || has_residual {
             super::validate_scalar_input(&self.nodes[start..])?;
         }
+        let distinct = distinct_columns(&right, distinct)?;
         let mut computed = Vec::new();
         let (probe, value, comparison) = bind_comparison(
             probe,
@@ -72,6 +82,7 @@ impl Builder<'_> {
                 correlation: spec.predicate,
                 semijoin,
                 skip,
+                distinct,
             }),
         });
         let mut columns = columns;
@@ -86,6 +97,19 @@ impl Builder<'_> {
         ensure!(edge.id == id, "marker join edge differs");
         Ok(Edge { id, columns })
     }
+}
+fn distinct_columns(right: &Edge, labels: Vec<String>) -> Result<Vec<ColumnRef>> {
+    labels
+        .into_iter()
+        .map(|label| {
+            let column = resolve(&Name(vec![label]), &right.columns)?.value.clone();
+            ensure!(
+                crate::compiler::partition::orderable(column.oid),
+                "EXISTS OFFSET requires native scalar equality for its grouping keys"
+            );
+            Ok(column)
+        })
+        .collect()
 }
 fn bind_comparison(
     ast: &Ast,

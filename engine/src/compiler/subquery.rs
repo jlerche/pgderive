@@ -13,4 +13,6 @@ pub struct Mark {
     pub(crate) semijoin: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) skip: Option<std::num::NonZeroUsize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) distinct: Vec<ColumnRef>,
 }

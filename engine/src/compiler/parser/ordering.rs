@@ -175,7 +175,7 @@ fn locationless(value: &Node) -> String {
     output
 }
 
-fn target_index(
+pub(super) fn target_index(
     value: &Node,
     targets: &[partition::Target],
     single_table: bool,

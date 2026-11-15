@@ -113,6 +113,7 @@ impl Builder<'_> {
                 quantified,
                 has_residual,
                 skip,
+                distinct,
             } => {
                 let left = self.tree(*left)?;
                 self.mark(
@@ -126,6 +127,7 @@ impl Builder<'_> {
                         quantified,
                         has_residual,
                         skip,
+                        distinct,
                     },
                 )
             }

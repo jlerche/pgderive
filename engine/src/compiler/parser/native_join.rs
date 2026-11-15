@@ -31,6 +31,7 @@ pub(in crate::compiler) enum Tree {
         quantified: Option<crate::compiler::syntax::Compare>,
         has_residual: bool,
         skip: Option<std::num::NonZeroUsize>,
+        distinct: Vec<String>,
     },
     Join {
         left: Box<Self>,

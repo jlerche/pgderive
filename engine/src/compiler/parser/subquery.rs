@@ -20,6 +20,13 @@ struct Rewrite<'a> {
     changed: bool,
     validation: Vec<Parsed>,
 }
+#[derive(Default)]
+struct MembershipOptions {
+    quantified: Option<Compare>,
+    skip: Option<std::num::NonZeroUsize>,
+    distinct: Vec<String>,
+}
+
 pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Parsed>> {
     let mut checked = select.clone();
     let mut rewrite = Rewrite {
@@ -282,26 +289,7 @@ impl Rewrite<'_> {
                     link.testexpr.is_none() && link.oper_name.is_empty(),
                     "invalid EXISTS sublink"
                 );
-                let probe = membership::existence_value(query)?;
-                let mut query = (**query).clone();
-                query.target_list = vec![ast::target(probe.clone(), "")];
-                let empty = query.limit_count.as_deref().is_some_and(membership::zero_limit);
-                let skip =
-                    std::num::NonZeroUsize::new(membership::clear_exists_clauses(&mut query)?);
-                let correlation = correlation::extract(&mut query, true)?;
-                scalar_input::validate(&query, scalar_input::Input::Membership)?;
-                if empty {
-                    let mut local = query
-                        .where_clause
-                        .take()
-                        .map(|value| *value)
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    local.push(ast::boolean(false));
-                    query.where_clause = ast::logical(local, true);
-                }
-                // The constant, non-NULL RHS makes the mark two-valued.
-                self.membership_mark(query, probe, (None, skip), correlation)
+                self.existence(query)
             }
             pg::SubLinkType::ExprSublink => {
                 ensure!(
@@ -341,6 +329,35 @@ impl Rewrite<'_> {
             _ => anyhow::bail!("unsupported scalar/IN sublink kind"),
         }
     }
+    fn existence(&mut self, query: &pg::SelectStmt) -> Result<Node> {
+        let probe = membership::existence_value(query)?;
+        let mut query = query.clone();
+        let empty = query.limit_count.as_deref().is_some_and(membership::zero_limit);
+        let (skip, keys) = membership::clear_exists_clauses(&mut query)?;
+        query.target_list = vec![ast::target(probe.clone(), "")];
+        let mut labels = Vec::with_capacity(keys.len());
+        for (index, key) in keys.into_iter().enumerate() {
+            let label = format!("\0exists_group_{index}");
+            query.target_list.push(ast::target(key, &label));
+            labels.push(label);
+        }
+        let correlation = correlation::extract(&mut query, true)?;
+        scalar_input::validate(&query, scalar_input::Input::Membership)?;
+        if empty {
+            let mut local =
+                query.where_clause.take().map(|value| *value).into_iter().collect::<Vec<_>>();
+            local.push(ast::boolean(false));
+            query.where_clause = ast::logical(local, true);
+        }
+        // The constant, non-NULL RHS makes the mark two-valued.
+        let options = MembershipOptions {
+            skip: std::num::NonZeroUsize::new(skip),
+            distinct: labels,
+            ..MembershipOptions::default()
+        };
+        self.membership_mark(query, probe, options, correlation)
+    }
+
     fn membership(
         &mut self,
         mut query: pg::SelectStmt,
@@ -348,13 +365,18 @@ impl Rewrite<'_> {
         quantified: Option<Compare>,
     ) -> Result<Node> {
         let correlation = correlation::extract(&mut query, true)?;
-        self.membership_mark(query, probe, (quantified, None), correlation)
+        self.membership_mark(
+            query,
+            probe,
+            MembershipOptions { quantified, ..MembershipOptions::default() },
+            correlation,
+        )
     }
     fn membership_mark(
         &mut self,
         mut query: pg::SelectStmt,
         probe: Node,
-        (quantified, skip): (Option<Compare>, Option<std::num::NonZeroUsize>),
+        MembershipOptions { quantified, skip, distinct }: MembershipOptions,
         correlation: correlation::Correlation,
     ) -> Result<Node> {
         let alias = self.alias()?;
@@ -415,6 +437,7 @@ impl Rewrite<'_> {
             quantified,
             has_residual,
             skip,
+            distinct,
         });
         Ok(ast::column(&alias, ast::VALUE))
     }

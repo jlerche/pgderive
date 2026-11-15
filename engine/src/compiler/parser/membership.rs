@@ -67,12 +67,16 @@ pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
             "EXISTS projection requires a supported row-preserving expression"
         );
     }
-    Ok(Node {
+    Ok(presence_value())
+}
+
+fn presence_value() -> Node {
+    Node {
         node: Some(NodeEnum::AConst(pg::AConst {
             val: Some(pg::a_const::Val::Ival(pg::Integer { ival: 1 })),
             ..pg::AConst::default()
         })),
-    })
+    }
 }
 
 // PostgreSQL can evaluate projection and ordering when OFFSET or GROUP BY
@@ -92,15 +96,11 @@ fn discardable(value: &Node, total: bool) -> Result<bool> {
 
 // Native prepare validates the original clauses. A literal zero limit
 // becomes an empty RHS before the existence mark runs.
-pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<usize> {
+pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<(usize, Vec<Node>)> {
     let mut skip = 0;
     let total = requires_total_discarded_expressions(query);
     if let Some(offset) = query.limit_offset.as_deref() {
         skip = super::ordering::count(offset)?.unwrap_or(0);
-        ensure!(
-            skip == 0 || (query.group_clause.is_empty() && query.distinct_clause.is_empty()),
-            "positive EXISTS OFFSET requires an ungrouped RHS without DISTINCT"
-        );
         query.limit_offset = None;
         if query.limit_count.is_none() {
             query.limit_option = i32::from(pg::LimitOption::Default);
@@ -127,10 +127,59 @@ pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<usize> 
     for key in query.distinct_clause.iter().filter(|key| key.node.is_some()) {
         ensure!(discardable(key, total)?, "EXISTS DISTINCT ON requires a row-preserving key");
     }
+    let keys = if skip == 0 { Vec::new() } else { offset_keys(query)? };
     query.distinct_clause.clear();
     query.group_clause.clear();
     query.sort_clause.clear();
-    Ok(skip)
+    Ok((skip, keys))
+}
+
+fn offset_keys(query: &pg::SelectStmt) -> Result<Vec<Node>> {
+    let distinct = &query.distinct_clause;
+    let group = &query.group_clause;
+    ensure!(
+        distinct.is_empty() || group.is_empty(),
+        "positive EXISTS OFFSET cannot combine grouping and DISTINCT"
+    );
+    let keys = match distinct.as_slice() {
+        [] => group.clone(),
+        [key] if key.node.is_none() && query.target_list.is_empty() => vec![presence_value()],
+        [key] if key.node.is_none() => query
+            .target_list
+            .iter()
+            .map(super::target)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .cloned()
+            .collect(),
+        keys => distinct_on_offset_keys(query, keys)?,
+    };
+    ensure!(
+        keys.len() <= 16 && keys.iter().all(plain_offset_key),
+        "grouped or DISTINCT EXISTS OFFSET requires at most 16 column or literal keys"
+    );
+    Ok(keys)
+}
+
+fn distinct_on_offset_keys(query: &pg::SelectStmt, keys: &[Node]) -> Result<Vec<Node>> {
+    let outputs = query.target_list.iter().map(super::target).collect::<Result<Vec<_>>>()?;
+    ensure!(
+        outputs.iter().all(|value| plain_offset_key(value)),
+        "positive EXISTS OFFSET with DISTINCT ON requires explicit column or literal targets"
+    );
+    let targets = super::partition::parse_targets(query)?;
+    let single_table = matches!(query.from_clause.as_slice(), [source]
+        if matches!(source.node, Some(NodeEnum::RangeVar(_))));
+    keys.iter()
+        .map(|key| {
+            let indexed = super::ordering::target_index(key, &targets, single_table)?;
+            Ok(indexed.and_then(|index| outputs.get(index).copied()).unwrap_or(key).clone())
+        })
+        .collect()
+}
+
+fn plain_offset_key(value: &Node) -> bool {
+    matches!(value.node, Some(NodeEnum::AConst(_))) || super::expressions::column(value).is_ok()
 }
 
 const fn supported_limit(node: &Node) -> bool {

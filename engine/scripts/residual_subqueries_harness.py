@@ -42,6 +42,9 @@ def reduce_truth(values, all_rows=False):
     return None if None in values else all_rows
 
 
+GROUP_OFFSET_MODES = ('exists-group-offset', 'exists-distinct-offset', 'exists-distinct-on-offset')
+
+
 class ResidualFixture(SqlFixture):
     def __init__(self, output, mode, keyed):
         super().__init__(output, False)
@@ -113,9 +116,15 @@ class ResidualFixture(SqlFixture):
             if mode == 'exists-offset':
                 exists = exists.replace('DISTINCT b.*', 'b.price')
                 exists = exists.removesuffix(')') + ' ORDER BY b.price LIMIT 1 OFFSET 2)'
-            if mode == 'exists-group':
+            if mode in ('exists-group', 'exists-group-offset'):
                 exists = exists.replace('DISTINCT b.*', 'b.price')
-                exists = exists.removesuffix(')') + ' GROUP BY b.price OFFSET 0)'
+                offset = 1 if mode == 'exists-group-offset' else 0
+                exists = exists.removesuffix(')') + f' GROUP BY b.price OFFSET {offset})'
+            if mode in ('exists-distinct-offset', 'exists-distinct-on-offset'):
+                projection = ('DISTINCT b.price' if mode == 'exists-distinct-offset'
+                              else 'DISTINCT ON (id) b.price AS id')
+                exists = exists.replace('DISTINCT b.*', projection)
+                exists = exists.removesuffix(')') + ' ORDER BY 1 OFFSET 1)'
             if mode == 'exists-zero':
                 empty = exists.removesuffix(')') + ' LIMIT 0)'
                 self.labels = ['id', 'present', 'absent']
@@ -179,6 +188,9 @@ class ResidualFixture(SqlFixture):
             elif self.mode == 'exists-offset':
                 if len(values) > 2:
                     memory[(row['id'],)] += 1
+            elif self.mode in GROUP_OFFSET_MODES:
+                if len(set(values)) > 1:
+                    memory[(row['id'],)] += 1
             elif self.mode == 'exists-zero':
                 memory[(row['id'], False, True)] += 1
             elif self.mode == 'exists-projection':
@@ -191,6 +203,11 @@ class ResidualFixture(SqlFixture):
 def qualify(output, command, mode, keyed):
     fixture = ResidualFixture(output, mode, keyed)
     a, b = fixture.outer, fixture.inner
+    group_changes = [
+        f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (11,3,NULL,1)',
+        f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (12,3,9,1)',
+        f'DELETE FROM {b} WHERE id=12',
+    ] if mode in GROUP_OFFSET_MODES else []
     with fixture.managed():
         fixture.run_history(command, History(
             changes=[
@@ -200,6 +217,7 @@ def qualify(output, command, mode, keyed):
                 f'UPDATE {b} SET auction=3,cutoff=1 WHERE id=3; UPDATE {a} SET probe=7 WHERE id=7',
                 f'DELETE FROM {b}',
                 f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (3,3,NULL,1)',
+                *group_changes,
             ],
             final=f'UPDATE {b} SET auction=1,price=7 WHERE id=3',
             normalized=fixture.query.replace('SELECT', 'select').replace('ANY', 'SOME'),
@@ -212,6 +230,7 @@ def qualify(output, command, mode, keyed):
 
 
 if __name__ == '__main__':
-    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined', 'exists-zero', 'exists-group', 'exists-offset')
+    modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined', 'exists-zero', 'exists-group', 'exists-offset',
+             *GROUP_OFFSET_MODES)
     run_cases(((mode if keyed else f'{mode}-inequality-only', mode, keyed)
                for keyed in (True, False) for mode in modes), qualify)

@@ -104,7 +104,7 @@ pub(super) fn mark(spec: &Mark) -> Group<Key, Row> {
                 } else {
                     None
                 };
-                emit(&spec, set.as_ref(), (cursor, sign), &mut output, work).await?;
+                emit(&spec, set.as_ref(), (cursor, sign, input.limits), &mut output, work).await?;
             }
             output.finish_batch()
         })
@@ -113,11 +113,11 @@ pub(super) fn mark(spec: &Mark) -> Group<Key, Row> {
 async fn emit(
     spec: &Mark,
     set: Option<&RightValues>,
-    state: (GroupCursor<Key, Row>, i64),
+    state: (GroupCursor<Key, Row>, i64, Limits),
     output: &mut Consolidator<((), Row)>,
     work: &mut PartitionWork,
 ) -> Result<()> {
-    let (mut cursor, sign) = state;
+    let (mut cursor, sign, limits) = state;
     let start = cursor.clone();
     while let Some((row, weight)) = cursor.next(work).await? {
         if !left(&row)? {
@@ -125,7 +125,7 @@ async fn emit(
         }
         let value = match set {
             Some(set) => indexed_membership(spec, &row, set)?,
-            None => membership(spec, &row, start.clone(), work).await?,
+            None => membership(spec, &row, start.clone(), work, limits).await?,
         };
         let mut row = stripped(&row);
         row.insert(
@@ -141,7 +141,9 @@ async fn membership(
     probe: &Row,
     mut right: GroupCursor<Key, Row>,
     work: &mut PartitionWork,
+    limits: Limits,
 ) -> Result<Option<bool>> {
+    let mut seen = DistinctKeys::default();
     let mut unknown = false;
     let mut skip = spec.skip.map_or(0, std::num::NonZeroUsize::get);
     while let Some((row, weight)) = right.next(work).await? {
@@ -153,17 +155,62 @@ async fn membership(
             continue;
         }
         match spec.comparison.truth((&joined, &joined))? {
-            Some(true) if skip == 0 => return Ok(Some(true)),
+            Some(true) if skip == 0 && spec.distinct.is_empty() => return Ok(Some(true)),
             Some(true) => {
-                let weight = usize::try_from(weight)?;
-                if weight > skip {
+                let count = if spec.distinct.is_empty() {
+                    usize::try_from(weight)?
+                } else {
+                    usize::from(seen.insert(&spec.distinct, &row, limits)?)
+                };
+                if count > skip {
                     return Ok(Some(true));
                 }
-                skip -= weight;
+                skip -= count;
             }
             Some(false) => {}
             None => unknown = true,
         }
     }
     Ok((!unknown).then_some(false))
+}
+
+#[derive(Default)]
+struct DistinctKeys {
+    values: BTreeSet<Vec<Option<String>>>,
+    bytes: u64,
+}
+
+impl DistinctKeys {
+    fn insert(&mut self, columns: &[ColumnRef], row: &Row, limits: Limits) -> Result<bool> {
+        let key =
+            columns.iter().map(|column| group_value(column, row)).collect::<Result<Vec<_>>>()?;
+        let bytes = key.iter().try_fold(VALUE_OVERHEAD, |bytes, value| -> Result<u64> {
+            let size = value.as_ref().map_or(0, String::capacity);
+            Ok(bytes.saturating_add(VALUE_OVERHEAD).saturating_add(u64::try_from(size)?))
+        })?;
+        if !self.values.insert(key) {
+            return Ok(false);
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        ensure!(
+            self.bytes <= limits.output_bytes,
+            CapacityExceeded("EXISTS group keys exceed resident limit")
+        );
+        Ok(true)
+    }
+}
+
+fn group_value(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
+    if column.oid == 1186 {
+        return row
+            .get(&column.name)
+            .context("missing EXISTS interval key")?
+            .as_deref()
+            .map(|value| {
+                let interval = crate::temporal::Interval::parse(value)?;
+                Ok(serde_json::to_string(&interval.duration_key())?)
+            })
+            .transpose();
+    }
+    crate::compiler::native_key(column, row)
 }

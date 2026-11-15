@@ -597,6 +597,26 @@ fn exists_positive_offset_preserves_count_and_rejects_fallible_sort_targets() ->
 }
 
 #[test]
+fn exists_positive_offset_counts_grouping_and_distinct_keys() -> Result<()> {
+    let native = native();
+    for (target, tail) in [
+        ("1", "GROUP BY b.price"),
+        ("DISTINCT b.price, b.auction", "ORDER BY b.price"),
+        ("DISTINCT ON (b.price) b.id", "ORDER BY b.price, b.id"),
+        ("DISTINCT ON (1) b.price", "ORDER BY 1"),
+        ("DISTINCT ON (id) b.price AS id", "ORDER BY id"),
+    ] {
+        let sql = format!(
+            "SELECT a.id, EXISTS
+                (SELECT {target} FROM source.bid b WHERE b.auction=a.id AND b.id>a.id
+                 {tail} OFFSET 1) AS present FROM source.auction a"
+        );
+        compile(&sql, &native).map_err(|error| error.context(sql))?;
+    }
+    Ok(())
+}
+
+#[test]
 fn exists_discards_row_preserving_targets() -> Result<()> {
     let native = native();
     for (projection, predicate) in [
@@ -651,7 +671,7 @@ fn exists_discards_row_preserving_targets() -> Result<()> {
         "GROUP BY b.price / 0",
         "LIMIT -1",
         "OFFSET -1",
-        "GROUP BY b.price OFFSET 1",
+        "GROUP BY b.price, b.auction OFFSET -1",
         "ORDER BY 1/0 OFFSET 1",
         "ORDER BY b.price FETCH FIRST 1 ROW WITH TIES",
         "ORDER BY generate_series(1,0)",
