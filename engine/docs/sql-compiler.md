@@ -237,6 +237,13 @@ Unicode characters, preserve collation, and retain the declared length in
 the result type. Shorter strings and NULLs are preserved. These casts do
 not change assignment coercion.
 
+`lower(text)` and `upper(text)` accept inputs whose resolved collation is
+built-in `C` or `POSIX`, supplied by a column declaration or an explicit
+`COLLATE` clause. They convert ASCII letters, preserve non-ASCII characters,
+and return text with the input collation. NULL inputs yield NULL. The
+16 MiB text output limit applies. Existing registrations need a rebuild
+because the source catalog fingerprint now includes both functions.
+
 `LIKE` and `NOT LIKE` match text and varchar under the built-in deterministic
 `C` and `POSIX` collations. A column declaration or explicit `COLLATE` clause
 can supply that collation. Matching is case-sensitive over the whole string.

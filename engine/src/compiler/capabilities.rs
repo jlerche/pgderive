@@ -36,9 +36,15 @@ pub(in crate::compiler) enum Builtin {
     Concat,
     ConcatWs,
     LikeEscape,
+    Lower,
+    Upper,
 }
 
 impl Builtin {
+    pub(in crate::compiler) const fn is_ascii_case_conversion(self) -> bool {
+        matches!(self, Self::Lower | Self::Upper)
+    }
+
     pub(in crate::compiler) const fn is_strict(self) -> bool {
         !matches!(self, Self::Concat | Self::ConcatWs)
     }
@@ -76,6 +82,8 @@ const SIGNATURES: &[Signature] = &[
     Signature::strict("bit_length", &[25], 23, Builtin::BitLength),
     Signature::strict("ascii", &[25], 23, Builtin::Ascii),
     Signature::strict("chr", &[23], 25, Builtin::Chr),
+    Signature::strict("lower", &[25], 25, Builtin::Lower),
+    Signature::strict("upper", &[25], 25, Builtin::Upper),
     Signature::strict("reverse", &[25], 25, Builtin::Reverse),
     Signature::strict("left", &[25, 23], 25, Builtin::Left),
     Signature::strict("right", &[25, 23], 25, Builtin::Right),

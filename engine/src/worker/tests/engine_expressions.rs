@@ -4,7 +4,7 @@ use crate::compiler::compile;
 use anyhow::{Context, Result};
 #[test]
 fn unsupported_functions_fail_before_registration_with_engine_reason() {
-    for function in ["lower(category)", "random()", "to_char(id,'999')"] {
+    for function in ["initcap(category)", "random()", "to_char(id,'999')"] {
         let error =
             compile(&format!("SELECT {function} AS value FROM source.auction"), &contract()).err();
         assert!(error.is_some(), "{function}");
@@ -80,7 +80,7 @@ fn typed_text_and_boolean_functions_run_in_predicates() -> Result<()> {
 }
 
 #[test]
-fn function_diagnostics_are_shared_across_existing_query_positions() {
+fn case_conversion_collation_diagnostics_are_shared_across_query_positions() {
     for sql in [
         "SELECT lower(category) AS value FROM source.auction",
         "SELECT id FROM source.auction WHERE lower(category)='x'",
@@ -89,7 +89,7 @@ fn function_diagnostics_are_shared_across_existing_query_positions() {
     ] {
         let error = compile(sql, &contract()).err();
         assert!(
-            format!("{error:?}").contains("function lower is not available in-engine"),
+            format!("{error:?}").contains("function lower requires C/POSIX collation"),
             "{sql}: {error:?}"
         );
     }

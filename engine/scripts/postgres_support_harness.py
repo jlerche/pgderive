@@ -60,6 +60,17 @@ def division_truncated(left, right):
     return Decimal(-quotient if (numerator < 0) != (denominator < 0) else quotient)
 
 
+ASCII_LOWER = 'abcdefghijklmnopqrstuvwxyz'
+ASCII_UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+LOWER_C = str.maketrans(ASCII_UPPER, ASCII_LOWER)
+UPPER_C = str.maketrans(ASCII_LOWER, ASCII_UPPER)
+
+
+def included(row):
+    category = row['category'] or ''
+    return not category.translate(LOWER_C).startswith('skip') and category.translate(UPPER_C) != 'EXCLUDE'
+
+
 def evaluate(case, row):
     args = [row[argument['column']] if 'column' in argument else argument['literal']
             for argument in case['arguments']]
@@ -75,6 +86,8 @@ def evaluate(case, row):
         return ord(text[0]) if text else 0
     if name == 'chr':
         return chr(text)
+    if name in ['lower', 'upper']:
+        return text.translate(LOWER_C if name == 'lower' else UPPER_C)
     if name == 'reverse':
         return text[::-1]
     if name == 'left':
@@ -142,8 +155,8 @@ class SupportFixture(SqlFixture):
             ADD COLUMN event_time timestamptz, ADD COLUMN local_time timestamp, ADD COLUMN amount numeric,
             ADD COLUMN on_date date, ADD COLUMN span interval;
             UPDATE {self.name}.auction SET
-            category=CASE WHEN id IN(1,2) THEN 'é🙂á é' WHEN id=3 THEN ''
-                          WHEN id=4 THEN NULL ELSE 'skip me' END,
+            category=CASE WHEN id IN(1,2) THEN 'É🙂á Zıß' WHEN id=3 THEN ''
+                          WHEN id=4 THEN NULL ELSE 'sKip me' END,
             group_id=CASE WHEN id IN(1,2) THEN 8 WHEN id=3 THEN -2 ELSE NULL END,
             small_value=CASE WHEN id=4 THEN NULL ELSE -7 END,
             large_value=CASE WHEN id=4 THEN NULL ELSE -2147483649 END,
@@ -154,7 +167,10 @@ class SupportFixture(SqlFixture):
             span=CASE WHEN id=4 THEN NULL ELSE 'P1Y1M1DT2H3M4.123456S'::interval END''')
         self.query = ('SELECT ' + ','.join(case['expression'] + ' AS ' + label
                       for case, label in zip(self.cases, self.labels))
-                      + f" FROM {self.name}.auction a WHERE NOT starts_with(COALESCE(a.category,''),'skip')")
+                      + f""" FROM {self.name}.auction a
+                          WHERE NOT starts_with(lower(COALESCE(a.category,'') COLLATE pg_catalog."C"),'skip')
+                            AND (upper(a.category COLLATE pg_catalog."POSIX") <> 'EXCLUDE'
+                                 OR a.category IS NULL)""")
 
     def verify(self):
         self.verify_sql(expected(self, self.labels))
@@ -164,7 +180,7 @@ class SupportFixture(SqlFixture):
         assert columns('groups') == columns('pgderive_native_oracle'), 'Sink column metadata differs'
         rows = json.loads(self.sql(f'SELECT json_agg(a) FROM {self.name}.auction a'), parse_float=Decimal) or []
         memory = collections.Counter(tuple(evaluate(case, row) for case in self.cases)
-                    for row in rows if not (row['category'] or '').startswith('skip'))
+                    for row in rows if included(row))
         self.verify_memory(dict(memory), parse_float=Decimal)
 
 
@@ -201,10 +217,10 @@ def qualify(output, command):
             assert fixture.sql(f"SELECT to_regclass('{fixture.name}.groups') IS NULL").strip() == 't'
             fixture.sql(f'ALTER TABLE {fixture.name}.auction DROP COLUMN unsupported')
         changes = [
-            f"UPDATE {fixture.name}.auction SET category='🙂é🙂',group_id=-1,codepoint=233 WHERE id=2",
+            f"UPDATE {fixture.name}.auction SET category='Exclude',group_id=-1,codepoint=233 WHERE id=2",
             f"DELETE FROM {fixture.name}.auction WHERE id=1; UPDATE {fixture.name}.auction SET category='é🙂',group_id=0 WHERE id=3",
             f"INSERT INTO {fixture.name}.auction(id,category,group_id) VALUES(100,NULL,NULL),(101,'é🙂',0)",
-            f"UPDATE {fixture.name}.auction SET category='skip now' WHERE id=2; UPDATE {fixture.name}.auction SET category='é🙂',group_id=2 WHERE id=5",
+            f"UPDATE {fixture.name}.auction SET category='MiXéß' WHERE id=2; UPDATE {fixture.name}.auction SET category='é🙂',group_id=2 WHERE id=5",
             f"DELETE FROM {fixture.name}.auction WHERE id=100; UPDATE {fixture.name}.auction SET category='',group_id=7 WHERE id=101",
         ]
         def initial():

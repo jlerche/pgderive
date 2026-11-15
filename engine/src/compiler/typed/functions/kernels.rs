@@ -47,6 +47,17 @@ pub(super) fn evaluate(
         Builtin::BitLength => count(first.len().checked_mul(8).context("bit length overflow")?),
         Builtin::Ascii => Ok(first.chars().next().map_or(0, u32::from).to_string()),
         Builtin::Chr => character(first),
+        Builtin::Lower | Builtin::Upper => {
+            ensure!(
+                first.len() <= TEXT_OUTPUT_LIMIT,
+                "case conversion output exceeds 16 MiB engine budget"
+            );
+            Ok(if operation == Builtin::Lower {
+                first.to_ascii_lowercase()
+            } else {
+                first.to_ascii_uppercase()
+            })
+        }
         Builtin::Reverse => Ok(first.chars().rev().collect()),
         Builtin::Left | Builtin::Right => {
             edge(first, second()?.parse()?, operation == Builtin::Right)

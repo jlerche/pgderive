@@ -10,7 +10,11 @@ impl Typed {
             Value::Call(call) => {
                 let mut call = call.clone();
                 call.arguments = call.arguments.iter().map(Self::fold).collect::<Result<_>>()?;
-                if call.operation.is_strict() && call.arguments.iter().any(Self::constant_null) {
+                // Keep the input derivation on collated case-conversion results, even for NULL.
+                if call.operation.is_strict()
+                    && call.result_collation.is_none()
+                    && call.arguments.iter().any(Self::constant_null)
+                {
                     Value::Literal(None)
                 } else {
                     Value::Call(call)

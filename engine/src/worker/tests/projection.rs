@@ -250,7 +250,7 @@ fn text_equality_revision_binds_each_expression_boundary() -> Result<()> {
 #[test]
 fn postgres_only_output_functions_are_unavailable() {
     for sql in [
-        "SELECT lower(category) AS n FROM source.auction",
+        "SELECT initcap(category) AS n FROM source.auction",
         "SELECT round(id) AS n FROM source.auction",
         "SELECT to_char(id,'999') AS n FROM source.auction",
     ] {

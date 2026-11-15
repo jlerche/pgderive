@@ -1,6 +1,34 @@
 use super::expression;
 use anyhow::Result;
 #[test]
+fn ascii_case_conversion_preserves_result_collation_and_nulls() -> Result<()> {
+    use crate::transaction::Row;
+
+    for (sql, collation, expected) in [
+        (r#"lower('AZéİ🙂' COLLATE "C")"#, 950, Some("azéİ🙂")),
+        (r#"pg_catalog.upper('azÉıß'::varchar COLLATE "POSIX")"#, 951, Some("AZÉıß")),
+        (r#"upper('' COLLATE "C")"#, 950, Some("")),
+        (r#"lower(COALESCE(NULL::text COLLATE "C", 'A'))"#, 950, Some("a")),
+        (r#"upper(CASE WHEN false THEN 'a' COLLATE "POSIX" ELSE 'b' END)"#, 951, Some("B")),
+        (r#"lower(upper(NULL COLLATE "POSIX"))"#, 951, None),
+    ] {
+        let value = expression(sql)?;
+        assert_eq!(value.oid(), 25, "{sql}");
+        assert_eq!(value.collation(&|_| Ok(0))?, collation, "{sql}");
+        assert_eq!(value.evaluate(&Row::new())?.as_deref(), expected, "{sql}");
+    }
+    for sql in [
+        "lower('a')",
+        r#"lower('a') COLLATE "C""#,
+        "upper('a' COLLATE ucs_basic)",
+        r#"upper('a' COLLATE "C" || 'b' COLLATE "POSIX")"#,
+    ] {
+        assert!(expression(sql).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
 fn text_functions_preserve_unicode_empty_and_null_semantics() -> Result<()> {
     for (sql, expected) in [
         ("length('é🙂a\u{301}')", "4"),

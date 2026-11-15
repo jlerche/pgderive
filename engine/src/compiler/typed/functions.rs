@@ -1,7 +1,7 @@
 //! Explicit `pg_catalog` signatures for pure, UTF8, locally evaluated functions.
-use super::{ColumnRef, Name, Typed, Value};
+use super::{ColumnRef, Name, Typed, Value, collation::Derivation};
 use crate::compiler::capabilities as registry;
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use pg_query::protobuf as pg;
 use serde::Serialize;
 mod kernels;
@@ -11,6 +11,9 @@ pub(super) struct Call {
     pub(super) operation: crate::compiler::capabilities::Builtin,
     pub(super) input_oid: u32,
     pub(super) arguments: Vec<Typed>,
+    // Case conversion uses the SQL input derivation before expression rewrites.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) result_collation: Option<Derivation>,
 }
 pub(super) fn bind(
     function: &pg::FuncCall,
@@ -21,16 +24,7 @@ pub(super) fn bind(
     crate::compiler::parser::scalar::validate_call(function)?;
     let names = names(&function.funcname)?.0;
     if names == [crate::compiler::subquery::CHECK] {
-        let [value, multiple] = function.args.as_slice() else {
-            anyhow::bail!("missing scalar cardinality operands");
-        };
-        let value = super::bind(value, resolve, depth + 1)?;
-        let multiple = super::bind(multiple, resolve, depth + 1)?;
-        let (Value::Column(value), Value::Column(multiple)) = (value.value, multiple.value) else {
-            anyhow::bail!("scalar cardinality requires bound columns");
-        };
-        ensure!(multiple.oid == 16, "invalid scalar cardinality marker");
-        return Ok(Typed { oid: value.oid, value: Value::Scalar { value, multiple } });
+        return bind_cardinality_check(&function.args, resolve, depth);
     }
     let name = builtin_name(&names).unwrap_or("");
     if name == "mod" {
@@ -56,17 +50,53 @@ pub(super) fn bind(
         let arguments = arguments.into_iter().map(Typed::unknown_text).collect();
         return Ok(Typed {
             oid: 25,
-            value: Value::Call(Call { operation, input_oid: 25, arguments }),
+            value: Value::Call(Call {
+                operation,
+                input_oid: 25,
+                arguments,
+                result_collation: None,
+            }),
         });
     }
     ensure!(registry::contains(name), "function {} is not available in-engine", names.join("."));
     registry::validate_arity(name, function.args.len())?;
-    let arguments = bind_arguments(function, resolve, depth)?;
+    bind_signature(name, bind_arguments(function, resolve, depth)?)
+}
+
+fn bind_cardinality_check(
+    arguments: &[pg_query::Node],
+    resolve: &impl Fn(&Name) -> Result<ColumnRef>,
+    depth: usize,
+) -> Result<Typed> {
+    let [value, multiple] = arguments else {
+        anyhow::bail!("missing scalar cardinality operands");
+    };
+    let value = super::bind(value, resolve, depth + 1)?;
+    let multiple = super::bind(multiple, resolve, depth + 1)?;
+    let (Value::Column(value), Value::Column(multiple)) = (value.value, multiple.value) else {
+        anyhow::bail!("scalar cardinality requires bound columns");
+    };
+    ensure!(multiple.oid == 16, "invalid scalar cardinality marker");
+    Ok(Typed { oid: value.oid, value: Value::Scalar { value, multiple } })
+}
+
+fn bind_signature(name: &str, arguments: Vec<Typed>) -> Result<Typed> {
     let types = arguments.iter().map(|value| value.oid).collect::<Vec<_>>();
     let signature = registry::resolve(name, &types)?;
     if matches!(signature.operation, registry::Builtin::Extract | registry::Builtin::DateTrunc) {
         validate_calendar(&arguments, signature)?;
     }
+    let result_collation = if signature.operation.is_ascii_case_conversion() {
+        let input = arguments.first().context("missing case conversion input")?;
+        let collation = input.derive_collation(&|column| Ok(column.collation))?;
+        ensure!(
+            matches!(collation.oid()?, 950 | 951),
+            "function {name} requires C/POSIX collation"
+        );
+        Some(collation)
+    } else {
+        None
+    };
     let arguments =
         if matches!(signature.operation, registry::Builtin::Sign | registry::Builtin::Div) {
             arguments.into_iter().map(numeric_argument).collect::<Result<_>>()?
@@ -84,6 +114,7 @@ pub(super) fn bind(
             signature.inputs[0]
         },
         arguments,
+        result_collation,
     });
     Ok(Typed { oid: signature.result, value })
 }
@@ -109,6 +140,7 @@ pub(in crate::compiler) fn like_pattern(
                 operation: registry::Builtin::LikeEscape,
                 input_oid: 25,
                 arguments,
+                result_collation: None,
             }),
         });
     }
@@ -165,7 +197,6 @@ impl Call {
 }
 
 fn validate_calendar(arguments: &[Typed], signature: &registry::Signature) -> Result<()> {
-    use anyhow::Context;
     let field = arguments.first().context("missing calendar field")?;
     ensure!(field.is_constant(), "calendar field must be constant");
     if let Some(field) = field.evaluate(&crate::transaction::Row::new())? {

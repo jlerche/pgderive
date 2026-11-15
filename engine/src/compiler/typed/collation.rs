@@ -44,7 +44,7 @@ pub(super) fn explicit(clause: &pg::CollateClause, input: Typed) -> Result<Typed
     Ok(Typed { oid: input.oid, value: Value::Collate { input: Box::new(input), collation } })
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub(in crate::compiler) enum Derivation {
     Implicit(u32),
     Explicit(u32),
@@ -105,6 +105,9 @@ impl Typed {
         use Derivation::{Explicit, Implicit, Indeterminate};
         let collatable = matches!(self.oid, 25 | 1043 | 705);
         if let Value::Call(call) = &self.value {
+            if let Some(collation) = call.result_collation {
+                return Ok(collation);
+            }
             let derived = collations(call.arguments.iter(), resolve)?;
             return Ok(if collatable { derived } else { Implicit(0) });
         }
