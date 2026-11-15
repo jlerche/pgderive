@@ -1,4 +1,4 @@
-//! Case-sensitive LIKE under deterministic C/POSIX collations.
+//! LIKE and ILIKE under deterministic C/POSIX collations.
 use super::{Expr, Resolve, Scalar, operand};
 use crate::{
     compiler::{
@@ -17,13 +17,16 @@ const MAX_MATCH_DEPTH: usize = 128;
 
 pub(in crate::compiler) fn is_like(expression: &pg::AExpr) -> bool {
     expression.kind == i32::from(pg::AExprKind::AexprLike)
+        || expression.kind == i32::from(pg::AExprKind::AexprIlike)
 }
 
 pub(super) fn bind(expression: &pg::AExpr, resolve: &Resolve<'_>) -> Result<Expr> {
     let operator = names(&expression.name)?;
-    let negated = match operator.0.as_slice() {
-        [operator] if operator == "~~" => false,
-        [operator] if operator == "!~~" => true,
+    let (negated, case_insensitive) = match operator.0.as_slice() {
+        [operator] if operator == "~~" => (false, false),
+        [operator] if operator == "!~~" => (true, false),
+        [operator] if operator == "~~*" => (false, true),
+        [operator] if operator == "!~~*" => (true, true),
         _ => anyhow::bail!("unsupported LIKE operator"),
     };
     let input = operand(optional(expression.lexpr.as_deref())?, resolve)?.coerce(25)?;
@@ -32,14 +35,16 @@ pub(super) fn bind(expression: &pg::AExpr, resolve: &Resolve<'_>) -> Result<Expr
     let collation = |column: &crate::compiler::ColumnRef| Ok(column.collation);
     let collation =
         input.derive_collation(&collation)?.merge(pattern.derive_collation(&collation)?)?.oid()?;
-    ensure!(matches!(collation, 950 | 951), "LIKE requires deterministic C/POSIX collation");
-    Ok(Expr::Like { input, pattern, negated })
+    let name = if case_insensitive { "ILIKE" } else { "LIKE" };
+    ensure!(matches!(collation, 950 | 951), "{name} requires deterministic C/POSIX collation");
+    Ok(Expr::Like { input, pattern, negated, case_insensitive })
 }
 
 pub(super) fn evaluate(
     input: &Scalar,
     pattern: &Scalar,
     negated: bool,
+    case_insensitive: bool,
     rows: (&Row, &Row),
 ) -> Result<Option<bool>> {
     let (input, pattern) = (input.native_pair(rows)?, pattern.native_pair(rows)?);
@@ -48,7 +53,7 @@ pub(super) fn evaluate(
         (None, _) | (_, None) => return Ok(None),
         _ => return Err(crate::engine::execution::PlanFault("invalid LIKE operands").into()),
     };
-    let matched = matches(&input, &pattern).context(EvaluationFailed)?;
+    let matched = matches(&input, &pattern, case_insensitive).context(EvaluationFailed)?;
     Ok(Some(matched != negated))
 }
 
@@ -78,10 +83,10 @@ pub(in crate::compiler) fn escape(pattern: &str, escape: &str) -> Result<String>
     Ok(result)
 }
 
-fn matches(input: &str, pattern: &str) -> Result<bool> {
+fn matches(input: &str, pattern: &str, case_insensitive: bool) -> Result<bool> {
     ensure!(pattern.len() <= MAX_PATTERN_BYTES, "LIKE pattern exceeds byte budget");
     let mut steps = MAX_MATCH_STEPS;
-    Ok(scan(input, pattern, &mut steps, 0)? == Match::Yes)
+    Ok(scan(input, pattern, &mut steps, 0, case_insensitive)? == Match::Yes)
 }
 
 #[derive(PartialEq, Eq)]
@@ -97,22 +102,28 @@ fn spend(steps: &mut usize) -> Result<()> {
     Ok(())
 }
 
-fn scan(mut input: &str, mut pattern: &str, steps: &mut usize, depth: usize) -> Result<Match> {
+fn scan(
+    mut input: &str,
+    mut pattern: &str,
+    steps: &mut usize,
+    depth: usize,
+    case_insensitive: bool,
+) -> Result<Match> {
     ensure!(depth <= MAX_MATCH_DEPTH, "LIKE match exceeds wildcard depth budget");
     while let (Some(ch), Some(token)) = (input.chars().next(), pattern.chars().next()) {
         spend(steps)?;
         pattern = &pattern[token.len_utf8()..];
         match token {
-            '%' => return search(input, pattern, steps, depth),
+            '%' => return search(input, pattern, steps, depth, case_insensitive),
             '_' => {}
             '\\' => {
                 let literal = escaped_literal(pattern)?;
-                if ch != literal {
+                if !literal_matches(ch, literal, case_insensitive) {
                     return Ok(Match::No);
                 }
                 pattern = &pattern[literal.len_utf8()..];
             }
-            literal if literal != ch => return Ok(Match::No),
+            literal if !literal_matches(ch, literal, case_insensitive) => return Ok(Match::No),
             _ => {}
         }
         input = &input[ch.len_utf8()..];
@@ -129,7 +140,13 @@ fn scan(mut input: &str, mut pattern: &str, steps: &mut usize, depth: usize) -> 
     Ok(Match::Yes)
 }
 
-fn search(mut input: &str, mut pattern: &str, steps: &mut usize, depth: usize) -> Result<Match> {
+fn search(
+    mut input: &str,
+    mut pattern: &str,
+    steps: &mut usize,
+    depth: usize,
+    case_insensitive: bool,
+) -> Result<Match> {
     while let Some(token) = pattern.chars().next() {
         spend(steps)?;
         match token {
@@ -149,14 +166,18 @@ fn search(mut input: &str, mut pattern: &str, steps: &mut usize, depth: usize) -
     };
     for (offset, ch) in input.char_indices() {
         spend(steps)?;
-        if ch == first {
-            let matched = scan(&input[offset..], pattern, steps, depth + 1)?;
+        if literal_matches(ch, first, case_insensitive) {
+            let matched = scan(&input[offset..], pattern, steps, depth + 1, case_insensitive)?;
             if matched != Match::No {
                 return Ok(matched);
             }
         }
     }
     Ok(Match::Exhausted)
+}
+
+const fn literal_matches(input: char, pattern: char, case_insensitive: bool) -> bool {
+    if case_insensitive { input.eq_ignore_ascii_case(&pattern) } else { input == pattern }
 }
 
 fn escaped_literal(pattern: &str) -> Result<char> {
@@ -169,12 +190,12 @@ mod tests {
 
     #[test]
     fn limits_bound_backtracking_and_nested_wildcard_search() {
-        let work = scan("aaaaaaaaaaaa", "%a%a%a%ab", &mut 8, 0);
+        let work = scan("aaaaaaaaaaaa", "%a%a%a%ab", &mut 8, 0, true);
         assert!(work.is_err_and(|error| error.to_string().contains("work budget")));
 
         let depth = MAX_MATCH_DEPTH + 1;
         assert!(
-            matches(&"a".repeat(depth), &"%a".repeat(depth))
+            matches(&"a".repeat(depth), &"%a".repeat(depth), false)
                 .is_err_and(|error| error.to_string().contains("depth budget"))
         );
     }

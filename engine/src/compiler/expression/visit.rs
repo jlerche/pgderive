@@ -35,10 +35,11 @@ impl Expr {
             Self::Compare(op, left, right) => {
                 Self::Compare(op.clone(), left.replaced(replace)?, right.replaced(replace)?)
             }
-            Self::Like { input, pattern, negated } => Self::Like {
+            Self::Like { input, pattern, negated, case_insensitive } => Self::Like {
                 input: input.replaced(replace)?,
                 pattern: pattern.replaced(replace)?,
                 negated: *negated,
+                case_insensitive: *case_insensitive,
             },
             Self::Distinct { left, right, negated } => Self::Distinct {
                 left: left.replaced(replace)?,

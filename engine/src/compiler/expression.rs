@@ -20,14 +20,31 @@ pub(super) enum Expr {
     Value(Scalar),
     Null(Scalar, bool),
     Compare(Compare, Scalar, Scalar),
-    Like { input: Scalar, pattern: Scalar, negated: bool },
+    Like {
+        input: Scalar,
+        pattern: Scalar,
+        negated: bool,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        case_insensitive: bool,
+    },
     And(Vec<Self>),
     Or(Vec<Self>),
-    Array { and: bool, values: Vec<Self> },
+    Array {
+        and: bool,
+        values: Vec<Self>,
+    },
     Quals(Vec<Self>),
     Not(Box<Self>),
-    BooleanTest { input: Box<Self>, expected: Option<bool>, negated: bool },
-    Distinct { left: Scalar, right: Scalar, negated: bool },
+    BooleanTest {
+        input: Box<Self>,
+        expected: Option<bool>,
+        negated: bool,
+    },
+    Distinct {
+        left: Scalar,
+        right: Scalar,
+        negated: bool,
+    },
 }
 type Resolve<'a> = dyn Fn(&Name) -> Result<ColumnRef> + 'a;
 pub fn native_key(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
@@ -382,8 +399,8 @@ impl Expr {
                 };
                 Ok(Some(distinct != *negated))
             }
-            Self::Like { input, pattern, negated } => {
-                like::evaluate(input, pattern, *negated, rows)
+            Self::Like { input, pattern, negated, case_insensitive } => {
+                like::evaluate(input, pattern, *negated, *case_insensitive, rows)
             }
             Self::Not(value) => Ok(value.evaluate(rows)?.map(|value| !value)),
             Self::BooleanTest { input, expected, negated } => {

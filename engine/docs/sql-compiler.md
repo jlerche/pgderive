@@ -247,9 +247,11 @@ collation, propagate NULL, and enforce the 16 MiB text output limit.
 Existing registrations need a rebuild because the source catalog fingerprint
 now includes `initcap`.
 
-`LIKE` and `NOT LIKE` match text and varchar under the built-in deterministic
-`C` and `POSIX` collations. A column declaration or explicit `COLLATE` clause
-can supply that collation. Matching is case-sensitive over the whole string.
+`LIKE`, `NOT LIKE`, `ILIKE`, and `NOT ILIKE` match text and varchar under
+the built-in deterministic `C` and `POSIX` collations. A column declaration or
+explicit `COLLATE` clause can supply that collation. Each matches the whole
+string. `ILIKE` and `NOT ILIKE` fold ASCII letters when comparing literals,
+including escaped literals, and compare non-ASCII characters exactly.
 `%` matches zero or more characters and `_` matches one Unicode character.
 Backslash is the default escape. `ESCAPE` accepts one character or the empty
 string to disable escaping. NULL operands, including a NULL escape, yield NULL.

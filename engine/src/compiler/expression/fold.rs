@@ -15,12 +15,17 @@ impl Expr {
                     Self::Compare(op.clone(), left, right)
                 }
             }
-            Self::Like { input, pattern, negated } => {
+            Self::Like { input, pattern, negated, case_insensitive } => {
                 let (input, pattern) = (input.fold()?, pattern.fold()?);
                 if input.constant_null() || pattern.constant_null() {
                     Self::Value(Scalar::null_boolean())
                 } else {
-                    Self::Like { input, pattern, negated: *negated }
+                    Self::Like {
+                        input,
+                        pattern,
+                        negated: *negated,
+                        case_insensitive: *case_insensitive,
+                    }
                 }
             }
             Self::Distinct { left, right, negated } => {
