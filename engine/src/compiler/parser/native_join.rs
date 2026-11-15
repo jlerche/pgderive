@@ -43,7 +43,7 @@ pub(in crate::compiler) enum Tree {
 }
 pub(in crate::compiler) struct MembershipCutoff {
     pub bounds: super::ordering::Bounds,
-    pub order: Vec<(String, bool, bool)>,
+    pub order: Vec<(usize, bool, bool)>,
     pub distinct: MembershipDistinct,
 }
 

@@ -467,7 +467,7 @@ impl Predicate {
     pub(super) fn is_total_comparison_expression(&self) -> bool {
         fn total_comparisons(expr: &Expr) -> bool {
             match expr {
-                Expr::Compare(_, left, right) => {
+                Expr::Compare(_, left, right) | Expr::Distinct { left, right, .. } => {
                     left.total_scalar_input() && right.total_scalar_input()
                 }
                 Expr::Not(term) => total_comparisons(term),

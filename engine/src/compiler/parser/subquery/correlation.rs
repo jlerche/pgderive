@@ -6,20 +6,23 @@ use crate::compiler::parser::{
 };
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Correlation {
     pub pairs: Vec<(Node, Node)>,
     pub residuals: Vec<Residual>,
     residual_count: usize,
 }
+#[derive(Clone)]
 pub(super) enum Residual {
     Comparison(Box<ResidualComparison>),
     Logical { terms: Vec<Self>, kind: pg::BoolExprType },
 }
+#[derive(Clone)]
 pub(super) struct ResidualComparison {
     pub outer: Node,
     pub inner: Node,
     pub operator: String,
+    pub kind: pg::AExprKind,
     pub outer_first: bool,
 }
 pub(super) fn extract(query: &mut pg::SelectStmt, inequality: bool) -> Result<Correlation> {
@@ -90,7 +93,9 @@ pub(in crate::compiler::parser) fn only_cross_scope_equalities(
             }
             return Ok(!logical.args.is_empty());
         }
-        if comparison(value, tables).is_ok_and(|(operator, _)| operator == "=") {
+        if comparison(value, tables)
+            .is_ok_and(|(operator, operands)| operands.ordinary_equality(&operator))
+        {
             return Ok(true);
         }
         let NodeEnum::AExpr(expression) = node(value)? else { return Ok(false) };
@@ -153,7 +158,7 @@ fn conjunct(
         return Ok(());
     }
     let (operator, operands) = comparison(&value, tables)?;
-    if operator == "=" {
+    if operands.ordinary_equality(&operator) {
         ensure!(correlation.pairs.len() < 8, "subquery correlation key count exceeded");
         correlation.pairs.push((operands.outer, operands.inner));
     } else {
@@ -193,13 +198,27 @@ struct Operands {
     outer: Node,
     inner: Node,
     outer_first: bool,
+    kind: pg::AExprKind,
+}
+
+impl Operands {
+    fn ordinary_equality(&self, operator: &str) -> bool {
+        self.kind == pg::AExprKind::AexprOp && operator == "="
+    }
 }
 
 fn comparison(value: &Node, tables: &[Table]) -> Result<(String, Operands)> {
     let NodeEnum::AExpr(expression) = node(value)? else {
         anyhow::bail!("correlation requires top-level AND equalities");
     };
-    ensure!(expression.kind == i32::from(pg::AExprKind::AexprOp), "invalid correlation comparison");
+    let kind = pg::AExprKind::try_from(expression.kind)?;
+    ensure!(
+        matches!(
+            kind,
+            pg::AExprKind::AexprOp | pg::AExprKind::AexprDistinct | pg::AExprKind::AexprNotDistinct
+        ),
+        "invalid correlation comparison"
+    );
     let operator = names(&expression.name)?.0;
     let [operator] = operator.as_slice() else {
         anyhow::bail!("correlation requires an unqualified comparison");
@@ -219,13 +238,20 @@ fn comparison(value: &Node, tables: &[Table]) -> Result<(String, Operands)> {
     );
     let outer_first = sides.0 == 2;
     let (outer, inner) = if outer_first { (left, right) } else { (right, left) };
-    Ok((operator.clone(), Operands { outer: outer.clone(), inner: inner.clone(), outer_first }))
+    Ok((
+        operator.clone(),
+        Operands { outer: outer.clone(), inner: inner.clone(), outer_first, kind },
+    ))
 }
 
 fn residual_term(operator: &str, operands: Operands, count: &mut usize) -> Result<Residual> {
     ensure!(
-        matches!(operator, "=" | "<" | "<=" | ">" | ">=" | "<>"),
-        "correlation residual requires ordinary comparisons"
+        if operands.kind == pg::AExprKind::AexprOp {
+            matches!(operator, "=" | "<" | "<=" | ">" | ">=" | "<>")
+        } else {
+            operator == "="
+        },
+        "unsupported correlation residual comparison"
     );
     ensure!(*count < 8, "subquery correlation residual comparison count exceeded");
     *count += 1;
@@ -233,6 +259,7 @@ fn residual_term(operator: &str, operands: Operands, count: &mut usize) -> Resul
         outer: operands.outer,
         inner: operands.inner,
         operator: operator.into(),
+        kind: operands.kind,
         outer_first: operands.outer_first,
     })))
 }
@@ -277,6 +304,7 @@ pub(super) fn children(value: &Node) -> Vec<&Node> {
             value.args.iter().chain(value.agg_filter.iter().map(Box::as_ref)).collect()
         }
         Some(NodeEnum::CoalesceExpr(value)) => value.args.iter().collect(),
+        Some(NodeEnum::GroupingFunc(value)) => value.args.iter().collect(),
         Some(NodeEnum::MinMaxExpr(value)) => value.args.iter().collect(),
         Some(NodeEnum::TypeCast(value)) => value.arg.as_deref().into_iter().collect(),
         Some(NodeEnum::CollateClause(value)) => value.arg.as_deref().into_iter().collect(),

@@ -35,9 +35,17 @@ pub(super) fn null() -> Node {
     Node { node: Some(NodeEnum::AConst(pg::AConst { isnull: true, ..pg::AConst::default() })) }
 }
 pub(super) fn comparison(left: Node, right: Node, name: &str) -> Node {
+    comparison_with_kind(left, right, name, pg::AExprKind::AexprOp)
+}
+pub(super) fn comparison_with_kind(
+    left: Node,
+    right: Node,
+    name: &str,
+    kind: pg::AExprKind,
+) -> Node {
     Node {
         node: Some(NodeEnum::AExpr(Box::new(pg::AExpr {
-            kind: i32::from(pg::AExprKind::AexprOp),
+            kind: i32::from(kind),
             name: vec![string(name)],
             lexpr: Some(Box::new(left)),
             rexpr: Some(Box::new(right)),

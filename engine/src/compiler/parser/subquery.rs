@@ -2,6 +2,7 @@
 mod ast;
 pub(super) mod correlation;
 mod nested_exists;
+mod parameter_groups;
 mod scalar;
 mod scalar_input;
 use super::{
@@ -26,6 +27,7 @@ struct MembershipOptions {
     quantified: Option<Compare>,
     skip: Option<std::num::NonZeroUsize>,
     distinct: Vec<String>,
+    parameterized: bool,
 }
 
 pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Parsed>> {
@@ -384,13 +386,32 @@ impl Rewrite<'_> {
         quantified: Option<Compare>,
     ) -> Result<Node> {
         let correlation = correlation::extract(&mut query, true)?;
-        if !correlation.pairs.is_empty() && has_empty_grouping_set(&query)? {
+        if (!correlation.pairs.is_empty() || !correlation.residuals.is_empty())
+            && has_empty_grouping_set(&query)?
+        {
             return self.membership_with_empty_group(query, probe, quantified, correlation);
         }
+        self.membership_input(query, probe, quantified, correlation)
+    }
+
+    fn membership_input(
+        &mut self,
+        mut query: pg::SelectStmt,
+        probe: Node,
+        quantified: Option<Compare>,
+        correlation: correlation::Correlation,
+    ) -> Result<Node> {
+        let parameterized = !query.group_clause.is_empty() && !correlation.residuals.is_empty();
+        let correlation = if parameterized {
+            self.validation.push(super::query(&query)?);
+            parameter_groups::rewrite(self.select, &mut query, correlation)?
+        } else {
+            correlation
+        };
         self.membership_mark(
             query,
             probe,
-            MembershipOptions { quantified, ..MembershipOptions::default() },
+            MembershipOptions { quantified, parameterized, ..MembershipOptions::default() },
             correlation,
         )
     }
@@ -402,8 +423,7 @@ impl Rewrite<'_> {
         quantified: Option<Compare>,
         correlation: correlation::Correlation,
     ) -> Result<Node> {
-        validate_keyed_grouping(&query, &correlation)?;
-        let present = self.group_input_present(&query, &correlation)?;
+        let present = self.group_input_present(&query, correlation.clone())?;
         let mut empty = query.clone();
         empty.where_clause = Some(Box::new(ast::boolean(false)));
         let without_rows = self.membership_mark(
@@ -412,19 +432,14 @@ impl Rewrite<'_> {
             MembershipOptions { quantified: quantified.clone(), ..MembershipOptions::default() },
             correlation::Correlation::default(),
         )?;
-        let with_rows = self.membership_mark(
-            query,
-            probe,
-            MembershipOptions { quantified, ..MembershipOptions::default() },
-            correlation,
-        )?;
+        let with_rows = self.membership_input(query, probe, quantified, correlation)?;
         Ok(ast::case(present, with_rows, without_rows))
     }
 
     fn group_input_present(
         &mut self,
         query: &pg::SelectStmt,
-        correlation: &correlation::Correlation,
+        correlation: correlation::Correlation,
     ) -> Result<Node> {
         let value = ast::boolean(true);
         let witness = pg::SelectStmt {
@@ -435,22 +450,26 @@ impl Rewrite<'_> {
             limit_option: i32::from(pg::LimitOption::Default),
             ..pg::SelectStmt::default()
         };
-        let mut keys = correlation::Correlation::default();
-        keys.pairs.clone_from(&correlation.pairs);
-        self.membership_mark(witness, value, MembershipOptions::default(), keys)
+        self.membership_mark(witness, value, MembershipOptions::default(), correlation)
     }
 
     fn membership_mark(
         &mut self,
         mut query: pg::SelectStmt,
         probe: Node,
-        MembershipOptions { quantified, skip, distinct }: MembershipOptions,
+        MembershipOptions { quantified, skip, distinct, parameterized }: MembershipOptions,
         correlation: correlation::Correlation,
     ) -> Result<Node> {
         let alias = self.alias()?;
         let has_residual = !correlation.residuals.is_empty();
         let grouped = !query.group_clause.is_empty() && !correlation.pairs.is_empty();
-        let ordered = if grouped {
+        let ordered = if parameterized {
+            let ordered = membership_ordered(&query);
+            if !ordered {
+                query.distinct_clause.clear();
+            }
+            ordered
+        } else if grouped {
             validate_keyed_grouping(&query, &correlation)?;
             self.validation.push(super::query(&query)?);
             let ordered = membership_ordered(&query);
@@ -603,10 +622,16 @@ fn defer_membership_cutoff(query: &mut pg::SelectStmt) -> Result<MembershipCutof
     ensure!(sorts.len() <= 16, "ORDER BY exceeds 16 keys");
     for (index, sort) in sorts.iter().enumerate() {
         let (value, descending, nulls_first) = super::partition::sort_expression(sort)?;
-        let value = order_expression(value, &targets, query)?;
-        let name = format!("\0membership_order_{index}");
-        query.target_list.push(ast::target(value, &name));
-        order.push((name, descending, nulls_first));
+        let position =
+            if let Some(position) = super::ordering::target_index(value, &targets, false)? {
+                position
+            } else {
+                let position = query.target_list.len();
+                let name = format!("\0membership_order_{index}");
+                query.target_list.push(ast::target(value.clone(), &name));
+                position
+            };
+        order.push((position, descending, nulls_first));
     }
     let distinct = match std::mem::take(&mut query.distinct_clause).as_slice() {
         [] => MembershipDistinct::None,
@@ -673,7 +698,7 @@ fn residual_condition(
             } else {
                 (inner, residual.outer)
             };
-            ast::comparison(left, right, &residual.operator)
+            ast::comparison_with_kind(left, right, &residual.operator, residual.kind)
         }
         correlation::Residual::Logical { terms, kind } => {
             let args = terms

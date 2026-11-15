@@ -59,6 +59,14 @@ fn aggregate_operand(value: &Node, depth: usize) -> Result<bool> {
         NodeEnum::FuncCall(call) if super::correlation::aggregate(value) => {
             aggregate_call(call, depth)
         }
+        NodeEnum::GroupingFunc(grouping) => {
+            for argument in &grouping.args {
+                if !collated_plain(argument)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
         NodeEnum::BoolExpr(expression) => {
             for argument in &expression.args {
                 if !aggregate_operand(argument, depth + 1)? {

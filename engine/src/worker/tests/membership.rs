@@ -438,12 +438,66 @@ fn equality_correlated_grouped_comparisons_preserve_local_grouping() -> Result<(
     }
     for invalid in [
         "SELECT b.auction FROM source.bid b WHERE b.auction=a.id GROUP BY b.price",
-        "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id AND b.id>a.id GROUP BY b.price",
         "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY b.price LIMIT 1",
         "SELECT max(b.price) FROM source.bid b WHERE b.auction=a.id GROUP BY b.price ORDER BY 2",
     ] {
         let sql = format!("SELECT a.other < ANY ({invalid}) FROM source.auction a");
         assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn grouped_correlations_apply_residuals_to_input_rows() -> Result<()> {
+    let native = ordered_contract();
+    let without_key = "b.id>a.id";
+    let keyed = "b.auction=a.id AND (b.id>a.id OR b.price IS NOT DISTINCT FROM a.other)";
+    for condition in [without_key, keyed, "b.auction=a.id AND b.price>a.other::bigint"] {
+        for tail in [
+            "GROUP BY b.auction HAVING count(*)>1",
+            "GROUP BY b.auction ORDER BY 1 OFFSET 1 LIMIT 1",
+            "GROUP BY GROUPING SETS ((b.auction), ()) HAVING count(*)=0",
+        ] {
+            let sql = format!(
+                "SELECT a.other < ALL (SELECT max(b.price) FROM source.bid b
+                 WHERE {condition} {tail}) FROM source.auction a"
+            );
+            compile(&sql, &native).map_err(|error| error.context(sql))?.validate_execution()?;
+        }
+    }
+    for condition in ["b.auction=a.id", keyed] {
+        let mask = format!(
+            "SELECT 1 = ANY (SELECT GROUPING(b.auction) FROM source.bid b
+             WHERE {condition} GROUP BY GROUPING SETS ((b.id), (b.auction))
+             HAVING GROUPING(b.auction)=1) FROM source.auction a"
+        );
+        compile(&mask, &native).map_err(|error| error.context(mask))?.validate_execution()?;
+    }
+    let fallible = "SELECT a.other < ALL (SELECT max(b.price) FROM source.bid b
+        WHERE b.price/(b.id-b.id)>a.id GROUP BY b.auction) FROM source.auction a";
+    assert!(compile(fallible, &native).is_err());
+    Ok(())
+}
+
+#[test]
+fn correlation_accepts_null_safe_comparisons() -> Result<()> {
+    let native = ordered_contract();
+    for condition in [
+        "b.price IS NOT DISTINCT FROM a.other",
+        "b.auction=a.id AND b.price IS DISTINCT FROM a.other",
+        "b.auction=a.id AND NOT (b.price IS NOT DISTINCT FROM a.other OR b.id<a.id)",
+    ] {
+        for comparison in ["IN", "< ANY", ">= ALL"] {
+            let sql = format!(
+                "SELECT a.other {comparison} (SELECT b.price FROM source.bid b WHERE {condition})
+                FROM source.auction a"
+            );
+            compile(&sql, &native).map_err(|error| error.context(sql))?.validate_execution()?;
+        }
+        let sql = format!(
+            "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE {condition}) FROM source.auction a"
+        );
+        compile(&sql, &native).map_err(|error| error.context(sql))?.validate_execution()?;
     }
     Ok(())
 }

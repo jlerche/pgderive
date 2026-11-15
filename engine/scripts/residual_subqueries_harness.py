@@ -143,6 +143,32 @@ class ResidualFixture(SqlFixture):
             self.query = f"""SELECT a.id, a.probe >= ALL ({nullable}) AS empty_group_all,
                 a.probe IN ({counted}) AS bounded_empty_group_in FROM {a} a"""
             self.sql(f'UPDATE {a} SET probe=0 WHERE id IN (5,9)')
+        elif mode == 'grouped-residual':
+            matched = f"""FROM {b} b WHERE {keys}
+                AND (b.id>a.floor OR b.price IS NOT DISTINCT FROM a.ceiling)"""
+            grouped = f"SELECT max(b.price) {matched} GROUP BY b.cutoff HAVING count(*)>1"
+            bounded = grouped.replace('SELECT ', 'SELECT DISTINCT ', 1) + ' ORDER BY 1 NULLS LAST OFFSET 1 LIMIT 1'
+            empty = f"SELECT max(b.price) {matched} GROUP BY ROLLUP(b.cutoff) HAVING count(*)=0"
+            masks = f"""SELECT GROUPING(b.cutoff) {matched}
+                GROUP BY GROUPING SETS ((b.cutoff), (b.price)) HAVING GROUPING(b.cutoff)=1"""
+            self.labels = ['id', 'member', 'earlier', 'earlier_than_all', 'empty_group_all', 'has_mask']
+            self.query = f"""SELECT a.id, a.probe IN ({grouped}) AS member,
+                a.probe < ANY ({bounded}) AS earlier,
+                a.probe < ALL ({grouped}) AS earlier_than_all,
+                a.probe < ALL ({empty}) AS empty_group_all,
+                1 = ANY ({masks}) AS has_mask FROM {a} a"""
+            self.sql(f"""UPDATE {a} SET floor=0 WHERE id IN (1,4,6);
+                UPDATE {a} SET probe=6 WHERE id=1;
+                INSERT INTO {b}(id,auction,price,cutoff) VALUES
+                    (120,1,6,20),(121,1,6,20),(122,1,6,21),(123,1,6,21),
+                    (124,1,10,22),(125,1,10,22)""")
+        elif mode == 'null-safe-residual':
+            same = f"SELECT b.price FROM {b} b WHERE {keys} AND b.price IS NOT DISTINCT FROM a.ceiling"
+            different = f"SELECT b.price FROM {b} b WHERE {keys} AND b.price IS DISTINCT FROM a.ceiling"
+            self.labels = ['id', 'same_exists', 'same_in', 'different_any', 'different_all']
+            self.query = f"""SELECT a.id, EXISTS ({same}) AS same_exists,
+                a.probe IN ({same}) AS same_in, a.probe < ANY ({different}) AS different_any,
+                a.probe < ALL ({different}) AS different_all FROM {a} a"""
         elif mode == 'nested-exists':
             scope = keys if keyed else keys + ' AND b.id>a.id'
             exists = f"""EXISTS (SELECT 1 FROM {b} b WHERE {scope}
@@ -307,6 +333,30 @@ class ResidualFixture(SqlFixture):
                 counts = sorted([*groups.values(), count, count])
                 memory[(row['id'], compare(row['probe'], [] if count else [None], operator.ge, True),
                         membership(row['probe'], counts[1:2]))] += 1
+            elif self.mode == 'grouped-residual':
+                groups = {}
+                for item in inner:
+                    if (item['id'] != 99
+                            and (not self.keyed or key is not None and key == item['auction'])
+                            and (floor is not None and item['id'] > floor
+                                 or item['price'] == row['ceiling'])):
+                        groups.setdefault(item['cutoff'], []).append(item['price'])
+                maxima = [max((p for p in prices if p is not None), default=None)
+                          for prices in groups.values() if len(prices) > 1]
+                bounded = sorted(set(maxima), key=lambda value: (value is None, value or 0))[1:2]
+                memory[(row['id'], membership(row['probe'], maxima),
+                        compare(row['probe'], bounded, operator.lt, False),
+                        compare(row['probe'], maxima, operator.lt, True),
+                        compare(row['probe'], [] if groups else [None], operator.lt, True),
+                        bool(groups))] += 1
+            elif self.mode == 'null-safe-residual':
+                available = [item['price'] for item in inner if item['id'] != 99
+                             and (not self.keyed or key is not None and key == item['auction'])]
+                same = [price for price in available if price == row['ceiling']]
+                different = [price for price in available if price != row['ceiling']]
+                memory[(row['id'], bool(same), membership(row['probe'], same),
+                        compare(row['probe'], different, operator.lt, False),
+                        compare(row['probe'], different, operator.lt, True))] += 1
             elif self.mode == 'nested-exists':
                 probe = row['probe']
                 present = any(
@@ -410,7 +460,7 @@ def qualify(output, command, mode, keyed):
 
 if __name__ == '__main__':
     modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined', 'exists-zero', 'exists-group', 'exists-offset',
-             'exists-ties', 'residual-ordered', 'nested-exists', *GROUP_OFFSET_MODES)
+             'exists-ties', 'residual-ordered', 'nested-exists', 'null-safe-residual', 'grouped-residual', *GROUP_OFFSET_MODES)
     cases = [(mode if keyed else f'{mode}-inequality-only', mode, keyed)
              for keyed in (True, False) for mode in modes]
     run_cases([*cases, ('ordered', 'ordered', True),

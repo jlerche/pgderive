@@ -123,8 +123,13 @@ impl Builder<'_> {
         let order = cutoff
             .order
             .iter()
-            .map(|(name, descending, nulls_first)| {
-                let column = resolve(&Name(vec![name.clone()]), &right.columns)?.value.clone();
+            .map(|(position, descending, nulls_first)| {
+                let column = right
+                    .columns
+                    .get(*position)
+                    .context("missing membership ORDER BY column")?
+                    .value
+                    .clone();
                 ensure!(
                     crate::compiler::partition::orderable(column.oid),
                     "unsupported ORDER BY native type"

@@ -84,9 +84,11 @@ correlation or a cross-domain date/timestamp comparison scans the RHS per outer 
 ## Residual correlation
 
 A correlated `IN` or `NOT IN` subquery can add up to eight residual comparisons
-with or without an indexable column equality. The six ordinary comparison operators may be combined with AND, OR,
-and NOT. A top-level equality can supply an index key. Equalities inside OR or
-NOT stay in the residual predicate. Each residual compares operands from opposite scopes using the existing
+with or without an indexable column equality. The ordinary comparisons
+and `IS [NOT] DISTINCT FROM` can be combined with AND, OR, and NOT.
+A top-level ordinary equality can supply an index key. Equalities inside
+OR or NOT and `IS [NOT] DISTINCT FROM` stay in the residual predicate.
+Each residual compares operands from opposite scopes using the existing
 native comparison rules. Operands may use total conversions, such as
 widening an integer or converting it to numeric. The same correlation is supported for
 `EXISTS` and `NOT EXISTS` in projections and
@@ -177,8 +179,20 @@ An empty grouping set
 produces its empty-input row when no source rows match the outer key,
 including a NULL outer key. HAVING and row cutoffs apply to that branch.
 A comparison with an empty grouping set uses three of the eight
-subquery lift slots. Residual correlation in grouped inputs remains
-unsupported.
+subquery lift slots.
+
+Grouped comparison inputs also support residual predicates with or
+without an equality key when the outer query reads one native table.
+The engine deduplicates tuples of outer parameter values, applies each
+residual predicate before grouping the matching inner rows, and uses
+NULL-safe comparisons to match the resulting groups back to outer
+occurrences. Residual predicates must compare a native inner column
+with a total outer operand. HAVING, GROUPING(), plain DISTINCT, and
+supported row cutoffs apply to the grouped rows for each parameter tuple.
+
+The parameter input is maintained for the whole outer source table,
+including rows filtered out by the outer query. The standard join and
+subquery work limits apply to the parameter join and matchback.
 
 The operators `=`, `<>` (also spelled `!=`), `<`, `<=`, `>`, and `>=`
 support `ANY` (also spelled `SOME`) and `ALL` over a one-column subquery. Both operands
