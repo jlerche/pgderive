@@ -137,8 +137,23 @@ its original scope and joins the witnesses before evaluating presence.
 Direct witness-to-witness column equalities supply native join keys.
 It admits up to eight witness sources with row-preserving bounds.
 Repeated qualifiers resolve to the closest enclosing source, and the
-compiler gives each witness occurrence its own internal alias. Nested EXISTS inside OR or NOT, and other
-multilevel correlation shapes, remain unsupported.
+compiler gives each witness occurrence its own internal alias.
+
+EXISTS, IN, ANY, and ALL can also evaluate an ordinary native-table RHS
+containing WHERE predicates with nested EXISTS, IN, ANY, or ALL under AND,
+OR, or NOT. A nested IN, ANY, or ALL requires a plain scalar column or
+literal probe and an independently safe RHS. Nested implicit IN requires a
+column or literal result from an ordinary SELECT or VALUES input. Qualified references that skip a scope are
+supported in nested WHERE predicates.
+For a qualified reference that skips a scope, the compiler joins the
+intermediate input to distinct ancestor parameter tuples and uses
+NULL-safe equality to match results back to the original rows. It retains
+ordinary column equality join keys where available. This parameter rewrite
+allows up to eight distinct column references and applies the existing join
+and subquery work limits. It requires one native table in the outer and
+intermediate scopes. Correlation through nested projections, grouping
+in a parameterized scope, and arbitrary lateral dependencies remain
+unsupported.
 The membership probe must be safe to evaluate independently of the RHS.
 
 The mark scans the matching equality bucket, or the shared bucket for a

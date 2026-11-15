@@ -509,6 +509,8 @@ fn nested_positive_exists_preserves_scope_and_presence() -> Result<()> {
         AND EXISTS (SELECT 1 FROM source.bid c WHERE c.auction=b.id AND c.price>a.other))
         FROM source.auction a";
     compile(exists, &native).map_err(|error| error.context(exists))?;
+    let grouped = exists.replace("c.price>a.other))", "c.price>a.other) GROUP BY b.auction)");
+    compile(&grouped, &native).map_err(|error| error.context(grouped))?;
     let siblings = exists.replace(
         "c.price>a.other))",
         "c.price>a.other) AND EXISTS (SELECT 1 FROM source.bid d WHERE d.auction=b.id))",
@@ -521,15 +523,19 @@ fn nested_positive_exists_preserves_scope_and_presence() -> Result<()> {
         AND EXISTS (SELECT 1 FROM source.bid b WHERE b.price>a.other AND b.auction=a.id))
         FROM source.auction a";
     compile(shadowed, &native).map_err(|error| error.context(shadowed))?;
+    for supported in [
+        exists.replace("b.auction=a.id", "auction=a.id"),
+        exists.replace("AND EXISTS", "OR EXISTS"),
+        exists.replace("AND EXISTS", "AND NOT EXISTS"),
+        exists.replace("c.price>a.other", "c.price>a.other OFFSET 1"),
+    ] {
+        compile(&supported, &native).map_err(|error| error.context(supported))?;
+    }
     for invalid in [
         shadowed
             .replace("source.bid b WHERE b.price>a.other", "source.bid a WHERE a.other>b.price"),
         siblings.replace("d.auction=b.id", "d.auction=c.id"),
         exists.replace("b.auction=a.id", "b.auction=c.id"),
-        exists.replace("b.auction=a.id", "auction=a.id"),
-        exists.replace("AND EXISTS", "OR EXISTS"),
-        exists.replace("AND EXISTS", "AND NOT EXISTS"),
-        exists.replace("c.price>a.other", "c.price>a.other OFFSET 1"),
         exists.replace("source.bid c", "source.bid a"),
     ] {
         assert!(compile(&invalid, &native).is_err(), "{invalid}");
@@ -638,4 +644,100 @@ fn ordered_probe_oracle(
         let output = row(&[("0:id", outer["id"].as_deref()), (field, member)]);
         ((relational::Key::new(), output), *weight)
     }))
+}
+
+#[test]
+fn nested_negative_witness_binds_parent_and_ancestor_scopes() -> Result<()> {
+    let contract = contract();
+    for sql in [
+        "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id
+         AND NOT EXISTS (SELECT 1 FROM source.bid c WHERE c.auction=b.auction
+         AND c.price>b.price)) FROM source.auction a",
+        "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id
+         AND NOT EXISTS (SELECT 1 FROM source.bid c WHERE c.auction=b.auction
+         AND c.price>a.id)) FROM source.auction a",
+        "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id
+         AND (b.price IS NULL OR NOT EXISTS (SELECT 1 FROM source.bid a
+         WHERE a.auction=b.auction AND a.price>b.price))) FROM source.auction a",
+        "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE b.id>a.id OR NOT EXISTS
+         (SELECT 1 FROM source.bid c WHERE c.auction=b.auction AND c.price>b.price))
+         FROM source.auction a",
+        "SELECT a.id < ANY (SELECT b.price FROM source.bid b WHERE b.auction=a.id
+         AND NOT EXISTS (SELECT 1 FROM source.bid c WHERE c.auction=b.auction
+         AND c.price>b.price)) FROM source.auction a",
+    ] {
+        compile(sql, &contract).with_context(|| sql.to_owned())?;
+    }
+    Ok(())
+}
+
+#[test]
+fn nested_quantified_witness_binds_parent_and_ancestor_scopes() -> Result<()> {
+    let contract = contract();
+    for sql in [
+        "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id
+         AND b.price IN (SELECT c.price FROM source.bid c WHERE c.id=b.id AND c.price>a.id))
+         FROM source.auction a",
+        "SELECT a.id < ANY (SELECT b.price FROM source.bid b WHERE b.auction=a.id
+         AND b.price < ALL (SELECT c.price FROM source.bid c WHERE c.id=b.id AND c.price>a.id))
+         FROM source.auction a",
+        "SELECT a.id IN (SELECT b.price FROM source.bid b WHERE b.auction=a.id
+         AND b.price >= ANY (SELECT c.price FROM source.bid c WHERE c.id=b.id AND c.price>a.id))
+         FROM source.auction a",
+    ] {
+        compile(sql, &contract).with_context(|| sql.to_owned())?;
+    }
+    Ok(())
+}
+
+#[test]
+fn nested_in_rejects_a_value_cast_that_can_fail_on_unmatched_rows() {
+    assert!(
+        compile(
+            "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id
+         AND b.price IN (SELECT c.price::smallint FROM source.bid c WHERE c.auction=b.id))
+         FROM source.auction a",
+            &contract(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn enclosing_keyed_in_checks_nested_probe_inputs() {
+    assert!(
+        compile(
+            "SELECT a.id IN (SELECT b.price FROM source.bid b WHERE b.auction=a.id
+             AND b.price IN (SELECT c.price::smallint FROM source.bid c WHERE c.auction=b.id))
+             FROM source.auction a",
+            &contract(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn nested_in_rejects_an_unverified_set_input_conversion() {
+    assert!(
+        compile(
+            "SELECT EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id
+         AND b.price IN (SELECT c.price FROM source.bid c UNION ALL SELECT 5))
+         FROM source.auction a",
+            &contract(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn nested_membership_rejects_scalar_children_and_grouped_inputs() {
+    let native = ordered_contract();
+    for sql in [
+        "SELECT a.id IN (SELECT b.auction FROM source.bid b WHERE b.id > (SELECT 1))
+         FROM source.auction a",
+        "SELECT a.id IN (SELECT SUM(100 / b.id) FROM source.bid b WHERE b.auction=a.id
+         AND EXISTS (SELECT 1 FROM source.bid c WHERE c.auction=b.id)) FROM source.auction a",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
 }

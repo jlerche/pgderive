@@ -179,6 +179,10 @@ fn total_source(value: &Node, depth: usize) -> Result<bool> {
     ensure!(depth < 16, "scalar RHS join depth exceeded");
     match node(value)? {
         NodeEnum::RangeVar(_) => Ok(true),
+        NodeEnum::RangeSubselect(select) if !select.lateral => Ok(select
+            .alias
+            .as_ref()
+            .is_some_and(|alias| alias.aliasname == super::parameter_groups::ALIAS)),
         NodeEnum::JoinExpr(join) => {
             let left = optional(join.larg.as_deref())?;
             let right = optional(join.rarg.as_deref())?;
@@ -253,6 +257,7 @@ fn predicate_with(
             }
             Ok(true)
         }
+        NodeEnum::SubLink(link) => total_link(link),
         NodeEnum::NullTest(test) => operand(optional(test.arg.as_deref())?, depth + 1),
         NodeEnum::BooleanTest(test) => operand(optional(test.arg.as_deref())?, depth + 1),
         NodeEnum::AExpr(expr)
@@ -263,5 +268,32 @@ fn predicate_with(
                 && operand(optional(expr.rexpr.as_deref())?, depth + 1)?)
         }
         _ => plain(value),
+    }
+}
+
+fn total_link(link: &pg::SubLink) -> Result<bool> {
+    match pg::SubLinkType::try_from(link.sub_link_type)? {
+        // The nested lift checks the witness query before it runs.
+        pg::SubLinkType::ExistsSublink => Ok(true),
+        pg::SubLinkType::AnySublink | pg::SubLinkType::AllSublink => {
+            let probe = optional(link.testexpr.as_deref())?;
+            if !collated_plain(probe)? {
+                return Ok(false);
+            }
+            let NodeEnum::SelectStmt(query) = node(optional(link.subselect.as_deref())?)? else {
+                return Ok(false);
+            };
+            // Implicit IN does not necessarily request eager RHS cast validation.
+            let input =
+                if link.oper_name.is_empty() { Input::Membership } else { Input::Quantified };
+            ensure!(
+                !matches!(input, Input::Membership)
+                    || query.op == i32::from(pg::SetOperation::SetopNone),
+                "nested IN requires an ordinary SELECT or VALUES input"
+            );
+            validate(query, input)?;
+            Ok(true)
+        }
+        _ => Ok(false),
     }
 }

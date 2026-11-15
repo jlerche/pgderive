@@ -7,7 +7,7 @@ use super::{
 use anyhow::{Result, ensure};
 use pg_query::{Node, NodeEnum, protobuf as pg};
 
-const ALIAS: &str = "\0group_parameters";
+pub(super) const ALIAS: &str = "\0group_parameters";
 
 pub(super) fn rewrite(
     outer: &pg::SelectStmt,
@@ -56,13 +56,13 @@ pub(super) fn rewrite(
 }
 
 #[derive(Default)]
-struct Domain {
+pub(super) struct Domain {
     targets: Vec<Node>,
     names: Vec<String>,
 }
 
 impl Domain {
-    fn add(&mut self, expression: Node) -> Node {
+    pub(super) fn add(&mut self, expression: Node) -> Node {
         let name = format!("\0parameter_{}", self.targets.len());
         self.targets.push(ast::target(expression, &name));
         let column = ast::column(ALIAS, &name);
@@ -106,7 +106,7 @@ impl Domain {
         }
     }
 
-    fn relation(self, source: Node) -> Node {
+    pub(super) fn relation(self, source: Node) -> Node {
         let select = pg::SelectStmt {
             distinct_clause: vec![Node { node: None }],
             target_list: self.targets,

@@ -68,6 +68,18 @@ fn collect_tables(value: &Node, tables: &mut Vec<Table>, depth: usize) -> Result
             tables.push(table);
             Ok(true)
         }
+        NodeEnum::RangeSubselect(select)
+            if select
+                .alias
+                .as_ref()
+                .is_some_and(|alias| alias.aliasname == super::parameter_groups::ALIAS) =>
+        {
+            tables.push(Table {
+                name: crate::compiler::parser::Name(Vec::new()),
+                alias: Some(super::parameter_groups::ALIAS.into()),
+            });
+            Ok(true)
+        }
         NodeEnum::JoinExpr(join) if join.alias.is_none() && join.join_using_alias.is_none() => {
             let left = super::super::optional(join.larg.as_deref())?;
             let right = super::super::optional(join.rarg.as_deref())?;

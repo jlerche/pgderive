@@ -169,6 +169,30 @@ class ResidualFixture(SqlFixture):
             self.query = f"""SELECT a.id, EXISTS ({same}) AS same_exists,
                 a.probe IN ({same}) AS same_in, a.probe < ANY ({different}) AS different_any,
                 a.probe < ALL ({different}) AS different_all FROM {a} a"""
+        elif mode == 'nested-quantified':
+            scope = keys if keyed else keys + ' AND b.id > a.id'
+            child = f"""SELECT c.price FROM {b} c WHERE c.id<>99
+                AND c.auction=b.id AND c.id>a.id"""
+            candidates = f'SELECT b.price FROM {b} b WHERE {scope}'
+            self.labels = ['id', 'both_in', 'any_all', 'all_any']
+            self.query = f"""SELECT a.id,
+                a.probe IN ({candidates} AND b.price IN ({child})) AS both_in,
+                a.probe < ANY ({candidates} AND b.price < ALL ({child})) AS any_all,
+                a.probe < ALL ({candidates} AND b.price >= ANY ({child})) AS all_any
+                FROM {a} a"""
+        elif mode == 'nested-domain':
+            scope = keys if keyed else keys + ' AND b.id > a.id'
+            remaining = f"""SELECT b.price FROM {b} b WHERE {scope}
+                AND (b.cutoff IS NULL OR NOT EXISTS (SELECT 1 FROM {b} c WHERE c.id<>99
+                    AND c.auction=b.id AND c.price>=a.probe))"""
+            mixed = f"""SELECT 1 FROM {b} b WHERE {keys}
+                AND (b.id > a.id OR NOT EXISTS (SELECT 1 FROM {b} c WHERE c.id<>99
+                    AND c.auction=b.id AND c.price>=b.price))"""
+            self.labels = ['id', 'present', 'member', 'earlier', 'before_all', 'mixed_present']
+            self.query = f"""SELECT a.id, EXISTS ({remaining}) AS present,
+                a.probe IN ({remaining}) AS member, a.probe < ANY ({remaining}) AS earlier,
+                a.probe < ALL ({remaining}) AS before_all,
+                EXISTS ({mixed}) AS mixed_present FROM {a} a"""
         elif mode == 'nested-exists':
             scope = keys if keyed else keys + ' AND b.id>a.id'
             exists = f"""EXISTS (SELECT 1 FROM {b} b WHERE {scope}
@@ -357,6 +381,46 @@ class ResidualFixture(SqlFixture):
                 memory[(row['id'], bool(same), membership(row['probe'], same),
                         compare(row['probe'], different, operator.lt, False),
                         compare(row['probe'], different, operator.lt, True))] += 1
+            elif self.mode == 'nested-quantified':
+                paired = [
+                    (item['price'], [
+                        child['price'] for child in inner
+                        if child['id'] != 99 and child['auction'] == item['id']
+                        and child['id'] > row['id']
+                    ]) for item in inner if item['id'] != 99
+                    and (key is not None and key == item['auction'] if self.keyed
+                         else item['id'] > row['id'])
+                ]
+                nested_in = [price for price, child in paired if membership(price, child) is True]
+                nested_all = [price for price, child in paired
+                              if compare(price, child, operator.lt, True) is True]
+                nested_any = [price for price, child in paired
+                              if compare(price, child, operator.ge, False) is True]
+                memory[(row['id'], membership(row['probe'], nested_in),
+                        compare(row['probe'], nested_all, operator.lt, False),
+                        compare(row['probe'], nested_any, operator.lt, True))] += 1
+            elif self.mode == 'nested-domain':
+                probe = row['probe']
+                values = [
+                    item['price'] for item in inner if item['id'] != 99
+                    and (key is not None and key == item['auction'] if self.keyed
+                         else item['id'] > row['id'])
+                    and (item['cutoff'] is None or not any(child['id'] != 99 and child['auction'] == item['id']
+                                and probe is not None and child['price'] is not None
+                                and child['price'] >= probe for child in inner))
+                ]
+                mixed = any(
+                    item['id'] != 99
+                    and (not self.keyed or key is not None and key == item['auction'])
+                    and (item['id'] > row['id'] or not any(
+                        child['id'] != 99 and child['auction'] == item['id']
+                        and item['price'] is not None and child['price'] is not None
+                        and child['price'] >= item['price'] for child in inner))
+                    for item in inner
+                )
+                memory[(row['id'], bool(values), membership(probe, values),
+                        compare(probe, values, operator.lt, False),
+                        compare(probe, values, operator.lt, True), mixed)] += 1
             elif self.mode == 'nested-exists':
                 probe = row['probe']
                 present = any(
@@ -434,7 +498,7 @@ def qualify(output, command, mode, keyed):
             VALUES (20,1,NULL,1), (21,20,7,1), (22,20,7,1), (23,1,7,1)""",
         f'DELETE FROM {b} WHERE id=21',
         f'DELETE FROM {b} WHERE id=22',
-    ] if mode == 'nested-exists' else []
+    ] if mode in ('nested-exists', 'nested-domain', 'nested-quantified') else []
     with fixture.managed():
         fixture.run_history(command, History(
             changes=[
@@ -460,7 +524,7 @@ def qualify(output, command, mode, keyed):
 
 if __name__ == '__main__':
     modes = ('exists', 'not-exists', 'in', 'in-filter', 'quantified', 'all-filter', 'exists-projection', 'row', 'joined', 'exists-zero', 'exists-group', 'exists-offset',
-             'exists-ties', 'residual-ordered', 'nested-exists', 'null-safe-residual', 'grouped-residual', *GROUP_OFFSET_MODES)
+             'exists-ties', 'residual-ordered', 'nested-exists', 'nested-domain', 'nested-quantified', 'null-safe-residual', 'grouped-residual', *GROUP_OFFSET_MODES)
     cases = [(mode if keyed else f'{mode}-inequality-only', mode, keyed)
              for keyed in (True, False) for mode in modes]
     run_cases([*cases, ('ordered', 'ordered', True),

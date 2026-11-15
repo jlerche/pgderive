@@ -1,6 +1,7 @@
 //! Lift bounded scalar/IN subqueries into the ordinary relational source tree.
 mod ast;
 pub(super) mod correlation;
+mod nested_domain;
 mod nested_exists;
 mod parameter_groups;
 mod scalar;
@@ -273,15 +274,24 @@ impl Rewrite<'_> {
         let NodeEnum::SelectStmt(query) = node(optional(link.subselect.as_deref())?)? else {
             anyhow::bail!("subquery requires SELECT");
         };
-        if nested_query(query) {
-            ensure!(
-                link.sub_link_type == i32::from(pg::SubLinkType::ExistsSublink),
-                "nested scalar/IN subqueries inside a lifted subquery are unsupported"
-            );
+        let nested = nested_query(query);
+        if nested
+            && link.sub_link_type == i32::from(pg::SubLinkType::ExistsSublink)
+            && let Ok(flattened) = nested_exists::flatten(self.select, query)
+        {
             ensure!(link.testexpr.is_none() && link.oper_name.is_empty(), "invalid EXISTS sublink");
-            let flattened = nested_exists::flatten(self.select, query)?;
             return self.existence(&flattened);
         }
+        if nested {
+            validate_nested_rhs(link, query)?;
+        }
+        let parameterized;
+        let query = if nested {
+            parameterized = nested_domain::rewrite(self.select, query)?;
+            &parameterized
+        } else {
+            query
+        };
         ensure!(
             link.sub_link_type == i32::from(pg::SubLinkType::ExistsSublink)
                 || query.op != i32::from(pg::SetOperation::SetopNone)
@@ -306,7 +316,7 @@ impl Rewrite<'_> {
                     link.testexpr.is_none() && link.oper_name.is_empty(),
                     "invalid scalar sublink"
                 );
-                Ok(self.scalar((**query).clone())?.value)
+                Ok(self.scalar(query.clone())?.value)
             }
             kind @ (pg::SubLinkType::AnySublink | pg::SubLinkType::AllSublink) => {
                 self.quantified_link(link, query, kind == pg::SubLinkType::AllSublink)
@@ -583,7 +593,7 @@ fn prepare_membership_rhs(
     let ordered = membership_ordered(query);
     let joined =
         query.from_clause.iter().any(|source| matches!(source.node, Some(NodeEnum::JoinExpr(_))));
-    if quantified || residual || joined || ordered && keyed {
+    if quantified || residual || joined || ordered && keyed || nested_query(query) {
         let input = if quantified {
             scalar_input::Input::Quantified
         } else {
@@ -722,7 +732,39 @@ fn dominating(value: &Node, operation: i32) -> bool {
     matches!(&value.node, Some(NodeEnum::AConst(value)) if matches!(&value.val, Some(pg::a_const::Val::Boolval(value)) if (operation == i32::from(pg::BoolExprType::AndExpr) && !value.boolval) || (operation == i32::from(pg::BoolExprType::OrExpr) && value.boolval)))
 }
 
+fn validate_nested_rhs(link: &pg::SubLink, query: &pg::SelectStmt) -> Result<()> {
+    ensure!(
+        link.sub_link_type != i32::from(pg::SubLinkType::ExprSublink)
+            && !nested_outside_where(query)
+            && query.where_clause.as_deref().is_some_and(witness_predicate),
+        "nested subqueries require supported WHERE witnesses in an existence or membership RHS"
+    );
+    ensure!(
+        query.group_clause.is_empty()
+            && query.having_clause.is_none()
+            && !scalar::global_aggregate(query)?,
+        "nested witness RHS requires a nonaggregate SELECT"
+    );
+    Ok(())
+}
+
+fn witness_predicate(value: &Node) -> bool {
+    if let Some(NodeEnum::SubLink(link)) = &value.node {
+        return matches!(
+            pg::SubLinkType::try_from(link.sub_link_type),
+            Ok(pg::SubLinkType::ExistsSublink
+                | pg::SubLinkType::AnySublink
+                | pg::SubLinkType::AllSublink)
+        );
+    }
+    correlation::children(value).into_iter().all(witness_predicate)
+}
+
 fn nested_query(query: &pg::SelectStmt) -> bool {
+    query.where_clause.as_deref().is_some_and(nested_node) || nested_outside_where(query)
+}
+
+fn nested_outside_where(query: &pg::SelectStmt) -> bool {
     query
         .target_list
         .iter()
@@ -730,7 +772,7 @@ fn nested_query(query: &pg::SelectStmt) -> bool {
         .chain(&query.group_clause)
         .chain(&query.sort_clause)
         .chain(
-            [&query.where_clause, &query.having_clause, &query.limit_count, &query.limit_offset]
+            [&query.having_clause, &query.limit_count, &query.limit_offset]
                 .into_iter()
                 .flatten()
                 .map(Box::as_ref),
