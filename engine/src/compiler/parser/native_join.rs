@@ -44,6 +44,13 @@ pub(in crate::compiler) enum Tree {
 pub(in crate::compiler) struct MembershipCutoff {
     pub bounds: super::ordering::Bounds,
     pub order: Vec<(String, bool, bool)>,
+    pub distinct: MembershipDistinct,
+}
+
+pub(in crate::compiler) enum MembershipDistinct {
+    None,
+    Values,
+    On(Vec<String>),
 }
 
 pub(in crate::compiler) enum JoinClause {

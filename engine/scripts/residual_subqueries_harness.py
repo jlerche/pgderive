@@ -42,6 +42,16 @@ def reduce_truth(values, all_rows=False):
     return None if None in values else all_rows
 
 
+def distinct_on_values(rows):
+    # Sort by cutoff first and greatest id within each equal cutoff.
+    sorted_rows = sorted(rows, key=lambda row: (
+        row['cutoff'] is None, row['cutoff'] or 0, -row['id']))
+    winners = {}
+    for row in sorted_rows:
+        winners.setdefault(row['cutoff'], row['price'])
+    return list(winners.values())[1:3]
+
+
 GROUP_OFFSET_MODES = ('exists-group-offset', 'exists-distinct-offset', 'exists-distinct-on-offset')
 
 
@@ -69,32 +79,24 @@ class ResidualFixture(SqlFixture):
         rhs = f'SELECT b.price FROM {b} b WHERE {keys} AND NOT (a.ceiling::bigint<=b.cutoff::numeric AND (b.id<=a.floor OR b.id<a.id OR b.id=a.id))'
         if mode in ('in', 'all-filter'):
             rhs = rhs.replace('SELECT ', 'SELECT DISTINCT ', 1)
-        if mode == 'ordered':
-            selected = f"""SELECT b.price FROM {b} b WHERE {keys}
+        if mode in ('ordered', 'residual-ordered'):
+            where = keys + (' AND b.id>a.id' if mode == 'residual-ordered' else '')
+            selected = f"""SELECT b.price FROM {b} b WHERE {where}
                 ORDER BY b.id DESC OFFSET 1 LIMIT 2"""
-            unique = f"""SELECT DISTINCT b.price FROM {b} b WHERE {keys}
+            unique = f"""SELECT DISTINCT b.price FROM {b} b WHERE {where}
                 ORDER BY 1 ASC NULLS LAST OFFSET 1 LIMIT 1"""
-            ties = f"""SELECT b.price FROM {b} b WHERE {keys}
+            ties = f"""SELECT b.price FROM {b} b WHERE {where}
                 ORDER BY b.cutoff DESC NULLS LAST FETCH FIRST 1 ROW WITH TIES"""
-            self.labels = ['id', 'member', 'excluded', 'earlier', 'before_all', 'unique_member', 'ties_earlier']
-            self.query = f'''SELECT a.id, a.probe IN ({selected}) AS member,
-                a.probe NOT IN ({selected}) AS excluded,
-                a.probe < ANY ({selected}) AS earlier,
-                a.probe < ALL ({selected}) AS before_all,
-                a.probe IN ({unique}) AS unique_member, a.probe < ANY ({ties}) AS ties_earlier
-                FROM {a} a'''
-            self.sql(f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (13,1,8,12)')
-        elif mode == 'residual-ordered':
-            selected = f"""SELECT b.price FROM {b} b WHERE {keys} AND b.id>a.id
-                ORDER BY b.id DESC OFFSET 1 LIMIT 2"""
-            ties = f"""SELECT b.price FROM {b} b WHERE {keys} AND b.id>a.id
-                ORDER BY b.cutoff DESC NULLS LAST FETCH FIRST 1 ROW WITH TIES"""
-            self.labels = ['id', 'member', 'excluded', 'earlier', 'before_all', 'ties_earlier']
+            representatives = f"""SELECT DISTINCT ON (b.cutoff) b.price FROM {b} b
+                WHERE {where} ORDER BY b.cutoff ASC NULLS LAST, b.id DESC OFFSET 1 LIMIT 2"""
+            self.labels = ['id', 'member', 'excluded', 'earlier', 'before_all',
+                           'unique_member', 'ties_earlier', 'representative_member']
             self.query = f"""SELECT a.id, a.probe IN ({selected}) AS member,
                 a.probe NOT IN ({selected}) AS excluded,
                 a.probe < ANY ({selected}) AS earlier,
                 a.probe < ALL ({selected}) AS before_all,
-                a.probe < ANY ({ties}) AS ties_earlier FROM {a} a"""
+                a.probe IN ({unique}) AS unique_member, a.probe < ANY ({ties}) AS ties_earlier,
+                a.probe IN ({representatives}) AS representative_member FROM {a} a"""
             self.sql(f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (13,1,8,12)')
         elif mode == 'joined':
             rhs = rhs.replace(f'SELECT b.price FROM {b} b',
@@ -187,9 +189,11 @@ class ResidualFixture(SqlFixture):
                 )
             ]
             values = [item['price'] for item in matches]
-            if self.mode == 'ordered':
-                bucket = sorted((item for item in inner if key is not None and key == item['auction']
-                                 and item['id'] != 99), key=lambda item: -item['id'])
+            if self.mode in ('ordered', 'residual-ordered'):
+                bucket = sorted((item for item in inner if item['id'] != 99
+                                 and (not self.keyed or key is not None and key == item['auction'])
+                                 and (self.mode != 'residual-ordered' or item['id'] > row['id'])),
+                                key=lambda item: -item['id'])
                 values = [item['price'] for item in bucket[1:3]]
                 mark = membership(row['probe'], values)
                 unique = sorted({item['price'] for item in bucket},
@@ -200,19 +204,8 @@ class ResidualFixture(SqlFixture):
                         compare(row['probe'], values, operator.lt, False),
                         compare(row['probe'], values, operator.lt, True),
                         membership(row['probe'], unique[1:2]),
-                        compare(row['probe'], peers, operator.lt, False))] += 1
-            elif self.mode == 'residual-ordered':
-                bucket = sorted((item for item in inner if item['id'] != 99 and item['id'] > row['id']
-                                 and (not self.keyed or key is not None and key == item['auction'])),
-                                key=lambda item: -item['id'])
-                values = [item['price'] for item in bucket[1:3]]
-                mark = membership(row['probe'], values)
-                first = max((item['cutoff'] for item in bucket if item['cutoff'] is not None), default=None)
-                peers = [item['price'] for item in bucket if item['cutoff'] == first]
-                memory[(row['id'], mark, None if mark is None else not mark,
-                        compare(row['probe'], values, operator.lt, False),
-                        compare(row['probe'], values, operator.lt, True),
-                        compare(row['probe'], peers, operator.lt, False))] += 1
+                        compare(row['probe'], peers, operator.lt, False),
+                        membership(row['probe'], distinct_on_values(bucket)))] += 1
             elif self.mode == 'joined':
                 values = [
                     value for item in matches for value in

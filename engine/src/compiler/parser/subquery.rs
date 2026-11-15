@@ -7,7 +7,7 @@ use super::{
     Parsed,
     expressions::{between_kind, distinct_kind, names, node, optional},
     membership,
-    native_join::{MembershipCutoff, Tree},
+    native_join::{MembershipCutoff, MembershipDistinct, Tree},
 };
 use crate::compiler::syntax::Compare;
 use anyhow::{Context, Result, ensure};
@@ -101,12 +101,14 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
 }
 /// `PostgreSQL` pulls up IN as a semijoin only when it is a top-level WHERE conjunct.
 fn mark_semijoins(tree: &mut Tree, condition: &Node) {
-    let Tree::Mark { left, alias, semijoin, quantified, has_residual, skip, .. } = tree else {
+    let Tree::Mark { left, alias, semijoin, quantified, has_residual, skip, cutoff, .. } = tree
+    else {
         return;
     };
     *semijoin = quantified.is_none()
         && !*has_residual
         && skip.is_none()
+        && cutoff.is_none()
         && conjunct(condition, &ast::column(alias, ast::VALUE));
     mark_semijoins(left, condition);
 }
@@ -382,8 +384,9 @@ impl Rewrite<'_> {
         let alias = self.alias()?;
         let has_residual = !correlation.residuals.is_empty();
         let ordered = prepare_membership_rhs(&mut query, &correlation, quantified.is_some())?;
-        let cutoff =
-            if ordered && has_residual { Some(defer_membership_cutoff(&mut query)?) } else { None };
+        let deferred =
+            ordered && (has_residual || query.distinct_clause.iter().any(|key| key.node.is_some()));
+        let cutoff = if deferred { Some(defer_membership_cutoff(&mut query)?) } else { None };
         let key_start = query.target_list.len();
         let mut conditions = Vec::new();
         for (index, (outer, inner)) in correlation.pairs.into_iter().enumerate() {
@@ -400,7 +403,7 @@ impl Rewrite<'_> {
                 .map(|term| residual_condition(term, &alias, &mut query.target_list, &mut index)),
         );
         let mut right = super::query(&query)?;
-        if ordered && !has_residual {
+        if ordered && !deferred {
             let Parsed::Ordered(ordering) = &mut right else {
                 anyhow::bail!("correlated comparison requires an ordinary ordered SELECT");
             };
@@ -432,7 +435,8 @@ fn prepare_membership_rhs(
     let keyed = !correlation.pairs.is_empty();
     let ordered = !query.sort_clause.is_empty()
         || query.limit_count.is_some()
-        || query.limit_offset.is_some();
+        || query.limit_offset.is_some()
+        || query.distinct_clause.iter().any(|key| key.node.is_some());
     let joined =
         query.from_clause.iter().any(|source| matches!(source.node, Some(NodeEnum::JoinExpr(_))));
     if quantified || residual || joined || ordered && keyed {
@@ -452,15 +456,10 @@ fn prepare_membership_rhs(
     }
     if residual || keyed {
         ensure!(
-            !(ordered && residual) || query.distinct_clause.is_empty(),
-            "ordered residual comparisons require an RHS without DISTINCT"
-        );
-        ensure!(
             query.group_clause.is_empty()
-                && query.distinct_clause.iter().all(|key| key.node.is_none())
                 && query.having_clause.is_none()
                 && query.op == i32::from(pg::SetOperation::SetopNone),
-            "correlated comparisons require a native projection without grouping or DISTINCT ON"
+            "correlated comparisons require a native projection without grouping"
         );
         if ordered {
             validate_sort_scope(query)?;
@@ -479,16 +478,46 @@ fn defer_membership_cutoff(query: &mut pg::SelectStmt) -> Result<MembershipCutof
     ensure!(sorts.len() <= 16, "ORDER BY exceeds 16 keys");
     for (index, sort) in sorts.iter().enumerate() {
         let (value, descending, nulls_first) = super::partition::sort_expression(sort)?;
-        let indexed = super::ordering::target_index(value, &targets, false)?;
-        let value = indexed.map_or(Ok(value), |index| super::target(&query.target_list[index]))?;
+        let value = order_expression(value, &targets, query)?;
         let name = format!("\0membership_order_{index}");
-        query.target_list.push(ast::target(value.clone(), &name));
+        query.target_list.push(ast::target(value, &name));
         order.push((name, descending, nulls_first));
     }
+    let distinct = match std::mem::take(&mut query.distinct_clause).as_slice() {
+        [] => MembershipDistinct::None,
+        [key] if key.node.is_none() => MembershipDistinct::Values,
+        keys => MembershipDistinct::On(distinct_targets(query, &targets, keys)?),
+    };
     query.limit_count = None;
     query.limit_offset = None;
     query.limit_option = i32::from(pg::LimitOption::Default);
-    Ok(MembershipCutoff { bounds, order })
+    Ok(MembershipCutoff { bounds, order, distinct })
+}
+fn distinct_targets(
+    query: &mut pg::SelectStmt,
+    targets: &[super::partition::Target],
+    keys: &[Node],
+) -> Result<Vec<String>> {
+    ensure!(keys.len() <= 16, "DISTINCT ON exceeds 16 keys");
+    keys.iter()
+        .enumerate()
+        .map(|(index, key)| {
+            let value = order_expression(key, targets, query)?;
+            let name = format!("\0membership_distinct_{index}");
+            query.target_list.push(ast::target(value, &name));
+            Ok(name)
+        })
+        .collect()
+}
+
+fn order_expression(
+    value: &Node,
+    targets: &[super::partition::Target],
+    query: &pg::SelectStmt,
+) -> Result<Node> {
+    super::ordering::target_index(value, targets, false)?
+        .map_or(Ok(value), |index| super::target(&query.target_list[index]))
+        .cloned()
 }
 // Adding hidden correlation columns must not expand the user's ordinal scope.
 fn validate_sort_scope(query: &pg::SelectStmt) -> Result<()> {

@@ -1,7 +1,7 @@
 //! Native DISTINCT/existence against independent raw-row bags through restart.
 use super::{batch, contract, row, settings};
 use crate::{compiler::compile, engine::Batch, transaction::Row, worker::program::relational};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 type State = BTreeMap<Row, i64>;
 fn oracle(
@@ -360,6 +360,33 @@ fn residual_comparison_orders_after_correlation() -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+#[test]
+fn correlated_comparisons_bind_distinct_keys_before_the_cutoff() -> Result<()> {
+    let native = ordered_contract();
+    for condition in ["b.auction=a.id", "b.auction=a.id AND b.id>a.id", "b.id>a.id"] {
+        for shape in [
+            "DISTINCT b.price ORDER BY 1 LIMIT 1 OFFSET 1",
+            "DISTINCT ON (id) b.price AS id ORDER BY id, b.id LIMIT 1",
+            "DISTINCT ON (b.auction) b.price ORDER BY b.auction, b.id DESC LIMIT 1",
+        ] {
+            let (projection, order) =
+                shape.split_once(" ORDER BY ").context("missing test order")?;
+            let sql = format!(
+                "SELECT a.other IN (SELECT {projection} FROM source.bid b WHERE {condition}
+                 ORDER BY {order}) FROM source.auction a"
+            );
+            compile(&sql, &native).map_err(|error| error.context(sql))?;
+        }
+    }
+    let prefix = "SELECT a.other IN (SELECT DISTINCT ON (b.price) b.price FROM source.bid b
+        WHERE b.id>a.id ORDER BY b.id,b.price) FROM source.auction a";
+    let ambiguous = "SELECT a.other IN (SELECT DISTINCT ON (b.auction) b.price FROM source.bid b
+        WHERE b.id>a.id ORDER BY b.auction) FROM source.auction a";
+    assert!(compile(prefix, &native).is_err());
+    assert!(compile(ambiguous, &native).is_err());
     Ok(())
 }
 

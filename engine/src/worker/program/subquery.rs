@@ -168,13 +168,22 @@ async fn membership(
         if !spec.correlation.as_ref().map_or(Ok(true), |condition| condition.qualifies(&joined))? {
             continue;
         }
-        if let Some(cutoff) = &mut cutoff
-            && !cutoff.include(&row, usize::try_from(weight)?)?
-        {
-            continue;
+        if let Some(cutoff) = &mut cutoff {
+            let count = if spec.distinct.is_empty() {
+                usize::try_from(weight)?
+            } else if seen.insert(&spec.distinct, &row, limits)? {
+                1
+            } else {
+                continue;
+            };
+            if !cutoff.include(&row, count)? {
+                continue;
+            }
         }
         match spec.comparison.truth((&joined, &joined))? {
-            Some(true) if skip == 0 && spec.distinct.is_empty() => return Ok(Some(true)),
+            Some(true) if skip == 0 && (cutoff.is_some() || spec.distinct.is_empty()) => {
+                return Ok(Some(true));
+            }
             Some(true) => {
                 let count = if spec.distinct.is_empty() {
                     usize::try_from(weight)?
@@ -255,7 +264,7 @@ impl DistinctKeys {
         self.bytes = self.bytes.saturating_add(bytes);
         ensure!(
             self.bytes <= limits.output_bytes,
-            CapacityExceeded("EXISTS group keys exceed resident limit")
+            CapacityExceeded("subquery distinct keys exceed resident limit")
         );
         Ok(true)
     }
@@ -265,7 +274,7 @@ fn group_value(column: &ColumnRef, row: &Row) -> Result<Option<String>> {
     if column.oid == 1186 {
         return row
             .get(&column.name)
-            .context("missing EXISTS interval key")?
+            .context("missing subquery interval key")?
             .as_deref()
             .map(|value| {
                 let interval = crate::temporal::Interval::parse(value)?;

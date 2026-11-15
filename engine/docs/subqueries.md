@@ -111,19 +111,24 @@ A positive fetch tests for at least one occurrence after OFFSET, including
 when further rows tie with the cutoff. The original ORDER BY is required.
 A correlated membership RHS can read native tables through supported
 joins with simple local ON predicates. Correlation is extracted from WHERE,
-and the RHS keeps a simple projection and supported local filters. Plain SELECT DISTINCT is allowed because RHS duplicates do not
-affect membership or quantified truth values. With equality-only correlation,
+and the RHS keeps a simple projection and supported local filters. Without
+a cutoff, repeated comparison values leave membership and quantified truth
+unchanged. With equality-only correlation,
 ORDER BY, literal LIMIT and OFFSET, and FETCH WITH TIES can select RHS
 occurrences separately for each key. A cutoff that can cut through a peer
 group requires the sort and correlation keys to determine the compared
 values, or to identify each original occurrence. Selection precedes
 three-valued comparison and keeps the existing ordering budgets. With residual
-correlation, an ordered RHS without DISTINCT uses the same ordering codec
+correlation, an ordered RHS uses the same ordering codec
 and scans the applicable bucket for each outer row. Only qualifying
 occurrences consume OFFSET or LIMIT, and only selected values contribute to
 the three-valued comparison. Scans charge candidate visits against the
-existing work limits. For comparisons, DISTINCT ON
-still requires choosing a representative and remains outside this slice. Qualify outer references in residual comparisons. Correlation
+existing work limits. Plain DISTINCT deduplicates compared value tuples
+before the cutoff. DISTINCT ON chooses the first qualifying row per key
+and then applies the cutoff. Its ORDER BY must follow PostgreSQL's prefix
+rule and determine the compared values of each representative. Retained
+distinct keys also count against the resident output-byte limit.
+Qualify outer references in residual comparisons. Correlation
 is limited to one outer query level.
 The membership probe must be safe to evaluate independently of the RHS.
 

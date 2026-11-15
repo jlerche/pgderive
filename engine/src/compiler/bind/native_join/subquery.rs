@@ -3,7 +3,10 @@ use super::{Builder, Column, Edge, keys, resolve};
 use crate::compiler::{
     ColumnRef, Predicate,
     expression::Expr,
-    parser::{Name, Parsed},
+    parser::{
+        Name, Parsed,
+        native_join::{MembershipCutoff, MembershipDistinct},
+    },
     relational::Node,
     scalar,
     subquery::Mark,
@@ -21,7 +24,7 @@ pub(super) struct MarkArguments<'a> {
     pub(super) has_residual: bool,
     pub(super) skip: Option<std::num::NonZeroUsize>,
     pub(super) distinct: Vec<String>,
-    pub(super) cutoff: Option<crate::compiler::parser::native_join::MembershipCutoff>,
+    pub(super) cutoff: Option<MembershipCutoff>,
 }
 
 impl Builder<'_> {
@@ -42,14 +45,14 @@ impl Builder<'_> {
             distinct,
             cutoff,
         } = arguments;
-        let ordered =
-            matches!(&*parsed, Parsed::Ordered(value) if !value.correlation_keys.is_empty());
+        let ordered = cutoff.is_some()
+            || matches!(&*parsed, Parsed::Ordered(value) if !value.correlation_keys.is_empty());
         let start = self.nodes.len();
         let mut right = self.derived(parsed, alias.clone())?;
         if quantified.is_some() || has_residual || ordered {
             super::validate_scalar_input(&self.nodes[start..])?;
         }
-        let distinct = distinct_columns(&right, distinct)?;
+        let mut distinct = distinct_columns(&right, distinct)?;
         let mut computed = Vec::new();
         let (probe, value, comparison) = bind_comparison(
             probe,
@@ -63,8 +66,13 @@ impl Builder<'_> {
         let id = format!("tree_join_{}", self.joins);
         let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
         validate_correlation(&bound, quantified.is_some() || ordered, has_residual)?;
-        let cutoff =
-            cutoff.map(|cutoff| self.mark_cutoff(&mut right, cutoff, &bound)).transpose()?;
+        let cutoff = if let Some(cutoff) = cutoff {
+            let (cutoff, keys) = self.mark_cutoff(&mut right, cutoff, &bound)?;
+            distinct = keys;
+            Some(cutoff)
+        } else {
+            None
+        };
         let edge = self.join(left, right, bound, crate::compiler::left_join::Kind::Left)?;
         let Some(Node::LeftJoin { id, input, spec }) = self.nodes.pop() else {
             anyhow::bail!("missing marker tagged join");
@@ -109,14 +117,14 @@ impl Builder<'_> {
     fn mark_cutoff(
         &mut self,
         right: &mut Edge,
-        cutoff: crate::compiler::parser::native_join::MembershipCutoff,
+        cutoff: MembershipCutoff,
         correlation: &keys::Bound,
-    ) -> Result<crate::compiler::topk::Spec> {
+    ) -> Result<(crate::compiler::topk::Spec, Vec<ColumnRef>)> {
         let order = cutoff
             .order
-            .into_iter()
+            .iter()
             .map(|(name, descending, nulls_first)| {
-                let column = resolve(&Name(vec![name]), &right.columns)?.value.clone();
+                let column = resolve(&Name(vec![name.clone()]), &right.columns)?.value.clone();
                 ensure!(
                     crate::compiler::partition::orderable(column.oid),
                     "unsupported ORDER BY native type"
@@ -124,15 +132,15 @@ impl Builder<'_> {
                 if matches!(column.oid, 25 | 1043) {
                     crate::compiler::partition::require_bytewise(column.collation)?;
                 }
-                Ok(crate::compiler::partition::Order { column, descending, nulls_first })
+                Ok(crate::compiler::partition::Order {
+                    column,
+                    descending: *descending,
+                    nulls_first: *nulls_first,
+                })
             })
             .collect::<Result<Vec<_>>>()?;
+        let distinct = self.validate_mark_order(right, &order, correlation, &cutoff)?;
         let bounds = cutoff.bounds;
-        if bounds.limit != Some(0)
-            && (bounds.offset != 0 || bounds.limit.is_some() && !bounds.with_ties)
-        {
-            self.prove_mark_cutoff(right, &order, correlation)?;
-        }
         let spec = crate::compiler::topk::Spec {
             order,
             field: None,
@@ -144,14 +152,15 @@ impl Builder<'_> {
         let id = format!("tree_join_{}_membership_order", self.joins);
         let input = std::mem::replace(&mut right.id, id.clone());
         self.nodes.push(Node::TopKInput { id, input, spec: spec.clone() });
-        Ok(spec)
+        Ok((spec, distinct))
     }
-    fn prove_mark_cutoff(
+    fn validate_mark_order(
         &self,
         right: &Edge,
         order: &[crate::compiler::partition::Order],
         correlation: &keys::Bound,
-    ) -> Result<()> {
+        cutoff: &MembershipCutoff,
+    ) -> Result<Vec<ColumnRef>> {
         use crate::compiler::{properties::Analysis, relational::Relational};
         let temporary = Relational {
             sources: self.sources.clone(),
@@ -161,22 +170,75 @@ impl Builder<'_> {
         };
         let analysis = Analysis::infer(self.contract, &temporary)?;
         let facts = analysis.edge(&right.id)?;
-        let names = order
+        let payload = right
+            .columns
             .iter()
-            .map(|value| value.column.name.clone())
-            .chain(correlation.keys.iter().map(|(_, rhs)| rhs.name.clone()))
+            .take_while(|value| !value.label.starts_with('\0'))
+            .map(|value| value.value.clone())
             .collect::<Vec<_>>();
-        ensure!(
-            facts.proves_key(&names)
-                || right
-                    .columns
-                    .iter()
-                    .take_while(|value| !value.label.starts_with('\0'))
-                    .all(|value| facts.same_identity(&value.value.name, &names)),
-            "correlated row cutoff requires ORDER BY that determines the selected values"
-        );
-        Ok(())
+        let order_names = order.iter().map(|value| value.column.name.clone()).collect::<Vec<_>>();
+        let keys = match &cutoff.distinct {
+            MembershipDistinct::None => Vec::new(),
+            MembershipDistinct::Values => {
+                let names = payload.iter().map(|column| column.name.clone()).collect::<Vec<_>>();
+                ensure!(
+                    order_names.iter().all(|field| facts.same_identity(field, &names)),
+                    "SELECT DISTINCT ORDER BY expressions must appear in the output"
+                );
+                payload.clone()
+            }
+            MembershipDistinct::On(labels) => {
+                let keys = distinct_columns(right, labels.clone())?;
+                check_distinct_prefix(facts, &order_names, &keys)?;
+                keys
+            }
+        };
+        let mut peers = order_names;
+        peers.extend(correlation.keys.iter().map(|(_, rhs)| rhs.name.clone()));
+        let bounds = &cutoff.bounds;
+        if bounds.limit != Some(0)
+            && (bounds.offset != 0 || bounds.limit.is_some() && !bounds.with_ties)
+        {
+            prove_selected_values(facts, &peers, &payload)?;
+        }
+        if matches!(cutoff.distinct, MembershipDistinct::On(_)) && bounds.limit != Some(0) {
+            peers.extend(keys.iter().map(|column| column.name.clone()));
+            prove_selected_values(facts, &peers, &payload)?;
+        }
+        Ok(keys)
     }
+}
+fn prove_selected_values(
+    facts: &crate::compiler::properties::Properties,
+    peers: &[String],
+    payload: &[ColumnRef],
+) -> Result<()> {
+    ensure!(
+        facts.proves_key(peers)
+            || payload.iter().all(|value| facts.same_identity(&value.name, peers)),
+        "correlated row cutoff requires ORDER BY that determines the selected values"
+    );
+    Ok(())
+}
+
+fn check_distinct_prefix(
+    facts: &crate::compiler::properties::Properties,
+    order: &[String],
+    keys: &[ColumnRef],
+) -> Result<()> {
+    let mut remaining = keys.iter().map(|column| column.name.clone()).collect::<Vec<_>>();
+    let names = remaining.clone();
+    for field in order {
+        if remaining.is_empty() {
+            break;
+        }
+        ensure!(
+            facts.same_identity(field, &names),
+            "DISTINCT ON expressions must match initial ORDER BY expressions"
+        );
+        remaining.retain(|key| !facts.same_identity(key, std::slice::from_ref(field)));
+    }
+    Ok(())
 }
 fn distinct_columns(right: &Edge, labels: Vec<String>) -> Result<Vec<ColumnRef>> {
     labels

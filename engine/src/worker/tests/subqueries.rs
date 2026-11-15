@@ -560,7 +560,7 @@ fn residual_membership_admits_inequality_only_correlation() -> Result<()> {
 }
 
 #[test]
-fn correlated_membership_elides_only_plain_distinct() -> Result<()> {
+fn correlated_membership_preserves_distinct_value_semantics() -> Result<()> {
     let native = native();
     for comparison in ["IN", "NOT IN", "< ANY", ">= ALL"] {
         let query = format!(
@@ -568,10 +568,7 @@ fn correlated_membership_elides_only_plain_distinct() -> Result<()> {
              WHERE b.auction = a.id AND b.id > a.id) FROM source.auction a"
         );
         compile(&query, &native)?;
-        assert!(
-            compile(&query.replace("DISTINCT b.price", "DISTINCT ON (b.price) b.price"), &native)
-                .is_err()
-        );
+        compile(&query.replace("DISTINCT b.price", "DISTINCT ON (b.price) b.price"), &native)?;
     }
     Ok(())
 }
