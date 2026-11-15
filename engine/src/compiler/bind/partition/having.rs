@@ -18,6 +18,7 @@ pub(super) enum GroupingSlot {
     Expression,
     HiddenConstant,
     ConstantTarget(usize),
+    CorrelationTarget(usize),
 }
 
 struct Rewrite<'a, F> {
@@ -116,9 +117,6 @@ pub(super) fn build(
     context: Stage<'_>,
 ) -> Result<Compiled> {
     let mut rewrite = Rewrite::new(&groups, body, resolve, context.scalar_scope)?;
-    if let Some(sets) = &body.grouping_sets {
-        validate_correlation_keys(sets, &rewrite.keys)?;
-    }
     rewrite.dependent_sources = dependent_sources(body, &rewrite, &context);
     let targets = rewrite.targets(&body.targets)?;
     let mut condition = body.having.as_deref().cloned();
@@ -197,31 +195,6 @@ pub(super) fn build(
     super::composition::compose(&mut compiled.relational, &mut outer)?;
     Ok(compiled)
 }
-// A correlation key belongs to every physical branch. If SQL groups by
-// that same column in only some branches, it needs a separate logical slot
-// so those other branches can still produce a grouping-generated NULL.
-fn validate_correlation_keys(
-    sets: &crate::compiler::parser::grouping_sets::Sets,
-    keys: &[ColumnRef],
-) -> Result<()> {
-    let start = keys
-        .len()
-        .checked_sub(sets.correlation_keys)
-        .context("missing grouping correlation keys")?;
-    for key in &keys[start..] {
-        let count = sets
-            .groups
-            .iter()
-            .filter(|set| set.iter().any(|&i| i < start && keys[i] == *key))
-            .count();
-        ensure!(
-            count == 0 || count == sets.groups.len(),
-            "a correlated grouping key must occur in all or none of the grouping sets"
-        );
-    }
-    Ok(())
-}
-
 // PostgreSQL recognizes only the declared base-table primary key here.
 // When every grouping set contains it, adding a dependent column does
 // not split a group. Keep these physical keys separate from SQL GROUPING().
@@ -230,9 +203,15 @@ fn dependent_sources<F>(body: &Body, rewrite: &Rewrite<'_, F>, context: &Stage<'
         body.grouping_sets.as_ref().map_or_else(
             || rewrite.keys.iter().any(|key| key.name == field),
             |sets| {
-                sets.groups
-                    .iter()
-                    .all(|set| set.iter().any(|index| rewrite.keys[*index].name == field))
+                sets.groups.iter().all(|set| {
+                    set.iter().any(|&index| {
+                        rewrite.keys[index].name == field
+                            && !matches!(
+                                rewrite.constant_slots[index],
+                                GroupingSlot::CorrelationTarget(_)
+                            )
+                    })
+                })
             },
         )
     })
@@ -308,7 +287,7 @@ fn aggregate_stage<F: Fn(&Name) -> Result<ColumnRef>>(
     let ordinary = sets.is_none().then(|| crate::compiler::parser::grouping_sets::Sets {
         groups: vec![(0..groups.len()).collect()],
         distinct: false,
-        correlation_keys: 0,
+        correlation_targets: 0..0,
     });
     let sets = sets.or(ordinary.as_ref()).context("missing grouping sets")?;
 
@@ -341,7 +320,20 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
     fn new(groups: &[Key], body: &Body, resolve: &'a F, scope: Option<usize>) -> Result<Self> {
         let mut computed = Vec::new();
         let keys = super::keys(groups.to_vec(), resolve, &mut computed, scope)?;
-        let constant_slots = constant_slots(groups, &keys, body, resolve, (scope, &computed));
+        let mut constant_slots = constant_slots(groups, &keys, body, resolve, (scope, &computed));
+        if let Some(sets) = &body.grouping_sets {
+            // Hidden correlation projections are always present, even if the same
+            // source column belongs to only some SQL grouping sets.
+            let start = keys
+                .len()
+                .checked_sub(sets.correlation_targets.len())
+                .context("missing grouping correlation keys")?;
+            for (slot, target) in
+                constant_slots[start..].iter_mut().zip(sets.correlation_targets.clone())
+            {
+                *slot = GroupingSlot::CorrelationTarget(target);
+            }
+        }
         Ok(Self {
             resolve,
             constant_slots,
@@ -360,11 +352,10 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
         for (index, target) in targets.iter().enumerate() {
             let value = match &target.value {
                 Value::Typed(value) => {
-                    let value = if let Some(key) = self
-                        .constant_slots
-                        .iter()
-                        .position(|slot| *slot == GroupingSlot::ConstantTarget(index))
-                    {
+                    let value = if let Some(key) = self.constant_slots.iter().position(|slot| {
+                        matches!(slot, GroupingSlot::ConstantTarget(target)
+                            | GroupingSlot::CorrelationTarget(target) if *target == index)
+                    }) {
                         column('g', key)
                     } else {
                         let mut value = (**value).clone();
@@ -402,7 +393,10 @@ impl<'a, F: Fn(&Name) -> Result<ColumnRef>> Rewrite<'a, F> {
             positions.push(
                 self.keys
                     .iter()
-                    .position(|candidate| *candidate == key)
+                    .zip(&self.constant_slots)
+                    .position(|(candidate, slot)| {
+                        *candidate == key && !matches!(slot, GroupingSlot::CorrelationTarget(_))
+                    })
                     .context("GROUPING arguments must match GROUP BY expressions")?,
             );
         }

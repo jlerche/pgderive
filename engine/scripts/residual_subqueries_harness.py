@@ -120,15 +120,18 @@ class ResidualFixture(SqlFixture):
             first = f'{per_key_group} ORDER BY count(*) DESC FETCH FIRST 1 ROW WITH TIES'
             sets = f"""SELECT b.price FROM {b} b WHERE {keys}
                 GROUP BY GROUPING SETS ((b.price), (b.cutoff))"""
+            partial_key = f"""SELECT b.auction FROM {b} b WHERE {keys}
+                GROUP BY GROUPING SETS ((b.auction), (b.cutoff))"""
             self.labels = ['id', 'key_group_in', 'key_group_any', 'key_group_all',
-                           'key_group_second', 'key_group_first_any', 'key_group_first_all', 'key_group_sets']
+                           'key_group_second', 'key_group_first_any', 'key_group_first_all', 'key_group_sets', 'key_group_partial']
             self.query = f"""SELECT a.id, a.probe IN ({per_key_group}) AS key_group_in,
                 a.probe < ANY ({per_key_group}) AS key_group_any,
                 a.probe < ALL ({per_key_group}) AS key_group_all,
                 a.probe IN ({second}) AS key_group_second,
                 a.probe < ANY ({first}) AS key_group_first_any,
                 a.probe < ALL ({first}) AS key_group_first_all,
-                a.probe >= ALL ({sets}) AS key_group_sets FROM {a} a"""
+                a.probe >= ALL ({sets}) AS key_group_sets,
+                a.probe >= ALL ({partial_key}) AS key_group_partial FROM {a} a"""
             self.sql(f"""INSERT INTO {b}(id,auction,price,cutoff) VALUES
                 (14,2,NULL,2),(15,1,10,1),(16,1,8,1),(17,1,10,4),(18,1,8,4)""")
         elif mode == 'nested-exists':
@@ -286,7 +289,8 @@ class ResidualFixture(SqlFixture):
                         membership(row['probe'], unique[1:2]),
                         compare(row['probe'], first, operator.lt, False),
                         compare(row['probe'], first, operator.lt, True),
-                        compare(row['probe'], set_values, operator.ge, True))] += 1
+                        compare(row['probe'], set_values, operator.ge, True),
+                        compare(row['probe'], [key, None] if groups else [], operator.ge, True))] += 1
             elif self.mode == 'nested-exists':
                 probe = row['probe']
                 present = any(

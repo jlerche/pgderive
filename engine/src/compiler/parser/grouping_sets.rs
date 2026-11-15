@@ -16,7 +16,7 @@ const MAX_SETS: usize = 64;
 pub(in crate::compiler) struct Sets {
     pub groups: Vec<Vec<usize>>,
     pub distinct: bool,
-    pub correlation_keys: usize,
+    pub correlation_targets: std::ops::Range<usize>,
 }
 
 pub(super) struct Grouping {
@@ -41,7 +41,7 @@ pub(super) fn parse(select: &SelectStmt, targets: &[Target]) -> Result<Grouping>
     }
     Ok(Grouping {
         keys,
-        sets: Some(Sets { groups, distinct: select.group_distinct, correlation_keys: 0 }),
+        sets: Some(Sets { groups, distinct: select.group_distinct, correlation_targets: 0..0 }),
     })
 }
 

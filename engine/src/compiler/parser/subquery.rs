@@ -442,7 +442,7 @@ impl Rewrite<'_> {
         );
         let mut right = super::query(&query)?;
         if grouped && let Some(sets) = grouping_sets(&mut right) {
-            sets.correlation_keys = key_end - key_start;
+            sets.correlation_targets = key_start..key_end;
         }
         if ordered && !deferred {
             let Parsed::Ordered(ordering) = &mut right else {
