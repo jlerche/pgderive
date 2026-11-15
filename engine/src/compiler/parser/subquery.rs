@@ -94,11 +94,12 @@ pub(super) fn parse(select: &pg::SelectStmt, visible: usize) -> Result<Option<Pa
 }
 /// `PostgreSQL` pulls up IN as a semijoin only when it is a top-level WHERE conjunct.
 fn mark_semijoins(tree: &mut Tree, condition: &Node) {
-    let Tree::Mark { left, alias, semijoin, quantified, has_residual, .. } = tree else {
+    let Tree::Mark { left, alias, semijoin, quantified, has_residual, skip, .. } = tree else {
         return;
     };
     *semijoin = quantified.is_none()
         && !*has_residual
+        && skip.is_none()
         && conjunct(condition, &ast::column(alias, ast::VALUE));
     mark_semijoins(left, condition);
 }
@@ -285,7 +286,8 @@ impl Rewrite<'_> {
                 let mut query = (**query).clone();
                 query.target_list = vec![ast::target(probe.clone(), "")];
                 let empty = query.limit_count.as_deref().is_some_and(membership::zero_limit);
-                membership::clear_exists_clauses(&mut query)?;
+                let skip =
+                    std::num::NonZeroUsize::new(membership::clear_exists_clauses(&mut query)?);
                 let correlation = correlation::extract(&mut query, true)?;
                 scalar_input::validate(&query, scalar_input::Input::Membership)?;
                 if empty {
@@ -299,7 +301,7 @@ impl Rewrite<'_> {
                     query.where_clause = ast::logical(local, true);
                 }
                 // The constant, non-NULL RHS makes the mark two-valued.
-                self.membership_mark(query, probe, None, correlation)
+                self.membership_mark(query, probe, (None, skip), correlation)
             }
             pg::SubLinkType::ExprSublink => {
                 ensure!(
@@ -346,13 +348,13 @@ impl Rewrite<'_> {
         quantified: Option<Compare>,
     ) -> Result<Node> {
         let correlation = correlation::extract(&mut query, true)?;
-        self.membership_mark(query, probe, quantified, correlation)
+        self.membership_mark(query, probe, (quantified, None), correlation)
     }
     fn membership_mark(
         &mut self,
         mut query: pg::SelectStmt,
         probe: Node,
-        quantified: Option<Compare>,
+        (quantified, skip): (Option<Compare>, Option<std::num::NonZeroUsize>),
         correlation: correlation::Correlation,
     ) -> Result<Node> {
         let alias = self.alias()?;
@@ -412,6 +414,7 @@ impl Rewrite<'_> {
             semijoin: false,
             quantified,
             has_residual,
+            skip,
         });
         Ok(ast::column(&alias, ast::VALUE))
     }

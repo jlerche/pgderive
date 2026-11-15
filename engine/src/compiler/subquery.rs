@@ -11,4 +11,6 @@ pub struct Mark {
     pub(crate) comparison: Predicate,
     pub(crate) correlation: Option<Predicate>,
     pub(crate) semijoin: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) skip: Option<std::num::NonZeroUsize>,
 }

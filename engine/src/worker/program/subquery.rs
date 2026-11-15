@@ -30,7 +30,8 @@ struct RightValues {
 }
 const fn indexed(spec: &Mark) -> bool {
     // Component-preserving interval encodings can differ for equal durations.
-    spec.probe.oid != 1186
+    spec.skip.is_none()
+        && spec.probe.oid != 1186
         && spec.comparison.is_equality()
         && spec.correlation.is_none()
         && (spec.probe.oid == spec.value.oid
@@ -142,7 +143,8 @@ async fn membership(
     work: &mut PartitionWork,
 ) -> Result<Option<bool>> {
     let mut unknown = false;
-    while let Some((row, _)) = right.next(work).await? {
+    let mut skip = spec.skip.map_or(0, std::num::NonZeroUsize::get);
+    while let Some((row, weight)) = right.next(work).await? {
         if left(&row)? {
             continue;
         }
@@ -151,7 +153,14 @@ async fn membership(
             continue;
         }
         match spec.comparison.truth((&joined, &joined))? {
-            Some(true) => return Ok(Some(true)),
+            Some(true) if skip == 0 => return Ok(Some(true)),
+            Some(true) => {
+                let weight = usize::try_from(weight)?;
+                if weight > skip {
+                    return Ok(Some(true));
+                }
+                skip -= weight;
+            }
             Some(false) => {}
             None => unknown = true,
         }

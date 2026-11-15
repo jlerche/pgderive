@@ -99,7 +99,8 @@ For EXISTS, sorting and DISTINCT ON do not change whether rows exist.
 A positive literal LIMIT, LIMIT ALL, and LIMIT NULL also leave presence
 unchanged. A literal LIMIT 0 yields FALSE for EXISTS and TRUE for NOT EXISTS.
 Plain-column GROUP BY without HAVING, and literal OFFSET 0 or OFFSET NULL,
-also preserve presence. Positive offsets and WITH TIES require separate lowering.
+also preserve presence. A positive literal OFFSET counts qualifying weighted
+occurrences for an ungrouped RHS without DISTINCT. WITH TIES remains unsupported.
 A correlated membership RHS can read native tables through supported
 joins with simple local ON predicates. Correlation is extracted from WHERE,
 and the RHS keeps a simple projection and supported local filters. Plain SELECT DISTINCT is allowed because RHS duplicates do not

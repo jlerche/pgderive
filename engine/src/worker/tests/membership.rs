@@ -115,7 +115,7 @@ fn unsupported_membership_shapes_fail_during_compilation() {
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction+1>a.id)",
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=a.id OR b.id=1)",
         "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction+1=b.id)",
-        "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=a.id OFFSET 1)",
+        "SELECT a.id FROM source.auction a WHERE EXISTS(SELECT 1 FROM source.bid b WHERE b.auction=a.id OFFSET -1)",
     ] {
         assert!(compile(sql, &native).is_err(), "{sql}");
     }

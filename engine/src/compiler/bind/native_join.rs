@@ -112,6 +112,7 @@ impl Builder<'_> {
                 semijoin,
                 quantified,
                 has_residual,
+                skip,
             } => {
                 let left = self.tree(*left)?;
                 self.mark(
@@ -124,6 +125,7 @@ impl Builder<'_> {
                         semijoin,
                         quantified,
                         has_residual,
+                        skip,
                     },
                 )
             }

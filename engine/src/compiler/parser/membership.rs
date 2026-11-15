@@ -52,7 +52,7 @@ fn existence_source(select: &pg::SelectStmt, query: &pg::SelectStmt, anti: bool)
 
 pub(super) fn existence_value(query: &pg::SelectStmt) -> Result<Node> {
     let mut shape = query.clone();
-    clear_exists_clauses(&mut shape)?;
+    let _ = clear_exists_clauses(&mut shape)?;
     super::validate_query(&shape)?;
     ensure!(
         query.group_clause.iter().all(|key| super::expressions::column(key).is_ok())
@@ -92,13 +92,14 @@ fn discardable(value: &Node, total: bool) -> Result<bool> {
 
 // Native prepare validates the original clauses. A literal zero limit
 // becomes an empty RHS before the existence mark runs.
-pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<()> {
+pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<usize> {
+    let mut skip = 0;
     let total = requires_total_discarded_expressions(query);
     if let Some(offset) = query.limit_offset.as_deref() {
+        skip = super::ordering::count(offset)?.unwrap_or(0);
         ensure!(
-            zero_limit(offset)
-                || matches!(&offset.node, Some(NodeEnum::AConst(value)) if value.isnull),
-            "EXISTS requires OFFSET zero or NULL"
+            skip == 0 || (query.group_clause.is_empty() && query.distinct_clause.is_empty()),
+            "positive EXISTS OFFSET requires an ungrouped RHS without DISTINCT"
         );
         query.limit_offset = None;
         if query.limit_count.is_none() {
@@ -129,7 +130,7 @@ pub(super) fn clear_exists_clauses(query: &mut pg::SelectStmt) -> Result<()> {
     query.distinct_clause.clear();
     query.group_clause.clear();
     query.sort_clause.clear();
-    Ok(())
+    Ok(skip)
 }
 
 const fn supported_limit(node: &Node) -> bool {
@@ -177,7 +178,16 @@ pub(super) fn uses_keyed_existence(select: &pg::SelectStmt, condition: &Node) ->
         return Ok(false);
     }
     let Some((query, _)) = exists(condition)? else { return Ok(false) };
-    if query.limit_count.as_deref().is_some_and(zero_limit) {
+    if query.limit_count.as_deref().is_some_and(zero_limit)
+        || query
+            .limit_offset
+            .as_deref()
+            .map(super::ordering::count)
+            .transpose()?
+            .flatten()
+            .unwrap_or(0)
+            > 0
+    {
         return Ok(false);
     }
     super::subquery::correlation::only_cross_scope_equalities(query)

@@ -19,6 +19,7 @@ pub(super) struct MarkArguments<'a> {
     pub(super) semijoin: bool,
     pub(super) quantified: Option<Compare>,
     pub(super) has_residual: bool,
+    pub(super) skip: Option<std::num::NonZeroUsize>,
 }
 
 impl Builder<'_> {
@@ -28,7 +29,7 @@ impl Builder<'_> {
         parsed: Box<Parsed>,
         arguments: MarkArguments<'_>,
     ) -> Result<Edge> {
-        let MarkArguments { probe, alias, condition, semijoin, quantified, has_residual } =
+        let MarkArguments { probe, alias, condition, semijoin, quantified, has_residual, skip } =
             arguments;
         let start = self.nodes.len();
         let right = self.derived(parsed, alias.clone())?;
@@ -70,6 +71,7 @@ impl Builder<'_> {
                 comparison,
                 correlation: spec.predicate,
                 semijoin,
+                skip,
             }),
         });
         let mut columns = columns;

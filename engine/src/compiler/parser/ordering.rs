@@ -123,7 +123,7 @@ fn byte_order(value: &Node) -> Result<(&Node, bool)> {
     Ok((super::optional(collate.arg.as_deref())?, true))
 }
 
-fn count(value: &Node) -> Result<Option<usize>> {
+pub(super) fn count(value: &Node) -> Result<Option<usize>> {
     // PostgreSQL represents LIMIT ALL and LIMIT NULL with the same NULL
     // A_Const. OFFSET NULL uses that node too and means zero at its caller.
     if matches!(node(value)?, NodeEnum::AConst(value) if value.isnull) {

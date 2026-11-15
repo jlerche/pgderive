@@ -30,6 +30,7 @@ pub(in crate::compiler) enum Tree {
         semijoin: bool,
         quantified: Option<crate::compiler::syntax::Compare>,
         has_residual: bool,
+        skip: Option<std::num::NonZeroUsize>,
     },
     Join {
         left: Box<Self>,

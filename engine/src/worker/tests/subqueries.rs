@@ -577,6 +577,26 @@ fn correlated_membership_elides_only_plain_distinct() -> Result<()> {
 }
 
 #[test]
+fn exists_positive_offset_preserves_count_and_rejects_fallible_sort_targets() -> Result<()> {
+    let native = native();
+    for sort in ["x", "1"] {
+        let sql = format!(
+            "SELECT EXISTS (SELECT b.price::smallint AS x FROM source.bid b
+            WHERE b.auction=a.id ORDER BY {sort} OFFSET 1) FROM source.auction a"
+        );
+        assert!(compile(&sql, &native).is_err(), "{sql}");
+    }
+    for negation in ["", "NOT "] {
+        let sql = format!(
+            "SELECT a.id FROM source.auction a WHERE {negation}EXISTS
+            (SELECT 1 FROM source.bid b WHERE b.auction=a.id OFFSET 2)"
+        );
+        compile(&sql, &native).map_err(|error| error.context(sql))?;
+    }
+    Ok(())
+}
+
+#[test]
 fn exists_discards_row_preserving_targets() -> Result<()> {
     let native = native();
     for (projection, predicate) in [
@@ -630,7 +650,9 @@ fn exists_discards_row_preserving_targets() -> Result<()> {
         "GROUP BY b.price HAVING count(*) > 1",
         "GROUP BY b.price / 0",
         "LIMIT -1",
-        "OFFSET 1",
+        "OFFSET -1",
+        "GROUP BY b.price OFFSET 1",
+        "ORDER BY 1/0 OFFSET 1",
         "ORDER BY b.price FETCH FIRST 1 ROW WITH TIES",
         "ORDER BY generate_series(1,0)",
         "ORDER BY count(*)",
