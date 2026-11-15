@@ -98,6 +98,16 @@ class ResidualFixture(SqlFixture):
                 a.probe IN ({unique}) AS unique_member, a.probe < ANY ({ties}) AS ties_earlier,
                 a.probe IN ({representatives}) AS representative_member FROM {a} a"""
             self.sql(f'INSERT INTO {b}(id,auction,price,cutoff) VALUES (13,1,8,12)')
+        elif mode == 'aggregate-quantified':
+            grouped = f'FROM {b} b WHERE {keys}'
+            count = f'SELECT count(*) {grouped}'
+            maximum = f'SELECT max(b.price) {grouped} HAVING count(*)>1'
+            self.labels = ['id', 'count_any', 'max_any', 'max_all']
+            self.query = f"""SELECT a.id, a.probe >= ANY ({count}) AS count_any,
+                a.probe < ANY ({maximum}) AS max_any, a.probe < ALL ({maximum}) AS max_all
+                FROM {a} a"""
+            self.sql(f'''INSERT INTO {b}(id,auction,price,cutoff) VALUES (14,2,NULL,3);
+                UPDATE {a} SET probe=2 WHERE id=9''')
         elif mode == 'nested-exists':
             scope = keys if keyed else keys + ' AND b.id>a.id'
             exists = f"""EXISTS (SELECT 1 FROM {b} b WHERE {scope}
@@ -217,6 +227,14 @@ class ResidualFixture(SqlFixture):
                         membership(row['probe'], unique[1:2]),
                         compare(row['probe'], peers, operator.lt, False),
                         membership(row['probe'], distinct_on_values(bucket)))] += 1
+            elif self.mode == 'aggregate-quantified':
+                qualifying = [item['price'] for item in inner if item['id'] != 99
+                              and key is not None and key == item['auction']]
+                maximum = [max((value for value in qualifying if value is not None), default=None)
+                           ] if len(qualifying) > 1 else []
+                memory[(row['id'], compare(row['probe'], [len(qualifying)], operator.ge, False),
+                        compare(row['probe'], maximum, operator.lt, False),
+                        compare(row['probe'], maximum, operator.lt, True))] += 1
             elif self.mode == 'nested-exists':
                 probe = row['probe']
                 present = any(
@@ -322,4 +340,5 @@ if __name__ == '__main__':
              'exists-ties', 'residual-ordered', 'nested-exists', *GROUP_OFFSET_MODES)
     cases = [(mode if keyed else f'{mode}-inequality-only', mode, keyed)
              for keyed in (True, False) for mode in modes]
-    run_cases([*cases, ('ordered', 'ordered', True)], qualify)
+    run_cases([*cases, ('ordered', 'ordered', True),
+               ('aggregate-quantified', 'aggregate-quantified', True)], qualify)

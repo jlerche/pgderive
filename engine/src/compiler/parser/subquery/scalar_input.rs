@@ -14,26 +14,70 @@ pub(super) fn validate(select: &pg::SelectStmt, input: Input) -> Result<()> {
     validate_scope(select, 0, input)
 }
 
+pub(super) fn validate_quantified_aggregate(select: &pg::SelectStmt) -> Result<()> {
+    validate_source(select, Input::Quantified)?;
+    for target in &select.target_list {
+        ensure!(
+            aggregate_operand(super::super::target(target)?, 0)?,
+            "quantified aggregate requires columns, literals, or total aggregate comparisons"
+        );
+    }
+    if let Some(filter) = select.where_clause.as_deref() {
+        ensure!(predicate(filter, 0)?, "quantified aggregate requires a total input predicate");
+    }
+    if let Some(having) = select.having_clause.as_deref() {
+        ensure!(
+            aggregate_operand(having, 0)?,
+            "quantified aggregate requires a total HAVING expression"
+        );
+    }
+    for sort in &select.sort_clause {
+        let (value, _, _) = super::super::partition::sort_expression(sort)?;
+        ensure!(aggregate_operand(value, 0)?, "quantified aggregate requires total ordering");
+    }
+    Ok(())
+}
+
+fn aggregate_operand(value: &Node, depth: usize) -> Result<bool> {
+    ensure!(depth < 32, "quantified aggregate expression depth exceeded");
+    match node(value)? {
+        NodeEnum::FuncCall(call) if super::correlation::aggregate(value) => {
+            aggregate_call(call, depth)
+        }
+        NodeEnum::BoolExpr(expression) => {
+            for argument in &expression.args {
+                if !aggregate_operand(argument, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => predicate_with(value, depth, &aggregate_operand),
+    }
+}
+
+fn aggregate_call(call: &pg::FuncCall, depth: usize) -> Result<bool> {
+    for argument in &call.args {
+        if !collated_plain(argument)? {
+            return Ok(false);
+        }
+    }
+    for sort in &call.agg_order {
+        let (value, _, _) = super::super::partition::sort_expression(sort)?;
+        if !collated_plain(value)? {
+            return Ok(false);
+        }
+    }
+    call.agg_filter.as_deref().map_or(Ok(true), |filter| predicate(filter, depth + 1))
+}
+
 fn validate_scope(select: &pg::SelectStmt, depth: usize, input: Input) -> Result<()> {
     ensure!(depth < 16, "scalar RHS nesting exceeds limit");
     ensure!(
-        select.with_clause.is_none()
-            && select.group_clause.is_empty()
-            && select.having_clause.is_none()
-            && select.window_clause.is_empty()
-            && select.from_clause.len() <= 1,
+        select.group_clause.is_empty() && select.having_clause.is_none(),
         "nonaggregate scalar RHS requires native tables, a total native join, or constant/set input"
     );
-    if let [source] = select.from_clause.as_slice() {
-        ensure!(
-            if matches!(input, Input::Scalar) {
-                matches!(source.node, Some(NodeEnum::RangeVar(_)))
-            } else {
-                total_source(source, 0)?
-            },
-            "scalar RHS requires native tables and simple local join predicates"
-        );
-    }
+    validate_source(select, input)?;
     for target in &select.target_list {
         let value = super::super::target(target)?;
         ensure!(
@@ -71,6 +115,26 @@ fn validate_scope(select: &pg::SelectStmt, depth: usize, input: Input) -> Result
     }
     for child in [&select.larg, &select.rarg].into_iter().flatten() {
         validate_scope(child, depth + 1, input)?;
+    }
+    Ok(())
+}
+
+fn validate_source(select: &pg::SelectStmt, input: Input) -> Result<()> {
+    ensure!(
+        select.with_clause.is_none()
+            && select.window_clause.is_empty()
+            && select.from_clause.len() <= 1,
+        "nonaggregate scalar RHS requires native tables, a total native join, or constant/set input"
+    );
+    if let [source] = select.from_clause.as_slice() {
+        ensure!(
+            if matches!(input, Input::Scalar) {
+                matches!(source.node, Some(NodeEnum::RangeVar(_)))
+            } else {
+                total_source(source, 0)?
+            },
+            "scalar RHS requires native tables and simple local join predicates"
+        );
     }
     Ok(())
 }
@@ -137,23 +201,32 @@ fn without_collation(value: &Node) -> Result<&Node> {
 }
 
 fn predicate(value: &Node, depth: usize) -> Result<bool> {
+    predicate_with(value, depth, &|value, _| plain(value))
+}
+
+fn predicate_with(
+    value: &Node,
+    depth: usize,
+    operand: &impl Fn(&Node, usize) -> Result<bool>,
+) -> Result<bool> {
     ensure!(depth < 32, "scalar RHS predicate depth exceeded");
     match node(value)? {
         NodeEnum::BoolExpr(value) => {
             for argument in &value.args {
-                if !predicate(argument, depth + 1)? {
+                if !predicate_with(argument, depth + 1, operand)? {
                     return Ok(false);
                 }
             }
             Ok(true)
         }
-        NodeEnum::NullTest(test) => plain(optional(test.arg.as_deref())?),
-        NodeEnum::BooleanTest(test) => plain(optional(test.arg.as_deref())?),
+        NodeEnum::NullTest(test) => operand(optional(test.arg.as_deref())?, depth + 1),
+        NodeEnum::BooleanTest(test) => operand(optional(test.arg.as_deref())?, depth + 1),
         NodeEnum::AExpr(expr)
             if crate::compiler::expression::is_comparison(expr)?
                 || distinct_kind(expr.kind).is_some() =>
         {
-            Ok(plain(optional(expr.lexpr.as_deref())?)? && plain(optional(expr.rexpr.as_deref())?)?)
+            Ok(operand(optional(expr.lexpr.as_deref())?, depth + 1)?
+                && operand(optional(expr.rexpr.as_deref())?, depth + 1)?)
         }
         _ => plain(value),
     }

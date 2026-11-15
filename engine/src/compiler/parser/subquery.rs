@@ -307,35 +307,46 @@ impl Rewrite<'_> {
                 Ok(self.scalar((**query).clone())?.value)
             }
             kind @ (pg::SubLinkType::AnySublink | pg::SubLinkType::AllSublink) => {
-                let all = kind == pg::SubLinkType::AllSublink;
-                let probe = optional(link.testexpr.as_deref())?.clone();
-                let row = matches!(probe.node, Some(NodeEnum::RowExpr(_)));
-                if !all && link.oper_name.is_empty() && !row {
-                    if query.group_clause.is_empty() && scalar::global_aggregate(query)? {
-                        let scalar = self.scalar((**query).clone())?;
-                        return Ok(ast::case(
-                            ast::is_null(scalar.present),
-                            ast::boolean(false),
-                            ast::comparison(probe, scalar.value, "="),
-                        ));
-                    }
-                    return self.membership((**query).clone(), probe, None);
-                }
-                let operator = names(&link.oper_name)?;
-                let operator = if link.oper_name.is_empty() && row {
-                    "="
-                } else {
-                    super::expressions::builtin_name(&operator.0)
-                        .context("quantified comparison requires a built-in operator")?
-                };
-                let comparison = Compare::parse(operator)?;
-                // ALL is the negation of ANY over the complementary strict comparison.
-                let comparison = if all { comparison.negate() } else { comparison };
-                let mark = self.membership((**query).clone(), probe, Some(comparison))?;
-                Ok(if all { ast::not(mark) } else { mark })
+                self.quantified_link(link, query, kind == pg::SubLinkType::AllSublink)
             }
             _ => anyhow::bail!("unsupported scalar/IN sublink kind"),
         }
+    }
+    fn quantified_link(
+        &mut self,
+        link: &pg::SubLink,
+        query: &pg::SelectStmt,
+        all: bool,
+    ) -> Result<Node> {
+        let probe = optional(link.testexpr.as_deref())?.clone();
+        let row = matches!(probe.node, Some(NodeEnum::RowExpr(_)));
+        let implicit_in = !all && link.oper_name.is_empty();
+        let name = names(&link.oper_name)?;
+        let operator = if implicit_in {
+            "="
+        } else {
+            super::expressions::builtin_name(&name.0)
+                .context("quantified comparison requires a built-in operator")?
+        };
+        let comparison = Compare::parse(operator)?;
+        if !row && query.group_clause.is_empty() && scalar::global_aggregate(query)? {
+            if !implicit_in {
+                scalar_input::validate_quantified_aggregate(query)?;
+            }
+            let scalar = self.scalar(query.clone())?;
+            return Ok(ast::case(
+                ast::is_null(scalar.present),
+                ast::boolean(all),
+                ast::comparison(probe, scalar.value, operator),
+            ));
+        }
+        if implicit_in && !row {
+            return self.membership(query.clone(), probe, None);
+        }
+        // ALL is the negation of ANY over the complementary strict comparison.
+        let comparison = if all { comparison.negate() } else { comparison };
+        let mark = self.membership(query.clone(), probe, Some(comparison))?;
+        Ok(if all { ast::not(mark) } else { mark })
     }
     fn existence(&mut self, query: &pg::SelectStmt) -> Result<Node> {
         let probe = membership::existence_value(query)?;

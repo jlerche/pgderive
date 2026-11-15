@@ -364,6 +364,26 @@ fn residual_comparison_orders_after_correlation() -> Result<()> {
 }
 
 #[test]
+fn quantified_global_aggregates_use_the_single_result_or_empty_identity() -> Result<()> {
+    let native = ordered_contract();
+    for comparison in ["IN", "< ANY", ">= ALL"] {
+        for aggregate in [
+            "count(*) FROM source.bid b WHERE b.auction=a.id",
+            "max(b.price) FROM source.bid b WHERE b.auction=a.id HAVING count(*)>1",
+            "max(b.price) FROM source.bid b LIMIT 0",
+        ] {
+            let sql =
+                format!("SELECT a.other {comparison} (SELECT {aggregate}) FROM source.auction a");
+            compile(&sql, &native).map_err(|error| error.context(sql))?;
+        }
+    }
+    let fallible_join = "SELECT a.other < ANY (SELECT max(b.price) FROM source.bid b
+        JOIN source.bid c ON b.id=c.auction AND 1/(c.id-c.id)>0) FROM source.auction a";
+    assert!(compile(fallible_join, &native).is_err());
+    Ok(())
+}
+
+#[test]
 fn nested_positive_exists_preserves_scope_and_presence() -> Result<()> {
     let native = ordered_contract();
     let exists = "SELECT a.id, EXISTS (SELECT 1 FROM source.bid b WHERE b.auction=a.id

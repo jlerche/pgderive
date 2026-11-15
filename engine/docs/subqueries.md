@@ -152,6 +152,14 @@ outer multiplicity and remains valid across duplicate RHS changes and cold reope
 
 ## Quantified comparisons
 
+A supported single-result global aggregate can feed `IN`, `ANY`, or `ALL`
+for ordinary scalar comparisons supported by the binder. Explicit quantified
+aggregate inputs require simple column or literal arguments and total
+filter and HAVING expressions. This uses the same lowering as a scalar
+subquery. A row suppressed
+by HAVING or a supported bound gives the empty-input result. A present row
+with a NULL aggregate result participates in three-valued comparison.
+
 The operators `=`, `<>` (also spelled `!=`), `<`, `<=`, `>`, and `>=`
 support `ANY` (also spelled `SOME`) and `ALL` over a one-column subquery. Both operands
 may be smallint, integer, bigint, or numeric, including mixed pairs. Comparisons
