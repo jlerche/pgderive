@@ -388,6 +388,12 @@ fn aggregate(
     state: &mut Targets,
     computed: &mut Vec<crate::compiler::scalar::Computed>,
 ) -> Result<ColumnRef> {
+    let string_agg = value
+        .string_agg
+        .as_ref()
+        .map(|parsed| string_agg::bind(parsed, resolve))
+        .transpose()?
+        .map(Box::new);
     let window = value
         .window
         .map(|window| {
@@ -398,7 +404,7 @@ fn aggregate(
             bind_window(
                 window,
                 resolve,
-                (context.occurrence_keys, value.function.occurrence_order()),
+                (context.occurrence_keys, &value.function, string_agg.as_deref()),
                 computed,
                 context.scalar_scope,
             )
@@ -431,12 +437,6 @@ fn aggregate(
         .as_deref()
         .map(|ast| argument::integer_window_argument(ast, resolve))
         .transpose()?;
-    let string_agg = value
-        .string_agg
-        .as_ref()
-        .map(|parsed| string_agg::bind(parsed, resolve))
-        .transpose()?
-        .map(Box::new);
     let mut aggregate = Aggregate {
         function: value.function,
         expression,
@@ -491,7 +491,11 @@ fn validate_order(
 fn bind_window(
     window: syntax::Window,
     resolve: &impl Fn(&crate::compiler::parser::Name) -> Result<ColumnRef>,
-    context: (&crate::compiler::properties::Properties, bool),
+    context: (
+        &crate::compiler::properties::Properties,
+        &Function,
+        Option<&crate::compiler::partition::StringAgg>,
+    ),
     computed: &mut Vec<crate::compiler::scalar::Computed>,
     scope: Option<usize>,
 ) -> Result<(Mode, Vec<ColumnRef>)> {
@@ -515,15 +519,9 @@ fn bind_window(
     }
     let mode = match window.frame {
         syntax::WindowFrame::Range { start, end, exclusion } => {
-            if context.1 {
-                validate_order(&order, context.0, &window_keys)?;
-            }
             range::bind(start, end, order, (window.ranking, exclusion))?
         }
         syntax::WindowFrame::Position(frame) => {
-            if context.1 || (!window.ranking && window.peers.is_none()) {
-                validate_order(&order, context.0, &window_keys)?;
-            }
             if window.ranking {
                 Mode::Ranking { order }
             } else if let Some(groups) = window.peers {
@@ -533,6 +531,9 @@ fn bind_window(
             }
         }
     };
+    if mode.requires_occurrence_order(context.1, context.2) {
+        validate_order(mode.order(), context.0, &window_keys)?;
+    }
     Ok((mode, window_keys))
 }
 

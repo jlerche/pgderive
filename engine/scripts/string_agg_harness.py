@@ -22,12 +22,16 @@ class StringAggFixture(SqlFixture):
                   FILTER (WHERE id <> 105) AS result
                 FROM {self.source} GROUP BY auction'''
         elif mode == 'window':
-            self.labels = ['id', 'result']
+            self.labels = ['id', 'result', 'peer_result']
             self.query = f'''SELECT id, string_agg(payload, delimiter)
                 FILTER (WHERE id <> 105) OVER (
                     PARTITION BY auction ORDER BY price DESC NULLS LAST, id
                     ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING EXCLUDE CURRENT ROW
-                ) AS result FROM {self.source}'''
+                ) AS result,
+                string_agg(payload, delimiter) FILTER (WHERE id <> 101) OVER (
+                    PARTITION BY auction ORDER BY payload, delimiter
+                    GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW EXCLUDE TIES
+                ) AS peer_result FROM {self.source}'''
         else:
             self.labels = ['result']
             self.query = f'''SELECT string_agg(DISTINCT payload, delimiter

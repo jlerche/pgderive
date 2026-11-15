@@ -498,6 +498,15 @@ impl Typed {
         bind(value, resolve, depth)
     }
 
+    pub(super) const fn string_agg_column(&self) -> Option<&ColumnRef> {
+        match &self.value {
+            Value::Cast { input, typmod: None } if self.oid == 25 && input.oid == 1043 => {
+                input.as_column()
+            }
+            _ => self.as_column(),
+        }
+    }
+
     pub(super) fn string_agg_text(self) -> Result<Self> {
         match self {
             Self { value: Value::Collate { input, collation }, .. } => {

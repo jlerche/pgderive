@@ -46,17 +46,12 @@ impl Windows {
         }
         for window in &self.0 {
             let spec = &window.spec;
-            if let Mode::Rows { order, .. }
-            | Mode::Ranking { order }
-            | Mode::Peers { order, .. }
-            | Mode::Range { order, .. }
-            | Mode::NumericRange { order, .. }
-            | Mode::TemporalRange { order, .. } = &spec.mode
-                && (matches!(spec.mode, Mode::Rows { .. })
-                    || spec.aggregates.iter().any(|value| value.function.occurrence_order()))
-            {
+            if spec.aggregates.iter().any(|value| {
+                spec.mode.requires_occurrence_order(&value.function, value.string_agg.as_deref())
+            }) {
                 ensure!(
-                    order
+                    spec.mode
+                        .order()
                         .iter()
                         .any(|order| order.column.name == crate::compiler::expansion::FIELD),
                     "expanded positional windows must order by generated ordinal"

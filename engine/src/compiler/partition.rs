@@ -94,6 +94,17 @@ pub struct StringAgg {
     pub(crate) collation: u32,
 }
 
+impl StringAgg {
+    fn peer_invariant(&self, order: &[Order]) -> bool {
+        [&self.value, &self.delimiter].into_iter().all(|value| {
+            value.is_constant()
+                || value
+                    .string_agg_column()
+                    .is_some_and(|column| order.iter().any(|key| &key.column == column))
+        })
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct AggregateOrder {
     pub(crate) expression: super::typed::Typed,
@@ -209,6 +220,33 @@ pub enum Mode {
     TemporalRange { order: Vec<Order>, frame: TemporalRangeFrame },
 }
 impl Mode {
+    pub(crate) fn order(&self) -> &[Order] {
+        match self {
+            Self::Grouped { .. } => &[],
+            Self::Rows { order, .. }
+            | Self::Ranking { order }
+            | Self::Peers { order, .. }
+            | Self::Range { order, .. }
+            | Self::NumericRange { order, .. }
+            | Self::TemporalRange { order, .. } => order,
+        }
+    }
+
+    pub(crate) fn requires_occurrence_order(
+        &self,
+        function: &Function,
+        string_agg: Option<&StringAgg>,
+    ) -> bool {
+        match self {
+            Self::Grouped { .. } => false,
+            Self::Rows { .. } => true,
+            _ => {
+                function.occurrence_order()
+                    && !string_agg.is_some_and(|aggregate| aggregate.peer_invariant(self.order()))
+            }
+        }
+    }
+
     pub(crate) const fn exclusion(&self) -> Exclusion {
         match self {
             Self::Rows { frame, .. } | Self::Peers { frame, .. } | Self::Range { frame, .. } => {

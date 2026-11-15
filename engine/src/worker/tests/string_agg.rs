@@ -64,6 +64,33 @@ fn append_expected(result: &mut Option<String>, row: &Row) {
 }
 
 #[test]
+fn string_agg_peer_frames_allow_identical_input_pairs() -> Result<()> {
+    let mut native = contract();
+    native.relations[0].columns[1].collation = 950;
+    for oid in [25, 1043] {
+        native.relations[0].columns[1].oid = oid;
+        for frame in [
+            "RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
+            "GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW EXCLUDE TIES",
+        ] {
+            let sql = format!(
+                "SELECT string_agg(category, ',') OVER
+                (ORDER BY category {frame}) FROM source.auction"
+            );
+            compile(&sql, &native).map_err(|error| error.context(sql))?.validate_execution()?;
+        }
+    }
+    for sql in [
+        "SELECT string_agg(category, other) OVER (ORDER BY category) FROM source.auction",
+        "SELECT string_agg(category, ',') OVER (ORDER BY category ROWS 1 PRECEDING)
+         FROM source.auction",
+    ] {
+        assert!(compile(sql, &native).is_err(), "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
 fn string_agg_checks_distinct_arguments_and_sort_domains() -> Result<()> {
     let mut contract = contract();
     contract.relations[0].columns[1].oid = 1043;

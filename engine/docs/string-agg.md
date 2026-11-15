@@ -24,9 +24,11 @@ requires an aggregate ORDER BY in Pgderive.
 Windowed text aggregation uses `string_agg(value, delimiter) OVER
 (ORDER BY ...)` and accepts FILTER. It follows frame order and honors
 frame bounds and exclusions. The window partition and ORDER BY must
-identify each occurrence so changes can reproduce that order. As in
-PostgreSQL, DISTINCT and aggregate-local ORDER BY are unavailable in a
-window call.
+identify each occurrence for ROWS frames and when tied rows can
+contribute different value and delimiter pairs. RANGE and GROUPS frames
+also accept ties when both arguments are constants or columns in the
+window ORDER BY. As in PostgreSQL, DISTINCT and aggregate-local ORDER BY
+are unavailable in a window call.
 
 The operator reevaluates only affected groups over their weighted row
 bags at transaction boundaries. Duplicate occurrences are preserved
