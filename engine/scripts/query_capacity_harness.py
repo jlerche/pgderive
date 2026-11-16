@@ -118,6 +118,9 @@ def qualify(output,binary):
         membership = json.loads(fixture.sql(f"SELECT json_build_object('objects',count(*),'bytes',coalesce(sum((reference->>'bytes')::bigint),0)) FROM {fixture.name}.pgderive_roots"))
         worker.finish(graceful=True)
         peak = sampler.finish()
+        # The outage needs a durable post-restart checkpoint. Keep the sustained
+        # workload settings intact and let this phase reach the checkpoint promptly.
+        config.write_text(text.replace('[worker.health]', 'checkpoint_interval_ms=100\n[worker.health]'))
         worker,sampler = start('restart','cold')
         worker.event('ready'); verify(fixture,labels)
         fixture.sql(f'UPDATE {fixture.name}.bid SET price=COALESCE(price,0)+1 WHERE id=1')
@@ -154,12 +157,13 @@ def qualify(output,binary):
         retried = command(fixture,binary,'status',config)['progress']
         assert {key:value for key,value in after.items() if key!='fence'} == {key:value for key,value in retried.items() if key!='fence'}
         assert fixture.sql(f"SELECT confirmed_flush_lsn > '{before['checkpoint_lsn']}'::pg_lsn FROM pg_replication_slots WHERE slot_name='{ready['slot']}'").strip()=='f'
+        # Resume only after the failed restart and unchanged ACK have been
+        # witnessed and the final update has produced a WAL boundary to replay.
         for ordinal in range(5):
             watermark = fixture.sql(f'UPDATE {fixture.name}.bid SET price={ordinal} WHERE id={ordinal+3} RETURNING pg_current_wal_insert_lsn()').splitlines()[0]
-        while time.monotonic()-outage<60:
-            time.sleep(max(0,min(1,60-(time.monotonic()-outage))))
-        duration=time.monotonic()-outage
-        proxy.send_signal(signal.SIGCONT); config.write_text(text)
+        proxy.send_signal(signal.SIGCONT)
+        duration = time.monotonic() - outage
+        config.write_text(text)
         worker,sampler=start('restart','supervisor-recovered')
         caught_up = worker.event('ready')
         # Source commits can share one DBSP epoch; wait for their WAL boundary.

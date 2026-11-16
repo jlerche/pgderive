@@ -107,6 +107,10 @@ order within each shard; the gate verifies each shard against the pinned corpus.
 The 80 composition-matrix histories also run in shards with complete transactions
 and restart checks. The release package builds in parallel with the live lanes. Once it is ready,
 the capacity check can overlap image construction and container qualification.
+The capacity check restores storage after it witnesses a failed restart,
+verifies the durable checkpoint and WAL acknowledgement are still protected,
+and queues the final update. After restarting, it waits for publication through
+that update's WAL boundary and verifies the sink against both oracles.
 The protocol log must show the exact named test and one passing test, preventing
 an obsolete filter from silently running zero tests.
 
