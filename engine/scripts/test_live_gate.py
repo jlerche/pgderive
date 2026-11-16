@@ -9,6 +9,7 @@ from unittest.mock import patch
 import live_gate
 from gate_build import manifest, verify_protocol, PROTOCOL_TEST
 from verify_worker_core import LIVE_COUNTS
+from worker_case_shard import select_cases
 
 
 class LiveGateTests(unittest.TestCase):
@@ -20,6 +21,34 @@ class LiveGateTests(unittest.TestCase):
         for name in names:
             self.assertTrue(live_gate.command(name,pathlib.Path('/evidence'),binaries))
         self.assertIn('/admin',live_gate.command('query-rebuild',pathlib.Path('/evidence'),binaries))
+
+    def test_long_release_suites_partition_into_whole_histories(self):
+        from subquery_harness import MODES as subqueries
+        from outer_join_harness import MODES as outer_joins
+        from set_operation_harness import MODES as set_operations
+        from temporal_arithmetic_harness import MODES as temporal
+        from join_predicate_harness import MODES as join_predicates
+
+        inventory = {'subqueries': subqueries, 'outer-joins': outer_joins,
+                     'set-operations': set_operations, 'temporal-arithmetic': temporal,
+                     'join-predicates': join_predicates}
+        for suite, cases in inventory.items():
+            shards = []
+            for name, index, count in live_gate.tasks(True, True):
+                if name == suite:
+                    with patch.dict(os.environ, {'PGDERIVE_TEST_CASE_SHARD': f'{index}/{count}'}):
+                        shard = select_cases(cases)
+                    self.assertLessEqual(len(shard), 2)
+                    shards.extend(shard)
+            self.assertCountEqual(shards, cases)
+
+    def test_full_composition_runs_each_history_and_inventory_separately(self):
+        from composition_matrix_model import FAMILIES
+
+        tasks = live_gate.tasks(True, True)
+        self.assertEqual(sum(name == 'composition-matrix' for name, _, _ in tasks),
+                         10 * len(FAMILIES))
+        self.assertEqual(sum(name == 'composition-inventory' for name, _, _ in tasks), 1)
 
     def test_parallelism_uses_distinct_servers_and_is_sequential_within_each(self):
         finished=[]; ports={}; lock=threading.Lock(); barrier=threading.Barrier(4)
@@ -59,6 +88,7 @@ class LiveGateTests(unittest.TestCase):
         completed = [task for lane in evidence['groups'] for task in lane]
         self.assertEqual(len(completed), len(expected))
         self.assertEqual(set(completed), expected)
+        self.assertEqual(set(evidence['elapsed_seconds']), expected)
         self.assertTrue(all(success for _,success in finished))
         self.assertTrue(evidence['passed'])
 
@@ -164,6 +194,9 @@ class LiveGateTests(unittest.TestCase):
                           if (port := env.get('PGDERIVE_TEST_POSTGRES_PORT'))}, {'0', '1'})
         self.assertEqual(verified, [(root, binaries, '0', True)])
         self.assertEqual(outputs[root/'replication/console.log'][1]['PGDERIVE_CHECK_PROFILE'], 'full')
+        self.assertIn('--skip-inventory', outputs[root/'composition-matrix/shard-1/console.log'][0])
+        self.assertIn('--inventory-only', outputs[root/'composition-inventory/console.log'][0])
+        self.assertIn('scripts/worker_case_shard.py', outputs[root/'subqueries/shard-1/console.log'][0])
         self.assertIn('--replication-only', outputs[root/'replication/console.log'][0])
         self.assertTrue(outputs[root/'error-order/shard-1/console.log'][1]['PGDERIVE_ERROR_ORDER_EVIDENCE'])
         self.assertIn('/admin', outputs[root/'query-recovery/console.log'][0])

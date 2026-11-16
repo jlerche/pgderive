@@ -11,3 +11,16 @@ def select_cases(cases):
     if not 0 <= index < count <= len(cases):
         raise ValueError(f'Invalid case shard {selection!r} for {len(cases)} cases')
     return cases[index::count]
+
+def main():
+    import importlib
+    import sys
+
+    from worker_harness import run_modes
+
+    module = importlib.import_module(sys.argv.pop(1))
+    run_modes(select_cases(module.MODES), module.qualify)
+
+
+if __name__ == '__main__':
+    main()

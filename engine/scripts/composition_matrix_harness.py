@@ -64,6 +64,9 @@ def main():
     parser.add_argument('--family',choices=FAMILIES)
     parser.add_argument('--seed',type=int)
     parser.add_argument('--full',action='store_true')
+    inventory_mode = parser.add_mutually_exclusive_group()
+    inventory_mode.add_argument('--inventory-only', action='store_true')
+    inventory_mode.add_argument('--skip-inventory', action='store_true')
     parser.add_argument('--completed-root',type=pathlib.Path,action='append',default=[])
     split = sys.argv.index('--')
     args = parser.parse_args(sys.argv[1:split])
@@ -105,12 +108,14 @@ def main():
         traces = [trace for trace in traces if not any(saved['id']==trace['id'] and saved['seed']==trace['seed']
                   and saved['matrix']['sql']==trace['matrix']['sql'] and saved['initial']==trace['initial']
                   and saved['history']==trace['history'] for saved in complete)]
-    if not args.replay and traces:
+    if not args.skip_inventory and not args.replay and traces:
         inspection = args.output/'inventory'
         inspection.mkdir()
         fixture = MatrixFixture(inspection,traces[0])
         with fixture.managed():
             inventory(fixture,command)
+    if args.inventory_only:
+        return
     records = []
     for trace in traces:
         label = trace['id']+'-'+str(trace['seed'])

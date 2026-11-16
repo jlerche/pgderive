@@ -15,6 +15,7 @@ fi
 if [[ ${PGDERIVE_COVERAGE:-0} == 1 ]]; then
     source "$(dirname "$PGDERIVE_GATE_BUILD")/coverage.env"
 fi
+export PGDERIVE_GATE_REPLICATION=${PGDERIVE_GATE_REPLICATION:-1}
 mkdir -p artifacts/worker
 output=$(mktemp -d "$PWD/artifacts/worker/run-XXXXXXXX")
 printf 'Worker evidence: %s\n' "$output"

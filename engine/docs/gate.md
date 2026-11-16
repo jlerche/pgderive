@@ -65,7 +65,15 @@ provisions a pool of independently owned PostgreSQL containers with tmpfs
 storage. The default pool size is the CPU count capped at eight and can be
 adjusted with `PGDERIVE_GATE_LANES`. Each lane takes pending work as it becomes
 free. Residual and quantified subqueries, grouping sets, and text ordering are
-split into disjoint shards of whole histories. Each lane runs one harness at a
+split into disjoint shards of whole histories. The full profile also shards
+scalar subqueries, outer joins, set operations, temporal arithmetic, and join
+predicates. Each of these five suites runs at most two histories per task.
+The composition matrix runs one history per task and checks the shared
+acceptance and rejection inventory once on its own lane.
+The harness runner records task wall time in `lanes.json`, including tasks
+that run without the object-store latency proxy. Lane Rust executables default
+to two Tokio worker threads to limit oversubscription. Set
+`TOKIO_WORKER_THREADS` to override the default. Each lane runs one harness at a
 time against its own database. The result verifier requires the same counts and
 rejects duplicate case evidence across shards. These checks use real
 PostgreSQL/object storage, event witnesses and explicit fault barriers.

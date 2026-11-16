@@ -143,6 +143,14 @@ not a full release claim. Standalone `check_worker.sh`, `check_integration.sh` a
 `check_coverage.sh` retain the full profile by default; set
 `PGDERIVE_CHECK_PROFILE=core` to select their focused profile explicitly.
 
+To run the complete live integration suite separately from Rust unit tests, run
+`./scripts/check_worker.sh` from the engine directory. It includes the
+replication checks and runs independent tasks in parallel on owned PostgreSQL
+instances. Use `PGDERIVE_GATE_LANES` to tune concurrency on your machine and
+see `lanes.json` in the worker evidence directory for task timings. Run Rust
+unit tests from the same directory with
+`cargo test --locked --all-targets --all-features`.
+
 Frozen oracles are never regenerated during a gate. Recipe fingerprints, exact
 family counts, per-history oracle checks and cold reopen reports are verified.
 For fixture refresh and coverage boundaries, see [the gate design](docs/gate.md).

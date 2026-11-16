@@ -27,6 +27,7 @@ unordered unordered
 query-concurrent query_concurrent
 application application_portfolio
 composition-matrix composition_matrix
+composition-inventory composition_matrix
 sliding-extrema sliding_extrema
 prefix-window prefix_window
 expression-composition expression_composition
@@ -113,10 +114,18 @@ EXTRA = (
     'native-cross', 'nexmark-q6',
 )
 OPTIONS = {
+    'composition-matrix': ['--skip-inventory'],
+    'composition-inventory': ['--inventory-only'],
     'multi-query': ['--counts', '2', '--seconds', '2', '--mode', 'shared'],
     'query-storage-soak': ['--duration', '1', '--transactions', '6', '--rows', '256'],
 }
 RELEASE = ('query-container', 'query-capacity')
+# Each harness exposes its original named history inventory and qualifier.
+MODE_SHARDS = {
+    'subqueries': 38, 'outer-joins': 23, 'set-operations': 22,
+    'temporal-arithmetic': 20, 'join-predicates': 15,
+}
+COMPOSITION_SHARDS = 80
 ERROR_ORDER_SHARDS = 8
 FULL_RESULT_COUNT = 918
 
@@ -141,7 +150,10 @@ def command(name, directory, binaries, postgres_port):
     arguments = [str(directory), *OPTIONS.get(name, [])]
     if name == 'query-storage-soak':
         arguments = [*OPTIONS[name], str(directory)]
-    return [sys.executable, f'scripts/{script}_harness.py', *arguments, '--', executable]
+    entrypoint = [f'scripts/{script}_harness.py']
+    if name in MODE_SHARDS:
+        entrypoint = ['scripts/worker_case_shard.py', f'{script}_harness']
+    return [sys.executable, *entrypoint, *arguments, '--', executable]
 
 
 def qualify_container(output, commands, environment):

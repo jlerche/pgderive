@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import full_live_gate
 from harness_control import Server
 from run_with_s3_proxy import prepare
@@ -24,8 +25,7 @@ from verify_worker_core import main as verify_worker
 # Start slow suites early. Each shard still runs complete histories and
 # each lane owns one isolated PostgreSQL instance.
 SUITES = (
-    ('residual-subqueries', 8), ('quantified-subqueries', 4),
-    ('tenant-storage', 1), ('text-ordering', 2), ('grouping-sets', 2),
+    ('tenant-storage', 1), ('residual-subqueries', 24), ('quantified-subqueries', 18), ('text-ordering', 2), ('grouping-sets', 2),
     ('transactions', 1), ('crashes', 1), ('postgres-support', 1),
     ('query-rebuild', 1), ('projection-compiler', 1), ('memtable', 1),
     ('string-agg', 1), ('query-lifecycle', 1), ('checkpoint', 1),
@@ -47,7 +47,8 @@ def tasks(with_replication, full=False):
         )
         names = (*prioritized, *(name for name in names if name not in prioritized))
         shards_by_name['error-order'] = full_live_gate.ERROR_ORDER_SHARDS
-        shards_by_name['composition-matrix'] = 8
+        shards_by_name.update(full_live_gate.MODE_SHARDS)
+        shards_by_name['composition-matrix'] = full_live_gate.COMPOSITION_SHARDS
         suites = [(name, shards_by_name.get(name, 1)) for name in names]
     pending = [(name, index, shards) for name, shards in suites
                if with_replication or name not in ('replication', 'error-order')
@@ -56,7 +57,8 @@ def tasks(with_replication, full=False):
         # Interleave the long histories with replication and the error corpus
         # so no single suite occupies the entire pool while peers are pending.
         first = {'replication', 'error-order', 'residual-subqueries', 'quantified-subqueries',
-                 'composition-matrix', 'subqueries', 'outer-joins', 'join-predicates'}
+                 'composition-matrix', 'subqueries', 'outer-joins', 'join-predicates',
+                 'set-operations', 'temporal-arithmetic'}
         pending.sort(key=lambda task: (task[0] not in first, task[1] if task[0] in first else 0))
     return pending
 
@@ -129,11 +131,14 @@ def provision(index, output, servers):
     return server
 
 
-def lane(index, pending, output, binaries, commands, server, completed, package):
+def lane(index, pending, output, binaries, commands, server, completed, timings, package):
     full = package is not None
     environment = {
         **{key: value for key, value in os.environ.items()
            if not key.startswith('PGDERIVE__') and key != 'PGDERIVE_TEST_CASE_SHARD'},
+        # Each lane can start several Rust processes. Keep their async pools
+        # small so runnable threads scale with the lane count, not CPU count squared.
+        'TOKIO_WORKER_THREADS': os.environ.get('TOKIO_WORKER_THREADS') or '2',
         'PGDERIVE_TEST_POSTGRES_PORT': str(server.port),
         'PGPASSWORD': 'postgres', 'PGDERIVE__POSTGRES__PASSWORD': 'postgres',
         'PGDERIVE_S3_LATENCY_SCALE': '0',
@@ -154,6 +159,7 @@ def lane(index, pending, output, binaries, commands, server, completed, package)
         directory = output / relative
         if name in full_live_gate.RELEASE:
             package.result()
+        started = time.monotonic()
         if name == 'query-container':
             full_live_gate.qualify_container(output, commands, task_environment)
         else:
@@ -176,8 +182,10 @@ def lane(index, pending, output, binaries, commands, server, completed, package)
             elif name != 'replication':
                 argv = [sys.executable, 'scripts/run_with_s3_proxy.py', str(directory), *argv]
             commands.run(argv, task_environment, directory / 'console.log')
+        elapsed = time.monotonic() - started
         completed.append(str(relative))
-        print(f'Lane {index}: {relative} passed', flush=True)
+        timings[str(relative)] = elapsed
+        print(f'Lane {index}: {relative} passed in {elapsed:.1f}s', flush=True)
 
 
 def run(output, binaries, full=False):
@@ -193,6 +201,7 @@ def run(output, binaries, full=False):
     lane_count = workers(len(scheduled))
     print(f'Live gate: {len(scheduled)} tasks across {lane_count} PostgreSQL lanes', flush=True)
     completed = [[] for _ in range(lane_count)]
+    timings = [{} for _ in range(lane_count)]
     try:
         # Initialize the shared object service/bucket once, before any lane.
         prepare()
@@ -208,7 +217,7 @@ def run(output, binaries, full=False):
                 if len({server.port for server in owned})!=lane_count or len({server.name for server in owned})!=lane_count:
                     raise RuntimeError('Live lanes do not have distinct PostgreSQL servers')
                 jobs = [pool.submit(lane, index, pending, output, binaries, commands, server,
-                                    completed[index], package) for index, server in enumerate(owned)]
+                                    completed[index], timings[index], package) for index, server in enumerate(owned)]
                 if package is not None:
                     jobs.append(package)
                 for job in as_completed(jobs):
@@ -233,7 +242,9 @@ def run(output, binaries, full=False):
                 except Exception as error:print(f'Archive failed; server retained: {server.name}: {error}',file=sys.stderr)
             server.finish(success)
         records.sort(key=lambda record: int(record['lane'].split('-')[1]))
-        evidence = {'passed': success, 'servers': records, 'groups': completed}
+        evidence = {'passed': success, 'servers': records, 'groups': completed,
+                    'elapsed_seconds': {task: seconds for lane_timings in timings
+                                        for task, seconds in lane_timings.items()}}
         (output / 'lanes.json').write_text(json.dumps(evidence, indent=2) + '\n')
 
 
