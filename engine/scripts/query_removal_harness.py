@@ -6,6 +6,7 @@ import time
 from gc_fixture import paged_garbage, empty_inventory
 
 from query_lifecycle_harness import configured, grouped, inspect, rejected, verify_result
+from worker_case_shard import select_cases
 from worker_harness import Worker, harness_arguments
 from harness_control import commit_proxy, wait_records
 
@@ -165,16 +166,12 @@ def guarded_drop(output, command, kind):
 
 if __name__ == '__main__':
     root, command = harness_arguments()
-    for stage in ('intent', 'finish'):
-        for mode in ('before', 'after', 'hold'):
-            output = root/f'{stage}-{mode}'
-            output.mkdir()
-            fault(output, command, stage, mode)
-    for name, qualify in [('competing-sink', competing_sink), ('unowned-sink', unowned_sink)]:
-        output = root/name
+    cases = [(f'{stage}-{mode}', fault, stage, mode)
+             for stage in ('intent', 'finish') for mode in ('before', 'after', 'hold')]
+    cases.extend([('competing-sink', competing_sink), ('unowned-sink', unowned_sink)])
+    cases.extend((kind, guarded_drop, kind)
+                 for kind in ('dependent-view', 'altered-table', 'replaced-sink'))
+    for name, qualify, *arguments in select_cases(cases):
+        output = root / name
         output.mkdir()
-        qualify(output, command)
-    for kind in ('dependent-view', 'altered-table', 'replaced-sink'):
-        output = root/kind
-        output.mkdir()
-        guarded_drop(output, command, kind)
+        qualify(output, command, *arguments)

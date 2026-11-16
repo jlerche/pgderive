@@ -25,12 +25,13 @@ from verify_worker_core import main as verify_worker
 # Start slow suites early. Each shard still runs complete histories and
 # each lane owns one isolated PostgreSQL instance.
 SUITES = (
-    ('tenant-storage', 1), ('residual-subqueries', 24), ('quantified-subqueries', 18), ('text-ordering', 2), ('grouping-sets', 2),
-    ('transactions', 1), ('crashes', 1), ('postgres-support', 1),
+    ('tenant-storage', 1), ('replication', 1), ('postgres-support', 1),
+    ('transactions', 1), ('crashes', 1), ('residual-subqueries', 48),
+    ('quantified-subqueries', 36), ('text-ordering', 13), ('grouping-sets', 10),
     ('query-rebuild', 1), ('projection-compiler', 1), ('memtable', 1),
     ('string-agg', 1), ('query-lifecycle', 1), ('checkpoint', 1),
     ('result-table', 1), ('multi-query', 1), ('tenant-storage-commit', 1),
-    ('operation-budget', 1), ('replication', 1),
+    ('operation-budget', 1),
 )
 
 
@@ -48,6 +49,7 @@ def tasks(with_replication, full=False):
         names = (*prioritized, *(name for name in names if name not in prioritized))
         shards_by_name['error-order'] = full_live_gate.ERROR_ORDER_SHARDS
         shards_by_name.update(full_live_gate.MODE_SHARDS)
+        shards_by_name.update(full_live_gate.OPERATION_SHARDS)
         shards_by_name['composition-matrix'] = full_live_gate.COMPOSITION_SHARDS
         suites = [(name, shards_by_name.get(name, 1)) for name in names]
     pending = [(name, index, shards) for name, shards in suites
@@ -58,7 +60,9 @@ def tasks(with_replication, full=False):
         # so no single suite occupies the entire pool while peers are pending.
         first = {'replication', 'error-order', 'residual-subqueries', 'quantified-subqueries',
                  'composition-matrix', 'subqueries', 'outer-joins', 'join-predicates',
-                 'set-operations', 'temporal-arithmetic'}
+                 'set-operations', 'temporal-arithmetic', 'application', 'tenant-storage',
+                 'text-ordering', 'grouping-sets',
+                 *full_live_gate.MODE_SHARDS, *full_live_gate.OPERATION_SHARDS}
         pending.sort(key=lambda task: (task[0] not in first, task[1] if task[0] in first else 0))
     return pending
 

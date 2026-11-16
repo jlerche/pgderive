@@ -122,9 +122,13 @@ OPTIONS = {
 RELEASE = ('query-container', 'query-capacity')
 # Each harness exposes its original named history inventory and qualifier.
 MODE_SHARDS = {
-    'subqueries': 38, 'outer-joins': 23, 'set-operations': 22,
-    'temporal-arithmetic': 20, 'join-predicates': 15,
+    'subqueries': 75, 'outer-joins': 45, 'set-operations': 44,
+    'temporal-arithmetic': 40, 'join-predicates': 29,
+    'sql-composition': 28, 'numeric-arithmetic': 19, 'unordered': 17,
+    'expression-composition': 12, 'computed-join': 6, 'aggregate-inputs': 6,
 }
+OPERATION_SHARDS = {'query-rebuild-fault': 12, 'query-removal': 11,
+                    'query-health-failure': 6, 'memtable': 8}
 COMPOSITION_SHARDS = 80
 ERROR_ORDER_SHARDS = 8
 FULL_RESULT_COUNT = 918
@@ -152,7 +156,8 @@ def command(name, directory, binaries, postgres_port):
         arguments = [*OPTIONS[name], str(directory)]
     entrypoint = [f'scripts/{script}_harness.py']
     if name in MODE_SHARDS:
-        entrypoint = ['scripts/worker_case_shard.py', f'{script}_harness']
+        inventory = 'COUNTS' if name == 'unordered' else 'MODES'
+        entrypoint = ['scripts/worker_case_shard.py', f'{script}_harness', inventory]
     return [sys.executable, *entrypoint, *arguments, '--', executable]
 
 
@@ -198,8 +203,9 @@ def verify(output, binaries, postgres_port, with_replication):
          'query-capacity', 'query-storage-soak')
     ]
     for name, count in (('query-removal', 11), ('query-rebuild-fault', 12), ('query-health-failure', 6)):
-        cases = list((output / name).glob('*/qualification.json'))
-        assert len(cases) == count, (name, len(cases), count)
+        cases = list((output / name).rglob('qualification.json'))
+        assert len(cases) == count and len({case.parent.name for case in cases}) == count, (
+            name, len(cases), count)
         reports.extend(cases)
     for report in (*results, *reports):
         json.loads(report.read_text())

@@ -65,9 +65,12 @@ provisions a pool of independently owned PostgreSQL containers with tmpfs
 storage. The default pool size is the CPU count capped at eight and can be
 adjusted with `PGDERIVE_GATE_LANES`. Each lane takes pending work as it becomes
 free. Residual and quantified subqueries, grouping sets, and text ordering are
-split into disjoint shards of whole histories. The full profile also shards
-scalar subqueries, outer joins, set operations, temporal arithmetic, and join
-predicates. Each of these five suites runs at most two histories per task.
+split into disjoint shards of one complete history each. The full profile also
+uses one task per history for scalar subqueries, outer joins, set operations,
+temporal and numeric arithmetic, join predicates, SQL composition, unordered
+selection, expression composition, computed joins, and aggregate inputs.
+Independent memtable, removal, health-failure, and rebuild-fault scenarios
+also run in separate tasks during full qualification.
 The composition matrix runs one history per task and checks the shared
 acceptance and rejection inventory once on its own lane.
 The harness runner records task wall time in `lanes.json`, including tasks

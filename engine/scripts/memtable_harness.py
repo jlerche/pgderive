@@ -5,6 +5,7 @@ import pathlib
 import sys
 import subprocess
 from harness_control import held_transaction, finish_transaction, wait_sql
+from worker_case_shard import select_cases
 from worker_harness import Fixture
 
 
@@ -331,12 +332,10 @@ if __name__ == '__main__':
     output = pathlib.Path(sys.argv[1])
     command = sys.argv[2:]
     command = command[1:] if command and command[0] == '--' else command
-    qualify(output, command)
-    memory_pressure(output/'pressure', command)
-    publication_guards(output/'guards', command)
-    checkpoint_guards(output/'checkpoint-guards', command)
-    ownership_locked(output/'ownership-lock', command)
-    publication_barrier(output/'barrier', command)
-    concurrent_ddl(output/'ddl', command)
     from adaptive_epoch_harness import qualify as epochs
-    epochs(output/'epochs', command)
+
+    cases = ((None, qualify), ('pressure', memory_pressure), ('guards', publication_guards),
+             ('checkpoint-guards', checkpoint_guards), ('ownership-lock', ownership_locked),
+             ('barrier', publication_barrier), ('ddl', concurrent_ddl), ('epochs', epochs))
+    for name, run in select_cases(cases):
+        run(output if name is None else output / name, command)

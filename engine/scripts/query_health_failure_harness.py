@@ -11,6 +11,7 @@ from query_health_harness import health
 from harness_control import start_recorded
 from query_lifecycle_harness import configured, grouped
 from query_rebuild_harness import command, verify
+from worker_case_shard import select_cases
 from worker_harness import Worker
 
 
@@ -173,7 +174,9 @@ if __name__ == '__main__':
     binary = sys.argv[2:]
     if binary and binary[0] == '--':
         binary = binary[1:]
-    for case in ['transaction_limit', 'diagnostic_connection', 'diagnostic_lock', 'engine_scratch', 'scratch_directory', 'storage_outage']:
+    cases = ('transaction_limit', 'diagnostic_connection', 'diagnostic_lock',
+             'engine_scratch', 'scratch_directory', 'storage_outage')
+    for case in select_cases(cases):
         directory = root/case
         directory.mkdir(parents=True, exist_ok=True)
         qualify(directory, binary, case)

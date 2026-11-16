@@ -9,6 +9,7 @@ import time
 from query_removal_harness import setup, cleanup, wait_records
 from query_lifecycle_harness import rejected
 from query_rebuild_harness import command, verify
+from worker_case_shard import select_cases
 from worker_harness import Worker
 from harness_control import commit_proxy
 
@@ -104,8 +105,9 @@ if __name__ == '__main__':
     binary = sys.argv[2:]
     if binary and binary[0] == '--':
         binary = binary[1:]
-    for stage in ('intent','activation','cutover','retirement'):
-        for mode in ('before','after','hold'):
-            directory = output/(stage+'-'+mode)
-            directory.mkdir()
-            fault(directory,binary,stage,mode)
+    cases = [(stage, mode) for stage in ('intent', 'activation', 'cutover', 'retirement')
+             for mode in ('before', 'after', 'hold')]
+    for stage, mode in select_cases(cases):
+        directory = output / f'{stage}-{mode}'
+        directory.mkdir()
+        fault(directory, binary, stage, mode)

@@ -1,4 +1,5 @@
 """Every suite runs once; concurrent lanes own distinct PostgreSQL servers."""
+import importlib
 import json
 import os
 import pathlib
@@ -22,23 +23,23 @@ class LiveGateTests(unittest.TestCase):
             self.assertTrue(live_gate.command(name,pathlib.Path('/evidence'),binaries))
         self.assertIn('/admin',live_gate.command('query-rebuild',pathlib.Path('/evidence'),binaries))
 
-    def test_long_release_suites_partition_into_whole_histories(self):
-        from subquery_harness import MODES as subqueries
-        from outer_join_harness import MODES as outer_joins
-        from set_operation_harness import MODES as set_operations
-        from temporal_arithmetic_harness import MODES as temporal
-        from join_predicate_harness import MODES as join_predicates
+    def test_release_mode_shards_cover_each_original_history_once(self):
+        from live_gate import full_live_gate
 
-        inventory = {'subqueries': subqueries, 'outer-joins': outer_joins,
-                     'set-operations': set_operations, 'temporal-arithmetic': temporal,
-                     'join-predicates': join_predicates}
-        for suite, cases in inventory.items():
+        tasks = live_gate.tasks(True, True)
+        for suite, count in full_live_gate.MODE_SHARDS.items():
+            argv = full_live_gate.command(suite, pathlib.Path('/evidence'),
+                                          {'worker': '/worker', 'admin': '/admin'}, '5432')
+            self.assertEqual(argv[1], 'scripts/worker_case_shard.py')
+            module = importlib.import_module(argv[2])
+            cases = list(getattr(module, argv[3]))
+            self.assertEqual(count, len(cases))
             shards = []
-            for name, index, count in live_gate.tasks(True, True):
+            for name, index, total in tasks:
                 if name == suite:
-                    with patch.dict(os.environ, {'PGDERIVE_TEST_CASE_SHARD': f'{index}/{count}'}):
-                        shard = select_cases(cases)
-                    self.assertLessEqual(len(shard), 2)
+                    with patch.dict(os.environ, {'PGDERIVE_TEST_CASE_SHARD': f'{index}/{total}'}):
+                        shard = list(select_cases(cases))
+                    self.assertEqual(len(shard), 1)
                     shards.extend(shard)
             self.assertCountEqual(shards, cases)
 
