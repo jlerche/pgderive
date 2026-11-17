@@ -120,6 +120,11 @@ OPTIONS = {
     'query-storage-soak': ['--duration', '1', '--transactions', '6', '--rows', '256'],
 }
 RELEASE = ('query-container', 'query-capacity')
+REPLICATION = tuple(f'replication-{scenario}' for scenario in (
+    'stream', 'snapshot', 'maintenance', 'collection', 'paged', 'cohort', 'protocol',
+))
+
+
 # Each harness exposes its original named history inventory and qualifier.
 MODE_SHARDS = {
     'subqueries': 75, 'outer-joins': 45, 'set-operations': 44,
@@ -135,12 +140,16 @@ FULL_RESULT_COUNT = 918
 
 
 def suites():
-    return ('replication', 'error-order', *MATRIX, *WORKER, 'transactions', *EXTRA, *ADMIN)
+    return (*REPLICATION, 'error-order', *MATRIX, *WORKER, 'transactions', *EXTRA, *ADMIN)
+
+
+def replication_command(name, directory):
+    return ['bash', 'scripts/check_replication_case.sh', name.removeprefix('replication-'), str(directory)]
 
 
 def command(name, directory, binaries, postgres_port):
-    if name == 'replication':
-        return ['bash', 'scripts/check_integration.sh', '--replication-only']
+    if name in REPLICATION:
+        return replication_command(name, directory)
     if name == 'error-order':
         return [sys.executable, 'scripts/error_order_differential.py', 'psql', '-h', '127.0.0.1',
                 '-p', postgres_port, '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-Atq']

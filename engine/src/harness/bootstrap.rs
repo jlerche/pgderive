@@ -5,7 +5,7 @@ mod layout;
 mod ledger;
 mod maintenance;
 mod validation;
-use super::{Fixture, apply, connect, source_state};
+use super::{Fixture, ReplicationScenario, apply, connect, source_state};
 use crate::{
     Config,
     catalog::{Catalog, Lsn, Snapshot, Writer},
@@ -20,12 +20,14 @@ pub(super) async fn check(
     sql: &mut crate::catalog::Connection,
     fixture: &Fixture,
     recovery: &super::recovery::Recovery,
+    scenario: ReplicationScenario,
 ) -> Result<()> {
+    let verify_snapshot = matches!(scenario, ReplicationScenario::Snapshot);
     let slot = format!("{}_snapshot", fixture.slot);
     let export = Export::create(&recovery.config, &slot).await?;
     let boundary = export.consistent();
     let (contract, mut model, batch) =
-        snapshot_copy(sql, fixture, &recovery.config, export).await?;
+        snapshot_copy(sql, fixture, &recovery.config, export, verify_snapshot).await?;
     let mut graph = super::mvp::Query::new(
         plan(&contract)?,
         super::mvp::operators(),
@@ -38,23 +40,21 @@ pub(super) async fn check(
         },
     )?;
     let catalog = Catalog::new(&fixture.schema, "snapshot_grouped")?;
+    catalog.install(sql).await?;
     let protection = activate(
         sql,
         &catalog,
         &mut graph,
         Initial { contract: &contract, boundary, batch: &batch, config: &recovery.config },
+        verify_snapshot,
     )
     .await?;
     let (mut graph, mut writer) = restore(sql, &catalog, graph, boundary).await?;
     protection.published(sql, &writer, graph.plan(), &graph.checkpoint()?).await?;
     let mut config = recovery.config.clone();
     config.replication.slot = slot.clone();
-    let verified = writer.confirmed(sql, graph.plan()).await?;
-    let mut stream = crate::acknowledged::Stream::connect(&config, &verified).await?;
-    let result = catch_up(sql, &fixture.schema, &mut graph, &mut writer, &mut stream).await;
-    let shutdown = stream.shutdown().await;
-    drop(stream);
-    let transaction = crate::outcome::combine(result, shutdown, "snapshot CDC shutdown")?;
+    let transaction =
+        stream_catch_up(sql, &catalog, &config, (&mut graph, &mut writer), verify_snapshot).await?;
     apply(&mut model, &transaction)?;
     ensure!(
         model == source_state(&**sql, &fixture.schema).await?,
@@ -65,15 +65,69 @@ pub(super) async fn check(
         report.time == 2 && report.epoch == 2,
         "fresh process recovered wrong snapshot/CDC boundary"
     );
-    maintenance::check(sql, &fixture.schema, &mut graph, &mut writer, recovery).await?;
-    collection::check(sql, &catalog, &mut graph, &mut writer, recovery).await?;
-    finish_source(sql, fixture, &config, &catalog, graph.plan()).await?;
+    if verify_snapshot {
+        finish_source(sql, fixture, &config, &catalog, graph.plan()).await?;
+        drop(config);
+        eprintln!(
+            "MVP exported snapshot plus concurrent insert/update/delete CDC reconstructed exact source state; native schema drift rejected"
+        );
+        return Ok(());
+    }
     drop(config);
-    eprintln!(
-        "MVP exported snapshot plus concurrent insert/update/delete CDC reconstructed exact source state; native schema drift rejected"
-    );
+    check_checkpoint(sql, &catalog, (&mut graph, &mut writer), recovery, scenario).await?;
+    sql.query_one("SELECT pg_drop_replication_slot($1)", &[&slot]).await?;
     Ok(())
 }
+
+async fn stream_catch_up(
+    sql: &mut crate::catalog::Connection,
+    catalog: &Catalog,
+    config: &Config,
+    state: (&mut super::mvp::Query, &mut Writer),
+    verify_snapshot: bool,
+) -> Result<crate::transaction::Transaction> {
+    let (graph, writer) = state;
+    let verified = writer.confirmed(sql, graph.plan()).await?;
+    let mut stream = crate::acknowledged::Stream::connect(config, &verified).await?;
+    let result = async {
+        let transaction = catch_up(sql, graph, writer, &mut stream).await?;
+        if verify_snapshot {
+            reject_publication_drift(sql, catalog.schema(), graph, writer).await?;
+        }
+        verify_sink(sql, catalog.schema()).await?;
+        Ok(transaction)
+    }
+    .await;
+    let shutdown = stream.shutdown().await;
+    drop(stream);
+    crate::outcome::combine(result, shutdown, "snapshot CDC shutdown")
+}
+
+async fn check_checkpoint(
+    sql: &mut crate::catalog::Connection,
+    catalog: &Catalog,
+    state: (&mut super::mvp::Query, &mut Writer),
+    recovery: &super::recovery::Recovery,
+    scenario: ReplicationScenario,
+) -> Result<()> {
+    let (graph, writer) = state;
+    match scenario {
+        ReplicationScenario::Maintenance => {
+            maintenance::check(sql, catalog.schema(), graph, writer, recovery).await
+        }
+        ReplicationScenario::Collection => {
+            collection::check(sql, catalog, graph, writer, recovery).await
+        }
+        ReplicationScenario::Paged => {
+            collection::check_paged(sql, catalog, graph, writer, recovery).await
+        }
+        ReplicationScenario::Cohort => {
+            collection::check_cohort(sql, catalog, graph, writer, recovery).await
+        }
+        _ => anyhow::bail!("scenario cannot use the checkpoint fixture"),
+    }
+}
+
 async fn finish_source(
     sql: &mut crate::catalog::Connection,
     fixture: &Fixture,
@@ -131,6 +185,7 @@ async fn activate(
     catalog: &Catalog,
     graph: &mut super::mvp::Query,
     initial: Initial<'_>,
+    verify_snapshot: bool,
 ) -> Result<crate::catalog::Protection> {
     let Initial { contract, boundary, batch, config } = initial;
     let protection = catalog.protect_upload(sql, "snapshot-upload").await?;
@@ -155,13 +210,16 @@ async fn activate(
         boundary,
         sink: crate::harness::tuple_sink::sink("snapshot_groups"),
     };
-    activation::check(sql, catalog, graph.plan(), snapshot, config).await?;
+    if verify_snapshot {
+        activation::check(sql, catalog, graph.plan(), snapshot, config).await?;
+    } else {
+        catalog.activate_snapshot(sql, graph.plan(), snapshot).await?;
+    }
     graph.commit(prepared)?;
     Ok(protection)
 }
 async fn catch_up(
     sql: &mut crate::catalog::Connection,
-    schema: &str,
     graph: &mut super::mvp::Query,
     writer: &mut Writer,
     stream: &mut crate::acknowledged::Stream,
@@ -204,13 +262,16 @@ async fn catch_up(
     graph.commit(prepared)?;
     protection.published(sql, writer, graph.plan(), &checkpoint).await?;
     stream.acknowledge(sql, writer, graph.plan()).await?;
-    reject_publication_drift(sql, schema, graph, writer).await?;
+    Ok(transaction)
+}
+
+async fn verify_sink(sql: &Client, schema: &str) -> Result<()> {
     let expected = format!(
         "SELECT jsonb_build_array('',jsonb_build_object('category',a.category::text,'count',COUNT(*)::text,'sum',(SUM(b.price)::bigint)::text)),1::bigint FROM {schema}.auction a JOIN {schema}.bid b ON a.id=b.auction GROUP BY a.category"
     );
     let different: bool = sql.query_one(&format!("SELECT EXISTS((SELECT tuple,count(*)::bigint weight FROM {schema}.snapshot_groups GROUP BY tuple EXCEPT {expected}) UNION ALL ({expected} EXCEPT SELECT tuple,count(*)::bigint weight FROM {schema}.snapshot_groups GROUP BY tuple))"),&[]).await?.try_get(0)?;
     ensure!(!different, "snapshot/CDC sink differs from SQL");
-    Ok(transaction)
+    Ok(())
 }
 
 async fn reject_publication_drift(
@@ -340,6 +401,7 @@ async fn snapshot_copy(
     fixture: &Fixture,
     config: &Config,
     export: Export,
+    verify_snapshot: bool,
 ) -> Result<(Contract, super::Model, crate::weighted::Batch)> {
     let baseline = source_state(sql, &fixture.schema).await?;
     let (mut reader, task) = connect(config).await?;
@@ -362,7 +424,9 @@ async fn snapshot_copy(
     export.close().await?;
     drop(reader);
     task.await.context("snapshot SQL driver failed")??;
-    super::evaluation::check(sql, &fixture.schema, &contract).await?;
+    if verify_snapshot {
+        super::evaluation::check(sql, &fixture.schema, &contract).await?;
+    }
     Ok((contract, model, batch))
 }
 

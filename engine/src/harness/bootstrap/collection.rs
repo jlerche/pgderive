@@ -8,6 +8,19 @@ use crate::catalog::{Catalog, Collection, GcLimits, Writer};
 use anyhow::{Result, ensure};
 use object_store::{ObjectStoreExt, path::Path};
 
+pub(super) use paged::check as check_paged;
+
+pub(super) async fn check_cohort(
+    sql: &mut crate::catalog::Connection,
+    catalog: &Catalog,
+    graph: &mut Query,
+    writer: &mut Writer,
+    recovery: &Recovery,
+) -> Result<()> {
+    abandoned(sql, catalog, graph, writer, recovery).await?;
+    cohort::check(sql, catalog, graph, writer, recovery).await
+}
+
 pub(super) async fn check(
     sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
@@ -236,7 +249,5 @@ async fn abandoned_and_ledger(
 ) -> Result<()> {
     concurrency::check(sql, catalog, graph, writer, recovery).await?;
     abandoned(sql, catalog, graph, writer, recovery).await?;
-    super::ledger::check(sql, catalog, graph, writer, recovery).await?;
-    paged::check(sql, catalog, graph, writer, recovery).await?;
-    cohort::check(sql, catalog, graph, writer, recovery).await
+    super::ledger::check(sql, catalog, graph, writer, recovery).await
 }

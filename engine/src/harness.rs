@@ -35,6 +35,23 @@ struct Fixture {
     publication: String,
 }
 
+/// Independent live replication fixture to run.
+#[derive(Clone, Copy)]
+pub enum ReplicationScenario {
+    /// Diagnostic CDC, atomic publication, durable acknowledgement and cold recovery.
+    Stream,
+    /// Exported snapshot, catch-up, codecs and source drift.
+    Snapshot,
+    /// Uncertain maintenance commits and compacted membership recovery.
+    Maintenance,
+    /// Reader pinning, abandoned uploads and collection under concurrent writers.
+    Collection,
+    /// Durable continuation of paged collection.
+    Paged,
+    /// Retirement of upload cohorts.
+    Cohort,
+}
+
 /// Insert, update, and delete Nexmark-shaped rows while validating live CDC.
 ///
 /// Creates an isolated schema and an unused `pgderive_` publication/slot, then
@@ -44,7 +61,7 @@ struct Fixture {
 /// # Errors
 /// Returns setup, stream, oracle, timeout, or cleanup errors. The local harness
 /// requires a non-TLS connection; the standalone listener also supports TLS.
-pub async fn run_harness(config: Config) -> Result<()> {
+pub async fn run_harness(config: Config, scenario: ReplicationScenario) -> Result<()> {
     config.validate()?;
     ensure!(config.postgres.tls == "disable", "local harness requires postgres.tls=disable");
     ensure!(
@@ -57,7 +74,7 @@ pub async fn run_harness(config: Config) -> Result<()> {
     );
     let (mut sql, connection) = connect(&config).await?;
     let fixture = Fixture::prepare(&mut sql, &config).await?;
-    let result = Box::pin(execute(&mut sql, &fixture, config)).await;
+    let result = Box::pin(execute(&mut sql, &fixture, config, scenario)).await;
     let cleanup = if result.is_ok() {
         fixture.cleanup(&sql).await
     } else {
@@ -74,9 +91,11 @@ pub async fn run_harness(config: Config) -> Result<()> {
         .and_then(|result| result.map_err(Into::into));
     let outcome = crate::outcome::combine(result, cleanup, "fixture cleanup");
     crate::outcome::combine(outcome, disconnected, "SQL disconnect")?;
-    eprintln!(
-        "harness passed: fifteen diagnostic transactions without acknowledgement, rollback excluded, durable resume/publication/acknowledgement verified; fixture cleaned up"
-    );
+    if matches!(scenario, ReplicationScenario::Stream) {
+        eprintln!(
+            "harness passed: fifteen diagnostic transactions without acknowledgement, rollback excluded, durable resume/publication/acknowledgement verified; fixture cleaned up"
+        );
+    }
     Ok(())
 }
 
@@ -167,9 +186,9 @@ impl Fixture {
 async fn execute(
     sql: &mut crate::catalog::Connection,
     fixture: &Fixture,
-    mut config: Config,
+    config: Config,
+    scenario: ReplicationScenario,
 ) -> Result<()> {
-    config.listener.max_transactions = cases::COUNT;
     let prefix = config
         .object_store
         .as_ref()
@@ -187,7 +206,24 @@ async fn execute(
         } else {
             std::sync::Arc::new(object_store::memory::InMemory::new())
         };
-    let recovery = recovery::Recovery { config: config.clone(), store: store.clone(), prefix };
+    let recovery = recovery::Recovery { config, store, prefix };
+    if matches!(scenario, ReplicationScenario::Stream) {
+        return stream(sql, fixture, &recovery).await;
+    }
+    for (statements, _, _) in cases::transactions(&fixture.schema) {
+        sql.batch_execute(&statements).await?;
+    }
+    cases::insert_acknowledged_person(sql, fixture).await?;
+    bootstrap::check(sql, fixture, &recovery, scenario).await
+}
+
+async fn stream(
+    sql: &mut crate::catalog::Connection,
+    fixture: &Fixture,
+    recovery: &recovery::Recovery,
+) -> Result<()> {
+    let mut config = recovery.config.clone();
+    config.listener.max_transactions = cases::COUNT;
     let (ready, connected) = oneshot::channel();
     let (observed, mut received) = mpsc::channel(8);
     let mut task =
@@ -214,7 +250,7 @@ async fn execute(
         task.abort();
     }
     completed.context("listener shutdown timed out")?.context("listener task failed")??;
-    let end = acknowledgement::check(sql, fixture, &config, store.clone()).await?;
+    let end = acknowledgement::check(sql, fixture, &config, recovery.store.clone()).await?;
     drop(config);
     let report = recovery.recover_query(sql, &fixture.schema, "atomic_grouped").await?;
     ensure!(
@@ -222,8 +258,6 @@ async fn execute(
         "fresh-process durable source/state recovery mismatch"
     );
     eprintln!("MVP fresh-process recovered atomic tick 17 with exact durable source position");
-    bootstrap::check(sql, fixture, &recovery).await?;
-    drop(recovery);
     Ok(())
 }
 

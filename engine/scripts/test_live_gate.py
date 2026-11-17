@@ -17,11 +17,20 @@ class LiveGateTests(unittest.TestCase):
     def test_inventory_keeps_every_live_boundary_and_builds_explicit_commands(self):
         names=[name for name, _ in live_gate.SUITES]
         self.assertEqual(len(names),len(set(names)))
-        self.assertEqual(set(names),set(LIVE_COUNTS)|{'replication','tenant-storage','tenant-storage-commit','multi-query','query-rebuild'})
+        self.assertEqual(set(names),set(LIVE_COUNTS)|{*live_gate.full_live_gate.REPLICATION,'tenant-storage','tenant-storage-commit','multi-query','query-rebuild'})
         binaries={'worker':'/worker','admin':'/admin'}
         for name in names:
             self.assertTrue(live_gate.command(name,pathlib.Path('/evidence'),binaries))
         self.assertIn('/admin',live_gate.command('query-rebuild',pathlib.Path('/evidence'),binaries))
+
+    def test_standalone_replication_inventory_includes_full_error_corpus(self):
+        from live_gate import full_live_gate
+
+        cases = [(name, 0, 1) for name in full_live_gate.REPLICATION]
+        self.assertEqual(live_gate.tasks(False, replication_only=True), cases)
+        count = full_live_gate.ERROR_ORDER_SHARDS
+        self.assertEqual(live_gate.tasks(False, full=True, replication_only=True),
+                         cases + [('error-order', index, count) for index in range(count)])
 
     def test_release_mode_shards_cover_each_original_history_once(self):
         from live_gate import full_live_gate
@@ -75,7 +84,7 @@ class LiveGateTests(unittest.TestCase):
                     assert 'PGDERIVE_TEST_CASE_SHARD' not in environment
             @staticmethod
             def assert_environment(environment,name):
-                if name=='replication':assert 'PGDERIVE__WORKER__RETRY_DELAY_MS' not in environment
+                if name in live_gate.full_live_gate.REPLICATION:assert 'PGDERIVE__WORKER__RETRY_DELAY_MS' not in environment
                 else:assert environment['PGDERIVE__WORKER__RETRY_DELAY_MS']=='1'
                 assert 'PGDERIVE__POSTGRES__DATABASE' not in environment
             def cancel(self, *, kill_active):raise AssertionError('unexpected cancellation')
@@ -169,7 +178,7 @@ class LiveGateTests(unittest.TestCase):
                     barrier.wait(timeout=5)
                     packaged.set()
                     return
-                if log.parent.name == 'replication':
+                if log.parent.name == 'replication-stream':
                     barrier.wait(timeout=5)
                 if log.name in ('container-image.log', 'query-container.log') or log.parent.name == 'query-capacity':
                     assert packaged.is_set()
@@ -194,11 +203,11 @@ class LiveGateTests(unittest.TestCase):
         self.assertEqual({port for _, env in outputs.values()
                           if (port := env.get('PGDERIVE_TEST_POSTGRES_PORT'))}, {'0', '1'})
         self.assertEqual(verified, [(root, binaries, '0', True)])
-        self.assertEqual(outputs[root/'replication/console.log'][1]['PGDERIVE_CHECK_PROFILE'], 'full')
+        self.assertEqual(outputs[root/'replication-stream/console.log'][1]['PGDERIVE_CHECK_PROFILE'], 'full')
         self.assertIn('--skip-inventory', outputs[root/'composition-matrix/shard-1/console.log'][0])
         self.assertIn('--inventory-only', outputs[root/'composition-inventory/console.log'][0])
         self.assertIn('scripts/worker_case_shard.py', outputs[root/'subqueries/shard-1/console.log'][0])
-        self.assertIn('--replication-only', outputs[root/'replication/console.log'][0])
+        self.assertIn('stream', outputs[root/'replication-stream/console.log'][0])
         self.assertTrue(outputs[root/'error-order/shard-1/console.log'][1]['PGDERIVE_ERROR_ORDER_EVIDENCE'])
         self.assertIn('/admin', outputs[root/'query-recovery/console.log'][0])
         self.assertIn(str(root/'package/bin/pgderive'), outputs[root/'query-capacity/console.log'][0])

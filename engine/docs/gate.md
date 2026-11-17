@@ -60,7 +60,12 @@ The default worker suite retains 131 result cases plus rebuild and tenant report
 - Quantified and residual subqueries, grouping sets, ordered string aggregation
   and text ordering against live PostgreSQL.
 
-The complete low-level replication harness remains live. The default gate
+The low-level replication checks run as independent live scenarios for
+streaming and durable acknowledgement, exported snapshots, maintenance
+recovery, collection, paged collection, retirement cohorts, and the tenant
+manifest protocol. The replication scenarios use real object storage without
+added latency by default. Set `PGDERIVE_S3_LATENCY_SCALE=1` for the synthetic
+latency profile. The default gate
 provisions a pool of independently owned PostgreSQL containers with tmpfs
 storage. The default pool size is the CPU count capped at eight and can be
 adjusted with `PGDERIVE_GATE_LANES`. Each lane takes pending work as it becomes
@@ -145,8 +150,7 @@ Push/PR checks run the development gate. The Checks workflow can be dispatched
 with `full=true` for complete release qualification. Each proxy-wrapped live
 suite records `timing.json`, including failures and timeouts. The common gate
 prints its total elapsed wall time. Coverage and virtual replay reports remain
-under `artifacts/coverage/run-*`; live evidence remains under `artifacts/worker`
-and `artifacts/replication`.
+under `artifacts/coverage/run-*`; live evidence remains under `artifacts/worker`.
 
 
 Measured locally on 2026-11-10, the default gate passed in **241 seconds

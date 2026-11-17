@@ -117,3 +117,12 @@ fn sum_cases(schema: &str) -> [Case; 5] {
         ),
     ]
 }
+
+pub(super) async fn insert_acknowledged_person(
+    sql: &tokio_postgres::Client,
+    fixture: &super::Fixture,
+) -> anyhow::Result<()> {
+    sql.batch_execute(&format!("INSERT INTO {}.person VALUES(999,'durable ack')", fixture.schema))
+        .await?;
+    Ok(())
+}

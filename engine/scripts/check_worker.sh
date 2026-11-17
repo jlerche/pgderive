@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+if (( $# )) && [[ "$#:$1" != '1:--replication-only' ]]; then
+    printf 'Usage: %s [--replication-only]\n' "$0" >&2
+    exit 2
+fi
 profile=${PGDERIVE_CHECK_PROFILE:-full}
 case "$profile" in
     core|full) ;;
@@ -19,4 +23,4 @@ export PGDERIVE_GATE_REPLICATION=${PGDERIVE_GATE_REPLICATION:-1}
 mkdir -p artifacts/worker
 output=$(mktemp -d "$PWD/artifacts/worker/run-XXXXXXXX")
 printf 'Worker evidence: %s\n' "$output"
-exec python3 scripts/live_gate.py "$output" "$PGDERIVE_GATE_BUILD" "$profile"
+exec python3 scripts/live_gate.py "$output" "$PGDERIVE_GATE_BUILD" "$profile" "$@"

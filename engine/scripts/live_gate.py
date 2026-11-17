@@ -25,7 +25,7 @@ from verify_worker_core import main as verify_worker
 # Start slow suites early. Each shard still runs complete histories and
 # each lane owns one isolated PostgreSQL instance.
 SUITES = (
-    ('tenant-storage', 1), ('replication', 1), ('postgres-support', 1),
+    ('tenant-storage', 1), *((name, 1) for name in full_live_gate.REPLICATION), ('postgres-support', 1),
     ('transactions', 1), ('crashes', 1), ('residual-subqueries', 48),
     ('quantified-subqueries', 36), ('text-ordering', 13), ('grouping-sets', 10),
     ('query-rebuild', 1), ('projection-compiler', 1), ('memtable', 1),
@@ -35,13 +35,19 @@ SUITES = (
 )
 
 
-def tasks(with_replication, full=False):
+def tasks(with_replication, full=False, replication_only=False):
+    if replication_only:
+        scheduled = [(name, 0, 1) for name in full_live_gate.REPLICATION]
+        if full:
+            count = full_live_gate.ERROR_ORDER_SHARDS
+            scheduled.extend(('error-order', index, count) for index in range(count))
+        return scheduled
     suites = SUITES
     if full:
         shards_by_name = dict(SUITES)
         names = full_live_gate.suites()
         prioritized = (
-            'replication', 'error-order', 'residual-subqueries', 'quantified-subqueries',
+            *full_live_gate.REPLICATION, 'error-order', 'residual-subqueries', 'quantified-subqueries',
             'subqueries', 'composition-matrix', 'outer-joins', 'join-predicates',
             'set-operations', 'temporal-arithmetic',
             'application', *full_live_gate.RELEASE, 'tenant-storage', 'text-ordering', 'grouping-sets',
@@ -53,12 +59,12 @@ def tasks(with_replication, full=False):
         shards_by_name['composition-matrix'] = full_live_gate.COMPOSITION_SHARDS
         suites = [(name, shards_by_name.get(name, 1)) for name in names]
     pending = [(name, index, shards) for name, shards in suites
-               if with_replication or name not in ('replication', 'error-order')
+               if with_replication or name not in (*full_live_gate.REPLICATION, 'error-order')
                for index in range(shards)]
     if full:
         # Interleave the long histories with replication and the error corpus
         # so no single suite occupies the entire pool while peers are pending.
-        first = {'replication', 'error-order', 'residual-subqueries', 'quantified-subqueries',
+        first = {*full_live_gate.REPLICATION, 'error-order', 'residual-subqueries', 'quantified-subqueries',
                  'composition-matrix', 'subqueries', 'outer-joins', 'join-predicates',
                  'set-operations', 'temporal-arithmetic', 'application', 'tenant-storage',
                  'text-ordering', 'grouping-sets',
@@ -77,8 +83,8 @@ def workers(task_count):
 
 def command(name, output, binaries):
     worker=[binaries['worker']]; admin=[binaries['admin']]
-    if name=='replication':
-        return ['bash','scripts/check_integration.sh']
+    if name in full_live_gate.REPLICATION:
+        return full_live_gate.replication_command(name, output)
     if name in ('memtable','checkpoint','query-lifecycle'):
         boundary='lifecycle' if name=='query-lifecycle' else name
         executable=admin if boundary=='lifecycle' else worker
@@ -135,8 +141,7 @@ def provision(index, output, servers):
     return server
 
 
-def lane(index, pending, output, binaries, commands, server, completed, timings, package):
-    full = package is not None
+def lane(index, pending, output, binaries, commands, server, completed, timings, package, full):
     environment = {
         **{key: value for key, value in os.environ.items()
            if not key.startswith('PGDERIVE__') and key != 'PGDERIVE_TEST_CASE_SHARD'},
@@ -173,18 +178,21 @@ def lane(index, pending, output, binaries, commands, server, completed, timings,
                 if name in full_live_gate.MATRIX:
                     task_environment['PGDERIVE_HARNESS_TIMEOUT_SECONDS'] = (
                         task_environment.get('PGDERIVE_HARNESS_TIMEOUT_SECONDS') or '1800')
-                if name in ('replication', 'crashes'):
+                if name == 'crashes':
                     task_environment['PGDERIVE_S3_LATENCY_SCALE'] = (
                         os.environ.get('PGDERIVE_S3_LATENCY_SCALE') or '1')
             else:
                 argv = command(name, directory, binaries)
-                if name != 'replication':
+                if name not in full_live_gate.REPLICATION:
                     # Retry count stays the same. Paused-time tests check timer scheduling.
                     task_environment['PGDERIVE__WORKER__RETRY_DELAY_MS'] = '1'
             if name == 'error-order':
                 task_environment['PGDERIVE_ERROR_ORDER_EVIDENCE'] = str(directory / 'cases.json')
-            elif name != 'replication':
+            elif name not in full_live_gate.REPLICATION:
                 argv = [sys.executable, 'scripts/run_with_s3_proxy.py', str(directory), *argv]
+            if name in full_live_gate.REPLICATION:
+                task_environment['PGDERIVE_S3_LATENCY_SCALE'] = (
+                    os.environ.get('PGDERIVE_S3_LATENCY_SCALE') or '0')
             commands.run(argv, task_environment, directory / 'console.log')
         elapsed = time.monotonic() - started
         completed.append(str(relative))
@@ -192,13 +200,13 @@ def lane(index, pending, output, binaries, commands, server, completed, timings,
         print(f'Lane {index}: {relative} passed in {elapsed:.1f}s', flush=True)
 
 
-def run(output, binaries, full=False):
+def run(output, binaries, full=False, replication_only=False):
     output.mkdir(parents=True,exist_ok=True)
     commands = Commands(timeout=None if full else 1800)
     servers = queue.Queue()
     success = False
     with_replication = os.environ.get('PGDERIVE_GATE_REPLICATION') == '1'
-    scheduled = tasks(with_replication, full)
+    scheduled = tasks(with_replication, full, replication_only)
     pending = queue.Queue()
     for task in scheduled:
         pending.put(task)
@@ -206,13 +214,14 @@ def run(output, binaries, full=False):
     print(f'Live gate: {len(scheduled)} tasks across {lane_count} PostgreSQL lanes', flush=True)
     completed = [[] for _ in range(lane_count)]
     timings = [{} for _ in range(lane_count)]
+    package_required = full and not replication_only
     try:
         # Initialize the shared object service/bucket once, before any lane.
         prepare()
-        with ThreadPoolExecutor(max_workers=lane_count + int(full)) as pool:
+        with ThreadPoolExecutor(max_workers=lane_count + int(package_required)) as pool:
             try:
                 package = None
-                if full:
+                if package_required:
                     package = pool.submit(commands.run,
                                           ['bash', 'scripts/package_release.sh', str(output / 'package')],
                                           os.environ.copy(), output / 'package.log')
@@ -221,12 +230,15 @@ def run(output, binaries, full=False):
                 if len({server.port for server in owned})!=lane_count or len({server.name for server in owned})!=lane_count:
                     raise RuntimeError('Live lanes do not have distinct PostgreSQL servers')
                 jobs = [pool.submit(lane, index, pending, output, binaries, commands, server,
-                                    completed[index], timings[index], package) for index, server in enumerate(owned)]
+                                    completed[index], timings[index], package, full) for index, server in enumerate(owned)]
                 if package is not None:
                     jobs.append(package)
                 for job in as_completed(jobs):
                     job.result()
-                if full:
+                if replication_only:
+                    if full:
+                        full_live_gate.verify_error_order(output)
+                elif full:
                     full_live_gate.verify(output, binaries, str(owned[0].port), with_replication)
                 else:
                     verify_worker(output,[binaries['worker'],binaries['admin']])
@@ -281,4 +293,4 @@ def interrupted(_signal,_frame):
 if __name__=='__main__':
     signal.signal(signal.SIGTERM,interrupted)
     run(pathlib.Path(sys.argv[1]), json.loads(pathlib.Path(sys.argv[2]).read_text()),
-        full=sys.argv[3] == 'full')
+        full=sys.argv[3] == 'full', replication_only=sys.argv[4:] == ['--replication-only'])

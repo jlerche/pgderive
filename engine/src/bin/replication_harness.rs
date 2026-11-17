@@ -1,7 +1,7 @@
 //! Drive an isolated Nexmark-shaped fixture through the diagnostic listener.
 
 use anyhow::{Context, Result};
-use pgderive::{Config, run_harness, run_recovery};
+use pgderive::{Config, ReplicationScenario, run_harness, run_recovery};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -12,6 +12,17 @@ async fn main() -> Result<()> {
         serde_json::to_writer(std::io::stdout().lock(), &report)?;
         return Ok(());
     }
-    let path = args.get(1).map_or("config.local.toml", String::as_str);
-    Box::pin(run_harness(Config::load(path)?)).await
+    let scenario = match args.get(1).map(String::as_str) {
+        Some("stream") => ReplicationScenario::Stream,
+        Some("snapshot") => ReplicationScenario::Snapshot,
+        Some("maintenance") => ReplicationScenario::Maintenance,
+        Some("collection") => ReplicationScenario::Collection,
+        Some("paged") => ReplicationScenario::Paged,
+        Some("cohort") => ReplicationScenario::Cohort,
+        _ => anyhow::bail!(
+            "expected replication scenario: stream, snapshot, maintenance, collection, paged, or cohort"
+        ),
+    };
+    let path = args.get(2).map_or("config.local.toml", String::as_str);
+    Box::pin(run_harness(Config::load(path)?, scenario)).await
 }

@@ -22,5 +22,5 @@ mod weighted;
 pub mod worker;
 
 pub use configuration::Config;
-pub use harness::{RecoveryReport, run_harness, run_recovery};
+pub use harness::{RecoveryReport, ReplicationScenario, run_harness, run_recovery};
 pub use listener::listen;

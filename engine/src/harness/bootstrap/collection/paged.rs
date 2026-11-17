@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result, ensure};
 use object_store::{ObjectStoreExt as _, path::Path};
 use tokio_postgres::Client;
 
-pub(super) async fn check(
+pub(in crate::harness::bootstrap) async fn check(
     sql: &mut crate::catalog::Connection,
     catalog: &Catalog,
     graph: &Query,

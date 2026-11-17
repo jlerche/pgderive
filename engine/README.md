@@ -161,7 +161,7 @@ logical-replication endpoint. Full qualification additionally needs BuildKit for
 actual image/runtime checks.
 Every proxy-wrapped harness records `timing.json` (including nonzero exits and
 harness exceptions/timeouts), and prints its elapsed time as it finishes. Evidence remains under
-`artifacts/worker/run-*` and `artifacts/replication/run-*`.
+`artifacts/worker/run-*`.
 
 Compiler warnings and dead/unused code
 are errors; unsafe code is forbidden. Clippy denies `all`, `pedantic`, and
@@ -259,11 +259,11 @@ DROP TABLE public.listener_demo;
 ./scripts/check_integration.sh
 ```
 
-The script uses a local PostgreSQL instance at port 55434, reusing the existing
-PoC service when available. Otherwise it starts this repository's PostgreSQL 17
-Compose service with ephemeral tmpfs database storage and no persistent Docker
-volumes. Stopping this Compose service discards its database contents. The script
-creates `pgderive_dev` only if absent and never resets an existing database. It also reuses the PoC SeaweedFS service at port 8333, or starts this repository's pinned SeaweedFS image with tmpfs storage when unavailable.
+The script starts isolated PostgreSQL lanes with tmpfs database storage.
+Each lane runs one scenario at a time, with its own database, publications,
+and slots. It reuses the local SeaweedFS service at port 8333 or starts the
+repository's pinned SeaweedFS image when needed. Scenarios use unique object
+prefixes.
 
 The harness starts the same listener used by the executable, waits for the
 replication connection, and drives fifteen committed transactions:
@@ -298,10 +298,9 @@ retain them for inspection and print their names; the next run refuses
 to overwrite a leftover publication or slot.
 
 JSONL, logs, configuration/source/binary hashes, and version information are saved
-in a fresh ignored `artifacts/replication/run-*` directory, including stderr on
-failure. Run mutating harnesses sequentially. The PostgreSQL service remains
-running after the check; this repository does not provision persistent database
-volumes.
+in a fresh ignored `artifacts/worker/run-*` directory, including stderr on
+failure. Successful runs remove their owned PostgreSQL instances. Failed
+runs retain the instances and save cluster archives alongside the logs.
 
 The diagnostic listener excludes snapshot bootstrap and durable result
 publication; the continuous worker implements them. Schema evolution, TRUNCATE,
@@ -514,9 +513,10 @@ Compaction at tick five checks pinned readers and unchanged logical time.
 bucket if absent and uses a fresh unique object prefix per run. It starts a fresh
 local HTTP latency proxy on a dynamic port and routes the configured S3 client
 through it. Request logs, storage profile, CDC output, and source/binary hashes
-are retained under `artifacts/replication/run-*`. S3 objects are retained under
+are retained under `artifacts/worker/run-*`. S3 objects are retained under
 the isolated prefix; no accepted PoC objects or frozen binaries are changed.
-The common coverage gate includes this sequential live S3/PostgreSQL harness.
+The common coverage gate runs independent replication scenarios in parallel,
+with each lane owning its PostgreSQL instance.
 
 The proxy's default GET p50/p95/p99 is 26.13/38.86/86.13 ms, and PUT is
 69.75/101.10/137.23 ms, from the labeled raw tables in the
@@ -531,8 +531,8 @@ The model has no payload-size/bandwidth scaling or correlated tails. Seeds are
 reproducible per operation, though concurrency can change request assignment.
 
 ```bash
-./scripts/check_integration.sh                         # published latency profile
-PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh # fast local correctness
+./scripts/check_integration.sh                         # real local IO without added latency
+PGDERIVE_S3_LATENCY_SCALE=1 ./scripts/check_integration.sh # published latency profile
 PGDERIVE_S3_FAIL=GET:1 PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh # expected read failure; fixture retained
 PGDERIVE_S3_FAIL=PUT:1 PGDERIVE_S3_LATENCY_SCALE=0 ./scripts/check_integration.sh
 python3 scripts/s3_latency_proxy.py --port 8334         # standalone local proxy

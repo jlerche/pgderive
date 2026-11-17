@@ -60,8 +60,7 @@ async fn exercise(
     writer: &mut crate::catalog::Writer,
     stream: &mut Stream,
 ) -> Result<crate::catalog::Lsn> {
-    sql.batch_execute(&format!("INSERT INTO {}.person VALUES(999,'durable ack')", fixture.schema))
-        .await?;
+    super::cases::insert_acknowledged_person(sql, fixture).await?;
     let transaction = tokio::time::timeout(Duration::from_secs(20), stream.recv())
         .await
         .context("waiting for acknowledged source transaction")??;
