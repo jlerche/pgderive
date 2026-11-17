@@ -60,6 +60,12 @@ The default worker suite retains 131 result cases plus rebuild and tenant report
 - Quantified and residual subqueries, grouping sets, ordered string aggregation
   and text ordering against live PostgreSQL.
 
+The tenant-storage scenario uses a small three-database, two-tenant fixture.
+It queues source mutations before waiting on their WAL fences, then stops
+churn once the manifest shows a pack shared across databases. The collector
+must relocate retained chunks while their source is still offline. All six
+queries must pass their oracles after a cold reopen.
+
 The low-level replication checks run as independent live scenarios for
 streaming and durable acknowledgement, exported snapshots, maintenance
 recovery, collection, paged collection, retirement cohorts, and the tenant

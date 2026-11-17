@@ -6,13 +6,37 @@ import json
 import pathlib
 import signal
 import subprocess
-import time
 import uuid
 from types import SimpleNamespace
 
 from harness_control import held_transaction, finish_transaction, wait_records
 from multi_query_memory_harness import configure, start, wait_for_fence
 from multi_tenant_memory_harness import check, database, fixture_group
+
+
+def advance(streams, value):
+    # Queue writes on all sources before waiting. Separate databases can
+    # checkpoint together, allowing the shared uploader to batch their chunks.
+    fences = []
+    for fixture, table, column, predicate, readers in streams:
+        target = fixture.sql(f"""WITH changed AS (
+            UPDATE {table} SET {column}={value} WHERE {predicate} RETURNING 1)
+            SELECT pg_current_wal_insert_lsn()::text FROM changed LIMIT 1""").strip()
+        assert target, f'{table} produced no WAL fence'
+        fences.append((readers, target))
+    for readers, target in fences:
+        wait_for_fence(readers, target)
+
+
+def verify_packs(rows, catalogs):
+    packs = {}
+    uploaders = {}
+    for row in rows:
+        packs.setdefault(row['pack'], []).append(row)
+        uploaders.setdefault(row['owner'], set()).add(catalogs[row['catalog']])
+    assert all(len({row['tenant'] for row in members}) == 1 for members in packs.values())
+    return any(len({catalogs[row['catalog']] for row in members}) > 1
+               for members in packs.values()) and any(len(sources) > 1 for sources in uploaders.values())
 
 
 def qualify(output, command):
@@ -25,7 +49,7 @@ def qualify(output, command):
             directory.mkdir()
             db = cleanup.enter_context(database(f'{schema}_{index}', directory))
             databases.append(db)
-            queries, sources = fixture_group(cleanup, directory, index, db)
+            queries, sources = fixture_group(cleanup, directory, index, db, churn_rows=40, application_rows=80)
             for fixture in queries:
                 fixture.tenant_id = 'alice' if index < 2 else 'bob'
             fixtures.extend(queries)
@@ -46,12 +70,16 @@ def qualify(output, command):
         paths = []
         for fixture in fixtures:
             path = configure(fixture, getattr(fixture, 'source', None) or fixture)
-            text = path.read_text().replace('checkpoint_interval_ms=60000', 'checkpoint_interval_ms=250')
+            text = path.read_text().replace('checkpoint_interval_ms=60000', 'checkpoint_interval_ms=100')
+            text = text.replace('block_rows=64', 'block_rows=256')
+            # Keep the production retry count while waiting on the actual
+            # failed-query witness. The timer policy is checked separately.
+            text = text.replace('retry_delay_ms=100', 'retry_delay_ms=1')
             text = text.replace('gc_interval_ms=300000', 'gc_interval_ms=1000')
             text = text.replace(f'schema="{fixture.name}_storage"', f'schema="{schema}"')
             text = text.replace(f'object_prefix="tenant-{fixture.name}"', f'object_prefix="{schema}"')
             # Give concurrently ready independent queries a generous test batch window.
-            text += '\n[tenant_storage.batching]\ndelay_ms=100\n'
+            text += '\n[tenant_storage.batching]\ndelay_ms=175\n'
             path.write_text(text)
             paths.append(path)
 
@@ -67,26 +95,16 @@ def qualify(output, command):
         worker = start(command, fixtures, paths, output, 'shared', 'first')[0]
         unavailable = False
         try:
-            check(fixtures)
-            for tick in range(8):
-                for fixture, table, column, predicate, readers in streams:
-                    target = fixture.sql(f'''UPDATE {table} SET {column}={100+tick}
-                      WHERE {predicate}; SELECT pg_current_wal_insert_lsn()::text''').splitlines()[-1]
-                    wait_for_fence(readers, target)
-                time.sleep(.3)
-            check(fixtures)
-            initial = manifest()
-            (output/'manifest-before.json').write_text(json.dumps(initial, indent=2))
-            packs = {}
-            for row in initial:
-                packs.setdefault(row['pack'], []).append(row)
-            assert all(len({row['tenant'] for row in rows}) == 1 for rows in packs.values())
-            assert any(len({row['catalog'] for row in rows}) > 1 for rows in packs.values()), 'no cross-catalog shared pack'
             catalogs = json.loads(sql(f"SELECT json_object_agg(catalog::text,source->>'database') FROM {schema}.catalogs"))
-            uploaders = {}
-            for row in initial:
-                uploaders.setdefault(row['owner'], set()).add(catalogs[row['catalog']])
-            assert any(len(databases) > 1 for databases in uploaders.values()), 'independent databases did not share an uploader'
+            for tick in range(8):
+                advance(streams, 100+tick)
+                initial = manifest()
+                if verify_packs(initial, catalogs):
+                    break
+            else:
+                raise AssertionError('no pack shared by catalogs in independent source databases')
+            check(fixtures)
+            (output/'manifest-before.json').write_text(json.dumps(initial, indent=2))
             offline_ids = {f.sql(f'SELECT catalog_id::text FROM {f.name}.pgderive_tenant_owner').strip() for f in fixtures[:2]}
             sql(f'ALTER DATABASE {databases[0]} ALLOW_CONNECTIONS false')
             unavailable = True
@@ -99,17 +117,13 @@ def qualify(output, command):
             before = {(r['catalog'], r['name']): r for r in manifest() if r['catalog'] in offline_ids}
             assert before, 'offline source has no durable objects'
             finish_transaction(barrier, 'COMMIT')
-            # Healthy databases keep consuming and acknowledging through their own checkpoints.
-            for tick in range(8):
-                for fixture, table, column, predicate, readers in streams[1:]:
-                    target = fixture.sql(f'''UPDATE {table} SET {column}={200+tick}
-                      WHERE {predicate}; SELECT pg_current_wal_insert_lsn()::text''').splitlines()[-1]
-                    wait_for_fence(readers, target)
-                time.sleep(.3)
-            check(fixtures[2:])
-            # This command receives the unavailable source's configuration, but
-            # must use only its independently configured manifest endpoint.
+            # Keep the healthy sources progressing while collecting. Stop as
+            # soon as relocation is witnessed in the central manifest.
             for turn in range(24):
+                if turn < 8:
+                    advance(streams[1:], 200+turn)
+                # The unavailable source config must still collect through
+                # its independently configured manifest endpoint.
                 result = subprocess.run([str(pathlib.Path(command[0]).with_name('pgderive')),
                                          'storage', 'collect', str(paths[0])],
                                         env=fixtures[0].environment, capture_output=True, text=True, timeout=60)
@@ -120,9 +134,9 @@ def qualify(output, command):
                          and r['path'] != before[r['catalog'], r['name']]['path']]
                 if moved:
                     break
+            check(fixtures[2:])
             assert moved, 'offline catalog was not relocated while healthy peers reclaimed shared space'
-            assert all(any(r['catalog'] == old['catalog'] and r['name'] == old['name'] for r in after)
-                       for old in before.values()), 'offline logical object lost'
+            assert before.keys() <= {(r['catalog'], r['name']) for r in after}, 'offline logical object lost'
             (output/'manifest-offline.json').write_text(json.dumps(after, indent=2))
             sql(f'ALTER DATABASE {databases[0]} ALLOW_CONNECTIONS true')
             unavailable = False
@@ -131,7 +145,6 @@ def qualify(output, command):
             worker.close_logs()
             assert worker.process.returncode != 0, 'source failure was not reported'
             worker = start(command, fixtures, paths, output, 'shared', 'reopened')[0]
-            check(fixtures)
             worker.finish(graceful=True)
             check(fixtures)
             report = {'passed': True, 'databases': 3, 'queries': 6, 'tenants': 2,

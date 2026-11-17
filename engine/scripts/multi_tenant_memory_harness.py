@@ -34,7 +34,7 @@ def database(name, output):
     execute(f'DROP DATABASE {name}')
 
 
-def fixture_group(cleanup, directory, tenant, db):
+def fixture_group(cleanup, directory, tenant, db, *, churn_rows=600, application_rows=None):
     fixtures, streams = [], []
     for index in range(2):
         output = directory/f'query-{index}'
@@ -46,22 +46,24 @@ def fixture_group(cleanup, directory, tenant, db):
                                   top10=index == 1, database=db)
             if index == 0:
                 _, table = fixture.relations()
-                fixture.sql(f'INSERT INTO {table} SELECT 7000000+i,1+i%20,0,{seed} FROM generate_series(0,599) i')
-                streams.append((fixture, table, 'quantity', 'line_id BETWEEN 7000000 AND 7000599', [fixture]))
+                fixture.sql(f'INSERT INTO {table} SELECT 7000000+i,1+i%20,0,{seed} FROM generate_series(0,{churn_rows-1}) i')
+                streams.append((fixture, table, 'quantity', f'line_id BETWEEN 7000000 AND {7000000+churn_rows-1}', [fixture]))
             else:
                 streams[0][4].append(fixture)
         elif tenant%3 == 1:
-            initial, _history = generated(seed, rows=1024*(tenant+1)+index*128, accounts=32*(tenant+1), transactions=0)
+            base_rows = 1024*(tenant+1) if application_rows is None else application_rows
+            initial, _history = generated(seed, rows=base_rows+index*128,
+                                          accounts=32*(tenant+1), transactions=0)
             trace = {'initial': initial, 'spec': query('group' if index == 0 else 'window', seed)}
             fixture = ApplicationFixture(output, trace, database=db)
             fixture.sql(f'UPDATE {fixture.name}.entry SET account_id=1+id%{32*(tenant+1)},amount=id*{seed}')
-            streams.append((fixture, fixture.name+'.entry', 'amount', 'id BETWEEN 1 AND 600', [fixture]))
+            streams.append((fixture, fixture.name+'.entry', 'amount', f'id BETWEEN 1 AND {churn_rows}', [fixture]))
         else:
             fixture = SqlFixture(output, False, typed=index == 0, remainder=index == 1, database=db, index=tag)
             fixture.sql(f'''INSERT INTO {fixture.name}.bid SELECT 7000000+i,1+i%8,i*{seed}
-              FROM generate_series(0,599) i;
+              FROM generate_series(0,{churn_rows-1}) i;
               UPDATE {fixture.name}.auction SET category='tenant_{tenant}_'||id::text''')
-            streams.append((fixture, fixture.name+'.bid', 'price', 'id BETWEEN 7000000 AND 7000599', [fixture]))
+            streams.append((fixture, fixture.name+'.bid', 'price', f'id BETWEEN 7000000 AND {7000000+churn_rows-1}', [fixture]))
         fixture.tenant_id = f"tenant-{tenant}"
         fixtures.append(cleanup.enter_context(fixture.managed()))
     return fixtures, streams
