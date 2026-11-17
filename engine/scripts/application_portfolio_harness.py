@@ -17,6 +17,7 @@ from application_evidence import checked_phases, process, provenance, requests
 from native_mv_oracle import expected as native_expected
 from sql_compiler_harness import SqlFixture
 from worker_harness import Fixture
+from worker_case_shard import select_cases
 
 SERIAL = itertools.count()
 PORTFOLIO = pathlib.Path('queries/application/portfolio.json')
@@ -238,14 +239,14 @@ def main():
     rows = int(os.environ.get('PGDERIVE_PORTFOLIO_ROWS','24'))
     auctions = int(os.environ.get('PGDERIVE_PORTFOLIO_ACCOUNTS','8'))
     assert 1<=rounds<=8 and 6<=transactions<=256 and 4<=rows<=4096 and 4<=auctions<=128
-    for round_ in range(rounds):
-        for index,item in enumerate(portfolio):
-            seed = 1701+round_*10007+index*1009
-            initial, history = generated(seed,rows,auctions,transactions)
-            history.insert(len(history)//2,{'restart':True})
-            trace = {'version':VERSION,'id':item['id'],'seed':seed,'spec':query(item['recipe'],seed),
-                     'initial':initial,'history':history}
-            run_case(args.output,command,trace,f"{item['id']}-{seed}",check_inventory=(round_==index==0))
+    cases = itertools.product(range(rounds), enumerate(portfolio))
+    for round_, (index, item) in select_cases(cases):
+        seed = 1701+round_*10007+index*1009
+        initial, history = generated(seed,rows,auctions,transactions)
+        history.insert(len(history)//2,{'restart':True})
+        trace = {'version':VERSION,'id':item['id'],'seed':seed,'spec':query(item['recipe'],seed),
+                 'initial':initial,'history':history}
+        run_case(args.output,command,trace,f"{item['id']}-{seed}",check_inventory=(round_==index==0))
 
 
 if __name__=='__main__':

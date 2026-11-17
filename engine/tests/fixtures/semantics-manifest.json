@@ -2538,7 +2538,7 @@
     "scripts/aggregate_inputs_compiler_harness.py": "3991abfbaf980b3860b200c082c76f87a05d2974cad0d1be702c2baa9def4e01",
     "scripts/application_evidence.py": "57360975a873d136d2af00c4232c7a85db8e214ebeb09be35c5de083cefc8355",
     "scripts/application_model.py": "d98949dc70ffb02e9722480fcdff155960d13624df6388674e05e32bd9d021f6",
-    "scripts/application_portfolio_harness.py": "63c8e2d47ae638adefb9c2f5fcf6d4cc11f704c561b7939dd203fc37259e39c7",
+    "scripts/application_portfolio_harness.py": "11272e3b2f4e7824bae4173748129d710a41ace2fd566d8d05083466533057f7",
     "scripts/application_reduce.py": "dd2ee3955ed9b72f3d91aaea947d0ef808f0bf23defe2e01daae2809ea7227d9",
     "scripts/application_trace.py": "88768b87b74119ceac4f7278fcc0994807bb4d19f2e1a16efb37ace9978cfe74",
     "scripts/case_compiler_harness.py": "523c49ab1fa43697696e7a61dc04923ab24488787fc9aefcba67cbbbcb64e695",
@@ -2574,6 +2574,7 @@
     "scripts/temporal_arithmetic_harness.py": "775ab5361c9175c6872bda6ed624fb8387f82e374838724450f3570cbd8f546b",
     "scripts/temporal_oracle.py": "f709e469177d6a1f41ae6f35fd0bd8f1f25616354cc608df4b2ccb6fa0b769f6",
     "scripts/unordered_harness.py": "c0ec6814ed5c54000e12fc1f4785b9699822e8fcf263a26662b00a39f4d59eb6",
+    "scripts/worker_case_shard.py": "cdb217b5e06ac4e196a1ea2b3c6b7f7fdcaf2811735b698f116c6cbcb808a597",
     "scripts/worker_harness.py": "005ab8aa6a1a488755973a0c728dbb41bd922d07d6065666379a26de047ff032"
   },
   "fixture_sha256": "335942ad529cd63daae0f14bada063784d3a8bdd3b51a554ec4bf7aa0e6a9af4"

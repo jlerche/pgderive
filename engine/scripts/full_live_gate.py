@@ -133,7 +133,7 @@ MODE_SHARDS = {
     'expression-composition': 12, 'computed-join': 6, 'aggregate-inputs': 6,
 }
 OPERATION_SHARDS = {'query-rebuild-fault': 12, 'query-removal': 11,
-                    'query-health-failure': 6, 'memtable': 8}
+                    'query-health-failure': 6, 'memtable': 8, 'application': 6}
 COMPOSITION_SHARDS = 80
 ERROR_ORDER_SHARDS = 8
 FULL_RESULT_COUNT = 918

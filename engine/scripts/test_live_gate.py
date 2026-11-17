@@ -60,6 +60,28 @@ class LiveGateTests(unittest.TestCase):
                          10 * len(FAMILIES))
         self.assertEqual(sum(name == 'composition-inventory' for name, _, _ in tasks), 1)
 
+    def test_application_shards_keep_whole_histories_and_one_rejection_inventory(self):
+        import application_portfolio_harness as application
+
+        tasks = [task for task in live_gate.tasks(True, True) if task[0] == 'application']
+        self.assertEqual(len(tasks), 6)
+        with patch.dict(os.environ, {'PGDERIVE_CHECK_PROFILE': 'full'}, clear=True), \
+             patch('sys.argv', ['application', '/evidence', '--', '/worker']), \
+             patch.object(application, 'run_case') as run_case:
+            application.main()
+            unsharded = run_case.call_args_list
+            self.assertEqual(len(unsharded), 12)
+            sharded = []
+            for _, index, count in tasks:
+                run_case.reset_mock()
+                with patch.dict(os.environ, {'PGDERIVE_TEST_CASE_SHARD': f'{index}/{count}'}):
+                    application.main()
+                self.assertEqual(len(run_case.call_args_list), 2)
+                sharded.extend(run_case.call_args_list)
+
+        self.assertCountEqual(sharded, unsharded)
+        self.assertEqual(sum(call.kwargs['check_inventory'] for call in sharded), 1)
+
     def test_parallelism_uses_distinct_servers_and_is_sequential_within_each(self):
         finished=[]; ports={}; lock=threading.Lock(); barrier=threading.Barrier(4)
         class Server:
