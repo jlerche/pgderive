@@ -2557,7 +2557,7 @@
     "scripts/numeric_arithmetic_oracle.py": "1af96436f5839277d5a3b6e7835adfe0d4bb213a1fbe862cfe334312eaa74247",
     "scripts/numeric_compiler_harness.py": "d79b31a3a2390895a5f26b9530f58916e93a3143c0378b347635f5a8406a0ce7",
     "scripts/ordering_domains_harness.py": "32ca9e09850091b41d9922d28b17852e64319bbcc05bd82c43bc7fe9095658ac",
-    "scripts/ordering_harness.py": "6e5da1322f17cc241a0363d1c3b69c59961da06b6db0236541a6288613d8bee9",
+    "scripts/ordering_harness.py": "8dff6f3c89937c36c0f086350a01e02d9a4f711e5f53398226974cd555987d62",
     "scripts/outer_join_harness.py": "7349038610b2de7f8a9d81587fdd37ef13c4beb3b31e74b468d8bb722f508b75",
     "scripts/partition_compiler_harness.py": "009120f50a23ee9f7fdb8d03c3343af3d317df5072f44d5567ae9bee6af1fdeb",
     "scripts/prefix_window_harness.py": "fb32cb90a3fd7b3200760feb1fb608d5e7b79cf2dbb819e2876711d395eb42d5",

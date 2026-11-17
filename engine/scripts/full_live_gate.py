@@ -129,7 +129,7 @@ REPLICATION = tuple(f'replication-{scenario}' for scenario in (
 MODE_SHARDS = {
     'subqueries': 75, 'outer-joins': 45, 'set-operations': 44,
     'temporal-arithmetic': 40, 'join-predicates': 29,
-    'sql-composition': 28, 'numeric-arithmetic': 19, 'unordered': 17,
+    'sql-composition': 28, 'numeric-arithmetic': 19, 'ordering': 18, 'unordered': 17,
     'expression-composition': 12, 'computed-join': 6, 'aggregate-inputs': 6,
 }
 OPERATION_SHARDS = {'query-rebuild-fault': 12, 'query-removal': 11,

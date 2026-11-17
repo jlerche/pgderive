@@ -121,8 +121,11 @@ def qualify(output, command, mode):
     qualify_topk(output, command, mode, fixture_type=OrderingFixture)
 
 
+MODES = ('descending', 'ascending', 'nulls-first', 'empty', 'unbounded',
+         'computed', 'grouped', 'distinct', 'derived', 'timestamp',
+         'timestamptz', 'integral-extremes', 'join', 'window', 'empty-overflow',
+         'empty-derived', 'empty-join', 'empty-window')
+
+
 if __name__ == '__main__':
-    run_modes(('descending', 'ascending', 'nulls-first', 'empty', 'unbounded',
-               'computed', 'grouped', 'distinct', 'derived', 'timestamp',
-               'timestamptz', 'integral-extremes', 'join', 'window', 'empty-overflow',
-               'empty-derived', 'empty-join', 'empty-window'), qualify)
+    run_modes(MODES, qualify)
