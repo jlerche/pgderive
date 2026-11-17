@@ -49,7 +49,11 @@ def qualify(output, command):
             directory.mkdir()
             db = cleanup.enter_context(database(f'{schema}_{index}', directory))
             databases.append(db)
-            queries, sources = fixture_group(cleanup, directory, index, db, churn_rows=40, application_rows=80)
+            # Give the healthy Alice database most of the shared pack bytes.
+            # Its updates must free enough space to relocate the offline members.
+            queries, sources = fixture_group(cleanup, directory, index, db,
+                                             churn_rows=64 if index == 1 else 16,
+                                             application_size=(80, 16))
             for fixture in queries:
                 fixture.tenant_id = 'alice' if index < 2 else 'bob'
             fixtures.extend(queries)

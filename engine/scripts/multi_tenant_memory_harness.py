@@ -34,7 +34,7 @@ def database(name, output):
     execute(f'DROP DATABASE {name}')
 
 
-def fixture_group(cleanup, directory, tenant, db, *, churn_rows=600, application_rows=None):
+def fixture_group(cleanup, directory, tenant, db, *, churn_rows=600, application_size=None):
     fixtures, streams = [], []
     for index in range(2):
         output = directory/f'query-{index}'
@@ -51,12 +51,11 @@ def fixture_group(cleanup, directory, tenant, db, *, churn_rows=600, application
             else:
                 streams[0][4].append(fixture)
         elif tenant%3 == 1:
-            base_rows = 1024*(tenant+1) if application_rows is None else application_rows
-            initial, _history = generated(seed, rows=base_rows+index*128,
-                                          accounts=32*(tenant+1), transactions=0)
+            rows, accounts = application_size or (1024*(tenant+1)+index*128, 32*(tenant+1))
+            initial, _history = generated(seed, rows=rows, accounts=accounts, transactions=0)
             trace = {'initial': initial, 'spec': query('group' if index == 0 else 'window', seed)}
             fixture = ApplicationFixture(output, trace, database=db)
-            fixture.sql(f'UPDATE {fixture.name}.entry SET account_id=1+id%{32*(tenant+1)},amount=id*{seed}')
+            fixture.sql(f'UPDATE {fixture.name}.entry SET account_id=1+id%{accounts},amount=id*{seed}')
             streams.append((fixture, fixture.name+'.entry', 'amount', f'id BETWEEN 1 AND {churn_rows}', [fixture]))
         else:
             fixture = SqlFixture(output, False, typed=index == 0, remainder=index == 1, database=db, index=tag)
