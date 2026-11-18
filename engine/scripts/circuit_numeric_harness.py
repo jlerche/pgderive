@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Exact PostgreSQL numeric circuit versus identical SQL MV and decimal row oracle."""
-from worker_harness import run_cases
+from worker_harness import run_modes
 import collections
 import decimal
 import json
 import os
-from partition_compiler_harness import PartitionFixture, qualify
+from partition_compiler_harness import PartitionFixture, qualify as qualify_partition
 from native_mv_oracle import expected, binary_difference
 
 
@@ -160,8 +160,15 @@ class NumericFixture(PartitionFixture):
             expected_memory[tuple(str(value) if isinstance(value, decimal.Decimal) and not value.is_finite() else value for value in result)] = 1
         return expected_memory
 
+EXTREMA_MODES = ('extrema-min', 'extrema-max', 'extrema-mixed')
+MODES = ('native', 'computed', 'sum', 'sum-computed', 'group-key', 'join-key', *EXTREMA_MODES)
+CORE_MODES = ('sum', 'sum-computed', 'group-key', *EXTREMA_MODES)
+
+
+def qualify(output, command, mode):
+    qualify_partition(output, command, False, mode, fixture_class=NumericFixture)
+
+
 if __name__ == '__main__':
-    modes = ('sum', 'sum-computed', 'group-key') if os.environ.get('PGDERIVE_CHECK_PROFILE') == 'core' else ('native', 'computed', 'sum', 'sum-computed', 'group-key', 'join-key')
-    modes += ('extrema-min', 'extrema-max', 'extrema-mixed')
-    run_cases(((mode, False, mode) for mode in modes),
-              qualify, fixture_class=NumericFixture)
+    modes = CORE_MODES if os.environ.get('PGDERIVE_CHECK_PROFILE') == 'core' else MODES
+    run_modes(modes, qualify)

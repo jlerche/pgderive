@@ -2542,7 +2542,7 @@
     "scripts/application_reduce.py": "dd2ee3955ed9b72f3d91aaea947d0ef808f0bf23defe2e01daae2809ea7227d9",
     "scripts/application_trace.py": "88768b87b74119ceac4f7278fcc0994807bb4d19f2e1a16efb37ace9978cfe74",
     "scripts/case_compiler_harness.py": "523c49ab1fa43697696e7a61dc04923ab24488787fc9aefcba67cbbbcb64e695",
-    "scripts/circuit_numeric_harness.py": "41842c6a7931ce9cd5f157cb89df8347722bd96c8efe7002c5cd27e27167d294",
+    "scripts/circuit_numeric_harness.py": "95a6d7536d8981bab949faf8fcb7528d859dc911f6ad92fcac213d2261ea1042",
     "scripts/computed_join_harness.py": "490566b3b11d12a4943842d0a3906fd32eebeddaa70e1dd53dfe7c889efdd9fb",
     "scripts/export_semantics.py": "0c113ea19159c4da3eeba1b4fd840fc6168f4e559d3d75e6dfbbf53f53c2dcf1",
     "scripts/expression_composition_harness.py": "9dda5ce9df02ad2e6b59500261f5bf5ab4f87e9cb3225ca0978e9cad9a812c88",
