@@ -2,6 +2,7 @@ use anyhow::{Result, ensure};
 use bytes::Bytes;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, path::Path};
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 use std::{
     io::{self, Write},
     sync::Arc,
@@ -54,6 +55,29 @@ pub(super) fn encode(value: &impl Serialize) -> Result<Vec<u8>> {
     Ok(buffer.0)
 }
 
+struct HashWriter {
+    counter: Counter,
+    digest: Sha256,
+}
+
+impl Write for HashWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.counter.write(bytes)?;
+        self.digest.update(bytes);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub(super) fn encoded_identity(value: &impl Serialize) -> Result<(u64, String)> {
+    let mut writer = HashWriter { counter: Counter(0), digest: Sha256::new() };
+    serde_json::to_writer(&mut writer, value)?;
+    Ok((u64::try_from(writer.counter.0)?, format!("{:x}", writer.digest.finalize())))
+}
+
 pub(super) async fn put(store: &Arc<dyn ObjectStore>, path: &str, bytes: Vec<u8>) -> Result<()> {
     let path = Path::from(path);
     let bytes = Bytes::from(bytes);
@@ -78,7 +102,7 @@ pub(super) async fn put(store: &Arc<dyn ObjectStore>, path: &str, bytes: Vec<u8>
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_BYTES, encode, encoded_len, put};
+    use super::{MAX_BYTES, encode, encoded_identity, encoded_len, put};
     use anyhow::Result;
     use object_store::{ObjectStore, ObjectStoreExt as _, memory::InMemory, path::Path};
     use std::sync::Arc;
@@ -90,7 +114,12 @@ mod tests {
             serde_json::json!({"key": [1, 2, 3], "other": {"nested": false}}),
             serde_json::json!("x".repeat(MAX_BYTES - 2)),
         ] {
-            assert_eq!(encoded_len(&value)?, encode(&value)?.len());
+            let bytes = encode(&value)?;
+            assert_eq!(encoded_len(&value)?, bytes.len());
+            assert_eq!(
+                encoded_identity(&value)?,
+                (u64::try_from(bytes.len())?, super::super::format::hash(&bytes))
+            );
         }
         let oversized = "x".repeat(MAX_BYTES - 1);
         assert_eq!(
@@ -98,6 +127,10 @@ mod tests {
             encode(&oversized).err().map(|error| error.to_string())
         );
         assert!(encoded_len(&oversized).is_err());
+        assert_eq!(
+            encoded_identity(&oversized).err().map(|error| error.to_string()),
+            encode(&oversized).err().map(|error| error.to_string())
+        );
         Ok(())
     }
 

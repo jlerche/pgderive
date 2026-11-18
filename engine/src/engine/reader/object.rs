@@ -1,6 +1,6 @@
 use super::{
     BatchData, BatchReader, BlockCache, Cursor, Entry,
-    format::{Block, Pack, hash, hash_matches, validate},
+    format::{Block, Pack, hash, hash_matches, valid_hash, validate},
     index::{Address, Authenticated, Leaf, Node, Root},
 };
 use crate::engine::Batch;
@@ -37,33 +37,29 @@ impl ObjectRef {
     pub(crate) fn namespace(&self) -> Option<&str> {
         self.namespace.as_deref()
     }
-    pub(crate) fn qualify(mut self, namespace: &str) -> Result<Self> {
+    pub(super) fn qualify(&mut self, namespace: &str) -> Result<()> {
         ensure!(
             valid_namespace(namespace) && self.namespace.is_none(),
             "invalid immutable upload namespace"
         );
         self.path = format!("{namespace}/{}", self.path);
         self.namespace = Some(namespace.into());
-        Ok(self)
+        Ok(())
     }
     pub(crate) fn validate_identity(&self) -> Result<()> {
         ensure!(
             self.blocks.as_ref().is_none_or(|range| range.start < range.end),
             "empty run extent"
         );
-        ensure!(
-            self.hash.len() == 64
-                && self
-                    .hash
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-            "invalid immutable root hash"
-        );
-        if let Some(namespace) = &self.namespace {
+        ensure!(valid_hash(&self.hash), "invalid immutable root hash");
+        let path = if let Some(namespace) = &self.namespace {
             ensure!(valid_namespace(namespace), "invalid upload namespace");
-        }
+            self.path.strip_prefix(namespace).and_then(|path| path.strip_prefix('/'))
+        } else {
+            Some(self.path.as_str())
+        };
         ensure!(
-            self.path == self.child_path(&format!("pgderive/batch/{}", self.hash)),
+            path.and_then(|path| path.strip_prefix("pgderive/batch/")) == Some(self.hash.as_str()),
             "invalid immutable root identity"
         );
         Ok(())
@@ -105,7 +101,7 @@ type IndexUpload<K, V> = (ObjectRef, Root<(K, V)>, Head<K, V>);
 #[derive(Debug, Clone)]
 pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) store: Arc<dyn ObjectStore>,
-    pub(super) reference: ObjectRef,
+    pub(super) reference: Arc<ObjectRef>,
     pub(super) index: Arc<Root<(K, V)>>,
     pub(super) head: Head<K, V>,
     pub(super) rows: usize,
@@ -146,15 +142,15 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         target: (&str, usize),
     ) -> Result<ObjectRef> {
         ensure!(valid_namespace(target.0), "invalid batch upload namespace");
-        Ok(Self::write_resident(
+        let resident = Self::write_resident(
             store,
             batch,
             schema,
             (Some(target.0), target.1),
             Arc::new(BlockCache::new(0, 0)),
         )
-        .await?
-        .reference)
+        .await?;
+        Ok(Arc::unwrap_or_clone(resident.reference))
     }
     /// Encode and PUT a canonical batch without publishing trace membership.
     /// Schema identity must include the key/value types and ordering semantics.
@@ -168,15 +164,15 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         schema: &str,
         block_rows: usize,
     ) -> Result<ObjectRef> {
-        Ok(Self::write_resident(
+        let resident = Self::write_resident(
             store,
             batch,
             schema,
             (None, block_rows),
             Arc::new(BlockCache::new(0, 0)),
         )
-        .await?
-        .reference)
+        .await?;
+        Ok(Arc::unwrap_or_clone(resident.reference))
     }
     pub(super) async fn upload_index(
         store: &Arc<dyn ObjectStore>,
@@ -284,7 +280,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let selection = reference.blocks.clone();
         let mut batch = Self {
             store,
-            reference,
+            reference: Arc::new(reference),
             head,
             index: Arc::new(index),
             rows,
@@ -303,7 +299,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
 
     /// Coarse trusted catalog reference for this immutable run.
     #[must_use]
-    pub const fn reference(&self) -> &ObjectRef {
+    pub fn reference(&self) -> &ObjectRef {
         &self.reference
     }
     pub(crate) const fn max_weight(&self) -> u64 {
@@ -353,9 +349,12 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
             .map(|head| super::bounded::encode(head.node()).map(|bytes| bytes.len()))
             .transpose()?
             .unwrap_or(0);
+        // Keep charging the descriptor itself when its ownership is shared.
+        let metadata = std::mem::size_of::<Self>() - std::mem::size_of::<Arc<ObjectRef>>()
+            + std::mem::size_of::<ObjectRef>();
         root.checked_add(head)
             .and_then(|bytes| bytes.checked_mul(2))
-            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .and_then(|bytes| bytes.checked_add(metadata))
             .and_then(|bytes| bytes.checked_add(self.head.as_ref().map_or(0, |head| head.charge())))
             .context("resident index charge overflow")
     }

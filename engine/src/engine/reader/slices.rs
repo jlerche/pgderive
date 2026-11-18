@@ -99,7 +99,7 @@ impl<K: BatchData, V: BatchData> ObjectBatch<K, V> {
         let last = self.leaf(range.end - 1).await?.block.last;
         self.rows = rows;
         self.max_weight = max_weight;
-        self.reference.blocks = Some(range.clone());
+        Arc::make_mut(&mut self.reference).blocks = Some(range.clone());
         self.span = Some(Arc::new(Span { range, first, last, payload_bytes, pages: None }));
         Ok(())
     }
@@ -170,7 +170,9 @@ mod tests {
         let full = ObjectBatch::<i64, i64>::open(store.clone(), reference, "extent").await?;
         let outer = full.slice(30..220).await?;
         let inner = outer.slice(50..130).await?;
-        assert_eq!(inner.reference.blocks, Some(80..160));
+        assert_eq!(full.reference().blocks, None);
+        assert_eq!(outer.reference().blocks, Some(30..220));
+        assert_eq!(inner.reference().blocks, Some(80..160));
         assert_eq!(inner.row_count(), 80);
         assert_eq!(inner.max_weight(), 2);
         assert_eq!(inner.key_bounds(), Some((&1, &1)));
@@ -178,7 +180,7 @@ mod tests {
         assert!(inner.validate_page(&old_page).is_err());
         let cold = ObjectBatch::<i64, i64>::open_with_cache(
             store.clone(),
-            inner.reference.clone(),
+            inner.reference().clone(),
             "extent",
             Arc::new(BlockCache::new(1, 1)),
         )
@@ -188,7 +190,7 @@ mod tests {
         assert!(full.slice(4..4).await.is_err());
         assert!(full.slice(0..257).await.is_err());
         for (start, end) in [(0, 0), (256, 257), (10, 9)] {
-            let mut reference = full.reference.clone();
+            let mut reference = full.reference().clone();
             reference.blocks = Some(start..end);
             assert!(
                 ObjectBatch::<i64, i64>::open(store.clone(), reference, "extent").await.is_err()

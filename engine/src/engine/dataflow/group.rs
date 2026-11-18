@@ -69,31 +69,26 @@ impl<K: BatchData, V: BatchData> GroupCursor<K, V> {
                 .delta
                 .as_deref()
                 .and_then(|delta| delta.get(self.index))
-                .map(|(((), value), weight)| (value, weight));
-            let value = old
-                .map(|entry| entry.0)
-                .into_iter()
-                .chain(changed.map(|entry| entry.0))
-                .min()
-                .cloned();
+                .map(|(((), value), weight)| (value, *weight));
+            let value =
+                old.map(|(value, _)| value).into_iter().chain(changed.map(|row| row.0)).min();
             let Some(value) = value else { return Ok(None) };
             work.charge(1)?;
-            let mut weight = 0_i64;
-            if let Some((candidate, coefficient)) = old
-                && candidate == &value
-            {
-                weight = coefficient;
+            let old = old.filter(|(candidate, _)| *candidate == value).map(|(_, weight)| weight);
+            let changed =
+                changed.filter(|(candidate, _)| *candidate == value).map(|(_, weight)| weight);
+            let weight = old.unwrap_or_default().checked_add(changed.unwrap_or_default());
+            let row = weight.filter(|&weight| weight > 0).map(|weight| (value.clone(), weight));
+            // Reads retain precedence over coefficient errors. Clone only
+            // emitted identities before advancing the cursor that pins them.
+            if old.is_some() {
                 self.prior.advance().await?;
             }
-            if let Some((candidate, coefficient)) = changed
-                && candidate == &value
-            {
-                weight = weight.checked_add(*coefficient).context("group coefficient overflow")?;
-                self.index += 1;
-            }
+            let weight = weight.context("group coefficient overflow")?;
+            self.index += usize::from(changed.is_some());
             ensure!(weight >= 0, "negative group membership");
-            if weight != 0 {
-                return Ok(Some((value, weight)));
+            if row.is_some() {
+                return Ok(row);
             }
         }
     }

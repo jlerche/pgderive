@@ -180,13 +180,11 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
         self.flush_block().await?;
         self.flush_root().await?;
         if let Some(namespace) = &self.namespace {
-            self.references = self
-                .references
-                .into_iter()
-                .map(|reference| reference.qualify(namespace))
-                .collect::<Result<Vec<_>>>()?;
+            for reference in &mut self.references {
+                reference.qualify(namespace)?;
+            }
             for batch in &mut self.resident {
-                batch.reference = batch.reference.clone().qualify(namespace)?;
+                Arc::make_mut(&mut batch.reference).qualify(namespace)?;
                 batch.store = store.clone();
             }
         }
@@ -448,7 +446,7 @@ impl<K: BatchData, V: BatchData> Writer<K, V> {
             index.inline = None;
             self.resident.push(ObjectBatch {
                 store: self.store.clone(),
-                reference,
+                reference: Arc::new(reference),
                 rows,
                 max_weight,
                 index: Arc::new(index),

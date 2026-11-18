@@ -16,6 +16,36 @@ async fn root(store: &Arc<dyn ObjectStore>, bytes: Vec<u8>) -> Result<ObjectRef>
     Ok(reference)
 }
 
+#[test]
+fn root_identity_requires_exact_digest_and_namespace_boundary() -> Result<()> {
+    let digest = hash(b"root");
+    let path = format!("pgderive/batch/{digest}");
+    let mut reference = ObjectRef {
+        path: path.clone(),
+        bytes: 1,
+        hash: digest,
+        schema: "tuple".into(),
+        namespace: None,
+        blocks: None,
+    };
+    reference.validate_identity()?;
+    let namespace = "pgderive/upload-v1/exact";
+    reference.qualify(namespace)?;
+    reference.validate_identity()?;
+    for invalid in [
+        path.clone(),
+        format!("{namespace}{path}"),
+        format!("{namespace}//{path}"),
+        format!("{namespace}-other/{path}"),
+        format!("{namespace}/{path}/extra"),
+        format!("{namespace}/pgderive/batch/{}", hash(b"other")),
+    ] {
+        reference.path = invalid;
+        assert!(reference.validate_identity().is_err());
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn sole_format_rejects_old_layouts_and_plain_json() -> Result<()> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());

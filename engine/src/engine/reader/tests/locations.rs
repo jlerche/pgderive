@@ -16,7 +16,7 @@ async fn replacement_root_authenticates_data_in_an_older_upload_namespace() -> R
     .await?;
     let original = ObjectBatch::<i64, i64>::open(store.clone(), source.clone(), schema).await?;
     let namespace = "pgderive/upload-v1/replacement-location";
-    let (replacement, _, _) = ObjectBatch::<i64, i64>::upload_index(
+    let (mut replacement, _, _) = ObjectBatch::<i64, i64>::upload_index(
         &scoped_store(&store, Some(namespace)),
         schema,
         (original.test_packs().await?, original.test_blocks().await?),
@@ -24,7 +24,7 @@ async fn replacement_root_authenticates_data_in_an_older_upload_namespace() -> R
         None,
     )
     .await?;
-    let replacement = replacement.qualify(namespace)?;
+    replacement.qualify(namespace)?;
     let original_dependencies = source.dependencies(&store).await?;
     let replacement_dependencies = replacement.dependencies(&store).await?;
     assert_eq!(original_dependencies, replacement_dependencies);
