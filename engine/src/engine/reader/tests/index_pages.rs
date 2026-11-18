@@ -67,6 +67,7 @@ async fn growing_indexes_keep_only_bounded_metadata_and_preserve_navigation() ->
         assert!(object.head.is_none());
         let copy = object.clone();
         assert!(Arc::ptr_eq(&copy.index, &object.index));
+        assert!(std::ptr::eq(copy.reference(), object.reference()));
         root_charges.push(object.resident_index_bytes()?);
         for key in (0..rows).step_by(31) {
             assert_eq!(

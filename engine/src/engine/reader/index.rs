@@ -653,8 +653,7 @@ async fn append_level<T: Ord + Clone + Serialize + Send + Sync>(
 pub(super) fn inline_identity(node: &impl Serialize) -> Result<(u64, String)> {
     // GC has no application tuple types. Canonical JSON object order makes the
     // inline identity identical for typed nodes and their opaque JSON views.
-    let bytes = bounded::encode(&serde_json::to_value(node)?)?;
-    Ok((u64::try_from(bytes.len())?, hash(&bytes)))
+    bounded::encoded_identity(&serde_json::to_value(node)?)
 }
 
 impl Cache {
