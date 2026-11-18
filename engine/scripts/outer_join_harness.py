@@ -29,8 +29,14 @@ CASES = {
     'right-residual': Case('RIGHT', variant='residual'),
     'full-residual': Case(variant='residual'),
     'right-keyless': Case('RIGHT', variant='keyless'),
+    'inner-band': Case('INNER', variant='band'),
+    'left-band': Case('LEFT', variant='band'),
+    'right-band': Case('RIGHT', variant='band'),
     'full-true': Case(variant='true'), 'full-false': Case(variant='false'),
     'full-null': Case(variant='null'),
+    'full-folded-true': Case(variant='folded-true'),
+    'full-folded-false': Case(variant='folded-false'),
+    'full-folded-null': Case(variant='folded-null'),
     'right-where': Case('RIGHT', variant='where'),
     'full-where': Case(variant='where'),
     'right-derived': Case('RIGHT', variant='derived'),
@@ -171,7 +177,11 @@ class OuterFixture(SqlFixture):
             b = f'(SELECT id,k,tk,price FROM {b})'
         condition = {'residual': 'a.k=b.k AND b.price>a.group_id',
                      'keyless': 'a.group_id<b.price', 'true': 'true',
-                     'false': 'false', 'null': 'NULL'}.get(case.variant, 'a.k=b.k')
+                     'false': 'false', 'null': 'NULL',
+                     'band': 'b.price BETWEEN a.k AND a.group_id',
+                     'folded-true': 'a.k<b.k OR TRUE',
+                     'folded-false': 'a.k<b.k AND 1=0',
+                     'folded-null': 'a.k < NULL::integer'}.get(case.variant, 'a.k=b.k')
         clause = ('USING(k,tk)' if case.variant == 'composite' else 'USING(k)') if case.using else 'ON '+condition
         source = f'{a} a {case.kind} JOIN {b} b {clause}'
         labels, expressions = ['ak','bk','c','p'], ['a.k','b.k','a.category','b.price']
@@ -205,12 +215,15 @@ class OuterFixture(SqlFixture):
 
     def matches(self, a, b):
         variant = self.case.variant
-        if variant in ('false', 'null'):
+        if variant in ('false', 'null', 'folded-false', 'folded-null'):
             return False
-        if variant == 'true':
+        if variant in ('true', 'folded-true'):
             return True
         if variant == 'keyless':
             return greater(b['price'], a['group_id'])
+        if variant == 'band':
+            lo, value, hi = a['k'], b['price'], a['group_id']
+            return lo is not None and value is not None and hi is not None and lo <= value <= hi
         return eq(a['k'],b['k']) and (variant != 'residual' or greater(b['price'],a['group_id'])) and (variant != 'composite' or eq(a['tk'],b['tk']))
 
     def memory(self, left, right, third=()):

@@ -127,7 +127,7 @@ REPLICATION = tuple(f'replication-{scenario}' for scenario in (
 
 # Each harness exposes its original named history inventory and qualifier.
 MODE_SHARDS = {
-    'subqueries': 75, 'outer-joins': 45, 'set-operations': 44,
+    'subqueries': 75, 'outer-joins': 51, 'set-operations': 44,
     'temporal-arithmetic': 40, 'join-predicates': 29,
     'sql-composition': 28, 'numeric-arithmetic': 19, 'ordering': 18, 'unordered': 17,
     'ordering-domains': 14, 'boolean-resolution': 15, 'nexmark-q8': 8,
@@ -141,7 +141,7 @@ OPERATION_SHARDS = {'query-rebuild-fault': 12, 'query-removal': 11,
                     'query-binding': 18, 'keyed-sink': 6}
 COMPOSITION_SHARDS = 80
 ERROR_ORDER_SHARDS = 8
-FULL_RESULT_COUNT = 922
+FULL_RESULT_COUNT = 928
 
 
 def suites():

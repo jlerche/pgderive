@@ -11,7 +11,7 @@ from export_semantics import MODULES, updates
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 COUNTS={'sql_composition':28,'set_operation':44,'subquery':75,'numeric_arithmetic':19,
-        'temporal_arithmetic':40,'join_predicate':29,'outer_join':45,'ordering':18,
+        'temporal_arithmetic':40,'join_predicate':29,'outer_join':51,'ordering':18,
         'ordering_domains':14,'unordered':17,'sliding_extrema':6,'prefix_window':6,
         'expression_composition':12,'sliding_window':5,'functions_compiler':1,
         'computed_join':6,'aggregate_inputs_compiler':6,'relational_compiler':2,

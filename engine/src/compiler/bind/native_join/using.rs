@@ -42,13 +42,10 @@ impl Builder<'_> {
         condition: Option<&Ast>,
     ) -> Result<Edge> {
         let id = format!("tree_join_{}", self.joins);
-        let bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
-        ensure!(
-            kind != Kind::Full
-                || !bound.keys.is_empty()
-                || bound.predicate.as_ref().is_none_or(crate::compiler::Predicate::is_constant),
-            "FULL JOIN requires a supported cross-input equality key or a fully constant ON condition"
-        );
+        let mut bound = keys::condition(condition, &left.columns, &right.columns, &id)?;
+        if kind == Kind::Full && bound.keys.is_empty() {
+            fold_full_condition(&mut bound)?;
+        }
         self.join(left, right, bound, kind)
     }
 
@@ -126,6 +123,22 @@ impl Builder<'_> {
         edge.columns = merged;
         Ok(edge)
     }
+}
+fn fold_full_condition(bound: &mut keys::Bound) -> Result<()> {
+    let Some(predicate) = &bound.predicate else {
+        return Ok(());
+    };
+    if predicate.is_constant() {
+        return Ok(());
+    }
+    // Classify keyless FULL conditions after the same scalar folding used by the planner.
+    let folded = predicate.fold()?;
+    ensure!(
+        folded.is_constant(),
+        "FULL JOIN requires a supported cross-input equality key or a fully constant ON condition"
+    );
+    bound.predicate = Some(folded);
+    Ok(())
 }
 fn natural_names(left: &[Column], right: &[Column]) -> Vec<String> {
     let right = right

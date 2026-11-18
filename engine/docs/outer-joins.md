@@ -58,12 +58,15 @@ and unsupported locale comparisons retain their existing rejection boundaries.
 
 Aliases on a whole join or USING clause, lateral derived references, and
 wildcard projection remain unsupported. FULL ON clauses require at least one
-supported cross-input equality key or a fully constant condition. The compiler
-rejects keyless nonconstant conditions, including inequality-only and OR-only
-FULL joins, before activation; preparing a result description alone does not
-prove PostgreSQL can plan them. Constant TRUE/FALSE/NULL and supported equality
-plus residual predicates are qualified. RIGHT retains the existing supported
-inequality-only and Boolean predicate domains.
+supported cross-input equality key or an ON condition that is constant after
+folding supported expressions. Examples include `a.k < b.k OR TRUE`,
+`a.k < b.k AND 1=0`, and `a.k < NULL::integer`. Conditions that still reference
+either input after folding require a supported equality key. PostgreSQL 17
+rejects genuinely keyless inequality-only, OR-only and null-safe equality FULL
+conditions with SQLSTATE 0A000 at planning time. Preparing a result description
+alone does not establish that the query can run. Constant TRUE/FALSE/NULL
+and supported equality plus residual predicates are qualified. RIGHT supports
+inequality-only and Boolean predicates, including integral bands.
 
 ## State, costs and reference
 
@@ -85,7 +88,7 @@ then logical-slot acknowledgement.
 
 ## Qualification
 
-The 43 cases in `scripts/outer_join_harness.py` compare the original SQL's native
+The 51 cases in `scripts/outer_join_harness.py` compare the original SQL's native
 materialized view, native send bytes, output labels/types/modifiers/collations and
 an independent raw-source nested-loop Counter oracle. They cover RIGHT/FULL ON
 conditions and derived scopes, composite/chained USING and USING between joined

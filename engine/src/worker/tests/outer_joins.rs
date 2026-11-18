@@ -209,9 +209,15 @@ async fn using_merged_and_qualified_values_match_all_join_kinds_through_restart(
 }
 
 #[test]
-fn full_join_admission_rejects_keyless_nonconstant_numeric_conditions() -> Result<()> {
+fn full_join_admission_requires_a_key_or_constant_after_folding() -> Result<()> {
     let native = native();
-    for condition in ["a.id<b.id", "a.id>0", "a.id=b.id OR a.other=b.auction"] {
+    for condition in [
+        "a.id<b.id",
+        "a.id>0",
+        "a.id=b.id OR a.other=b.auction",
+        "b.price BETWEEN a.id AND a.other",
+        "a.id IS NOT DISTINCT FROM b.id",
+    ] {
         assert!(
             compile(
                 &format!(
@@ -223,7 +229,16 @@ fn full_join_admission_rejects_keyless_nonconstant_numeric_conditions() -> Resul
             "{condition}"
         );
     }
-    for condition in ["TRUE", "FALSE", "NULL", "1=1", "a.id=b.id AND a.other<b.auction"] {
+    for condition in [
+        "TRUE",
+        "FALSE",
+        "NULL",
+        "1=1",
+        "a.id=b.id AND a.other<b.auction",
+        "a.id<b.id AND 1=0",
+        "a.id<b.id OR TRUE",
+        "a.id<NULL::integer",
+    ] {
         compile(
             &format!(
                 "SELECT a.id,b.id FROM source.auction a FULL JOIN source.bid b ON {condition}"

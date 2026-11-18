@@ -8,7 +8,7 @@ modules are not excluded to make the faster gate pass.
 
 ## Deterministic semantics and timers
 
-The default Rust tests replay 417 histories in 26 SQL families from
+The default Rust tests replay 423 histories in 26 SQL families from
 `tests/fixtures/semantics.json.zst`. These reuse the original harness queries,
 source layouts and complete transaction endpoints. Expected weighted bags are
 computed by PostgreSQL during an explicit fixture refresh, independently of the
@@ -112,7 +112,7 @@ phases and the semantic-report verifier to pass. A unit or semantic-report
 failure still waits for live cleanup/evidence preservation before returning an
 error. In the full profile, the same isolated lanes run replication, the
 PostgreSQL expression-error corpus, the complete query matrix and operational
-harnesses. The full worker verifier requires 918 distinct result reports and
+harnesses. The full worker verifier requires 928 distinct result reports and
 the named rebuild, health, TLS, recovery, container and capacity evidence. The expression-error shards retain all 1,257 cases in the original
 order within each shard; the gate verifies each shard against the pinned corpus.
 The 80 composition-matrix histories also run in shards with complete transactions

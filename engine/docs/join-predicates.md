@@ -17,7 +17,11 @@ bound scalar kernels. Text/varchar keys share byte equality under compatible
 deterministic collations; different varchar lengths do not change equality.
 Mixed integral/numeric comparisons use exact numeric comparison. Conditions that
 cannot become keys remain predicates over candidate pairs; a keyless condition
-uses the existing Cartesian join key and work limits.
+uses one Cartesian navigation key and the existing work limits. This includes
+inequality-only predicates and integral bands such as `r.point BETWEEN l.lo AND
+l.hi` for INNER, LEFT, and RIGHT joins. The bounds can vary per row. A reversed
+band matches no rows, an equal-bound band can match its endpoint, and a NULL
+bound or point prevents a TRUE match. FULL has a separate admission boundary.
 
 Text predicate binding follows source and derived expression collation lineage.
 Conflicting collations reject. Text ordering requires a built-in bytewise collation (C, POSIX, `ucs_basic`, `pg_c_utf8`, or `pg_unicode_fast`); no locale
@@ -46,9 +50,15 @@ multiply output occurrences; they do not multiply unmatched rows.
 This follows Feldera a2e791e12's separation of equality keys and residual match
 conditions in CalciteToDBSPCompiler.visitJoin. Its matched-join/antijoin construction
 and this engine's affected-key differentiation implement the same bag semantics.
-Residual LEFT evaluation can scan all candidate pairs in an affected key bucket;
-keyless predicates can scan the whole Cartesian product. Existing work/storage
-budgets bound this cost. This slice does not add a range join index.
+For keyless joins, bootstrap can visit the whole Cartesian product. INNER
+processes the two delta/prior terms and the delta cross term. The residual
+outer cursor evaluates pairs involving changed rows and scans retained rows
+as needed to settle transitions between matched and unmatched output. Scans
+can still cost a Cartesian product in the worst case. The candidate work
+budget is `execution.contributions` (10,000,000 by default). Outer match
+tracking is also bounded by `execution.output_bytes` (64 MiB by default).
+An exceeded limit leaves the last durable publication intact. A specialized
+range index would be a separate performance slice.
 
 The LEFT join plan records its ON predicate explicitly, including its absence.
 Existing LEFT join registrations therefore require an explicit rebuild before
@@ -72,3 +82,10 @@ The expanded Nexmark Q8 harness adds native PostgreSQL and independent grouped-p
 histories for OR and non-equality joins between temporal derived scopes. Its eight
 modes cover local/instant timestamps, C/ICU output collations, NULLs, infinities,
 duplicate seller memberships, simultaneous changes and cold restart.
+
+
+Six more outer-join histories qualify bounded integral bands for INNER, LEFT,
+and RIGHT and keyless FULL predicates that fold to TRUE, FALSE, or NULL. The
+same native materialized view, binary representation and metadata comparison,
+and independent nested-loop oracle cover both-input transactions, changed
+bounds and points, duplicates, empty sides, and cold restart.
