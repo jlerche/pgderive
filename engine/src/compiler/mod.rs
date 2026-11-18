@@ -23,6 +23,7 @@ pub(crate) mod subquery;
 mod syntax;
 pub(crate) mod topk;
 mod typed;
+pub(crate) use typed::Typed;
 pub(crate) mod value;
 use crate::source::Contract;
 use anyhow::Result;

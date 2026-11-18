@@ -89,6 +89,17 @@ impl Typed {
         }
     }
 
+    // FILTER lowering uses one same-type CASE arm and a typed NULL fallback.
+    // Evaluating that arm on its own produces the same native and text value.
+    pub(crate) fn guarded_argument(&self) -> Option<(super::Predicate, &Self)> {
+        let Value::Case { branches, otherwise } = &self.value else { return None };
+        let [(condition, argument)] = branches.as_slice() else { return None };
+        (argument.oid == self.oid
+            && otherwise.oid == self.oid
+            && matches!(otherwise.value, Value::Literal(None)))
+        .then(|| (super::Predicate::new(condition.clone()), argument))
+    }
+
     pub(crate) fn evaluate(&self, row: &crate::transaction::Row) -> Result<Option<String>> {
         self.text_pair((row, row))
     }

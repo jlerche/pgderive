@@ -11,6 +11,11 @@ impl std::error::Error for CapacityExceeded {}
 /// A row-dependent expression failure. Later source changes can remove the row.
 #[derive(Debug)]
 pub struct EvaluationFailed;
+impl EvaluationFailed {
+    pub(crate) fn classify(error: anyhow::Error) -> anyhow::Error {
+        if error.is::<Self>() || error.is::<PlanFault>() { error } else { error.context(Self) }
+    }
+}
 impl std::fmt::Display for EvaluationFailed {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("query expression evaluation failed")

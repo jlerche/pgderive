@@ -198,3 +198,56 @@ async fn root_average_finalizes_nonterminating_nulls_retractions_and_cold_reopen
     }
     Ok(())
 }
+
+#[test]
+fn shared_arguments_keep_each_guard_and_its_error_position() -> Result<()> {
+    use crate::engine::{dataflow::TimedBatch, execution::EvaluationFailed};
+    use anyhow::Context as _;
+    let native = contract();
+    let run = |operands: &str, price: Option<&str>| -> Result<Vec<Option<String>>> {
+        let compiled = compile(
+            &format!("SELECT auction,{operands} FROM source.bid GROUP BY auction"),
+            &native,
+        )?;
+        let computed = compiled
+            .relational()
+            .nodes
+            .iter()
+            .find_map(|node| match node {
+                Node::Map { computed, .. } => Some(computed),
+                _ => None,
+            })
+            .context("missing computed arguments")?;
+        assert_eq!(computed.len(), 3);
+        let output = relational::map(computed).evaluate(&TimedBatch {
+            time: 1,
+            batch: Batch::from_updates([(
+                (
+                    relational::Key::new(),
+                    row(&[("0:id", Some("2")), ("0:auction", Some("1")), ("0:price", price)]),
+                ),
+                1,
+            )])?,
+        })?;
+        let ((_, mapped), _) = output.batch.iter().next().context("missing mapped row")?;
+        computed
+            .iter()
+            .map(|value| mapped.get(&value.column.name).cloned().context("missing computed field"))
+            .collect()
+    };
+
+    let shared = "SUM(abs(price)) FILTER(WHERE id>2), COUNT(abs(price)) FILTER(WHERE id>1), AVG(abs(price)) FILTER(WHERE id<3)";
+    assert_eq!(run(shared, Some("-7"))?, [None, Some("7".into()), Some("7".into())]);
+    assert_eq!(run(shared, None)?, [None, None, None]);
+    let excluded = "SUM(abs(price)) FILTER(WHERE id>2), COUNT(abs(price)) FILTER(WHERE id>3), AVG(abs(price)) FILTER(WHERE id<2)";
+    assert_eq!(run(excluded, Some("-9223372036854775808"))?, [None, None, None]);
+    let error = "SUM(abs(price)) FILTER(WHERE id>1), COUNT(abs(price)) FILTER(WHERE 1/(id-2)>0), AVG(abs(price)) FILTER(WHERE id<3)";
+    let guard = run(error, Some("-7")).err().context("later guard must run")?;
+    assert!(guard.is::<EvaluationFailed>());
+    assert!(format!("{guard:#}").contains("division by zero"));
+    let argument =
+        run(error, Some("-9223372036854775808")).err().context("first argument must run")?;
+    assert!(argument.is::<EvaluationFailed>());
+    assert!(format!("{argument:#}").contains("integral abs overflow"));
+    Ok(())
+}
