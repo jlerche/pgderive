@@ -18,13 +18,7 @@ fn column_value(column: &crate::compiler::ColumnRef, rows: (&Row, &Row)) -> Resu
 
 impl Typed {
     pub(in crate::compiler) fn native_pair(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
-        self.native_result(rows).map_err(|error| {
-            if error.is::<EvaluationFailed>() || error.is::<PlanFault>() {
-                error
-            } else {
-                error.context(EvaluationFailed)
-            }
-        })
+        self.native_result(rows).map_err(EvaluationFailed::classify)
     }
     fn native_result(&self, rows: (&Row, &Row)) -> Result<Option<Native>> {
         self.native_value(rows)?

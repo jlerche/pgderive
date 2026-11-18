@@ -14,11 +14,13 @@ pub use capacity::{CapacityExceeded, EvaluationFailed, PlanFault};
 pub(crate) use sealed::group;
 pub use sealed::{Sealed, SealedCursor};
 mod record;
+mod resident;
+use resident::Entries;
 
 use crate::engine::{Batch, reader::BatchData};
 use anyhow::{Context, Result, ensure};
 use num_bigint::BigInt;
-use std::{collections::BTreeMap, fs::File, io::BufWriter};
+use std::{fs::File, io::BufWriter};
 use tempfile::TempDir;
 
 /// Explicit per-operator work limits. Byte budgets measure serialized records;
@@ -140,6 +142,21 @@ pub(crate) fn charge_contribution(count: &mut usize, limit: usize) -> Result<()>
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum OrderedTerm {
+    Prior,
+    Cross,
+}
+
+impl OrderedTerm {
+    const fn index(self) -> usize {
+        match self {
+            Self::Prior => 0,
+            Self::Cross => 1,
+        }
+    }
+}
+
 struct Resident {
     weight: BigInt,
     tuple_bytes: usize,
@@ -156,7 +173,7 @@ struct Scratch {
 pub struct Consolidator<T: BatchData> {
     limits: Limits,
     scratch: Option<Box<Scratch>>,
-    entries: BTreeMap<T, Resident>,
+    entries: Entries<T>,
     bytes: usize,
     contributions: usize,
     runs: Vec<record::Run>,
@@ -175,7 +192,7 @@ impl<T: BatchData> Consolidator<T> {
         Ok(Self {
             limits,
             scratch: None,
-            entries: BTreeMap::new(),
+            entries: Entries::default(),
             bytes: 0,
             contributions: 0,
             runs: Vec::new(),
@@ -190,8 +207,24 @@ impl<T: BatchData> Consolidator<T> {
     /// # Errors
     /// Returns resource, serialization, or scratch I/O failures.
     pub fn add(&mut self, tuple: T, weight: impl Into<BigInt>) -> Result<()> {
+        self.add_term(tuple, weight, None)
+    }
+    pub(crate) fn add_ordered(
+        &mut self,
+        tuple: T,
+        weight: BigInt,
+        term: OrderedTerm,
+    ) -> Result<()> {
+        self.add_term(tuple, weight, Some(term))
+    }
+    fn add_term(
+        &mut self,
+        tuple: T,
+        weight: impl Into<BigInt>,
+        term: Option<OrderedTerm>,
+    ) -> Result<()> {
         ensure!(!self.failed, "failed consolidator cannot be reused");
-        let result = self.add_inner(tuple, weight.into());
+        let result = self.add_inner(tuple, weight.into(), term);
         self.failed = result.is_err();
         result.with_context(|| self.failure_context())
     }
@@ -213,11 +246,12 @@ impl<T: BatchData> Consolidator<T> {
             },
         )
     }
-    fn add_inner(&mut self, tuple: T, weight: BigInt) -> Result<()> {
+    fn add_inner(&mut self, tuple: T, weight: BigInt, term: Option<OrderedTerm>) -> Result<()> {
         charge_contribution(&mut self.contributions, self.limits.contributions)?;
-        let previous = self.entries.get(&tuple);
-        let next = previous.map(|old| &old.weight + &weight);
-        let tuple_bytes = previous.map_or_else(
+        let count = self.entries.len();
+        let previous = self.entries.get_mut(&tuple, term);
+        let next = previous.as_deref().map(|old| &old.weight + &weight);
+        let tuple_bytes = previous.as_deref().map_or_else(
             || record::size_value(&tuple, self.limits.record_bytes),
             |old| Ok(old.tuple_bytes),
         )?;
@@ -226,27 +260,31 @@ impl<T: BatchData> Consolidator<T> {
             next.as_ref().unwrap_or(&weight),
             self.limits.record_bytes,
         )?;
-        let old_bytes = previous.map_or(0, |old| old.bytes);
+        let old_bytes = previous.as_deref().map_or(0, |old| old.bytes);
         let required = self
             .bytes
             .checked_sub(old_bytes)
             .and_then(|retained| retained.checked_add(bytes))
             .context("resident byte count overflow")?;
         if required > self.limits.resident_bytes
-            || (previous.is_none() && self.entries.len() == self.limits.resident_entries)
+            || (previous.is_none() && count == self.limits.resident_entries)
         {
             self.spill()?;
-            // BTreeMap keeps its original key on an occupied insert. After a
-            // spill this incoming representative becomes the retained key, so
+            // An occupied identity retains its original key. After a spill
+            // this incoming representative becomes the retained key, so
             // charge its own serialization even if ordering compares equal.
             let tuple_bytes = record::size_value(&tuple, self.limits.record_bytes)?;
             let bytes = record::weighted_size(tuple_bytes, &weight, self.limits.record_bytes)?;
             self.bytes += bytes;
-            self.entries.insert(tuple, Resident { weight, tuple_bytes, bytes });
+            self.entries.insert(tuple, Resident { weight, tuple_bytes, bytes }, term)?;
         } else {
             self.bytes = required;
-            self.entries
-                .insert(tuple, Resident { weight: next.unwrap_or(weight), tuple_bytes, bytes });
+            let resident = Resident { weight: next.unwrap_or(weight), tuple_bytes, bytes };
+            if let Some(previous) = previous {
+                *previous = resident;
+            } else {
+                self.entries.insert(tuple, resident, term)?;
+            }
         }
         Ok(())
     }
@@ -258,9 +296,9 @@ impl<T: BatchData> Consolidator<T> {
         let before = self.written;
         let mut writer = BufWriter::new(File::create_new(&path)?);
         let scratch = self.scratch.as_deref_mut().context("missing operator scratch")?;
-        for (tuple, resident) in &self.entries {
+        for (tuple, resident) in std::mem::take(&mut self.entries).ordered() {
             record::encode(
-                tuple,
+                &tuple,
                 &resident.weight,
                 self.limits.record_bytes,
                 &mut scratch.record_buffer,
@@ -282,7 +320,6 @@ impl<T: BatchData> Consolidator<T> {
         if self.runs.len() > self.limits.spill_runs {
             self.merge_level()?;
         }
-        self.entries.clear();
         self.bytes = 0;
         Ok(())
     }
@@ -307,7 +344,7 @@ impl<T: BatchData> Consolidator<T> {
         ensure!(!self.failed, "failed consolidator cannot be finalized");
         if self.runs.is_empty() {
             let rows = std::mem::take(&mut self.entries)
-                .into_iter()
+                .ordered()
                 .filter(|(_, resident)| resident.weight != BigInt::default())
                 .map(|(tuple, resident)| Ok((tuple, resident.weight, resident.bytes)));
             return finish_rows(self.limits, rows, visit);

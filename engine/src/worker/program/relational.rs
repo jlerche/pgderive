@@ -7,6 +7,7 @@ use crate::{
     engine::{
         Batch,
         dataflow::{Project, TimedBatch},
+        execution::EvaluationFailed,
         plan::{
             self, Plan, Settings,
             relational::{Operator, Operators, Relational as Circuit},
@@ -241,19 +242,88 @@ fn join_map() -> Project<Key, (Row, Row), Key, Row> {
     })
 }
 
-fn map(computed: &[crate::compiler::scalar::Computed]) -> Project<Key, Row, Key, Row> {
-    let computed = computed.to_vec();
+pub(in crate::worker) fn map(
+    computed: &[crate::compiler::scalar::Computed],
+) -> Project<Key, Row, Key, Row> {
+    let groups = computed_groups(computed);
     Project::new(move |key: &Key, row: &Row| {
         let mut mapped = row.clone();
-        for value in &computed {
-            ensure!(
-                mapped.insert(value.column.name.clone(), value.expression.evaluate(row)?).is_none(),
-                "duplicate computed field"
-            );
+        for group in &groups {
+            group.evaluate(row, &mut mapped)?;
         }
         Ok(Some((key.clone(), mapped)))
     })
 }
+
+enum ComputedGroup {
+    Single(crate::compiler::scalar::Computed),
+    Shared { argument: crate::compiler::Typed, fields: Vec<(String, crate::compiler::Predicate)> },
+}
+
+fn computed_groups(computed: &[crate::compiler::scalar::Computed]) -> Vec<ComputedGroup> {
+    let mut groups = Vec::new();
+    let mut values = computed.iter().peekable();
+    while let Some(first) = values.next() {
+        let Some((guard, argument)) = first.expression.guarded_argument() else {
+            groups.push(ComputedGroup::Single(first.clone()));
+            continue;
+        };
+        let mut fields = Vec::new();
+        while let Some(next) = values.peek() {
+            let Some((guard, input)) = next.expression.guarded_argument() else { break };
+            if input != argument {
+                break;
+            }
+            fields.push((next.column.name.clone(), guard));
+            values.next();
+        }
+        if fields.is_empty() {
+            groups.push(ComputedGroup::Single(first.clone()));
+        } else {
+            fields.insert(0, (first.column.name.clone(), guard));
+            groups.push(ComputedGroup::Shared { argument: argument.clone(), fields });
+        }
+    }
+    groups
+}
+
+impl ComputedGroup {
+    fn evaluate(&self, row: &Row, mapped: &mut Row) -> Result<()> {
+        match self {
+            Self::Single(value) => {
+                insert_computed(mapped, &value.column.name, value.expression.evaluate(row)?)
+            }
+            Self::Shared { argument, fields } => evaluate_shared(argument, fields, row, mapped),
+        }
+    }
+}
+
+fn evaluate_shared(
+    argument: &crate::compiler::Typed,
+    fields: &[(String, crate::compiler::Predicate)],
+    row: &Row,
+    mapped: &mut Row,
+) -> Result<()> {
+    let mut cached = None;
+    for (name, guard) in fields {
+        let value = if guard.qualifies(row).map_err(EvaluationFailed::classify)? {
+            if cached.is_none() {
+                cached = Some(argument.evaluate(row)?);
+            }
+            cached.clone().flatten()
+        } else {
+            None
+        };
+        insert_computed(mapped, name, value)?;
+    }
+    Ok(())
+}
+
+fn insert_computed(mapped: &mut Row, name: &str, value: Option<String>) -> Result<()> {
+    ensure!(mapped.insert(name.into(), value).is_none(), "duplicate computed field");
+    Ok(())
+}
+
 #[cfg(test)]
 pub(in crate::worker) fn plan(
     contract: &Contract,
