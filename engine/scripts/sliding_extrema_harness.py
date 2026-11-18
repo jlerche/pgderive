@@ -53,6 +53,9 @@ def qualify(output, command, peers, native):
             'independent_frames':True,'cold_restart':True,'rollback':True,'computed_filtered_mixed_aggregates':True})+'\n')
 
 
+CASES = tuple((native + ('-groups' if peers else '-rows'), peers, native)
+               for native in ('smallint','integer','bigint') for peers in (False,True))
+
+
 if __name__ == '__main__':
-    run_cases(((native + ('-groups' if peers else '-rows'), peers, native)
-               for native in ('smallint','integer','bigint') for peers in (False,True)), qualify)
+    run_cases(CASES, qualify)

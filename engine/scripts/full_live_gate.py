@@ -130,10 +130,15 @@ MODE_SHARDS = {
     'subqueries': 75, 'outer-joins': 45, 'set-operations': 44,
     'temporal-arithmetic': 40, 'join-predicates': 29,
     'sql-composition': 28, 'numeric-arithmetic': 19, 'ordering': 18, 'unordered': 17,
-    'ordering-domains': 14, 'expression-composition': 12, 'circuit-numeric': 9, 'computed-join': 6, 'aggregate-inputs': 6,
+    'ordering-domains': 14, 'boolean-resolution': 15, 'nexmark-q8': 8,
+    'query-native-join': 8, 'query-topk': 10, 'expression-composition': 12,
+    'circuit-numeric': 9, 'computed-join': 6, 'aggregate-inputs': 6,
 }
+CASE_SHARDS = {'natural-joins': 8, 'prefix-window': 6, 'sliding-extrema': 6}
 OPERATION_SHARDS = {'query-rebuild-fault': 12, 'query-removal': 11,
-                    'query-health-failure': 6, 'memtable': 8, 'application': 6}
+                    'query-health-failure': 6, 'memtable': 8, 'application': 6,
+                    'tenant-capacity': 2, 'query-lifecycle': 8, 'async-checkpoints': 6,
+                    'query-binding': 18, 'keyed-sink': 6}
 COMPOSITION_SHARDS = 80
 ERROR_ORDER_SHARDS = 8
 FULL_RESULT_COUNT = 918
@@ -167,6 +172,8 @@ def command(name, directory, binaries, postgres_port):
     if name in MODE_SHARDS:
         inventory = 'COUNTS' if name == 'unordered' else 'MODES'
         entrypoint = ['scripts/worker_case_shard.py', f'{script}_harness', inventory]
+    if name in CASE_SHARDS:
+        entrypoint = ['scripts/worker_case_shard.py', f'{script}_harness', 'CASES']
     return [sys.executable, *entrypoint, *arguments, '--', executable]
 
 
@@ -177,7 +184,7 @@ def qualify_container(output, commands, environment):
                   str(image), '--tag', tag], environment, output / 'container-image.log')
     commands.run([sys.executable, 'scripts/query_container_harness.py', str(output / 'query-container'),
                   '--image', tag, '--image-manifest', str(image / 'manifest.json'),
-                  '--duration-seconds', '35', '--interval-seconds', '1'],
+                  '--transactions', '13'],
                  environment, output / 'query-container.log')
 
 

@@ -93,5 +93,8 @@ def qualify(output,command,mode):
         ), initial=initial)
         (output/'result.json').write_text(json.dumps({'mode':mode,'postgres':'exact native MV bag','memory':'independent grouped memberships and SQL three-valued identity/bucket predicate; occurrence multiplicities', 'condition':fixture.condition,'transactions':'complete simultaneous sources; duplicate partial/last deletion; PK/key/bucket moves; NULLs/infinities; rollback; empty bid-only input tick','restart':'cold same slot; aliases/operand orientation/conjunction order normalized','identity':'changed stride and compound join key rejected'})+'\n')
 
-if __name__=='__main__':
-    run_modes(('local', 'instant', 'c', 'icu', 'instant-or', 'local-or', 'instant-range', 'local-range'), qualify)
+MODES = ('local', 'instant', 'c', 'icu', 'instant-or', 'local-or', 'instant-range', 'local-range')
+
+
+if __name__ == '__main__':
+    run_modes(MODES, qualify)

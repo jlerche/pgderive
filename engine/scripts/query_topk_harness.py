@@ -69,5 +69,8 @@ def qualify(output,command,mode,fixture_type=TopKFixture):
         ))
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':'identical SQL exact bag','memory':'independent sorted raw source occurrences','duplicates':'cutoff and projection bag','restart':True,'transactions':len(changes)+1})+'\n')
 
+MODES = ('descending','ascending','nulls-first','equality','strict','reversed','empty','timestamp','timestamptz','integral-extremes')
+
+
 if __name__ == '__main__':
-    run_modes(('descending','ascending','nulls-first','equality','strict','reversed','empty','timestamp','timestamptz','integral-extremes'), qualify)
+    run_modes(MODES, qualify)

@@ -36,7 +36,7 @@ class LiveGateTests(unittest.TestCase):
         from live_gate import full_live_gate
 
         tasks = live_gate.tasks(True, True)
-        for suite, count in full_live_gate.MODE_SHARDS.items():
+        for suite, count in (full_live_gate.MODE_SHARDS | full_live_gate.CASE_SHARDS).items():
             argv = full_live_gate.command(suite, pathlib.Path('/evidence'),
                                           {'worker': '/worker', 'admin': '/admin'}, '5432')
             self.assertEqual(argv[1], 'scripts/worker_case_shard.py')
@@ -233,7 +233,7 @@ class LiveGateTests(unittest.TestCase):
         self.assertTrue(outputs[root/'error-order/shard-1/console.log'][1]['PGDERIVE_ERROR_ORDER_EVIDENCE'])
         self.assertIn('/admin', outputs[root/'query-recovery/console.log'][0])
         self.assertIn(str(root/'package/bin/pgderive'), outputs[root/'query-capacity/console.log'][0])
-        self.assertIn('35', outputs[root/'query-container.log'][0])
+        self.assertEqual(outputs[root/'query-container.log'][0][-2:], ['--transactions', '13'])
         self.assertEqual(outputs[root/'query-storage-soak/console.log'][0][-9:],
                          ['--duration', '1', '--transactions', '6', '--rows', '256',
                           str(root/'query-storage-soak'), '--', '/worker'])

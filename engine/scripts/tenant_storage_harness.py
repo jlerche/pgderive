@@ -10,22 +10,8 @@ import uuid
 from types import SimpleNamespace
 
 from harness_control import held_transaction, finish_transaction, wait_records
-from multi_query_memory_harness import configure, start, wait_for_fence
+from multi_query_memory_harness import advance, configure, start
 from multi_tenant_memory_harness import check, database, fixture_group
-
-
-def advance(streams, value):
-    # Queue writes on all sources before waiting. Separate databases can
-    # checkpoint together, allowing the shared uploader to batch their chunks.
-    fences = []
-    for fixture, table, column, predicate, readers in streams:
-        target = fixture.sql(f"""WITH changed AS (
-            UPDATE {table} SET {column}={value} WHERE {predicate} RETURNING 1)
-            SELECT pg_current_wal_insert_lsn()::text FROM changed LIMIT 1""").strip()
-        assert target, f'{table} produced no WAL fence'
-        fences.append((readers, target))
-    for readers, target in fences:
-        wait_for_fence(readers, target)
 
 
 def verify_packs(rows, catalogs):

@@ -55,6 +55,7 @@ def tasks(with_replication, full=False, replication_only=False):
         names = (*prioritized, *(name for name in names if name not in prioritized))
         shards_by_name['error-order'] = full_live_gate.ERROR_ORDER_SHARDS
         shards_by_name.update(full_live_gate.MODE_SHARDS)
+        shards_by_name.update(full_live_gate.CASE_SHARDS)
         shards_by_name.update(full_live_gate.OPERATION_SHARDS)
         shards_by_name['composition-matrix'] = full_live_gate.COMPOSITION_SHARDS
         suites = [(name, shards_by_name.get(name, 1)) for name in names]
@@ -68,7 +69,7 @@ def tasks(with_replication, full=False, replication_only=False):
                  'composition-matrix', 'subqueries', 'outer-joins', 'join-predicates',
                  'set-operations', 'temporal-arithmetic', 'application', 'tenant-storage',
                  'text-ordering', 'grouping-sets',
-                 *full_live_gate.MODE_SHARDS, *full_live_gate.OPERATION_SHARDS}
+                 *full_live_gate.MODE_SHARDS, *full_live_gate.CASE_SHARDS, *full_live_gate.OPERATION_SHARDS}
         pending.sort(key=lambda task: (task[0] not in first, task[1] if task[0] in first else 0))
     return pending
 

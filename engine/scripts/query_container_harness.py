@@ -46,7 +46,7 @@ def qualifier_inputs(manifest):
     return hashes
 
 
-def qualify(output,image,image_manifest,duration,interval):
+def qualify(output,image,image_manifest,duration,interval, *, transactions=None):
     output.mkdir(mode=0o700,parents=True)
     manifest_bytes=image_manifest.read_bytes(); manifest=json.loads(manifest_bytes)
     image=json.loads(subprocess.check_output(['docker','image','inspect',image]))[0]['Id']
@@ -147,7 +147,7 @@ def qualify(output,image,image_manifest,duration,interval):
             ready=worker.event('ready'); check()
             cases.append({'fixture':fixture,'config':config,'scratch':scratch,'keeper':keeper,'worker':worker,'check':check,'tick':ready['time'],'container':container})
         began=time.monotonic(); ordinal=0; samples=[]
-        while time.monotonic()-began<duration:
+        while ordinal < transactions if transactions is not None else time.monotonic()-began < duration:
             for case in cases:
                 f=case['fixture']; first=1+(ordinal*13)%1900
                 f.sql(f"BEGIN; UPDATE {f.name}.auction SET group_id=CASE WHEN {ordinal}%7=0 THEN NULL ELSE {ordinal}%9 END WHERE id=1; UPDATE {f.name}.bid SET price=CASE WHEN id%5=0 THEN NULL ELSE {ordinal}+id END WHERE id BETWEEN {first} AND {first+15}; DELETE FROM {f.name}.bid WHERE id=2001; INSERT INTO {f.name}.bid VALUES(2001,CASE WHEN {ordinal}%3=0 THEN NULL ELSE 1 END,CASE WHEN {ordinal}%4=0 THEN NULL ELSE {ordinal} END); COMMIT")
@@ -160,7 +160,8 @@ def qualify(output,image,image_manifest,duration,interval):
                     case['worker'].finish(graceful=False)
                     worker=ContainerWorker(image,case['container'],case['config'],secret,case['scratch'],case['fixture'].output/f'cold-{ordinal}','restart','owned-container-password',existing=True)
                     workers.append(worker); case['worker']=worker; worker.event('ready'); case['check']()
-            time.sleep(min(interval,max(0,duration-(time.monotonic()-began))))
+            if transactions is None:
+                time.sleep(min(interval,max(0,duration-(time.monotonic()-began))))
         elapsed=time.monotonic()-began
         for case in cases:
             case['worker'].finish(graceful=False)
@@ -179,7 +180,7 @@ def qualify(output,image,image_manifest,duration,interval):
         (output/'samples.json').write_text(json.dumps(samples,indent=2)+'\n')
         assert qualifier_inputs(manifest)==inputs,'qualifier source changed during run'
         assert image_manifest.read_bytes()==manifest_bytes,'image manifest changed during run'
-        (output/'qualification.json').write_text(json.dumps({'image_id':image,'requested_seconds':duration,'elapsed_seconds':elapsed,'transactions_per_query':ordinal,'query_count':3,'native_and_memory_oracles':True,'actual_container_restart':True,'forced_cold_restarts_per_query':1+ordinal//30,'physical_prefix_inventories':[case['physical_inventory'] for case in cases],'restricted_postgres_tls':True,'mounted_private_s3_secret_tls':True,'read_only_nonroot_pid1_sigint':True,'maintenance_events':len(maintenance),'delete_requests':sum(r.get('request_method')=='DELETE' for r in requests),'signed_conditional_puts':len(puts),'scope':'owned tmpfs PostgreSQL and local SeaweedFS TLS proxy; no cloud or orchestrator claim'},indent=2)+'\n')
+        (output/'qualification.json').write_text(json.dumps({'image_id':image,'requested_seconds':duration if transactions is None else None,'requested_transactions':transactions,'elapsed_seconds':elapsed,'transactions_per_query':ordinal,'query_count':3,'native_and_memory_oracles':True,'actual_container_restart':True,'forced_cold_restarts_per_query':1+ordinal//30,'physical_prefix_inventories':[case['physical_inventory'] for case in cases],'restricted_postgres_tls':True,'mounted_private_s3_secret_tls':True,'read_only_nonroot_pid1_sigint':True,'maintenance_events':len(maintenance),'delete_requests':sum(r.get('request_method')=='DELETE' for r in requests),'signed_conditional_puts':len(puts),'scope':'owned tmpfs PostgreSQL and local SeaweedFS TLS proxy; no cloud or orchestrator claim'},indent=2)+'\n')
         completed=True
     except BaseException:
         for fixture in fixtures: fixture.preserve()
@@ -203,5 +204,8 @@ if __name__=='__main__':
     parser.add_argument('output',type=pathlib.Path); parser.add_argument('--image',required=True)
     parser.add_argument('--image-manifest',type=pathlib.Path,required=True)
     parser.add_argument('--duration-seconds',type=float,default=1800); parser.add_argument('--interval-seconds',type=float,default=5)
+    parser.add_argument('--transactions',type=int)
     args=parser.parse_args(); assert args.duration_seconds>0 and args.interval_seconds>0
-    qualify(args.output,args.image,args.image_manifest,args.duration_seconds,args.interval_seconds)
+    assert args.transactions is None or args.transactions>=4
+    qualify(args.output,args.image,args.image_manifest,args.duration_seconds,args.interval_seconds,
+            transactions=args.transactions)

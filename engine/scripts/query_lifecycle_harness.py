@@ -14,6 +14,7 @@ from nexmark_projection_harness import ProjectionFixture
 from nexmark_q1_harness import Q1Fixture
 from native_compiler_harness import NativeFixture
 from native_mv_oracle import expected as native_expected
+from worker_case_shard import select_cases
 from worker_harness import Worker, harness_arguments
 from harness_control import admin
 from gc_fixture import paged_garbage, empty_inventory, logical_get, authority
@@ -334,18 +335,17 @@ class WideningFixture(SqlFixture):
 
 if __name__ == '__main__':
     output, command = harness_arguments()
-    race = output/'namespace-race'
-    race.mkdir()
-    namespace_race(race, command)
-    for name, factory in [
-        ('grouped', grouped),
-        ('projection-local', lambda out: ProjectionFixture(out, 'q0', 'local')),
-        ('projection-instant', lambda out: ProjectionFixture(out, 'q0', 'instant')),
-        ('numeric', lambda out: Q1Fixture(out, 'int8')),
-        ('native-range', lambda out: NativeFixture(out, 'projection')),
-        ('native-scalars', ScalarFixture),
-        ('deferred-widening', WideningFixture),
-    ]:
+    cases = [
+        ('namespace-race', namespace_race, ()),
+        ('grouped', qualify, (grouped,)),
+        ('projection-local', qualify, (lambda out: ProjectionFixture(out, 'q0', 'local'),)),
+        ('projection-instant', qualify, (lambda out: ProjectionFixture(out, 'q0', 'instant'),)),
+        ('numeric', qualify, (lambda out: Q1Fixture(out, 'int8'),)),
+        ('native-range', qualify, (lambda out: NativeFixture(out, 'projection'),)),
+        ('native-scalars', qualify, (ScalarFixture,)),
+        ('deferred-widening', qualify, (WideningFixture,)),
+    ]
+    for name, run, arguments in select_cases(cases):
         directory = output/name
         directory.mkdir()
-        qualify(directory, command, factory)
+        run(directory, command, *arguments)

@@ -3,6 +3,7 @@
 import json
 import pathlib
 import signal
+from worker_case_shard import select_cases
 from worker_harness import Fixture, harness_arguments
 from worker_crash_harness import arm, proxy, wait_for
 
@@ -263,12 +264,16 @@ def upload_timeout(output, command):
 
 
 def qualify(output, command):
-    for after in [False, True]:
-        case(output/('after-commit' if after else 'during-upload'), command, after)
-    memory_pressure(output/'pressure', command)
-    debt_pressure(output/'debt', command)
-    case(output/'shutdown', command, False, shutdown=True)
-    upload_timeout(output/'timeout', command)
+    cases = (
+        ('during-upload', case, (False,)),
+        ('after-commit', case, (True,)),
+        ('pressure', memory_pressure, ()),
+        ('debt', debt_pressure, ()),
+        ('shutdown', case, (False, True)),
+        ('timeout', upload_timeout, ()),
+    )
+    for name, run, arguments in select_cases(cases):
+        run(output/name, command, *arguments)
 
 
 if __name__ == '__main__':

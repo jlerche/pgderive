@@ -17,11 +17,13 @@ def main():
     import importlib
     import sys
 
-    from worker_harness import run_modes
+    from worker_harness import run_cases, run_modes
 
     module = importlib.import_module(sys.argv.pop(1))
-    inventory = getattr(module, sys.argv.pop(1))
-    run_modes(select_cases(inventory), module.qualify)
+    name = sys.argv.pop(1)
+    cases = select_cases(getattr(module, name))
+    run = run_cases if name == 'CASES' else run_modes
+    run(cases, module.qualify)
 
 
 if __name__ == '__main__':

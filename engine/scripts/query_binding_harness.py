@@ -8,6 +8,7 @@ never alter shared pgderive_dev built-ins, even for a rollback-only test.
 import json
 import os
 import subprocess
+from worker_case_shard import select_cases
 from worker_harness import Fixture, harness_arguments
 
 
@@ -185,17 +186,14 @@ def main():
     subprocess.run(control+[f'CREATE DATABASE {database} TEMPLATE template0'], env=environment, check=True)
     (output/'database.json').write_text(json.dumps({'owned_database':database,'port':port})+'\n')
     try:
-        for mode in ['type','varchar','helper','bootstrap-helper','expression',*LOCAL_FUNCTIONS,'aggregate-sort']:
+        cases = [(mode, qualify, (mode,)) for mode in
+                 ('type', 'varchar', 'helper', 'bootstrap-helper', 'expression', *LOCAL_FUNCTIONS, 'aggregate-sort')]
+        cases.extend((mode, hot_path, (mode,)) for mode in ('hot-plain', 'hot-computed'))
+        cases.append(('context', context, ()))
+        for mode, run, arguments in select_cases(cases):
             directory = output/mode
             directory.mkdir()
-            qualify(directory, command, mode, database)
-        for mode in ['hot-plain','hot-computed']:
-            directory = output/mode
-            directory.mkdir()
-            hot_path(directory, command, mode, database)
-        directory = output/'context'
-        directory.mkdir()
-        context(directory, command, database)
+            run(directory, command, *arguments, database)
     except BaseException:
         print('Preserving binding failure database:',database, flush=True)
         raise

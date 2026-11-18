@@ -71,6 +71,20 @@ def wait_for_fence(fixtures, target):
         time.sleep(.1)
 
 
+def advance(streams, value):
+    # Queue writes on all sources before waiting. Separate databases can
+    # checkpoint together, allowing the shared uploader to batch their chunks.
+    fences = []
+    for fixture, table, column, predicate, readers in streams:
+        target = fixture.sql(f"""WITH changed AS (
+            UPDATE {table} SET {column}={value} WHERE {predicate} RETURNING 1)
+            SELECT pg_current_wal_insert_lsn()::text FROM changed LIMIT 1""").strip()
+        assert target, f'{table} produced no WAL fence'
+        fences.append((readers, target))
+    for readers, target in fences:
+        wait_for_fence(readers, target)
+
+
 def verify(fixtures):
     for fixture in fixtures:
         fixture.verify()

@@ -150,7 +150,7 @@ class UuidResolutionFixture(ResolutionFixture):
                                 if price is None or price > 0))
 
 
-def qualify(output, command, mode):
+def qualify_boolean(output, command, mode):
     fixture = BooleanResolutionFixture(output, mode)
     a = fixture.name + '.auction'
     b = fixture.name + '.bid'
@@ -199,6 +199,13 @@ def qualify_uuid(output, command, mode):
         })+'\n')
 
 
+MODES = ('scalar', 'unknown', *OPERATIONS, *('uuid-'+mode for mode in ('scalar', *OPERATIONS)))
+
+
+def qualify(output, command, mode):
+    qualifier = qualify_uuid if mode.startswith('uuid-') else qualify_boolean
+    qualifier(output, command, mode)
+
+
 if __name__ == '__main__':
-    run_modes(('scalar', 'unknown', *OPERATIONS), qualify)
-    run_modes(tuple('uuid-'+mode for mode in ('scalar', *OPERATIONS)), qualify_uuid)
+    run_modes(MODES, qualify)

@@ -9,7 +9,8 @@ import subprocess
 import time
 
 from multi_tenant_memory_harness import database, fixture_group, check
-from multi_query_memory_harness import configure, start, wait_for_fence
+from multi_query_memory_harness import advance, configure, start, wait_for_fence
+from worker_case_shard import select_cases
 from worker_harness import Worker, harness_arguments
 from portfolio_cadence_fixture import DemoFixture
 from application_portfolio_harness import ApplicationFixture
@@ -77,9 +78,10 @@ def qualify(output, command):
         workers = start(pooled, fixtures, paths, output, 'shared', 'worker')
         check(fixtures)
         for tick in range(8):
-            for fixture, table, column, predicate, readers in streams:
-                target = fixture.sql(f"UPDATE {table} SET {column}={100+tick} WHERE {predicate}; SELECT pg_current_wal_insert_lsn()::text").splitlines()[-1]
-                wait_for_fence(readers, target)
+            advance(streams, 100+tick)
+            if any(row['event'] == 'checkpoint_backpressure' and row.get('reason') == 'shared_memtable'
+                   for row in map(json.loads, pathlib.Path(workers[0].metrics.name).read_text().splitlines())):
+                break
         check(fixtures)
         for worker in workers:
             stop(worker)
@@ -98,7 +100,9 @@ def qualify(output, command):
                     assert stats['used'] <= stats['limit'] and stats['peak'] <= stats['limit'], stats
                     assert stats['tenant_used'] <= stats['tenant_limit'], stats
         foreign = output/'foreign.toml'
-        foreign.write_text(paths[0].read_text().replace('tenant_id="tenant-0"', 'tenant_id="foreign"'))
+        # Keep the retry budget and avoid waiting on backoff for a permanent ownership failure.
+        foreign.write_text(paths[0].read_text().replace('tenant_id="tenant-0"', 'tenant_id="foreign"')
+                           .replace('retry_delay_ms=100', 'retry_delay_ms=1'))
         denied = subprocess.run(command+[str(foreign)], env=fixtures[0].environment, capture_output=True, text=True, timeout=60)
         (output/'foreign.stdout').write_text(denied.stdout)
         (output/'foreign.stderr').write_text(denied.stderr)
@@ -130,5 +134,5 @@ def qualify(output, command):
 
 if __name__ == '__main__':
     output, command = harness_arguments()
-    replay_pressure(output/'replay-pressure', command)
-    qualify(output, command)
+    for name, run in select_cases((('replay-pressure', replay_pressure), ('', qualify))):
+        run(output/name, command)

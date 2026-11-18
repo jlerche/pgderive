@@ -41,6 +41,9 @@ def qualify(output, command, kind, shared):
         })+'\n')
 
 
+CASES = tuple((f'{kind.lower()}-{"shared" if shared else "disjoint"}', kind, shared)
+               for kind in ('INNER', 'LEFT', 'RIGHT', 'FULL') for shared in (True, False))
+
+
 if __name__ == '__main__':
-    run_cases(((f'{kind.lower()}-{"shared" if shared else "disjoint"}', kind, shared)
-               for kind in ('INNER', 'LEFT', 'RIGHT', 'FULL') for shared in (True, False)), qualify)
+    run_cases(CASES, qualify)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Proven grouped primary keys, atomic replacement, restart and layout tampering."""
 import json
+from worker_case_shard import select_cases
 from worker_harness import Fixture, harness_arguments
 from native_mv_oracle import expected, binary_difference
 from harness_control import held_transaction, finish_transaction, wait_sql
@@ -167,12 +168,14 @@ def inheritance(output,command):
                 'progress_unchanged':True,'ack_safe':True})+'\n')
 
 
-if __name__=='__main__':
-    output,command=harness_arguments()
-    qualify(output,command)
-    stale_destination(output/'stale-destination',command)
-    bounded_updates(output/'bounded-updates',command)
-    concurrent_destination(output/'concurrent-destination',command)
-    inheritance(output/'inheritance',command)
+if __name__ == '__main__':
     from relational_property_cases import qualify as qualify_properties
-    qualify_properties(output/'relational-properties',command)
+
+    output, command = harness_arguments()
+    cases = (
+        ('', qualify), ('stale-destination', stale_destination),
+        ('bounded-updates', bounded_updates), ('concurrent-destination', concurrent_destination),
+        ('inheritance', inheritance), ('relational-properties', qualify_properties),
+    )
+    for name, run in select_cases(cases):
+        run(output/name, command)

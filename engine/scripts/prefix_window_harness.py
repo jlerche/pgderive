@@ -58,6 +58,9 @@ def qualify(output,command,native,peers):
         fixture.run_trace(command)
         (output/'result.json').write_text(json.dumps({'native':native,'peers':peers,'native_binary_and_metadata':True,'independent_prefix_frames':True,'cold_restart':True,'rollback':True,'prefix_statistics':True,'durable_arrangements':fixture.prefix_witness})+'\n')
 
+CASES = tuple((native + ('-peers' if peers else '-ordered'), native, peers)
+               for native in ('smallint','integer','bigint') for peers in (False,True))
+
+
 if __name__ == '__main__':
-    run_cases(((native + ('-peers' if peers else '-ordered'), native, peers)
-               for native in ('smallint','integer','bigint') for peers in (False,True)), qualify)
+    run_cases(CASES, qualify)

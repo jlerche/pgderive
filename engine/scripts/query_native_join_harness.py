@@ -95,5 +95,8 @@ def qualify(output,command,mode):
         (output/'result.json').write_text(json.dumps({'mode':mode,'native_mv':'identical SQL exact bag','memory':'independent nested-loop raw-row oracle','cold_restart':True,'simultaneous_changes':True,'transactions':len(changes)+1})+'\n')
 
 
+MODES = ('left','compound','self','self-left','multiway','nested-left','derived-left','native-derived-left')
+
+
 if __name__ == '__main__':
-    run_modes(('left','compound','self','self-left','multiway','nested-left','derived-left','native-derived-left'), qualify)
+    run_modes(MODES, qualify)
