@@ -188,9 +188,9 @@ async fn borrowed_spans_share_decodes_preserve_restrictions_and_stream_objects()
     assert_eq!(cache.stats()?.pins, 2);
     let page = object.key_page(&1).await?.ok_or_else(|| anyhow::anyhow!("missing key"))?;
     let mut restricted = Cursor::object_key_page(
-        object.clone(),
+        Arc::new(object.clone()),
         &crate::engine::reader::KeyIdentity::new(&1)?,
-        page,
+        &page,
         None,
     )
     .await?

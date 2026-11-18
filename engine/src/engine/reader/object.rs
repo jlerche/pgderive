@@ -114,7 +114,6 @@ pub struct ObjectBatch<K: BatchData, V: BatchData> {
     pub(super) span: Option<Arc<super::slices::Span<K, V>>>,
 }
 
-#[derive(Clone)]
 pub struct SelectedBlock<K: BatchData, V: BatchData> {
     pub(crate) ordinal: usize,
     owner: Arc<Root<(K, V)>>,

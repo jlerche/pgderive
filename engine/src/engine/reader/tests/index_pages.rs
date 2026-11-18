@@ -26,9 +26,10 @@ async fn cold_key_selection_descends_once_and_preserves_spanning_keys() -> Resul
     let before = cache.stats()?.index_reads;
     let page = object.key_page(&2).await?.context("missing spanning key")?;
     assert_eq!(cache.stats()?.index_reads - before, u64::try_from(depth + 1)?);
-    let mut cursor = Cursor::object_key_page(object.clone(), &KeyIdentity::new(&2)?, page, None)
-        .await?
-        .context("missing cursor")?;
+    let mut cursor =
+        Cursor::object_key_page(Arc::new(object.clone()), &KeyIdentity::new(&2)?, &page, None)
+            .await?
+            .context("missing cursor")?;
     let mut rows = Vec::new();
     while let Some((key, value, weight)) = cursor.current() {
         rows.push(((*key, *value), weight));
@@ -177,9 +178,9 @@ async fn foreign_selected_metadata_cannot_bypass_validation_through_head_reuse()
         ObjectBatch::<i64, i64>::open(store.clone(), root.clone(), "selected-owner").await?;
     let page = first.key_page(&1).await?.context("missing selected page")?;
     let head = Cursor::object_key_page(
-        first,
+        Arc::new(first),
         &crate::engine::reader::KeyIdentity::new(&1)?,
-        page.clone(),
+        &page,
         None,
     )
     .await?
@@ -187,9 +188,9 @@ async fn foreign_selected_metadata_cannot_bypass_validation_through_head_reuse()
     let other = ObjectBatch::<i64, i64>::open(store, root, "selected-owner").await?;
     assert!(
         Cursor::object_key_page(
-            other,
+            Arc::new(other),
             &crate::engine::reader::KeyIdentity::new(&1)?,
-            page,
+            &page,
             Some(&head)
         )
         .await
@@ -414,9 +415,9 @@ async fn prepared_pages_recheck_synopses_learned_after_metadata_selection() -> R
     let before = cache.stats()?;
     assert!(
         Cursor::object_key_page(
-            object.clone(),
+            Arc::new(object.clone()),
             &crate::engine::reader::KeyIdentity::new(&3)?,
-            selected,
+            &selected,
             None
         )
         .await?
@@ -429,9 +430,9 @@ async fn prepared_pages_recheck_synopses_learned_after_metadata_selection() -> R
     let present = object.key_page(&4).await?.context("missing present page")?;
     assert!(
         Cursor::object_key_page(
-            object,
+            Arc::new(object),
             &crate::engine::reader::KeyIdentity::new(&4)?,
-            present,
+            &present,
             None
         )
         .await?

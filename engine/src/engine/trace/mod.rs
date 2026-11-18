@@ -189,7 +189,7 @@ impl<K: BatchData, V: BatchData> TraceSnapshot<K, V> {
     /// Batch affected-key probes against this immutable boundary.
     #[must_use]
     pub fn probes(&self) -> KeyProbes<K, V> {
-        KeyProbes::new(self.clone())
+        KeyProbes::new(self)
     }
     /// Read one complete tuple coefficient using object-local full-identity fences.
     ///
