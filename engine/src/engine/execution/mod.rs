@@ -131,9 +131,18 @@ pub(crate) fn paired_record_size(
     value: &impl serde::Serialize,
     limit: usize,
 ) -> Result<usize> {
+    paired_record_size_with(tuple_bytes, limit, |available| record_size(value, available))
+}
+
+// The callback must reject any size above the available byte budget.
+pub(crate) fn paired_record_size_with(
+    tuple_bytes: usize,
+    limit: usize,
+    size_value: impl FnOnce(usize) -> Result<usize>,
+) -> Result<usize> {
     let prefix = tuple_bytes.checked_add(3).context("scratch record size overflow")?;
     ensure!(prefix <= limit, CapacityExceeded("scratch record limit exceeded"));
-    Ok(prefix + record_size(value, limit - prefix)?)
+    Ok(prefix + size_value(limit - prefix)?)
 }
 
 pub(crate) fn charge_contribution(count: &mut usize, limit: usize) -> Result<()> {

@@ -1,12 +1,15 @@
 //! Canonical mixed integer/numeric scalar codec for one additive SQL operator.
 use crate::{
     compiler::partition::{Aggregate, Function},
-    engine::dataflow::Additive,
+    engine::{
+        dataflow::Additive,
+        execution::{CapacityExceeded, paired_record_size, paired_record_size_with},
+    },
     numeric::sum::Sum,
     transaction::Row,
 };
 use anyhow::{Context, Result, ensure};
-use num_bigint::BigInt;
+use num_bigint::{BigInt, Sign};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) enum Scalar {
@@ -48,6 +51,30 @@ impl Additive for Scalar {
             Self::Numeric(value) => value.is_zero(),
         }
     }
+
+    fn record_size(&self, tuple_bytes: usize, limit: usize) -> Result<usize> {
+        match self {
+            Self::Integer(value) if value.bits() <= 64 => {
+                paired_record_size_with(tuple_bytes, limit, |available| {
+                    let bytes = integer_json_size(value)?;
+                    ensure!(bytes <= available, CapacityExceeded("scratch record limit exceeded"));
+                    Ok(bytes)
+                })
+            }
+            _ => paired_record_size(tuple_bytes, self, limit),
+        }
+    }
+}
+
+fn integer_json_size(value: &BigInt) -> Result<usize> {
+    // Scalar's serde tag wraps BigInt's stable [sign, u32 limbs] encoding.
+    const ZERO_BYTES: usize = br#"{"Integer":[0,[]]}"#.len();
+    let mut limbs = value.iter_u32_digits();
+    let punctuation =
+        ZERO_BYTES + usize::from(value.sign() == Sign::Minus) + limbs.len().saturating_sub(1);
+    limbs.try_fold(punctuation, |bytes, limb| {
+        Ok(bytes + usize::try_from(limb.checked_ilog10().map_or(1, |digits| digits + 1))?)
+    })
 }
 impl super::super::native::NativeValue for Scalar {
     fn heap_bytes(&self) -> Result<usize> {

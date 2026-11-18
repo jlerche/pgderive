@@ -100,3 +100,38 @@ fn finalizer_validates_other_slots_and_does_not_skip_errors_on_retractions() -> 
     }
     Ok(())
 }
+
+#[test]
+fn integer_accumulator_sizes_match_serde_and_capacity_errors() -> Result<()> {
+    use super::scalar::Scalar;
+    use crate::engine::{
+        dataflow::Additive,
+        execution::{CapacityExceeded, paired_record_size},
+    };
+    use num_bigint::BigInt;
+
+    let mut magnitudes = vec![0, 1, u64::from(u32::MAX), 1 << 32, (1 << 32) + 1, u64::MAX];
+    for power in 1..=9 {
+        let boundary = 10_u64.pow(power);
+        magnitudes.extend([boundary - 1, boundary, (boundary << 32) + boundary]);
+    }
+    let values = magnitudes
+        .into_iter()
+        .flat_map(|magnitude| [BigInt::from(magnitude), -BigInt::from(magnitude)])
+        .chain([BigInt::from(1) << 64, -(BigInt::from(1) << 96_u32)]);
+    for value in values {
+        let scalar = Scalar::Integer(value);
+        let bytes = serde_json::to_vec(&scalar)?.len();
+        let limit = 23 + 3 + bytes;
+        assert_eq!(scalar.record_size(23, limit)?, limit);
+        for tight in [0, 25, limit - 1] {
+            let expected =
+                paired_record_size(23, &scalar, tight).err().context("reference limit")?;
+            let actual = scalar.record_size(23, tight).err().context("optimized limit")?;
+            assert!(actual.is::<CapacityExceeded>());
+            assert_eq!(actual.to_string(), expected.to_string());
+        }
+        assert!(scalar.record_size(usize::MAX, usize::MAX).is_err());
+    }
+    Ok(())
+}
