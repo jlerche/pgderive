@@ -1,4 +1,4 @@
-use super::{Consolidator, Limits};
+use super::{Consolidator, Limits, OrderedTerm};
 use anyhow::{Context as _, Result};
 use num_bigint::BigInt;
 
@@ -472,5 +472,30 @@ fn scratch_merge_rejects_duplicate_and_descending_run_identities() -> Result<()>
         let error = merge.next().err().context("accepted noncanonical run")?;
         assert!(error.to_string().contains("noncanonical scratch run"));
     }
+    Ok(())
+}
+
+#[test]
+fn ordered_join_terms_share_exact_resident_identity_and_limits() -> Result<()> {
+    for entries in [1, 2, 8] {
+        let mut output = Consolidator::new(limits(entries))?;
+        let large = BigInt::from(i64::MAX) * 3;
+        output.add((0, 0), &large + 1)?;
+        output.add((0, 2), 2)?;
+        output.add_ordered((0, 0), -&large * 2, OrderedTerm::Prior)?;
+        output.add_ordered((0, 1), 3.into(), OrderedTerm::Prior)?;
+        output.add_ordered((0, 0), large, OrderedTerm::Cross)?;
+        output.add_ordered((0, 1), (-3).into(), OrderedTerm::Cross)?;
+        let batch = output.finish_batch()?;
+        assert_eq!(batch, crate::engine::Batch::from_updates([((0, 0), 1), ((0, 2), 2)])?);
+    }
+    let size = super::record::size(&(0, 0), &BigInt::from(9), 4096)?;
+    let mut output = Consolidator::new(Limits { record_bytes: size, ..limits(8) })?;
+    output.add_ordered((0, 0), 9.into(), OrderedTerm::Prior)?;
+    let failure = output
+        .add_ordered((0, 0), 1.into(), OrderedTerm::Cross)
+        .err()
+        .context("summed resident coefficient must fit")?;
+    assert!(failure.is::<super::CapacityExceeded>());
     Ok(())
 }

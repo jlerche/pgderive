@@ -1,7 +1,7 @@
 use super::TimedBatch;
 use crate::engine::{
     Batch,
-    execution::{Consolidator, Limits},
+    execution::{Consolidator, Limits, OrderedTerm},
     reader::BatchData,
     trace::TraceSnapshot,
 };
@@ -75,8 +75,12 @@ impl Join {
         let right = right.batch.borrow();
         limits.check_batch(left)?;
         limits.check_batch(right)?;
-        prior_join(left, prior_right, output, |left, right| (left.clone(), right.clone())).await?;
-        prior_join(right, prior_left, output, |right, left| (left.clone(), right.clone())).await?;
+        prior_join(left, prior_right, output, None, |left, right| (left.clone(), right.clone()))
+            .await?;
+        prior_join(right, prior_left, output, Some(OrderedTerm::Prior), |right, left| {
+            (left.clone(), right.clone())
+        })
+        .await?;
         cross(left, right, output)
     }
 }
@@ -88,6 +92,7 @@ async fn prior_join<K: BatchData, D: BatchData, P: BatchData, L: BatchData, R: B
     delta: &Batch<K, D>,
     prior: &TraceSnapshot<K, P>,
     output: &mut JoinWeights<K, L, R>,
+    term: Option<OrderedTerm>,
     pair: impl Fn(&D, &P) -> (L, R),
 ) -> Result<()> {
     let mut entries = delta.iter().peekable();
@@ -103,8 +108,13 @@ async fn prior_join<K: BatchData, D: BatchData, P: BatchData, L: BatchData, R: B
                 break;
             }
             for ((_, value), weight) in group.clone() {
-                output
-                    .add((key.clone(), pair(value, other)), BigInt::from(*weight) * other_weight)?;
+                let tuple = (key.clone(), pair(value, other));
+                let coefficient = BigInt::from(*weight) * other_weight;
+                if let Some(term) = term {
+                    output.add_ordered(tuple, coefficient, term)?;
+                } else {
+                    output.add(tuple, coefficient)?;
+                }
             }
             cursor.advance().await?;
         }
@@ -127,9 +137,10 @@ fn cross<K: BatchData, L: BatchData, R: BatchData>(
         }
         let group = right.clone().take_while(|((other, _), _)| other == key);
         for ((_, other), other_weight) in group {
-            output.add(
+            output.add_ordered(
                 (key.clone(), (value.clone(), other.clone())),
                 BigInt::from(*weight) * *other_weight,
+                OrderedTerm::Cross,
             )?;
         }
     }
