@@ -23,7 +23,7 @@ pub(super) fn run(graph: &mut Graph<'_>, settled: bool) -> Result<bool> {
     let mut required =
         graph.ir.output.columns.iter().map(|output| output.column.name.clone()).collect::<Names>();
     let mut changed = false;
-    let mut removable = Vec::new();
+    let (mut removable, mut empty_ordered) = (Vec::new(), Vec::new());
     for node in graph.ir.nodes.iter_mut().rev() {
         if let Node::LeftJoin { id, spec, .. } = node
             && !spec.full
@@ -44,10 +44,19 @@ pub(super) fn run(graph: &mut Graph<'_>, settled: bool) -> Result<bool> {
         if !unflattened.contains(node.id()) {
             changed |= trim(node, &origin, &required);
         }
+        if let Node::OrderedFinalize { id, spec, .. } = node
+            && spec.aggregates.is_empty()
+        {
+            empty_ordered.push(id.clone());
+        }
         if settled {
             changed |= simplify_map(node);
         }
         required.extend(reads(node)?);
+    }
+    for id in empty_ordered {
+        replace_empty_ordered(graph, &id)?;
+        changed = true;
     }
     changed |= remove_empty(graph)?;
     if settled && !changed {
@@ -196,7 +205,8 @@ pub(super) fn computed_origin(graph: &Graph<'_>, marks: bool) -> Names {
             Node::Partition { spec, .. }
             | Node::PrefixWindow { spec, .. }
             | Node::Statistics { spec, .. }
-            | Node::Finalize { spec, .. } => {
+            | Node::Finalize { spec, .. }
+            | Node::OrderedFinalize { spec, .. } => {
                 origin.extend(spec.aggregates.iter().map(|value| value.field.clone()));
             }
             _ => {}
@@ -239,9 +249,35 @@ fn trim(node: &mut Node, origin: &Names, required: &Names) -> bool {
         | Node::DistinctMembership { spec, .. }
         | Node::Statistics { spec, .. }
         | Node::Finalize { spec, .. } => trim_aggregates(spec, required),
+        Node::OrderedInput { spec, .. }
+        | Node::OrderedFirst { spec, .. }
+        | Node::OrderedFinalize { spec, .. } => {
+            let before = spec.aggregates.len();
+            spec.aggregates.retain(|value| required.contains(&value.field));
+            spec.aggregates.len() != before
+        }
         _ => false,
     }
 }
+/// An ordered input emits one row per measured extremum, so with none left
+/// use ordinary grouping to retain one row per nonempty group.
+fn replace_empty_ordered(graph: &mut Graph<'_>, id: &str) -> Result<()> {
+    let Node::OrderedFinalize { id, input: group, spec } = graph.remove(id)? else {
+        anyhow::bail!("missing ordered finalizer");
+    };
+    let Node::OrderedGroup { input: first, .. } = graph.node(&group)? else {
+        anyhow::bail!("missing ordered group");
+    };
+    let Node::OrderedFirst { input: expand, .. } = graph.node(first)? else {
+        anyhow::bail!("missing ordered selection");
+    };
+    let Node::OrderedInput { input, .. } = graph.node(expand)? else {
+        anyhow::bail!("missing ordered input");
+    };
+    graph.ir.nodes.push(Node::Partition { id, input: input.clone(), spec });
+    Ok(())
+}
+
 /// `PostgreSQL` drops unread aggregates; a scope that reads none still keeps its rows and keys.
 fn trim_aggregates(spec: &mut Partition, required: &Names) -> bool {
     let before = spec.aggregates.clone();

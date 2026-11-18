@@ -23,10 +23,47 @@ plan. Current planner implementation still documents the following differences:
 
 | Class | Cases | Disposition |
 | --- | --- | --- |
-| Compiler/planner candidates | Contradictory restrictions; folding after substitution; unread ordered aggregates/windows; nested set-operation flattening; subqueries under false/NULL filters; removed joins with failing constants | Retain documented limitations. Each needs a minimized native phase test before changing the shared planner. This slice does not assert these claims were independently requalified. |
+| Qualified planner cases | Contradictory restrictions, folding after substitution, unread measures, nested UNION ALL, guarded EXISTS under a NULL filter, and removed joins | Minimized phase and output cases are pinned in the native differential corpus. See the checked shapes below. |
+| Admission boundaries | ORDER BY on SUM, literal FALSE-guarded EXISTS, and unsupported RHS predicates beneath NULL-guarded EXISTS | These forms remain rejected. Ordered text string_agg and admitted EXISTS shapes have their own qualification. |
 | Execution-model decisions | Skipped join inputs/probes, join-order-dependent two-sided predicates, computed merge-sort equalities, LIMIT 0 beside joins, membership evaluated before joins eliminate rows | Incremental input maintenance can evaluate rows a selected native plan never reads; do not swallow errors to imitate that plan |
 | Environment-dependent planning | Statistics-dependent OR restrictions and non-default function costs | Existing cost/selectivity model remains bounded; one forced plan cannot establish universal error equivalence |
 | Resource domain | 16 KiB expression inlining boundary, bounded numeric/temporal/state domains and scalar expansion budgets | Declared engine limits, distinct from PostgreSQL semantic errors |
+
+## C13 planner qualification
+
+The planner discards unread grouped ordered extrema before their arguments
+reach the evaluator. In a derived grouped SELECT, an outer projection can
+leave every MIN or MAX unread, or retain another extremum while discarding
+a failing argument. When every measure is unread, the ordinary grouping
+node keeps one row per nonempty group. With a live measure, the ordered
+input, selection and finalizer retain the same live measure list. A used
+extremum still raises its planning or execution error.
+
+The native differential cases distinguish these boundaries:
+
+- Contradictory restrictions suppress row-dependent failures when there
+  are no qualifying rows. A statically failing expression can still fail
+  during planning. Equality substitution across a join is checked in the
+  same corpus as ordinary filter folding.
+- Unread grouped extrema, window aggregates and ordered text
+  string_agg arguments are removed. A constant window ordering expression
+  retains its planning failure even when the window result is unread.
+- Simple nested UNION ALL arms retain planning failures from constant
+  expressions, while unread row-dependent outputs can disappear.
+- An unused right-hand projection can disappear when a LEFT JOIN is
+  removed or never matches. A false INNER JOIN preserves the empty result.
+- An admitted EXISTS under a NULL filter produces no rows. The compiler
+  still rejects a subquery beneath a literal FALSE-guarded Boolean operand
+  and rejects aggregate ORDER BY on SUM. A NULL guard does not expand RHS
+  predicate admission. For example, PostgreSQL returns no rows for
+  `EXISTS(SELECT 1 FROM source.bid WHERE 1/0>0) AND NULL`, while Pgderive
+  rejects that constant RHS predicate during lowering. These are admission
+  limits rather than expression-error differences on accepted queries.
+
+The corpus pins representative shapes and forced native planner settings.
+Host-plan-dependent error ordering remains subject to the execution-model
+and environment distinctions above. Existing registered queries whose
+unread extrema now produce a different physical plan require rebuild.
 
 ## Implemented slice and qualification
 

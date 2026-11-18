@@ -113,7 +113,7 @@ failure still waits for live cleanup/evidence preservation before returning an
 error. In the full profile, the same isolated lanes run replication, the
 PostgreSQL expression-error corpus, the complete query matrix and operational
 harnesses. The full worker verifier requires 928 distinct result reports and
-the named rebuild, health, TLS, recovery, container and capacity evidence. The expression-error shards retain all 1,257 cases in the original
+the named rebuild, health, TLS, recovery, container and capacity evidence. The expression-error shards retain all 1,286 cases in the original
 order within each shard; the gate verifies each shard against the pinned corpus.
 The 80 composition-matrix histories also run in shards with complete transactions
 and restart checks. The release package builds in parallel with the live lanes. Once it is ready,
