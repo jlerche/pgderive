@@ -104,7 +104,10 @@ def qualify(output, command, mode):
     qualify_topk(output, command, mode, fixture_type=DomainFixture)
 
 
+MODES = ('bool', 'bool-desc', 'uuid', 'uuid-desc', 'numeric', 'numeric-desc',
+         'text-c', 'text-desc', 'varchar-posix', 'varchar-desc', 'text-explicit', 'ties-offset',
+         'offset-only', 'zero-offset')
+
+
 if __name__ == '__main__':
-    run_modes(('bool', 'bool-desc', 'uuid', 'uuid-desc', 'numeric', 'numeric-desc',
-               'text-c', 'text-desc', 'varchar-posix', 'varchar-desc', 'text-explicit', 'ties-offset',
-               'offset-only', 'zero-offset'), qualify)
+    run_modes(MODES, qualify)
