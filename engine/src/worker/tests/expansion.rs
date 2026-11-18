@@ -96,13 +96,16 @@ fn series_binding_rejects_ambiguous_and_unqualified_semantics() -> Result<()> {
     let mut native = native();
     for sql in [
         sql().replace("0,4", "0,1024"),
-        sql().replace("0,4", "0,4,1"),
+        sql().replace("0,4", "0,4,0"),
+        sql().replace("0,4", "NULL,NULL"),
+        sql().replace("0,4", "0::smallint,4::smallint"),
+        sql().replace("0,4", "NULL,4::smallint"),
         sql().replace("0,4", "0.0,4"),
         sql().replace("generate_series", "other.generate_series"),
         sql().replace("CROSS JOIN", "LEFT JOIN").replace(" GROUP BY", " ON true GROUP BY"),
         sql().replace("w(n)", "b(n)"),
         sql().replace("w(n)", "w(n,x)"),
-        sql().replace("w(n)", "WITH ORDINALITY w(n)"),
+        sql().replace("w(n)", "WITH ORDINALITY w(n,n)"),
         sql().replace("CROSS JOIN", "CROSS JOIN LATERAL"),
         sql().replace("w.n *", "b.id *"),
         sql().replace("INTERVAL '2 seconds'", "INTERVAL '1 day'"),
@@ -219,6 +222,38 @@ async fn plain_series_projection_preserves_expansion_and_weights() -> Result<()>
             .into();
             ((Key::new(), output), weight)
         }))?;
+        assert_eq!(prepared.output().batch, expected);
+        query.commit(prepared)?;
+        super::restart_relational(&mut query, &native, &compiled, &options).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn descending_series_preserves_value_and_ordinality_on_retraction() -> Result<()> {
+    use crate::compiler::expansion::{FIELD, ORDINAL};
+    let native = native();
+    let compiled = compile(
+        "SELECT w.w AS value,w.ordinality FROM source.bid b CROSS JOIN generate_series(-9223372036854775806,-9223372036854775808,-2) WITH ORDINALITY w",
+        &native,
+    )?;
+    let options = settings();
+    let mut query = relational::build(&native, &compiled, &options)?;
+    let input = row(&[("id", Some("1")), ("auction", None), ("price", None)]);
+    for (time, weight) in [(1, 2), (2, -2)] {
+        let delta = batch(vec![("bid", input.clone(), weight)]);
+        let prepared =
+            query.prepare(relational::inputs(&delta, compiled.relational(), time)?).await?;
+        let expected = Batch::from_updates([
+            (
+                (Key::new(), row(&[(FIELD, Some("-9223372036854775806")), (ORDINAL, Some("1"))])),
+                weight,
+            ),
+            (
+                (Key::new(), row(&[(FIELD, Some("-9223372036854775808")), (ORDINAL, Some("2"))])),
+                weight,
+            ),
+        ])?;
         assert_eq!(prepared.output().batch, expected);
         query.commit(prepared)?;
         super::restart_relational(&mut query, &native, &compiled, &options).await?;

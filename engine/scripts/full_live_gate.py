@@ -131,7 +131,7 @@ MODE_SHARDS = {
     'temporal-arithmetic': 40, 'join-predicates': 29,
     'sql-composition': 28, 'numeric-arithmetic': 19, 'ordering': 18, 'unordered': 17,
     'ordering-domains': 14, 'boolean-resolution': 15, 'nexmark-q8': 8,
-    'query-native-join': 8, 'query-topk': 10, 'expression-composition': 12,
+    'query-native-join': 8, 'query-topk': 10, 'hopping': 10, 'expression-composition': 12,
     'circuit-numeric': 9, 'computed-join': 6, 'aggregate-inputs': 6,
 }
 CASE_SHARDS = {'natural-joins': 8, 'prefix-window': 6, 'sliding-extrema': 6}
@@ -141,7 +141,7 @@ OPERATION_SHARDS = {'query-rebuild-fault': 12, 'query-removal': 11,
                     'query-binding': 18, 'keyed-sink': 6}
 COMPOSITION_SHARDS = 80
 ERROR_ORDER_SHARDS = 8
-FULL_RESULT_COUNT = 918
+FULL_RESULT_COUNT = 922
 
 
 def suites():

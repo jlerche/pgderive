@@ -160,26 +160,30 @@ fn expanded(
     id: &str,
     series: &crate::compiler::expansion::Series,
 ) -> Result<Properties> {
+    use crate::compiler::expansion::{FIELD, ORDINAL};
     let mut facts = input.clone();
-    let reference = ColumnRef {
-        right: false,
-        name: crate::compiler::expansion::FIELD.into(),
-        oid: 23,
-        nullable: false,
-        collation: 0,
-        modifier: None,
-    };
-    ensure!(!facts.columns.contains_key(&reference.name), "property expansion field collision");
-    let column = Column::derived(id, reference);
-    facts.keys = std::mem::take(&mut facts.keys)
-        .into_iter()
-        .map(|mut key| {
+    let keys = std::mem::take(&mut facts.keys);
+    for (name, oid) in [(FIELD, series.oid), (ORDINAL, 20)] {
+        if name == ORDINAL && !series.ordinality {
+            continue;
+        }
+        let reference = ColumnRef {
+            right: false,
+            name: name.into(),
+            oid,
+            nullable: false,
+            collation: 0,
+            modifier: None,
+        };
+        ensure!(!facts.columns.contains_key(name), "property expansion field collision");
+        let column = Column::derived(id, reference);
+        facts.keys.extend(keys.iter().cloned().map(|mut key| {
             key.insert(column.identity.clone());
             key
-        })
-        .collect();
-    facts.columns.insert(column.reference.name.clone(), column);
-    let count = u64::try_from((i64::from(series.end) - i64::from(series.start) + 1).max(0))?;
+        }));
+        facts.columns.insert(column.reference.name.clone(), column);
+    }
+    let count = u64::from(series.count);
     facts.maximum =
         facts.maximum.and_then(|n| n.checked_mul(count)).or_else(|| (count == 0).then_some(0));
     Ok(facts)

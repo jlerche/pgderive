@@ -56,6 +56,9 @@ WITH RECURSIVE native AS (
         'pg_catalog.sha256(bytea)'::regprocedure,
         'pg_catalog.convert_to(text,name)'::regprocedure,
         'pg_catalog.encode(bytea,text)'::regprocedure,
+        'pg_catalog.generate_series(integer,integer)'::regprocedure,
+        'pg_catalog.generate_series(integer,integer,integer)'::regprocedure,
+        'pg_catalog.generate_series(bigint,bigint,bigint)'::regprocedure,
         'pg_catalog.generate_series(bigint,bigint)'::regprocedure
     ]::oid[])
 ), function_ids(oid) AS (

@@ -50,10 +50,10 @@ impl Windows {
                 spec.mode.requires_occurrence_order(&value.function, value.string_agg.as_deref())
             }) {
                 ensure!(
-                    spec.mode
-                        .order()
-                        .iter()
-                        .any(|order| order.column.name == crate::compiler::expansion::FIELD),
+                    spec.mode.order().iter().any(|order| matches!(
+                        order.column.name.as_str(),
+                        crate::compiler::expansion::FIELD | crate::compiler::expansion::ORDINAL
+                    )),
                     "expanded positional windows must order by generated ordinal"
                 );
             }

@@ -285,7 +285,10 @@ fn source_predicate(
             crate::compiler::expression::bind_quals(&expr, &|name| {
                 let column = resolve(name)?;
                 ensure!(
-                    column.name != crate::compiler::expansion::FIELD,
+                    !matches!(
+                        column.name.as_str(),
+                        crate::compiler::expansion::FIELD | crate::compiler::expansion::ORDINAL
+                    ),
                     "WHERE on generated series columns requires post-expansion filtering"
                 );
                 Ok(column)
@@ -343,9 +346,7 @@ fn attach_expansion(
             for value in computed {
                 if let Some((_, duration)) = value.expression.shift() {
                     ensure!(
-                        duration
-                            .checked_mul(i64::from(series.end))
-                            .is_some_and(|micros| micros <= 9_007_199_254_740_992),
+                        series.spec.exact_interval_offsets(*duration),
                         "hopping offset exceeds exact PostgreSQL interval multiplication range"
                     );
                 }

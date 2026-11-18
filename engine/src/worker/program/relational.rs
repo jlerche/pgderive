@@ -210,19 +210,21 @@ fn filter(predicate: &crate::compiler::Predicate) -> Project<Key, Row, Key, Row>
 fn expand(
     series: &crate::compiler::expansion::Series,
 ) -> crate::engine::dataflow::Expand<Key, Row, Key, Row> {
+    use crate::compiler::expansion::{FIELD, ORDINAL};
     let series = series.clone();
     crate::engine::dataflow::Expand::new(move |key: &Key, row: &Row, emit| {
-        if series.start > series.end {
-            return Ok(());
-        }
-        for ordinal in series.start..=series.end {
+        for (value, ordinal) in series.values() {
             let mut expanded = row.clone();
             ensure!(
-                expanded
-                    .insert(crate::compiler::expansion::FIELD.into(), Some(ordinal.to_string()))
-                    .is_none(),
-                "duplicate generated ordinal"
+                expanded.insert(FIELD.into(), Some(value.to_string())).is_none(),
+                "duplicate generated series field"
             );
+            if series.ordinality {
+                ensure!(
+                    expanded.insert(ORDINAL.into(), Some(ordinal.to_string())).is_none(),
+                    "duplicate generated ordinality"
+                );
+            }
             emit((key.clone(), expanded))?;
         }
         Ok(())
