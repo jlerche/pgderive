@@ -1,6 +1,9 @@
 //! Bounded run-head reuse for affected-key probes at one immutable boundary.
 use super::{KeyCursor, MergedCursor, Run, TraceSnapshot};
-use crate::engine::reader::{BatchData, Cursor, KeyIdentity, PointRows, SelectedBlock};
+use crate::engine::{
+    Batch,
+    reader::{BatchData, Cursor, KeyIdentity, ObjectBatch, PointRows, SelectedBlock},
+};
 use anyhow::{Context as _, Result};
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use std::{collections::BTreeMap, sync::Arc};
@@ -14,7 +17,7 @@ pub(super) use crate::engine::reader::READ_CONCURRENCY;
 /// Current and returned cursors can pin additional blocks independently.
 /// Failed probes preserve the reusable heads.
 pub struct KeyProbes<K: BatchData, V: BatchData> {
-    runs: Vec<Run<K, V>>,
+    runs: Vec<ProbeRun<K, V>>,
     slots: Vec<usize>,
     heads: Vec<Option<Cursor<K, V>>>,
     current: Option<LastProbe<K, V>>,
@@ -49,30 +52,37 @@ impl<K: BatchData, V: BatchData> PreparedKey<K, V> {
         })
     }
 }
+enum ProbeRun<K: BatchData, V: BatchData> {
+    Memory(Arc<Batch<K, V>>),
+    Object(Arc<ObjectBatch<K, V>>),
+}
 struct LastProbe<K: BatchData, V: BatchData> {
     key: K,
     cursor: KeyCursor<K, V>,
 }
 impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
-    pub(super) fn new(snapshot: TraceSnapshot<K, V>) -> Self {
+    pub(super) fn new(snapshot: &TraceSnapshot<K, V>) -> Self {
         let cache = snapshot.logical_cache.clone();
-        let mut runs: Vec<Run<K, V>> = Vec::new();
-        let mut paths = BTreeMap::<String, Vec<usize>>::new();
-        let mut slots = Vec::new();
-        for run in snapshot.runs {
-            let matching = if let Run::Object(batch) = &run {
+        let mut runs = Vec::new();
+        let mut paths = BTreeMap::<&str, Vec<usize>>::new();
+        let mut slots = Vec::with_capacity(snapshot.runs.len());
+        for run in &snapshot.runs {
+            let matching = if let Run::Object(batch) = run {
                 paths.get(batch.reference().path()).into_iter().flatten().copied().find(
-                    |index| matches!(&runs[*index], Run::Object(prior) if batch.same_reader(prior)),
+                    |index| matches!(&runs[*index], ProbeRun::Object(prior) if batch.same_reader(prior)),
                 )
             } else {
                 None
             };
             let index = matching.unwrap_or_else(|| {
                 let index = runs.len();
-                if let Run::Object(batch) = &run {
-                    paths.entry(batch.reference().path().to_owned()).or_default().push(index);
-                }
-                runs.push(run);
+                runs.push(match run {
+                    Run::Memory(batch) => ProbeRun::Memory(batch.clone()),
+                    Run::Object(batch) => {
+                        paths.entry(batch.reference().path()).or_default().push(index);
+                        ProbeRun::Object(Arc::new(batch.clone()))
+                    }
+                });
                 index
             });
             slots.push(index);
@@ -96,7 +106,7 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         let ticket = ticket.filter(|_| !self.runs.is_empty());
         let mut pages = Vec::with_capacity(self.runs.len());
         for run in &self.runs {
-            let page = if let Run::Object(batch) = run {
+            let page = if let ProbeRun::Object(batch) = run {
                 let Some(page) = batch.key_page(key).await? else {
                     pages.push(None);
                     continue;
@@ -123,7 +133,7 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
     ) -> Result<bool> {
         let mut admitted = true;
         for (index, (run, page)) in self.runs.iter().zip(&key.pages).enumerate() {
-            let (Run::Object(batch), Some(page)) = (run, page) else { continue };
+            let (ProbeRun::Object(batch), Some(page)) = (run, page) else { continue };
             if !self.heads[index].as_ref().is_some_and(|head| head.holds_block(batch, page.ordinal))
             {
                 admitted &= batch.reserve_page(page, plans)?;
@@ -169,17 +179,17 @@ impl<K: BatchData, V: BatchData> KeyProbes<K, V> {
         Ok(cursor)
     }
     async fn select(
-        run: &Run<K, V>,
+        run: &ProbeRun<K, V>,
         head: Option<&Cursor<K, V>>,
         key: &KeyIdentity<K>,
         page: Option<&SelectedBlock<K, V>>,
     ) -> Result<Option<Cursor<K, V>>> {
         match run {
-            Run::Memory(batch) => {
+            ProbeRun::Memory(batch) => {
                 Ok(Some(Cursor::memory_key_reusing(batch.shared_entries(), key.key(), head)))
             }
-            Run::Object(batch) => match page {
-                Some(page) => Cursor::object_key_page(batch.clone(), key, page.clone(), head).await,
+            ProbeRun::Object(batch) => match page {
+                Some(page) => Cursor::object_key_page(batch.clone(), key, page, head).await,
                 None => Ok(None),
             },
         }

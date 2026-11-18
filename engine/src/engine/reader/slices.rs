@@ -276,7 +276,7 @@ mod tests {
         assert!(object.key_page(&2).await?.is_none());
         let page = object.key_page(&1).await?.context("missing inner page")?;
         let mut cursor =
-            Cursor::object_key_page(object.clone(), &KeyIdentity::new(&1)?, page, None)
+            Cursor::object_key_page(Arc::new(object.clone()), &KeyIdentity::new(&1)?, &page, None)
                 .await?
                 .context("missing key cursor")?;
         cursor.seek_key(&2).await?;

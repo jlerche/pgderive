@@ -67,13 +67,13 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
     }
 
     pub(crate) async fn object_key_page(
-        batch: ObjectBatch<K, V>,
+        batch: Arc<ObjectBatch<K, V>>,
         identity: &super::KeyIdentity<K>,
-        page: SelectedBlock<K, V>,
+        page: &SelectedBlock<K, V>,
         previous: Option<&Self>,
     ) -> Result<Option<Self>> {
         let key = identity.key();
-        batch.validate_page(&page)?;
+        batch.validate_page(page)?;
         let block = page.ordinal;
         let rows = match previous {
             Some(previous)
@@ -83,10 +83,10 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
                 previous.rows.clone()
             }
             _ => {
-                if !batch.may_contain_page(&page, key)? {
+                if !batch.may_contain_page(page, key)? {
                     return Ok(None);
                 }
-                batch.read_page(&page).await?
+                batch.read_page(page).await?
             }
         };
         let start = previous
@@ -96,7 +96,7 @@ impl<K: BatchData, V: BatchData> Cursor<K, V> {
             .map_or(0, |old| old.position.min(rows.len()));
         let position = crate::engine::search::advance(&rows, start, |row| row.0.0 < *key);
         Ok(Some(Self {
-            source: Source::Object(Arc::new(batch)),
+            source: Source::Object(batch),
             rows,
             block,
             position,

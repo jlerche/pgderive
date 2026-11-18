@@ -17,7 +17,7 @@ async fn scans_do_not_use_or_admit_foreground_complete_key_entries() -> Result<(
     )
     .await?;
     let page = object.key_page(&1).await?.context("missing key")?;
-    Cursor::object_key_page(object.clone(), &KeyIdentity::new(&1)?, page, None).await?;
+    Cursor::object_key_page(Arc::new(object.clone()), &KeyIdentity::new(&1)?, &page, None).await?;
     let before = cache.stats()?;
     assert_eq!(before.point_entries, 0);
     let scan = ObjectBatch::<i64, i64>::open_with_cache(
@@ -28,7 +28,7 @@ async fn scans_do_not_use_or_admit_foreground_complete_key_entries() -> Result<(
     )
     .await?;
     let page = scan.key_page(&2).await?.context("missing scan key")?;
-    Cursor::object_key_page(scan, &KeyIdentity::new(&2)?, page, None).await?;
+    Cursor::object_key_page(Arc::new(scan), &KeyIdentity::new(&2)?, &page, None).await?;
     let after = cache.stats()?;
     assert_eq!(
         (before.point_bytes, before.point_entries, before.point_hits),
@@ -51,14 +51,15 @@ async fn cancelled_page_read_has_no_logical_admission_and_retries_exactly() -> R
     assert!(
         tokio::time::timeout(
             Duration::from_millis(5),
-            Cursor::object_key_page(object.clone(), &identity, page.clone(), None)
+            Cursor::object_key_page(Arc::new(object.clone()), &identity, &page, None)
         )
         .await
         .is_err()
     );
     assert_eq!(cache.stats()?.point_entries, 0);
-    let cursor =
-        Cursor::object_key_page(object, &identity, page, None).await?.context("missing cursor")?;
+    let cursor = Cursor::object_key_page(Arc::new(object), &identity, &page, None)
+        .await?
+        .context("missing cursor")?;
     assert_eq!(cursor.current(), Some((&1, &7, -3)));
     assert_eq!(cache.stats()?.point_entries, 0);
     Ok(())

@@ -129,11 +129,11 @@ impl Pack {
 }
 
 fn valid_pack_path(path: &str, hash: &str) -> bool {
-    let canonical = format!("pgderive/pack/{hash}");
-    if path == canonical {
-        return true;
-    }
-    path.strip_suffix(&format!("/{canonical}")).is_some_and(super::object::valid_namespace)
+    let Some(prefix) = path.strip_suffix(hash).and_then(|path| path.strip_suffix("pgderive/pack/"))
+    else {
+        return false;
+    };
+    prefix.is_empty() || prefix.strip_suffix('/').is_some_and(super::object::valid_namespace)
 }
 
 #[cfg(test)]
@@ -163,6 +163,8 @@ mod location_tests {
         }
         for path in [
             format!("other/{relative}"),
+            format!("/{relative}"),
+            format!("pgderive/upload-v1/good-1{relative}"),
             format!("pgderive/upload-v1//{relative}"),
             format!("pgderive/upload-v1/../{relative}"),
             format!("pgderive/upload-v1/bad/nested/{relative}"),
